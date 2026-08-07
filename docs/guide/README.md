@@ -9,6 +9,7 @@ Everything you need to mod Gothic 1 Remake with GORE. Start with
 |---|---|
 | [Getting started](getting-started.md) | Install the CLI, point it at the game, pick the right tool, first mod |
 | [CLI reference](cli-reference.md) | Every command, subcommand, and flag |
+| [Finding things](find.md) | `gore find`: class names, asset paths, and what an id does in game |
 | [MCP server](mcp.md) | Drive the whole CLI from an AI assistant over the Model Context Protocol |
 
 ## Modding domains

@@ -17,6 +17,7 @@ gore --version
 | `doctor` | — | Diagnose the setup in one read-only pass: game path, install, UE4SS, enabled mods, deployment, leftovers, catalog staleness. | [getting-started](getting-started.md#check-the-setup) |
 | `mcp` | `serve` · `tools` | Serve the whole CLI over the Model Context Protocol (stdio JSON-RPC) for AI assistants. | [mcp](mcp.md) |
 | `guide` | `search` · `html` | Search this guide and the reference from a shell, or render the guide into one self-contained HTML file. | [below](#guide) |
+| `find` | — | Search the bundled catalogs and the effect register: class names, ids, categories, display names, and what an id does in game. | [find](find.md) |
 | `gen` | — | Compile `overrides.toml` → a UE4SS Lua override mod. | [items](items.md) |
 | `mod` | `build` · `deploy` · `undeploy` | Build/deploy/undeploy a unified bundle. | [bundles](bundles.md) |
 | `mgr` | `import` · `list` · `remove` · `enable` · `disable` · `order` · `analyze` · `apply` · `status` · `reset` | Multi-mod manager: library, load order, conflicts, composed deploy. | [mod-manager](mod-manager.md) |
@@ -106,6 +107,31 @@ install root that does not exist, which yields one `problem` and eight `skipped`
 lines instead of restating one cause eight times. The missing-UE4SS,
 competing-override and leftover-lock verdicts are pinned by tests over fixture
 trees, not by a run against a real broken install.
+
+## `find`
+
+`gore find [OPTIONS] <QUERY>...`
+
+| Flag | Meaning |
+|---|---|
+| `<QUERY>...` | Words to search for. Several words are one query and **all** must match, so no quoting is needed. |
+| `--domain <NAME>` | One id namespace: `item`, `npc`, `knowledge`, `texture`, `loc`, `audio`, `voice`, `asset`. An unknown one is refused with the list. |
+| `--max <N>` | Stop after N hits (default 50). The result says how many matched. |
+| `--json` | One JSON document instead of the human-readable blocks. |
+
+Searches the item, NPC and knowledge catalogs compiled into `gore.exe` together
+with the effect register, matching ids, categories, class paths, knowledge
+captions and the register's own `effect` and `note` text. Every hit says which
+layer it came from and, for register annotations, which provenance.
+
+Display names are matched only when the shared text catalog is present. Every
+result carries one line saying whether they were searched, and when they were
+not, that `gore loc extract` is what fixes it — a name search that quietly
+skipped its index would answer "no such item" about an item that is there. Full
+detail in [Finding things](find.md).
+
+**Exit code 0 whether or not anything matched.** An empty result is an answer,
+and failing would bury the line explaining what was not searched.
 
 ## `gen`
 

@@ -1,0 +1,90 @@
+{
+  "format": 1,
+  "domain": "item",
+  "entries": [
+    {
+      "id": "ItFo_Apple",
+      "effect": "`m_Value` is the item's base worth. A trader's buy and sell prices are derived from it; neither is read off it directly.",
+      "note": "Vanilla `m_Value` is 4, read back off the CDO in the running game — the first check the bundled catalog's vanilla values ever got against anything but themselves. At `m_Value` 1000, at the trader Dexter on difficulty Gothic, the apple bought for 843 and sold for 422: a per-item factor of about 0.843, with sell almost exactly half of buy. Readings drift by roughly 0.3% between visits (846 instead of 844), so one measurement does not pin a factor. One trader, one difficulty, one session — nothing here says what another trader charges. Timing worth knowing before you judge an override broken: the CDO does not exist at launch, and on this build the generated mod started at 10:58:03.4 while the write landed at 10:58:07.5 — about four seconds and several retries later, so quitting as soon as the main menu is up shows nothing.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "bin direkt ins spiel und hab nachgeschaut. alle 4 items haben jetzt sehr hohe werte.",
+          "by": "maintainer"
+        },
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "Schwierigkeit Gothic, bei Dexter, Kaufen: [...] Apfel: 843 [...] verkaufen: Apfel: 422",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "ItFo_Loaf",
+      "effect": "`m_Value` is the item's base worth; the trader's buy price can sit above it.",
+      "note": "Vanilla `m_Value` is 6. This is the item that refutes the obvious model. At `m_Value` 1000 bread bought for 1167 and sold for 585 — a factor of about 1.167, above the base value, while its sell price stayed at half the buy price like everything else. \"Prices never go above `m_Value`\" holds for selling only, and the observer's own first reading had suggested otherwise because he had looked at the sell side alone. It also shows the factor belongs to the item and not to the class prefix: apple, bread and health potion are all `ItFo_*`, and bread is the one that falls out of line.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "bin direkt ins spiel und hab nachgeschaut. alle 4 items haben jetzt sehr hohe werte.",
+          "by": "maintainer"
+        },
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "Schwierigkeit Gothic, bei Dexter, Kaufen: Brot: 1167 [...] verkaufen: [...] Brot: 585",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "ItFo_Potion_Health_01",
+      "effect": "`m_Value` is the item's base worth, from which the trader's buy and sell prices derive.",
+      "note": "Vanilla `m_Value` is 25. At `m_Value` 1000, at Dexter on difficulty Gothic, it bought for 844 and sold for 423 — a factor of about 0.844, indistinguishable from the apple's within the ~0.3% jitter, and sell again at half of buy. Whether the relationship is purely multiplicative was not tested: a second base value would separate `buy = value x 1.167` from `buy = value x 1.1 + 67`, and that run was skipped as unimportant.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "bin direkt ins spiel und hab nachgeschaut. alle 4 items haben jetzt sehr hohe werte.",
+          "by": "maintainer"
+        },
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "Schwierigkeit Gothic, bei Dexter, Kaufen: [...] Heiltrank: 844 [...] verkaufen: [...] Trank: 423",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "ItMw_1H_Sword_Old_01",
+      "effect": "`m_Value` is the item's base worth; overriding it moves what the item is worth in game.",
+      "note": "Vanilla `m_Value` is 10, confirmed against the running game. The weakest of the four price entries on purpose: Dexter does not carry this sword, so there is no buy/sell pair for it and no factor. All that stands behind it is the override landing and the observer reporting all four items at plainly raised values — which is why no number appears here.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "bin direkt ins spiel und hab nachgeschaut. alle 4 items haben jetzt sehr hohe werte.",
+          "by": "maintainer"
+        }
+      ]
+    }
+  ]
+}

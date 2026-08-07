@@ -1,0 +1,21 @@
+{
+  "format": 1,
+  "domain": "asset",
+  "entries": [
+    {
+      "id": "/Game/UI/CoreMenus/Settings/W_SettingsRow",
+      "effect": "Main Menu -> Einstellungen — the height of every settings row. At ten times its shipped height the rows are absurdly tall, the dropdowns render as tall rectangles and the page layout visibly breaks.",
+      "note": "Export 44, object `SizeBox_SettingsEntry`, class `/Script/UMG.SizeBox`, leaf `/MinDesiredHeight`: one little-endian float32, `00002042` (40.0f) replaced by `0000c843` (400.0f). Packed as the additive Zen triplet `zzz_GoreSettingsRowTall_P` and taken into the game through `gore mgr`, which classified it as a foreign IoStore triplet — it carries no `gore-mod.json` — and applied it as `zzz_gm000_GoreSettingsRowTall_P`, because `gore asset pack` does not deploy. Before this, no edit these commands made had ever been observed to take effect in game; the workflow was trusted because the bytes and the receipts said so and for no other reason. Read the scope exactly: one asset, one leaf, one float, one build, one look, and the target was a cooked UMG widget package rather than a DataAsset proper. It says nothing about other leaf kinds, other asset classes or other builds.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "jo schaut ziemlich weird aus",
+          "by": "maintainer"
+        }
+      ]
+    }
+  ]
+}

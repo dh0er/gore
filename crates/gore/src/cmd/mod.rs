@@ -7,6 +7,7 @@ pub mod deploy_shared;
 pub mod doctor;
 pub mod dump;
 pub mod dump_mod;
+pub mod find;
 pub mod gen;
 pub mod gui_model;
 pub mod guide;

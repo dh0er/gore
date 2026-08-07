@@ -73,6 +73,21 @@ enum Commands {
         #[command(subcommand)]
         action: cmd::location::LocationAction,
     },
+    /// Search the bundled catalogs and the effect register: class names, ids, and what they do
+    Find {
+        /// Words to search for; several words all have to match, so no quoting is needed
+        #[arg(required = true, num_args = 1..)]
+        query: Vec<String>,
+        /// Keep only one id namespace (e.g. item, npc, knowledge, texture, loc)
+        #[arg(long)]
+        domain: Option<String>,
+        /// Max hits to print. The result says how many matched when it stops here
+        #[arg(long, default_value_t = cmd::find::DEFAULT_MAX)]
+        max: usize,
+        /// Emit one JSON document instead of the human-readable blocks
+        #[arg(long)]
+        json: bool,
+    },
     /// Convert a gore-cli reflection model into a gore-mod GUI shape JSON
     GuiModel {
         /// Path to model.json (output of `gore-cli dump`)
@@ -480,6 +495,12 @@ fn run_cli() {
         } => cmd::story_catalog::run(exe, cache, binds, out),
         Commands::LocationCatalog { source, out } => cmd::location_catalog::run(source, out),
         Commands::Location { action } => cmd::location::run(action),
+        Commands::Find {
+            query,
+            domain,
+            max,
+            json,
+        } => cmd::find::run(query, domain, max, json),
         Commands::GuiModel {
             model,
             catalog,

@@ -126,10 +126,25 @@ screen.
 
 ## Finding class and field names
 
-Which route you have depends on what you installed.
+**Class names come from `gore find`**, which searches the catalogs compiled into
+`gore.exe`. No game install, no dump, no setup:
 
-**From a release install**, list the classes out of the game's own compiled
-script cache:
+```powershell
+gore find ItFo_Potion_Health     # by class name
+gore find healing potion         # by display name, after `gore loc extract`
+gore find --domain item rune     # one namespace only
+```
+
+Each hit prints the class the game resolves — `/Script/Angelscript.ItFo_Apple` —
+which is what an `[[override]]` names, and anything the effect register records
+about that id. Display names need `gore loc extract` first; every result says
+which of the two states you are in, so an empty answer can be told apart from an
+answer that could not look. The whole command is [Finding things](find.md).
+
+`find` knows the classes. It does not know their **fields** — for those, read
+the values out of the game's own compiled script cache.
+
+**From a release install:**
 
 ```powershell
 gore as default-sites "$GAME\G1R\Script\PrecompiledScript_Shipping.Cache" `
@@ -163,12 +178,7 @@ against an install newer than any build the toolkit has sealed, returned an
 unavailable for this build` and `this toolkit has not sealed this build yet` on
 stderr. Read the stderr before concluding that a class has no such field.
 
-**From a source checkout**, the catalogs bundled with the save editor
-(`apps/save-editor/assets/*_catalog.json`) list item, NPC and knowledge classes
-directly and are quicker to skim. They are not in the release zip, which
-contains `gore.exe`, `shared\` and `docs\` and nothing else.
-
-To regenerate those catalogs and the field schema yourself, or to fold the
+To regenerate the catalogs `find` reads, or the field schema, or to fold the
 game's *real* default values into the model, see
 [Catalogs & data models](catalogs-and-models.md). Both start from a UE4SS
 object dump, so neither is a way in while you are still setting UE4SS up.

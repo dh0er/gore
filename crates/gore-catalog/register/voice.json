@@ -1,0 +1,36 @@
+{
+  "format": 1,
+  "domain": "voice",
+  "entries": [
+    {
+      "id": "german_new/OldCamp/Diego/INFO_DIEGO_GAMESTART_11_00.ogg",
+      "effect": "Diego's first spoken line in a new game (vanilla: \"Ich bin Diego.\"), about a minute or two after the intro.",
+      "note": "The cheapest audible voice target there is: it needs a new game and no play beyond walking up to Diego. Replaced with an Orcish take lifted out of `foreign.zip`, because the machine had no Ogg encoder — another language's recording is unmistakable in a way a synthesized tone is not. Game voice language German. Its subtitle is the separate loc id `info_diego_gamestart_11_00`; changing one without the other gives a line that reads one way and sounds another. Only `replace` was exercised — `add` was not touched in this campaign and remains experimental.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "alles überprüft: dialoge stimmen, itemnamen stimmen",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "german_new/OldCamp/Diego/INFO_DIEGO_GAMESTART_11_03.ogg",
+      "effect": "Diego's closing line of the opening conversation, the one that ends in the player's first dialog choice.",
+      "note": "Replaced with the Russian take of the same line out of `russian.zip`. The part worth keeping is what was deliberately left alone: the line between this one and INFO_DIEGO_GAMESTART_11_00 was not edited and played as normal German, so nothing in the 915 MB archive shifted or re-indexed around the two members that changed. Replacing every line in the scene would have sounded just as convincing and proved none of that. Two entries, one language, one scene, one sitting.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "alles überprüft: dialoge stimmen, itemnamen stimmen",
+          "by": "maintainer"
+        }
+      ]
+    }
+  ]
+}

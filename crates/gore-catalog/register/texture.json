@@ -1,0 +1,59 @@
+{
+  "format": 1,
+  "domain": "texture",
+  "entries": [
+    {
+      "id": "/Game/UI/Textures/Common/T_LogoRemake",
+      "effect": "Main menu — the \"Gothic REMAKE\" wordmark above the buttons.",
+      "note": "512x180 PF_DXT5. The cheapest smoke test in the toolkit: it is on screen before a key is pressed, so reaching the main menu is the whole test. Seen twice on one day from two different bundles — once on its own beside T_Logo, once inside a bundle that also carried loc_edits and an override — which is why it is the control every other texture run rode along with. In the launch between the two, with the logo triplet undeployed, the wordmark was back to its shipped art.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "ja genau. nr 1 magenta, nr 2 nicht vorhanden",
+          "by": "maintainer"
+        },
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "passt alles",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "/Game/UI/Textures/Common/T_Logo",
+      "effect": null,
+      "note": "400x128 PF_BC7. Replaced with the same magenta field, in the same triplet and the same launch as T_LogoRemake — which was plainly visible — so the deploy worked and this asset is simply not what that screen draws. Read the refutation for exactly its scope: one person looked at the main menu for a short time and did not see it. Nobody has looked for it anywhere else in the game, so this is not \"T_Logo is unused\". It is here because it is the failure the texture guide warns about — a flawless deploy that changes nothing — and what made it diagnosable rather than mysterious was the known-good logo riding in the same container.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "refuted",
+          "witness": "ja genau. nr 1 magenta, nr 2 nicht vorhanden",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "/Game/UI/Textures/MainMenus/T_TempBackground_V2",
+      "effect": "Main menu — the entire backdrop behind the buttons.",
+      "note": "3840x2160 PF_BC7. Shipped as its own bundle, deliberately not combined with the logos, so a malformed large container could not take the known-good control down with it. What this widens is the UNCOMPRESSED writer, at 4K and at that container size: the bundle path passes compress=false whatever the size, and the deployed .ucas was 8,294,998 bytes against 8,294,400 bytes of raw mip — 598 bytes of container overhead. It says nothing about the compressed writer, whose only in-game record remains one older unnamed sighting. An earlier summary of this very run claimed the compressed path was proven and had to be corrected.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "hintergrund magenta, logo normal.",
+          "by": "maintainer"
+        }
+      ]
+    }
+  ]
+}

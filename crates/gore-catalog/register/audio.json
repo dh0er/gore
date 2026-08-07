@@ -1,0 +1,111 @@
+{
+  "format": 1,
+  "domain": "audio",
+  "entries": [
+    {
+      "id": "SFX_UI_Action_MenuButton_Click_01",
+      "effect": "Menu confirm and navigate — a main-menu button click, and also backing out of a submenu with Escape.",
+      "note": "SFX.bank. One of four takes (_01 to _04) the game picks at random; this one carried a single 440 Hz pulse in the run that gave each take its own pulse count, and the observer heard all four counts arriving with no pattern. So replacing only _01 — the obvious move — produces the intended sound on roughly one click in four, which is easy to mistake for a tool that does not work. The name is narrower than the behaviour: the same sound plays on Escape navigation back into a parent menu, so treat this set as the generic menu confirm sound rather than as a button click. Nobody would have derived that from the name.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "komplett random zwischen 1-4 pieps. [...] der piep kommt auch wenn ich z.b. per Esc in ein parent menü zurückgeh",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "SFX_UI_Action_MenuButton_Click_02",
+      "effect": "Menu confirm and navigate — a main-menu button click, and also backing out of a submenu with Escape.",
+      "note": "SFX.bank. Carried two 660 Hz pulses in the run that gave each of the four takes its own pulse count; the observer heard all four counts, in no pattern. Replace the whole set if the change has to be audible every time. Like its siblings it also plays on Escape navigation back into a parent menu, which the name does not suggest.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "komplett random zwischen 1-4 pieps. [...] der piep kommt auch wenn ich z.b. per Esc in ein parent menü zurückgeh",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "SFX_UI_Action_MenuButton_Click_03",
+      "effect": "Menu confirm and navigate — a main-menu button click, and also backing out of a submenu with Escape.",
+      "note": "SFX.bank. Carried three 880 Hz pulses in the run that gave each of the four takes its own pulse count; the observer heard all four counts, in no pattern. Replace the whole set if the change has to be audible every time. Like its siblings it also plays on Escape navigation back into a parent menu, which the name does not suggest.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "komplett random zwischen 1-4 pieps. [...] der piep kommt auch wenn ich z.b. per Esc in ein parent menü zurückgeh",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "SFX_UI_Action_MenuButton_Click_04",
+      "effect": "Menu confirm and navigate — a main-menu button click, and also backing out of a submenu with Escape.",
+      "note": "SFX.bank. Carried four 1320 Hz pulses in the run that gave each of the four takes its own pulse count; the observer heard all four counts, in no pattern. Replace the whole set if the change has to be audible every time. Like its siblings it also plays on Escape navigation back into a parent menu, which the name does not suggest.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "komplett random zwischen 1-4 pieps. [...] der piep kommt auch wenn ich z.b. per Esc in ein parent menü zurückgeh",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "SFX_UI_Action_Button_Hover_01",
+      "effect": "Hovering a menu entry — the pointer resting on a button, without clicking.",
+      "note": "SFX.bank. Exactly what the name says, which is worth recording because the sample beside it is not. Pinned by giving it a 220 Hz tone, far below the four click takes, and hearing it on hover and on nothing else the listener did. An earlier run in the same sitting put the same 1000 Hz beep on all five UI samples: that proved SFX.bank replacement is audible but could not attribute it, and the beep on hover then meant nothing on its own. The lesson is in the design, not the result — one distinguishable marker per target, or you learn only that it works.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "1. tiefer ton beim hovern",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "title",
+      "effect": "Main menu title music — suspected, not separated from `title_MASTER`.",
+      "note": "Music.bank. `title` and `title_MASTER` were replaced with the same rising siren in one pass and the observer heard the siren instead of the shipped title music, so the title event draws on at least one of the two — and the run cannot say which. Replacing one of them alone has not been tried, and is the one launch that would settle it. Recorded as unconfirmed for that reason: a human heard the change, the experiment could not attribute it.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "unconfirmed",
+          "witness": "sirene läuft",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "title_MASTER",
+      "effect": "Main menu title music — suspected, not separated from `title`.",
+      "note": "Music.bank. The other half of the pair above. Replacing both at once was deliberate — it kept an unknown binding from sinking the run — and the cost is that neither sample is attributed. Replace one alone to close it.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "outcome": "unconfirmed",
+          "witness": "sirene läuft",
+          "by": "maintainer"
+        }
+      ]
+    }
+  ]
+}
