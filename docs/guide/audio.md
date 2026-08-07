@@ -185,11 +185,17 @@ expect a replacement here throughout menu navigation rather than on clicks alone
 In the same run `SFX_UI_Action_Button_Hover_01` landed where its name suggests —
 its tone played on hover, and nothing else the listener did played it.
 
-Music has the same gap between name and binding, and one hole that run did not
-close. The main menu's title music was replaced successfully on that build, but
-`title` and `title_MASTER` in `Music.bank` were replaced in the same pass, so
-which of the two the title event draws on is still unknown. Replacing one of them
-alone has not been tried.
+Music has the same gap between name and binding, and it took two runs to close.
+`Music.bank` holds both `title` and `title_MASTER`; the first run replaced them
+together and the main menu played a siren, which proved the event draws on at
+least one of the two without saying which. A second run replaced `title` alone
+and the menu played its normal theme. So the title event draws on
+**`title_MASTER`**, and not on `title`.
+
+Note what that does and does not say. `title_MASTER` was never replaced on its
+own, so this is elimination across two witnessed observations rather than a
+direct test, and it does not rule out the event drawing on further samples
+besides.
 
 ## Variant sets
 

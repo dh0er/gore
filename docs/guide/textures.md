@@ -169,8 +169,9 @@ opens. One launch decided it: all eight loose PNGs were replaced and the pointer
 did not change, while a cooked texture replaced by the same bundle in the same
 launch was plainly visible. The packed copy is the live one. A new cursor has to
 ship as a pak that overrides those eight entries, which is a bundle's
-[`pak_files` section](bundles.md#shadowed-destinations) — a route that has been
-built but never deployed and never seen to work in game.
+[`pak_files` section](bundles.md#shadowed-destinations). A second launch settled
+that half too: all eight were shipped as an override pak and the pointer was
+magenta. An override pak beats the base pak.
 
 ## What is proven, and by what
 
@@ -221,12 +222,18 @@ build, one sitting, and no screenshots.
   toolkit can otherwise offer — the game itself showed the removal — though it
   is again one look at one screen.
 
-Two corners the pass did not reach. The
-[`pak_files`](bundles.md#shadowed-destinations) route — the shadowed-destination
-case, the mouse cursor above being the example — was built but never deployed and
-never observed, so nothing here says a pak overriding a packed entry works in
-game. And nothing about texture replacement has been checked on any build other
-than 24340829.
+- **An override pak beats the base pak.** The
+  [`pak_files`](bundles.md#shadowed-destinations) route was built during the first
+  pass and deployed in a second one: the eight cursor PNGs went out as an override
+  pak of 2,312 bytes into `~mods\`, and the pointer was magenta where replacing
+  the same eight files loose had changed nothing. That settles a mechanism rather
+  than a cursor, and the part that reaches furthest is not the cursor at all —
+  `G1R\Config` has no loose copy anywhere, so every `.ini` the game reads,
+  `DefaultEngine.ini` included, exists only inside a pak. This is the only route
+  to any of them.
+
+One corner the pass did not reach: nothing about texture replacement has been
+checked on any build other than 24340829.
 
 A *deployed* triplet is verified by SHA-256 and by nothing else: `deploy` records
 a hash per file and confirms the bytes arrived. Nothing in this toolkit ever

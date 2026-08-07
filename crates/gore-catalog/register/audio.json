@@ -79,8 +79,8 @@
     },
     {
       "id": "title",
-      "effect": "Main menu title music — suspected, not separated from `title_MASTER`.",
-      "note": "Music.bank. `title` and `title_MASTER` were replaced with the same rising siren in one pass and the observer heard the siren instead of the shipped title music, so the title event draws on at least one of the two — and the run cannot say which. Replacing one of them alone has not been tried, and is the one launch that would settle it. Recorded as unconfirmed for that reason: a human heard the change, the experiment could not attribute it.",
+      "effect": null,
+      "note": "Replaced ALONE in Music.bank, with `title_MASTER` left untouched, and the main menu played its normal orchestral theme. So the title event does not draw on this sample. An earlier run had replaced both at once and produced the siren, which is what made the pair separable at all.",
       "observations": [
         {
           "date": "2026-08-07",
@@ -89,13 +89,21 @@
           "outcome": "unconfirmed",
           "witness": "sirene läuft",
           "by": "maintainer"
+        },
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "by": "user",
+          "outcome": "refuted",
+          "witness": "musik normal"
         }
       ]
     },
     {
       "id": "title_MASTER",
-      "effect": "Main menu title music — suspected, not separated from `title`.",
-      "note": "Music.bank. The other half of the pair above. Replacing both at once was deliberate — it kept an unknown binding from sinking the run — and the cost is that neither sample is attributed. Replace one alone to close it.",
+      "effect": "Main menu title music",
+      "note": "Identified by elimination rather than by a direct test: this sample was never replaced on its own. Two witnessed observations pin it. Replacing `title` and `title_MASTER` together produced a siren on the main menu, so the event draws on at least one of them; replacing `title` alone changed nothing, so it is not that one. The precise claim is therefore that the title event draws on `title_MASTER` and not on `title` — it does not rule out that it draws on further samples as well.",
       "observations": [
         {
           "date": "2026-08-07",
@@ -104,6 +112,14 @@
           "outcome": "unconfirmed",
           "witness": "sirene läuft",
           "by": "maintainer"
+        },
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "by": "user",
+          "outcome": "confirmed",
+          "witness": "musik normal"
         }
       ]
     }

@@ -54,6 +54,21 @@
           "by": "maintainer"
         }
       ]
+    },
+    {
+      "id": "G1R/Content/Slate/Cursors/Normal/Normal.PNG",
+      "effect": "The mouse pointer, everywhere the game draws one — reachable only through an override .pak, never by replacing the loose file",
+      "note": "The `pak_files` route, observed working for the first time. All eight cursor PNGs were shipped as an override .pak into `~mods\\` (2,312 bytes) and the pointer was magenta. That settles a mechanism, not just a cursor: these eight names exist BOTH loose on disk and inside `G1R-Windows.pak`, and an earlier run established that replacing the loose copies changes nothing because the packed copy wins. An override .pak beats the base .pak. The consequence reaches past cursors — `G1R\\Config` has no loose copy at all, so every .ini the game reads, `DefaultEngine.ini` included, exists only inside a .pak and is reachable only this way. One person, one look, one build.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24340829",
+          "gore": "90940340",
+          "by": "user",
+          "outcome": "confirmed",
+          "witness": "cursor magenta"
+        }
+      ]
     }
   ]
 }
