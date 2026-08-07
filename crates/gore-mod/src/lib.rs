@@ -5560,6 +5560,25 @@ fn prepare(
                         pending.1.insert(set.to_ascii_lowercase(), (set, text));
                     }
                 }
+                /// Split a language tag into its stem and generation rank: `german` -> (german, 0),
+                /// `german_new` -> (german, 1), `english_newer` -> (english, 2).
+                ///
+                /// Derived from the suffix rather than a fixed list of names, so a cache that
+                /// grows another generation is covered without a code change. Only the ORDER is
+                /// assumed — nothing in the file states that `_newer` outranks `_new`; that came
+                /// from watching the game display the newer one. The stems it produces from the
+                /// shipped header are exactly two ladders, german and english, and nothing else.
+                fn generation(language: &str) -> (&str, u8) {
+                    match language
+                        .strip_suffix("_newer")
+                        .map(|stem| (stem, 2))
+                        .or_else(|| language.strip_suffix("_new").map(|stem| (stem, 1)))
+                    {
+                        Some(pair) => pair,
+                        None => (language, 0),
+                    }
+                }
+
                 let mut lc = gore_loc::loc::Lcache::decode(&pristine)?;
                 let declared: BTreeMap<String, String> = lc
                     .languages()
@@ -5568,7 +5587,34 @@ fn prepare(
                     .collect();
                 for (id, langs) in edits.values() {
                     if lc.has_key(id) {
+                        // Owned so the shadow check can read the id's slots while set_value below
+                        // holds the cache mutably.
+                        let carried: Vec<String> = lc
+                            .languages_for(id)
+                            .into_iter()
+                            .map(str::to_ascii_lowercase)
+                            .collect();
                         for (folded_set, (set, text)) in langs {
+                            // An edit to a generation the game does not read lands in the file and
+                            // shows up nowhere. Suppressed when this same bundle also writes the
+                            // winning generation for this id, which is the practice the guide
+                            // recommends and must not be nagged about.
+                            let (stem, rank) = generation(folded_set);
+                            if let Some(winner) = carried
+                                .iter()
+                                .filter(|carried_lang| {
+                                    let (other_stem, other_rank) = generation(carried_lang);
+                                    other_stem == stem && other_rank > rank
+                                })
+                                .max_by_key(|carried_lang| generation(carried_lang).1)
+                            {
+                                if !langs.contains_key(winner) {
+                                    plan.loc_warnings.push(format!(
+                                        "'{id}' also carries '{winner}', which the game displays \
+                                         instead of '{set}' — that edit will not be visible"
+                                    ));
+                                }
+                            }
                             // Best-effort: a language absent from THIS install's record (e.g. a
                             // shared mod built against a different game version) is skipped rather
                             // than aborting the entire deploy.
@@ -9652,6 +9698,13 @@ mod tests {
 
     /// Minimal real encrypted lcache used to exercise the studio LocPatch prepare path.
     fn test_lcache_with_languages(languages: &[&str]) -> Vec<u8> {
+        test_lcache_with_pairs(languages, &[("german", "Käse")])
+    }
+
+    /// The same cache with the single id's language slots spelled out, so a test can build the
+    /// sparse shape the real cache has — an id carrying two generations of one language, or
+    /// carrying fewer languages than the header declares.
+    fn test_lcache_with_pairs(languages: &[&str], pairs: &[(&str, &str)]) -> Vec<u8> {
         let mut plain = Vec::new();
         plain.push(0);
         plain.extend_from_slice(&(b"LCACHE".len() as i32).to_le_bytes());
@@ -9662,9 +9715,11 @@ mod tests {
         }
         plain.extend_from_slice(&1i32.to_le_bytes());
         plain.extend_from_slice(&test_lcache_fstring("itfo_cheese"));
-        plain.extend_from_slice(&1i32.to_le_bytes());
-        plain.extend_from_slice(&test_lcache_fstring("german"));
-        plain.extend_from_slice(&test_lcache_fstring("Käse"));
+        plain.extend_from_slice(&(pairs.len() as i32).to_le_bytes());
+        for (language, value) in pairs {
+            plain.extend_from_slice(&test_lcache_fstring(language));
+            plain.extend_from_slice(&test_lcache_fstring(value));
+        }
         plain.extend_from_slice(&test_lcache_fstring(""));
         plain.extend_from_slice(&0i32.to_le_bytes());
         let pad = (16 - plain.len() % 16) % 16;
@@ -9878,6 +9933,61 @@ mod tests {
         let exported = decoded.export(false);
         assert_eq!(exported["itfo_cheese"]["german"], "Käse");
         assert!(!exported["itfo_cheese"].contains_key("english"));
+    }
+
+    /// Writing the older generation of a language the id also carries a newer one for lands in
+    /// the file and is never displayed. This is the 2,147-id case in the shipped German cache and
+    /// the one the guide's own example used to teach.
+    #[test]
+    fn studio_loc_patch_warns_when_the_edited_generation_is_shadowed() {
+        let cache = test_lcache_with_pairs(
+            &["german", "german_new"],
+            &[("german", "Käse"), ("german_new", "Bergkäse")],
+        );
+        let mut edits: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        edits
+            .entry("itfo_cheese".into())
+            .or_default()
+            .insert("german".into(), "Emmentaler".into());
+
+        let plan = prepare_test_loc_patch_with_cache(&edits, cache).unwrap();
+        assert_eq!(
+            plan.loc_warnings.len(),
+            1,
+            "a shadowed edit must be reported: {:?}",
+            plan.loc_warnings
+        );
+        assert!(
+            plan.loc_warnings[0].contains("german_new")
+                && plan.loc_warnings[0].contains("itfo_cheese"),
+            "the warning names the id and the generation that wins: {:?}",
+            plan.loc_warnings
+        );
+        // The edit still lands: it was a legitimate write, just not a visible one.
+        let decoded = gore_loc::loc::Lcache::decode(&plan.writes[0].1).unwrap();
+        assert_eq!(decoded.export(false)["itfo_cheese"]["german"], "Emmentaler");
+    }
+
+    /// Writing both generations is what the guide recommends, so it must not be nagged about —
+    /// otherwise the warning fires on every correct edit and gets tuned out.
+    #[test]
+    fn studio_loc_patch_stays_silent_when_the_winning_generation_is_written_too() {
+        let cache = test_lcache_with_pairs(
+            &["german", "german_new"],
+            &[("german", "Käse"), ("german_new", "Bergkäse")],
+        );
+        let mut edits: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        edits.entry("itfo_cheese".into()).or_default().extend([
+            ("german".into(), "Emmentaler".into()),
+            ("german_new".into(), "Emmentaler".into()),
+        ]);
+
+        let plan = prepare_test_loc_patch_with_cache(&edits, cache).unwrap();
+        assert!(
+            plan.loc_warnings.is_empty(),
+            "writing both generations is correct and must not warn: {:?}",
+            plan.loc_warnings
+        );
     }
 
     /// The counterpart, so the warning cannot become noise on every correct edit.
