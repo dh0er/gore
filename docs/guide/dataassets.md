@@ -172,6 +172,58 @@ header changes, and unknown wire forms cannot be edited. Inputs are
 size-capped (64 MiB `.uasset`, 256 MiB `.uexp`, 512 MiB per complete cooked
 package); anything larger or malformed is rejected before output is written.
 
+## What is proven, and by what
+
+Two different kinds of evidence stand behind this workflow, and they are worth
+keeping apart.
+
+The first is offline and runs on every test pass. Inspect resolves a selector,
+`patch-fixed` changes exactly the addressed bytes and nothing else, the patched
+pair reopens and walks, a stale selector and an existing output are both
+refused, and the extract -> patch -> pack receipt chain fails closed once the
+installed generation has moved. The real-fixture case changes one lane of one
+`Vector4` leaf in `DA_WolfFootsteps`: the `.uasset` stays byte-identical and
+exactly one `.uexp` byte differs. `pack` then reopens the triplet it just wrote
+and requires the contained package, the TOC chunk hashes, and the mount point to
+agree. None of that involves running the game.
+
+The second is one sighting, and it is new. Before 2026-08-07 no edit made by
+these commands had ever been observed to take effect in the game — the workflow
+was trusted because the bytes and the receipts said so, and for no other reason.
+On that date, on Gothic 1 Remake Steam BuildID 24340829 with `gore` built from
+commit 90940340, one edit was watched:
+
+- package `/Game/UI/CoreMenus/Settings/W_SettingsRow`, extracted to a sealed
+  legacy package;
+- export index 44, object `SizeBox_SettingsEntry`, class `/Script/UMG.SizeBox`,
+  leaf `/MinDesiredHeight`;
+- one `float32`, little-endian: `00002042` (40.0f) replaced by `0000c843`
+  (400.0f);
+- packed as the additive Zen triplet `zzz_GoreSettingsRowTall_P`.
+
+Because `pack` does not deploy, the triplet went into the game through
+[`gore mgr`](mod-manager.md), which classified it as a foreign IoStore triplet
+rather than a GORE bundle, imported it, and applied it under the load-order name
+`zzz_gm000_GoreSettingsRowTall_P.*`. In game, under Main Menu ->
+Einstellungen -> Anzeige, the settings rows were dramatically taller, the
+dropdown controls rendered as tall rectangles, and the page layout was visibly
+broken. One person looked at the screen, once. There is no screenshot, and
+nothing in the test suite checks any of it. Afterwards the mod was undeployed
+and `~mods\` was confirmed empty again.
+
+Read that sighting for exactly what it is. It establishes that the engine
+honours an additive container for a cooked UMG widget asset on this build, and
+that one fixed-width `float32` leaf patched this way reaches the renderer. It
+does not establish anything about other leaf kinds, other asset classes, or
+other builds: one asset, one leaf, one float, one build, one look. Note also
+that the target was a cooked UMG widget package rather than a DataAsset proper —
+that is what these commands accepted in this one case, not a general statement
+about which classes they cover.
+
+Nothing in this toolkit ever observes the screen. A clean `pack` means the
+container is well formed and holds the bytes you asked for; whether the game
+draws anything different is a question only a launch answers.
+
 ## Related
 
 - [Textures](textures.md) — the same additive Zen-triplet delivery for

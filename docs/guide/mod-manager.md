@@ -24,6 +24,11 @@ gore mgr remove <ID>                      # drop from library and loadout
 triplets (`.utoc`/`.ucas`/`.pak`), UE4SS Lua mod folders, and raw game-file
 replacements. `list` prints the entry ids the other commands take.
 
+The foreign path has been walked once end to end against a real install: on
+BuildID 24340829 a triplet produced by `gore asset pack` — not a GORE bundle,
+with no `gore-mod.json` anywhere in it — was imported, classified as a foreign
+triplet, and applied with a load-order filename prefix.
+
 ### GORE bundle format gate
 
 Recognizing a root `gore-mod.json` commits import to the closed
@@ -47,6 +52,14 @@ paks, this ordering controls the filenames the manager writes; it is not by
 itself proof of Unreal's runtime mount priority. At most 1,000 entries may be
 enabled at once, matching the closed `gm000` through `gm999` filename range.
 
+The direction reads backwards the first time, so it is worth saying twice, the
+way the command's own help says it: `0 = mounts first, loses conflicts`. Going
+first is going early, and whatever comes later overwrites you. That has been
+watched happen once, on BuildID 24340829. With two bundles editing the same
+localization id, moving the winner to position `0` flipped `analyze`'s
+prediction, and after a re-apply the game showed the other mod's text — same two
+mods, same id, nothing rebuilt.
+
 ## Conflicts
 
 ```powershell
@@ -56,6 +69,14 @@ gore mgr analyze
 Reports conflicts among the **enabled** mods across localization, audio,
 texture/asset, item overrides (CDO), scripts, and raw-file replacements, and
 which mod wins each one.
+
+Localization is reported **per language**: the target is `<id>|<language>`, so
+two mods editing one id collide once for every language key they both write, and
+each line names its own winner. That naming has been checked against the running
+game once. On BuildID 24340829 two bundles editing the same id were imported,
+enabled and applied; `analyze` reported the clash per language and named a
+winner; the game showed that mod's text. Reordering flipped both the prediction
+and the screen, as [above](#order-and-enablement).
 
 Voice collisions on `(archive, archive_path)` are case-insensitive, soft, and
 order-dependent: the later mod wins while retaining the winning spelling and
@@ -70,6 +91,12 @@ analysis.
 Script mods that do not declare their CDO targets are treated as opaque — the
 manager cannot prove what they touch, so it cannot rule out a conflict with
 them.
+
+Everything else this section describes is still the manager's stated intent
+rather than an observed outcome. Exactly one conflict kind has been watched
+resolve in game: a soft localization clash between two bundles, in both order
+directions. Texture-versus-texture container precedence, script splices, and
+three-way conflicts have never been checked against a running game at all.
 
 ## Apply
 
@@ -91,9 +118,28 @@ disabling a mod in the middle of the order safe.
 Applying, reordering, and resetting against an offline synthetic game root can
 prove deterministic files, owned cleanup, and receipt state. Those checks do
 not prove that Unreal mounts one pak ahead of another, that the game reads the
-selected bytes, or that any runtime behavior changed. They grant no authority
-to modify a real installation, launch the game, or read or mutate a save; those
-steps require separate qualified safety gates.
+selected bytes, or that any runtime behavior changed.
+
+One session has gone past that line. On 2026-08-07, against Gothic 1 Remake at
+Steam BuildID 24340829 with `gore` built from commit `90940340`, a real install
+was imported into, enabled, analyzed, applied, launched, reordered, re-applied
+and reset by hand. The two-mod localization conflict resolved on screen the way
+`analyze` had named it, in both order directions; a foreign `gore asset pack`
+triplet imported and applied; and `reset` left the install pristine, verified on
+disk afterwards — `~mods\` empty, not one `*.gore-bak` anywhere, no deploy
+record, no mutation lock, and every rewritten file back at its original byte
+count, the numbers being the ones in
+[bundles](bundles.md#what-is-proven-and-by-what).
+
+That is one person, one install, one build, one sitting. It moves import, apply,
+reorder, reset and the localization conflict from "deterministic offline" to
+"seen working once on the real game", and it leaves every other conflict kind
+where it was. Nothing re-runs it, and nothing in the toolkit observes the
+screen.
+
+Neither the offline checks nor that session grants any authority to modify a
+real installation, launch the game, or read or mutate a save; those steps
+require separate qualified safety gates.
 
 ## Flag summary
 

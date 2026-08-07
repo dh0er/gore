@@ -70,6 +70,10 @@ been seen to mount and render (see
 follows the base game's own writer conventions and uses a pure-Rust Oodle
 implementation — no proprietary `oo2core` DLL is required.
 
+`--compress` is reachable only from `gore texture pack`. A texture shipped inside
+a [bundle](bundles.md) is packed uncompressed, whatever its size, so an in-game
+sighting by way of `gore mod deploy` says nothing about the compressed writer.
+
 ## What these commands reach
 
 `gore texture` reaches cooked `Texture2D` assets **inside the IoStore
@@ -165,29 +169,69 @@ opens. One launch decided it: all eight loose PNGs were replaced and the pointer
 did not change, while a cooked texture replaced by the same bundle in the same
 launch was plainly visible. The packed copy is the live one. A new cursor has to
 ship as a pak that overrides those eight entries, which is a bundle's
-[`pak_files` section](bundles.md#shadowed-destinations).
+[`pak_files` section](bundles.md#shadowed-destinations) — a route that has been
+built but never deployed and never seen to work in game.
 
 ## What is proven, and by what
 
 Worth being exact about, because the words carry weight the moment something
 does not work. What the tests prove on every run is *structural*: a written
 triplet is a well-formed container, and an asset read back out of it through
-retoc is byte-identical to what went in, down to the pixels. What a human has
-seen — once each, recorded in a commit message and nowhere else — is that such
-a container mounts and renders in game: first an uncompressed one, and after the
-compressed-writer fix a fully compressed multi-block one too. The most recent
-sighting is the one with a date on it: on BuildID 24340829, a triplet deployed
-into `~mods\` by `gore mod deploy` replaced
-`/Game/UI/Textures/Common/T_LogoRemake` — 512×180 `PF_DXT5`, the logo on the
-main menu — and the new art was on screen, in the same launch that showed the
-loose cursor edit changing nothing. That one asset is the known-good target to
-retest with — `T_Logo` sits beside it in the same folder and has never been
-looked at. The sighting is what establishes that `~mods\` mounts on this build,
-and it is still one person looking at one screen: there is no screenshot, and
-nothing in the test suite checks any of it. A *deployed* triplet is verified by
-SHA-256 and by nothing else: `deploy` records a hash per file and confirms the
-bytes arrived. Nothing in this toolkit ever observes the screen, so a successful
-deploy means the file is in place — never that anything changed.
+retoc is byte-identical to what went in, down to the pixels. Nothing in the test
+suite has ever looked at a screen.
+
+That a container also mounts and renders in game is something a human has seen.
+The first two sightings were recorded in commit messages and nowhere else: an
+uncompressed container, and after the compressed-writer fix a fully compressed
+multi-block one. A verification pass on 2026-08-07 added four more observations,
+all on Steam BuildID 24340829 — the same build as the earlier logo sighting —
+with a `gore` binary built from commit `90940340`. One person, one install, one
+build, one sitting, and no screenshots.
+
+- **The logo replacement reproduced.** `/Game/UI/Textures/Common/T_LogoRemake`
+  — 512×180 `PF_DXT5` — was replaced with a solid magenta field carrying a black
+  diagonal cross, shipped as a bundle and deployed with `gore mod deploy` as
+  `zzz_GoreVerifyTexLogos_c5110c96_0_tex_P.{pak,ucas,utoc}`. The magenta field
+  was on the main menu. So the claim that `~mods\` mounts on this build no longer
+  rests on one observation: it has been seen twice, the second time with code
+  newer than the first sighting's.
+- **`T_Logo` is not drawn on the main menu.**
+  `/Game/UI/Textures/Common/T_Logo` — 400×128 `PF_BC7` — was replaced in the
+  *same* triplet and the same launch, and the magenta was nowhere on the main
+  menu. Read that for exactly what it is: one person looked at that one screen
+  for a short time and did not see it. It is evidence that the shipped main menu
+  does not sample this asset; it is not proof the asset is dead everywhere in the
+  game, which nobody has checked. It is worth recording because it is precisely
+  the failure this page warns about — a flawless deploy that changes nothing
+  because the asset is not the one in use — and what made it diagnosable rather
+  than mysterious was the known-good logo riding in the same container.
+- **A large multi-block container mounts and renders.**
+  `/Game/UI/Textures/MainMenus/T_TempBackground_V2` — 3840×2160 `PF_BC7` — went
+  out as its own separate bundle, deliberately not combined with the logos, so a
+  malformed large container could not take the known-good control down with it.
+  The deployed `.ucas` was 8,294,998 bytes, and in game the entire main-menu
+  backdrop was the magenta field. Note what that does and does not extend.
+  Bundles pack uncompressed, so this widens the *uncompressed* writer to 4K
+  `PF_BC7` and to a container of that size. The compressed writer's in-game
+  record is still the single unnamed sighting above; nothing in this pass was
+  packed with `--compress`.
+- **Undeploy was confirmed on screen.** In the launch that showed the magenta
+  backdrop the logo was back to its shipped art, the logo triplet having been
+  undeployed between runs. That is a stronger check than the file-level one this
+  toolkit can otherwise offer — the game itself showed the removal — though it
+  is again one look at one screen.
+
+Two corners the pass did not reach. The
+[`pak_files`](bundles.md#shadowed-destinations) route — the shadowed-destination
+case, the mouse cursor above being the example — was built but never deployed and
+never observed, so nothing here says a pak overriding a packed entry works in
+game. And nothing about texture replacement has been checked on any build other
+than 24340829.
+
+A *deployed* triplet is verified by SHA-256 and by nothing else: `deploy` records
+a hash per file and confirms the bytes arrived. Nothing in this toolkit ever
+observes the screen, so a successful deploy means the file is in place — never
+that anything changed.
 
 ## Flag summary
 

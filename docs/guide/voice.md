@@ -113,6 +113,29 @@ gore voice add --archive "$VO" --path "GoreMods/MyMod/DIA_NEW.ogg" `
 These commands *create an archive*. They do not install it into the game — for
 that, use a [bundle](bundles.md).
 
+### Where the replacement Ogg comes from
+
+`--ogg` takes Ogg/Vorbis or Ogg/Opus and nothing else, and the toolkit ships no
+encoder. Recording real lines therefore needs an encoder of your own — ffmpeg,
+oggenc, sox, whatever you already use — set to write one of those two formats.
+A machine with none of them installed cannot produce a payload at all.
+
+For merely checking that the path works, there is a way round that needs no
+encoder: take a recording out of another language's archive and use it as the
+payload. The other archives under `G1R\Story\VoiceOver` hold Ogg already, so an
+extracted file goes straight back in.
+
+```powershell
+gore voice extract --archive "$GAME\G1R\Story\VoiceOver\russian.zip" `
+    --basename INFO_DIEGO_GAMESTART_11_03.ogg -o payload
+```
+
+For a test this beats a synthesized tone. Another language's take is a different
+voice saying different words, so there is nothing to argue about when you hear
+it, while a beep in the middle of a conversation is easy to mistake for
+something else going wrong. It is a way to prove the path before you commit to
+recording anything, not a way to ship voice work — that still needs the encoder.
+
 ## Multi-file patches: the manifest
 
 For a distributable patch touching several recordings, use the versioned
@@ -195,7 +218,9 @@ Every language's intro subtitles therefore come out of the loc catalog, and a
 
 For an audible proof early in a new game, replace a real in-engine conversation
 line instead. `german_new/OldCamp/Diego/INFO_DIEGO_GAMESTART_11_00.ogg` is the
-first NPC line of a new game:
+first NPC line of a new game, and one of the two lines a replacement has
+actually been heard on — see
+[Deployment reality check](#deployment-reality-check):
 
 ```powershell
 gore voice replace --archive "$VO" `
@@ -207,12 +232,43 @@ gore voice replace --archive "$VO" `
 
 `replace` targets an existing recording and is the established path. `add` is
 archive-safe, but whether the game actually resolves a brand-new voice path at
-runtime is still runtime-dependent — treat additions as experimental.
+runtime is still runtime-dependent — treat additions as experimental. Nothing
+below moves that: the run described here did not exercise `add` at all.
 
 A correct replacement is not the same as an audible one. The archive edit is
 verified; whether that recording is what the engine plays at the moment you are
 listening to is a separate question, and the intro above is the case where the
 answer is no.
+
+A replacement has now also been heard. On BuildID 24340829, with the game's
+voice language set to German, two entries of
+`G1R\Story\VoiceOver\german_new.zip` were replaced through a bundle and the
+bundle deployed:
+
+- `german_new/OldCamp/Diego/INFO_DIEGO_GAMESTART_11_00.ogg` — an Orcish line,
+  taken out of `foreign.zip`.
+- `german_new/OldCamp/Diego/INFO_DIEGO_GAMESTART_11_03.ogg` — the Russian take
+  of the same line, taken out of `russian.zip`.
+
+In a new game, Diego walked up and growled in Orcish instead of saying "Ich bin
+Diego", and his later line came out in Russian. The line between the two,
+`INFO_DIEGO_GAMESTART_11_02`, was deliberately left untouched and played as
+normal German.
+
+That untouched middle line is the part worth writing down. It shows the edit is
+per-entry: nothing in the archive shifted or re-indexed around the two members
+that changed, and a line sitting between them still resolved to its own
+recording. Replacing every line in the scene would have sounded just as
+convincing and proved none of that. The archive grew from 915,670,575 to
+915,717,157 bytes on deploy, and undeploy put it back to exactly 915,670,575.
+
+Read that for what it is. One person listened to one scene, once, on one build
+and one install, with the toolkit built from commit 90940340. Two lines were
+checked, in German only — no other language, no other speaker, no second
+sitting. It establishes that the path works end to end on that build, on the
+two entries that were touched. It does not establish that a particular
+replacement of yours will be audible, and it says nothing about `add`. Nothing
+in this toolkit ever listens, and no test in the suite checks any of it.
 
 ## Flag summary
 

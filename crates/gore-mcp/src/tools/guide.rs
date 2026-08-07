@@ -479,9 +479,16 @@ mod tests {
 
     #[test]
     fn read_returns_a_whole_page() {
-        let result = call_with(json!({ "action": "read", "page": "textures" }));
+        // The shortest page, picked by length rather than by name: a named one starts exercising
+        // the splitter the day it grows past the budget, which is what happened to `textures`.
+        // The split path is covered by its own tests above.
+        let page = guide::PAGES
+            .iter()
+            .min_by_key(|page| page.markdown.len())
+            .expect("the guide has pages");
+        let result = call_with(json!({ "action": "read", "page": page.slug }));
         assert_eq!(result["isError"], json!(false));
-        assert_eq!(text_of(&result), guide::page("textures").unwrap().markdown);
+        assert_eq!(text_of(&result), page.markdown);
     }
 
     #[test]

@@ -595,3 +595,22 @@ guards, serialized exact-basis session/controller behavior, and the direct
 expanded-stage **Build files...** action. This is offline construction evidence
 only; no test currently qualifies the Footstep values' gameplay meaning or an
 installed runtime result.
+
+One in-game observation now sits beside that test evidence, outside the suite.
+On 2026-08-07, on Steam BuildID 24340829 with a build of commit 90940340, a
+triplet produced by the standalone extract/`patch-fixed`/pack route —
+`/Game/UI/CoreMenus/Settings/W_SettingsRow`, export 44 `SizeBox_SettingsEntry`
+(`/Script/UMG.SizeBox`), leaf `/MinDesiredHeight`, `float32` `00002042` ->
+`0000c843` — was deployed through `gore mgr` as a foreign IoStore triplet and
+visibly changed the rendered settings page. The exact sighting is recorded in
+[the guide](../guide/dataassets.md). It is the first observed runtime effect in
+this domain, and it remains one person, one install, one build, one look, with
+no screenshot and no automated check. It covers one
+fixed-width `float32` leaf on one cooked UMG widget package and says nothing
+about other leaf kinds, classes, or builds.
+
+It also does not reach the managed routes described above. The reviewed
+Human/Scavenger/Wolf `FeetTextureSize` profile, the installed-package browser's
+typed edits, and the managed reviewed-stage build were not exercised in that
+session; their outputs have still never been seen in a running game, and every
+`runtime_unqualified` status above stands unchanged.

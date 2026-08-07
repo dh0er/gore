@@ -116,6 +116,51 @@ What deploy does per domain:
 
 `gore mod undeploy` restores every backup and removes every additive container.
 
+### What is proven, and by what
+
+The offline half is routine and re-checked on every test run against a temporary
+game root: a deploy writes the files it names, and an undeploy restores the
+backups and deletes the containers it owns. Whether that survives contact with
+the game was checked once, by hand, on 2026-08-07 — Gothic 1 Remake at Steam
+BuildID 24340829, `gore` built from commit `90940340`, with each mod's effect
+picked so it could not be misread, and a person looking or listening.
+
+One bundle carrying `overrides`, `loc_edits` and a `texture` deployed as a unit
+and took effect in a single launch. The main-menu logo was magenta, the edited
+menu string was on screen, and the override's line was in `UE4SS.log`. That is
+three unrelated deploy mechanisms landing together — an additive Zen triplet in
+`~mods\`, an in-place `.lcache` rewrite with its `*.gore-bak` beside it, and a
+generated UE4SS Lua mod folder — from one spec and one `gore mod deploy`.
+
+Undeploy came back **byte-exact** for the in-place mechanisms, which is more
+than "the backup was restored". Over the day's runs the `.lcache` returned to
+exactly 37,093,440 bytes and the 915 MB `german_new.zip` to exactly
+915,670,575 — the sizes they had before any of it started.
+
+Undeploy also left nothing behind *between* runs, and that is the most useful
+single thing the session established. Seven bundles were deployed and undeployed
+in sequence on that install, several of them overriding the same class. The
+seventh one's line in `UE4SS.log` read:
+
+```
+[GoreVerifyCombo] ItFo_Apple.m_Value 4 -> 12345
+```
+
+The `4` is the value read off the CDO before the write: the vanilla one, not the
+`99999` or the `1000` that earlier bundles in the same sequence had set. Nothing
+carried over.
+Every other observation from that day rests on it: in a sequence of deploys and
+undeploys where residue survived, no result would mean anything, because each
+run would be reading what the previous ones left rather than the mod under test.
+Each run also carried a control whose effect was already established, so a run
+that showed nothing could be told apart from a tool that did nothing.
+
+Read it for exactly what it is. One person, one install, one build, one sitting,
+a screen and a log file: more evidence than existed before, and not a test
+suite. Nothing re-checks it, and nothing in this toolkit ever observes the
+screen — a deploy that reports success still says only that the bytes are in
+place.
+
 ## Loose files
 
 Most game content lives in the IoStore containers (use `texture`) or in an
@@ -191,9 +236,13 @@ and its restore.
 
 The deterministic pak filenames, filesystem changes, and deploy receipts are
 offline ownership evidence only. They do **not** prove Unreal's mount priority,
-that the game reads the intended entry, or any runtime/gameplay result. They
-also grant no authority for a real installation, game launch, save access, or
-save mutation; each of those needs its own qualified safety gate.
+that the game reads the intended entry, or any runtime/gameplay result. The
+2026-08-07 session did not close that gap either. It launched the game with a
+triplet of its own in `~mods\` and looked at the result, but it never put two
+mods' containers on the same path, so which of those the engine picks is still
+unobserved. The receipts also grant no authority for a real installation, game
+launch, save access, or save mutation; each of those needs its own qualified
+safety gate.
 
 ## Dialog topics
 
@@ -241,6 +290,14 @@ live archive is changed.
 and conflict detection, use [`gore mgr`](mod-manager.md) or the
 [Mod Manager](../../apps/mod-manager/README.md) app, which consume the same
 bundles.
+
+That side was exercised on the same install, on the same day: two bundles
+editing one localization id, `gore mgr analyze` naming the winner, and the game
+showing the mod it named — then the reverse after a reorder. The details are in
+[the manager's evidence boundary](mod-manager.md#evidence-boundary). It goes
+exactly one conflict kind deep: a soft localization clash between two bundles.
+Texture-versus-texture container precedence, script splices and three-way
+conflicts were never checked against a running game.
 
 ## Other helpers
 
