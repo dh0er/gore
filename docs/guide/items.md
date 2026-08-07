@@ -97,7 +97,7 @@ when the mod first runs. So the mod polls: every 1000 ms, up to 120 attempts,
 applying each override the first time its CDO appears and leaving it alone
 afterwards. If a CDO never turns up, it logs that it gave up and stops.
 
-Measured once, on Steam build 24340829: the mod started at 10:58:03.4 and the
+Measured once, on Steam build 24539464: the mod started at 10:58:03.4 and the
 override landed at 10:58:07.5 — about four seconds and several retries later.
 Quitting as soon as the main menu is up can therefore show you nothing, and
 that is not the same as the mod being broken.

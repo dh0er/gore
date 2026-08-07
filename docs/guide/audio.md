@@ -177,7 +177,7 @@ sliders, spin boxes and the settings rows. Replace one of those, click through
 the main menu, and you hear the original — not because the replacement failed
 but because that surface never plays it.
 
-One check in game bears that out and widens it. On BuildID 24340829 the four
+One check in game bears that out and widens it. On BuildID 24539464 the four
 `SFX_UI_Action_MenuButton_Click` samples were replaced with distinguishable tones
 and a person listened: the tones played on the menu buttons, and also when
 backing out of a submenu with Escape. The name is narrower than the behaviour, so
@@ -224,7 +224,7 @@ substring of `SFX_UI_Action_MenuButton_Click_01`.
 
 Which member a trigger picks is decided by the event's playlist inside the bank,
 which `gore audio` does not read. For that one set it behaved randomly: on
-BuildID 24340829, with a different tone in each of the four, a listener clicking
+BuildID 24539464, with a different tone in each of the four, a listener clicking
 through the main menu reported them arriving in no pattern. Replacing only `_01`,
 which is the obvious move, would have produced the intended sound on roughly one
 click in four — easy to mistake for a tool that does not work.
@@ -288,7 +288,7 @@ game's own FMOD runtime and the event plays the injected audio. That was measure
 once, off-line, by rendering an event through FMOD's non-realtime writer from a
 pristine bank and from an injected one and comparing the results.
 
-It has since also been heard. On BuildID 24340829, five replaced `SFX.bank`
+It has since also been heard. On BuildID 24539464, five replaced `SFX.bank`
 samples and the main menu's title music came out of the running game and were
 identified by a person listening — one build, one install, one listener, one
 sitting. That single session is what the menu findings above rest on, and it is

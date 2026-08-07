@@ -25,7 +25,7 @@ triplets (`.utoc`/`.ucas`/`.pak`), UE4SS Lua mod folders, and raw game-file
 replacements. `list` prints the entry ids the other commands take.
 
 The foreign path has been walked once end to end against a real install: on
-BuildID 24340829 a triplet produced by `gore asset pack` — not a GORE bundle,
+BuildID 24539464 a triplet produced by `gore asset pack` — not a GORE bundle,
 with no `gore-mod.json` anywhere in it — was imported, classified as a foreign
 triplet, and applied with a load-order filename prefix.
 
@@ -55,7 +55,7 @@ enabled at once, matching the closed `gm000` through `gm999` filename range.
 The direction reads backwards the first time, so it is worth saying twice, the
 way the command's own help says it: `0 = mounts first, loses conflicts`. Going
 first is going early, and whatever comes later overwrites you. That has been
-watched happen once, on BuildID 24340829. With two bundles editing the same
+watched happen once, on BuildID 24539464. With two bundles editing the same
 localization id, moving the winner to position `0` flipped `analyze`'s
 prediction, and after a re-apply the game showed the other mod's text — same two
 mods, same id, nothing rebuilt.
@@ -73,7 +73,7 @@ which mod wins each one.
 Localization is reported **per language**: the target is `<id>|<language>`, so
 two mods editing one id collide once for every language key they both write, and
 each line names its own winner. That naming has been checked against the running
-game once. On BuildID 24340829 two bundles editing the same id were imported,
+game once. On BuildID 24539464 two bundles editing the same id were imported,
 enabled and applied; `analyze` reported the clash per language and named a
 winner; the game showed that mod's text. Reordering flipped both the prediction
 and the screen, as [above](#order-and-enablement).
@@ -121,7 +121,7 @@ not prove that Unreal mounts one pak ahead of another, that the game reads the
 selected bytes, or that any runtime behavior changed.
 
 One session has gone past that line. On 2026-08-07, against Gothic 1 Remake at
-Steam BuildID 24340829 with `gore` built from commit `90940340`, a real install
+Steam BuildID 24539464 with `gore` built from commit `90940340`, a real install
 was imported into, enabled, analyzed, applied, launched, reordered, re-applied
 and reset by hand. The two-mod localization conflict resolved on screen the way
 `analyze` had named it, in both order directions; a foreign `gore asset pack`

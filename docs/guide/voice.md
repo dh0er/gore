@@ -305,7 +305,7 @@ verified; whether that recording is what the engine plays at the moment you are
 listening to is a separate question, and the intro above is the case where the
 answer is no.
 
-A replacement has now also been heard. On BuildID 24340829, with the game's
+A replacement has now also been heard. On BuildID 24539464, with the game's
 voice language set to German, two entries of
 `G1R\Story\VoiceOver\german_new.zip` were replaced through a bundle and the
 bundle deployed:

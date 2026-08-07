@@ -72,7 +72,7 @@ backs the original up to `*.gore-bak` on deploy.
 
 ## Which language key to write
 
-One `gore loc export` of BuildID 24340829 finishes by reporting `43898 ids
+One `gore loc export` of BuildID 24539464 finishes by reporting `43898 ids
 across 19 languages`. The 19 counts keys in the cache header, not translations
 you can choose between. Grouped by what they actually are — every id count here
 comes from that same export, and counts only ids that carry text:
@@ -106,7 +106,7 @@ in wording rather than spelling — the same line rewritten, not reprinted.
 Where an id has both German keys, the game displays `german_new`. Where it has
 only `german`, the game displays `german`.
 
-That was observed on the shipped game, in both directions, on BuildID 24340829.
+That was observed on the shipped game, in both directions, on BuildID 24539464.
 A distinguishable marker was written into each of one id's two German keys, and
 the journal showed the `german_new` marker; separately, ids that carry only
 `german` — menu buttons, difficulty names, NPC display names, and the dialog
@@ -144,7 +144,7 @@ Writing `german` on an id that has *only* `german_new` behaves differently
 depending on how the edit reaches the game:
 
 - **`gore loc import` fails loudly**, naming the id and the key. Measured
-  against a copy of BuildID 24340829's cache:
+  against a copy of BuildID 24539464's cache:
 
   ```
   error: editing info_bau_2_daslager_15_00/german: language 'german' not found for key 'info_bau_2_daslager_15_00'

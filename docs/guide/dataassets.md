@@ -190,8 +190,12 @@ agree. None of that involves running the game.
 The second is one sighting, and it is new. Before 2026-08-07 no edit made by
 these commands had ever been observed to take effect in the game — the workflow
 was trusted because the bytes and the receipts said so, and for no other reason.
-On that date, on Gothic 1 Remake Steam BuildID 24340829 with `gore` built from
-commit 90940340, one edit was watched:
+On that date, on Gothic 1 Remake Steam BuildID 24539464 with `gore` built from
+commit 90940340, one edit was watched. Note one wrinkle in its provenance: the
+triplet had been extracted and packed two days earlier, against the containers
+of the preceding build 24340829, and it still applied after the game updated.
+That is worth knowing and is not the same as having been produced against the
+build it ran on:
 
 - package `/Game/UI/CoreMenus/Settings/W_SettingsRow`, extracted to a sealed
   legacy package;

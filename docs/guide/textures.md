@@ -185,8 +185,10 @@ That a container also mounts and renders in game is something a human has seen.
 The first two sightings were recorded in commit messages and nowhere else: an
 uncompressed container, and after the compressed-writer fix a fully compressed
 multi-block one. A verification pass on 2026-08-07 added four more observations,
-all on Steam BuildID 24340829 — the same build as the earlier logo sighting —
-with a `gore` binary built from commit `90940340`. One person, one install, one
+all on Steam BuildID 24539464 with a `gore` binary built from commit `90940340`.
+That is a *newer* build than the one the first two sightings were made on
+(24340829): the game updated in between, so the pipeline is now known to have
+survived a game update rather than only to have worked twice on one build. One person, one install, one
 build, one sitting, and no screenshots.
 
 - **The logo replacement reproduced.** `/Game/UI/Textures/Common/T_LogoRemake`
@@ -233,7 +235,7 @@ build, one sitting, and no screenshots.
   to any of them.
 
 One corner the pass did not reach: nothing about texture replacement has been
-checked on any build other than 24340829.
+checked on any build other than these two, 24340829 and 24539464.
 
 A *deployed* triplet is verified by SHA-256 and by nothing else: `deploy` records
 a hash per file and confirms the bytes arrived. Nothing in this toolkit ever

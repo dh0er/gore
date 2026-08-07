@@ -597,7 +597,8 @@ only; no test currently qualifies the Footstep values' gameplay meaning or an
 installed runtime result.
 
 One in-game observation now sits beside that test evidence, outside the suite.
-On 2026-08-07, on Steam BuildID 24340829 with a build of commit 90940340, a
+On 2026-08-07, on Steam BuildID 24539464 with a build of commit 90940340 — and
+from a triplet packed two days earlier against the preceding build 24340829 — a
 triplet produced by the standalone extract/`patch-fixed`/pack route —
 `/Game/UI/CoreMenus/Settings/W_SettingsRow`, export 44 `SizeBox_SettingsEntry`
 (`/Script/UMG.SizeBox`), leaf `/MinDesiredHeight`, `float32` `00002042` ->

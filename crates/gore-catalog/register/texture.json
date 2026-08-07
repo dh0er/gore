@@ -9,7 +9,7 @@
       "observations": [
         {
           "date": "2026-08-07",
-          "build": "24340829",
+          "build": "24539464",
           "gore": "90940340",
           "outcome": "confirmed",
           "witness": "ja genau. nr 1 magenta, nr 2 nicht vorhanden",
@@ -17,7 +17,7 @@
         },
         {
           "date": "2026-08-07",
-          "build": "24340829",
+          "build": "24539464",
           "gore": "90940340",
           "outcome": "confirmed",
           "witness": "passt alles",
@@ -32,7 +32,7 @@
       "observations": [
         {
           "date": "2026-08-07",
-          "build": "24340829",
+          "build": "24539464",
           "gore": "90940340",
           "outcome": "refuted",
           "witness": "ja genau. nr 1 magenta, nr 2 nicht vorhanden",
@@ -47,7 +47,7 @@
       "observations": [
         {
           "date": "2026-08-07",
-          "build": "24340829",
+          "build": "24539464",
           "gore": "90940340",
           "outcome": "confirmed",
           "witness": "hintergrund magenta, logo normal.",
@@ -62,7 +62,7 @@
       "observations": [
         {
           "date": "2026-08-07",
-          "build": "24340829",
+          "build": "24539464",
           "gore": "90940340",
           "by": "user",
           "outcome": "confirmed",

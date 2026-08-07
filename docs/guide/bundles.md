@@ -41,7 +41,7 @@ instead of surviving to a deploy that was always going to reject it.
 **`loc_edits` keys are language keys, and German has two of them.** The cache
 carries `german` (the original 1998 text) and `german_new` (the remake's
 rewrite), plus three English generations; where an id has both German keys the
-game displays `german_new` — observed once, on BuildID 24340829. That is why
+game displays `german_new` — observed once, on BuildID 24539464. That is why
 the example above writes both. An edit
 whose key a given id does not carry is **silently dropped at deploy** — the
 bundle deploys, the `.lcache` is rewritten, the `*.gore-bak` backup is taken,
@@ -122,7 +122,7 @@ The offline half is routine and re-checked on every test run against a temporary
 game root: a deploy writes the files it names, and an undeploy restores the
 backups and deletes the containers it owns. Whether that survives contact with
 the game was checked once, by hand, on 2026-08-07 — Gothic 1 Remake at Steam
-BuildID 24340829, `gore` built from commit `90940340`, with each mod's effect
+BuildID 24539464, `gore` built from commit `90940340`, with each mod's effect
 picked so it could not be misread, and a person looking or listening.
 
 One bundle carrying `overrides`, `loc_edits` and a `texture` deployed as a unit
