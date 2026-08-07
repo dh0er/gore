@@ -1204,12 +1204,12 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let occupied = dir.path().join("sfx");
         std::fs::create_dir_all(&occupied).expect("mkdir");
-        std::fs::write(occupied.join("0_Kept.wav"), b"edited").expect("write");
+        std::fs::write(occupied.join("ItFo_Apple.lua"), b"edited").expect("write");
 
         let raised = question(
-            "gore_audio",
-            "extract",
-            json!({ "bank": "SFX.bank", "out": occupied.to_string_lossy() }),
+            "gore_catalog",
+            "stubs",
+            json!({ "model": "model.json", "out": occupied.to_string_lossy() }),
             &options(),
         )
         .expect("extracting over files already in the directory is asked about");
@@ -1244,9 +1244,9 @@ mod tests {
         for out in [&missing, &empty] {
             assert!(
                 question(
-                    "gore_audio",
-                    "extract",
-                    json!({ "bank": "SFX.bank", "out": out.to_string_lossy() }),
+                    "gore_catalog",
+                    "stubs",
+                    json!({ "model": "model.json", "out": out.to_string_lossy() }),
                     &options(),
                 )
                 .is_none(),
@@ -1261,9 +1261,9 @@ mod tests {
         std::fs::create_dir_all(&inside).expect("mkdir");
         assert!(
             question(
-                "gore_audio",
-                "extract",
-                json!({ "bank": "SFX.bank", "out": inside.to_string_lossy() }),
+                "gore_catalog",
+                "stubs",
+                json!({ "model": "model.json", "out": inside.to_string_lossy() }),
                 &options(),
             )
             .is_some(),

@@ -176,6 +176,13 @@ const AUDIO_EXTRACT_ARGS: &[ArgSpec] = &[
     ArgSpec::new("out", Long("out"), Path, "Output directory for .wav files", true),
     ArgSpec::new("sample", Long("sample"), Str, "A single sample name, or \"all\"", false)
         .with_default("all"),
+    ArgSpec::new(
+        "filter",
+        Long("filter"),
+        Str,
+        "Extract every sample whose name contains this substring (case-insensitive)",
+        false,
+    ),
     AUDIO_KEY,
 ];
 
@@ -239,13 +246,14 @@ const AUDIO_COMMANDS: &[CommandSpec] = &[
         "extract",
         "Extract samples to WAV (.wav) for listening/editing",
         AUDIO_EXTRACT_ARGS,
-        // Writes `<out>/<index>_<sample>.wav` per sample with `fs::write`, so a rerun or an edited
-        // WAV in that directory is truncated. The names come from the bank's own sample list, which
-        // this layer cannot read. That used to gate the command outright, and the cost showed up in
-        // a real session: extracting one sample into a scratch directory that did not exist yet
-        // raised the same confirmation as writing into the game. An empty or absent `out` holds
-        // nothing to overwrite, whatever the bank calls its samples, so only an occupied one asks.
-        Safety::write().clobbers_dir(&["out"]),
+        // Writes `<out>/<index>_<sample>.wav` per sample, under names taken from the bank's own
+        // sample list, which this layer cannot read. It used to ask whenever `out` was non-empty,
+        // and that is the workflow: auditioning candidates one at a time filled the directory, so
+        // the second extract raised a confirmation because the first had succeeded. The CLI now
+        // refuses the individual file it would replace and names it, which protects the same thing
+        // without standing in front of the ordinary case. The two halves ship together — dropping
+        // this facet against an older CLI would leave neither layer checking.
+        Safety::write(),
         T_NORMAL,
     )
     .guide("audio"),

@@ -321,6 +321,9 @@ enum AudioAction {
         /// A single sample name, or "all" (default)
         #[arg(long)]
         sample: Option<String>,
+        /// Extract every sample whose name contains this substring (case-insensitive)
+        #[arg(long)]
+        filter: Option<String>,
         /// Override the bank encryption key
         #[arg(long)]
         key: Option<String>,
@@ -503,8 +506,9 @@ fn run_cli() {
                 bank,
                 out,
                 sample,
+                filter,
                 key,
-            } => cmd::audio::extract(bank, out, sample, key),
+            } => cmd::audio::extract(bank, out, sample, filter, key),
             AudioAction::Replace {
                 map,
                 bank,

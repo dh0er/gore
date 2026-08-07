@@ -1010,11 +1010,17 @@ mod tests {
                 }
             }
         }
-        // `asset extract` is the one exemption. Its CLI resolves the destination through
-        // `prepare_absent_output_directory`, which refuses anything inside the live game tree
-        // outright — so the command is already the guard, and adding it here would only replace a
-        // precise CLI error with a permission refusal.
-        unchecked.retain(|name| name != "gore_asset extract");
+        // Two exemptions, both for the same reason: the CLI is already the guard, and listing them
+        // here would replace a precise CLI error with a permission refusal.
+        //
+        // `asset extract` resolves the destination through `prepare_absent_output_directory`, which
+        // refuses anything inside the live game tree outright.
+        //
+        // `audio extract` writes one WAV per sample under names taken from the bank, and refuses
+        // the individual file it would replace, naming it. It was covered by `clobbers_dir` until
+        // that proved to fire on the ordinary workflow — auditioning candidates into one directory
+        // means the second extract meets the first one's output.
+        unchecked.retain(|name| name != "gore_asset extract" && name != "gore_audio extract");
         assert!(
             unchecked.is_empty(),
             "these name an output that no safety list covers: {unchecked:?}"
@@ -1136,8 +1142,10 @@ mod tests {
         choosing.sort_unstable();
 
         let mut expected: Vec<(&str, &str, &[&'static str])> = vec![
-            // One WAV per sample, named from the bank.
-            ("gore_audio", "extract", &["out"]),
+            // `gore_audio extract` used to be here. It writes one WAV per sample under names taken
+            // from the bank, but auditioning candidates into one directory is the workflow, so the
+            // whole-directory rule fired on the second extract of a normal session. The CLI refuses
+            // the individual file it would replace instead.
             // One `.lua` per class, named from the model file.
             ("gore_catalog", "stubs", &["out"]),
             // One `.as` per module, laid out by the cache's own ScriptRelativeFilename.

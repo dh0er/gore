@@ -191,6 +191,7 @@ pub fn extract(
     bank: PathBuf,
     out: PathBuf,
     sample: Option<String>,
+    filter: Option<String>,
     key: Option<String>,
 ) -> Result<()> {
     let bytes = std::fs::read(&bank).with_context(|| format!("reading '{}'", bank.display()))?;
@@ -204,12 +205,32 @@ pub fn extract(
     std::fs::create_dir_all(&out).with_context(|| format!("creating '{}'", out.display()))?;
 
     // indices to extract
-    let indices: Vec<usize> = match &sample {
-        Some(name) if name != "all" => vec![view
+    let indices: Vec<usize> = match (&sample, &filter) {
+        (Some(name), _) if name != "all" => vec![view
             .samples
             .iter()
             .position(|s| &s.name == name)
             .with_context(|| format!("sample not found: {name}"))?],
+        // Same semantics as `list --filter`: case-insensitive substring. Auditioning a variant set
+        // is the normal way into this command, and doing it one `--sample` at a time was the
+        // reason a directory kept filling up.
+        (_, Some(needle)) => {
+            let needle = needle.to_lowercase();
+            let matched: Vec<usize> = view
+                .samples
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| super::contains_case_insensitive(&s.name, &needle))
+                .map(|(i, _)| i)
+                .collect();
+            if matched.is_empty() {
+                anyhow::bail!(
+                    "no sample name contains '{needle}'; `gore audio list --bank <BANK> \
+                     --filter {needle}` shows what the bank does carry"
+                );
+            }
+            matched
+        }
         _ => (0..view.samples.len()).collect(),
     };
 
@@ -226,6 +247,19 @@ pub fn extract(
                 // Prefix with the sample index so two names that sanitize to the same basename
                 // (e.g. differing only by punctuation) don't collide and silently overwrite.
                 let path = out.join(format!("{i}_{}.wav", sanitize(&view.samples[i].name)));
+                // Refuse the one file rather than the whole directory. The names come from the
+                // bank, so a caller cannot predict them and cannot be asked about them up front —
+                // but an existing file is still theirs, possibly an edited one they are about to
+                // inject. Auditioning several samples into one directory is the workflow this
+                // command is for, and a blanket emptiness rule made that impossible.
+                if path.exists() {
+                    anyhow::bail!(
+                        "'{}' already exists; extract writes one file per sample under a name \
+                         taken from the bank, so this would replace it. Delete it, or pass a \
+                         different --out.",
+                        path.display()
+                    );
+                }
                 std::fs::write(&path, &wav)
                     .with_context(|| format!("writing '{}'", path.display()))?;
                 ok += 1;

@@ -67,11 +67,19 @@ all ten banks has to expect that; the samples themselves are in `SFX.bank`,
 ## Extract
 
 ```powershell
-gore audio extract --bank "$GAME\...\SFX.bank" -o wavs               # all samples
-gore audio extract --bank "$GAME\...\SFX.bank" -o wavs --sample Foo  # just one
+gore audio extract --bank "$GAME\...\SFX.bank" -o wavs                      # all samples
+gore audio extract --bank "$GAME\...\SFX.bank" -o wavs --sample Foo         # just one
+gore audio extract --bank "$GAME\...\SFX.bank" -o wavs --filter MenuButton  # a whole set
 ```
 
-`--sample` takes a single sample name, or `all` (the default).
+`--sample` takes a single sample name, or `all` (the default). `--filter` takes
+the same case-insensitive substring `list` does, which is how you pull a whole
+variant set out in one call rather than one `--sample` at a time.
+
+Extracting into a directory that already holds WAVs is fine — auditioning
+candidates is what this command is for. What it will not do is replace a file
+already there: the names come from the bank, so a collision means the earlier
+extract's output, or something you edited. It names the file and stops.
 
 Extraction decodes Vorbis, so a sample in another codec is skipped rather than
 written. Skips are reported to stderr once per *reason*, with a count and the
@@ -236,7 +244,7 @@ pass it.
 |---|---|---|
 | `--bank <PATH>` | all | The `.bank` file to read or modify. |
 | `--json` | `list` | One JSON document instead of the human-readable table. |
-| `--filter <TEXT>` | `list` | Keep only sample names containing this substring, case-insensitive. |
+| `--filter <TEXT>` | `list`, `extract` | Keep only sample names containing this substring, case-insensitive. |
 | `--max <N>` | `list` | Max samples to print (default 100). The result says how many matched. `--max 0` lists nothing and reports only the counts. |
 | `-o, --out <PATH>` | `extract`, `replace`, `export-patch`, `apply-patch` | Output dir (`extract`), output bank (`replace`, `apply-patch`), or output zip (`export-patch`). |
 | `--sample <NAME>` | `extract` | One sample name, or `all` (default). |
