@@ -75,6 +75,21 @@ pub fn deploy(bundle: PathBuf, game: Option<PathBuf>) -> Result<()> {
         rec.mod_name,
         rec.backups.len()
     );
+    // The deploy succeeded, so this goes to stderr and after the result line: it reports edits
+    // that did not land, not a failure of the deployment.
+    if !rec.loc_warnings.is_empty() {
+        eprintln!(
+            "warning: {} localization edit(s) did not apply:",
+            rec.loc_warnings.len()
+        );
+        for warning in &rec.loc_warnings {
+            eprintln!("  - {warning}");
+        }
+        eprintln!(
+            "The game reads one generation of each language and an id carries only the ones it \
+             has. See the text-and-dialogs guide page on which language key to write."
+        );
+    }
     Ok(())
 }
 

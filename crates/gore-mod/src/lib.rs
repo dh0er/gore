@@ -3171,6 +3171,11 @@ pub struct FileCleanupClaim {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct DeployRecord {
+    /// Localization edits this deploy could not apply, each naming the id and language. Carried
+    /// back to the caller so it can be shown, never written to the on-disk record: it describes
+    /// one run, not the deployment's state, and the record is read back by undeploy and status.
+    #[serde(skip)]
+    pub loc_warnings: Vec<String>,
     pub mod_name: String,
     /// deployed UE4SS mod dir (absolute), if any
     pub ue4ss_mod_dir: Option<String>,
@@ -3965,6 +3970,12 @@ pub(crate) struct DeployPlan {
     /// Retained component-wise no-follow binding of the fixed VoiceOver directory. This survives
     /// prepare so commit can reject an identity replacement before any game mutation.
     voice_over_guard: Option<VoiceOverPathGuard>,
+    /// Localization edits that named a declared language the target id does not carry. The write
+    /// is legitimately skipped — the id simply has no slot for that language — but skipping it
+    /// silently is what made a mis-targeted translation indistinguishable from a broken tool.
+    /// Reported after a successful deploy rather than refused, so one unusable edit in a large
+    /// bundle does not block the rest.
+    pub(crate) loc_warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -4526,7 +4537,12 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
         mod_name: manifest.mod_meta.name.clone(),
         ..Default::default()
     };
-    commit_plan(&gp, game_root, plan, record, prev)
+    // Carried across the commit because the plan is consumed there, and only reattached on
+    // success: a deploy that failed has nothing to report about edits it never applied.
+    let loc_warnings = plan.loc_warnings.clone();
+    let mut committed = commit_plan(&gp, game_root, plan, record, prev)?;
+    committed.loc_warnings = loc_warnings;
+    Ok(committed)
 }
 
 /// Commit a prepared [`DeployPlan`]: stage backups, atomically persist a recovery record BEFORE
@@ -5557,7 +5573,16 @@ fn prepare(
                             // shared mod built against a different game version) is skipped rather
                             // than aborting the entire deploy.
                             if declared.contains_key(folded_set) {
-                                let _ = lc.set_value(id, set, text);
+                                // `set_value` still fails when the language is declared by the
+                                // cache but this particular id has no slot for it — the cache is
+                                // sparse. That is a different miss from the one above, and the
+                                // standalone `gore loc import` reports it by name, so swallowing
+                                // it here left the two paths disagreeing about the same edit.
+                                if let Err(error) = lc.set_value(id, set, text) {
+                                    plan.loc_warnings.push(format!(
+                                        "'{id}' has no '{set}' text, so that edit was skipped: {error}"
+                                    ));
+                                }
                             }
                         }
                     } else {
@@ -9813,6 +9838,65 @@ mod tests {
         assert!(!exported["goremod_new_dialog"].contains_key("english"));
         assert_eq!(exported["goremod_new_dialog"].len(), 1);
         assert_eq!(exported["itfo_cheese"]["german"], "Käse");
+    }
+
+    /// The cache is sparse: declaring a language does not mean every id carries it. An edit that
+    /// names a declared language the id has no slot for cannot land, and used to be dropped
+    /// without a word — while the standalone `gore loc import` reported the same miss by name.
+    /// That silence is what made a mis-targeted translation look like a broken tool.
+    #[test]
+    fn studio_loc_patch_reports_an_edit_the_target_id_has_no_slot_for() {
+        let mut edits: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        edits
+            .entry("itfo_cheese".into())
+            .or_default()
+            .insert("english".into(), "Cheese".into());
+
+        // english IS declared here, so this is not the unknown-language skip above; itfo_cheese
+        // still carries german alone.
+        let plan = prepare_test_loc_patch_with_cache(
+            &edits,
+            test_lcache_with_languages(&["german", "english"]),
+        )
+        .unwrap();
+
+        assert_eq!(plan.writes.len(), 1, "the deploy still proceeds");
+        assert_eq!(
+            plan.loc_warnings.len(),
+            1,
+            "the skipped edit must be reported: {:?}",
+            plan.loc_warnings
+        );
+        assert!(
+            plan.loc_warnings[0].contains("itfo_cheese")
+                && plan.loc_warnings[0].contains("english"),
+            "the warning names the id and the language: {:?}",
+            plan.loc_warnings
+        );
+
+        let decoded = gore_loc::loc::Lcache::decode(&plan.writes[0].1).unwrap();
+        let exported = decoded.export(false);
+        assert_eq!(exported["itfo_cheese"]["german"], "Käse");
+        assert!(!exported["itfo_cheese"].contains_key("english"));
+    }
+
+    /// The counterpart, so the warning cannot become noise on every correct edit.
+    #[test]
+    fn studio_loc_patch_stays_silent_when_every_edit_lands() {
+        let mut edits: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        edits
+            .entry("itfo_cheese".into())
+            .or_default()
+            .insert("german".into(), "Bergkäse".into());
+
+        let plan = prepare_test_loc_patch(&edits).unwrap();
+        assert!(
+            plan.loc_warnings.is_empty(),
+            "an edit that lands must not warn: {:?}",
+            plan.loc_warnings
+        );
+        let decoded = gore_loc::loc::Lcache::decode(&plan.writes[0].1).unwrap();
+        assert_eq!(decoded.export(false)["itfo_cheese"]["german"], "Bergkäse");
     }
 
     #[test]
