@@ -87,7 +87,7 @@ Every domain produces a mod a different way, and each one is usable on its own:
 
 | Domain | Mechanism | Touches | Guide |
 |--------|-----------|---------|-------|
-| Item/stat values | UE4SS Lua CDO override, applied at runtime | a new mod folder under `ue4ss\Mods\` | [items.md](items.md) |
+| Item/stat values | [UE4SS](#ue4ss) Lua CDO override, applied at runtime | a new mod folder under `ue4ss\Mods\` | [items.md](items.md) |
 | Text & dialogs | re-encrypted `.lcache` | the localization cache, in place | [text-and-dialogs.md](text-and-dialogs.md) |
 | Audio | re-packed FMOD `.bank` | the sound bank, in place | [audio.md](audio.md) |
 | Voice-over | copy-on-write localized ZIP edit | the selected language archive, in place | [voice.md](voice.md) |
@@ -113,9 +113,68 @@ see [Bundling & deploying](bundles.md).
   (`.gore-install-mutation.lock`) so two GORE processes cannot fight, but the
   game itself does not participate in that lock.
 
+## UE4SS
+
+Of the domains in the table above, item and stat values are the only one applied
+while the game runs: instead of changing a file the game loads, GORE emits a
+small Lua mod that sets the value in memory. Something has to run that Lua, and
+that something is UE4SS — a third-party loader that attaches to the running game
+and executes the Lua mods it finds in a `Mods\` folder. It is a separate
+community project, not part of Gothic 1 Remake and not part of GORE.
+Hand-written [gore-lua](../../lua/README.md) mods run the same way; the other
+rows of the table above never involve it.
+
+GORE does not install it, and no command checks whether it is there. `gore gen`
+and `gore mod build` produce a well-formed mod either way, and `gore mod deploy`
+creates `ue4ss\Mods\` itself when it is missing — so a deploy that reports
+success means the files are in place, never that anything will run them.
+
+To find out whether you already have it, look at this folder:
+
+```powershell
+ls "$GAME\G1R\Binaries\Win64\ue4ss"
+```
+
+An install has `UE4SS.dll`, `UE4SS-settings.ini` and a `Mods\` directory sitting
+beside each other. If the `ue4ss` folder is not there at all, you do not have it,
+and an override mod will sit in the install doing nothing, with nothing on either
+side reporting a problem.
+
+> **TODO (maintainer):** put the canonical UE4SS download link here, and the
+> version this path was last checked against. Neither is recorded anywhere in
+> this repository, and a guessed link would be worse than none.
+
+Inside `Mods\`, each mod is one folder holding `Scripts\main.lua` and an empty
+`enabled.txt`. That empty file is the switch — UE4SS loads a folder because
+`enabled.txt` is present. `gore gen` and `gore scaffold` write both for you.
+
+**Confirming an override applied.** UE4SS writes a log next to itself,
+`G1R\Binaries\Win64\ue4ss\UE4SS.log`, and a generated override mod prints one
+line there for every override it applies:
+
+```
+[<timestamp>] [Lua] [MyBalanceMod] ItFo_Apple.m_Value 10 -> 500
+```
+
+That line is the only machine-readable evidence that the change took effect, and
+it is worth reading before you conclude a mod failed: it separates "nothing
+happened" from "something happened and you were looking at the wrong thing".
+
+Do not judge it in the first seconds. The class defaults an override targets do
+not exist yet when the mod starts, so the generated Lua polls for them — every
+1000 ms, up to 120 attempts. In the one run that was measured, the line appeared
+about four seconds after the mod started, after several retries. If a class never
+appears at all, the log says that instead:
+
+```
+[<timestamp>] [Lua] [MyBalanceMod] gave up after 120 attempts; 1 CDO(s) never appeared
+```
+
 ## A first mod
 
-Make apples worth 500 gold. Save this as `overrides.toml`:
+Make apples worth 500 gold. This is an override, so it needs UE4SS in the game
+install — see [UE4SS](#ue4ss) above if you have not checked. Save this as
+`overrides.toml`:
 
 ```toml
 [meta]
@@ -133,8 +192,9 @@ Then compile it into the game's UE4SS mods folder:
 gore gen overrides.toml -o "$GAME\G1R\Binaries\Win64\ue4ss\Mods"
 ```
 
-Start the game with UE4SS enabled and the value is applied at load. Details and
-the full override format: [Item & stat values](items.md).
+Start the game. The value is applied a few seconds in rather than at the moment
+of launch, and `UE4SS.log` is where you see it happen — see [UE4SS](#ue4ss)
+above. Details and the full override format: [Item & stat values](items.md).
 
 ## Next steps
 
