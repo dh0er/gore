@@ -834,7 +834,39 @@ fn deployment_without_a_loadout(
         )
         .with_items(items)
         .with_fix(broken),
-        _ => Check::new(
+        // Rung 4, and the ladder's own words for it are "stale regardless of the loadout" — it is
+        // decided by verifying the recorded files, not by any diff against a target. It is also
+        // literally the case this whole report exists for: deploy said yes and the game shows
+        // nothing. Losing it behind a complaint about a JSON file was the worst of the three.
+        Ok(ManagerStatus::GameUpdated { drifted }) => Check::new(
+            "deployment",
+            "deployment",
+            Verdict::Problem,
+            format!(
+                "{} deployed file(s) were changed outside GORE — a Steam update or an integrity \
+                 verify has put the game's own version back",
+                drifted.len()
+            ),
+        )
+        .with_items(drifted)
+        .with_fix(format!(
+            "this is the case where the tool reported success and the game shows nothing. Run \
+             'gore mgr apply' (or re-deploy the bundle) to rebuild against the refreshed files. \
+             Separately: {broken}"
+        )),
+        // Two failures, and the deploy record is the one that stops things working. Reporting only
+        // the loadout named the lesser of them and left the other out of the report entirely.
+        Err(error) => Check::new(
+            "deployment",
+            "deployment",
+            Verdict::Problem,
+            format!("the deploy record could not be read: {error}"),
+        )
+        .with_items(items)
+        .with_fix(format!("{broken}. The deploy record is the more urgent of the two")),
+        // What is left is `NothingDeployed`, `InSync` and `ChangesPending`. The last two ARE the
+        // diff against the loadout that could not be read, so there is nothing to say about them.
+        Ok(_) => Check::new(
             "deployment",
             "deployment",
             Verdict::Problem,
@@ -1373,7 +1405,45 @@ fn check_loc_catalog(meta: Option<LocMeta>, catalog: &Path, installed: Option<&P
         )
     };
 
+    // The catalog can now record the source's own modification time, which answers "is this still
+    // the file it was built from" directly — no second-resolution ladder, and none of its blind
+    // spots. Catalogs written before that field existed fall back to the ladder below.
+    let modified_nanos = |m: &std::fs::Metadata| -> Option<u64> {
+        m.modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|since| u64::try_from(since.as_nanos()).ok())
+    };
+
     match std::fs::metadata(installed) {
+        Ok(m) if m.len() == meta.source_bytes && meta.source_modified_nanos.is_some() => {
+            match (modified_nanos(&m), meta.source_modified_nanos) {
+                (Some(now), Some(recorded)) if now == recorded => Check::new(
+                    "loc_catalog",
+                    "loc catalog",
+                    Verdict::Ok,
+                    format!("{summary}; the installed cache is the file it was extracted from"),
+                )
+                .with_items(items),
+                (Some(_), _) => Check::new(
+                    "loc_catalog",
+                    "loc catalog",
+                    Verdict::Problem,
+                    format!(
+                        "{summary}, but the installed cache has been written since the \
+                         extraction — it is the same length, so what changed is its contents"
+                    ),
+                )
+                .with_items(items)
+                .with_fix(
+                    "'gore loc import' re-encrypts the cache in place and can leave its length \
+                     unchanged. Run 'gore loc extract' so the shared catalog describes the text \
+                     that is installed",
+                ),
+                (None, _) => inconclusive("this filesystem reported no modification time"),
+            }
+        }
         Ok(m) if m.len() == meta.source_bytes => match written(&m) {
             Written::AfterExtraction => Check::new(
                 "loc_catalog",
@@ -2005,8 +2075,22 @@ mod tests {
             id_count: 43851,
             languages: vec!["german".into(), "english".into()],
             extracted_at,
+            // The ladder below is what a catalog without this field falls back to, and these
+            // fixtures are what keeps that path covered. The recorded-identity path has its own.
+            source_modified_nanos: None,
             catalog_path: r"C:\Users\x\AppData\Local\gore\loc_catalog.json".into(),
         }
+    }
+
+    /// The same fixture, but recording the source's own modification time the way `extract` does
+    /// now — which is what a catalog written by a current build carries.
+    fn meta_with_identity(source: &Path, bytes: u64) -> LocMeta {
+        let nanos = std::fs::metadata(source)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|since| u64::try_from(since.as_nanos()).ok());
+        LocMeta { source_modified_nanos: nanos, ..meta(source, bytes) }
     }
 
     #[test]
@@ -2033,6 +2117,54 @@ mod tests {
             Some(&cache),
         );
         assert_eq!(fresh.verdict, Verdict::Ok);
+    }
+
+    #[test]
+    fn a_recorded_source_identity_settles_what_the_second_ladder_could_not() {
+        // The window the ladder cannot see: `extracted_at` is stamped after the read, the decode
+        // and the catalog write, so an import landing inside it leaves the cache with an mtime
+        // EARLIER than the extraction — "not written since", reported healthy, built from bytes
+        // that are gone. Comparing the source's own recorded timestamp answers it directly.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("AlkimiaLocalization_00000000.lcache");
+        std::fs::write(&cache, vec![0u8; 2048]).unwrap();
+
+        let recorded = meta_with_identity(&cache, 2048);
+        assert!(recorded.source_modified_nanos.is_some(), "the fixture must record one");
+
+        let unchanged = check_loc_catalog(
+            Some(recorded.clone()),
+            &extracted_catalog(dir.path()),
+            Some(&cache),
+        );
+        assert_eq!(unchanged.verdict, Verdict::Ok, "{}", unchanged.detail);
+        assert!(
+            unchanged.detail.contains("the file it was extracted from"),
+            "{}",
+            unchanged.detail
+        );
+
+        // A same-length rewrite, stamped BEFORE the recorded extraction — the exact case the
+        // seconds ladder called untouched.
+        std::fs::write(&cache, vec![1u8; 2048]).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&cache)
+            .unwrap()
+            .set_modified(
+                std::time::UNIX_EPOCH
+                    + std::time::Duration::from_nanos(recorded.source_modified_nanos.unwrap())
+                    - std::time::Duration::from_secs(5),
+            )
+            .unwrap();
+
+        let rewritten = check_loc_catalog(
+            Some(recorded),
+            &extracted_catalog(dir.path()),
+            Some(&cache),
+        );
+        assert_eq!(rewritten.verdict, Verdict::Problem, "{}", rewritten.detail);
+        assert!(rewritten.detail.contains("same length"), "{}", rewritten.detail);
     }
 
     #[test]

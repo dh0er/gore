@@ -48,6 +48,17 @@ pub struct LocMeta {
     pub languages: Vec<String>,
     /// Unix seconds when the extraction ran.
     pub extracted_at: u64,
+    /// The source file's own modification time when it was read, in nanoseconds since the epoch.
+    ///
+    /// `extracted_at` cannot answer "is this catalog built from the bytes that are installed now":
+    /// it is stamped after the read, the decode and the catalog write, so a `gore loc import` that
+    /// lands inside that window leaves the cache with an mtime EARLIER than the extraction and a
+    /// catalog built from the previous bytes. Comparing the source's own timestamp instead answers
+    /// the question directly, and in nanoseconds so a rewrite inside one second still differs.
+    ///
+    /// `None` on catalogs written before this field existed; readers fall back to `extracted_at`.
+    #[serde(default)]
+    pub source_modified_nanos: Option<u64>,
     /// Absolute path of the written catalog.
     pub catalog_path: String,
 }
@@ -69,6 +80,18 @@ pub fn status() -> Option<LocMeta> {
     serde_json::from_slice(&bytes).ok()
 }
 
+/// A file's modification time in nanoseconds since the epoch, or `None` where the filesystem
+/// does not offer one. Nanoseconds because whole seconds cannot tell a rewrite from an untouched
+/// file when both happen inside one second, which is routine for extract-then-import.
+fn source_modified(path: &Path) -> Option<u64> {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|since| u64::try_from(since.as_nanos()).ok())
+}
+
 /// True when the shared catalog file is present.
 pub fn catalog_present() -> bool {
     paths::loc_catalog_path().is_file()
@@ -78,11 +101,27 @@ pub fn catalog_present() -> bool {
 /// `loc_catalog.json` + `loc_meta.json` into the shared `gore` dir.
 pub fn extract(hint: Option<&Path>) -> Result<LocMeta, LocStoreError> {
     let lcache = resolve_lcache(hint).ok_or(LocStoreError::NotFound)?;
+    let before_read = source_modified(&lcache);
     let enc = fs::read(&lcache).map_err(|source| LocStoreError::Read {
         path: lcache.display().to_string(),
         source,
     })?;
     let source_bytes = enc.len() as u64;
+    // Taken again AFTER the bytes and compared with the one from before them. A cache rewritten
+    // mid-read would otherwise be recorded as the source of a catalog built half from each version.
+    // Refused rather than recorded, because neither timestamp describes what was read.
+    //
+    // Two `None`s compare equal, which is the right outcome: no timestamp was available at all, the
+    // field stays absent, and readers fall back to `extracted_at` as they did before it existed.
+    let source_modified_nanos = source_modified(&lcache);
+    if source_modified_nanos != before_read {
+        return Err(LocStoreError::Read {
+            path: lcache.display().to_string(),
+            source: std::io::Error::other(
+                "the .lcache changed while it was being read — run 'gore loc extract' again",
+            ),
+        });
+    }
     let lc = Lcache::decode(&enc)?;
     let catalog = lc.export(false);
 
@@ -108,6 +147,7 @@ pub fn extract(hint: Option<&Path>) -> Result<LocMeta, LocStoreError> {
         id_count: catalog.len(),
         languages: lc.languages(),
         extracted_at: now_unix(),
+        source_modified_nanos,
         catalog_path: catalog_path.display().to_string(),
     };
     let meta_path = paths::loc_meta_path();
