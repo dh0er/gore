@@ -483,7 +483,20 @@ fn check_ue4ss_mods(gp: &GamePaths) -> Check {
         );
     }
 
-    let found = read_ue4ss_mods(mods);
+    // A folder that exists and cannot be read is reported as unread. "No mod folders" is the answer
+    // that hides a competing override mod, which is the thing this check is for.
+    let found = match read_ue4ss_mods(mods) {
+        Ok(found) => found,
+        Err(error) => {
+            return Check::new(
+                "ue4ss_mods",
+                "UE4SS mods",
+                Verdict::Problem,
+                format!("could not inspect the UE4SS mod folder: {error}"),
+            )
+            .with_fix("run the same command from a shell that can read the install")
+        }
+    };
     if found.is_empty() {
         return Check::new(
             "ue4ss_mods",
@@ -531,12 +544,17 @@ fn check_ue4ss_mods(gp: &GamePaths) -> Check {
 /// Directories under `Mods\`, sorted, with `shared` left out: that is the gore-lua SDK namespace
 /// `gore deploy-shared` installs for other mods to `require`, not a mod, and it has no enabled.txt
 /// by design.
-fn read_ue4ss_mods(mods: &Path) -> Vec<Ue4ssMod> {
-    let Ok(entries) = std::fs::read_dir(mods) else {
-        return Vec::new();
-    };
+///
+/// A directory that cannot be read is reported rather than counted as empty. "No mod folders" is
+/// exactly the answer that hides a competing override mod, and this check exists to find those.
+fn read_ue4ss_mods(mods: &Path) -> Result<Vec<Ue4ssMod>, String> {
+    let entries = std::fs::read_dir(mods)
+        .map_err(|error| format!("{} could not be read: {error}", mods.display()))?;
+    let entries = entries
+        .collect::<std::io::Result<Vec<_>>>()
+        .map_err(|error| format!("{} could not be read: {error}", mods.display()))?;
     let mut found: Vec<Ue4ssMod> = entries
-        .filter_map(|entry| entry.ok())
+        .into_iter()
         .filter(|entry| entry.path().is_dir())
         .filter_map(|entry| {
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -556,7 +574,7 @@ fn read_ue4ss_mods(mods: &Path) -> Vec<Ue4ssMod> {
     // stock mods and cut off the handful that actually run — which is the only part anyone asked
     // about.
     found.sort_by_key(|m| (!m.enabled, m.name.to_lowercase()));
-    found
+    Ok(found)
 }
 
 /// Was this mod folder's `Scripts\main.lua` written by `gore gen` / `gore mod build`?
@@ -1249,7 +1267,7 @@ mod tests {
         make_mod(&gp.ue4ss_mods, "AaaDisabled", false, false);
         make_mod(&gp.ue4ss_mods, "ZzzEnabled", true, false);
 
-        let listed = read_ue4ss_mods(&gp.ue4ss_mods);
+        let listed = read_ue4ss_mods(&gp.ue4ss_mods).expect("the fixture directory is readable");
         assert_eq!(listed[0].name, "ZzzEnabled");
         assert_eq!(listed[1].name, "AaaDisabled");
     }

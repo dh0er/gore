@@ -514,3 +514,45 @@ fn a_collision_anywhere_in_the_selection_writes_nothing_at_all() {
         "no partial output beside it: {present:?}"
     );
 }
+
+#[test]
+fn a_successful_extraction_leaves_no_staging_files_behind() {
+    // Extraction stages each WAV beside its destination and renames them in together, so that a
+    // collision can be raised after it is known which samples actually produced audio — a sample
+    // whose codec `extract_wav` skips writes nothing, and planning its destination up front used to
+    // refuse the run over a leftover that was never going to be replaced.
+    //
+    // The skip case itself has no fixture: every bank these tests can build extracts cleanly, which
+    // `every_sample_of_a_pcm16_bank_extracts_rather_than_being_skipped` already notes. What is
+    // checkable here is the invariant the fix rests on — the staging files exist only during the
+    // run, and a completed run leaves exactly the WAVs and nothing else.
+    let temp = TempDir::new().unwrap();
+    let bank = temp.path().join("SFX.bank");
+    let extracted = temp.path().join("wavs");
+    numbered_bank(&bank, "SFX_UI_Click_", 12);
+
+    let output = Command::cargo_bin("gore")
+        .unwrap()
+        .args([
+            "audio",
+            "extract",
+            "--bank",
+            bank.to_str().unwrap(),
+            "--out",
+            extracted.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    let mut names: Vec<String> = std::fs::read_dir(&extracted)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names.len(), 12, "one file per sample: {names:?}");
+    assert!(
+        names.iter().all(|name| name.ends_with(".wav")),
+        "no staging file survived the run: {names:?}"
+    );
+}

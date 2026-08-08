@@ -113,10 +113,19 @@ pub fn banks(game: Option<PathBuf>, json: bool, key: Option<String>) -> Result<(
 /// The ordering is imposed rather than inherited: `read_dir` promises nothing about it, and two
 /// runs that listed the same ten files in two orders would make a diff of the output unreadable.
 fn bank_rows(dir: &Path, key: &[u8]) -> Result<Vec<BankRow>> {
+    // Every entry or none. A bank whose *contents* cannot be read is kept as an error row on
+    // purpose — one damaged file must not cost the other nine — but an entry the directory itself
+    // could not yield is different: dropping it would print a bank count, a sample total and a
+    // listing that all describe a subset while claiming to describe the directory.
     let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)
         .with_context(|| format!("reading the FMOD bank directory '{}'", dir.display()))?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
+        .map(|entry| {
+            entry
+                .map(|entry| entry.path())
+                .with_context(|| format!("reading an entry of '{}'", dir.display()))
+        })
+        .collect::<Result<Vec<PathBuf>>>()?
+        .into_iter()
         // The `.bank` extension is the whole filter, which also excludes this toolkit's own
         // `*.bank.gore-bak` backups and `*.gore-tmp` half-writes: those are not banks the game
         // loads, and offering one as a `--bank` would send a replacement into a file the game
@@ -455,40 +464,45 @@ pub fn extract(
     // `SFX.bank` that was 7,218 identical stderr lines (~400 KB) describing one fact. The first
     // sample to hit a reason is named, which is what a single-sample run needs, and the count says
     // how far it went.
-    // Every destination is settled before the first byte is written. Refusing the one file this
-    // would replace is right, but doing it inside the write loop made a collision on the fifth
-    // sample leave four WAVs behind — and then the retry failed on the first of those instead of
-    // on the file the caller actually needs to deal with. Names come from the bank rather than the
-    // arguments, so the caller cannot compute them beforehand and this is the only place the check
-    // can happen at all.
+    // Decode into staging files first, then move them into place together. Two requirements pull
+    // against each other and this is what satisfies both.
+    //
+    // A collision must not leave partial output: refusing inside the write loop meant a clash on
+    // the fifth sample left four WAVs behind, and the obvious retry then failed on one of those
+    // instead of on the file the caller actually had to deal with.
+    //
+    // And a collision must only be raised for a file this run would really write. Whether a sample
+    // yields audio at all is known only after `extract_wav` has tried, because a codec it cannot
+    // read is skipped — so planning every selected sample's destination up front refused runs over
+    // leftovers belonging to samples that were never going to be written.
+    //
+    // Staging answers both: what lands in the staging set is exactly what was produced, and nothing
+    // reaches its final name until every one of them is known to be free. `.gore-tmp` is the same
+    // suffix `write_atomic` uses above, and staging beside the destination keeps the final move a
+    // rename within one directory.
     //
     // Prefix with the sample index so two names that sanitize to the same basename (e.g. differing
     // only by punctuation) do not collide and silently overwrite.
-    let destinations: Vec<(usize, PathBuf)> = indices
-        .iter()
-        .map(|&i| {
-            (
-                i,
-                out.join(format!("{i}_{}.wav", sanitize(&view.samples[i].name))),
-            )
-        })
-        .collect();
-    if let Some((_, path)) = destinations.iter().find(|(_, path)| path.exists()) {
-        bail!(
-            "'{}' already exists; extract writes one file per sample under a name taken from the \
-             bank, so this would replace it. Nothing was written. Delete it, or pass a different \
-             --out.",
-            path.display()
-        );
-    }
-
     let (mut ok, mut skipped) = (0usize, 0usize);
     let mut skips: BTreeMap<String, (usize, usize)> = BTreeMap::new();
-    for (i, path) in destinations {
+    let mut staged: Vec<(PathBuf, PathBuf)> = Vec::new();
+
+    let discard = |staged: &[(PathBuf, PathBuf)]| {
+        for (tmp, _) in staged {
+            let _ = std::fs::remove_file(tmp);
+        }
+    };
+
+    for i in indices {
         match view.extract_wav(i) {
             Ok(wav) => {
-                std::fs::write(&path, &wav)
-                    .with_context(|| format!("writing '{}'", path.display()))?;
+                let dest = out.join(format!("{i}_{}.wav", sanitize(&view.samples[i].name)));
+                let tmp = dest.with_extension("gore-tmp");
+                if let Err(error) = std::fs::write(&tmp, &wav) {
+                    discard(&staged);
+                    return Err(error).with_context(|| format!("writing '{}'", tmp.display()));
+                }
+                staged.push((tmp, dest));
                 ok += 1;
             }
             Err(e) => {
@@ -496,6 +510,24 @@ pub fn extract(
                 let seen = skips.entry(e).or_insert((0, i));
                 seen.0 += 1;
             }
+        }
+    }
+
+    if let Some((_, dest)) = staged.iter().find(|(_, dest)| dest.exists()) {
+        let dest = dest.clone();
+        discard(&staged);
+        bail!(
+            "'{}' already exists; extract writes one file per sample under a name taken from the \
+             bank, so this would replace it. Nothing was written. Delete it, or pass a different \
+             --out.",
+            dest.display()
+        );
+    }
+
+    for (tmp, dest) in &staged {
+        if let Err(error) = std::fs::rename(tmp, dest) {
+            discard(&staged);
+            return Err(error).with_context(|| format!("writing '{}'", dest.display()));
         }
     }
     for (reason, (count, first)) in &skips {
