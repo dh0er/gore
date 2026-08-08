@@ -191,7 +191,29 @@ fn collect(explicit: Option<&Path>) -> Report {
     // A root that resolved to nothing on disk is no more inspectable than one that did not
     // resolve, and running the rest against it would restate the same single cause as four more
     // problems — burying the one line that says what to fix.
-    let Some(root) = resolved.filter(|root| root.is_dir()) else {
+    let looked = match resolved.as_deref() {
+        Some(root) => present(root),
+        None => Ok(None),
+    };
+    let readable = match looked {
+        Ok(Some(metadata)) if metadata.is_dir() => resolved,
+        Ok(_) => None,
+        Err(error) => {
+            // There and unreadable, which is neither of the above. Skipping as "no install to look
+            // at" described an install that is not there, and sent people to reconfigure a path
+            // that was right all along.
+            for (id, title) in SKIPPED_WITHOUT_INSTALL {
+                checks.push(
+                    Check::new(id, title, Verdict::Skipped, format!("could not be read: {error}"))
+                        .with_fix(
+                            "run the same command from a shell that can read the install",
+                        ),
+                );
+            }
+            return Report::new(None, source, checks);
+        }
+    };
+    let Some(root) = readable else {
         // Every remaining check reads the install. Say so once per check rather than dropping
         // them: a report that silently shrinks looks like a report that found less to say.
         for (id, title) in SKIPPED_WITHOUT_INSTALL {
@@ -209,7 +231,14 @@ fn collect(explicit: Option<&Path>) -> Report {
     // One probe answers two checks — the running game and the leftover locks/journals — and
     // enumerating the process list twice could disagree with itself between the two lines.
     let probe = gore_as::compile::probe_install_compile_state(&gp.root);
-    let record_present = gore_mod::deploy_record_path(&gp.root).is_file();
+    // Unreadable counts as present: `check_deployment` reads the same file and reports the
+    // failure itself, and the only other consumer uses this to decide whether `*.gore-bak` files
+    // are orphans. Guessing "no deployment" there would turn one unreadable file into a claim that
+    // game files are still modified.
+    let record_present = match present(&gore_mod::deploy_record_path(&gp.root)) {
+        Ok(metadata) => metadata.is_some_and(|metadata| metadata.is_file()),
+        Err(_) => true,
+    };
 
     checks.push(check_install(&gp));
     checks.push(check_ue4ss(&gp));
@@ -288,18 +317,37 @@ fn check_game_path(
         );
     };
 
-    if !root.is_dir() {
-        return Check::new(
-            "game_path",
-            "game path",
-            Verdict::Problem,
-            format!("{} (source: {source}) does not exist", root.display()),
-        )
-        .with_items(items)
-        .with_fix(
-            "the path resolved but there is no directory there — the game moved, or the drive is \
-             not mounted. Set it again with 'gore config set game-path <path>'",
-        );
+    match present(root) {
+        Ok(Some(metadata)) if metadata.is_dir() => {}
+        Ok(_) => {
+            return Check::new(
+                "game_path",
+                "game path",
+                Verdict::Problem,
+                format!("{} (source: {source}) does not exist", root.display()),
+            )
+            .with_items(items)
+            .with_fix(
+                "the path resolved but there is no directory there — the game moved, or the \
+                 drive is not mounted. Set it again with 'gore config set game-path <path>'",
+            );
+        }
+        // The configured path is right and something is stopping this process from reading it.
+        // Telling somebody their install does not exist is the one answer that makes them break a
+        // working configuration trying to fix it.
+        Err(error) => {
+            return Check::new(
+                "game_path",
+                "game path",
+                Verdict::Problem,
+                format!("{} (source: {source}) could not be read: {error}", root.display()),
+            )
+            .with_items(items)
+            .with_fix(
+                "the path is set correctly. Run the same command from a shell that can read the \
+                 install, or check the folder's permissions — do not change the configured path",
+            );
+        }
     }
 
     Check::new(

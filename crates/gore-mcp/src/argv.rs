@@ -765,11 +765,23 @@ fn name_in_json(path: &str, pointer: &str) -> Result<String, SourceProblem> {
         .pointer(pointer)
         .and_then(Value::as_str)
         .ok_or(SourceProblem::NoName)?;
-    let mut components = std::path::Path::new(name).components();
-    match (components.next(), components.next()) {
-        (Some(std::path::Component::Normal(only)), None) if only == name => Ok(name.to_string()),
-        _ => Err(SourceProblem::NotOneComponent),
+    // Spelled out rather than asked of `std::path`, which parses per host: on Linux
+    // `C:\\elsewhere` is one "normal" component, so this check passed a name `gore-mod` rejects
+    // outright and the gate went on to ask about a path nothing could ever write.
+    //
+    // These are the escape-relevant rules of the child's `is_safe_mod_name` — anything that would
+    // move the derived path out of the directory the caller named. Windows filename legality
+    // (reserved device names like `CON`, trailing dots) is deliberately NOT mirrored: the child
+    // reports those precisely, and a rule copied imperfectly here would refuse calls it accepts.
+    let escapes = name.is_empty()
+        || name.contains(['/', '\\', ':', '\0'])
+        || name.chars().any(char::is_control)
+        || name == "."
+        || name == "..";
+    if escapes {
+        return Err(SourceProblem::NotOneComponent);
     }
+    Ok(name.to_string())
 }
 
 /// Reject a call whose derived output cannot be worked out because the file it is named in is
@@ -1332,10 +1344,15 @@ mod tests {
         let out = dir.path().join("build");
         let spec = dir.path().join("spec.json");
 
-        let elsewhere: [&[u8]; 3] = [
+        let elsewhere: [&[u8]; 5] = [
             br#"{"meta":{"name":"../escape"}}"#,
             br#"{"meta":{"name":"nested/mod"}}"#,
             br#"{"meta":{"name":"C:\\elsewhere"}}"#,
+            // A bare backslash, which only Windows parses as a separator: asking `std::path` made
+            // this check answer differently depending on the host it ran on, while the rule it is
+            // mirroring — the child's — is the same everywhere.
+            br#"{"meta":{"name":"nested\\mod"}}"#,
+            br#"{"meta":{"name":"bell\u0007name"}}"#,
         ];
         for body in elsewhere {
             std::fs::write(&spec, body).expect("write");
