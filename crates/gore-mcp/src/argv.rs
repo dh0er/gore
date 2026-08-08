@@ -53,8 +53,8 @@ pub enum SourceProblem {
     NotJson(String),
     /// The pointer resolves to nothing, or to something that is not a string.
     NoName,
-    /// A name was read, but it is not one path component, so the write lands somewhere the gate
-    /// cannot check. Not a defect in the call: the child accepts it and runs.
+    /// A name was read, but it is not one path component. `gore-mod` refuses exactly this before
+    /// it writes anything (`is_safe_mod_name`), so no such call can run.
     NotOneComponent,
 }
 
@@ -112,9 +112,12 @@ impl fmt::Display for BuildError {
                         "has no string there. Put a string at `{pointer}` and send the same call \
                          again."
                     )?,
-                    // Unreachable from check_derived_sources: that one is still the gate's to ask
-                    // about. Written so the match is total and a future caller cannot get nonsense.
-                    SourceProblem::NotOneComponent => write!(f, "names something else.")?,
+                    SourceProblem::NotOneComponent => write!(
+                        f,
+                        "is not a single path component. `{sub}` refuses a name carrying a \
+                         separator, `..` or a drive letter before it writes anything. Put a plain \
+                         folder name at `{pointer}` and send the same call again."
+                    )?,
                 }
                 write!(
                     f,
@@ -777,8 +780,12 @@ fn name_in_json(path: &str, pointer: &str) -> Result<String, SourceProblem> {
 /// a misspelled field raised a confirmation, and a client that answers its own dialogs turned that
 /// into a refusal about permission. None of these calls could have run: the child reads the same
 /// file and fails on it before writing anything, so there is nothing there for a person to allow.
-/// A name that reads fine but is not one path component is left to the gate, because that one the
-/// child does run.
+///
+/// That includes a name which reads fine but is not one path component. This used to be left to the
+/// gate on the grounds that the child runs it — it does not. `build_bundle_relative_to` rejects an
+/// unsafe name before `write_bundle` touches the filesystem, so a `..` or a separator derived a path
+/// that could well be occupied, raised a confirmation about it, and hid the real validation error
+/// behind an answer about permission.
 fn check_derived_sources(
     command: &CommandSpec,
     args: &Map<String, Value>,
@@ -796,7 +803,7 @@ fn check_derived_sources(
             continue;
         };
         match name_in_json(path, pointer) {
-            Ok(_) | Err(SourceProblem::NotOneComponent) => {}
+            Ok(_) => {}
             Err(problem) => {
                 return Err(BuildError::UnusableSource {
                     sub: command.sub,
@@ -1314,28 +1321,38 @@ mod tests {
     }
 
     #[test]
-    fn a_bundle_name_that_reads_but_is_not_one_component_is_treated_as_occupied() {
-        // Fail closed where the gate genuinely cannot tell what would be deleted. The spec is
-        // fine and `gore mod build` will run it; it is only the destination this layer cannot
-        // pin down, so "could not check" must not read as "nothing there".
+    fn a_bundle_name_that_is_not_one_component_is_a_spec_defect_not_a_consent_question() {
+        // This test used to assert the opposite, on the premise that the spec is fine and
+        // `gore mod build` would run it. It does not: `build_bundle_relative_to` rejects an unsafe
+        // name (`is_safe_mod_name`) before `write_bundle` touches the filesystem. So the derived
+        // path — which for `../escape` is a real directory that may well be occupied — raised a
+        // confirmation nobody could meaningfully answer, and a client that answers its own dialogs
+        // turned the validation error into a refusal about permission.
         let dir = tempfile::tempdir().expect("tempdir");
         let out = dir.path().join("build");
         let spec = dir.path().join("spec.json");
 
-        let elsewhere: [&[u8]; 2] = [
+        let elsewhere: [&[u8]; 3] = [
             br#"{"meta":{"name":"../escape"}}"#,
             br#"{"meta":{"name":"nested/mod"}}"#,
+            br#"{"meta":{"name":"C:\\elsewhere"}}"#,
         ];
         for body in elsewhere {
             std::fs::write(&spec, body).expect("write");
-            let raised = question(
-                "gore_mod",
-                "build",
-                json!({ "spec": spec.to_string_lossy(), "out": out.to_string_lossy() }),
-                &options(),
-            )
-            .unwrap_or_else(|| panic!("{:?} must not pass as an empty destination", body));
-            assert!(raised.reason.contains("could not be read"), "{}", raised.reason);
+            let call = json!({ "spec": spec.to_string_lossy(), "out": out.to_string_lossy() });
+            // No command line at all, so there is no `Consent` to answer either way — which is the
+            // whole point: the gate is never reached for a call the child would refuse.
+            let rendered = build_with("gore_mod", "build", call, &options())
+                .expect_err("a name the child refuses must not build a command line")
+                .to_string();
+            assert!(
+                rendered.contains("is not a single path component"),
+                "{body:?} must be diagnosed as a defect in the file: {rendered}"
+            );
+            assert!(
+                rendered.contains("not in what this server is allowed to do"),
+                "the message must say this is not a permission problem: {rendered}"
+            );
         }
     }
 

@@ -221,11 +221,21 @@ impl NameIndex {
         self.names.get(&id.to_lowercase()).map(Vec::as_slice)
     }
 
-    /// How many ids of `wanted` this index can name — the honest coverage
-    /// number, which is well short of all of them (knowledge ids have no loc
-    /// entry at all, and some 47 item classes are unnamed in every language).
-    fn covering(&self, wanted: &HashSet<String>) -> usize {
-        wanted.iter().filter(|id| self.names.contains_key(*id)).count()
+    /// How many CATALOG ROWS this index can name — the honest coverage number,
+    /// which is well short of all of them (knowledge ids have no loc entry at
+    /// all, and some 47 item classes are unnamed in every language).
+    ///
+    /// Rows, not ids, because the sentence this feeds says "of N catalog
+    /// entries" and N is `catalog.len()`. Counting the deduplicated `wanted` set
+    /// instead answered a different question in both directions at once: 232
+    /// knowledge rows share `text_dialog_end` and counted once between them,
+    /// while register-only ids counted although they are not catalog rows at
+    /// all.
+    fn covering(&self, catalog: &[CatalogEntry]) -> usize {
+        catalog
+            .iter()
+            .filter(|entry| self.names.contains_key(&entry.loc_id().to_lowercase()))
+            .count()
     }
 }
 
@@ -252,12 +262,17 @@ impl NameIndexState {
     }
 
     /// The one line every report carries about the name index, hit or no hit.
-    fn notice(&self, wanted: &HashSet<String>, catalog_entries: usize) -> String {
+    ///
+    /// Takes the catalog rather than a count and a set that have to agree: the
+    /// numerator and the denominator are now read off the same slice, so they
+    /// cannot drift apart again.
+    fn notice(&self, catalog: &[CatalogEntry]) -> String {
+        let catalog_entries = catalog.len();
         match self {
             NameIndexState::Ready(index) => format!(
                 "display names: searched — {} of {catalog_entries} catalog entries have one \
                  (shared loc catalog: {} ids, {} languages)",
-                index.covering(wanted),
+                index.covering(catalog),
                 index.total_ids,
                 index.languages.len()
             ),
@@ -538,7 +553,6 @@ pub fn run(query: Vec<String>, domain: Option<String>, max: usize, json: bool) -
         catalog: &catalog,
         register: &register,
         name_index: &name_index,
-        wanted: &wanted,
         listed: hits.len().min(max),
         hits: &hits,
     };
@@ -860,7 +874,6 @@ pub struct Report<'a> {
     pub catalog: &'a [CatalogEntry],
     pub register: &'a Register,
     pub name_index: &'a NameIndexState,
-    pub wanted: &'a HashSet<String>,
     pub hits: &'a [Hit<'a>],
     /// How many of `hits` are printed. Never more than `hits.len()`.
     pub listed: usize,
@@ -889,7 +902,7 @@ impl Report<'_> {
         // Always, hit or no hit: an empty result read as exhaustive is the
         // failure this line exists to prevent, and that is exactly the case
         // where a line about what was *not* searched is easiest to leave out.
-        out.push_str(&self.name_index.notice(self.wanted, self.catalog.len()));
+        out.push_str(&self.name_index.notice(self.catalog));
         out.push('\n');
         if self.register.is_empty() {
             out.push_str(
@@ -936,7 +949,7 @@ impl Report<'_> {
                 // The same sentence the text report prints, so a client that
                 // renders only the JSON cannot show a search that looks
                 // exhaustive when the name index was missing.
-                "notice": self.name_index.notice(self.wanted, self.catalog.len()),
+                "notice": self.name_index.notice(self.catalog),
             },
             "hits": hits,
         });
@@ -1277,7 +1290,6 @@ mod tests {
         query: &str,
         state: &NameIndexState,
     ) -> String {
-        let wanted = wanted_loc_ids(catalog, register);
         let hits = search(catalog, register, &terms(query), state.index(), None);
         Report {
             query,
@@ -1285,7 +1297,6 @@ mod tests {
             catalog,
             register,
             name_index: state,
-            wanted: &wanted,
             listed: hits.len(),
             hits: &hits,
         }
@@ -1565,14 +1576,12 @@ mod tests {
             .collect();
         let register = Register::default();
         let hits = search(&catalog, &register, &terms("apple"), None, None);
-        let wanted = wanted_loc_ids(&catalog, &register);
         let clipped = Report {
             query: "apple",
             domain: None,
             catalog: &catalog,
             register: &register,
             name_index: &NameIndexState::Absent,
-            wanted: &wanted,
             listed: 2,
             hits: &hits,
         };
@@ -1630,7 +1639,6 @@ mod tests {
         // that looks exhaustive when the name index was missing.
         let catalog = vec![apple()];
         let register = Register::default();
-        let wanted = wanted_loc_ids(&catalog, &register);
         let hits = search(&catalog, &register, &terms("apple"), None, None);
         let json = Report {
             query: "apple",
@@ -1638,7 +1646,6 @@ mod tests {
             catalog: &catalog,
             register: &register,
             name_index: &NameIndexState::Absent,
-            wanted: &wanted,
             listed: hits.len(),
             hits: &hits,
         }
@@ -1655,6 +1662,43 @@ mod tests {
     }
 
     #[test]
+    fn the_coverage_count_counts_rows_and_not_deduplicated_ids() {
+        // Three catalog rows, all named, and the name they share is one id. The count belongs to
+        // the sentence "of N catalog entries", so it has to say 3 — counting the deduplicated set
+        // said 1 for the rows and then added a register id that is no row at all.
+        let shared = |n: u8| CatalogEntry {
+            domain: "knowledge",
+            id: format!("Info_Diego_{n}"),
+            category: "dialog".into(),
+            class: None,
+            module: None,
+            loc_key: Some("text_dialog_end".into()),
+            caption: None,
+        };
+        let catalog = vec![shared(1), shared(2), shared(3)];
+        let register = register_with(
+            "loc",
+            "ui_main_newgame",
+            &observation("confirmed", Some("NEUES SPIEL"), "24539464"),
+            "Main menu entry",
+        );
+        let index = NameIndex::from_pairs(&[
+            ("text_dialog_end", "german", "Bis dann."),
+            // In the index and in the register, but not a catalog row: it must not inflate the
+            // numerator of a fraction whose denominator counts rows.
+            ("ui_main_newgame", "german", "NEUES SPIEL"),
+        ]);
+
+        let text = report(
+            &catalog,
+            &register,
+            "nothing-matches-this",
+            &NameIndexState::Ready(index),
+        );
+        assert!(text.contains("3 of 3 catalog entries have one"), "{text}");
+    }
+
+    #[test]
     fn the_json_register_block_carries_the_derived_status_and_its_corroboration() {
         let register = register_with(
             "texture",
@@ -1662,7 +1706,6 @@ mod tests {
             &observation("confirmed", Some("magenta"), "24340829"),
             "Main menu wordmark",
         );
-        let wanted = wanted_loc_ids(&[], &register);
         let hits = search(&[], &register, &terms("logoremake"), None, None);
         let json = Report {
             query: "logoremake",
@@ -1670,7 +1713,6 @@ mod tests {
             catalog: &[],
             register: &register,
             name_index: &NameIndexState::Absent,
-            wanted: &wanted,
             listed: hits.len(),
             hits: &hits,
         }
