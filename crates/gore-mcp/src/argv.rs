@@ -858,13 +858,29 @@ fn check_derived_sources(
         let Derived::ChildNamedInJson { arg, pointer } = how else {
             continue;
         };
-        // Both arguments have to be present. A missing one is `MissingRequired`'s to report, and
-        // reading a file for a call clap will reject anyway helps nobody.
-        if args.get(*name).and_then(Value::as_str).is_none() {
-            continue;
+        // Absent and wrong-typed are not the same case, and folding them together is how a
+        // `{"spec": 42}` reached the consent gate: the source check skipped it, the gate could not
+        // read a file at a path that is not a string, and asked to overwrite the destination it
+        // had guessed. A client that answers its own dialogs then reported a permission refusal
+        // for a call clap would have rejected outright.
+        //
+        // Absent still continues — `MissingRequired` reports that one, and reading a file for a
+        // call the CLI will refuse anyway helps nobody.
+        let wrong_type = |name: &'static str, value: &Value| BuildError::WrongType {
+            sub: command.sub,
+            name,
+            expected: "a string".to_string(),
+            got: type_name(value),
+        };
+        match args.get(*name) {
+            None => continue,
+            Some(Value::String(_)) => {}
+            Some(other) => return Err(wrong_type(name, other)),
         }
-        let Some(path) = args.get(*arg).and_then(Value::as_str) else {
-            continue;
+        let path = match args.get(*arg) {
+            None => continue,
+            Some(Value::String(path)) => path,
+            Some(other) => return Err(wrong_type(arg, other)),
         };
         match name_in_json(path, pointer) {
             Ok(_) => {}
@@ -1429,6 +1445,27 @@ mod tests {
                 rendered.contains("not in what this server is allowed to do"),
                 "the message must say this is not a permission problem: {rendered}"
             );
+        }
+    }
+
+    #[test]
+    fn a_wrong_typed_source_is_a_type_error_and_never_a_consent_question() {
+        // `{"spec": 42}` used to skip the source check, so the gate could not read a file at a
+        // path that is not a string, guessed a destination and asked to overwrite it. A client
+        // answering its own dialogs then reported a permission refusal for a call clap would have
+        // rejected on sight.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("build");
+
+        for (args, name) in [
+            (json!({ "spec": 42, "out": out.to_string_lossy() }), "spec"),
+            (json!({ "spec": dir.path().join("spec.json").to_string_lossy(), "out": [] }), "out"),
+        ] {
+            let rendered = build_with("gore_mod", "build", args, &options())
+                .expect_err("a wrong-typed argument must not build a command line")
+                .to_string();
+            assert!(rendered.contains(&format!("argument `{name}`")), "{rendered}");
+            assert!(rendered.contains("must be a string"), "{rendered}");
         }
     }
 
