@@ -774,21 +774,60 @@ fn check_leftovers(
     // Same posture as the probe's own InspectionFailed below: a directory that cannot be read is
     // reported as unread, never as clean. This check exists to find leftovers, so answering "none"
     // because the scan failed is the one wrong answer it can give.
-    let backups = match find_backups(gp) {
-        Ok(backups) => backups,
-        Err(error) => {
-            return Check::new(
-                "leftovers",
-                "leftovers",
-                Verdict::Problem,
-                format!("could not scan for leftover backups: {error}"),
-            )
-            .with_items(items)
-            .with_fix("run the same command from a shell that can read the install")
-        }
+    //
+    // A failed scan is an ADDITIONAL finding, not a replacement for the one ranked above it.
+    // Returning here dropped the lock/recovery verdict — the only thing this check reports that
+    // actually stops deploy — and sent the reader off to fix read permissions while the blocker
+    // itself stayed put and unmentioned.
+    let (backups, scan_error) = match find_backups(gp) {
+        Ok(backups) => (backups, None),
+        Err(error) => (Vec::new(), Some(error)),
     };
     let orphan_backups = !record_present && !backups.is_empty();
     items.extend(backups.iter().cloned());
+    if let Some(error) = &scan_error {
+        items.push(format!("could not scan for leftover backups: {error}"));
+    }
+
+    // Ranked ahead of both inspection failures below. A lock or journal is why deploy and
+    // 'as compile' refuse to start, and its recovery action is to finish the open transaction, not
+    // to re-run with more rights. Inside the probe `InspectionFailed` already outranks
+    // `RecoveryArtifactsPresent` — an unreadable process list is enough to trigger it — so unless
+    // this branch comes first, a found lock is reported as a Note about something else entirely.
+    if artifact_count > 0 {
+        let partly_unread = scan_error.is_some()
+            || probe.disposition == InstallCompileStateDisposition::InspectionFailed;
+        let and_unread = if partly_unread {
+            ", and part of the install could not be read, so there may be more"
+        } else {
+            ""
+        };
+        return Check::new(
+            "leftovers",
+            "leftovers",
+            Verdict::Problem,
+            format!(
+                "{artifact_count} lock/recovery artifact(s) are still in the install, so deploy \
+                 and 'as compile' will refuse to start{and_unread}"
+            ),
+        )
+        .with_items(items)
+        .with_fix(
+            "a GORE process was interrupted. Make sure none is running, then run \
+             'gore mod undeploy' (or 'gore mgr reset') to finish the transaction it left open",
+        );
+    }
+
+    if let Some(error) = scan_error {
+        return Check::new(
+            "leftovers",
+            "leftovers",
+            Verdict::Problem,
+            format!("could not scan for leftover backups: {error}"),
+        )
+        .with_items(items)
+        .with_fix("run the same command from a shell that can read the install");
+    }
 
     if probe.disposition == InstallCompileStateDisposition::InspectionFailed {
         // The probe fails closed; say which part it could not read rather than reporting a clean
@@ -808,29 +847,13 @@ fn check_leftovers(
         .with_fix("run the same command from a shell that can read the install");
     }
 
-    if artifact_count == 0 && backups.is_empty() {
+    // `artifact_count` is 0 from here: the branch above returned on every other value.
+    if backups.is_empty() {
         return Check::new(
             "leftovers",
             "leftovers",
             Verdict::Ok,
             "no locks, journals or leftover backups in the install",
-        );
-    }
-
-    if artifact_count > 0 {
-        return Check::new(
-            "leftovers",
-            "leftovers",
-            Verdict::Problem,
-            format!(
-                "{artifact_count} lock/recovery artifact(s) are still in the install, so deploy \
-                 and 'as compile' will refuse to start"
-            ),
-        )
-        .with_items(items)
-        .with_fix(
-            "a GORE process was interrupted. Make sure none is running, then run \
-             'gore mod undeploy' (or 'gore mgr reset') to finish the transaction it left open",
         );
     }
 
@@ -1383,6 +1406,61 @@ mod tests {
             .items
             .iter()
             .any(|item| item.contains("InstallMutationLock")));
+    }
+
+    #[test]
+    fn a_recovery_artifact_survives_a_failed_backup_scan() {
+        // Both findings are real and only one of them blocks deploy. Reporting the scan failure
+        // alone pointed at read permissions while the lock — the thing that makes deploy refuse —
+        // went unmentioned.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        std::fs::write(root.join(".gore-install-mutation.lock"), b"{}").unwrap();
+
+        // A file where the scan expects a folder: read_dir fails with something other than
+        // NotFound on every platform, without needing permissions the test suite may not have.
+        let script = root.join("G1R").join("Script");
+        std::fs::remove_dir_all(&script).unwrap();
+        std::fs::write(&script, b"not a directory").unwrap();
+
+        let check = check_leftovers(&paths(root), &probe(root, false), false);
+        assert_eq!(check.verdict, Verdict::Problem);
+        assert!(check.detail.contains("refuse to start"), "{}", check.detail);
+        assert!(check.detail.contains("could not be read"), "{}", check.detail);
+        assert!(check.fix.unwrap().contains("gore mod undeploy"));
+        assert!(check
+            .items
+            .iter()
+            .any(|item| item.contains("InstallMutationLock")));
+        assert!(check
+            .items
+            .iter()
+            .any(|item| item.contains("could not scan for leftover backups")));
+    }
+
+    #[test]
+    fn a_recovery_artifact_survives_a_probe_that_could_not_inspect_everything() {
+        // `InspectionFailed` outranks `RecoveryArtifactsPresent` in the probe, and an unreadable
+        // process list alone is enough to set it. The artifacts are still there and still block.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        std::fs::write(root.join(".gore-install-mutation.lock"), b"{}").unwrap();
+
+        let probe = gore_as::compile::probe_install_compile_state_with_stated_game_process(
+            root,
+            || Err("the process list could not be read".into()),
+        );
+        assert_eq!(
+            probe.disposition,
+            InstallCompileStateDisposition::InspectionFailed
+        );
+
+        let check = check_leftovers(&paths(root), &probe, false);
+        assert_eq!(check.verdict, Verdict::Problem);
+        assert!(check.detail.contains("refuse to start"), "{}", check.detail);
+        assert!(check.fix.unwrap().contains("gore mod undeploy"));
     }
 
     #[test]
