@@ -542,6 +542,7 @@ pub fn run(query: Vec<String>, domain: Option<String>, max: usize, json: bool) -
     if let Some(domain) = domain.as_deref() {
         known_domain(domain, &register)?;
     }
+    let catalog = catalog_in_domain(catalog, domain.as_deref());
 
     let wanted = wanted_loc_ids(&catalog, &register);
     let name_index = load_name_index(&wanted);
@@ -562,6 +563,18 @@ pub fn run(query: Vec<String>, domain: Option<String>, max: usize, json: bool) -
     // the "display names were not searched" line as the last word rather than
     // burying it under `error:`.
     Ok(())
+}
+
+/// The catalog rows a search can reach, which with `--domain` is not all of them.
+///
+/// Scoped once, here, rather than only inside `search`: every number the report prints is read off
+/// this slice, and `--domain texture` used to claim it had searched all ~9,700 bundled entries
+/// while skipping every item, NPC and knowledge row in them.
+fn catalog_in_domain(mut catalog: Vec<CatalogEntry>, domain: Option<&str>) -> Vec<CatalogEntry> {
+    if let Some(domain) = domain {
+        catalog.retain(|entry| entry.domain.eq_ignore_ascii_case(domain));
+    }
+    catalog
 }
 
 /// Every localization id this run could possibly need a name for.
@@ -880,6 +893,15 @@ pub struct Report<'a> {
 }
 
 impl Report<'_> {
+    /// Register entries this search could reach: the whole register, or one domain of it.
+    ///
+    /// The catalog arrives already scoped (see `run`), the register does not — it is shared by
+    /// reference and filtered per match. Counting all of it beside a scoped catalog would describe
+    /// two different searches in one sentence.
+    fn register_searched(&self) -> usize {
+        self.register.in_domain(self.domain).len()
+    }
+
     fn text(&self) -> String {
         let query = self.query;
         let from_catalog = self.hits.iter().filter(|hit| hit.catalog.is_some()).count();
@@ -890,7 +912,7 @@ impl Report<'_> {
                 "nothing matches {query:?} — searched {} bundled catalog entries and {} \
                  effect-register entries\n",
                 self.catalog.len(),
-                self.register.len()
+                self.register_searched()
             )
         } else {
             format!(
@@ -940,7 +962,7 @@ impl Report<'_> {
             "query": self.query,
             "domain": self.domain,
             "catalog_entries": self.catalog.len(),
-            "register_entries": self.register.len(),
+            "register_entries": self.register_searched(),
             "matched_count": self.hits.len(),
             "listed_count": self.listed,
             "truncated": self.listed < self.hits.len(),
@@ -1696,6 +1718,86 @@ mod tests {
             &NameIndexState::Ready(index),
         );
         assert!(text.contains("3 of 3 catalog entries have one"), "{text}");
+    }
+
+    #[test]
+    fn scoping_the_catalog_keeps_the_rows_of_one_domain_and_all_of_them_without_one() {
+        let dialogue = CatalogEntry {
+            domain: "knowledge",
+            id: "ChoiceSaturasExit".into(),
+            category: "choice".into(),
+            class: None,
+            module: None,
+            loc_key: Some("TEXT_DDIAZ_20231219_132411".into()),
+            caption: None,
+        };
+        let catalog = vec![apple(), potion(), dialogue];
+        assert_eq!(catalog_in_domain(catalog.clone(), None).len(), 3);
+
+        let items = catalog_in_domain(catalog.clone(), Some("item"));
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().all(|entry| entry.domain == "item"), "{items:?}");
+
+        // Case-insensitively, like every other domain comparison in this command.
+        assert_eq!(catalog_in_domain(catalog, Some("KNOWLEDGE")).len(), 1);
+    }
+
+    #[test]
+    fn a_domain_filter_scopes_the_totals_and_not_just_the_hits() {
+        // The totals are what tells a reader an empty result was exhaustive. Reporting the whole
+        // catalog and the whole register beside a search that skipped most of both says the
+        // opposite of what happened.
+        let catalog = vec![apple(), potion()];
+        let mut register = register_with(
+            "texture",
+            "/Game/UI/T_LogoRemake",
+            &observation("confirmed", Some("magenta"), "24539464"),
+            "Main menu wordmark",
+        );
+        let item_source = format!(
+            r#"{{"format": 1, "domain": "item", "entries": [
+                 {{"id": "ItFo_Apple", "effect": "an apple",
+                   "note": "second domain, so the filter has something to leave out",
+                   "observations": [{}]}}
+               ]}}"#,
+            observation("confirmed", Some("Apfel"), "24539464")
+        );
+        register.push(
+            RegisterSource::parse(&item_source, Provenance::Bundled, "test fixture")
+                .expect("the fixture is a valid register"),
+        );
+
+        // Rows are dropped where `run` drops them, so the totals below count what was searched.
+        let scoped = catalog_in_domain(catalog, Some("texture"));
+        assert!(scoped.is_empty(), "the fixture catalog carries no texture rows");
+
+        let hits = search(&scoped, &register, &terms("logoremake"), None, Some("texture"));
+        let report = Report {
+            query: "logoremake",
+            domain: Some("texture"),
+            catalog: &scoped,
+            register: &register,
+            name_index: &NameIndexState::Absent,
+            listed: hits.len(),
+            hits: &hits,
+        };
+
+        let json = report.json().expect("serializes");
+        let document: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(document["catalog_entries"], serde_json::json!(0));
+        assert_eq!(
+            document["register_entries"],
+            serde_json::json!(1),
+            "only the texture entry was searchable: {json}"
+        );
+
+        // And the same numbers in the text, which is the half a person actually reads.
+        let empty = Report { query: "nothing-matches-this", hits: &[], listed: 0, ..report };
+        let text = empty.text();
+        assert!(
+            text.contains("searched 0 bundled catalog entries and 1 effect-register entries"),
+            "{text}"
+        );
     }
 
     #[test]

@@ -1096,8 +1096,21 @@ fn file_names(dir: &Path) -> Result<Vec<String>, String> {
     for entry in entries {
         let entry = entry
             .map_err(|error| format!("{} could not be read: {error}", dir.display()))?;
-        if entry.path().is_file() {
-            names.push(entry.file_name().to_string_lossy().into_owned());
+        let path = entry.path();
+        // Not `Path::is_file()`, which answers `false` for every reason it could not tell — an ACL,
+        // an I/O error, a drive that went away mid-scan — and so dropped the entry silently. That is
+        // the same swallowed error this function's own contract rules out one paragraph above.
+        // `fs::metadata` follows links like `is_file()` did, and hands back the reason.
+        match std::fs::metadata(&path) {
+            Ok(metadata) => {
+                if metadata.is_file() {
+                    names.push(entry.file_name().to_string_lossy().into_owned());
+                }
+            }
+            // Gone between the listing and the look, or a link with nothing at the end of it.
+            // Not there IS an answer, and the same one `read_dir` gives for a missing directory.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("{} could not be read: {error}", path.display())),
         }
     }
     Ok(names)
