@@ -1212,28 +1212,54 @@ fn check_loc_catalog(meta: Option<LocMeta>, catalog: &Path, installed: Option<&P
     // shared format that Mod Studio and the save editor also read — so the modification time is the
     // second signal, and an unchanged length with an untouched mtime is reported as what it is:
     // nothing that looks changed, rather than proof of a match.
-    let modified_after_extraction = |m: &std::fs::Metadata| {
-        m.modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .is_some_and(|since| since.as_secs() > meta.extracted_at)
+    // `None` where no modification time could be read. Distinct from `Some(false)`: the whole
+    // reason this predicate exists is that length cannot separate an untouched cache from a
+    // same-length rewrite, so a filesystem that gives no timestamp leaves the question open rather
+    // than answering it in the reassuring direction.
+    let modified_after_extraction = |m: &std::fs::Metadata| -> Option<bool> {
+        let since = m
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?;
+        Some(since.as_secs() > meta.extracted_at)
     };
 
     match std::fs::metadata(installed) {
-        Ok(m) if m.len() == meta.source_bytes && modified_after_extraction(&m) => Check::new(
-            "loc_catalog",
-            "loc catalog",
-            Verdict::Problem,
-            format!(
-                "{summary}, but the installed cache has been written since the extraction — it is \
-                 the same length, so what changed is its contents"
-            ),
-        )
-        .with_items(items)
-        .with_fix(
-            "'gore loc import' re-encrypts the cache in place and can leave its length unchanged. \
-             Run 'gore loc extract' so the shared catalog describes the text that is installed",
-        ),
+        Ok(m) if m.len() == meta.source_bytes && modified_after_extraction(&m) == Some(true) => {
+            Check::new(
+                "loc_catalog",
+                "loc catalog",
+                Verdict::Problem,
+                format!(
+                    "{summary}, but the installed cache has been written since the extraction — \
+                     it is the same length, so what changed is its contents"
+                ),
+            )
+            .with_items(items)
+            .with_fix(
+                "'gore loc import' re-encrypts the cache in place and can leave its length \
+                 unchanged. Run 'gore loc extract' so the shared catalog describes the text that \
+                 is installed",
+            )
+        }
+        Ok(m) if m.len() == meta.source_bytes && modified_after_extraction(&m).is_none() => {
+            Check::new(
+                "loc_catalog",
+                "loc catalog",
+                Verdict::Note,
+                format!(
+                    "{summary}; the installed cache is the same length, and whether it has been \
+                     rewritten since cannot be told — this filesystem reported no modification \
+                     time"
+                ),
+            )
+            .with_items(items)
+            .with_fix(
+                "nothing here says the catalog is stale. If text in the game disagrees with what \
+                 'gore loc' shows, run 'gore loc extract' to settle it",
+            )
+        }
         Ok(m) if m.len() == meta.source_bytes => Check::new(
             "loc_catalog",
             "loc catalog",

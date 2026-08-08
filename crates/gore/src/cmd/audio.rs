@@ -536,9 +536,10 @@ pub fn extract(
     // only by punctuation) do not collide and silently overwrite.
     let (mut ok, mut skipped) = (0usize, 0usize);
     let mut skips: BTreeMap<String, (usize, usize)> = BTreeMap::new();
-    // Path plus the length written, so the rollback can tell its own output from a file that
-    // something else put there since.
-    let mut published: Vec<(PathBuf, u64)> = Vec::new();
+    // Path, the length written, and the modification time the filesystem gave the file the moment
+    // this run finished writing it — recorded while it is certainly still ours, because rollback
+    // can only ask what is on disk later.
+    let mut published: Vec<Published> = Vec::new();
 
     // Best effort by nature: the run has already failed, and a file that cannot be removed is not a
     // reason to fail differently.
@@ -546,14 +547,17 @@ pub fn extract(
     // It removes only what still looks like what this run wrote. `create_new` stops the *creation*
     // from clobbering anything, but rollback happens later, and an editor or a watcher that
     // replaced an early WAV while a long extraction was still running would otherwise have its file
-    // deleted by a failure it had nothing to do with. Length is the cheap identity available here;
-    // a file replaced by different content of exactly the same length is not distinguished, and
-    // that is the residual this note exists to record.
-    let roll_back = |published: &[(PathBuf, u64)]| {
-        for (path, written) in published {
-            let ours = std::fs::metadata(path).map(|m| m.len() == *written).unwrap_or(false);
-            if ours {
-                let _ = std::fs::remove_file(path);
+    // deleted by a failure it had nothing to do with.
+    //
+    // Length AND modification time, because length alone let exactly the commonest such edit
+    // through: rewriting audio without changing its duration or encoding leaves the byte count
+    // where it was. What remains undistinguished is a rewrite that also restores the old timestamp,
+    // which no editor does by accident. A real file identity (inode, file index) would not close it
+    // either — an in-place rewrite keeps that too — so the mtime is the signal that matters here.
+    let roll_back = |published: &[Published]| {
+        for entry in published {
+            if entry.is_still_ours() {
+                let _ = std::fs::remove_file(&entry.path);
             }
         }
     };
@@ -596,7 +600,9 @@ pub fn extract(
             roll_back(&published);
             return Err(error).with_context(|| format!("writing '{}'", dest.display()));
         }
-        published.push((dest, wav.len() as u64));
+        // Read back through the handle that wrote it, before anything else can touch the path.
+        let stamp = file.metadata().ok().and_then(|m| m.modified().ok());
+        published.push(Published { path: dest, written: wav.len() as u64, stamp });
         ok += 1;
     }
     for (reason, (count, first)) in &skips {
@@ -610,6 +616,28 @@ pub fn extract(
         out.display()
     );
     Ok(())
+}
+
+/// One file this run created, and the evidence that it is still that file.
+struct Published {
+    path: PathBuf,
+    written: u64,
+    /// `None` where the filesystem offers no modification time. Then length is all there is, which
+    /// is the behaviour this type replaced — no worse, and only on such a filesystem.
+    stamp: Option<std::time::SystemTime>,
+}
+
+impl Published {
+    /// Whether what is at `path` now is still what this run wrote there.
+    ///
+    /// Unreadable counts as not ours: rollback exists to undo this run's own writes, and a file it
+    /// cannot even look at is not one it should delete.
+    fn is_still_ours(&self) -> bool {
+        let Ok(metadata) = std::fs::metadata(&self.path) else {
+            return false;
+        };
+        metadata.len() == self.written && metadata.modified().ok() == self.stamp
+    }
 }
 
 fn sanitize(name: &str) -> String {
@@ -854,6 +882,56 @@ fn resolve(base: &Path, rel: &str) -> PathBuf {
 /// are what these drive. The banks themselves are real: `gore_fmod`'s fixture builder emits the
 /// same encrypted RIFF/`FEV ` wrapper the reader walks, and its codec is PCM16 rather than the
 /// shipped Vorbis, so a codec cell can only be right by having been read.
+#[cfg(test)]
+mod rollback_tests {
+    use super::Published;
+    use std::io::Write as _;
+    use tempfile::TempDir;
+
+    /// Exactly what the extraction loop records: the bytes written, and the timestamp read back
+    /// through the handle that wrote them.
+    fn publish(dir: &std::path::Path, name: &str, bytes: &[u8]) -> Published {
+        let path = dir.join(name);
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(bytes).unwrap();
+        let stamp = file.metadata().ok().and_then(|m| m.modified().ok());
+        Published { path, written: bytes.len() as u64, stamp }
+    }
+
+    #[test]
+    fn a_same_length_rewrite_is_not_claimed_as_this_runs_output() {
+        let temp = TempDir::new().unwrap();
+        let entry = publish(temp.path(), "0_line.wav", b"original bytes");
+        assert!(entry.is_still_ours());
+
+        // What an editor does to a WAV: different audio, same duration and encoding, so the same
+        // byte count. Length alone called that ours, and a collision on a later sample deleted
+        // somebody else's file as part of undoing a failure it had nothing to do with.
+        std::fs::write(&entry.path, b"replaced bytes").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&entry.path)
+            .unwrap()
+            .set_modified(entry.stamp.unwrap() + std::time::Duration::from_secs(5))
+            .unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&entry.path).unwrap().len(),
+            entry.written,
+            "the fixture is only interesting while the length still matches"
+        );
+        assert!(!entry.is_still_ours());
+    }
+
+    #[test]
+    fn a_file_that_is_no_longer_there_is_not_ours_either() {
+        let temp = TempDir::new().unwrap();
+        let entry = publish(temp.path(), "0_line.wav", b"bytes");
+        std::fs::remove_file(&entry.path).unwrap();
+        assert!(!entry.is_still_ours());
+    }
+}
+
 #[cfg(test)]
 mod banks_tests {
     use super::{bank_rows, banks_document, banks_table, BankRow};
