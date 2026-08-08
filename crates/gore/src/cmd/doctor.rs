@@ -474,6 +474,18 @@ fn check_ue4ss(gp: &GamePaths) -> Check {
         Ok(metadata) => metadata.is_some_and(|metadata| metadata.is_dir()),
         Err(error) => return unreadable(error),
     };
+    // UE4SS.dll is the payload; something has to load it. The game imports a proxy DLL, and the one
+    // this toolkit knows is `dwmapi.dll` beside the executable — `gore-as` moves that exact file
+    // aside for a regen, so its name is not a guess. Without it the payload sits there unloaded and
+    // every deployed override does nothing, which is the symptom this check exists to name.
+    let proxy = ue4ss.parent().map(|win64| win64.join("dwmapi.dll"));
+    let proxy_present = match proxy.as_deref().map(present) {
+        Some(Ok(metadata)) => metadata.is_some_and(|metadata| metadata.is_file()),
+        Some(Err(error)) => return unreadable(error),
+        // No parent directory to look in. Not a shape this check can judge, and not one it should
+        // invent a finding about.
+        None => true,
+    };
 
     if !ue4ss_present {
         return Check::new(
@@ -547,6 +559,30 @@ fn check_ue4ss(gp: &GamePaths) -> Check {
         )
         .with_items(items)
         .with_fix("'gore mod deploy' and 'gore gen -o <mods dir>' both create it");
+    }
+
+    if !proxy_present {
+        // A Note, not a Problem: UE4SS supports several proxy names and somebody may have installed
+        // it under one this toolkit does not look for. Saying so is still worth a line, because the
+        // alternative is a report that calls UE4SS installed while nothing loads it.
+        return Check::new(
+            "ue4ss",
+            "UE4SS",
+            Verdict::Note,
+            format!(
+                "installed at {}, but there is no dwmapi.dll next to the game executable to load \
+                 it",
+                ue4ss.display()
+            ),
+        )
+        .with_items(items)
+        .with_fix(
+            "UE4SS is loaded by a proxy DLL the game imports, and dwmapi.dll is the one this \
+             toolkit knows — it belongs in G1R\\Binaries\\Win64. If you installed UE4SS under a \
+             different proxy name this line is nothing to act on; otherwise nothing loads UE4SS \
+             and every deployed override does nothing. See the UE4SS section of \
+             docs\\guide\\getting-started.md",
+        );
     }
 
     Check::new(
@@ -754,6 +790,61 @@ fn is_generated_override_mod(dir: &Path) -> Result<bool, String> {
     Ok(String::from_utf8_lossy(&head[..read]).starts_with(GENERATED_MARKER))
 }
 
+/// What can still be said about a deployment when the manager's loadout will not parse.
+///
+/// The first three rungs of the status ladder — nothing deployed, an interrupted apply, a
+/// standalone `gore mod deploy` bundle — are read off the deploy record before the target loadout
+/// is consulted at all. Returning on the loadout error therefore hid a half-finished deploy, and an
+/// active bundle, behind a complaint about an unrelated JSON file. Those two are the report's whole
+/// reason for existing; the loadout is what `gore mgr` needs, and it is said alongside.
+///
+/// Anything past those three rungs genuinely is a diff against the loadout, so it is not attempted.
+fn deployment_without_a_loadout(
+    gp: &GamePaths,
+    library: &Path,
+    items: Vec<String>,
+    loadout_path: &Path,
+    error: impl std::fmt::Display,
+) -> Check {
+    let broken = format!(
+        "the manager loadout could not be read: {error}. Delete or repair {} — every 'gore mgr' \
+         command reads it first",
+        loadout_path.display()
+    );
+    // An empty target is safe for exactly the record-only rungs, and its answer is ignored for
+    // every other one.
+    let record_only = gore_mod::mgr::status::status(&gp.root, library, &Default::default());
+    match record_only {
+        Ok(ManagerStatus::RecoveryRequired) => Check::new(
+            "deployment",
+            "deployment",
+            Verdict::Problem,
+            "a previous deploy was interrupted and the install is half-changed",
+        )
+        .with_items(items)
+        .with_fix(format!(
+            "run 'gore mgr reset' (or 'gore mod undeploy') to restore the game before deploying \
+             anything else. Separately: {broken}"
+        )),
+        Ok(ManagerStatus::StudioDeployActive { mod_name }) => Check::new(
+            "deployment",
+            "deployment",
+            Verdict::Problem,
+            format!("one bundle is deployed: {mod_name}; the manager loadout is unreadable"),
+        )
+        .with_items(items)
+        .with_fix(broken),
+        _ => Check::new(
+            "deployment",
+            "deployment",
+            Verdict::Problem,
+            "the manager loadout could not be read",
+        )
+        .with_items(items)
+        .with_fix(broken),
+    }
+}
+
 /// Is anything deployed, and is it still what was deployed?
 ///
 /// This is `gore mgr status`, called the same way with the same shared library and loadout, so the
@@ -771,19 +862,7 @@ fn check_deployment(gp: &GamePaths, library: &Path, loadout_path: &Path) -> Chec
 
     let target = match gore_mod::mgr::loadout::load(loadout_path) {
         Ok(loadout) => loadout,
-        Err(error) => {
-            return Check::new(
-                "deployment",
-                "deployment",
-                Verdict::Problem,
-                format!("the manager loadout could not be read: {error}"),
-            )
-            .with_items(items)
-            .with_fix(format!(
-                "delete or repair {} — every 'gore mgr' command reads it first",
-                loadout_path.display()
-            ));
-        }
+        Err(error) => return deployment_without_a_loadout(gp, library, items, loadout_path, error),
     };
 
     match gore_mod::mgr::status::status(&gp.root, library, &target) {
@@ -1554,10 +1633,36 @@ mod tests {
         let ue4ss = ue4ss_dir(&gp);
         std::fs::write(ue4ss.join("UE4SS.dll"), b"dll").unwrap();
         std::fs::write(ue4ss.join("UE4SS-settings.ini"), b"[]").unwrap();
+        // The proxy the game imports. A complete install has it; without it the payload above is
+        // never loaded, so a fixture that left it out was not describing a complete install.
+        std::fs::write(ue4ss.parent().unwrap().join("dwmapi.dll"), b"proxy").unwrap();
 
         let check = check_ue4ss(&gp);
         assert_eq!(check.verdict, Verdict::Ok);
         assert!(check.fix.is_none());
+    }
+
+    #[test]
+    fn ue4ss_without_its_loader_proxy_is_reported_as_loading_nothing() {
+        // The payload and the loader are two files. With UE4SS.dll present and no dwmapi.dll the
+        // report used to say "installed", while in the game nothing runs and every deployed
+        // override does nothing — the exact symptom this check exists to name.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        std::fs::create_dir_all(&gp.ue4ss_mods).unwrap();
+        let ue4ss = ue4ss_dir(&gp);
+        std::fs::write(ue4ss.join("UE4SS.dll"), b"dll").unwrap();
+
+        let check = check_ue4ss(&gp);
+        assert_eq!(check.verdict, Verdict::Note);
+        assert!(check.detail.contains("dwmapi.dll"), "{}", check.detail);
+        let fix = check.fix.unwrap();
+        assert!(
+            fix.contains("different proxy name"),
+            "a legitimate other proxy must not read as a fault: {fix}"
+        );
     }
 
     /// Write a UE4SS mod folder; `generated` decides whether its main.lua carries the marker.
