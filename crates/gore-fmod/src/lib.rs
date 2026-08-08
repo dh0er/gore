@@ -747,7 +747,33 @@ pub fn bank_summary(bank: &[u8], key: &[u8]) -> Result<BankSummary, String> {
     for entry in &entries {
         headers.push(sub_bank_header(bank, entry, key)?);
     }
-    let first = *entries.first().ok_or("bank has no FSB5")?;
+    // And where the waveforms point. Every block parsing does not mean the bank plays: a slot
+    // naming a sub-bank that is not there, or a subsound past the end of the one it names, is
+    // rejected by `read_bank`'s bounds checks — after this summary had already called the file
+    // intact. Repointing those pairs is the whole of what an injection does, so a bank with a bad
+    // one is a replacement that went wrong, which is exactly what somebody runs `banks` to find.
+    let counts: Vec<usize> = headers
+        .iter()
+        .map(|header| u32_le(header, 0x08) as usize)
+        .collect();
+    for (slot_index, slot) in waveform_slots(bank)?.iter().enumerate() {
+        let Some(count) = counts.get(slot.sub_bank) else {
+            return Err(format!(
+                "waveform {slot_index} points at sub-bank {} and the bank has {}: the bank is \\
+                 damaged, or a replacement was written against a different one",
+                slot.sub_bank,
+                counts.len()
+            ));
+        };
+        if slot.subsound >= *count {
+            return Err(format!(
+                "waveform {slot_index} points at subsound {} of sub-bank {}, which holds {count}: \\
+                 the bank is damaged, or a replacement was written against a different one",
+                slot.subsound, slot.sub_bank
+            ));
+        }
+    }
+
     let header = headers.remove(0);
     Ok(BankSummary::Samples {
         sub_banks: entries.len(),
@@ -855,8 +881,21 @@ fn walk_sample_headers(b: &[u8], n: usize, base: usize) -> Result<(), String> {
                 let w = u32_le(b, co);
                 let more = w & 1;
                 let csz = ((w >> 1) & 0xFF_FFFF) as usize;
+                let ctyp = (w >> 25) & 0x7F;
                 if co + 4 + csz > b.len() {
                     return Err("FSB5 chunk payload out of bounds".into());
+                }
+                // The parser reads a field out of these three and refuses a payload too small to
+                // hold it. Mirroring its bounds and dropping its minima left a `0x02` frequency
+                // chunk with no payload passing here and failing there — the same disagreement one
+                // condition further in, which is the whole reason this walk exists.
+                let need = match ctyp {
+                    0x01 => 1,
+                    0x02 | 0x0B | 0x0E => 4,
+                    _ => 0,
+                };
+                if csz < need {
+                    return Err("FSB5 chunk too small for its type".into());
                 }
                 co += 4 + csz;
                 if more == 0 {

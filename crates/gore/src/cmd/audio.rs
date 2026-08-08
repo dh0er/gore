@@ -616,9 +616,10 @@ pub fn extract(
             roll_back(&published);
             return Err(error).with_context(|| format!("writing '{}'", dest.display()));
         }
-        // Read back through the handle that wrote it, before anything else can touch the path.
-        let stamp = file.metadata().ok().and_then(|m| m.modified().ok());
-        published.push(Published { path: dest, written: wav.len() as u64, stamp });
+        // Taken from the buffer, not from the file: this is what was written, with no window
+        // between writing it and identifying it.
+        let digest = digest_of(&wav);
+        published.push(Published { path: dest, written: wav.len() as u64, digest });
         ok += 1;
     }
     for (reason, (count, first)) in &skips {
@@ -638,9 +639,18 @@ pub fn extract(
 struct Published {
     path: PathBuf,
     written: u64,
-    /// `None` where the filesystem offers no modification time. Then length is all there is, which
-    /// is the behaviour this type replaced — no worse, and only on such a filesystem.
-    stamp: Option<std::time::SystemTime>,
+    /// SHA-256 of the bytes written here, taken from the buffer that was about to be written.
+    ///
+    /// Length and modification time came first and were not enough. Two of the three signals a
+    /// stat can offer are coarse by design: an editor rewriting a WAV without changing its
+    /// duration or encoding keeps the byte count, and a filesystem with a two-second timestamp
+    /// tick — FAT32, and the removable media people keep game files on — can leave the mtime
+    /// unchanged as well. Both together still described a file this run did not write, and
+    /// rollback would have deleted it.
+    ///
+    /// Hashing costs one pass over bytes already in memory, and the comparison only happens on the
+    /// failure path, where a re-read is not what anybody is waiting for.
+    digest: [u8; 32],
 }
 
 impl Published {
@@ -652,21 +662,21 @@ impl Published {
         let Ok(metadata) = std::fs::metadata(&self.path) else {
             return false;
         };
+        // Cheap reject first: a different length cannot be the same content, and this spares the
+        // read for every file something else has plainly replaced.
         if metadata.len() != self.written {
             return false;
         }
-        match self.stamp {
-            // Recorded one, so it has to still be that one. A file that cannot produce a timestamp
-            // now is one this run can no longer identify, and rollback does not delete those.
-            Some(stamp) => metadata.modified().is_ok_and(|now| now == stamp),
-            // None was available when it was written, so there is nothing to compare against and
-            // length is the whole of the evidence — the behaviour this type replaced, kept for the
-            // case that produced no timestamp. Comparing the two `Option`s for equality instead
-            // read as "and it must still have no timestamp", which left this run's own output
-            // behind the moment one became readable.
-            None => true,
-        }
+        let Ok(bytes) = std::fs::read(&self.path) else {
+            return false;
+        };
+        digest_of(&bytes) == self.digest
     }
+}
+
+fn digest_of(bytes: &[u8]) -> [u8; 32] {
+    use sha2::{Digest as _, Sha256};
+    Sha256::digest(bytes).into()
 }
 
 fn sanitize(name: &str) -> String {
@@ -917,14 +927,17 @@ mod rollback_tests {
     use std::io::Write as _;
     use tempfile::TempDir;
 
-    /// Exactly what the extraction loop records: the bytes written, and the timestamp read back
-    /// through the handle that wrote them.
+    /// Exactly what the extraction loop records: the bytes, and their digest taken from the
+    /// buffer that was about to be written.
     fn publish(dir: &std::path::Path, name: &str, bytes: &[u8]) -> Published {
         let path = dir.join(name);
         let mut file = std::fs::File::create(&path).unwrap();
         file.write_all(bytes).unwrap();
-        let stamp = file.metadata().ok().and_then(|m| m.modified().ok());
-        Published { path, written: bytes.len() as u64, stamp }
+        Published {
+            path,
+            written: bytes.len() as u64,
+            digest: super::digest_of(bytes),
+        }
     }
 
     #[test]
@@ -934,16 +947,10 @@ mod rollback_tests {
         assert!(entry.is_still_ours());
 
         // What an editor does to a WAV: different audio, same duration and encoding, so the same
-        // byte count. Length alone called that ours, and a collision on a later sample deleted
-        // somebody else's file as part of undoing a failure it had nothing to do with.
+        // byte count. Nothing here touches the timestamp, and it does not need to — that was the
+        // signal this test used to rely on, and a filesystem with a two-second tick can leave it
+        // unchanged through exactly this edit.
         std::fs::write(&entry.path, b"replaced bytes").unwrap();
-        std::fs::File::options()
-            .write(true)
-            .open(&entry.path)
-            .unwrap()
-            .set_modified(entry.stamp.unwrap() + std::time::Duration::from_secs(5))
-            .unwrap();
-
         assert_eq!(
             std::fs::metadata(&entry.path).unwrap().len(),
             entry.written,
@@ -953,22 +960,18 @@ mod rollback_tests {
     }
 
     #[test]
-    fn a_file_written_without_a_timestamp_is_still_ours_by_length() {
-        // The fallback for a filesystem or a moment that gave no modification time. Comparing the
-        // two `Option`s for equality turned this into "and it must still have no timestamp", so
-        // the first readable one left this run's own output behind after a failure.
+    fn a_file_rewritten_with_the_very_same_bytes_is_still_ours() {
+        // The other direction, and the reason content is the right identity rather than a stricter
+        // stat: a file whose bytes are what this run wrote IS what this run wrote, whenever it was
+        // written and by whom. Refusing to roll it back would leave output behind for a difference
+        // nobody can observe.
         let temp = TempDir::new().unwrap();
-        let mut entry = publish(temp.path(), "0_line.wav", b"bytes");
-        entry.stamp = None;
-
-        assert!(
-            std::fs::metadata(&entry.path).unwrap().modified().is_ok(),
-            "the point of the fixture is that a timestamp IS readable now"
-        );
+        let entry = publish(temp.path(), "0_line.wav", b"original bytes");
+        std::fs::write(&entry.path, b"original bytes").unwrap();
         assert!(entry.is_still_ours());
 
-        // Length is then all there is, and it still has to match.
-        std::fs::write(&entry.path, b"longer bytes").unwrap();
+        // And a different length is rejected before the file is read at all.
+        std::fs::write(&entry.path, b"a different length entirely").unwrap();
         assert!(!entry.is_still_ours());
     }
 
