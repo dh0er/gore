@@ -193,10 +193,13 @@ const _dataAssetsBoundaryMarkers = <String, List<String>>{
     'изменения игры или сохранений, поведение во время выполнения и содержимое '
         'мира.',
   ],
+  // The generic `zh` locale carries Simplified, the same as `zh-Hans` and as every neighbouring
+  // string in app_zh.arb. It briefly carried Traditional here, which made this one row read
+  // differently from the rest of the screen for anyone whose locale resolves to plain `zh`.
   'zh': <String>[
-    '僅檢查已由專案建置預覽驗證的精確目前暫存 DataAssets 領域。',
-    '不涵蓋新增或結構性資產、可遊玩檔案、安裝、部署',
-    '遊戲或存檔變更、執行階段行為或世界內容。',
+    '仅检查已由项目构建预览验证的精确当前暂存 DataAssets 领域。',
+    '不涵盖新增或结构性资产、可游玩文件、安装、部署',
+    '游戏或存档更改、运行时行为或世界内容。',
   ],
   'zh-Hans': <String>[
     '仅检查已由项目构建预览验证的精确当前暂存 DataAssets 领域。',

@@ -3613,7 +3613,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get managedTestReleaseDataAssetsDescription =>
-      '僅檢查已由專案建置預覽驗證的精確目前暫存 DataAssets 領域。不涵蓋新增或結構性資產、可遊玩檔案、安裝、部署、遊戲或存檔變更、執行階段行為或世界內容。';
+      '仅检查已由项目构建预览验证的精确当前暂存 DataAssets 领域。不涵盖新增或结构性资产、可游玩文件、安装、部署、游戏或存档更改、运行时行为或世界内容。';
 
   @override
   String get managedTestReleaseDataAssetsAction => '查看 DataAsset';
