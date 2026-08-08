@@ -3171,11 +3171,16 @@ pub struct FileCleanupClaim {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct DeployRecord {
-    /// Localization edits this deploy could not apply, each naming the id and language. Carried
+    /// Localization edits this deploy could not write, each naming the id and language. Carried
     /// back to the caller so it can be shown, never written to the on-disk record: it describes
     /// one run, not the deployment's state, and the record is read back by undeploy and status.
     #[serde(skip)]
-    pub loc_warnings: Vec<String>,
+    pub loc_skipped: Vec<String>,
+    /// Localization edits this deploy wrote that the game will not display, because the id also
+    /// carries a newer generation of the same language. Written, not skipped — the distinction
+    /// decides whether a reader should fix their spec or undo their deployment.
+    #[serde(skip)]
+    pub loc_shadowed: Vec<String>,
     pub mod_name: String,
     /// deployed UE4SS mod dir (absolute), if any
     pub ue4ss_mod_dir: Option<String>,
@@ -3982,12 +3987,17 @@ pub(crate) struct DeployPlan {
     /// Retained component-wise no-follow binding of the fixed VoiceOver directory. This survives
     /// prepare so commit can reject an identity replacement before any game mutation.
     voice_over_guard: Option<VoiceOverPathGuard>,
-    /// Localization edits that named a declared language the target id does not carry. The write
-    /// is legitimately skipped — the id simply has no slot for that language — but skipping it
-    /// silently is what made a mis-targeted translation indistinguishable from a broken tool.
+    /// Localization edits that could not be written: the id carries no slot for that language.
     /// Reported after a successful deploy rather than refused, so one unusable edit in a large
     /// bundle does not block the rest.
-    pub(crate) loc_warnings: Vec<String>,
+    pub(crate) loc_skipped: Vec<String>,
+    /// Localization edits that WERE written and will not be seen, because the id also carries a
+    /// newer generation of the same language and the game reads that one.
+    ///
+    /// Kept apart from [`Self::loc_skipped`] deliberately. Counting them together reported a
+    /// landed edit as one that "did not apply", which invites somebody to undo a deployment that
+    /// worked — and one edit can raise both, so even the count was wrong.
+    pub(crate) loc_shadowed: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -4551,9 +4561,11 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
     };
     // Carried across the commit because the plan is consumed there, and only reattached on
     // success: a deploy that failed has nothing to report about edits it never applied.
-    let loc_warnings = plan.loc_warnings.clone();
+    let loc_skipped = plan.loc_skipped.clone();
+    let loc_shadowed = plan.loc_shadowed.clone();
     let mut committed = commit_plan(&gp, game_root, plan, record, prev)?;
-    committed.loc_warnings = loc_warnings;
+    committed.loc_skipped = loc_skipped;
+    committed.loc_shadowed = loc_shadowed;
     Ok(committed)
 }
 
@@ -5621,9 +5633,9 @@ fn prepare(
                                 .max_by_key(|carried_lang| generation(carried_lang).1)
                             {
                                 if !langs.contains_key(winner) {
-                                    plan.loc_warnings.push(format!(
+                                    plan.loc_shadowed.push(format!(
                                         "'{id}' also carries '{winner}', which the game displays \
-                                         instead of '{set}' — that edit will not be visible"
+                                         instead of '{set}'"
                                     ));
                                 }
                             }
@@ -5637,8 +5649,8 @@ fn prepare(
                                 // standalone `gore loc import` reports it by name, so swallowing
                                 // it here left the two paths disagreeing about the same edit.
                                 if let Err(error) = lc.set_value(id, set, text) {
-                                    plan.loc_warnings.push(format!(
-                                        "'{id}' has no '{set}' text, so that edit was skipped: {error}"
+                                    plan.loc_skipped.push(format!(
+                                        "'{id}' has no '{set}' text: {error}"
                                     ));
                                 }
                             }
@@ -9929,16 +9941,16 @@ mod tests {
 
         assert_eq!(plan.writes.len(), 1, "the deploy still proceeds");
         assert_eq!(
-            plan.loc_warnings.len(),
+            plan.loc_skipped.len(),
             1,
-            "the skipped edit must be reported: {:?}",
-            plan.loc_warnings
+            "the unwritable edit must be reported: {:?}",
+            plan.loc_skipped
         );
         assert!(
-            plan.loc_warnings[0].contains("itfo_cheese")
-                && plan.loc_warnings[0].contains("english"),
+            plan.loc_skipped[0].contains("itfo_cheese")
+                && plan.loc_skipped[0].contains("english"),
             "the warning names the id and the language: {:?}",
-            plan.loc_warnings
+            plan.loc_skipped
         );
 
         let decoded = gore_loc::loc::Lcache::decode(&plan.writes[0].1).unwrap();
@@ -9964,16 +9976,16 @@ mod tests {
 
         let plan = prepare_test_loc_patch_with_cache(&edits, cache).unwrap();
         assert_eq!(
-            plan.loc_warnings.len(),
+            plan.loc_shadowed.len(),
             1,
             "a shadowed edit must be reported: {:?}",
-            plan.loc_warnings
+            plan.loc_shadowed
         );
         assert!(
-            plan.loc_warnings[0].contains("german_new")
-                && plan.loc_warnings[0].contains("itfo_cheese"),
+            plan.loc_shadowed[0].contains("german_new")
+                && plan.loc_shadowed[0].contains("itfo_cheese"),
             "the warning names the id and the generation that wins: {:?}",
-            plan.loc_warnings
+            plan.loc_shadowed
         );
         // The edit still lands: it was a legitimate write, just not a visible one.
         let decoded = gore_loc::loc::Lcache::decode(&plan.writes[0].1).unwrap();
@@ -9996,9 +10008,9 @@ mod tests {
 
         let plan = prepare_test_loc_patch_with_cache(&edits, cache).unwrap();
         assert!(
-            plan.loc_warnings.is_empty(),
+            plan.loc_shadowed.is_empty(),
             "writing both generations is correct and must not warn: {:?}",
-            plan.loc_warnings
+            plan.loc_shadowed
         );
     }
 
@@ -10013,9 +10025,9 @@ mod tests {
 
         let plan = prepare_test_loc_patch(&edits).unwrap();
         assert!(
-            plan.loc_warnings.is_empty(),
+            plan.loc_skipped.is_empty() && plan.loc_shadowed.is_empty(),
             "an edit that lands must not warn: {:?}",
-            plan.loc_warnings
+            plan.loc_skipped
         );
         let decoded = gore_loc::loc::Lcache::decode(&plan.writes[0].1).unwrap();
         assert_eq!(decoded.export(false)["itfo_cheese"]["german"], "Bergkäse");

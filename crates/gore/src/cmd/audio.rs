@@ -429,6 +429,20 @@ pub fn extract(
         .context("decoding bank")?;
     std::fs::create_dir_all(&out).with_context(|| format!("creating '{}'", out.display()))?;
 
+    // A named `--sample` and a `--filter` are two different selections, and honouring one means
+    // ignoring the other. Silently keeping the sample meant a caller who passed both got a
+    // successful extraction that answered half their request. `--sample all` is not a conflict:
+    // it is the default, and it means "no sample selection", which is exactly what a filter narrows.
+    if let (Some(name), Some(needle)) = (&sample, &filter) {
+        if name != "all" {
+            bail!(
+                "--sample '{name}' and --filter '{needle}' select differently and cannot both be \
+                 honoured. Pass one: --sample for a single known name, --filter for every name \
+                 containing a substring."
+            );
+        }
+    }
+
     // indices to extract
     let indices: Vec<usize> = match (&sample, &filter) {
         (Some(name), _) if name != "all" => vec![view
@@ -488,13 +502,25 @@ pub fn extract(
     // only by punctuation) do not collide and silently overwrite.
     let (mut ok, mut skipped) = (0usize, 0usize);
     let mut skips: BTreeMap<String, (usize, usize)> = BTreeMap::new();
-    let mut published: Vec<PathBuf> = Vec::new();
+    // Path plus the length written, so the rollback can tell its own output from a file that
+    // something else put there since.
+    let mut published: Vec<(PathBuf, u64)> = Vec::new();
 
     // Best effort by nature: the run has already failed, and a file that cannot be removed is not a
-    // reason to fail differently. Order does not matter — these are independent files.
-    let roll_back = |published: &[PathBuf]| {
-        for path in published {
-            let _ = std::fs::remove_file(path);
+    // reason to fail differently.
+    //
+    // It removes only what still looks like what this run wrote. `create_new` stops the *creation*
+    // from clobbering anything, but rollback happens later, and an editor or a watcher that
+    // replaced an early WAV while a long extraction was still running would otherwise have its file
+    // deleted by a failure it had nothing to do with. Length is the cheap identity available here;
+    // a file replaced by different content of exactly the same length is not distinguished, and
+    // that is the residual this note exists to record.
+    let roll_back = |published: &[(PathBuf, u64)]| {
+        for (path, written) in published {
+            let ours = std::fs::metadata(path).map(|m| m.len() == *written).unwrap_or(false);
+            if ours {
+                let _ = std::fs::remove_file(path);
+            }
         }
     };
 
@@ -536,7 +562,7 @@ pub fn extract(
             roll_back(&published);
             return Err(error).with_context(|| format!("writing '{}'", dest.display()));
         }
-        published.push(dest);
+        published.push((dest, wav.len() as u64));
         ok += 1;
     }
     for (reason, (count, first)) in &skips {

@@ -75,19 +75,36 @@ pub fn deploy(bundle: PathBuf, game: Option<PathBuf>) -> Result<()> {
         rec.mod_name,
         rec.backups.len()
     );
-    // The deploy succeeded, so this goes to stderr and after the result line: it reports edits
-    // that did not land, not a failure of the deployment.
-    if !rec.loc_warnings.is_empty() {
+    // Both go to stderr after the result line: the deploy succeeded, and these are findings about
+    // individual edits rather than a failure of it.
+    //
+    // Reported as two separate things because they call for opposite responses. A skipped edit was
+    // never written and the spec has to change. A shadowed edit WAS written and is simply not the
+    // one the game reads — telling somebody that it "did not apply" invites them to undo a
+    // deployment that worked.
+    if !rec.loc_skipped.is_empty() {
         eprintln!(
-            "warning: {} localization edit(s) did not apply:",
-            rec.loc_warnings.len()
+            "warning: {} localization edit(s) could not be written — the id carries no slot for \
+             that language:",
+            rec.loc_skipped.len()
         );
-        for warning in &rec.loc_warnings {
+        for warning in &rec.loc_skipped {
             eprintln!("  - {warning}");
         }
+    }
+    if !rec.loc_shadowed.is_empty() {
         eprintln!(
-            "The game reads one generation of each language and an id carries only the ones it \
-             has. See the text-and-dialogs guide page on which language key to write."
+            "note: {} localization edit(s) were written but will not be seen — the id also carries \
+             a newer generation of the same language, and the game reads that one:",
+            rec.loc_shadowed.len()
+        );
+        for warning in &rec.loc_shadowed {
+            eprintln!("  - {warning}");
+        }
+    }
+    if !rec.loc_skipped.is_empty() || !rec.loc_shadowed.is_empty() {
+        eprintln!(
+            "See the text-and-dialogs guide page on which language key to write."
         );
     }
     Ok(())
