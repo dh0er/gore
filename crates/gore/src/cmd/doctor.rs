@@ -314,7 +314,11 @@ fn read_config_file(path: &Path) -> ConfigFile {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return ConfigFile::Absent,
         Err(error) => return ConfigFile::Unreadable(error.to_string()),
     };
-    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+    // Deserialized as `Config`, which is what `config::load` does, and not merely as JSON. The two
+    // are different questions: `{"game_path": 42}` is valid JSON and invalid `Config`, so `load`
+    // discards it and falls back to the default — the exact silent discard this check exists to
+    // expose, and a syntax-only check called it healthy.
+    match serde_json::from_slice::<gore_loc::config::Config>(&bytes) {
         Ok(_) => ConfigFile::Parsed,
         Err(error) => ConfigFile::Malformed(error.to_string()),
     }
@@ -1963,6 +1967,24 @@ mod tests {
         let bad = dir.path().join("bad.json");
         std::fs::write(&bad, b"{ not json").unwrap();
         assert!(matches!(read_config_file(&bad), ConfigFile::Malformed(_)));
+
+        // Valid JSON, invalid Config. `load` discards each of these and returns the default, so a
+        // syntax-only check called them healthy while every command ignored the file.
+        for shape in [&br#"{"game_path":42}"#[..], b"null", b"[]", b"\"a string\""] {
+            let wrong = dir.path().join("wrong.json");
+            std::fs::write(&wrong, shape).unwrap();
+            assert!(
+                matches!(read_config_file(&wrong), ConfigFile::Malformed(_)),
+                "{:?} is not a Config",
+                String::from_utf8_lossy(shape)
+            );
+        }
+
+        // An unknown key is NOT a fault: `Config` keeps future keys verbatim so an older build
+        // never clobbers a newer one's settings, and this check must agree with that.
+        let newer = dir.path().join("newer.json");
+        std::fs::write(&newer, br#"{"game_path":"C:/Games/G1R","future_key":true}"#).unwrap();
+        assert!(matches!(read_config_file(&newer), ConfigFile::Parsed));
 
         // A directory where the file is expected: read fails with something other than NotFound on
         // every platform, without needing permissions the suite may not have.
