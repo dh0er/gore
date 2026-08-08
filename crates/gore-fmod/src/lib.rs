@@ -873,8 +873,19 @@ fn sample_table_base(header: &[u8]) -> usize {
 /// claiming a sample count has to know and could not tell from sizes alone.
 ///
 /// `b` is the decrypted metadata region, so the bound is the sample table and the name table
-/// together. That is more permissive than the sample table alone and stricter than the whole
-/// block: a chain reaching past the metadata and into the audio is corruption by any reading.
+/// together — deliberately, and not the declared `shdr_size` alone.
+///
+/// `parse_fsb5` bounds its own walk by the whole block, name table and audio included, and so
+/// accepts a chain that runs past the declared table: a bank with `shdr_size = 8`, one sample with
+/// `has_chunks` set and a name table after it parses there, reading the chunk header out of the
+/// name table's first four bytes. Verified by construction, not by reading. Bounding this walk at
+/// `base + shdr_size` would therefore make it refuse banks `audio list` opens without complaint,
+/// and this walk exists to predict that command, not to grade the format.
+///
+/// What remains is the other direction: a chain reaching past the metadata and into the audio is
+/// accepted by the parser and refused here, because decrypting 260 MB of `SFX.bank` to follow it
+/// would cost more than the answer is worth. Such a bank is corrupt by any reading, so of the two
+/// ways to be wrong this is the one that misleads nobody.
 fn walk_sample_headers(b: &[u8], n: usize, base: usize, data_size: u64) -> Result<(), String> {
     let mut off = base;
     let mut offsets = Vec::with_capacity(n);
