@@ -788,24 +788,49 @@ fn sub_bank_header(bank: &[u8], entry: &BankEntry, key: &[u8]) -> Result<Vec<u8>
         ));
     }
 
-    let version = u32_le(&header, 0x04);
-    let base = if version == 0 { 0x40u64 } else { 0x3Cu64 };
-    let declared = base
-        .saturating_add(u32_le(&header, 0x0C) as u64)
-        .saturating_add(u32_le(&header, 0x10) as u64)
-        .saturating_add(u32_le(&header, 0x14) as u64);
     let present = match entry.fsb5_size {
         // The wrapper's chunk size when it has one, but never more than the file actually holds.
         size if size > 0 => (size as u64).min((bank.len() - entry.fsb5_offset) as u64),
         _ => (bank.len() - entry.fsb5_offset) as u64,
     };
+    header_fits(&header, present)?;
+    Ok(header)
+}
+
+/// Whether a decrypted FSB5 header describes something the bytes present can actually hold.
+///
+/// Two questions, and the first one alone is not enough. The block's declared total has to fit in
+/// what is there — otherwise the file is truncated — and the sample-header table has to be big
+/// enough for the number of samples the same header claims. `parse_fsb5` reads a mandatory 8-byte
+/// word per sample and gives up with "sample header overrun" when it runs out, so a header
+/// declaring a thousand samples in a sixteen-byte table passes any check of the total and fails
+/// the parse that would follow. `audio banks` would print that thousand, and mark its totals
+/// complete, for a bank `audio list` cannot open.
+fn header_fits(header: &[u8], present: u64) -> Result<(), String> {
+    let version = u32_le(header, 0x04);
+    let base = if version == 0 { 0x40u64 } else { 0x3Cu64 };
+    let samples = u32_le(header, 0x08) as u64;
+    let shdr_size = u32_le(header, 0x0C) as u64;
+    let declared = base
+        .saturating_add(shdr_size)
+        .saturating_add(u32_le(header, 0x10) as u64)
+        .saturating_add(u32_le(header, 0x14) as u64);
     if declared > present {
         return Err(format!(
             "an FSB5 block declares {declared} bytes and only {present} are there: the bank is \
              truncated, so its sample table and audio cannot be read"
         ));
     }
-    Ok(header)
+
+    // `parse_fsb5`'s own minimum: eight bytes of base word per sample, before any chunk.
+    let needed = samples.saturating_mul(8);
+    if needed > shdr_size {
+        return Err(format!(
+            "an FSB5 block declares {samples} sample(s) and a {shdr_size}-byte sample header \
+             table, which cannot hold them: the bank is damaged, so its samples cannot be read"
+        ));
+    }
+    Ok(())
 }
 
 /// Where one waveform's audio is taken from: a sub-bank index and a subsound within it.
@@ -1469,6 +1494,41 @@ pub fn inject_fsb5(
 mod truncation_tests {
     use super::{bank_summary, BankSummary, GOTHIC_STUDIO_KEY};
     use crate::test_fixture::{numbered_pcm16_samples, pristine_bank_pcm16};
+
+    /// A synthetic 0x3C header, so the arithmetic can be exercised without building and
+    /// re-encrypting a whole bank around it.
+    fn header(samples: u32, shdr: u32, names: u32, data: u32) -> Vec<u8> {
+        let mut h = vec![0u8; 0x3C];
+        h[0x00..0x04].copy_from_slice(b"FSB5");
+        h[0x04..0x08].copy_from_slice(&1u32.to_le_bytes());
+        h[0x08..0x0C].copy_from_slice(&samples.to_le_bytes());
+        h[0x0C..0x10].copy_from_slice(&shdr.to_le_bytes());
+        h[0x10..0x14].copy_from_slice(&names.to_le_bytes());
+        h[0x14..0x18].copy_from_slice(&data.to_le_bytes());
+        h
+    }
+
+    #[test]
+    fn a_sample_table_too_small_for_its_own_count_is_refused() {
+        use super::header_fits;
+
+        // Four samples, thirty-two bytes of table: the mandatory eight bytes each, and it fits.
+        let good = header(4, 32, 0, 64);
+        assert!(header_fits(&good, 0x3C + 32 + 64).is_ok());
+
+        // The same total, and a table that cannot hold the count the header states. `parse_fsb5`
+        // gives up here with "sample header overrun", so `banks` printed a thousand samples, and
+        // called its totals complete, for a bank `audio list` cannot open.
+        let lying = header(1000, 16, 0, 80);
+        let error = header_fits(&lying, 0x3C + 16 + 80).expect_err("1000 samples do not fit in 16 bytes");
+        assert!(error.contains("cannot hold them"), "{error}");
+        assert!(error.contains("1000"), "{error}");
+
+        // And the truncation check still fires on its own.
+        let truncated = header(1, 8, 0, 4096);
+        let error = header_fits(&truncated, 64).expect_err("a declared 4 KB of audio is not there");
+        assert!(error.contains("truncated"), "{error}");
+    }
 
     #[test]
     fn a_bank_cut_off_after_its_header_is_not_summarized_as_intact() {
