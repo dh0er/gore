@@ -195,8 +195,11 @@ fn collect(explicit: Option<&Path>) -> Report {
         Some(root) => present(root),
         None => Ok(None),
     };
+    // `resolved` is kept whole through both exits below. A path that resolved is what a caller
+    // has to show or repair, and `game_source` already names where it came from — dropping it from
+    // the JSON left a consumer able to say only that something was wrong somewhere.
     let readable = match looked {
-        Ok(Some(metadata)) if metadata.is_dir() => resolved,
+        Ok(Some(metadata)) if metadata.is_dir() => resolved.clone(),
         Ok(_) => None,
         Err(error) => {
             // There and unreadable, which is neither of the above. Skipping as "no install to look
@@ -210,7 +213,7 @@ fn collect(explicit: Option<&Path>) -> Report {
                         ),
                 );
             }
-            return Report::new(None, source, checks);
+            return Report::new(resolved.as_deref(), source, checks);
         }
     };
     let Some(root) = readable else {
@@ -224,7 +227,7 @@ fn collect(explicit: Option<&Path>) -> Report {
                 "no install to look at",
             ));
         }
-        return Report::new(None, source, checks);
+        return Report::new(resolved.as_deref(), source, checks);
     };
 
     let gp = gore_mod::resolve_game_paths(&root);
