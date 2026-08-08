@@ -292,6 +292,13 @@ fn banks_document(dir: &Path, rows: &[BankRow]) -> serde_json::Value {
                 }
                 Err(reason) => {
                     entry["error"] = serde_json::json!(reason);
+                    // The defaults above are assertions — carries no samples, none of them, not
+                    // injected — and nothing measured any of them for this file. A consumer could
+                    // not tell an unknown `SFX.bank` from one successfully inspected and found
+                    // empty; `totals_complete` qualifies the aggregate, not the row.
+                    for unknown in ["carries_samples", "sample_count", "codec", "sub_banks", "injected"] {
+                        entry[unknown] = serde_json::Value::Null;
+                    }
                 }
             }
             entry
@@ -1142,7 +1149,16 @@ mod banks_tests {
         assert!(broken["error"]
             .as_str()
             .is_some_and(|text| !text.is_empty()));
-        assert_eq!(broken["carries_samples"], false);
+        // `false` here was an assertion nothing had measured: a consumer could not tell this from
+        // a bank successfully inspected and found empty. Every field the summary would have filled
+        // is null instead.
+        for unknown in ["carries_samples", "sample_count", "codec", "sub_banks", "injected"] {
+            assert_eq!(
+                broken[unknown],
+                serde_json::Value::Null,
+                "{unknown} was never established for this file"
+            );
+        }
         assert_eq!(
             document["with_samples_count"], 1,
             "an unreadable bank counts as neither"

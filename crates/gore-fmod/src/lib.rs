@@ -739,13 +739,41 @@ pub fn bank_summary(bank: &[u8], key: &[u8]) -> Result<BankSummary, String> {
     // Sub-bank 0, for the same reason `read_bank` names it the bank's own audio: an injection
     // appends sub-banks and repoints into them without ever renaming or dropping a waveform, so
     // sub-bank 0 is what "how many samples does this bank have" means in every other subcommand.
+    // Every sub-bank, not only the one the counts come from. An injection appends sub-banks and
+    // repoints waveforms into them, so a damaged appended block is where the audio the bank
+    // currently PLAYS lives — and `read_bank` decrypts all of them and would reject the file that
+    // this summary called intact.
+    let mut headers = Vec::with_capacity(entries.len());
+    for entry in &entries {
+        headers.push(sub_bank_header(bank, entry, key)?);
+    }
     let first = *entries.first().ok_or("bank has no FSB5")?;
-    let end = first
+    let header = headers.remove(0);
+    Ok(BankSummary::Samples {
+        sub_banks: entries.len(),
+        sample_count: u32_le(&header, 0x08) as usize,
+        codec: Codec::from_u32(u32_le(&header, 0x18)),
+    })
+}
+
+/// One sub-bank's decrypted header, refused unless it is both the right shape and all there.
+///
+/// The magic proves the key; it does not prove the file. A block cut off after its header still
+/// decrypts to a valid-looking one, and reporting a sample count and codec off it described audio
+/// that is not in the file — while `audio list`, which parses the whole block, could not open the
+/// same bank at all. Two commands disagreeing about one file is the failure, and the summary was
+/// the one making a claim it had never checked.
+///
+/// The extent arithmetic is `parse_fsb5`'s, which is what would have to succeed later: the sample
+/// table, the name table and the audio are all declared in the header, so their total can be
+/// checked without reading any of them.
+fn sub_bank_header(bank: &[u8], entry: &BankEntry, key: &[u8]) -> Result<Vec<u8>, String> {
+    let end = entry
         .fsb5_offset
         .checked_add(FSB5_HEADER_LEN)
         .ok_or("FSB5 offset out of range (corrupt bank)")?;
     let mut header = bank
-        .get(first.fsb5_offset..end)
+        .get(entry.fsb5_offset..end)
         .ok_or("FSB5 header runs past the end of the file (truncated bank)")?
         .to_vec();
     fsb5_decrypt(&mut header, key);
@@ -759,37 +787,25 @@ pub fn bank_summary(bank: &[u8], key: &[u8]) -> Result<BankSummary, String> {
             &header[0..4]
         ));
     }
-    // The magic proves the key; it does not prove the file. A bank cut off after this header still
-    // decrypts to a valid-looking one, and reporting its sample count and codec described audio
-    // that is not in the file — while `audio list`, which parses the whole block, could not open
-    // the same bank at all. Two commands disagreeing about one file is the failure; the summary is
-    // the one making a claim it never checked.
-    //
-    // Same arithmetic as `parse_fsb5`, which is what would have to succeed later: the tables and
-    // the audio are declared in the header, so their total is checkable without reading any of it.
+
     let version = u32_le(&header, 0x04);
     let base = if version == 0 { 0x40u64 } else { 0x3Cu64 };
     let declared = base
         .saturating_add(u32_le(&header, 0x0C) as u64)
         .saturating_add(u32_le(&header, 0x10) as u64)
         .saturating_add(u32_le(&header, 0x14) as u64);
-    let present = match first.fsb5_size {
+    let present = match entry.fsb5_size {
         // The wrapper's chunk size when it has one, but never more than the file actually holds.
-        size if size > 0 => (size as u64).min((bank.len() - first.fsb5_offset) as u64),
-        _ => (bank.len() - first.fsb5_offset) as u64,
+        size if size > 0 => (size as u64).min((bank.len() - entry.fsb5_offset) as u64),
+        _ => (bank.len() - entry.fsb5_offset) as u64,
     };
     if declared > present {
         return Err(format!(
-            "the FSB5 block declares {declared} bytes and only {present} are there: the bank is \
+            "an FSB5 block declares {declared} bytes and only {present} are there: the bank is \
              truncated, so its sample table and audio cannot be read"
         ));
     }
-
-    Ok(BankSummary::Samples {
-        sub_banks: entries.len(),
-        sample_count: u32_le(&header, 0x08) as usize,
-        codec: Codec::from_u32(u32_le(&header, 0x18)),
-    })
+    Ok(header)
 }
 
 /// Where one waveform's audio is taken from: a sub-bank index and a subsound within it.
