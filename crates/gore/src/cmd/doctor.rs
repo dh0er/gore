@@ -238,10 +238,9 @@ fn collect(explicit: Option<&Path>) -> Report {
     // failure itself, and the only other consumer uses this to decide whether `*.gore-bak` files
     // are orphans. Guessing "no deployment" there would turn one unreadable file into a claim that
     // game files are still modified.
-    let record_present = match present(&gore_mod::deploy_record_path(&gp.root)) {
-        Ok(metadata) => metadata.is_some_and(|metadata| metadata.is_file()),
-        Err(_) => true,
-    };
+    // The backups the deployment claims, so a leftover from an unrelated in-place edit stays
+    // visible instead of being absorbed into "this is what a deployment looks like".
+    let owned_backups = gore_mod::deployed_backup_paths(&gp.root).map_err(|error| error.to_string());
 
     checks.push(check_install(&gp));
     checks.push(check_ue4ss(&gp));
@@ -252,7 +251,7 @@ fn collect(explicit: Option<&Path>) -> Report {
         &gore_mod::mgr::paths::loadout_path(),
     ));
     checks.push(check_mods_folder(&gp));
-    checks.push(check_leftovers(&gp, &probe, record_present));
+    checks.push(check_leftovers(&gp, &probe, &owned_backups));
     checks.push(check_game_process(&probe));
     checks.push(check_loc_catalog(
         gore_loc::loc_store::status(),
@@ -1042,7 +1041,7 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
 fn check_leftovers(
     gp: &GamePaths,
     probe: &InstallCompileStateProbe,
-    record_present: bool,
+    owned: &Result<Option<Vec<PathBuf>>, String>,
 ) -> Check {
     let mut items: Vec<String> = probe
         .artifacts
@@ -1059,14 +1058,45 @@ fn check_leftovers(
     // Returning here dropped the lock/recovery verdict — the only thing this check reports that
     // actually stops deploy — and sent the reader off to fix read permissions while the blocker
     // itself stayed put and unmentioned.
-    let (backups, scan_error) = match find_backups(gp) {
-        Ok(backups) => (backups, None),
-        Err(error) => (Vec::new(), Some(error)),
+    let (scan, scan_error) = match find_backups(gp) {
+        Ok(scan) => (scan, None),
+        Err(error) => (BackupScan { found: Vec::new(), complete: false }, Some(error)),
     };
-    let orphan_backups = !record_present && !backups.is_empty();
+    let backups = scan.found;
+
+    // Whether a backup belongs to the deployment, not merely whether SOME deployment exists. A
+    // UE4SS-only bundle owns no `.gore-bak` at all, so an in-place `gore audio replace` left
+    // `SFX.bank.gore-bak` sitting in the install and the presence of that unrelated record filed it
+    // as a healthy part of the deployment.
+    let unowned: Vec<String> = match owned {
+        // Nothing deployed: every backup is a leftover.
+        Ok(None) => backups.clone(),
+        Ok(Some(claimed)) => backups
+            .iter()
+            .filter(|path| {
+                !claimed
+                    .iter()
+                    .any(|owned| same_path(owned, Path::new(path)))
+            })
+            .cloned()
+            .collect(),
+        // The record could not be read, so ownership cannot be decided. Claiming these are
+        // leftovers would accuse a healthy deployment; claiming they are owned would hide a real
+        // one. Neither, and the check says so below.
+        Err(_) => Vec::new(),
+    };
+
     items.extend(backups.iter().cloned());
     if let Some(error) = &scan_error {
         items.push(format!("could not scan for leftover backups: {error}"));
+    }
+    if let Err(error) = owned {
+        items.push(format!("could not read the deploy record: {error}"));
+    }
+    if !scan.complete && scan_error.is_none() {
+        items.push(format!(
+            "the backup scan stopped after {MAX_BACKUP_SCAN_ENTRIES} entries; there may be more"
+        ));
     }
 
     // Ranked ahead of both inspection failures below. A lock or journal is why deploy and
@@ -1128,7 +1158,7 @@ fn check_leftovers(
     }
 
     // `artifact_count` is 0 from here: the branch above returned on every other value.
-    if backups.is_empty() {
+    if backups.is_empty() && scan.complete {
         return Check::new(
             "leftovers",
             "leftovers",
@@ -1137,22 +1167,58 @@ fn check_leftovers(
         );
     }
 
-    if orphan_backups {
+    if !scan.complete {
         return Check::new(
             "leftovers",
             "leftovers",
             Verdict::Note,
             format!(
-                "{} *.gore-bak backup(s) with no deployment to belong to — a game file is \
-                 probably still modified",
+                "{} *.gore-bak backup(s) found, and the scan stopped before it reached the end \
+                 of the install",
                 backups.len()
             ),
         )
         .with_items(items)
         .with_fix(
-            "these are the pristine bytes of files edited in place. Restore a bank with \
-             'gore audio restore --bank <bank>', or re-run 'gore mod undeploy' if a deployment \
-             was removed by hand",
+            "nothing here says the install is wrong, only that this line does not cover all of \
+             it. A tree that large under G1R\\Content or G1R\\Config is worth a look of its own",
+        );
+    }
+
+    if let Err(error) = owned {
+        return Check::new(
+            "leftovers",
+            "leftovers",
+            Verdict::Note,
+            format!(
+                "{} *.gore-bak backup(s), and whether a deployment owns them cannot be told: the \
+                 deploy record could not be read ({error})",
+                backups.len()
+            ),
+        )
+        .with_items(items)
+        .with_fix(
+            "the deployment check above reports that record failure with the command that \
+             settles it; these backups are described by whatever it says",
+        );
+    }
+
+    if !unowned.is_empty() {
+        return Check::new(
+            "leftovers",
+            "leftovers",
+            Verdict::Note,
+            format!(
+                "{} *.gore-bak backup(s) no deployment claims — a game file is probably still \
+                 modified",
+                unowned.len()
+            ),
+        )
+        .with_items(items)
+        .with_fix(
+            "these are the pristine bytes of files edited in place, and the active deployment (if \
+             any) does not list them. Restore a bank with 'gore audio restore --bank <bank>', or \
+             re-run 'gore mod undeploy' if a deployment was removed by hand",
         );
     }
 
@@ -1161,7 +1227,7 @@ fn check_leftovers(
         "leftovers",
         Verdict::Ok,
         format!(
-            "{} *.gore-bak backup(s), which is what an active deployment looks like",
+            "{} *.gore-bak backup(s), all of them claimed by the active deployment",
             backups.len()
         ),
     )
@@ -1520,7 +1586,7 @@ fn ue4ss_dir(gp: &GamePaths) -> PathBuf {
 /// bytes in a `<file>.gore-bak` sibling: the localization cache, the FMOD banks, the voice-over
 /// archives and the AngelScript cache. Scanning these rather than the whole install keeps the
 /// check cheap, and a `.gore-bak` anywhere else was not written by this CLI.
-fn find_backups(gp: &GamePaths) -> Result<Vec<String>, String> {
+fn find_backups(gp: &GamePaths) -> Result<BackupScan, String> {
     let g1r = gp.root.join("G1R");
     let dirs = [
         g1r.join("Story").join("Cache"),
@@ -1536,8 +1602,78 @@ fn find_backups(gp: &GamePaths) -> Result<Vec<String>, String> {
             }
         }
     }
+
+    // `Component::FilePatch` may replace a loose file anywhere under `G1R/Content/**` or
+    // `G1R/Config/**` — gore-mod names those two subtrees as the allowed destinations — and it
+    // leaves its `.gore-bak` beside whatever it replaced. Four fixed folders could never see one,
+    // so a hand-removed FilePatch deployment left a modified game file with its pristine copy next
+    // to it and the report said there were no backups at all.
+    let mut budget = MAX_BACKUP_SCAN_ENTRIES;
+    let mut complete = true;
+    for subtree in [g1r.join("Content"), g1r.join("Config")] {
+        complete &= find_backups_under(&subtree, &mut found, &mut budget)?;
+    }
+
     found.sort();
-    Ok(found)
+    found.dedup();
+    Ok(BackupScan { found, complete })
+}
+
+/// What a scan of the install's backup locations found, and whether it got to the end.
+struct BackupScan {
+    found: Vec<String>,
+    /// False when the walk ran out of budget. A scan that stopped early cannot support "there are
+    /// no leftovers", which is the one answer this check must never give without having looked.
+    complete: bool,
+}
+
+/// Entries a single `gore doctor` run will walk looking for `*.gore-bak`.
+///
+/// A shipped install keeps almost everything inside `.pak`/`.ucas`, so the loose trees are small
+/// and this is never reached in practice. It exists so a symlink loop or a user-made mess cannot
+/// turn one line of a report into an unbounded walk.
+const MAX_BACKUP_SCAN_ENTRIES: usize = 200_000;
+
+/// Recursive `*.gore-bak` hunt under one subtree. Returns whether it finished within `budget`.
+fn find_backups_under(
+    dir: &Path,
+    found: &mut Vec<String>,
+    budget: &mut usize,
+) -> Result<bool, String> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        // The subtree simply is not there. Both are optional in an install this toolkit supports.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+        Err(error) => return Err(format!("{} could not be read: {error}", dir.display())),
+    };
+
+    let mut complete = true;
+    for entry in entries {
+        if *budget == 0 {
+            return Ok(false);
+        }
+        *budget -= 1;
+        let entry = entry.map_err(|error| format!("{} could not be read: {error}", dir.display()))?;
+        let path = entry.path();
+        // `symlink_metadata`, not `metadata`: a junction pointing back up its own tree would
+        // otherwise be followed until the budget ran out, and the honest answer for a link is that
+        // it is a link, not the thing at the end of it.
+        let kind = std::fs::symlink_metadata(&path)
+            .map_err(|error| format!("{} could not be read: {error}", path.display()))?
+            .file_type();
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            complete &= find_backups_under(&path, found, budget)?;
+        } else if path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().ends_with(".gore-bak"))
+        {
+            found.push(path.display().to_string());
+        }
+    }
+    Ok(complete)
 }
 
 /// Plain file names directly in `dir`.
@@ -1921,6 +2057,17 @@ mod tests {
         assert!(check.detail.starts_with("install is incomplete"), "{}", check.detail);
     }
 
+    /// No deploy record at all: every backup found is a leftover.
+    fn nothing_deployed() -> Result<Option<Vec<PathBuf>>, String> {
+        Ok(None)
+    }
+
+    /// A deployment that claims exactly these backups. The distinction the old `bool` could not
+    /// draw: a record existing is not the same as a record owning the file in front of you.
+    fn deployment_owns(paths: &[&Path]) -> Result<Option<Vec<PathBuf>>, String> {
+        Ok(Some(paths.iter().map(|p| p.to_path_buf()).collect()))
+    }
+
     /// Build a probe against a fixture tree while STATING whether the game runs, so the result
     /// never depends on whether the developer has Gothic open while the suite runs.
     fn probe(root: &Path, running: bool) -> InstallCompileStateProbe {
@@ -1934,7 +2081,7 @@ mod tests {
         make_install(root);
         std::fs::write(root.join(".gore-install-mutation.lock"), b"{}").unwrap();
 
-        let check = check_leftovers(&paths(root), &probe(root, false), false);
+        let check = check_leftovers(&paths(root), &probe(root, false), &nothing_deployed());
         assert_eq!(check.verdict, Verdict::Problem);
         assert!(check.detail.contains("refuse to start"), "{}", check.detail);
         assert!(check
@@ -1959,7 +2106,7 @@ mod tests {
         std::fs::remove_dir_all(&script).unwrap();
         std::fs::write(&script, b"not a directory").unwrap();
 
-        let check = check_leftovers(&paths(root), &probe(root, false), false);
+        let check = check_leftovers(&paths(root), &probe(root, false), &nothing_deployed());
         assert_eq!(check.verdict, Verdict::Problem);
         assert!(check.detail.contains("refuse to start"), "{}", check.detail);
         assert!(check.detail.contains("could not be read"), "{}", check.detail);
@@ -1992,7 +2139,7 @@ mod tests {
             InstallCompileStateDisposition::InspectionFailed
         );
 
-        let check = check_leftovers(&paths(root), &probe, false);
+        let check = check_leftovers(&paths(root), &probe, &nothing_deployed());
         assert_eq!(check.verdict, Verdict::Problem);
         assert!(check.detail.contains("refuse to start"), "{}", check.detail);
         assert!(check.fix.unwrap().contains("gore mod undeploy"));
@@ -2006,22 +2153,56 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         make_install(root);
-        std::fs::write(
-            root.join("G1R")
-                .join("Story")
-                .join("Cache")
-                .join("AlkimiaLocalization_00000000.lcache.gore-bak"),
-            b"pristine",
-        )
-        .unwrap();
+        let backup = root
+            .join("G1R")
+            .join("Story")
+            .join("Cache")
+            .join("AlkimiaLocalization_00000000.lcache.gore-bak");
+        std::fs::write(&backup, b"pristine").unwrap();
 
-        let orphaned = check_leftovers(&paths(root), &probe(root, false), false);
+        let orphaned = check_leftovers(&paths(root), &probe(root, false), &nothing_deployed());
         assert_eq!(orphaned.verdict, Verdict::Note);
         assert!(orphaned.fix.unwrap().contains("gore audio restore"));
 
-        let owned = check_leftovers(&paths(root), &probe(root, false), true);
-        assert_eq!(owned.verdict, Verdict::Ok);
-        assert!(owned.fix.is_none());
+        let claimed =
+            check_leftovers(&paths(root), &probe(root, false), &deployment_owns(&[&backup]));
+        assert_eq!(claimed.verdict, Verdict::Ok);
+        assert!(claimed.fix.is_none());
+
+        // And the case the old `bool` could not see: a deployment IS active, but this backup is
+        // not one of its own — an in-place `gore audio replace` beside a UE4SS-only bundle.
+        let elsewhere = root.join("G1R").join("Script").join("other.gore-bak");
+        let unrelated =
+            check_leftovers(&paths(root), &probe(root, false), &deployment_owns(&[&elsewhere]));
+        assert_eq!(unrelated.verdict, Verdict::Note, "{}", unrelated.detail);
+        assert!(unrelated.detail.contains("no deployment claims"), "{}", unrelated.detail);
+    }
+
+    #[test]
+    fn a_backup_a_file_patch_left_deep_in_content_is_found() {
+        // `Component::FilePatch` may replace a loose file anywhere under G1R\Content or
+        // G1R\Config and leaves its `.gore-bak` beside it. Four fixed folders could never see one,
+        // so a hand-removed deployment left a modified game file with its pristine copy next to it
+        // and this check answered that there were no backups at all.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let cursors = root
+            .join("G1R")
+            .join("Content")
+            .join("Slate")
+            .join("Cursors")
+            .join("Normal");
+        std::fs::create_dir_all(&cursors).unwrap();
+        std::fs::write(cursors.join("Normal.PNG.gore-bak"), b"pristine").unwrap();
+
+        let check = check_leftovers(&paths(root), &probe(root, false), &nothing_deployed());
+        assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
+        assert!(
+            check.items.iter().any(|item| item.contains("Normal.PNG.gore-bak")),
+            "{:?}",
+            check.items
+        );
     }
 
     #[test]
@@ -2030,7 +2211,7 @@ mod tests {
         let root = dir.path();
         make_install(root);
 
-        let check = check_leftovers(&paths(root), &probe(root, false), false);
+        let check = check_leftovers(&paths(root), &probe(root, false), &nothing_deployed());
         assert_eq!(check.verdict, Verdict::Ok);
         assert!(check.items.is_empty());
     }

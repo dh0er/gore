@@ -7679,6 +7679,28 @@ fn loose_target_allowed(relative: &Path) -> bool {
     !fixed_live_file(&parts, true)
 }
 
+/// The `*.gore-bak` paths the active deployment owns, or `None` when nothing is deployed.
+///
+/// Exists so a caller can tell a backup that belongs to the deployment from one that does not,
+/// without being handed the record to interpret. `gore doctor` is the caller: a `.gore-bak` beside
+/// a game file is normal while a deployment holds it, and a leftover from an unrelated in-place
+/// edit is exactly what it is looking for. Knowing only THAT a record exists made every backup on
+/// the install look like part of it.
+pub fn deployed_backup_paths(game_root: &Path) -> Result<Option<Vec<PathBuf>>> {
+    let game_root = abs_root(game_root);
+    let Some(stored) = read_record(&game_root)? else {
+        return Ok(None);
+    };
+    Ok(Some(
+        stored
+            .record
+            .backups
+            .into_iter()
+            .map(|(_, backup, _)| PathBuf::from(backup))
+            .collect(),
+    ))
+}
+
 fn read_record(game_root: &Path) -> Result<Option<StoredDeployRecord>> {
     let path = record_path(game_root);
     match std::fs::symlink_metadata(&path) {
