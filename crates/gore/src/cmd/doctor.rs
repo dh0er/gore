@@ -552,17 +552,9 @@ fn check_ue4ss(gp: &GamePaths) -> Check {
         items.push(format!("UE4SS.log: {}", log.display()));
     }
 
-    if !mods_present {
-        return Check::new(
-            "ue4ss",
-            "UE4SS",
-            Verdict::Note,
-            format!("installed, but there is no {} yet", mods.display()),
-        )
-        .with_items(items)
-        .with_fix("'gore mod deploy' and 'gore gen -o <mods dir>' both create it");
-    }
-
+    // Ordered before the missing-`Mods` note, which used to return first and hide this. Following
+    // that note's advice creates the folder and leaves every override just as inactive, because
+    // nothing is loading UE4SS at all.
     if !proxy_present {
         // A Note, not a Problem: UE4SS supports several proxy names and somebody may have installed
         // it under one this toolkit does not look for. Saying so is still worth a line, because the
@@ -578,13 +570,32 @@ fn check_ue4ss(gp: &GamePaths) -> Check {
             ),
         )
         .with_items(items)
-        .with_fix(
+        .with_fix(format!(
             "UE4SS is loaded by a proxy DLL the game imports, and dwmapi.dll is the one this \
              toolkit knows — it belongs in G1R\\Binaries\\Win64. If you installed UE4SS under a \
              different proxy name this line is nothing to act on; otherwise nothing loads UE4SS \
              and every deployed override does nothing. See the UE4SS section of \
-             docs\\guide\\getting-started.md",
-        );
+             docs\\guide\\getting-started.md{}",
+            match mods_present {
+                true => String::new(),
+                false => format!(
+                    ". There is also no {} yet; 'gore mod deploy' and 'gore gen -o <mods dir>' \
+                     both create it",
+                    mods.display()
+                ),
+            }
+        ));
+    }
+
+    if !mods_present {
+        return Check::new(
+            "ue4ss",
+            "UE4SS",
+            Verdict::Note,
+            format!("installed, but there is no {} yet", mods.display()),
+        )
+        .with_items(items)
+        .with_fix("'gore mod deploy' and 'gore gen -o <mods dir>' both create it");
     }
 
     Check::new(
@@ -1020,11 +1031,66 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
             format!("{} is empty", dir.display()),
         );
     }
+    // Present is not mounted. The engine opens a `.utoc` together with the `.ucas` beside it
+    // (`gore_tex::container` canonicalizes exactly that sibling), so a lone half of a pair carries
+    // nothing — and counting it as mounted reassures the one reader whose additive override is
+    // precisely what failed to appear.
+    let mut mounted: Vec<String> = Vec::new();
+    let mut inert: Vec<String> = Vec::new();
+    for name in &names {
+        let lower = name.to_lowercase();
+        let mountable = if let Some(stem) = lower.strip_suffix(".utoc") {
+            names
+                .iter()
+                .any(|other| other.to_lowercase() == format!("{stem}.ucas"))
+        } else if let Some(stem) = lower.strip_suffix(".ucas") {
+            names
+                .iter()
+                .any(|other| other.to_lowercase() == format!("{stem}.utoc"))
+        } else {
+            // A loose `.pak` mounts on its own. Anything else in here is not something the engine
+            // reads from this folder.
+            lower.ends_with(".pak")
+        };
+        match mountable {
+            true => mounted.push(name.clone()),
+            false => inert.push(name.clone()),
+        }
+    }
+
+    if !inert.is_empty() {
+        return Check::new(
+            "mods_folder",
+            "~mods",
+            Verdict::Note,
+            format!(
+                "{} file(s) mounted from {}, and {} the engine will not read",
+                mounted.len(),
+                dir.display(),
+                inert.len()
+            ),
+        )
+        .with_items(
+            names
+                .iter()
+                .map(|name| match inert.contains(name) {
+                    true => format!("{name}  [not mounted]"),
+                    false => name.clone(),
+                })
+                .collect::<Vec<_>>(),
+        )
+        .with_fix(
+            "a .utoc needs the .ucas beside it, and the pair is what gets read — half of one is \
+             an override that will not appear however correct it is. Re-deploy the mod that put \
+             it there, or delete the leftover",
+        );
+    }
+
     Check::new(
         "mods_folder",
         "~mods",
         Verdict::Ok,
-        format!("{} file(s) mounted from {}", names.len(), dir.display()),
+        format!("{} file(s) mounted from {}", mounted.len(), dir.display()),
     )
     .with_items(names)
 }
@@ -2545,6 +2611,56 @@ mod tests {
         std::fs::write(mods.join("zzz_MyTextures_P.pak"), b"pak").unwrap();
         let some = check_mods_folder(&gp);
         assert_eq!(some.items, ["zzz_MyTextures_P.pak"]);
+    }
+
+    #[test]
+    fn half_an_iostore_pair_is_reported_as_not_mounted() {
+        // The engine opens a `.utoc` together with the `.ucas` beside it, so a lone half carries
+        // nothing. Counting it as mounted reassured the one reader whose additive override is
+        // exactly what failed to appear.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        let mods = gore_tex::container::mods_dir(&gp.root);
+        std::fs::create_dir_all(&mods).unwrap();
+
+        std::fs::write(mods.join("zzz_Good_P.utoc"), b"toc").unwrap();
+        std::fs::write(mods.join("zzz_Good_P.ucas"), b"cas").unwrap();
+        std::fs::write(mods.join("zzz_Half_P.utoc"), b"toc").unwrap();
+
+        let check = check_mods_folder(&gp);
+        assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
+        assert!(
+            check.items.iter().any(|i| i.contains("zzz_Half_P.utoc") && i.contains("not mounted")),
+            "{:?}",
+            check.items
+        );
+        assert!(
+            check.items.iter().any(|i| i == "zzz_Good_P.utoc"),
+            "the complete pair is not flagged: {:?}",
+            check.items
+        );
+    }
+
+    #[test]
+    fn a_missing_loader_is_reported_even_when_the_mods_folder_is_missing_too() {
+        // Both absent used to return the `Mods` note first. Following it creates the folder and
+        // leaves every override just as inactive, because nothing is loading UE4SS at all.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        let ue4ss = ue4ss_dir(&gp);
+        std::fs::create_dir_all(&ue4ss).unwrap();
+        std::fs::write(ue4ss.join("UE4SS.dll"), b"dll").unwrap();
+
+        let check = check_ue4ss(&gp);
+        assert_eq!(check.verdict, Verdict::Note);
+        assert!(check.detail.contains("dwmapi.dll"), "{}", check.detail);
+        let fix = check.fix.unwrap();
+        assert!(fix.contains("dwmapi.dll"), "{fix}");
+        assert!(fix.contains("gore mod deploy"), "both findings are named: {fix}");
     }
 
     #[test]
