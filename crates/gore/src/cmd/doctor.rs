@@ -292,19 +292,69 @@ fn game_path_source(explicit: bool, configured: Option<&str>) -> &'static str {
     }
 }
 
+/// What reading the shared `config.json` produced.
+///
+/// `gore_loc::config::load` answers `Config::default()` for a file that is missing, unreadable and
+/// malformed alike, so a corrupt config is indistinguishable from an empty one — and everything
+/// downstream then behaves as though nothing had ever been configured. With auto-detect finding
+/// some install, the report went on to describe a healthy setup whose configured path was being
+/// ignored; with auto-detect finding none, it said no game path was set, which is not what the file
+/// says at all.
+enum ConfigFile {
+    /// Nothing has been configured yet, which is a normal state and not a finding.
+    Absent,
+    Parsed,
+    Unreadable(String),
+    Malformed(String),
+}
+
+fn read_config_file(path: &Path) -> ConfigFile {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return ConfigFile::Absent,
+        Err(error) => return ConfigFile::Unreadable(error.to_string()),
+    };
+    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(_) => ConfigFile::Parsed,
+        Err(error) => ConfigFile::Malformed(error.to_string()),
+    }
+}
+
 fn check_game_path(
     explicit: Option<&Path>,
     configured: Option<&str>,
     resolved: Option<&Path>,
 ) -> Check {
-    let mut items = vec![format!(
-        "config file: {}",
-        gore_loc::config::config_path().display()
-    )];
+    let config_path = gore_loc::config::config_path();
+    let mut items = vec![format!("config file: {}", config_path.display())];
     if let Some(value) = configured {
         items.push(format!("game-path = {value}"));
     }
     let source = game_path_source(explicit.is_some(), configured);
+
+    // Ahead of everything below, because a config nobody could read makes every line after this
+    // one a statement about a fallback rather than about the install that was configured.
+    let broken = match read_config_file(&config_path) {
+        ConfigFile::Absent | ConfigFile::Parsed => None,
+        ConfigFile::Unreadable(error) => Some(format!("could not be read: {error}")),
+        ConfigFile::Malformed(error) => Some(format!("is not valid JSON: {error}")),
+    };
+    if let Some(why) = broken {
+        return Check::new(
+            "game_path",
+            "game path",
+            Verdict::Problem,
+            format!("the shared config {why}"),
+        )
+        .with_items(items)
+        .with_fix(format!(
+            "every gore command reads that file and treats an unreadable one as no configuration \
+             at all, so whatever it says about your game path is being ignored without a word. \
+             Repair or delete {}, then run 'gore config set game-path <path>'. This report used \
+             {source}",
+            config_path.display()
+        ));
+    }
 
     let Some(root) = resolved else {
         return Check::new(
@@ -1893,6 +1943,33 @@ mod tests {
             b"exe",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_broken_config_is_told_apart_from_an_absent_one() {
+        // `config::load` returns the default for all three, so a corrupt file reads as "nothing
+        // configured" and the report goes on to describe whatever auto-detect happened to find.
+        let dir = tempfile::tempdir().unwrap();
+
+        let absent = read_config_file(&dir.path().join("config.json"));
+        assert!(matches!(absent, ConfigFile::Absent), "a missing file is not a fault");
+
+        let good = dir.path().join("good.json");
+        // Forward slashes: a Windows path in JSON needs its backslashes escaped, and a fixture
+        // that gets that wrong tests the parser rather than this classification.
+        std::fs::write(&good, br#"{"game_path":"C:/Games/G1R"}"#).unwrap();
+        assert!(matches!(read_config_file(&good), ConfigFile::Parsed));
+
+        let bad = dir.path().join("bad.json");
+        std::fs::write(&bad, b"{ not json").unwrap();
+        assert!(matches!(read_config_file(&bad), ConfigFile::Malformed(_)));
+
+        // A directory where the file is expected: read fails with something other than NotFound on
+        // every platform, without needing permissions the suite may not have.
+        assert!(matches!(
+            read_config_file(dir.path()),
+            ConfigFile::Unreadable(_)
+        ));
     }
 
     #[test]
