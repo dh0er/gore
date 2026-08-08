@@ -626,7 +626,7 @@ pub fn search<'a>(
     // when there is one, its own hit when there is not (textures, loc keys and
     // FMOD samples have no bundled catalog at all).
     for entry in matching_register(register, terms, domain, index) {
-        let why = register_match(entry, terms);
+        let why = register_match(entry, terms, register, index);
         let key = (entry.domain.clone(), entry.id.to_lowercase());
         if let Some(position) = seen.get(&key) {
             let hit = &mut hits[*position];
@@ -718,12 +718,36 @@ fn rank(hit: &Hit<'_>) -> u8 {
 /// `/Game/UI/Textures/Common/T_Logo` outrank a subtitle containing the word
 /// "logo", and "matched: register text" printed under an id the query is
 /// visibly inside would explain nothing.
-fn register_match(entry: &Entry, terms: &[String]) -> Matched {
+fn register_match(
+    entry: &Entry,
+    terms: &[String],
+    register: &Register,
+    index: Option<&NameIndex>,
+) -> Matched {
     if terms.iter().all(|term| contains(&entry.id, term)) {
-        Matched::Id
-    } else {
-        Matched::Register
+        return Matched::Id;
     }
+    // An entry can now be in the result because its DISPLAY NAME matched, not its register text,
+    // and calling that "register text" would both explain the wrong thing and rank it as though a
+    // person had written it down. Ask the register itself: if it did not find every term, the name
+    // index is what did.
+    let by_register_text = terms.iter().all(|term| {
+        register
+            .search(term, Some(&entry.domain))
+            .iter()
+            .any(|other| std::ptr::eq(*other, entry))
+    });
+    if by_register_text {
+        return Matched::Register;
+    }
+    index
+        .and_then(|index| index.get(&entry.id))
+        .and_then(|names| choose_name(names, terms))
+        .map(|name| Matched::Name(name.language.clone()))
+        // Unreachable through `matching_register`, which admits an entry only for one of the two
+        // reasons above. Falling back to the register keeps the function total without inventing a
+        // language nobody matched in.
+        .unwrap_or(Matched::Register)
 }
 
 /// Register entries matching every term, against the entry's own text OR its display name.
