@@ -691,7 +691,18 @@ pub fn search<'a>(
     // FMOD samples have no bundled catalog at all).
     for entry in matching_register(register, terms, domain, index) {
         let why = register_match(entry, terms, register, index);
-        let key = (entry.domain.clone(), entry.id.to_lowercase());
+        let carried = catalog
+            .iter()
+            .find(|row| row.domain == entry.domain && row.id.eq_ignore_ascii_case(&entry.id));
+        // Two keys, because two different questions are being asked. Against a catalog row the
+        // fold is right: the register may spell an id differently from the catalog and still mean
+        // that row. Between register entries it is wrong — `Register::lookup` says in as many
+        // words that two ids differing only by case are two ids, and folding them here dropped the
+        // second one's id and its observations while keeping only its match reasons.
+        let key = match carried {
+            Some(row) => (row.domain.to_string(), row.id.to_lowercase()),
+            None => (entry.domain.clone(), entry.id.clone()),
+        };
         if let Some(position) = seen.get(&key) {
             let hit = &mut hits[*position];
             for reason in why {
@@ -701,9 +712,6 @@ pub fn search<'a>(
             }
             continue;
         }
-        let carried = catalog
-            .iter()
-            .find(|row| row.domain == entry.domain && row.id.eq_ignore_ascii_case(&entry.id));
         seen.insert(key, hits.len());
         match carried {
             Some(row) => hits.push(hit_for(row, register, index, why, terms)),
@@ -1983,6 +1991,44 @@ mod tests {
 
         // A term that was nothing but punctuation is not a term.
         assert!(query_terms("?? --").is_empty());
+    }
+
+    #[test]
+    fn two_register_ids_differing_only_by_case_are_two_hits() {
+        // `Register::lookup` states the contract: exact spellings win, and two ids that differ only
+        // by case are two ids. Keying the result by a lowercased id broke it — the second entry
+        // reached the merge branch, contributed its match reasons, and had its own id and every
+        // observation on it dropped from the report.
+        let mut register = register_with(
+            "texture",
+            "/Game/UI/T_Logo",
+            &observation("confirmed", Some("magenta"), "24539464"),
+            "the wordmark",
+        );
+        let second = format!(
+            r#"{{"format": 1, "domain": "texture", "entries": [
+                 {{"id": "/game/ui/t_logo", "effect": "a different asset entirely",
+                   "note": "same letters, different id",
+                   "observations": [{}]}}
+               ]}}"#,
+            observation("refuted", Some("nicht vorhanden"), "24539464")
+        );
+        register.push(
+            RegisterSource::parse(&second, Provenance::Bundled, "test fixture")
+                .expect("the fixture is a valid register"),
+        );
+
+        let hits = search(&[], &register, &terms("t_logo"), None, None);
+        assert_eq!(hits.len(), 2, "{hits:?}");
+
+        let ids: Vec<&str> = hits.iter().map(|hit| hit.id.as_str()).collect();
+        assert!(ids.contains(&"/Game/UI/T_Logo"), "{ids:?}");
+        assert!(ids.contains(&"/game/ui/t_logo"), "{ids:?}");
+
+        // And each keeps its own observations rather than borrowing the other's.
+        for hit in &hits {
+            assert_eq!(hit.register.len(), 1, "{:?}", hit.register);
+        }
     }
 
     #[test]
