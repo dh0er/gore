@@ -625,7 +625,7 @@ pub fn search<'a>(
     // belongs to whatever catalog row carries the same id: merged into that hit
     // when there is one, its own hit when there is not (textures, loc keys and
     // FMOD samples have no bundled catalog at all).
-    for entry in matching_register(register, terms, domain) {
+    for entry in matching_register(register, terms, domain, index) {
         let why = register_match(entry, terms);
         let key = (entry.domain.clone(), entry.id.to_lowercase());
         if let Some(position) = seen.get(&key) {
@@ -726,16 +726,44 @@ fn register_match(entry: &Entry, terms: &[String]) -> Matched {
     }
 }
 
+/// Register entries matching every term, against the entry's own text OR its display name.
+///
+/// The name index has to be consulted here rather than only when a hit is rendered. An id that
+/// exists in the register and in no bundled catalog — a texture path, an FMOD sample, a loc key —
+/// is reachable only through this function, so searching just id, effect and note meant
+/// `gore find <localized text>` answered "nothing matches" while the same run reported that display
+/// names had been searched. Saying a name index was used and then not using it is worse than not
+/// having one.
 fn matching_register<'a>(
     register: &'a Register,
     terms: &[String],
     domain: Option<&str>,
+    index: Option<&NameIndex>,
 ) -> Vec<&'a Entry> {
-    let mut matched = register.search(&terms[0], domain);
-    for term in &terms[1..] {
-        let also = register.search(term, domain);
-        matched.retain(|entry| also.iter().any(|other| std::ptr::eq(*entry, *other)));
-    }
+    let named = |entry: &Entry, term: &str| {
+        index
+            .and_then(|index| index.get(&entry.id))
+            .is_some_and(|names| {
+                names
+                    .iter()
+                    .any(|name| super::contains_case_insensitive(&name.text, &term.to_lowercase()))
+            })
+    };
+
+    let mut matched: Vec<&Entry> = register
+        .in_domain(domain)
+        .into_iter()
+        .filter(|entry| {
+            terms.iter().all(|term| {
+                register
+                    .search(term, domain)
+                    .iter()
+                    .any(|other| std::ptr::eq(*entry, *other))
+                    || named(entry, term)
+            })
+        })
+        .collect();
+    matched.dedup_by(|a, b| std::ptr::eq(*a, *b));
     matched
 }
 

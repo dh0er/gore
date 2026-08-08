@@ -5621,8 +5621,13 @@ fn prepare(
                         for (folded_set, (set, text)) in langs {
                             // Best-effort: a language absent from THIS install's record (e.g. a
                             // shared mod built against a different game version) is skipped rather
-                            // than aborting the entire deploy.
+                            // than aborting the entire deploy — but skipped is not the same as
+                            // fine. Dropping it silently let the summary claim no edit was
+                            // unwritable while this one had never been applied.
                             if !declared.contains_key(folded_set) {
+                                plan.loc_skipped.push(format!(
+                                    "'{id}': this install's cache declares no '{set}' language"
+                                ));
                                 continue;
                             }
                             // The write decides which of the two findings this edit can raise, so
@@ -5667,11 +5672,19 @@ fn prepare(
                         // order follows the lcache header. Unknown install languages remain the
                         // same best-effort skip as above.
                         let mut valid = BTreeMap::new();
-                        for (folded_set, (_, text)) in langs {
-                            if let Some(canonical) = declared.get(folded_set) {
+                        for (folded_set, (set, text)) in langs {
+                            match declared.get(folded_set) {
                                 // Case aliases target one logical language. BTreeMap traversal is
                                 // deterministic, and the later alias wins like other patch merges.
-                                valid.insert(canonical.clone(), text.clone());
+                                Some(canonical) => {
+                                    valid.insert(canonical.clone(), text.clone());
+                                }
+                                // Same silent drop as the existing-id branch had, and the same
+                                // reason to report it: the deploy succeeds and this translation is
+                                // not in it.
+                                None => plan.loc_skipped.push(format!(
+                                    "'{id}': this install's cache declares no '{set}' language"
+                                )),
                             }
                         }
                         if !valid.is_empty() {

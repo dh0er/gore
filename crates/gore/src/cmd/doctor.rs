@@ -553,22 +553,25 @@ fn read_ue4ss_mods(mods: &Path) -> Result<Vec<Ue4ssMod>, String> {
     let entries = entries
         .collect::<std::io::Result<Vec<_>>>()
         .map_err(|error| format!("{} could not be read: {error}", mods.display()))?;
-    let mut found: Vec<Ue4ssMod> = entries
-        .into_iter()
-        .filter(|entry| entry.path().is_dir())
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.eq_ignore_ascii_case("shared") {
-                return None;
-            }
-            let dir = entry.path();
-            Some(Ue4ssMod {
-                enabled: dir.join("enabled.txt").is_file(),
-                generated: is_generated_override_mod(&dir),
-                name,
-            })
-        })
-        .collect();
+    let mut found: Vec<Ue4ssMod> = Vec::new();
+    for entry in entries {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.eq_ignore_ascii_case("shared") {
+            continue;
+        }
+        let dir = entry.path();
+        found.push(Ue4ssMod {
+            enabled: dir.join("enabled.txt").is_file(),
+            // Propagated rather than defaulted: a marker that cannot be read is not a mod that
+            // carries no overrides, and treating it as one is how a competing generated override
+            // would disappear from a report whose whole job is to find it.
+            generated: is_generated_override_mod(&dir)?,
+            name,
+        });
+    }
     // Enabled first, then by name. A UE4SS install carries a couple of dozen folders and the
     // listing is capped, so plain alphabetical order would spend the whole cap on the disabled
     // stock mods and cut off the handful that actually run — which is the only part anyone asked
@@ -578,16 +581,23 @@ fn read_ue4ss_mods(mods: &Path) -> Result<Vec<Ue4ssMod>, String> {
 }
 
 /// Was this mod folder's `Scripts\main.lua` written by `gore gen` / `gore mod build`?
-fn is_generated_override_mod(dir: &Path) -> bool {
+/// `Ok(false)` means the file was read and carries no marker. `Err` means it could not be read,
+/// which is not the same answer: reporting it as "not generated" is how two competing generated
+/// overrides and one unreadable marker came back as a clean verdict.
+fn is_generated_override_mod(dir: &Path) -> Result<bool, String> {
     use std::io::Read;
-    let Ok(mut file) = std::fs::File::open(dir.join("Scripts").join("main.lua")) else {
-        return false;
+    let marker = dir.join("Scripts").join("main.lua");
+    let mut file = match std::fs::File::open(&marker) {
+        Ok(file) => file,
+        // No `main.lua` at all is a real answer: this folder holds no generated overrides.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(format!("{} could not be read: {error}", marker.display())),
     };
     let mut head = [0u8; MARKER_PROBE_BYTES];
-    let Ok(read) = file.read(&mut head) else {
-        return false;
-    };
-    String::from_utf8_lossy(&head[..read]).starts_with(GENERATED_MARKER)
+    let read = file
+        .read(&mut head)
+        .map_err(|error| format!("{} could not be read: {error}", marker.display()))?;
+    Ok(String::from_utf8_lossy(&head[..read]).starts_with(GENERATED_MARKER))
 }
 
 /// Is anything deployed, and is it still what was deployed?
