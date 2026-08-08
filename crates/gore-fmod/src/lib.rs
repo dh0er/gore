@@ -794,7 +794,79 @@ fn sub_bank_header(bank: &[u8], entry: &BankEntry, key: &[u8]) -> Result<Vec<u8>
         _ => (bank.len() - entry.fsb5_offset) as u64,
     };
     header_fits(&header, present)?;
+
+    // And then the table itself. Sizes fitting is not the same as records parsing: one sample with
+    // an 8-byte table and its `has_chunks` bit set satisfies every arithmetic check above and has
+    // no room for the chunk header that bit promises, which is where `parse_fsb5` stops with
+    // "chunk overrun". Three fixes in a row narrowed this gap by adding one more size condition;
+    // the gap closes by walking the records the way the parser does, not by guessing at their
+    // shape from their length.
+    //
+    // Only the metadata is decrypted for it — the sample table and the name table, never the
+    // audio, which for `SFX.bank` is 260 MB and has nothing to say about whether the table parses.
+    let base = sample_table_base(&header);
+    let shdr_size = u32_le(&header, 0x0C) as usize;
+    let names_size = u32_le(&header, 0x10) as usize;
+    let metadata_end = base
+        .saturating_add(shdr_size)
+        .saturating_add(names_size)
+        .min(present as usize);
+    let mut metadata = bank
+        .get(entry.fsb5_offset..entry.fsb5_offset + metadata_end)
+        .ok_or("FSB5 metadata runs past the end of the file (truncated bank)")?
+        .to_vec();
+    fsb5_decrypt(&mut metadata, key);
+    walk_sample_headers(&metadata, u32_le(&header, 0x08) as usize, base)?;
+
     Ok(header)
+}
+
+/// Where the sample header table starts, which `parse_fsb5` derives from the version field.
+fn sample_table_base(header: &[u8]) -> usize {
+    match u32_le(header, 0x04) {
+        0 => 0x40,
+        _ => 0x3C,
+    }
+}
+
+/// Walk `n` sample header records the way [`parse_fsb5`] does, reading nothing but their shape.
+///
+/// Mirrors that function's pass 1: an 8-byte base word per sample, and when its `has_chunks` bit
+/// is set, a chain of `(more, size, type)` words that must each fit. The values are not decoded —
+/// this answers only whether the records are there to be decoded, which is exactly what a summary
+/// claiming a sample count has to know and could not tell from sizes alone.
+///
+/// `b` is the decrypted metadata region, so the bound is the sample table and the name table
+/// together. That is more permissive than the sample table alone and stricter than the whole
+/// block: a chain reaching past the metadata and into the audio is corruption by any reading.
+fn walk_sample_headers(b: &[u8], n: usize, base: usize) -> Result<(), String> {
+    let mut off = base;
+    for _ in 0..n {
+        if off + 8 > b.len() {
+            return Err("sample header overrun".into());
+        }
+        let has_chunks = u64_le(b, off) & 1;
+        let mut co = off + 8;
+        if has_chunks == 1 {
+            loop {
+                if co + 4 > b.len() {
+                    return Err("chunk overrun".into());
+                }
+                let w = u32_le(b, co);
+                let more = w & 1;
+                let csz = ((w >> 1) & 0xFF_FFFF) as usize;
+                if co + 4 + csz > b.len() {
+                    return Err("FSB5 chunk payload out of bounds".into());
+                }
+                co += 4 + csz;
+                if more == 0 {
+                    break;
+                }
+            }
+        }
+        off = co;
+    }
+    Ok(())
 }
 
 /// Whether a decrypted FSB5 header describes something the bytes present can actually hold.
@@ -807,8 +879,7 @@ fn sub_bank_header(bank: &[u8], entry: &BankEntry, key: &[u8]) -> Result<Vec<u8>
 /// the parse that would follow. `audio banks` would print that thousand, and mark its totals
 /// complete, for a bank `audio list` cannot open.
 fn header_fits(header: &[u8], present: u64) -> Result<(), String> {
-    let version = u32_le(header, 0x04);
-    let base = if version == 0 { 0x40u64 } else { 0x3Cu64 };
+    let base = sample_table_base(header) as u64;
     let samples = u32_le(header, 0x08) as u64;
     let shdr_size = u32_le(header, 0x0C) as u64;
     let declared = base
@@ -1506,6 +1577,40 @@ mod truncation_tests {
         h[0x10..0x14].copy_from_slice(&names.to_le_bytes());
         h[0x14..0x18].copy_from_slice(&data.to_le_bytes());
         h
+    }
+
+    #[test]
+    fn a_record_promising_chunks_it_has_no_room_for_is_refused() {
+        use super::walk_sample_headers;
+
+        // One sample, eight bytes of table, and the base word's `has_chunks` bit set. Every size
+        // condition is satisfied — 1 * 8 == 8 — and the chunk header that bit promises is not
+        // there. `parse_fsb5` stops at exactly this point with "chunk overrun", so a summary that
+        // only measured sizes reported a sample `audio list` cannot read.
+        let mut table = vec![0u8; 0x3C];
+        table.extend_from_slice(&1u64.to_le_bytes()); // has_chunks = 1, nothing after it
+        let error = walk_sample_headers(&table, 1, 0x3C).expect_err("the chunk header is missing");
+        assert_eq!(error, "chunk overrun");
+
+        // The same record with room for its chunk walks fine: one 4-byte word, `more` clear.
+        let mut ok_table = vec![0u8; 0x3C];
+        ok_table.extend_from_slice(&1u64.to_le_bytes());
+        ok_table.extend_from_slice(&0u32.to_le_bytes());
+        assert!(walk_sample_headers(&ok_table, 1, 0x3C).is_ok());
+
+        // A chunk whose declared payload runs past the metadata is corruption, not a long chunk.
+        let mut overrun = vec![0u8; 0x3C];
+        overrun.extend_from_slice(&1u64.to_le_bytes());
+        overrun.extend_from_slice(&(0xFFu32 << 1).to_le_bytes()); // 255-byte payload, none present
+        assert_eq!(
+            walk_sample_headers(&overrun, 1, 0x3C).expect_err("the payload is not there"),
+            "FSB5 chunk payload out of bounds"
+        );
+
+        // And a record without chunks needs only its base word.
+        let mut plain = vec![0u8; 0x3C];
+        plain.extend_from_slice(&0u64.to_le_bytes());
+        assert!(walk_sample_headers(&plain, 1, 0x3C).is_ok());
     }
 
     #[test]
