@@ -253,6 +253,7 @@ fn collect(explicit: Option<&Path>) -> Report {
     checks.push(check_game_process(&probe));
     checks.push(check_loc_catalog(
         gore_loc::loc_store::status(),
+        &gore_loc::paths::loc_catalog_path(),
         gp.lcache.as_deref(),
     ));
 
@@ -1092,18 +1093,45 @@ fn check_game_process(probe: &InstallCompileStateProbe) -> Check {
 /// cache afterwards, which changes its size. Nothing breaks, but every tool that turns a text id
 /// into text is then reading the text the game no longer has, which reads exactly like an edit
 /// that did not take.
-fn check_loc_catalog(meta: Option<LocMeta>, installed: Option<&Path>) -> Check {
+fn check_loc_catalog(meta: Option<LocMeta>, catalog: &Path, installed: Option<&Path>) -> Check {
     let Some(meta) = meta else {
-        return Check::new(
-            "loc_catalog",
-            "loc catalog",
-            Verdict::Note,
-            "no localized-text catalog has been extracted",
-        )
-        .with_fix(
-            "run 'gore loc extract' — the save editor, Mod Studio and 'gore loc' all read that \
-             one shared catalog",
-        );
+        // `status()` reads `loc_meta.json` only, and returns `None` for a missing, unreadable or
+        // malformed sidecar alike. `extract` DELETES that sidecar when it cannot write it, on
+        // purpose, rather than leave one describing the previous extraction — so "no metadata" is
+        // a state a successful extraction can leave behind, with the catalog itself in place and
+        // perfectly usable by `gore find`, Mod Studio and the save editor.
+        return match present(catalog) {
+            Ok(Some(metadata)) if metadata.is_file() => Check::new(
+                "loc_catalog",
+                "loc catalog",
+                Verdict::Note,
+                "a localized-text catalog is there, but nothing records where it came from",
+            )
+            .with_items(vec![format!("catalog: {}", catalog.display())])
+            .with_fix(
+                "the catalog is usable as it is. Its provenance sidecar (loc_meta.json) is \
+                 missing or unreadable, which is what 'gore loc extract' leaves behind when it \
+                 could not write one — re-run it to restore the record of which install this \
+                 came from",
+            ),
+            Ok(_) => Check::new(
+                "loc_catalog",
+                "loc catalog",
+                Verdict::Note,
+                "no localized-text catalog has been extracted",
+            )
+            .with_fix(
+                "run 'gore loc extract' — the save editor, Mod Studio and 'gore loc' all read \
+                 that one shared catalog",
+            ),
+            Err(error) => Check::new(
+                "loc_catalog",
+                "loc catalog",
+                Verdict::Problem,
+                format!("the localized-text catalog could not be inspected: {error}"),
+            )
+            .with_fix("run the same command from a shell that can read it"),
+        };
     };
 
     let summary = format!(
@@ -1775,12 +1803,20 @@ mod tests {
         let cache = dir.path().join("AlkimiaLocalization_00000000.lcache");
         std::fs::write(&cache, vec![0u8; 2048]).unwrap();
 
-        let check = check_loc_catalog(Some(meta(&cache, 1024)), Some(&cache));
+        let check = check_loc_catalog(
+            Some(meta(&cache, 1024)),
+            &dir.path().join("loc_catalog.json"),
+            Some(&cache),
+        );
         assert_eq!(check.verdict, Verdict::Problem);
         assert!(check.detail.contains("stale"), "{}", check.detail);
         assert!(check.fix.unwrap().contains("gore loc extract"));
 
-        let fresh = check_loc_catalog(Some(meta(&cache, 2048)), Some(&cache));
+        let fresh = check_loc_catalog(
+            Some(meta(&cache, 2048)),
+            &dir.path().join("loc_catalog.json"),
+            Some(&cache),
+        );
         assert_eq!(fresh.verdict, Verdict::Ok);
     }
 
@@ -1799,7 +1835,11 @@ mod tests {
         before.extracted_at = before.extracted_at.saturating_sub(60);
         std::fs::write(&cache, vec![1u8; 2048]).unwrap();
 
-        let check = check_loc_catalog(Some(before), Some(&cache));
+        let check = check_loc_catalog(
+            Some(before),
+            &dir.path().join("loc_catalog.json"),
+            Some(&cache),
+        );
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(
             check.detail.contains("same length"),
@@ -1818,7 +1858,11 @@ mod tests {
         let elsewhere = dir.path().join("other.lcache");
         std::fs::write(&here, vec![0u8; 64]).unwrap();
 
-        let check = check_loc_catalog(Some(meta(&elsewhere, 64)), Some(&here));
+        let check = check_loc_catalog(
+            Some(meta(&elsewhere, 64)),
+            &dir.path().join("loc_catalog.json"),
+            Some(&here),
+        );
         assert_eq!(check.verdict, Verdict::Note);
         assert!(check.detail.contains("different file"), "{}", check.detail);
     }
@@ -1835,7 +1879,11 @@ mod tests {
         let mut relative = meta(&here, 64);
         relative.source_path = "cache\\AlkimiaLocalization_00000000.lcache".into();
 
-        let check = check_loc_catalog(Some(relative), Some(&here));
+        let check = check_loc_catalog(
+            Some(relative),
+            &dir.path().join("loc_catalog.json"),
+            Some(&here),
+        );
         assert_eq!(check.verdict, Verdict::Note);
         assert!(check.detail.contains("cannot be told"), "{}", check.detail);
         assert!(
@@ -1859,8 +1907,27 @@ mod tests {
     }
 
     #[test]
+    fn a_catalog_with_no_metadata_is_reported_as_usable_rather_than_as_absent() {
+        // `extract` writes the catalog first and DELETES the sidecar if it cannot write one, on
+        // purpose, so that no `loc_meta.json` describes the previous extraction. `status()` then
+        // returns None for a catalog that is there and perfectly usable, and saying "none has been
+        // extracted" sends somebody to re-run an extraction they already have the result of.
+        let dir = tempfile::tempdir().unwrap();
+        let catalog = dir.path().join("loc_catalog.json");
+        std::fs::write(&catalog, br#"{"itfo_apple":{"german":"Apfel"}}"#).unwrap();
+
+        let check = check_loc_catalog(None, &catalog, None);
+        assert_eq!(check.verdict, Verdict::Note);
+        assert!(check.detail.contains("is there"), "{}", check.detail);
+        let fix = check.fix.unwrap();
+        assert!(fix.contains("usable as it is"), "{fix}");
+        assert!(fix.contains("loc_meta.json"), "{fix}");
+    }
+
+    #[test]
     fn no_extracted_catalog_names_the_command_that_makes_one() {
-        let check = check_loc_catalog(None, None);
+        let dir = tempfile::tempdir().unwrap();
+        let check = check_loc_catalog(None, &dir.path().join("loc_catalog.json"), None);
         assert_eq!(check.verdict, Verdict::Note);
         assert!(check.fix.unwrap().contains("gore loc extract"));
     }

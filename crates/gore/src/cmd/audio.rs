@@ -79,13 +79,25 @@ pub fn banks(game: Option<PathBuf>, json: bool, key: Option<String>) -> Result<(
     // bare bank name against, and two spellings of one path is how a listing starts describing a
     // file nothing else will open.
     let dir = gore_mod::resolve_game_paths(&root).fmod_desktop;
-    if !dir.is_dir() {
-        bail!(
+    // Not `Path::is_dir()`, which answers `false` when it could not tell as readily as when the
+    // folder is not there. The message below sends the reader to re-point `--game` or verify the
+    // game files, and both are the wrong move for a directory sitting right there behind an ACL.
+    match std::fs::metadata(&dir) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            bail!(
+                "the FMOD bank directory at '{}' could not be read: {error}. That path is fixed \
+                 inside a Gothic 1 Remake install, so this is a permissions or I/O problem rather \
+                 than a wrong --game: run the same command from a shell that can read the install.",
+                dir.display()
+            );
+        }
+        _ => bail!(
             "no FMOD bank directory at '{}'. That path is fixed inside a Gothic 1 Remake install, \
              so either --game (or the configured game path) points at something that is not one, \
              or this install is incomplete — verify the game files and try again.",
             dir.display()
-        );
+        ),
     }
 
     let rows = bank_rows(&dir, &key_bytes(key))?;
