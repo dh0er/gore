@@ -774,7 +774,12 @@ pub fn bank_summary(bank: &[u8], key: &[u8]) -> Result<BankSummary, String> {
         }
     }
 
-    let header = headers.remove(0);
+    // Taken, not indexed. `entries.first().ok_or(..)` guarded this until the value it produced
+    // stopped being used and went with it; `remove(0)` on an empty list panics, which is the one
+    // thing a listing command must never do to a file it cannot read.
+    let Some(header) = headers.into_iter().next() else {
+        return Err("bank has no FSB5".into());
+    };
     Ok(BankSummary::Samples {
         sub_banks: entries.len(),
         sample_count: u32_le(&header, 0x08) as usize,
