@@ -37,7 +37,7 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 use gore_catalog::register::{Entry, Outcome, Register, Status};
-use gore_loc::{loc_store, paths};
+use gore_loc::paths;
 use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, Visitor};
 use serde::Deserialize;
 
@@ -306,12 +306,21 @@ impl NameIndexState {
 /// A missing or unreadable catalog is not an error: it is the degraded mode this
 /// command is designed to report rather than fail on.
 pub fn load_name_index(wanted: &HashSet<String>) -> NameIndexState {
-    if !loc_store::catalog_present() {
-        return NameIndexState::Absent;
-    }
-    let path = paths::loc_catalog_path();
+    load_name_index_at(paths::loc_catalog_path(), wanted)
+}
+
+/// [`load_name_index`] against a named path, so the three states can be exercised without
+/// depending on whether the machine running the tests has ever run `gore loc extract`.
+fn load_name_index_at(path: PathBuf, wanted: &HashSet<String>) -> NameIndexState {
+    // Read first and classify the failure, rather than asking `catalog_present()` — which is
+    // `Path::is_file()`, false both for "no catalog yet" and for "could not tell". A catalog behind
+    // an unreadable directory was reported as never extracted, and the advice that follows from
+    // that is `gore loc extract`, which will fail for the same reason nobody has mentioned.
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return NameIndexState::Absent;
+        }
         Err(error) => {
             return NameIndexState::Unreadable { path, detail: error.to_string() };
         }
@@ -767,15 +776,25 @@ fn register_match(
     register: &Register,
     index: Option<&NameIndex>,
 ) -> Vec<Matched> {
-    if terms.iter().all(|term| contains(&entry.id, term)) {
-        return vec![Matched::Id];
-    }
-    // Every reason, not the first one that fits. `matching_register` admits an entry when each term
-    // is answered by its register text OR by a display name, so the two can split a multi-word
-    // query between them — and reducing that to the name alone both dropped half the explanation
-    // and cost the entry the register's rank, which is what decides who survives `--max`.
+    // Every reason, not the first one that fits. `matching_register` admits an entry when each
+    // term is answered by its id, its register text OR a display name, so a multi-word query can be
+    // split across all three — and naming only one of them both drops most of the explanation and
+    // costs the entry its rank, which is what decides who survives `--max`.
     let mut reasons = Vec::new();
-    let answered_by_register = terms.iter().any(|term| {
+    if terms.iter().any(|term| contains(&entry.id, term)) {
+        reasons.push(Matched::Id);
+    }
+
+    // Only the terms the id did not already answer for. `Register::search` looks in the id as well
+    // as the effect and the note, so without this every id match would also be labelled "register
+    // text" — which explains the wrong thing about the strongest kind of hit there is.
+    let rest: Vec<String> = terms
+        .iter()
+        .filter(|term| !contains(&entry.id, term))
+        .cloned()
+        .collect();
+
+    let answered_by_register = rest.iter().any(|term| {
         register
             .search(term, Some(&entry.domain))
             .iter()
@@ -786,7 +805,7 @@ fn register_match(
     }
     if let Some(name) = index
         .and_then(|index| index.get(&entry.id))
-        .and_then(|names| matching_name(names, terms))
+        .and_then(|names| matching_name(names, &rest))
     {
         reasons.push(Matched::Name(name.language.clone()));
     }
@@ -1883,6 +1902,58 @@ mod tests {
         // Tier 2 is the register's, and it is what keeps an observed entry ahead of lexical
         // accidents when the list is truncated.
         assert_eq!(rank(&hits[0]), 2);
+    }
+
+    #[test]
+    fn a_catalog_that_is_missing_and_one_that_cannot_be_read_are_different_answers() {
+        // `catalog_present()` is `Path::is_file()`, false for both — so a catalog behind an
+        // unreadable directory was reported as never extracted, and the advice that follows from
+        // that is `gore loc extract`, which fails for the same unmentioned reason.
+        let dir = tempfile::tempdir().unwrap();
+        let wanted: HashSet<String> = ["itfo_apple".to_string()].into_iter().collect();
+
+        let absent = load_name_index_at(dir.path().join("nothing-here.json"), &wanted);
+        assert!(matches!(absent, NameIndexState::Absent), "{absent:?}");
+
+        // A directory where a file is expected: reading it fails with something other than
+        // NotFound on every platform, without needing permissions the suite may not have.
+        let unreadable = load_name_index_at(dir.path().to_path_buf(), &wanted);
+        assert!(
+            matches!(unreadable, NameIndexState::Unreadable { .. }),
+            "{unreadable:?}"
+        );
+    }
+
+    #[test]
+    fn an_id_that_answered_for_part_of_the_query_still_ranks_as_an_id_match() {
+        // `logo main`: the id carries "logo", the effect carries "main". Calling that register
+        // text alone dropped the entry from tier 1 to tier 2, which is where `--max` starts
+        // cutting — and an id match is the strongest reason this command has.
+        let register = register_with(
+            "texture",
+            "/Game/UI/Textures/Common/T_Logo",
+            &observation("confirmed", Some("magenta"), "24539464"),
+            "the wordmark on the main menu",
+        );
+
+        let hits = search(&[], &register, &terms("logo main"), None, None);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(
+            hits[0].matched.contains(&Matched::Id),
+            "the id answered for 'logo': {:?}",
+            hits[0].matched
+        );
+        assert!(
+            hits[0].matched.contains(&Matched::Register),
+            "the effect answered for 'main': {:?}",
+            hits[0].matched
+        );
+        assert_eq!(rank(&hits[0]), 1);
+
+        // And an entry the id answers for entirely is still an id match and nothing else: the
+        // register searches ids too, so this is the case that would wrongly gain "register text".
+        let only_id = search(&[], &register, &terms("t_logo"), None, None);
+        assert_eq!(only_id[0].matched, vec![Matched::Id], "{:?}", only_id[0].matched);
     }
 
     #[test]

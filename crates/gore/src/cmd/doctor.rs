@@ -378,17 +378,36 @@ fn check_install(gp: &GamePaths) -> Check {
         (r"G1R\Script", g1r.join("Script"), true),
     ];
 
-    let missing: Vec<String> = required
-        .iter()
-        .filter(|(_, path, want_dir)| {
-            if *want_dir {
-                !path.is_dir()
-            } else {
-                !path.is_file()
-            }
-        })
-        .map(|(label, _, _)| (*label).to_string())
-        .collect();
+    let mut missing: Vec<String> = Vec::new();
+    let mut unreadable: Vec<String> = Vec::new();
+    for (label, path, want_dir) in &required {
+        match present(path) {
+            Ok(Some(metadata)) if metadata.is_dir() == *want_dir => {}
+            Ok(_) => missing.push((*label).to_string()),
+            Err(error) => unreadable.push(format!("{label}: {error}")),
+        }
+    }
+
+    // An entry that could not be inspected is not an entry that is gone, and the two fixes below —
+    // repoint the config, verify the game files — are both wrong for it. Neither should be printed
+    // for a folder that is sitting right there behind an ACL.
+    if !unreadable.is_empty() {
+        return Check::new(
+            "install",
+            "install",
+            Verdict::Problem,
+            format!(
+                "{} of the {} entries that identify the install could not be inspected",
+                unreadable.len(),
+                required.len()
+            ),
+        )
+        .with_items(unreadable)
+        .with_fix(
+            "nothing here says the install is wrong, only that it could not be looked at. Run \
+             the same command from a shell that can read it",
+        );
+    }
 
     if missing.is_empty() {
         return Check::new(
@@ -430,7 +449,32 @@ fn check_ue4ss(gp: &GamePaths) -> Check {
     let dll = ue4ss.join("UE4SS.dll");
     let mods = &gp.ue4ss_mods;
 
-    if !ue4ss.is_dir() {
+    // Every verdict below turns on whether one of three paths is there. `Path::is_dir()` answers
+    // `false` when it could not tell, and each of the sentences underneath would then be a
+    // confident account of an install this process never managed to read.
+    let unreadable = |error: String| {
+        Check::new(
+            "ue4ss",
+            "UE4SS",
+            Verdict::Problem,
+            format!("UE4SS could not be inspected: {error}"),
+        )
+        .with_fix("run the same command from a shell that can read the install")
+    };
+    let ue4ss_present = match present(&ue4ss) {
+        Ok(metadata) => metadata.is_some_and(|metadata| metadata.is_dir()),
+        Err(error) => return unreadable(error),
+    };
+    let dll_present = match present(&dll) {
+        Ok(metadata) => metadata.is_some_and(|metadata| metadata.is_file()),
+        Err(error) => return unreadable(error),
+    };
+    let mods_present = match present(mods) {
+        Ok(metadata) => metadata.is_some_and(|metadata| metadata.is_dir()),
+        Err(error) => return unreadable(error),
+    };
+
+    if !ue4ss_present {
         return Check::new(
             "ue4ss",
             "UE4SS",
@@ -445,7 +489,7 @@ fn check_ue4ss(gp: &GamePaths) -> Check {
         );
     }
 
-    if !dll.is_file() {
+    if !dll_present {
         // The folder without the DLL is the shape `gore mod deploy` leaves behind on an install
         // that never had UE4SS: it creates ue4ss\Mods\ to put the mod in, and nothing else.
         return Check::new(
@@ -459,7 +503,7 @@ fn check_ue4ss(gp: &GamePaths) -> Check {
         )
         .with_items(vec![format!(
             "Mods\\: {}",
-            if mods.is_dir() {
+            if mods_present {
                 "present (a gore deploy creates it, so this proves nothing about UE4SS)"
             } else {
                 "not there"
@@ -474,17 +518,26 @@ fn check_ue4ss(gp: &GamePaths) -> Check {
 
     let mut items = vec![format!("UE4SS.dll: {}", dll.display())];
     let settings = ue4ss.join("UE4SS-settings.ini");
-    if !settings.is_file() {
-        items.push("UE4SS-settings.ini: not there".to_string());
+    match present(&settings) {
+        Ok(Some(metadata)) if metadata.is_file() => {}
+        Ok(_) => items.push("UE4SS-settings.ini: not there".to_string()),
+        Err(error) => items.push(format!("UE4SS-settings.ini: {error}")),
     }
     let log = ue4ss.join("UE4SS.log");
-    if log.is_file() {
+    let log_present = match present(&log) {
+        Ok(metadata) => metadata.is_some_and(|metadata| metadata.is_file()),
+        Err(error) => {
+            items.push(format!("UE4SS.log: {error}"));
+            false
+        }
+    };
+    if log_present {
         // The only machine-readable evidence that an override actually applied, and the first
         // thing to read when a mod is deployed and the game shows nothing.
         items.push(format!("UE4SS.log: {}", log.display()));
     }
 
-    if !mods.is_dir() {
+    if !mods_present {
         return Check::new(
             "ue4ss",
             "UE4SS",
@@ -522,7 +575,21 @@ struct Ue4ssMod {
 /// and warning about those would fire on every healthy install.
 fn check_ue4ss_mods(gp: &GamePaths) -> Check {
     let mods = &gp.ue4ss_mods;
-    if !mods.is_dir() {
+    let mods_present = match present(mods) {
+        Ok(metadata) => metadata.is_some_and(|metadata| metadata.is_dir()),
+        // Reported rather than skipped: "no Mods folder" is the answer that hides the competing
+        // override this check exists to find.
+        Err(error) => {
+            return Check::new(
+                "ue4ss_mods",
+                "UE4SS mods",
+                Verdict::Problem,
+                format!("could not inspect the UE4SS mod folder: {error}"),
+            )
+            .with_fix("run the same command from a shell that can read the install")
+        }
+    };
+    if !mods_present {
         return Check::new(
             "ue4ss_mods",
             "UE4SS mods",
@@ -799,7 +866,19 @@ fn check_deployment(gp: &GamePaths, library: &Path, loadout_path: &Path) -> Chec
 /// would still be mounted.
 fn check_mods_folder(gp: &GamePaths) -> Check {
     let dir = gore_tex::container::mods_dir(&gp.root);
-    if !dir.is_dir() {
+    let dir_present = match present(&dir) {
+        Ok(metadata) => metadata.is_some_and(|metadata| metadata.is_dir()),
+        Err(error) => {
+            return Check::new(
+                "mods_folder",
+                "~mods",
+                Verdict::Problem,
+                format!("could not inspect the additive mod folder: {error}"),
+            )
+            .with_fix("run the same command from a shell that can read the install")
+        }
+    };
+    if !dir_present {
         return Check::new(
             "mods_folder",
             "~mods",

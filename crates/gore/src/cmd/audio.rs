@@ -152,25 +152,43 @@ fn bank_rows(dir: &Path, key: &[u8]) -> Result<Vec<BankRow>> {
 }
 
 /// The counts the header states, so the table and the JSON document cannot claim different totals.
-fn bank_totals(rows: &[BankRow]) -> (usize, usize) {
-    rows.iter()
-        .filter_map(|row| match &row.summary {
-            Ok(gore_fmod::BankSummary::Samples { sample_count, .. }) => Some(*sample_count),
-            _ => None,
-        })
-        .fold((0, 0), |(banks, samples), count| {
-            (banks + 1, samples + count)
-        })
+///
+/// The third number is the point of the tuple. A bank that could not be summarized — unreadable,
+/// corrupt, or decrypted with the wrong key — contributes nothing to the first two, and `SFX.bank`
+/// alone carries most of the samples in the install. Dropping it silently and then printing
+/// "samples in total" states a number that is not the total of anything.
+fn bank_totals(rows: &[BankRow]) -> (usize, usize, usize) {
+    let mut with_samples = 0;
+    let mut samples = 0;
+    let mut unreadable = 0;
+    for row in rows {
+        match &row.summary {
+            Ok(gore_fmod::BankSummary::Samples { sample_count, .. }) => {
+                with_samples += 1;
+                samples += sample_count;
+            }
+            Ok(gore_fmod::BankSummary::SampleFree) => {}
+            Err(_) => unreadable += 1,
+        }
+    }
+    (with_samples, samples, unreadable)
 }
 
 fn banks_table(dir: &Path, rows: &[BankRow]) -> String {
     use std::fmt::Write as _;
 
-    let (with_samples, sample_total) = bank_totals(rows);
+    let (with_samples, sample_total, unreadable) = bank_totals(rows);
+    // Said in the header, where the number is, rather than left to be inferred from error rows
+    // further down the table.
+    let caveat = match unreadable {
+        0 => String::new(),
+        n => format!(", {n} could not be read so this is a partial count"),
+    };
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "FMOD banks: {} in {} ({with_samples} carry samples, {sample_total} samples in total)",
+        "FMOD banks: {} in {} ({with_samples} carry samples, {sample_total} samples in \
+         total{caveat})",
         rows.len(),
         dir.display()
     );
@@ -224,7 +242,7 @@ fn banks_table(dir: &Path, rows: &[BankRow]) -> String {
 /// The same shape `list --json` uses: the path under `bank`, the codec spelled the way `Codec`'s
 /// `Debug` spells it, and counts that answer their question without a reader subtracting anything.
 fn banks_document(dir: &Path, rows: &[BankRow]) -> serde_json::Value {
-    let (with_samples, sample_total) = bank_totals(rows);
+    let (with_samples, sample_total, unreadable) = bank_totals(rows);
     let banks = rows
         .iter()
         .map(|row| {
@@ -272,6 +290,10 @@ fn banks_document(dir: &Path, rows: &[BankRow]) -> serde_json::Value {
         "bank_count": rows.len(),
         "with_samples_count": with_samples,
         "sample_count": sample_total,
+        // A caller gating on `sample_count` cannot see the per-bank `error` rows without walking
+        // the list, so the aggregate says for itself whether it covers every bank.
+        "unreadable_count": unreadable,
+        "totals_complete": unreadable == 0,
         "banks": banks,
     })
 }
@@ -870,6 +892,28 @@ mod banks_tests {
         assert_eq!(document["banks"][0]["carries_samples"], false);
         assert_eq!(document["banks"][0]["sample_count"], 0);
         assert_eq!(document["banks"][0]["codec"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn a_total_that_could_not_count_every_bank_says_so_where_the_number_is() {
+        // `SFX.bank` carries almost every sample in the install, so one summary failing can move
+        // this total by thousands. Printing what is left as "samples in total" states a number
+        // that is not the total of anything, and a caller reading the JSON aggregate cannot see
+        // the per-bank error without walking the list.
+        let temp = TempDir::new().unwrap();
+        write_sample_bank(temp.path(), "SFX.bank", 7);
+        std::fs::write(temp.path().join("Broken.bank"), b"not a bank at all").unwrap();
+
+        let rows = rows(temp.path());
+        assert_eq!(rows.len(), 2);
+
+        let table = banks_table(temp.path(), &rows);
+        assert!(table.contains("partial count"), "{table:?}");
+
+        let document = banks_document(temp.path(), &rows);
+        assert_eq!(document["unreadable_count"], 1);
+        assert_eq!(document["totals_complete"], false);
+        assert_eq!(document["sample_count"], 7, "the readable bank still counts");
     }
 
     #[test]
