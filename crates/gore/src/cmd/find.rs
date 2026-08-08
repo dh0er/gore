@@ -316,11 +316,25 @@ pub fn load_name_index(wanted: &HashSet<String>) -> NameIndexState {
             return NameIndexState::Unreadable { path, detail: error.to_string() };
         }
     };
-    let mut deserializer = serde_json::Deserializer::from_str(&text);
-    match (WantedNames { wanted }).deserialize(&mut deserializer) {
+    match parse_name_index(&text, wanted) {
         Ok(index) => NameIndexState::Ready(index),
         Err(error) => NameIndexState::Unreadable { path, detail: error.to_string() },
     }
+}
+
+/// The parse behind [`load_name_index`], separated from the path so it can be exercised directly.
+///
+/// `end()` is the reason this is not a one-liner. `serde_json::from_str` checks that nothing
+/// follows the value it read; driving a [`DeserializeSeed`] over a `Deserializer` by hand does not,
+/// so a catalog consisting of one good object and then garbage — a truncated rewrite, two files
+/// concatenated — deserialized happily and `gore find` reported that display names had been
+/// searched. Reading half a catalog and calling it a catalog is the same failure this command
+/// reports everywhere else, one layer down.
+fn parse_name_index(text: &str, wanted: &HashSet<String>) -> serde_json::Result<NameIndex> {
+    let mut deserializer = serde_json::Deserializer::from_str(text);
+    let index = (WantedNames { wanted }).deserialize(&mut deserializer)?;
+    deserializer.end()?;
+    Ok(index)
 }
 
 /// Deserialization seed that keeps only the ids it was asked for.
@@ -1798,6 +1812,24 @@ mod tests {
             text.contains("searched 0 bundled catalog entries and 1 effect-register entries"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_catalog_with_anything_after_the_object_is_not_a_catalog() {
+        let wanted: HashSet<String> = ["itfo_apple".to_string()].into_iter().collect();
+        let good = r#"{"itfo_apple": {"german": "Apfel"}}"#;
+        assert!(parse_name_index(good, &wanted).is_ok());
+
+        // One valid object and then anything at all: a truncated rewrite, two files concatenated,
+        // a stray brace. The seed stops at the end of the first value and would have reported a
+        // catalog it only half read.
+        for tail in ["{\"itfo_apple\": {}}", "garbage", "]"] {
+            let text = format!("{good}\n{tail}");
+            assert!(
+                parse_name_index(&text, &wanted).is_err(),
+                "trailing {tail:?} must not pass as a catalog"
+            );
+        }
     }
 
     #[test]

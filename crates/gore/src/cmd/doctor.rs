@@ -538,6 +538,26 @@ fn check_ue4ss_mods(gp: &GamePaths) -> Check {
             ));
     }
 
+    // A GORE-generated override with no `enabled.txt` is not loaded by UE4SS, and its overrides
+    // therefore do nothing — which is precisely the "I deployed it and the game is unchanged" this
+    // report gets read to explain. A Note and not a Problem: deleting that file is also how the
+    // branch above tells people to settle a conflict, so being disabled is a legitimate state. What
+    // was missing is that the consequence was visible nowhere but in a bracket inside `items`.
+    let dormant: Vec<&str> = found
+        .iter()
+        .filter(|m| m.generated && !m.enabled)
+        .map(|m| m.name.as_str())
+        .collect();
+    if !dormant.is_empty() {
+        return Check::new("ue4ss_mods", "UE4SS mods", Verdict::Note, detail)
+            .with_items(items)
+            .with_fix(format!(
+                "{} GORE-generated override mod(s) have no enabled.txt, so UE4SS skips them and                  the class defaults they set are never applied ({}). If you disabled them on                  purpose there is nothing to do; otherwise put an empty enabled.txt back in the                  folder, or deploy the bundle again — it carries one",
+                dormant.len(),
+                dormant.join(", ")
+            ));
+    }
+
     Check::new("ue4ss_mods", "UE4SS mods", Verdict::Ok, detail).with_items(items)
 }
 
@@ -1291,6 +1311,38 @@ mod tests {
         assert_eq!(check.verdict, Verdict::Problem);
         let fix = check.fix.unwrap();
         assert!(fix.contains("OldBalance") && fix.contains("NewBalance"), "{fix}");
+    }
+
+    #[test]
+    fn a_generated_override_without_enabled_txt_is_reported_as_doing_nothing() {
+        // The other half of "I deployed it and nothing changed": the folder is there, the overrides
+        // are in it, and UE4SS never reads it because the marker file is gone.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        std::fs::create_dir_all(&gp.ue4ss_mods).unwrap();
+        make_mod(&gp.ue4ss_mods, "MyBalanceMod", false, true);
+
+        let check = check_ue4ss_mods(&gp);
+        assert_eq!(check.verdict, Verdict::Note);
+        let fix = check.fix.unwrap();
+        assert!(fix.contains("MyBalanceMod"), "{fix}");
+        assert!(fix.contains("enabled.txt"), "{fix}");
+    }
+
+    #[test]
+    fn a_disabled_mod_that_is_not_a_gore_override_stays_an_ok() {
+        // UE4SS ships mods that are off by default, and a person may keep any mod around disabled.
+        // Only a GORE-generated override can produce the confusion the note above exists for.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        std::fs::create_dir_all(&gp.ue4ss_mods).unwrap();
+        make_mod(&gp.ue4ss_mods, "ConsoleEnablerMod", false, false);
+
+        assert_eq!(check_ue4ss_mods(&gp).verdict, Verdict::Ok);
     }
 
     #[test]
