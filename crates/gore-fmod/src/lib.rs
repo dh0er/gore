@@ -759,6 +759,32 @@ pub fn bank_summary(bank: &[u8], key: &[u8]) -> Result<BankSummary, String> {
             &header[0..4]
         ));
     }
+    // The magic proves the key; it does not prove the file. A bank cut off after this header still
+    // decrypts to a valid-looking one, and reporting its sample count and codec described audio
+    // that is not in the file — while `audio list`, which parses the whole block, could not open
+    // the same bank at all. Two commands disagreeing about one file is the failure; the summary is
+    // the one making a claim it never checked.
+    //
+    // Same arithmetic as `parse_fsb5`, which is what would have to succeed later: the tables and
+    // the audio are declared in the header, so their total is checkable without reading any of it.
+    let version = u32_le(&header, 0x04);
+    let base = if version == 0 { 0x40u64 } else { 0x3Cu64 };
+    let declared = base
+        .saturating_add(u32_le(&header, 0x0C) as u64)
+        .saturating_add(u32_le(&header, 0x10) as u64)
+        .saturating_add(u32_le(&header, 0x14) as u64);
+    let present = match first.fsb5_size {
+        // The wrapper's chunk size when it has one, but never more than the file actually holds.
+        size if size > 0 => (size as u64).min((bank.len() - first.fsb5_offset) as u64),
+        _ => (bank.len() - first.fsb5_offset) as u64,
+    };
+    if declared > present {
+        return Err(format!(
+            "the FSB5 block declares {declared} bytes and only {present} are there: the bank is \
+             truncated, so its sample table and audio cannot be read"
+        ));
+    }
+
     Ok(BankSummary::Samples {
         sub_banks: entries.len(),
         sample_count: u32_le(&header, 0x08) as usize,
@@ -1421,6 +1447,37 @@ pub fn inject_fsb5(
     let riff = (out.len() - 8) as u32;
     put_u32(&mut out, 0x04, riff);
     Ok(out)
+}
+
+#[cfg(test)]
+mod truncation_tests {
+    use super::{bank_summary, BankSummary, GOTHIC_STUDIO_KEY};
+    use crate::test_fixture::{numbered_pcm16_samples, pristine_bank_pcm16};
+
+    #[test]
+    fn a_bank_cut_off_after_its_header_is_not_summarized_as_intact() {
+        let samples = numbered_pcm16_samples("SFX_UI_Click_", 4, 44_100);
+        let bank = pristine_bank_pcm16(&samples, GOTHIC_STUDIO_KEY).unwrap();
+
+        // Whole, it summarizes.
+        let whole = bank_summary(&bank, GOTHIC_STUDIO_KEY).expect("an intact bank summarizes");
+        assert!(matches!(whole, BankSummary::Samples { sample_count: 4, .. }), "{whole:?}");
+
+        // Cut short. The magic still decrypts — it lives in the first 60 bytes — so the check that
+        // used to run passed, and `banks` reported this file's count and codec as fact while
+        // `audio list` could not open it at all.
+        let cut = &bank[..bank.len() - 64];
+        let error = bank_summary(cut, GOTHIC_STUDIO_KEY)
+            .expect_err("a truncated bank must not summarize as intact");
+        // Specifically the extent check, not the older "header runs past the end" one: that message
+        // also says "truncated", so asserting on that word alone would pass whether or not the
+        // declared block size was ever compared with the bytes present.
+        assert!(
+            error.contains("declares") && error.contains("are there"),
+            "the extent check is what must have refused this: {error}"
+        );
+        assert!(error.contains("truncated"), "{error}");
+    }
 }
 
 #[cfg(test)]
