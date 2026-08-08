@@ -636,7 +636,20 @@ impl Published {
         let Ok(metadata) = std::fs::metadata(&self.path) else {
             return false;
         };
-        metadata.len() == self.written && metadata.modified().ok() == self.stamp
+        if metadata.len() != self.written {
+            return false;
+        }
+        match self.stamp {
+            // Recorded one, so it has to still be that one. A file that cannot produce a timestamp
+            // now is one this run can no longer identify, and rollback does not delete those.
+            Some(stamp) => metadata.modified().is_ok_and(|now| now == stamp),
+            // None was available when it was written, so there is nothing to compare against and
+            // length is the whole of the evidence — the behaviour this type replaced, kept for the
+            // case that produced no timestamp. Comparing the two `Option`s for equality instead
+            // read as "and it must still have no timestamp", which left this run's own output
+            // behind the moment one became readable.
+            None => true,
+        }
     }
 }
 
@@ -920,6 +933,26 @@ mod rollback_tests {
             entry.written,
             "the fixture is only interesting while the length still matches"
         );
+        assert!(!entry.is_still_ours());
+    }
+
+    #[test]
+    fn a_file_written_without_a_timestamp_is_still_ours_by_length() {
+        // The fallback for a filesystem or a moment that gave no modification time. Comparing the
+        // two `Option`s for equality turned this into "and it must still have no timestamp", so
+        // the first readable one left this run's own output behind after a failure.
+        let temp = TempDir::new().unwrap();
+        let mut entry = publish(temp.path(), "0_line.wav", b"bytes");
+        entry.stamp = None;
+
+        assert!(
+            std::fs::metadata(&entry.path).unwrap().modified().is_ok(),
+            "the point of the fixture is that a timestamp IS readable now"
+        );
+        assert!(entry.is_still_ours());
+
+        // Length is then all there is, and it still has to match.
+        std::fs::write(&entry.path, b"longer bytes").unwrap();
         assert!(!entry.is_still_ours());
     }
 
