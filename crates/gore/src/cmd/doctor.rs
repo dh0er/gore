@@ -1037,8 +1037,17 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
     // precisely what failed to appear.
     let mut mounted: Vec<String> = Vec::new();
     let mut inert: Vec<String> = Vec::new();
+    let mut bookkeeping: Vec<String> = Vec::new();
     for name in &names {
         let lower = name.to_lowercase();
+        // `gore_tex::container::deploy` writes `<name>.gore-deploy.json` here to record what it
+        // copied in, and undeploy reads it back. It is not something the engine mounts and not
+        // something wrong — flagging it turned every correctly deployed texture mod into a warning
+        // about an incomplete container.
+        if lower.contains(".gore-deploy.json") {
+            bookkeeping.push(name.clone());
+            continue;
+        }
         let mountable = if let Some(stem) = lower.strip_suffix(".utoc") {
             names
                 .iter()
@@ -1073,9 +1082,14 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
         .with_items(
             names
                 .iter()
-                .map(|name| match inert.contains(name) {
-                    true => format!("{name}  [not mounted]"),
-                    false => name.clone(),
+                .map(|name| {
+                    if inert.contains(name) {
+                        format!("{name}  [not mounted]")
+                    } else if bookkeeping.contains(name) {
+                        format!("{name}  [gore's own record of this deployment]")
+                    } else {
+                        name.clone()
+                    }
                 })
                 .collect::<Vec<_>>(),
         )
@@ -1142,7 +1156,7 @@ fn check_leftovers(
             .filter(|path| {
                 !claimed
                     .iter()
-                    .any(|owned| same_path(owned, Path::new(path)))
+                    .any(|owned| same_file(owned, Path::new(path)))
             })
             .cloned()
             .collect(),
@@ -1784,13 +1798,40 @@ fn file_names(dir: &Path) -> Result<Vec<String>, String> {
 /// involved, and a path that needs it compares unequal — the safe direction for a check whose only
 /// output is a note telling somebody to re-extract.
 fn same_path(a: &Path, b: &Path) -> bool {
+    use std::path::{Component, Prefix};
     let parts = |path: &Path| -> Vec<String> {
         path.components()
-            .filter(|component| !matches!(component, std::path::Component::CurDir))
-            .map(|component| component.as_os_str().to_string_lossy().to_lowercase())
+            .filter(|component| !matches!(component, Component::CurDir))
+            .map(|component| match component {
+                // `\\?\C:\x` and `C:\x` are one file, and deploy records hold the first form:
+                // gore-mod canonicalizes before persisting and says so. Compared as written they
+                // never matched, so every backup an active deployment owns looked like a leftover
+                // and the report told people to restore files their own deployment had put there.
+                Component::Prefix(prefix) => match prefix.kind() {
+                    Prefix::VerbatimDisk(letter) | Prefix::Disk(letter) => {
+                        (letter as char).to_ascii_lowercase().to_string()
+                    }
+                    _ => component.as_os_str().to_string_lossy().to_lowercase(),
+                },
+                _ => component.as_os_str().to_string_lossy().to_lowercase(),
+            })
             .collect()
     };
     parts(a) == parts(b)
+}
+
+/// Whether two paths name the same file on disk, asking the filesystem first.
+///
+/// [`same_path`] folds the spellings this module can predict. Canonicalizing also resolves 8.3
+/// short names, junctions and a drive reached through a substitute — differences a lexical compare
+/// cannot see and a deploy record can easily contain, because it stores whatever
+/// `fs::canonicalize` returned at deploy time. Falls back to the lexical form when either side no
+/// longer exists, which for a backup is a real possibility.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => same_path(a, b),
+    }
 }
 
 fn print_report(report: &Report) {
@@ -2512,6 +2553,25 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
+    fn a_verbatim_path_and_a_plain_one_are_the_same_file() {
+        // Deploy records hold what `fs::canonicalize` returned, which on Windows carries the
+        // `\\?\` prefix; this module builds ordinary paths. Comparing them as written meant every
+        // backup an active deployment owns read as a leftover, and the report told people to
+        // restore files their own deployment had just written.
+        assert!(same_path(
+            Path::new(r"\\?\C:\Games\G1R\Story\Cache\x.lcache.gore-bak"),
+            Path::new(r"C:\Games\G1R\Story\Cache\x.lcache.gore-bak"),
+        ));
+
+        // And it is still the drive and the path that have to agree.
+        assert!(!same_path(
+            Path::new(r"\\?\D:\Games\x.gore-bak"),
+            Path::new(r"C:\Games\x.gore-bak"),
+        ));
+    }
+
+    #[test]
     fn a_catalog_recording_a_relative_source_says_it_cannot_tell_rather_than_accusing() {
         // `gore loc extract --lcache some\\path.lcache` stores the spelling it was given, and this
         // process resolves the install to an absolute path. Compared as text those never match, so
@@ -2641,6 +2701,28 @@ mod tests {
             "the complete pair is not flagged: {:?}",
             check.items
         );
+    }
+
+    #[test]
+    fn gores_own_deploy_record_in_mods_is_not_a_failed_container() {
+        // `gore_tex::container::deploy` writes `<name>.gore-deploy.json` into `~mods` and undeploy
+        // reads it back. Treating every non-container file as inert turned a correctly deployed
+        // texture mod into a warning about an incomplete container.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        let mods = gore_tex::container::mods_dir(&gp.root);
+        std::fs::create_dir_all(&mods).unwrap();
+
+        std::fs::write(mods.join("zzz_MyTextures_P.utoc"), b"toc").unwrap();
+        std::fs::write(mods.join("zzz_MyTextures_P.ucas"), b"cas").unwrap();
+        std::fs::write(mods.join("zzz_MyTextures_P.pak"), b"pak").unwrap();
+        std::fs::write(mods.join("zzz_MyTextures_P.gore-deploy.json"), b"{}").unwrap();
+
+        let check = check_mods_folder(&gp);
+        assert_eq!(check.verdict, Verdict::Ok, "{}", check.detail);
+        assert!(check.fix.is_none());
     }
 
     #[test]

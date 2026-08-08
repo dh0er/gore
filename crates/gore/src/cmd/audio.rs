@@ -480,7 +480,6 @@ pub fn extract(
     let view = gore_fmod::read_bank(&bytes, &key_bytes(key))
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context("decoding bank")?;
-    std::fs::create_dir_all(&out).with_context(|| format!("creating '{}'", out.display()))?;
 
     // indices to extract
     let indices: Vec<usize> = match (&sample, &filter) {
@@ -539,6 +538,11 @@ pub fn extract(
     //
     // Prefix with the sample index so two names that sanitize to the same basename (e.g. differing
     // only by punctuation) do not collide and silently overwrite.
+    // Created only now, with a selection that is known to be non-empty. A `--filter` matching
+    // nothing errors below, and doing this first left an empty directory behind for a call that
+    // extracted nothing — the same "refuse before touching anything" the selector check above got.
+    std::fs::create_dir_all(&out).with_context(|| format!("creating '{}'", out.display()))?;
+
     let (mut ok, mut skipped) = (0usize, 0usize);
     let mut skips: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     // Path, the length written, and the modification time the filesystem gave the file the moment
@@ -1063,6 +1067,28 @@ mod banks_tests {
         assert_eq!(document["unreadable_count"], 1);
         assert_eq!(document["totals_complete"], false);
         assert_eq!(document["sample_count"], 7, "the readable bank still counts");
+    }
+
+    #[test]
+    fn a_filter_that_matches_nothing_leaves_no_output_directory_behind() {
+        // The selector conflict is refused before anything is read; this one cannot be, because
+        // whether a filter matches is only known once the bank is decoded. What it can do is
+        // create nothing until the selection is known to be non-empty — otherwise a call that
+        // extracted nothing still left a directory for the caller to clean up.
+        let temp = TempDir::new().unwrap();
+        write_sample_bank(temp.path(), "SFX.bank", 3);
+        let out = temp.path().join("out");
+
+        let error = super::extract(
+            temp.path().join("SFX.bank"),
+            out.clone(),
+            None,
+            Some("no-sample-is-called-this".into()),
+            None,
+        )
+        .expect_err("a filter matching nothing is an error");
+
+        assert!(!out.exists(), "no output directory may be left behind: {error}");
     }
 
     #[test]
