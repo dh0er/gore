@@ -5619,10 +5619,31 @@ fn prepare(
                             .map(str::to_ascii_lowercase)
                             .collect();
                         for (folded_set, (set, text)) in langs {
-                            // An edit to a generation the game does not read lands in the file and
-                            // shows up nowhere. Suppressed when this same bundle also writes the
-                            // winning generation for this id, which is the practice the guide
-                            // recommends and must not be nagged about.
+                            // Best-effort: a language absent from THIS install's record (e.g. a
+                            // shared mod built against a different game version) is skipped rather
+                            // than aborting the entire deploy.
+                            if !declared.contains_key(folded_set) {
+                                continue;
+                            }
+                            // The write decides which of the two findings this edit can raise, so
+                            // it happens first. `set_value` still fails when the language is
+                            // declared by the cache but this particular id has no slot for it — the
+                            // cache is sparse. That is a different miss from shadowing, and the
+                            // standalone `gore loc import` reports it by name, so swallowing it
+                            // here left the two paths disagreeing about the same edit.
+                            if let Err(error) = lc.set_value(id, set, text) {
+                                plan.loc_skipped.push(format!("'{id}' has no '{set}' text: {error}"));
+                                continue;
+                            }
+                            // Only now: the edit is in the file, so the remaining question is
+                            // whether anyone will see it. Asking before the write reported an edit
+                            // that never landed under a note saying it had been written — and an id
+                            // carrying `german_new` without `german` raised both findings for one
+                            // edit, which is exactly the case a reader must not be confused about.
+                            //
+                            // Suppressed when this same bundle also writes the winning generation
+                            // for this id, which is the practice the guide recommends and must not
+                            // be nagged about.
                             let (stem, rank) = generation(folded_set);
                             if let Some(winner) = carried
                                 .iter()
@@ -5636,21 +5657,6 @@ fn prepare(
                                     plan.loc_shadowed.push(format!(
                                         "'{id}' also carries '{winner}', which the game displays \
                                          instead of '{set}'"
-                                    ));
-                                }
-                            }
-                            // Best-effort: a language absent from THIS install's record (e.g. a
-                            // shared mod built against a different game version) is skipped rather
-                            // than aborting the entire deploy.
-                            if declared.contains_key(folded_set) {
-                                // `set_value` still fails when the language is declared by the
-                                // cache but this particular id has no slot for it — the cache is
-                                // sparse. That is a different miss from the one above, and the
-                                // standalone `gore loc import` reports it by name, so swallowing
-                                // it here left the two paths disagreeing about the same edit.
-                                if let Err(error) = lc.set_value(id, set, text) {
-                                    plan.loc_skipped.push(format!(
-                                        "'{id}' has no '{set}' text: {error}"
                                     ));
                                 }
                             }
@@ -10010,6 +10016,40 @@ mod tests {
         assert!(
             plan.loc_shadowed.is_empty(),
             "writing both generations is correct and must not warn: {:?}",
+            plan.loc_shadowed
+        );
+    }
+
+    /// An edit that never landed must not appear under the note that says edits were written.
+    ///
+    /// The shadow check used to run before the write, so an id carrying `german_new` and no
+    /// `german` raised BOTH findings for one edit: skipped, because there was no slot, and shadowed,
+    /// as though it had been written and merely hidden. The two readings call for opposite
+    /// responses — change the spec, or leave a working deployment alone — so reporting one edit as
+    /// both is worse than reporting neither.
+    #[test]
+    fn studio_loc_patch_does_not_call_an_unwritable_edit_shadowed() {
+        let cache = test_lcache_with_pairs(
+            &["german", "german_new"],
+            // The id carries only the newer generation, which is the shape 31,590 shipped ids have.
+            &[("german_new", "Bergkäse")],
+        );
+        let mut edits: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        edits
+            .entry("itfo_cheese".into())
+            .or_default()
+            .insert("german".into(), "Emmentaler".into());
+
+        let plan = prepare_test_loc_patch_with_cache(&edits, cache).unwrap();
+        assert_eq!(
+            plan.loc_skipped.len(),
+            1,
+            "the edit had no slot to land in: {:?}",
+            plan.loc_skipped
+        );
+        assert!(
+            plan.loc_shadowed.is_empty(),
+            "nothing was written, so nothing can be shadowed: {:?}",
             plan.loc_shadowed
         );
     }
