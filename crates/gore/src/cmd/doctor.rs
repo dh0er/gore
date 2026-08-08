@@ -1620,28 +1620,30 @@ fn check_loc_catalog(meta: Option<LocMeta>, catalog: &Path, installed: Option<&P
         )
     };
 
-    // The catalog can now record the source's own modification time, which answers "is this still
-    // the file it was built from" directly — no second-resolution ladder, and none of its blind
-    // spots. Catalogs written before that field existed fall back to the ladder below.
-    let modified_nanos = |m: &std::fs::Metadata| -> Option<u64> {
-        m.modified()
-            .ok()?
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()
-            .and_then(|since| u64::try_from(since.as_nanos()).ok())
-    };
-
+    // The catalog records the digest of the bytes it was built from, which answers "is this still
+    // that file" and needs nothing from the filesystem's own bookkeeping. Timestamps cannot answer
+    // it in any unit: a two-second tick — FAT32, and the removable media game files live on —
+    // leaves a same-length rewrite indistinguishable. Catalogs written before that field existed
+    // fall back to the timestamp ladder below, with the blind spots it always had.
+    //
+    // Reading the cache costs a pass over ~37 MB, and only when the length still matches, which is
+    // the case where nothing cheaper can tell the two apart. The alternative is the answer this
+    // check exists to avoid: confidently wrong.
     match std::fs::metadata(installed) {
-        Ok(m) if m.len() == meta.source_bytes && meta.source_modified_nanos.is_some() => {
-            match (modified_nanos(&m), meta.source_modified_nanos) {
-                (Some(now), Some(recorded)) if now == recorded => Check::new(
-                    "loc_catalog",
-                    "loc catalog",
-                    Verdict::Ok,
-                    format!("{summary}; the installed cache is the file it was extracted from"),
-                )
-                .with_items(items),
-                (Some(_), _) => Check::new(
+        Ok(m) if m.len() == meta.source_bytes && meta.source_sha256.is_some() => {
+            match std::fs::read(installed) {
+                Ok(bytes)
+                    if Some(gore_loc::loc_store::sha256_hex(&bytes)) == meta.source_sha256 =>
+                {
+                    Check::new(
+                        "loc_catalog",
+                        "loc catalog",
+                        Verdict::Ok,
+                        format!("{summary}; the installed cache is the file it was extracted from"),
+                    )
+                    .with_items(items)
+                }
+                Ok(_) => Check::new(
                     "loc_catalog",
                     "loc catalog",
                     Verdict::Problem,
@@ -1656,7 +1658,7 @@ fn check_loc_catalog(meta: Option<LocMeta>, catalog: &Path, installed: Option<&P
                      unchanged. Run 'gore loc extract' so the shared catalog describes the text \
                      that is installed",
                 ),
-                (None, _) => inconclusive("this filesystem reported no modification time"),
+                Err(error) => inconclusive(&format!("the cache could not be read: {error}")),
             }
         }
         Ok(m) if m.len() == meta.source_bytes => match written(&m) {
@@ -2481,7 +2483,7 @@ mod tests {
             extracted_at,
             // The ladder below is what a catalog without this field falls back to, and these
             // fixtures are what keeps that path covered. The recorded-identity path has its own.
-            source_modified_nanos: None,
+            source_sha256: None,
             catalog_path: r"C:\Users\x\AppData\Local\gore\loc_catalog.json".into(),
         }
     }
@@ -2489,12 +2491,10 @@ mod tests {
     /// The same fixture, but recording the source's own modification time the way `extract` does
     /// now — which is what a catalog written by a current build carries.
     fn meta_with_identity(source: &Path, bytes: u64) -> LocMeta {
-        let nanos = std::fs::metadata(source)
-            .and_then(|m| m.modified())
+        let digest = std::fs::read(source)
             .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .and_then(|since| u64::try_from(since.as_nanos()).ok());
-        LocMeta { source_modified_nanos: nanos, ..meta(source, bytes) }
+            .map(|bytes| gore_loc::loc_store::sha256_hex(&bytes));
+        LocMeta { source_sha256: digest, ..meta(source, bytes) }
     }
 
     #[test]
@@ -2534,7 +2534,7 @@ mod tests {
         std::fs::write(&cache, vec![0u8; 2048]).unwrap();
 
         let recorded = meta_with_identity(&cache, 2048);
-        assert!(recorded.source_modified_nanos.is_some(), "the fixture must record one");
+        assert!(recorded.source_sha256.is_some(), "the fixture must record one");
 
         let unchanged = check_loc_catalog(
             Some(recorded.clone()),
@@ -2548,19 +2548,10 @@ mod tests {
             unchanged.detail
         );
 
-        // A same-length rewrite, stamped BEFORE the recorded extraction — the exact case the
-        // seconds ladder called untouched.
+        // A same-length rewrite. Nothing here touches the timestamp, and it does not need to:
+        // that was the signal this test used to depend on, and a filesystem with a coarse tick can
+        // leave it identical through exactly this edit.
         std::fs::write(&cache, vec![1u8; 2048]).unwrap();
-        std::fs::File::options()
-            .write(true)
-            .open(&cache)
-            .unwrap()
-            .set_modified(
-                std::time::UNIX_EPOCH
-                    + std::time::Duration::from_nanos(recorded.source_modified_nanos.unwrap())
-                    - std::time::Duration::from_secs(5),
-            )
-            .unwrap();
 
         let rewritten = check_loc_catalog(
             Some(recorded),

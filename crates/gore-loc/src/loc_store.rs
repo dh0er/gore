@@ -48,17 +48,22 @@ pub struct LocMeta {
     pub languages: Vec<String>,
     /// Unix seconds when the extraction ran.
     pub extracted_at: u64,
-    /// The source file's own modification time when it was read, in nanoseconds since the epoch.
+    /// SHA-256 of the source `.lcache` bytes this catalog was built from.
     ///
     /// `extracted_at` cannot answer "is this catalog built from the bytes that are installed now":
     /// it is stamped after the read, the decode and the catalog write, so a `gore loc import` that
     /// lands inside that window leaves the cache with an mtime EARLIER than the extraction and a
-    /// catalog built from the previous bytes. Comparing the source's own timestamp instead answers
-    /// the question directly, and in nanoseconds so a rewrite inside one second still differs.
+    /// catalog built from the previous bytes.
+    ///
+    /// A timestamp cannot answer it either, whatever unit it is stored in. Nanoseconds do not make
+    /// a filesystem's clock finer, and on one with a two-second tick — FAT32, and the removable
+    /// media game files live on — a same-length `gore loc import` inside one tick leaves the mtime
+    /// identical. Content is the only identity that holds, and the bytes are already in memory
+    /// when the catalog is built.
     ///
     /// `None` on catalogs written before this field existed; readers fall back to `extracted_at`.
     #[serde(default)]
-    pub source_modified_nanos: Option<u64>,
+    pub source_sha256: Option<String>,
     /// Absolute path of the written catalog.
     pub catalog_path: String,
 }
@@ -80,9 +85,18 @@ pub fn status() -> Option<LocMeta> {
     serde_json::from_slice(&bytes).ok()
 }
 
-/// A file's modification time in nanoseconds since the epoch, or `None` where the filesystem
-/// does not offer one. Nanoseconds because whole seconds cannot tell a rewrite from an untouched
-/// file when both happen inside one second, which is routine for extract-then-import.
+/// Lowercase hex SHA-256, the shape every other digest in this toolkit is written in.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest as _, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// A file's modification time in nanoseconds since the epoch, or `None` where the filesystem does
+/// not offer one. Used only to notice a rewrite DURING the read, where the two readings are taken
+/// seconds apart at most; it is not evidence of identity, which is what the digest is for.
 fn source_modified(path: &Path) -> Option<u64> {
     fs::metadata(path)
         .and_then(|metadata| metadata.modified())
@@ -107,14 +121,12 @@ pub fn extract(hint: Option<&Path>) -> Result<LocMeta, LocStoreError> {
         source,
     })?;
     let source_bytes = enc.len() as u64;
-    // Taken again AFTER the bytes and compared with the one from before them. A cache rewritten
-    // mid-read would otherwise be recorded as the source of a catalog built half from each version.
-    // Refused rather than recorded, because neither timestamp describes what was read.
-    //
-    // Two `None`s compare equal, which is the right outcome: no timestamp was available at all, the
-    // field stays absent, and readers fall back to `extracted_at` as they did before it existed.
-    let source_modified_nanos = source_modified(&lcache);
-    if source_modified_nanos != before_read {
+    // The digest of exactly what was read, so nothing about the file's own metadata has to be
+    // trusted later. The mtime is still taken again and compared with the one from before the read:
+    // a cache rewritten mid-read would hash to a mixture of two versions, and refusing is a better
+    // answer than recording a digest that matches neither.
+    let source_sha256 = Some(sha256_hex(&enc));
+    if source_modified(&lcache) != before_read {
         return Err(LocStoreError::Read {
             path: lcache.display().to_string(),
             source: std::io::Error::other(
@@ -147,7 +159,7 @@ pub fn extract(hint: Option<&Path>) -> Result<LocMeta, LocStoreError> {
         id_count: catalog.len(),
         languages: lc.languages(),
         extracted_at: now_unix(),
-        source_modified_nanos,
+        source_sha256,
         catalog_path: catalog_path.display().to_string(),
     };
     let meta_path = paths::loc_meta_path();
