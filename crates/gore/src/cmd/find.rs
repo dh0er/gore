@@ -591,11 +591,17 @@ pub fn run(query: Vec<String>, domain: Option<String>, max: usize, json: bool) -
 /// potion?` searched for `potion?`, which is in no id and no display name, and answered that
 /// nothing matches. Trimmed only at the edges — punctuation inside a word belongs to it, and an id
 /// like `/Game/UI/T_Logo` or `ItFo_Apple` is mostly punctuation.
+///
+/// The rule is "keep letters, digits and `_`" rather than "drop ASCII punctuation", because a
+/// query is usually pasted. Typographic quotes, dashes and the German „…“ pass an
+/// `is_ascii_punctuation` test untouched and then match nothing — the same failure wearing a
+/// different character. `char::is_alphanumeric` is Unicode-aware, so umlauts and non-Latin scripts
+/// stay part of their word.
 fn query_terms(query: &str) -> Vec<String> {
     query
         .split_whitespace()
         .map(|word| {
-            word.trim_matches(|c: char| c.is_ascii_punctuation() && c != '_')
+            word.trim_matches(|c: char| !(c.is_alphanumeric() || c == '_'))
                 .to_lowercase()
         })
         .filter(|word| !word.is_empty())
@@ -1983,6 +1989,22 @@ mod tests {
         // Every term must match, so one stray character removed the result entirely: `gore find
         // healing potion?` searched for `potion?`, which is in no id and no name anywhere.
         assert_eq!(query_terms("healing potion?"), vec!["healing", "potion"]);
+
+        // Pasted from anywhere that renders quotes: curly, German, an en dash. None of these is
+        // ASCII punctuation, so an ASCII-only rule left them attached and the term matched nothing.
+        assert_eq!(
+            query_terms("\u{201c}healing potion\u{201d}"),
+            vec!["healing", "potion"]
+        );
+        assert_eq!(query_terms("\u{201e}Apfel\u{201c}"), vec!["apfel"]);
+        assert_eq!(query_terms("\u{2013}Trank\u{2014}"), vec!["trank"]);
+
+        // Letters outside ASCII are letters, not punctuation — the campaign's own witnesses are
+        // German, so this is the normal case rather than an exotic one.
+        assert_eq!(
+            query_terms("\u{201e}R\u{fc}stung\u{201c}"),
+            vec!["r\u{fc}stung"]
+        );
         assert_eq!(query_terms("\"Apfel\","), vec!["apfel"]);
 
         // Only at the edges. Ids are mostly punctuation, and an underscore is part of the word.
