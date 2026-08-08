@@ -305,7 +305,13 @@ enum ConfigFile {
     Absent,
     Parsed,
     Unreadable(String),
-    Malformed(String),
+    /// Broken syntax: a missing brace, a stray comma.
+    NotJson(String),
+    /// Parses as JSON and is not a `Config` — `game_path` as a number, a top-level array, `null`.
+    /// `load` discards it exactly as it discards a syntax error, but the two are not the same
+    /// thing to fix, and telling somebody with well-formed JSON that it is not valid JSON sends
+    /// them looking for a bracket that is not missing.
+    NotConfig(String),
 }
 
 fn read_config_file(path: &Path) -> ConfigFile {
@@ -314,13 +320,16 @@ fn read_config_file(path: &Path) -> ConfigFile {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return ConfigFile::Absent,
         Err(error) => return ConfigFile::Unreadable(error.to_string()),
     };
-    // Deserialized as `Config`, which is what `config::load` does, and not merely as JSON. The two
-    // are different questions: `{"game_path": 42}` is valid JSON and invalid `Config`, so `load`
-    // discards it and falls back to the default — the exact silent discard this check exists to
-    // expose, and a syntax-only check called it healthy.
-    match serde_json::from_slice::<gore_loc::config::Config>(&bytes) {
+    // Both questions, separately. `config::load` deserializes into `Config`, so that is what
+    // decides whether the file is used — but which of the two ways it failed is what decides what
+    // the reader has to go and change.
+    let json: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(json) => json,
+        Err(error) => return ConfigFile::NotJson(error.to_string()),
+    };
+    match serde_json::from_value::<gore_loc::config::Config>(json) {
         Ok(_) => ConfigFile::Parsed,
-        Err(error) => ConfigFile::Malformed(error.to_string()),
+        Err(error) => ConfigFile::NotConfig(error.to_string()),
     }
 }
 
@@ -341,7 +350,10 @@ fn check_game_path(
     let broken = match read_config_file(&config_path) {
         ConfigFile::Absent | ConfigFile::Parsed => None,
         ConfigFile::Unreadable(error) => Some(format!("could not be read: {error}")),
-        ConfigFile::Malformed(error) => Some(format!("is not valid JSON: {error}")),
+        ConfigFile::NotJson(error) => Some(format!("is not valid JSON: {error}")),
+        ConfigFile::NotConfig(error) => Some(format!(
+            "is valid JSON but not a usable configuration: {error}"
+        )),
     };
     if let Some(why) = broken {
         return Check::new(
@@ -1966,16 +1978,18 @@ mod tests {
 
         let bad = dir.path().join("bad.json");
         std::fs::write(&bad, b"{ not json").unwrap();
-        assert!(matches!(read_config_file(&bad), ConfigFile::Malformed(_)));
+        assert!(matches!(read_config_file(&bad), ConfigFile::NotJson(_)));
 
         // Valid JSON, invalid Config. `load` discards each of these and returns the default, so a
         // syntax-only check called them healthy while every command ignored the file.
         for shape in [&br#"{"game_path":42}"#[..], b"null", b"[]", b"\"a string\""] {
             let wrong = dir.path().join("wrong.json");
             std::fs::write(&wrong, shape).unwrap();
+            // `NotConfig`, not `NotJson`: the syntax is fine, and saying otherwise sends the
+            // reader looking for a bracket that is not missing.
             assert!(
-                matches!(read_config_file(&wrong), ConfigFile::Malformed(_)),
-                "{:?} is not a Config",
+                matches!(read_config_file(&wrong), ConfigFile::NotConfig(_)),
+                "{:?} is well-formed JSON that is not a Config",
                 String::from_utf8_lossy(shape)
             );
         }
