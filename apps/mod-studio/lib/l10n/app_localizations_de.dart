@@ -3727,7 +3727,7 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get managedTestReleaseDataAssetsDescription =>
-      'Vorgemerkte DataAssets erscheinen in der Problemliste, aber es gibt noch keinen vollständigen projektweiten Build-Nachweis.';
+      'Prüft nur den exakten aktuellen Bereich bereits vorgemerkter DataAssets, den die Projekt-Bauvorschau verifiziert hat. Neue oder strukturelle Assets, spielbare Dateien, Installation, Bereitstellung, Spiel- oder Spielstandsänderungen, Laufzeitverhalten und Weltinhalte sind nicht abgedeckt.';
 
   @override
   String get managedTestReleaseDataAssetsAction => 'DataAssets prüfen';

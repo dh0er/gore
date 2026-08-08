@@ -442,7 +442,7 @@
   "managedVoiceBuildReadinessBuildReleaseGuidance": "Tutaj sprawdzany jest tylko plan; utworzenie pakietu głosowego offline pozostaje osobną czynnością.",
   "managedVoiceBuildReadinessConfigureGameGuidance": "Dokładny plan pakietu głosowego został sprawdzony. Aby udostępnić osobną czynność tworzenia pakietu offline, nadal trzeba skonfigurować instalację gry.",
   "managedTestReleaseDataAssetsTitle": "DataAssets",
-  "managedTestReleaseDataAssetsDescription": "Przygotowane DataAssety są widoczne w Problemach, ale nie ma jeszcze pełnego dowodu kompilacji całego projektu.",
+  "managedTestReleaseDataAssetsDescription": "Sprawdza wyłącznie dokładny, bieżący obszar przygotowanych zasobów DataAssets, który został już zweryfikowany przez podgląd kompilacji projektu. Nie obejmuje nowych ani strukturalnych zasobów, plików grywalnych, instalacji, wdrażania, zmian w grze lub zapisach, działania w czasie wykonywania ani zawartości świata.",
   "managedTestReleaseDataAssetsAction": "Przejrzyj DataAssety",
   "managedTestReleasePlayableBuildTitle": "Grywalne pliki",
   "managedTestReleasePlayableBuildDescription": "Utwórz sprawdzoną grywalną kompilację z tej dokładnej zapisanej wersji projektu.",

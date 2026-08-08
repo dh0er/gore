@@ -3698,7 +3698,7 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get managedTestReleaseDataAssetsDescription =>
-      'Przygotowane DataAssety są widoczne w Problemach, ale nie ma jeszcze pełnego dowodu kompilacji całego projektu.';
+      'Sprawdza wyłącznie dokładny, bieżący obszar przygotowanych zasobów DataAssets, który został już zweryfikowany przez podgląd kompilacji projektu. Nie obejmuje nowych ani strukturalnych zasobów, plików grywalnych, instalacji, wdrażania, zmian w grze lub zapisach, działania w czasie wykonywania ani zawartości świata.';
 
   @override
   String get managedTestReleaseDataAssetsAction => 'Przejrzyj DataAssety';

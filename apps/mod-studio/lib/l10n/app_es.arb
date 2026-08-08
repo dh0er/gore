@@ -442,7 +442,7 @@
   "managedVoiceBuildReadinessBuildReleaseGuidance": "Aquí solo se comprueba el plan; crear el paquete de voces sin conexión sigue siendo una acción independiente.",
   "managedVoiceBuildReadinessConfigureGameGuidance": "El plan exacto del paquete de voces está comprobado. Aún se debe configurar una instalación del juego para que esté disponible la acción independiente del paquete sin conexión.",
   "managedTestReleaseDataAssetsTitle": "DataAssets",
-  "managedTestReleaseDataAssetsDescription": "Los DataAssets preparados aparecen en Problemas, pero todavía no existe evidencia de una compilación completa del proyecto.",
+  "managedTestReleaseDataAssetsDescription": "Comprueba solo el dominio exacto actual de DataAssets preparados que ya verificó la vista previa de compilación del proyecto. No cubre recursos nuevos o estructurales, archivos jugables, instalación, despliegue, cambios en el juego o partidas guardadas, comportamiento en ejecución ni contenido del mundo.",
   "managedTestReleaseDataAssetsAction": "Revisar DataAssets",
   "managedTestReleasePlayableBuildTitle": "Archivos jugables",
   "managedTestReleasePlayableBuildDescription": "Crea una compilación jugable comprobada a partir de esta versión guardada exacta del proyecto.",

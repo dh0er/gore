@@ -6147,7 +6147,7 @@ abstract class AppLocalizations {
   /// No description provided for @managedTestReleaseDataAssetsDescription.
   ///
   /// In en, this message translates to:
-  /// **'Staged DataAssets are visible in Problems, but no complete project-wide build evidence exists yet.'**
+  /// **'Checks only the exact current staged DataAssets domain already verified by Project build preview. It does not cover new or structural assets, playable files, installation, deployment, game or save changes, runtime behavior, or World content.'**
   String get managedTestReleaseDataAssetsDescription;
 
   /// No description provided for @managedTestReleaseDataAssetsAction.

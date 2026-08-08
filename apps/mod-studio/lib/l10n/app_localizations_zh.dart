@@ -3613,7 +3613,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get managedTestReleaseDataAssetsDescription =>
-      '已准备的 DataAsset 会显示在问题列表中，但尚无完整的全项目构建证据。';
+      '仅检查已由项目构建预览验证的精确当前暂存 DataAssets 领域。不涵盖新增或结构性资产、可游玩文件、安装、部署、游戏或存档更改、运行时行为或世界内容。';
 
   @override
   String get managedTestReleaseDataAssetsAction => '查看 DataAsset';
@@ -5101,7 +5101,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get managedTestReleaseDataAssetsDescription =>
-      '已准备的 DataAsset 会显示在问题列表中，但尚无完整的全项目构建证据。';
+      '仅检查已由项目构建预览验证的精确当前暂存 DataAssets 领域。不涵盖新增或结构性资产、可游玩文件、安装、部署、游戏或存档更改、运行时行为或世界内容。';
 
   @override
   String get managedTestReleaseDataAssetsAction => '查看 DataAsset';

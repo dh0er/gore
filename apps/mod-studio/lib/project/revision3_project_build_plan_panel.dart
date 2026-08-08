@@ -26,10 +26,12 @@ typedef Revision3ProjectBuildPlanReasonCopy =
 @immutable
 final class Revision3ProjectBuildPlanCheckpoint {
   Revision3ProjectBuildPlanCheckpoint({
+    required String projectRoot,
     required String projectId,
     required this.projectRevision,
     required String checkpointIdentity,
-  }) : projectId = _requiredBuildPlanText(projectId, 'projectId'),
+  }) : projectRoot = _requiredBuildPlanText(projectRoot, 'projectRoot'),
+       projectId = _requiredBuildPlanText(projectId, 'projectId'),
        checkpointIdentity = _requiredBuildPlanText(
          checkpointIdentity,
          'checkpointIdentity',
@@ -39,6 +41,7 @@ final class Revision3ProjectBuildPlanCheckpoint {
     }
   }
 
+  final String projectRoot;
   final String projectId;
   final int projectRevision;
   final String checkpointIdentity;
@@ -46,13 +49,14 @@ final class Revision3ProjectBuildPlanCheckpoint {
   @override
   bool operator ==(Object other) =>
       other is Revision3ProjectBuildPlanCheckpoint &&
+      other.projectRoot == projectRoot &&
       other.projectId == projectId &&
       other.projectRevision == projectRevision &&
       other.checkpointIdentity == checkpointIdentity;
 
   @override
   int get hashCode =>
-      Object.hash(projectId, projectRevision, checkpointIdentity);
+      Object.hash(projectRoot, projectId, projectRevision, checkpointIdentity);
 }
 
 enum Revision3ProjectBuildPlanLoadState { loading, ready, failed }
@@ -152,6 +156,143 @@ final class Revision3ProjectBuildPlanController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _generation++;
+    super.dispose();
+  }
+}
+
+/// Publication state of the DataAssets domain observed from one mounted
+/// project build preview.
+enum Revision3ProjectBuildPlanDataAssetsLoadState {
+  detached,
+  loading,
+  ready,
+  unavailable,
+}
+
+/// Narrow DataAssets-only output from the exact preview already loaded by the
+/// panel.
+///
+/// This deliberately excludes the aggregate plan outcome, blocker targets,
+/// every other domain, build output, deployment, game/save writes, runtime,
+/// and World evidence.
+@immutable
+final class Revision3ProjectBuildPlanDataAssetsSnapshot {
+  const Revision3ProjectBuildPlanDataAssetsSnapshot._({
+    required this.state,
+    this.checkpoint,
+    this.dataAssets,
+  }) : assert(
+         state == Revision3ProjectBuildPlanDataAssetsLoadState.detached
+             ? checkpoint == null && dataAssets == null
+             : checkpoint != null,
+       ),
+       assert(
+         state == Revision3ProjectBuildPlanDataAssetsLoadState.ready
+             ? dataAssets != null
+             : dataAssets == null,
+       );
+
+  const Revision3ProjectBuildPlanDataAssetsSnapshot._detached()
+    : this._(state: Revision3ProjectBuildPlanDataAssetsLoadState.detached);
+
+  factory Revision3ProjectBuildPlanDataAssetsSnapshot._loading(
+    Revision3ProjectBuildPlanCheckpoint checkpoint,
+  ) => Revision3ProjectBuildPlanDataAssetsSnapshot._(
+    state: Revision3ProjectBuildPlanDataAssetsLoadState.loading,
+    checkpoint: checkpoint,
+  );
+
+  factory Revision3ProjectBuildPlanDataAssetsSnapshot._unavailable(
+    Revision3ProjectBuildPlanCheckpoint checkpoint,
+  ) => Revision3ProjectBuildPlanDataAssetsSnapshot._(
+    state: Revision3ProjectBuildPlanDataAssetsLoadState.unavailable,
+    checkpoint: checkpoint,
+  );
+
+  factory Revision3ProjectBuildPlanDataAssetsSnapshot._ready(
+    Revision3ProjectBuildPlanCheckpoint checkpoint,
+    AuthoringRevision3ProjectBuildPlanResult result,
+  ) {
+    final dataAssets = result.plan.domain(
+      AuthoringRevision3ProjectBuildDomain.dataAssets,
+    );
+    if (dataAssets.domain != AuthoringRevision3ProjectBuildDomain.dataAssets) {
+      throw const FormatException(
+        'Project build preview returned the wrong DataAssets domain.',
+      );
+    }
+    return Revision3ProjectBuildPlanDataAssetsSnapshot._(
+      state: Revision3ProjectBuildPlanDataAssetsLoadState.ready,
+      checkpoint: checkpoint,
+      dataAssets: dataAssets,
+    );
+  }
+
+  final Revision3ProjectBuildPlanDataAssetsLoadState state;
+  final Revision3ProjectBuildPlanCheckpoint? checkpoint;
+  final AuthoringRevision3ProjectBuildDomainSummary? dataAssets;
+
+  bool belongsTo(Revision3ProjectBuildPlanCheckpoint expected) =>
+      checkpoint == expected;
+}
+
+/// Observes one mounted project build preview without owning or rerunning its
+/// native planner.
+///
+/// Attachment identity prevents a replaced or disposed preview from
+/// publishing stale DataAssets evidence into Test & Release.
+final class Revision3ProjectBuildPlanDataAssetsController
+    extends ChangeNotifier {
+  Object? _attachment;
+  Revision3ProjectBuildPlanDataAssetsSnapshot _snapshot =
+      const Revision3ProjectBuildPlanDataAssetsSnapshot._detached();
+  int _attachmentGeneration = 0;
+  bool _disposed = false;
+
+  Revision3ProjectBuildPlanDataAssetsSnapshot get snapshot => _snapshot;
+
+  void _attach(Object attachment) {
+    if (_disposed) {
+      throw StateError(
+        'A disposed project build DataAssets controller cannot attach.',
+      );
+    }
+    _attachment = attachment;
+    _attachmentGeneration++;
+    _snapshot = const Revision3ProjectBuildPlanDataAssetsSnapshot._detached();
+  }
+
+  void _publish(
+    Object attachment,
+    Revision3ProjectBuildPlanDataAssetsSnapshot snapshot,
+  ) {
+    if (_disposed || !identical(_attachment, attachment)) return;
+    _snapshot = snapshot;
+    _notifyAfterBuild(_attachmentGeneration);
+  }
+
+  void _detach(Object attachment) {
+    if (!identical(_attachment, attachment)) return;
+    _attachment = null;
+    final generation = ++_attachmentGeneration;
+    _snapshot = const Revision3ProjectBuildPlanDataAssetsSnapshot._detached();
+    _notifyAfterBuild(generation);
+  }
+
+  void _notifyAfterBuild(int generation) {
+    scheduleMicrotask(() {
+      if (_disposed || generation != _attachmentGeneration) return;
+      notifyListeners();
+    });
+  }
+
+  @override
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _attachment = null;
+    _attachmentGeneration++;
+    _snapshot = const Revision3ProjectBuildPlanDataAssetsSnapshot._detached();
     super.dispose();
   }
 }
@@ -347,6 +488,7 @@ class Revision3ProjectBuildPlanPanel extends StatefulWidget {
     required this.load,
     this.openVoiceDetails,
     this.openDataAssetDetails,
+    this.dataAssetsController,
     this.copy = const Revision3ProjectBuildPlanCopy.english(),
     super.key,
   });
@@ -355,6 +497,7 @@ class Revision3ProjectBuildPlanPanel extends StatefulWidget {
   final Revision3ProjectBuildPlanLoader load;
   final Revision3ProjectBuildPlanOpenVoiceDetails? openVoiceDetails;
   final Revision3ProjectBuildPlanOpenDataAssetDetails? openDataAssetDetails;
+  final Revision3ProjectBuildPlanDataAssetsController? dataAssetsController;
   final Revision3ProjectBuildPlanCopy copy;
 
   @override
@@ -374,29 +517,67 @@ class _Revision3ProjectBuildPlanPanelState
   @override
   void initState() {
     super.initState();
+    widget.dataAssetsController?._attach(this);
     _controller = Revision3ProjectBuildPlanController(
       checkpoint: widget.checkpoint,
       loader: widget.load,
     );
+    _controller.addListener(_publishCurrentDataAssetsSnapshot);
     unawaited(_controller.refresh());
   }
 
   @override
   void didUpdateWidget(covariant Revision3ProjectBuildPlanPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final dataAssetsControllerChanged =
+        oldWidget.dataAssetsController != widget.dataAssetsController;
+    if (dataAssetsControllerChanged) {
+      oldWidget.dataAssetsController?._detach(this);
+      widget.dataAssetsController?._attach(this);
+    }
     if (oldWidget.checkpoint != widget.checkpoint) {
       _actionEpoch++;
       _openingDetails = null;
       _actionError = null;
     }
     _controller.synchronize(checkpoint: widget.checkpoint, load: widget.load);
+    if (dataAssetsControllerChanged &&
+        oldWidget.checkpoint == widget.checkpoint) {
+      _publishCurrentDataAssetsSnapshot();
+    }
   }
 
   @override
   void dispose() {
     _actionEpoch++;
+    _controller.removeListener(_publishCurrentDataAssetsSnapshot);
+    widget.dataAssetsController?._detach(this);
     _controller.dispose();
     super.dispose();
+  }
+
+  void _publishCurrentDataAssetsSnapshot() {
+    final snapshot = _controller.snapshot;
+    final dataAssetsSnapshot = switch (snapshot.state) {
+      Revision3ProjectBuildPlanLoadState.loading =>
+        Revision3ProjectBuildPlanDataAssetsSnapshot._loading(
+          snapshot.checkpoint,
+        ),
+      Revision3ProjectBuildPlanLoadState.failed =>
+        Revision3ProjectBuildPlanDataAssetsSnapshot._unavailable(
+          snapshot.checkpoint,
+        ),
+      Revision3ProjectBuildPlanLoadState.ready when snapshot.result != null =>
+        Revision3ProjectBuildPlanDataAssetsSnapshot._ready(
+          snapshot.checkpoint,
+          snapshot.result!,
+        ),
+      Revision3ProjectBuildPlanLoadState.ready =>
+        Revision3ProjectBuildPlanDataAssetsSnapshot._unavailable(
+          snapshot.checkpoint,
+        ),
+    };
+    widget.dataAssetsController?._publish(this, dataAssetsSnapshot);
   }
 
   Future<void> _refresh() async {
