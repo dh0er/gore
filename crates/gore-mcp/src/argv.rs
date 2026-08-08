@@ -114,9 +114,11 @@ impl fmt::Display for BuildError {
                     )?,
                     SourceProblem::NotOneComponent => write!(
                         f,
-                        "is not a single path component. `{sub}` refuses a name carrying a \
-                         separator, `..` or a drive letter before it writes anything. Put a plain \
-                         folder name at `{pointer}` and send the same call again."
+                        "is not usable as a folder name. `{sub}` refuses a separator, `..`, a \
+                         drive letter, a control character, one of `<>\"|?*`, a trailing dot or \
+                         space, and the DOS device names (`CON`, `LPT1`, …) before it writes \
+                         anything. Put a plain folder name at `{pointer}` and send the same call \
+                         again."
                     )?,
                 }
                 write!(
@@ -766,22 +768,72 @@ fn name_in_json(path: &str, pointer: &str) -> Result<String, SourceProblem> {
         .and_then(Value::as_str)
         .ok_or(SourceProblem::NoName)?;
     // Spelled out rather than asked of `std::path`, which parses per host: on Linux
-    // `C:\\elsewhere` is one "normal" component, so this check passed a name `gore-mod` rejects
+    // `C:\elsewhere` is one "normal" component, so this check passed a name `gore-mod` rejects
     // outright and the gate went on to ask about a path nothing could ever write.
-    //
-    // These are the escape-relevant rules of the child's `is_safe_mod_name` — anything that would
-    // move the derived path out of the directory the caller named. Windows filename legality
-    // (reserved device names like `CON`, trailing dots) is deliberately NOT mirrored: the child
-    // reports those precisely, and a rule copied imperfectly here would refuse calls it accepts.
-    let escapes = name.is_empty()
-        || name.contains(['/', '\\', ':', '\0'])
-        || name.chars().any(char::is_control)
-        || name == "."
-        || name == "..";
-    if escapes {
+    if !is_safe_mod_name(name) {
         return Err(SourceProblem::NotOneComponent);
     }
     Ok(name.to_string())
+}
+
+/// The child's rule for a bundle directory name, restated.
+///
+/// `gore_mod::is_safe_mod_name` is `!contains('/') && !contains('\\')` plus
+/// `gore_vo::validate_archive_entry_path` for one component, and this crate cannot call either:
+/// it depends on `serde` alone and reaches the toolkit by spawning it. Restating the rule is the
+/// cost of that, so it is restated in full rather than in part.
+///
+/// An earlier version kept only the escape-relevant half — separators, `..`, drive letters — on
+/// the grounds that a rule copied imperfectly could refuse a call the child accepts. The half left
+/// out is reachable: Win32 strips a trailing dot, so `MyMod.` derives the existing `MyMod`
+/// directory, the occupancy gate finds it, and a client that answers its own dialogs turns a spec
+/// defect into a refusal about permission. The tests below pin both directions, which is what makes
+/// restating it safe.
+///
+/// Not mirrored: the child's byte-length limit. A name long enough to trip it is pathological, and
+/// omitting a bound can only let a call through to the child's own error — never refuse a good one.
+fn is_safe_mod_name(name: &str) -> bool {
+    if name.is_empty() || name == "." || name == ".." {
+        return false;
+    }
+    if name.contains(['/', '\\', ':', '\0'])
+        || name.chars().any(char::is_control)
+        || name.chars().any(|c| matches!(c, '<' | '>' | '"' | '|' | '?' | '*'))
+    {
+        return false;
+    }
+    // Win32 ignores these at the end of a component, so the name would not be the directory it
+    // spells.
+    if name.ends_with([' ', '.']) {
+        return false;
+    }
+    !is_windows_reserved(name)
+}
+
+/// DOS device names, which Win32 resolves regardless of directory. The stem before the first `.` is
+/// what counts (`CON .txt`, `LPT1...ogg`), matching `gore_vo`'s own reading.
+fn is_windows_reserved(name: &str) -> bool {
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or(name)
+        .trim_end_matches([' ', '.']);
+    let folded = stem.to_ascii_uppercase();
+    if matches!(
+        folded.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$" | "CONIN$" | "CONOUT$"
+    ) {
+        return true;
+    }
+    folded
+        .strip_prefix("COM")
+        .or_else(|| folded.strip_prefix("LPT"))
+        .is_some_and(|suffix| {
+            matches!(
+                suffix,
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "\u{b9}" | "\u{b2}" | "\u{b3}"
+            )
+        })
 }
 
 /// Reject a call whose derived output cannot be worked out because the file it is named in is
@@ -1344,7 +1396,7 @@ mod tests {
         let out = dir.path().join("build");
         let spec = dir.path().join("spec.json");
 
-        let elsewhere: [&[u8]; 5] = [
+        let elsewhere: [&[u8]; 9] = [
             br#"{"meta":{"name":"../escape"}}"#,
             br#"{"meta":{"name":"nested/mod"}}"#,
             br#"{"meta":{"name":"C:\\elsewhere"}}"#,
@@ -1353,6 +1405,13 @@ mod tests {
             // mirroring — the child's — is the same everywhere.
             br#"{"meta":{"name":"nested\\mod"}}"#,
             br#"{"meta":{"name":"bell\u0007name"}}"#,
+            // Win32 strips a trailing dot, so this derives the EXISTING `MyMod` directory. That is
+            // the reachable case that kept turning a spec defect into a refusal about permission,
+            // and the reason the rule is now mirrored in full rather than in part.
+            br#"{"meta":{"name":"MyMod."}}"#,
+            br#"{"meta":{"name":"MyMod "}}"#,
+            br#"{"meta":{"name":"CON"}}"#,
+            br#"{"meta":{"name":"bad?"}}"#,
         ];
         for body in elsewhere {
             std::fs::write(&spec, body).expect("write");
@@ -1363,13 +1422,38 @@ mod tests {
                 .expect_err("a name the child refuses must not build a command line")
                 .to_string();
             assert!(
-                rendered.contains("is not a single path component"),
+                rendered.contains("is not usable as a folder name"),
                 "{body:?} must be diagnosed as a defect in the file: {rendered}"
             );
             assert!(
                 rendered.contains("not in what this server is allowed to do"),
                 "the message must say this is not a permission problem: {rendered}"
             );
+        }
+    }
+
+    #[test]
+    fn an_ordinary_folder_name_is_not_refused_by_the_stricter_rule() {
+        // The other direction, and the reason the rule was only half-mirrored at first: refusing a
+        // name the child accepts turns a working call into an error about nothing. `console` is not
+        // `CON`, `COM` without a digit is not a device, and a dot inside a name is ordinary.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("build");
+        let spec = dir.path().join("spec.json");
+
+        for name in ["MyMod", "My_Mod-2", "Mod.v2", "console", "COM", "CONFIG", "aux2"] {
+            std::fs::write(
+                &spec,
+                format!(r#"{{"meta":{{"name":"{name}","version":"1.0.0"}}}}"#),
+            )
+            .expect("write");
+            let built = build_with(
+                "gore_mod",
+                "build",
+                json!({ "spec": spec.to_string_lossy(), "out": out.to_string_lossy() }),
+                &options(),
+            );
+            assert!(built.is_ok(), "{name:?} is a legal folder name: {built:?}");
         }
     }
 
