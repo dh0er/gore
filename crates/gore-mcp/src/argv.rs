@@ -562,7 +562,10 @@ fn output_paths(
         .chain(command.safety.truncates.iter().copied())
         // A directory filled with names of the command's own choosing is still a directory being
         // written into, and aiming one at the installation installs whatever lands there.
-        .chain(command.safety.clobbers_dir.iter().copied());
+        .chain(command.safety.clobbers_dir.iter().copied())
+        // Same reasoning, for the commands that police their own collisions and therefore carry no
+        // occupancy facet to be classified by.
+        .chain(command.safety.writes_into.iter().copied());
 
     let mut paths: Vec<(&'static str, std::path::PathBuf)> = named
         .filter_map(|name| {
@@ -1388,6 +1391,34 @@ mod tests {
         assert!(
             rendered.contains("could not be opened"),
             "a missing spec names itself as missing: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_self_policing_writer_still_has_its_output_classified() {
+        // `audio extract` checks collisions per file in the CLI, so it carries no occupancy facet.
+        // It briefly carried none at all — and `output_paths` is built from the facets, so dropping
+        // the last one took `out` out of the install-tree check with it: an agent could have filled
+        // the game installation with thousands of WAVs without anybody being asked. `writes_into`
+        // exists to answer "is this an output" without also answering "is something in the way".
+        let dir = tempfile::tempdir().expect("tempdir");
+        let outside = dir.path().join("wavs");
+        let call = |out: String| json!({ "bank": "SFX.bank", "out": out });
+
+        assert!(
+            question("gore_audio", "extract", call(outside.to_string_lossy().into_owned()), &options())
+                .is_none(),
+            "a scratch directory is still nobody's business"
+        );
+
+        assert!(
+            asks_about_a_write(question(
+                "gore_audio",
+                "extract",
+                call("D:/Games/G1R/G1R/Content/FMOD/Desktop/wavs".into()),
+                &options()
+            )),
+            "an output aimed inside the installation is an installation change, however new it is"
         );
     }
 

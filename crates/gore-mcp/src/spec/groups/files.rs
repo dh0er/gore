@@ -278,7 +278,10 @@ const AUDIO_COMMANDS: &[CommandSpec] = &[
         // refuses the individual file it would replace and names it, which protects the same thing
         // without standing in front of the ordinary case. The two halves ship together — dropping
         // this facet against an older CLI would leave neither layer checking.
-        Safety::write(),
+        //
+        // `writes_into` rather than nothing: the occupancy question is the CLI's now, but `out` must
+        // still be classified, or an output aimed inside the installation stops being seen as one.
+        Safety::write().writes_into(&["out"]),
         T_NORMAL,
     )
     .guide("audio"),

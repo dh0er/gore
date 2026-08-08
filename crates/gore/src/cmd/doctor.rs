@@ -693,7 +693,17 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
             format!("no {} (nothing additive is mounted)", dir.display()),
         );
     }
-    let mut names = file_names(&dir);
+    let mut names = match file_names(&dir) {
+        Ok(names) => names,
+        Err(error) => {
+            return Check::new(
+                "mods_folder",
+                "~mods",
+                Verdict::Problem,
+                format!("could not inspect the additive mod folder: {error}"),
+            )
+        }
+    };
     names.sort_by_key(|name| name.to_lowercase());
     if names.is_empty() {
         return Check::new(
@@ -733,7 +743,22 @@ fn check_leftovers(
         .collect();
     let artifact_count = items.len();
 
-    let backups = find_backups(gp);
+    // Same posture as the probe's own InspectionFailed below: a directory that cannot be read is
+    // reported as unread, never as clean. This check exists to find leftovers, so answering "none"
+    // because the scan failed is the one wrong answer it can give.
+    let backups = match find_backups(gp) {
+        Ok(backups) => backups,
+        Err(error) => {
+            return Check::new(
+                "leftovers",
+                "leftovers",
+                Verdict::Problem,
+                format!("could not scan for leftover backups: {error}"),
+            )
+            .with_items(items)
+            .with_fix("run the same command from a shell that can read the install")
+        }
+    };
     let orphan_backups = !record_present && !backups.is_empty();
     items.extend(backups.iter().cloned());
 
@@ -947,7 +972,7 @@ fn ue4ss_dir(gp: &GamePaths) -> PathBuf {
 /// bytes in a `<file>.gore-bak` sibling: the localization cache, the FMOD banks, the voice-over
 /// archives and the AngelScript cache. Scanning these rather than the whole install keeps the
 /// check cheap, and a `.gore-bak` anywhere else was not written by this CLI.
-fn find_backups(gp: &GamePaths) -> Vec<String> {
+fn find_backups(gp: &GamePaths) -> Result<Vec<String>, String> {
     let g1r = gp.root.join("G1R");
     let dirs = [
         g1r.join("Story").join("Cache"),
@@ -955,30 +980,42 @@ fn find_backups(gp: &GamePaths) -> Vec<String> {
         gp.voice_over.clone(),
         g1r.join("Script"),
     ];
-    let mut found: Vec<String> = dirs
-        .iter()
-        .flat_map(|dir| {
-            file_names(dir)
-                .into_iter()
-                .filter(|name| name.ends_with(".gore-bak"))
-                .map(|name| dir.join(name).display().to_string())
-                .collect::<Vec<_>>()
-        })
-        .collect();
+    let mut found: Vec<String> = Vec::new();
+    for dir in &dirs {
+        for name in file_names(dir)? {
+            if name.ends_with(".gore-bak") {
+                found.push(dir.join(name).display().to_string());
+            }
+        }
+    }
     found.sort();
-    found
+    Ok(found)
 }
 
-/// Plain file names directly in `dir`; a directory that is not there has none.
-fn file_names(dir: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
+/// Plain file names directly in `dir`.
+///
+/// A directory that is not there has no files, and that is an answer. A directory that is there and
+/// cannot be read is not an answer, and used to be reported as one: swallowing the error returned an
+/// empty vector, which `~mods` read as "empty" and the backup scan read as "nothing left over". A
+/// doctor that says `ok` because it could not look is worse than one that says nothing, and the
+/// installs where this happens — permissions, a half-mounted drive, I/O errors — are exactly the
+/// ones it exists for. Per-entry failures count the same way; a directory half-read is not a
+/// directory read.
+fn file_names(dir: &Path) -> Result<Vec<String>, String> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("{} could not be read: {error}", dir.display())),
     };
-    entries
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.path().is_file())
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .collect()
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| format!("{} could not be read: {error}", dir.display()))?;
+        if entry.path().is_file() {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+    }
+    Ok(names)
 }
 
 

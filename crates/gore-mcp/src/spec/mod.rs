@@ -277,6 +277,16 @@ pub struct Safety {
     /// write is still overwritten. What this answers is whether an agent may aim a name-choosing
     /// writer at a directory it can see is occupied.
     pub clobbers_dir: &'static [&'static str],
+    /// Arguments naming a destination this command writes into, registered for install-path
+    /// classification and for nothing else.
+    ///
+    /// [`Safety::truncates`] and [`Safety::clobbers_dir`] each answer two questions at once: is
+    /// this an output, and is something already in the way. A command whose CLI does its own
+    /// per-file collision check needs the first answer and not the second — and dropping the facet
+    /// to be rid of the occupancy question also drops the output out of
+    /// `installs_into_game_tree`, which is how `audio extract` briefly became able to fill the game
+    /// installation with WAVs without asking anybody.
+    pub writes_into: &'static [&'static str],
 }
 
 impl Safety {
@@ -290,6 +300,7 @@ impl Safety {
             derives: &[],
             installs_via: &[],
             clobbers_dir: &[],
+            writes_into: &[],
         }
     }
 
@@ -342,6 +353,13 @@ impl Safety {
     /// [`Safety::clobbers_dir`].
     pub const fn clobbers_dir(mut self, args: &'static [&'static str]) -> Self {
         self.clobbers_dir = args;
+        self
+    }
+
+    /// Register `args` as outputs for install-path classification without asking about occupancy.
+    /// For commands that check collisions themselves, per file, in the CLI.
+    pub const fn writes_into(mut self, args: &'static [&'static str]) -> Self {
+        self.writes_into = args;
         self
     }
 
@@ -999,6 +1017,7 @@ mod tests {
                     command.safety.truncates.contains(&name)
                         || command.safety.installs_via.contains(&name)
                         || command.safety.clobbers_dir.contains(&name)
+                        || command.safety.writes_into.contains(&name)
                         || command.safety.derives.iter().any(|(arg, _)| *arg == name)
                         // A command gated outright needs no per-argument check. Asked of the
                         // gate rather than of `Class`, because a GameLaunch command requires write
@@ -1012,17 +1031,11 @@ mod tests {
                 }
             }
         }
-        // Two exemptions, both for the same reason: the CLI is already the guard, and listing them
-        // here would replace a precise CLI error with a permission refusal.
-        //
-        // `asset extract` resolves the destination through `prepare_absent_output_directory`, which
-        // refuses anything inside the live game tree outright.
-        //
-        // `audio extract` writes one WAV per sample under names taken from the bank, and refuses
-        // the individual file it would replace, naming it. It was covered by `clobbers_dir` until
-        // that proved to fire on the ordinary workflow — auditioning candidates into one directory
-        // means the second extract meets the first one's output.
-        unchecked.retain(|name| name != "gore_asset extract" && name != "gore_audio extract");
+        // `asset extract` is the one exemption: the CLI is already the guard. It resolves the
+        // destination through `prepare_absent_output_directory`, which refuses anything inside the
+        // live game tree outright, so listing it here would replace a precise CLI error with a
+        // permission refusal.
+        unchecked.retain(|name| name != "gore_asset extract");
         assert!(
             unchecked.is_empty(),
             "these name an output that no safety list covers: {unchecked:?}"

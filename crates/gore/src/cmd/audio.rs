@@ -455,27 +455,38 @@ pub fn extract(
     // `SFX.bank` that was 7,218 identical stderr lines (~400 KB) describing one fact. The first
     // sample to hit a reason is named, which is what a single-sample run needs, and the count says
     // how far it went.
+    // Every destination is settled before the first byte is written. Refusing the one file this
+    // would replace is right, but doing it inside the write loop made a collision on the fifth
+    // sample leave four WAVs behind — and then the retry failed on the first of those instead of
+    // on the file the caller actually needs to deal with. Names come from the bank rather than the
+    // arguments, so the caller cannot compute them beforehand and this is the only place the check
+    // can happen at all.
+    //
+    // Prefix with the sample index so two names that sanitize to the same basename (e.g. differing
+    // only by punctuation) do not collide and silently overwrite.
+    let destinations: Vec<(usize, PathBuf)> = indices
+        .iter()
+        .map(|&i| {
+            (
+                i,
+                out.join(format!("{i}_{}.wav", sanitize(&view.samples[i].name))),
+            )
+        })
+        .collect();
+    if let Some((_, path)) = destinations.iter().find(|(_, path)| path.exists()) {
+        bail!(
+            "'{}' already exists; extract writes one file per sample under a name taken from the \
+             bank, so this would replace it. Nothing was written. Delete it, or pass a different \
+             --out.",
+            path.display()
+        );
+    }
+
     let (mut ok, mut skipped) = (0usize, 0usize);
     let mut skips: BTreeMap<String, (usize, usize)> = BTreeMap::new();
-    for i in indices {
+    for (i, path) in destinations {
         match view.extract_wav(i) {
             Ok(wav) => {
-                // Prefix with the sample index so two names that sanitize to the same basename
-                // (e.g. differing only by punctuation) don't collide and silently overwrite.
-                let path = out.join(format!("{i}_{}.wav", sanitize(&view.samples[i].name)));
-                // Refuse the one file rather than the whole directory. The names come from the
-                // bank, so a caller cannot predict them and cannot be asked about them up front —
-                // but an existing file is still theirs, possibly an edited one they are about to
-                // inject. Auditioning several samples into one directory is the workflow this
-                // command is for, and a blanket emptiness rule made that impossible.
-                if path.exists() {
-                    anyhow::bail!(
-                        "'{}' already exists; extract writes one file per sample under a name \
-                         taken from the bank, so this would replace it. Delete it, or pass a \
-                         different --out.",
-                        path.display()
-                    );
-                }
                 std::fs::write(&path, &wav)
                     .with_context(|| format!("writing '{}'", path.display()))?;
                 ok += 1;
