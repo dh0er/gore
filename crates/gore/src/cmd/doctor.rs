@@ -1134,6 +1134,38 @@ fn check_loc_catalog(meta: Option<LocMeta>, catalog: &Path, installed: Option<&P
         };
     };
 
+    // The metadata survives independently of the file it describes: deleting `loc_catalog.json`
+    // and leaving `loc_meta.json` reported a healthy catalog, complete with an id count, for
+    // something `gore find`, Mod Studio and the save editor can no longer load. Everything below
+    // this point is about how well the catalog matches the install, which is not a question worth
+    // answering about a catalog that is not there.
+    match present(catalog) {
+        Ok(Some(metadata)) if metadata.is_file() => {}
+        Ok(_) => {
+            return Check::new(
+                "loc_catalog",
+                "loc catalog",
+                Verdict::Problem,
+                "the record of an extracted catalog is there, but the catalog itself is gone",
+            )
+            .with_items(vec![format!("expected at: {}", catalog.display())])
+            .with_fix(
+                "run 'gore loc extract' — every tool that turns a text id into text reads that \
+                 one file, and until it is back they all fall back to showing raw ids",
+            );
+        }
+        Err(error) => {
+            return Check::new(
+                "loc_catalog",
+                "loc catalog",
+                Verdict::Problem,
+                format!("the localized-text catalog could not be inspected: {error}"),
+            )
+            .with_items(vec![format!("expected at: {}", catalog.display())])
+            .with_fix("run the same command from a shell that can read it");
+        }
+    }
+
     let summary = format!(
         "{} ids in {} language(s)",
         meta.id_count,
@@ -1803,6 +1835,14 @@ mod tests {
     /// the order reality has: `gore loc extract` reads a cache that already exists, so the file
     /// it read is never newer than the extraction. A fixture stuck at the epoch makes every file
     /// look rewritten since, which is the opposite of the fresh case these tests describe.
+    /// A shared catalog that exists, for the checks that are about how well it matches the install
+    /// rather than about whether it is there.
+    fn extracted_catalog(dir: &Path) -> PathBuf {
+        let path = dir.join("loc_catalog.json");
+        std::fs::write(&path, br#"{"itfo_apple":{"german":"Apfel"}}"#).unwrap();
+        path
+    }
+
     fn meta(source: &Path, bytes: u64) -> LocMeta {
         let extracted_at = std::fs::metadata(source)
             .and_then(|m| m.modified())
@@ -1831,7 +1871,7 @@ mod tests {
 
         let check = check_loc_catalog(
             Some(meta(&cache, 1024)),
-            &dir.path().join("loc_catalog.json"),
+            &extracted_catalog(dir.path()),
             Some(&cache),
         );
         assert_eq!(check.verdict, Verdict::Problem);
@@ -1840,7 +1880,7 @@ mod tests {
 
         let fresh = check_loc_catalog(
             Some(meta(&cache, 2048)),
-            &dir.path().join("loc_catalog.json"),
+            &extracted_catalog(dir.path()),
             Some(&cache),
         );
         assert_eq!(fresh.verdict, Verdict::Ok);
@@ -1863,7 +1903,7 @@ mod tests {
 
         let check = check_loc_catalog(
             Some(before),
-            &dir.path().join("loc_catalog.json"),
+            &extracted_catalog(dir.path()),
             Some(&cache),
         );
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
@@ -1886,7 +1926,7 @@ mod tests {
 
         let check = check_loc_catalog(
             Some(meta(&elsewhere, 64)),
-            &dir.path().join("loc_catalog.json"),
+            &extracted_catalog(dir.path()),
             Some(&here),
         );
         assert_eq!(check.verdict, Verdict::Note);
@@ -1907,7 +1947,7 @@ mod tests {
 
         let check = check_loc_catalog(
             Some(relative),
-            &dir.path().join("loc_catalog.json"),
+            &extracted_catalog(dir.path()),
             Some(&here),
         );
         assert_eq!(check.verdict, Verdict::Note);
@@ -1930,6 +1970,25 @@ mod tests {
         assert!(present(&file).unwrap().is_some_and(|m| m.is_file()));
         assert!(present(&dir.path().join("not-there.txt")).unwrap().is_none());
         assert!(present(dir.path()).unwrap().is_some_and(|m| m.is_dir()));
+    }
+
+    #[test]
+    fn metadata_without_the_catalog_it_describes_is_not_a_healthy_catalog() {
+        // The record and the file it describes are two files, and only one of them is what every
+        // other tool reads. With the catalog deleted the freshness checks below still had a length
+        // and a timestamp to compare and reported `ok` for something nothing can load.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("AlkimiaLocalization_00000000.lcache");
+        std::fs::write(&cache, vec![0u8; 1024]).unwrap();
+
+        let check = check_loc_catalog(
+            Some(meta(&cache, 1024)),
+            &dir.path().join("loc_catalog.json"),
+            Some(&cache),
+        );
+        assert_eq!(check.verdict, Verdict::Problem);
+        assert!(check.detail.contains("the catalog itself is gone"), "{}", check.detail);
+        assert!(check.fix.unwrap().contains("gore loc extract"));
     }
 
     #[test]

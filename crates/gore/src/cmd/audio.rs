@@ -453,20 +453,15 @@ pub fn extract(
     filter: Option<String>,
     key: Option<String>,
 ) -> Result<()> {
-    let bytes = std::fs::read(&bank).with_context(|| format!("reading '{}'", bank.display()))?;
-    // Through the view, so a replaced sample is read out of the sub-bank it was repointed at.
-    // Reading sub-bank 0 wrote the audio the replacement replaced into a file named after the
-    // replacement — the one failure mode a caller cannot detect, because the file is there and
-    // plays.
-    let view = gore_fmod::read_bank(&bytes, &key_bytes(key))
-        .map_err(|e| anyhow::anyhow!("{e}"))
-        .context("decoding bank")?;
-    std::fs::create_dir_all(&out).with_context(|| format!("creating '{}'", out.display()))?;
-
     // A named `--sample` and a `--filter` are two different selections, and honouring one means
     // ignoring the other. Silently keeping the sample meant a caller who passed both got a
     // successful extraction that answered half their request. `--sample all` is not a conflict:
     // it is the default, and it means "no sample selection", which is exactly what a filter narrows.
+    //
+    // First, before the bank is read and before the output directory exists. This needs nothing
+    // but the two arguments, and running it last meant a call that was never going to be honoured
+    // still read 260 MB of `SFX.bank` and left an empty directory behind that the caller then had
+    // to clean up after an error telling them they had passed the wrong flags.
     if let (Some(name), Some(needle)) = (&sample, &filter) {
         if name != "all" {
             bail!(
@@ -476,6 +471,16 @@ pub fn extract(
             );
         }
     }
+
+    let bytes = std::fs::read(&bank).with_context(|| format!("reading '{}'", bank.display()))?;
+    // Through the view, so a replaced sample is read out of the sub-bank it was repointed at.
+    // Reading sub-bank 0 wrote the audio the replacement replaced into a file named after the
+    // replacement — the one failure mode a caller cannot detect, because the file is there and
+    // plays.
+    let view = gore_fmod::read_bank(&bytes, &key_bytes(key))
+        .map_err(|e| anyhow::anyhow!("{e}"))
+        .context("decoding bank")?;
+    std::fs::create_dir_all(&out).with_context(|| format!("creating '{}'", out.display()))?;
 
     // indices to extract
     let indices: Vec<usize> = match (&sample, &filter) {
@@ -954,6 +959,27 @@ mod rollback_tests {
         // Length is then all there is, and it still has to match.
         std::fs::write(&entry.path, b"longer bytes").unwrap();
         assert!(!entry.is_still_ours());
+    }
+
+    #[test]
+    fn conflicting_selectors_are_refused_before_anything_is_read_or_created() {
+        // The bank path below does not exist, which is the assertion: reaching the read at all
+        // would fail with a different error. A call that was never going to be honoured used to
+        // decode 260 MB of `SFX.bank` first and leave an empty output directory behind.
+        let temp = TempDir::new().unwrap();
+        let out = temp.path().join("out");
+
+        let error = super::extract(
+            temp.path().join("no-such-bank.bank"),
+            out.clone(),
+            Some("SFX_UI_Click_0".into()),
+            Some("click".into()),
+            None,
+        )
+        .expect_err("two selectors cannot both be honoured");
+
+        assert!(error.to_string().contains("cannot both be honoured"), "{error}");
+        assert!(!out.exists(), "no output directory may be left behind");
     }
 
     #[test]

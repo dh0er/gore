@@ -551,10 +551,7 @@ pub fn run(query: Vec<String>, domain: Option<String>, max: usize, json: bool) -
     // Several words are one query, exactly as `gore guide search` takes them, so
     // a phrase needs no quoting on any shell.
     let query = query.join(" ");
-    let terms: Vec<String> = query
-        .split_whitespace()
-        .map(str::to_lowercase)
-        .collect();
+    let terms = query_terms(&query);
     if terms.is_empty() {
         bail!("nothing to search for — pass one or more words, e.g. `gore find healing potion`");
     }
@@ -586,6 +583,23 @@ pub fn run(query: Vec<String>, domain: Option<String>, max: usize, json: bool) -
     // the "display names were not searched" line as the last word rather than
     // burying it under `error:`.
     Ok(())
+}
+
+/// The words of a query, lowercased, with surrounding punctuation taken off.
+///
+/// Every term has to match, so one stray character removes a result entirely: `gore find healing
+/// potion?` searched for `potion?`, which is in no id and no display name, and answered that
+/// nothing matches. Trimmed only at the edges — punctuation inside a word belongs to it, and an id
+/// like `/Game/UI/T_Logo` or `ItFo_Apple` is mostly punctuation.
+fn query_terms(query: &str) -> Vec<String> {
+    query
+        .split_whitespace()
+        .map(|word| {
+            word.trim_matches(|c: char| c.is_ascii_punctuation() && c != '_')
+                .to_lowercase()
+        })
+        .filter(|word| !word.is_empty())
+        .collect()
 }
 
 /// The catalog rows a search can reach, which with `--domain` is not all of them.
@@ -1954,6 +1968,21 @@ mod tests {
         // register searches ids too, so this is the case that would wrongly gain "register text".
         let only_id = search(&[], &register, &terms("t_logo"), None, None);
         assert_eq!(only_id[0].matched, vec![Matched::Id], "{:?}", only_id[0].matched);
+    }
+
+    #[test]
+    fn a_word_with_punctuation_stuck_to_it_is_still_that_word() {
+        // Every term must match, so one stray character removed the result entirely: `gore find
+        // healing potion?` searched for `potion?`, which is in no id and no name anywhere.
+        assert_eq!(query_terms("healing potion?"), vec!["healing", "potion"]);
+        assert_eq!(query_terms("\"Apfel\","), vec!["apfel"]);
+
+        // Only at the edges. Ids are mostly punctuation, and an underscore is part of the word.
+        assert_eq!(query_terms("/Game/UI/T_Logo"), vec!["game/ui/t_logo"]);
+        assert_eq!(query_terms("ItFo_Apple"), vec!["itfo_apple"]);
+
+        // A term that was nothing but punctuation is not a term.
+        assert!(query_terms("?? --").is_empty());
     }
 
     #[test]
