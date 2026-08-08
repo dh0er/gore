@@ -567,6 +567,20 @@ fn check_ue4ss_mods(gp: &GamePaths) -> Check {
 ///
 /// A directory that cannot be read is reported rather than counted as empty. "No mod folders" is
 /// exactly the answer that hides a competing override mod, and this check exists to find those.
+/// `fs::metadata`, with "not there" separated from "could not tell".
+///
+/// `Path::is_dir()` and `Path::is_file()` answer `false` for both, and every check in this module
+/// that asked them was therefore able to report a clean install it had not managed to look at. Four
+/// separate places had that bug; they now share this one, which returns `Ok(None)` only for a real
+/// absence and the reason for anything else. Links are followed, as the `is_*` calls did.
+fn present(path: &Path) -> Result<Option<std::fs::Metadata>, String> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("{} could not be read: {error}", path.display())),
+    }
+}
+
 fn read_ue4ss_mods(mods: &Path) -> Result<Vec<Ue4ssMod>, String> {
     let entries = std::fs::read_dir(mods)
         .map_err(|error| format!("{} could not be read: {error}", mods.display()))?;
@@ -575,16 +589,20 @@ fn read_ue4ss_mods(mods: &Path) -> Result<Vec<Ue4ssMod>, String> {
         .map_err(|error| format!("{} could not be read: {error}", mods.display()))?;
     let mut found: Vec<Ue4ssMod> = Vec::new();
     for entry in entries {
-        if !entry.path().is_dir() {
-            continue;
+        let dir = entry.path();
+        match present(&dir)? {
+            Some(metadata) if metadata.is_dir() => {}
+            // A plain file, or something that vanished between the listing and the look.
+            _ => continue,
         }
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.eq_ignore_ascii_case("shared") {
             continue;
         }
-        let dir = entry.path();
         found.push(Ue4ssMod {
-            enabled: dir.join("enabled.txt").is_file(),
+            // An `enabled.txt` that cannot be read is not an absent one. Since a generated override
+            // without it is now reported as doing nothing, guessing here would invent that finding.
+            enabled: present(&dir.join("enabled.txt"))?.is_some_and(|m| m.is_file()),
             // Propagated rather than defaulted: a marker that cannot be read is not a mod that
             // carries no overrides, and treating it as one is how a competing generated override
             // would disappear from a report whose whole job is to find it.
@@ -981,7 +999,40 @@ fn check_loc_catalog(meta: Option<LocMeta>, installed: Option<&Path>) -> Check {
         .with_items(items);
     };
 
-    if !same_path(Path::new(&meta.source_path), installed) {
+    // `gore loc extract --lcache some\\path.lcache` records the spelling it was given, and this
+    // process resolved `installed` to an absolute path — so a relative recording never matched and
+    // every such catalog was reported as belonging to another install. Resolved against the current
+    // directory first, which is a guess: it was recorded relative to wherever `extract` ran. A
+    // mismatch on a relative spelling is therefore reported as not knowing, never as another
+    // install.
+    let recorded = Path::new(&meta.source_path);
+    let resolved = match std::env::current_dir() {
+        Ok(cwd) => cwd.join(recorded),
+        Err(_) => recorded.to_path_buf(),
+    };
+    if !same_path(&resolved, installed) && recorded.is_relative() {
+        return Check::new(
+            "loc_catalog",
+            "loc catalog",
+            Verdict::Note,
+            format!(
+                "{summary}, and whether it came from this install cannot be told: the catalog \
+                 records its source as a relative path"
+            ),
+        )
+        .with_items(
+            items
+                .into_iter()
+                .chain([format!("installed: {}", installed.display())])
+                .collect(),
+        )
+        .with_fix(
+            "run 'gore loc extract' from this install, or pass an absolute --lcache path, so the \
+             catalog records which file it came from",
+        );
+    }
+
+    if !same_path(&resolved, installed) {
         return Check::new(
             "loc_catalog",
             "loc catalog",
@@ -1116,21 +1167,8 @@ fn file_names(dir: &Path) -> Result<Vec<String>, String> {
     for entry in entries {
         let entry = entry
             .map_err(|error| format!("{} could not be read: {error}", dir.display()))?;
-        let path = entry.path();
-        // Not `Path::is_file()`, which answers `false` for every reason it could not tell — an ACL,
-        // an I/O error, a drive that went away mid-scan — and so dropped the entry silently. That is
-        // the same swallowed error this function's own contract rules out one paragraph above.
-        // `fs::metadata` follows links like `is_file()` did, and hands back the reason.
-        match std::fs::metadata(&path) {
-            Ok(metadata) => {
-                if metadata.is_file() {
-                    names.push(entry.file_name().to_string_lossy().into_owned());
-                }
-            }
-            // Gone between the listing and the look, or a link with nothing at the end of it.
-            // Not there IS an answer, and the same one `read_dir` gives for a missing directory.
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("{} could not be read: {error}", path.display())),
+        if present(&entry.path())?.is_some_and(|metadata| metadata.is_file()) {
+            names.push(entry.file_name().to_string_lossy().into_owned());
         }
     }
     Ok(names)
@@ -1656,6 +1694,41 @@ mod tests {
         let check = check_loc_catalog(Some(meta(&elsewhere, 64)), Some(&here));
         assert_eq!(check.verdict, Verdict::Note);
         assert!(check.detail.contains("different file"), "{}", check.detail);
+    }
+
+    #[test]
+    fn a_catalog_recording_a_relative_source_says_it_cannot_tell_rather_than_accusing() {
+        // `gore loc extract --lcache some\\path.lcache` stores the spelling it was given, and this
+        // process resolves the install to an absolute path. Compared as text those never match, so
+        // a perfectly good catalog was reported as belonging to a different install.
+        let dir = tempfile::tempdir().unwrap();
+        let here = dir.path().join("AlkimiaLocalization_00000000.lcache");
+        std::fs::write(&here, vec![0u8; 64]).unwrap();
+
+        let mut relative = meta(&here, 64);
+        relative.source_path = "cache\\AlkimiaLocalization_00000000.lcache".into();
+
+        let check = check_loc_catalog(Some(relative), Some(&here));
+        assert_eq!(check.verdict, Verdict::Note);
+        assert!(check.detail.contains("cannot be told"), "{}", check.detail);
+        assert!(
+            !check.detail.contains("different file"),
+            "a relative spelling is not evidence of another install: {}",
+            check.detail
+        );
+        assert!(check.fix.unwrap().contains("absolute"));
+    }
+
+    #[test]
+    fn absence_is_an_answer_and_unreadability_is_not() {
+        // The contract four separate checks in this module now depend on.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("there.txt");
+        std::fs::write(&file, b"x").unwrap();
+
+        assert!(present(&file).unwrap().is_some_and(|m| m.is_file()));
+        assert!(present(&dir.path().join("not-there.txt")).unwrap().is_none());
+        assert!(present(dir.path()).unwrap().is_some_and(|m| m.is_dir()));
     }
 
     #[test]

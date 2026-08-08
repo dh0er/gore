@@ -671,8 +671,10 @@ pub fn search<'a>(
         let key = (entry.domain.clone(), entry.id.to_lowercase());
         if let Some(position) = seen.get(&key) {
             let hit = &mut hits[*position];
-            if !hit.matched.contains(&why) {
-                hit.matched.push(why);
+            for reason in why {
+                if !hit.matched.contains(&reason) {
+                    hit.matched.push(reason);
+                }
             }
             continue;
         }
@@ -681,7 +683,7 @@ pub fn search<'a>(
             .find(|row| row.domain == entry.domain && row.id.eq_ignore_ascii_case(&entry.id));
         seen.insert(key, hits.len());
         match carried {
-            Some(row) => hits.push(hit_for(row, register, index, vec![why], terms)),
+            Some(row) => hits.push(hit_for(row, register, index, why, terms)),
             None => {
                 let name = index
                     .and_then(|index| index.get(&entry.id))
@@ -697,7 +699,7 @@ pub fn search<'a>(
                         None => NameSource::None,
                     },
                     name,
-                    matched: vec![why],
+                    matched: why,
                     exact: terms.len() == 1 && entry.id.eq_ignore_ascii_case(&terms[0]),
                 });
             }
@@ -764,31 +766,36 @@ fn register_match(
     terms: &[String],
     register: &Register,
     index: Option<&NameIndex>,
-) -> Matched {
+) -> Vec<Matched> {
     if terms.iter().all(|term| contains(&entry.id, term)) {
-        return Matched::Id;
+        return vec![Matched::Id];
     }
-    // An entry can now be in the result because its DISPLAY NAME matched, not its register text,
-    // and calling that "register text" would both explain the wrong thing and rank it as though a
-    // person had written it down. Ask the register itself: if it did not find every term, the name
-    // index is what did.
-    let by_register_text = terms.iter().all(|term| {
+    // Every reason, not the first one that fits. `matching_register` admits an entry when each term
+    // is answered by its register text OR by a display name, so the two can split a multi-word
+    // query between them — and reducing that to the name alone both dropped half the explanation
+    // and cost the entry the register's rank, which is what decides who survives `--max`.
+    let mut reasons = Vec::new();
+    let answered_by_register = terms.iter().any(|term| {
         register
             .search(term, Some(&entry.domain))
             .iter()
             .any(|other| std::ptr::eq(*other, entry))
     });
-    if by_register_text {
-        return Matched::Register;
+    if answered_by_register {
+        reasons.push(Matched::Register);
     }
-    index
+    if let Some(name) = index
         .and_then(|index| index.get(&entry.id))
-        .and_then(|names| choose_name(names, terms))
-        .map(|name| Matched::Name(name.language.clone()))
+        .and_then(|names| matching_name(names, terms))
+    {
+        reasons.push(Matched::Name(name.language.clone()));
+    }
+    if reasons.is_empty() {
         // Unreachable through `matching_register`, which admits an entry only for one of the two
-        // reasons above. Falling back to the register keeps the function total without inventing a
-        // language nobody matched in.
-        .unwrap_or(Matched::Register)
+        // reasons above. Keeps the function total without inventing a language nobody matched in.
+        reasons.push(Matched::Register);
+    }
+    reasons
 }
 
 /// Register entries matching every term, against the entry's own text OR its display name.
@@ -870,11 +877,19 @@ fn hit_for<'a>(
 /// Answering in the language somebody typed costs no flag and is almost always
 /// what they meant — a German search for `Apfel` that came back "Apple" would
 /// leave them checking whether it is even the same item.
-fn choose_name<'a>(names: &'a [Name], terms: &[String]) -> Option<&'a Name> {
-    if let Some(name) = names
+/// The name a term is actually inside, or nothing.
+///
+/// [`choose_name`] falls back to a preferred language so a hit always has something to print, which
+/// makes it the wrong question to ask when deciding WHY an entry matched: it answers even when no
+/// name did.
+fn matching_name<'a>(names: &'a [Name], terms: &[String]) -> Option<&'a Name> {
+    names
         .iter()
         .find(|name| terms.iter().any(|term| contains(&name.text, term)))
-    {
+}
+
+fn choose_name<'a>(names: &'a [Name], terms: &[String]) -> Option<&'a Name> {
+    if let Some(name) = matching_name(names, terms) {
         return Some(name);
     }
     for preferred in PREFERRED_LANGUAGES {
@@ -1830,6 +1845,44 @@ mod tests {
                 "trailing {tail:?} must not pass as a catalog"
             );
         }
+    }
+
+    #[test]
+    fn a_query_split_between_register_text_and_a_display_name_keeps_both_reasons() {
+        // `matching_register` admits an entry when every term is answered by its register text OR
+        // by a display name, so the two can split a multi-word query. Reporting only the name lost
+        // half the explanation and dropped the entry to the weakest tier, where `--max` cuts first.
+        let register = register_with(
+            "texture",
+            "/Game/UI/Textures/Common/T_Wordmark",
+            &observation("confirmed", Some("magenta"), "24539464"),
+            "turns magenta in the main menu",
+        );
+        let index = NameIndex::from_pairs(&[(
+            "/Game/UI/Textures/Common/T_Wordmark",
+            "german",
+            "Logo Remake",
+        )]);
+
+        // "logo" is in the display name only; "magenta" is in the register text only.
+        let hits = search(&[], &register, &terms("logo magenta"), Some(&index), None);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(
+            hits[0].matched.contains(&Matched::Register),
+            "the register answered for 'magenta': {:?}",
+            hits[0].matched
+        );
+        assert!(
+            hits[0]
+                .matched
+                .iter()
+                .any(|matched| matches!(matched, Matched::Name(_))),
+            "the display name answered for 'logo': {:?}",
+            hits[0].matched
+        );
+        // Tier 2 is the register's, and it is what keeps an observed entry ahead of lexical
+        // accidents when the list is truncated.
+        assert_eq!(rank(&hits[0]), 2);
     }
 
     #[test]
