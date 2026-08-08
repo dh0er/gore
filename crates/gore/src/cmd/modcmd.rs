@@ -5,6 +5,34 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 /// `gore mod build --spec spec.json --out DIR` → write the bundle dir.
+/// What `--model` validation actually establishes, said so that the part it does not cover is
+/// not read into it.
+///
+/// `validate_config` resolves the class and the field against the reflection model. It does not
+/// look at `module`, because the model carries no module or package information to look at — and
+/// the generated Lua builds `/Script/<module>.Default__<class>` out of exactly that field. A
+/// misspelling there produces a CDO path nothing resolves, and the mod then behaves precisely like
+/// an unknown class: 120 retries a second apart, one line in UE4SS.log, nothing changed in the
+/// game. "checked N override(s)" invited a reader to believe that had been ruled out.
+///
+/// The modules in play are named rather than described, because a typo is recognisable on sight
+/// and unrecognisable in prose.
+fn checked_against_model<'a>(
+    count: usize,
+    model_path: &std::path::Path,
+    modules: impl Iterator<Item = &'a str>,
+) -> String {
+    let modules: std::collections::BTreeSet<&str> = modules.collect();
+    format!(
+        "checked {count} override class and field name(s) against '{}'. The module each one \
+         names is NOT checked — the model carries none — and \
+         `/Script/<module>.Default__<class>` is built from it, so a misspelling there resolves \
+         to nothing exactly as silently as an unknown class would. In use: {}",
+        model_path.display(),
+        modules.into_iter().collect::<Vec<_>>().join(", ")
+    )
+}
+
 pub fn build(spec_path: PathBuf, out: PathBuf, model: Option<PathBuf>) -> Result<()> {
     let json = std::fs::read_to_string(&spec_path)
         .with_context(|| format!("reading spec '{}'", spec_path.display()))?;
@@ -29,9 +57,12 @@ pub fn build(spec_path: PathBuf, out: PathBuf, model: Option<PathBuf>) -> Result
                     &spec_path.display().to_string(),
                 )?;
                 eprintln!(
-                    "checked {} override(s) against '{}'",
-                    cfg.overrides.len(),
-                    model_path.display()
+                    "{}",
+                    checked_against_model(
+                        cfg.overrides.len(),
+                        model_path,
+                        cfg.overrides.iter().map(|o| o.module.as_str()),
+                    )
                 );
             }
             // stdout stays the bundle result so `--json`-style consumers see one clean document.
@@ -122,4 +153,32 @@ pub fn undeploy(game: Option<PathBuf>) -> Result<()> {
         None => println!("nothing deployed"),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod validation_message_tests {
+    use super::checked_against_model;
+    use std::path::Path;
+
+    #[test]
+    fn the_message_says_what_was_not_checked_and_names_the_modules() {
+        // The reported defect: "checked 3 override(s)" read as "this mod is known to resolve",
+        // while a mistyped module produces a CDO path nothing finds and a mod that does nothing.
+        let message = checked_against_model(
+            3,
+            Path::new("model.json"),
+            ["Angelscript", "Angelscrpt", "Angelscript"].into_iter(),
+        );
+
+        assert!(message.contains("class and field name(s)"), "{message}");
+        assert!(message.contains("NOT checked"), "{message}");
+        assert!(message.contains("/Script/<module>.Default__<class>"), "{message}");
+
+        // Named, deduplicated and sorted, so a typo stands next to the correct spelling.
+        assert!(message.ends_with("In use: Angelscript, Angelscrpt"), "{message}");
+
+        // And no run of spaces from a mangled line continuation, because this is the one line a
+        // reader is meant to actually read.
+        assert!(!message.contains("  "), "{message}");
+    }
 }
