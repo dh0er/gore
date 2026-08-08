@@ -1086,6 +1086,19 @@ fn check_game_process(probe: &InstallCompileStateProbe) -> Check {
     }
 }
 
+/// What the installed cache's modification time says about the extraction that recorded it.
+///
+/// `SameSecond` is its own answer rather than part of `Untouched`. `extracted_at` is whole seconds
+/// (`now_unix`), so nothing finer survives to compare against — and `gore loc extract` followed
+/// straight away by `gore loc import` lands inside one second routinely. Folding it into "not newer
+/// than the extraction" reported a rewritten cache as healthy.
+enum Written {
+    AfterExtraction,
+    SameSecond,
+    Untouched,
+    NoTimestamp,
+}
+
 /// Does the shared localized-text catalog still describe the installed `.lcache`?
 ///
 /// `gore loc status` reports the source path and size the catalog was extracted from, and that can
@@ -1244,22 +1257,46 @@ fn check_loc_catalog(meta: Option<LocMeta>, catalog: &Path, installed: Option<&P
     // shared format that Mod Studio and the save editor also read — so the modification time is the
     // second signal, and an unchanged length with an untouched mtime is reported as what it is:
     // nothing that looks changed, rather than proof of a match.
-    // `None` where no modification time could be read. Distinct from `Some(false)`: the whole
-    // reason this predicate exists is that length cannot separate an untouched cache from a
-    // same-length rewrite, so a filesystem that gives no timestamp leaves the question open rather
-    // than answering it in the reassuring direction.
-    let modified_after_extraction = |m: &std::fs::Metadata| -> Option<bool> {
-        let since = m
-            .modified()
-            .ok()?
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?;
-        Some(since.as_secs() > meta.extracted_at)
+    // Four answers, not two. Length cannot separate an untouched cache from a same-length
+    // rewrite, so this is the only signal there is — and both ways it can fail to give one have to
+    // stay distinguishable from "unchanged", which is the reassuring direction.
+    let written = |m: &std::fs::Metadata| -> Written {
+        let Ok(modified) = m.modified() else {
+            return Written::NoTimestamp;
+        };
+        let Ok(since) = modified.duration_since(std::time::UNIX_EPOCH) else {
+            return Written::NoTimestamp;
+        };
+        let seconds = since.as_secs();
+        if seconds > meta.extracted_at {
+            Written::AfterExtraction
+        } else if seconds == meta.extracted_at {
+            Written::SameSecond
+        } else {
+            Written::Untouched
+        }
+    };
+
+    let inconclusive = |why: &str| {
+        Check::new(
+            "loc_catalog",
+            "loc catalog",
+            Verdict::Note,
+            format!(
+                "{summary}; the installed cache is the same length, and whether it has been \
+                 rewritten since cannot be told — {why}"
+            ),
+        )
+        .with_items(items.clone())
+        .with_fix(
+            "nothing here says the catalog is stale. If text in the game disagrees with what \
+             'gore loc' shows, run 'gore loc extract' to settle it",
+        )
     };
 
     match std::fs::metadata(installed) {
-        Ok(m) if m.len() == meta.source_bytes && modified_after_extraction(&m) == Some(true) => {
-            Check::new(
+        Ok(m) if m.len() == meta.source_bytes => match written(&m) {
+            Written::AfterExtraction => Check::new(
                 "loc_catalog",
                 "loc catalog",
                 Verdict::Problem,
@@ -1273,32 +1310,22 @@ fn check_loc_catalog(meta: Option<LocMeta>, catalog: &Path, installed: Option<&P
                 "'gore loc import' re-encrypts the cache in place and can leave its length \
                  unchanged. Run 'gore loc extract' so the shared catalog describes the text that \
                  is installed",
-            )
-        }
-        Ok(m) if m.len() == meta.source_bytes && modified_after_extraction(&m).is_none() => {
-            Check::new(
+            ),
+            Written::NoTimestamp => {
+                inconclusive("this filesystem reported no modification time")
+            }
+            Written::SameSecond => inconclusive(
+                "it was last written in the same second the extraction recorded, and the record \
+                 keeps whole seconds only",
+            ),
+            Written::Untouched => Check::new(
                 "loc_catalog",
                 "loc catalog",
-                Verdict::Note,
-                format!(
-                    "{summary}; the installed cache is the same length, and whether it has been \
-                     rewritten since cannot be told — this filesystem reported no modification \
-                     time"
-                ),
+                Verdict::Ok,
+                format!("{summary}; the installed cache is unchanged in size and mtime since then"),
             )
-            .with_items(items)
-            .with_fix(
-                "nothing here says the catalog is stale. If text in the game disagrees with what \
-                 'gore loc' shows, run 'gore loc extract' to settle it",
-            )
-        }
-        Ok(m) if m.len() == meta.source_bytes => Check::new(
-            "loc_catalog",
-            "loc catalog",
-            Verdict::Ok,
-            format!("{summary}; the installed cache is unchanged in size and mtime since then"),
-        )
-        .with_items(items),
+            .with_items(items),
+        },
         Ok(m) => {
             let live = m.len();
             Check::new(
@@ -1844,11 +1871,14 @@ mod tests {
     }
 
     fn meta(source: &Path, bytes: u64) -> LocMeta {
+        // One second AFTER the cache was last written, which is what extracting from an installed
+        // file looks like. Equal timestamps are the ambiguous case, not the healthy one, and a
+        // fixture that used them stood in for a state the tests were not about.
         let extracted_at = std::fs::metadata(source)
             .and_then(|m| m.modified())
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|since| since.as_secs())
+            .map(|since| since.as_secs() + 1)
             .unwrap_or(0);
         LocMeta {
             source_path: source.display().to_string(),
@@ -1884,6 +1914,29 @@ mod tests {
             Some(&cache),
         );
         assert_eq!(fresh.verdict, Verdict::Ok);
+    }
+
+    #[test]
+    fn a_rewrite_inside_the_extraction_second_is_reported_as_undecidable() {
+        // `gore loc extract` immediately followed by `gore loc import` lands in one second
+        // routinely, and the record keeps whole seconds. Truncating to seconds made the two equal,
+        // "not newer than the extraction" then read as untouched, and a rewritten cache came back
+        // healthy.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("AlkimiaLocalization_00000000.lcache");
+        std::fs::write(&cache, vec![0u8; 2048]).unwrap();
+
+        let mut same_second = meta(&cache, 2048);
+        same_second.extracted_at -= 1;
+
+        let check = check_loc_catalog(
+            Some(same_second),
+            &extracted_catalog(dir.path()),
+            Some(&cache),
+        );
+        assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
+        assert!(check.detail.contains("cannot be told"), "{}", check.detail);
+        assert!(check.detail.contains("same second"), "{}", check.detail);
     }
 
     #[test]
