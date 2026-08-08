@@ -1416,13 +1416,27 @@ fn file_names(dir: &Path) -> Result<Vec<String>, String> {
 
 
 /// Windows path identity is case-insensitive, which is the same reason `semantic_install_root`
-/// compares its `G1R` component with `eq_ignore_ascii_case`. Compared lexically: both sides here
-/// are already absolute paths this process resolved, and canonicalizing would introduce the
-/// `\\?\` verbatim prefix that the rest of the toolkit avoids.
+/// compares its `G1R` component with `eq_ignore_ascii_case`. Not canonicalized: that would
+/// introduce the `\\?\` verbatim prefix the rest of the toolkit avoids, and it requires the file to
+/// still exist, which is not something this comparison should depend on.
+///
+/// Compared by component rather than as one string. `gore loc extract --lcache C:/Games/G1R/...`
+/// records forward slashes, `resolve_game_paths` builds the same path with backslashes, and a
+/// single `eq_ignore_ascii_case` over the whole thing then called two spellings of one file two
+/// different installs. `Path::components` splits on either separator on Windows, and drops `.`
+/// components on the way through.
+///
+/// `..` is left in place. Resolving it lexically is wrong wherever a symlink or a junction is
+/// involved, and a path that needs it compares unequal — the safe direction for a check whose only
+/// output is a note telling somebody to re-extract.
 fn same_path(a: &Path, b: &Path) -> bool {
-    a.as_os_str()
-        .to_string_lossy()
-        .eq_ignore_ascii_case(&b.as_os_str().to_string_lossy())
+    let parts = |path: &Path| -> Vec<String> {
+        path.components()
+            .filter(|component| !matches!(component, std::path::Component::CurDir))
+            .map(|component| component.as_os_str().to_string_lossy().to_lowercase())
+            .collect()
+    };
+    parts(a) == parts(b)
 }
 
 fn print_report(report: &Report) {
@@ -1984,6 +1998,30 @@ mod tests {
         );
         assert_eq!(check.verdict, Verdict::Note);
         assert!(check.detail.contains("different file"), "{}", check.detail);
+    }
+
+    #[test]
+    fn two_spellings_of_one_path_are_one_path() {
+        // The reported case: `--lcache` was given forward slashes while `resolve_game_paths` builds
+        // backslashes. Compared as one lowercased string those differ, and the report accused a
+        // perfectly matching catalog of describing another install.
+        #[cfg(windows)]
+        assert!(same_path(
+            Path::new("C:/Games/G1R/Story/Cache/x.lcache"),
+            Path::new(r"C:\Games\G1R\Story\Cache\x.lcache"),
+        ));
+
+        // Case, which was already handled, and a redundant `.`, which was not.
+        assert!(same_path(
+            Path::new("/games/g1r/x.lcache"),
+            Path::new("/Games/./G1R/X.LCACHE"),
+        ));
+
+        // And it still has to be the same file.
+        assert!(!same_path(
+            Path::new("/games/g1r/x.lcache"),
+            Path::new("/games/g1r/other.lcache"),
+        ));
     }
 
     #[test]
