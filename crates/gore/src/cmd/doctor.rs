@@ -947,11 +947,44 @@ fn check_loc_catalog(meta: Option<LocMeta>, installed: Option<&Path>) -> Check {
         );
     }
 
-    match std::fs::metadata(installed).map(|m| m.len()) {
-        Ok(live) if live == meta.source_bytes => {
-            Check::new("loc_catalog", "loc catalog", Verdict::Ok, summary).with_items(items)
-        }
-        Ok(live) => Check::new(
+    // Length alone cannot prove currency: `gore loc import` re-encrypts in place, and replacing a
+    // string with one that encodes to the same number of bytes leaves the file exactly as long as
+    // it was. The catalog carries no content hash to compare against — adding one would change the
+    // shared format that Mod Studio and the save editor also read — so the modification time is the
+    // second signal, and an unchanged length with an untouched mtime is reported as what it is:
+    // nothing that looks changed, rather than proof of a match.
+    let modified_after_extraction = |m: &std::fs::Metadata| {
+        m.modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .is_some_and(|since| since.as_secs() > meta.extracted_at)
+    };
+
+    match std::fs::metadata(installed) {
+        Ok(m) if m.len() == meta.source_bytes && modified_after_extraction(&m) => Check::new(
+            "loc_catalog",
+            "loc catalog",
+            Verdict::Problem,
+            format!(
+                "{summary}, but the installed cache has been written since the extraction — it is \
+                 the same length, so what changed is its contents"
+            ),
+        )
+        .with_items(items)
+        .with_fix(
+            "'gore loc import' re-encrypts the cache in place and can leave its length unchanged. \
+             Run 'gore loc extract' so the shared catalog describes the text that is installed",
+        ),
+        Ok(m) if m.len() == meta.source_bytes => Check::new(
+            "loc_catalog",
+            "loc catalog",
+            Verdict::Ok,
+            format!("{summary}; the installed cache is unchanged in size and mtime since then"),
+        )
+        .with_items(items),
+        Ok(m) => {
+            let live = m.len();
+            Check::new(
             "loc_catalog",
             "loc catalog",
             Verdict::Problem,
@@ -966,7 +999,8 @@ fn check_loc_catalog(meta: Option<LocMeta>, installed: Option<&Path>) -> Check {
             "the cache changed after the extraction — 'gore loc import' re-encrypts it in place, \
              and a game update replaces it. Run 'gore loc extract' so the shared catalog describes \
              the file that is actually installed",
-        ),
+        )
+        }
         Err(error) => Check::new(
             "loc_catalog",
             "loc catalog",
@@ -1393,13 +1427,23 @@ mod tests {
         assert_eq!(check_game_process(&probe(root, false)).verdict, Verdict::Ok);
     }
 
+    /// `extracted_at` comes from the source file rather than staying at zero, because that is
+    /// the order reality has: `gore loc extract` reads a cache that already exists, so the file
+    /// it read is never newer than the extraction. A fixture stuck at the epoch makes every file
+    /// look rewritten since, which is the opposite of the fresh case these tests describe.
     fn meta(source: &Path, bytes: u64) -> LocMeta {
+        let extracted_at = std::fs::metadata(source)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|since| since.as_secs())
+            .unwrap_or(0);
         LocMeta {
             source_path: source.display().to_string(),
             source_bytes: bytes,
             id_count: 43851,
             languages: vec!["german".into(), "english".into()],
-            extracted_at: 0,
+            extracted_at,
             catalog_path: r"C:\Users\x\AppData\Local\gore\loc_catalog.json".into(),
         }
     }
@@ -1420,6 +1464,31 @@ mod tests {
 
         let fresh = check_loc_catalog(Some(meta(&cache, 2048)), Some(&cache));
         assert_eq!(fresh.verdict, Verdict::Ok);
+    }
+
+    #[test]
+    fn a_loc_catalog_whose_source_was_rewritten_at_the_same_length_is_stale_too() {
+        // The case length alone cannot see: `gore loc import` re-encrypts in place, and a
+        // replacement string that encodes to the same number of bytes leaves the file exactly as
+        // long as it was. Caught through the modification time, because the catalog carries no
+        // content hash and adding one would change a format Mod Studio and the save editor read.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("AlkimiaLocalization_00000000.lcache");
+        std::fs::write(&cache, vec![0u8; 2048]).unwrap();
+
+        // Extracted a minute before the rewrite that follows, and at the very same length.
+        let mut before = meta(&cache, 2048);
+        before.extracted_at = before.extracted_at.saturating_sub(60);
+        std::fs::write(&cache, vec![1u8; 2048]).unwrap();
+
+        let check = check_loc_catalog(Some(before), Some(&cache));
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(
+            check.detail.contains("same length"),
+            "the detail says why length did not catch it: {}",
+            check.detail
+        );
+        assert!(check.fix.unwrap().contains("gore loc extract"));
     }
 
     #[test]

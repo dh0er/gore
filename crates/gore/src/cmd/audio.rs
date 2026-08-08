@@ -464,71 +464,80 @@ pub fn extract(
     // `SFX.bank` that was 7,218 identical stderr lines (~400 KB) describing one fact. The first
     // sample to hit a reason is named, which is what a single-sample run needs, and the count says
     // how far it went.
-    // Decode into staging files first, then move them into place together. Two requirements pull
-    // against each other and this is what satisfies both.
+    // Each WAV is published with an atomic create-if-absent open, and a failure removes whatever
+    // this run already wrote. Three requirements meet here and only this shape satisfies all of
+    // them.
     //
-    // A collision must not leave partial output: refusing inside the write loop meant a clash on
-    // the fifth sample left four WAVs behind, and the obvious retry then failed on one of those
-    // instead of on the file the caller actually had to deal with.
+    // Never overwrite. A separate `exists()` check followed by a write is a race: `std::fs::rename`
+    // replaces an existing destination on every platform this ships to — the comment on
+    // `write_atomic` above says so — so an editor or a second extraction that created the file in
+    // between would lose it. `create_new(true)` asks the filesystem the question and takes the file
+    // in one operation, so there is no window to lose.
     //
-    // And a collision must only be raised for a file this run would really write. Whether a sample
-    // yields audio at all is known only after `extract_wav` has tried, because a codec it cannot
-    // read is skipped — so planning every selected sample's destination up front refused runs over
-    // leftovers belonging to samples that were never going to be written.
+    // Only refuse for files this run would really write. Whether a sample yields audio is known
+    // only after `extract_wav` has tried, because a codec it cannot read is skipped — so planning
+    // every selected destination up front refused runs over leftovers belonging to samples that
+    // were never going to be written. Opening the destination only once there are bytes for it
+    // makes the question exact.
     //
-    // Staging answers both: what lands in the staging set is exactly what was produced, and nothing
-    // reaches its final name until every one of them is known to be free. `.gore-tmp` is the same
-    // suffix `write_atomic` uses above, and staging beside the destination keeps the final move a
-    // rename within one directory.
+    // Leave nothing behind on failure. A collision on the fifth sample used to leave four WAVs
+    // written, and the obvious retry then failed on one of those rather than on the file the caller
+    // had to deal with.
     //
     // Prefix with the sample index so two names that sanitize to the same basename (e.g. differing
     // only by punctuation) do not collide and silently overwrite.
     let (mut ok, mut skipped) = (0usize, 0usize);
     let mut skips: BTreeMap<String, (usize, usize)> = BTreeMap::new();
-    let mut staged: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut published: Vec<PathBuf> = Vec::new();
 
-    let discard = |staged: &[(PathBuf, PathBuf)]| {
-        for (tmp, _) in staged {
-            let _ = std::fs::remove_file(tmp);
+    // Best effort by nature: the run has already failed, and a file that cannot be removed is not a
+    // reason to fail differently. Order does not matter — these are independent files.
+    let roll_back = |published: &[PathBuf]| {
+        for path in published {
+            let _ = std::fs::remove_file(path);
         }
     };
 
     for i in indices {
-        match view.extract_wav(i) {
-            Ok(wav) => {
-                let dest = out.join(format!("{i}_{}.wav", sanitize(&view.samples[i].name)));
-                let tmp = dest.with_extension("gore-tmp");
-                if let Err(error) = std::fs::write(&tmp, &wav) {
-                    discard(&staged);
-                    return Err(error).with_context(|| format!("writing '{}'", tmp.display()));
-                }
-                staged.push((tmp, dest));
-                ok += 1;
-            }
+        let wav = match view.extract_wav(i) {
+            Ok(wav) => wav,
             Err(e) => {
                 skipped += 1;
                 let seen = skips.entry(e).or_insert((0, i));
                 seen.0 += 1;
+                continue;
             }
-        }
-    }
+        };
 
-    if let Some((_, dest)) = staged.iter().find(|(_, dest)| dest.exists()) {
-        let dest = dest.clone();
-        discard(&staged);
-        bail!(
-            "'{}' already exists; extract writes one file per sample under a name taken from the \
-             bank, so this would replace it. Nothing was written. Delete it, or pass a different \
-             --out.",
-            dest.display()
-        );
-    }
-
-    for (tmp, dest) in &staged {
-        if let Err(error) = std::fs::rename(tmp, dest) {
-            discard(&staged);
+        let dest = out.join(format!("{i}_{}.wav", sanitize(&view.samples[i].name)));
+        let mut file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&dest)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                roll_back(&published);
+                bail!(
+                    "'{}' already exists; extract writes one file per sample under a name taken \
+                     from the bank, so this would replace it. Nothing was written. Delete it, or \
+                     pass a different --out.",
+                    dest.display()
+                );
+            }
+            Err(error) => {
+                roll_back(&published);
+                return Err(error).with_context(|| format!("creating '{}'", dest.display()));
+            }
+        };
+        if let Err(error) = file.write_all(&wav) {
+            drop(file);
+            let _ = std::fs::remove_file(&dest);
+            roll_back(&published);
             return Err(error).with_context(|| format!("writing '{}'", dest.display()));
         }
+        published.push(dest);
+        ok += 1;
     }
     for (reason, (count, first)) in &skips {
         eprintln!(
