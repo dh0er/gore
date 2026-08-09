@@ -2263,17 +2263,23 @@ fn find_backups(gp: &GamePaths) -> Result<BackupScan, String> {
     let mut found: Vec<String> = Vec::new();
     let mut occupied: Vec<String> = Vec::new();
     for dir in &dirs {
-        // Every entry, not `file_names`: that one keeps only files, so a DIRECTORY sitting on a
-        // backup name was skipped here in silence — and an in-place edit writes exactly that path.
-        for entry in mods_entries(dir)? {
-            if !entry.name.ends_with(".gore-bak") {
-                continue;
-            }
-            let path = dir.join(&entry.name).display().to_string();
-            match entry.is_file {
-                true => found.push(path),
-                false => occupied.push(path),
-            }
+        // Read with `symlink_metadata` and sorted by the same rule the walk below uses. Neither
+        // `file_names` nor `mods_entries` can answer this: both resolve through a link, so a
+        // `*.gore-bak` link came out as an ordinary backup — and the deploy step refuses exactly
+        // that, which would have left the report recommending a restore that cannot run.
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("{} could not be read: {error}", dir.display())),
+        };
+        for entry in entries {
+            let entry =
+                entry.map_err(|error| format!("{} could not be read: {error}", dir.display()))?;
+            let path = entry.path();
+            let kind = std::fs::symlink_metadata(&path)
+                .map_err(|error| format!("{} could not be read: {error}", path.display()))?
+                .file_type();
+            sort_backup(&path, &kind, &mut found, &mut occupied);
         }
     }
 
@@ -2293,6 +2299,36 @@ fn find_backups(gp: &GamePaths) -> Result<BackupScan, String> {
     occupied.sort();
     occupied.dedup();
     Ok(BackupScan { found, occupied, complete })
+}
+
+/// Sort one entry by the rule `gore_mod`'s backup step applies, and say whether it took it.
+///
+/// That step calls `symlink_metadata` on the `*.gore-bak` path and refuses a link OR a non-file
+/// (`gore-mod/src/lib.rs`, the `metadata_is_link(&metadata) || !metadata.is_file()` guard). So both
+/// are blockers, and neither is a pristine copy anything can restore from — a link least of all,
+/// since the bytes at the end of it belong to whatever it points at.
+///
+/// One function because the two halves of the scan reach the same names by different routes: the
+/// four fixed folders list one level, the `Content`/`Config` walk recurses. They disagreed once
+/// already — the fixed half classified through the link and the walking half skipped links before
+/// it ever looked at the name.
+fn sort_backup(
+    path: &Path,
+    kind: &std::fs::FileType,
+    found: &mut Vec<String>,
+    occupied: &mut Vec<String>,
+) -> bool {
+    let is_backup_name = path
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().ends_with(".gore-bak"));
+    if !is_backup_name {
+        return false;
+    }
+    match kind.is_file() {
+        true => found.push(path.display().to_string()),
+        false => occupied.push(path.display().to_string()),
+    }
+    true
 }
 
 /// What a scan of the install's backup locations found, and whether it got to the end.
@@ -2349,15 +2385,13 @@ fn find_backups_under(
         // was descended into and never reported, so an empty one produced "no leftover backups" —
         // while an in-place `gore audio replace` writes exactly that path and fails on it, with
         // the report having just said nothing was in the way.
-        let is_backup_name = path
-            .file_name()
-            .is_some_and(|name| name.to_string_lossy().ends_with(".gore-bak"));
-        if is_backup_name {
-            match kind.is_file() {
-                true => found.push(path.display().to_string()),
-                false => occupied.push(path.display().to_string()),
-            }
-        } else if kind.is_dir() {
+        if sort_backup(&path, &kind, found, occupied) {
+            continue;
+        }
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
             complete &= find_backups_under(&path, found, occupied, budget)?;
         }
     }
@@ -3144,6 +3178,26 @@ mod tests {
         assert!(fix.contains("Remove or rename"), "{fix}");
         assert!(!fix.contains("gore audio restore"), "nothing restores from a directory: {fix}");
 
+        // A LINK on a backup name is the same blocker, in both halves of the scan: the deploy
+        // step refuses a link there as flatly as a directory, and the bytes at the end of one
+        // belong to whatever it points at, so nothing restores from it either. The walking half
+        // skipped links before it ever looked at the name; the fixed half resolved through them
+        // and called the target an ordinary backup.
+        std::fs::remove_dir(banks.join("SFX.bank.gore-bak")).unwrap();
+        let elsewhere = root.join("somewhere-else.bin");
+        std::fs::write(&elsewhere, b"not a pristine copy").unwrap();
+        if try_symlink_file(&elsewhere, &banks.join("SFX.bank.gore-bak")).is_ok() {
+            let check = check_leftovers(&paths(root), &probe(root, false), &nothing_deployed());
+            assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+            assert!(
+                check.items.iter().any(|item| item.contains("SFX.bank.gore-bak")),
+                "{:?}",
+                check.items
+            );
+            std::fs::remove_file(banks.join("SFX.bank.gore-bak")).unwrap();
+        }
+        std::fs::create_dir_all(banks.join("SFX.bank.gore-bak")).unwrap();
+
         // And it survives the branches that answer with a note about something else. A deploy
         // record nobody could read does not make the directory less of a blocker, and reporting
         // the note instead hid it — the same mistake as sitting below the all-clear, one branch
@@ -3548,6 +3602,19 @@ mod tests {
         // The control: a name nothing holds is still absent.
         let free = dir.path().join("nothing-here");
         assert!(matches!(occupant(&free, Wanted::Folder), Ok(Occupant::Absent)));
+    }
+
+    /// A symlink at `link` pointing at a FILE. Separate from the directory helper because
+    /// Windows needs to be told which of the two it is making.
+    fn try_symlink_file(target: &Path, link: &Path) -> std::io::Result<()> {
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_file(target, link)
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link)
+        }
     }
 
     /// A symlink at `link` pointing at `target`, which need not exist.
