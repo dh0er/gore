@@ -329,22 +329,20 @@ fn bank_shape_within(b: &[u8], file_len: usize) -> Result<BankShape, String> {
     }
     let version = u32_le(b, 0x14); // bank version (lives in FMT body)
 
-    // top-level RIFF chunk walk from 0x0C: fourcc(4) + u32_le size(4) + body.
-    let list_body = {
-        let mut off = 0x0C;
-        let mut found = None;
-        while off + 8 <= b.len() {
-            let fourcc = &b[off..off + 4];
-            let size = u32_le(b, off + 4) as usize;
-            let body = off + 8;
-            if fourcc == b"LIST" {
-                found = Some(body);
-                break;
-            }
-            off = body + size;
-        }
-        found.ok_or("no top-level LIST chunk")?
-    };
+    // The top-level chunk walk, shared with the one the on-disk route uses. It was written out
+    // again here, which cost twice: the bound added to the shared one did not apply, so a damaged
+    // 260 MB bank whose chunks all declare zero still stepped through it 8 bytes at a time; and
+    // the two copies had to be kept to the same rule by hand. `TopWalk::Any` is exactly what this
+    // loop did — follow every declared size, with no guard on the fourcc.
+    let list_body = find_top_list_with(b.len(), TopWalk::Any, &mut |off| {
+        Ok(b.get(off..off + 8).map(|header| {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(header);
+            bytes
+        }))
+    })
+    .map(|(off, _)| off + 8)
+    .map_err(|_| "no top-level LIST chunk".to_string())?;
 
     if list_body + 8 > b.len() {
         return Err("truncated LIST chunk (no room for PROJ/BNKI)".into());
@@ -2774,6 +2772,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(needed, 0, "there is no LIST to find, so nothing more should be read");
+
+        // `bank_shape_within` had its own copy of this walk, so the bound above did not reach the
+        // in-memory route at all. It shares the walker now; what a test can pin is that sharing it
+        // did not change the verdict.
+        let error = bank_summary(&bank, GOTHIC_STUDIO_KEY).unwrap_err();
+        assert!(error.contains("no top-level LIST chunk"), "{error}");
         assert!(
             (probe.len() + read) * 20 < bank.len(),
             "locating the wrapper touched {} of {} bytes",
