@@ -1474,8 +1474,20 @@ pub fn extract_ogg(block: &[u8], fsb: &Fsb5, index: usize) -> Result<Vec<u8>, St
     let s = fsb.samples.get(index).ok_or("sample index out of range")?;
     let crc = s.vorbis_crc32.ok_or("sample has no Vorbis setup CRC32")?;
     let start = (fsb.data_section + s.data_offset) as usize;
-    let end = (start + s.size as usize).min(block.len());
-    let audio = block.get(start..end).ok_or("sample data out of range")?;
+    // Refused, not clamped — the same fix the PCM arm just took, and this is the arm that matters
+    // for the shipped banks, which are all Vorbis. Clamping handed `extract_packets` a complete
+    // packet prefix, which it accepts and remuxes with an EOS page: a playable Ogg, quietly
+    // missing its tail, reported as a success.
+    let end = start
+        .checked_add(s.size as usize)
+        .ok_or("sample extent out of range (corrupt bank)")?;
+    let audio = block.get(start..end).ok_or_else(|| {
+        format!(
+            "sample '{}' runs to {end} and the block holds {}: the bank is truncated",
+            s.name,
+            block.len()
+        )
+    })?;
     vorbis::fsb_vorbis_to_ogg(s.channels, s.freq, crc, s.num_samples as u64, audio)
 }
 
@@ -2566,6 +2578,40 @@ mod tests {
             error.contains("truncated") || error.contains("out of range"),
             "the error has to name the shape of the damage, got {error:?}"
         );
+    }
+
+    #[test]
+    fn truncated_vorbis_is_refused_too_and_not_only_the_pcm_arm() {
+        // The fixture builder makes PCM16 banks, so the truncation test above cannot reach this
+        // arm — and this is the arm that matters for the shipped banks, which are all Vorbis.
+        // Clamping there handed the remuxer a complete packet prefix, which it accepts and closes
+        // with an EOS page: a playable Ogg quietly missing its tail, reported as a success.
+        let fsb = Fsb5 {
+            version: 1,
+            codec: Codec::Vorbis,
+            data_section: 0,
+            samples: vec![Fsb5Sample {
+                name: "SFX_Truncated".to_string(),
+                data_offset: 0,
+                size: 4096,
+                freq: 44_100,
+                channels: 1,
+                num_samples: 2048,
+                vorbis_crc32: Some(0x1234_5678),
+            }],
+        };
+
+        // Half the audio the sample declares.
+        let short = vec![0u8; 2048];
+        let error = extract_ogg(&short, &fsb, 0).unwrap_err();
+        assert!(error.contains("truncated"), "{error}");
+        assert!(error.contains("SFX_Truncated"), "the sample has to be named: {error}");
+
+        // The control: with the declared bytes present it gets past the bounds check and fails on
+        // the payload instead, which is a different sentence about a different thing.
+        let whole = vec![0u8; 4096];
+        let error = extract_ogg(&whole, &fsb, 0).unwrap_err();
+        assert!(!error.contains("truncated"), "{error}");
     }
 
     #[test]
