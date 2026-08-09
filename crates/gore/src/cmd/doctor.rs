@@ -1040,13 +1040,21 @@ fn check_deployment(gp: &GamePaths, library: &Path, loadout_path: &Path) -> Chec
             "run 'gore mgr reset' (or 'gore mod undeploy') to restore the game before deploying \
              anything else",
         ),
+        // A Problem with no fix is half a report, and this type's own contract says so: what was
+        // looked at, what was found, and what to do about it.
         Err(error) => Check::new(
             "deployment",
             "deployment",
             Verdict::Problem,
             format!("the deploy record could not be read: {error}"),
         )
-        .with_items(items),
+        .with_items(items)
+        .with_fix(
+            "that record is how 'gore mod undeploy' and 'gore mgr reset' know what to put back, \\
+             so deploy nothing further until it can be read. Run the same command from a shell \\
+             that can read the install; if the file itself is damaged, the deployment has to be \\
+             undone by hand from the *.gore-bak files the leftovers check lists",
+        ),
     }
 }
 
@@ -1058,7 +1066,24 @@ fn check_deployment(gp: &GamePaths, library: &Path, loadout_path: &Path) -> Chec
 fn check_mods_folder(gp: &GamePaths) -> Check {
     let dir = gore_tex::container::mods_dir(&gp.root);
     let dir_present = match present(&dir) {
-        Ok(metadata) => metadata.is_some_and(|metadata| metadata.is_dir()),
+        Ok(Some(metadata)) if metadata.is_dir() => true,
+        // Something is there and it is not a folder. Reduced to `false`, this reported "no ~mods
+        // (nothing additive is mounted)" as an `ok` — while `container::deploy` cannot create the
+        // directory it needs and every additive texture or DataAsset deployment fails against a
+        // report that said the path was simply empty.
+        Ok(Some(_)) => {
+            return Check::new(
+                "mods_folder",
+                "~mods",
+                Verdict::Problem,
+                format!("{} is a file, not a folder", dir.display()),
+            )
+            .with_fix(
+                "the game mounts additive overrides from that folder, and a deploy cannot create \\
+                 it while a file occupies its path. Remove or rename that file, then deploy again",
+            );
+        }
+        Ok(None) => false,
         Err(error) => {
             return Check::new(
                 "mods_folder",
@@ -2927,6 +2952,48 @@ mod tests {
             check.items
         );
         assert!(check.fix.unwrap().contains("stopped partway"));
+    }
+
+    #[test]
+    fn a_file_where_the_mods_folder_belongs_is_a_problem_not_an_absence() {
+        // `container::deploy` creates `~mods` when it is missing and cannot when a file sits at
+        // that path. Reduced to "not a directory", this reported the blockage as an empty folder
+        // and an `ok`, while every additive deployment failed against it.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        let mods = gore_tex::container::mods_dir(&gp.root);
+        std::fs::create_dir_all(mods.parent().unwrap()).unwrap();
+        std::fs::write(&mods, b"not a folder").unwrap();
+
+        let check = check_mods_folder(&gp);
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("is a file, not a folder"), "{}", check.detail);
+        assert!(check.fix.unwrap().contains("Remove or rename"));
+    }
+
+    #[test]
+    fn every_problem_this_report_can_produce_carries_a_fix() {
+        // The type's own contract: what was looked at, what was found, and what to do about it.
+        // A Problem with no next step is the half of a report nobody can act on, and one arm had
+        // gone without since it was written.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        std::fs::write(gore_mod::deploy_record_path(&gp.root), b"{ not a record").unwrap();
+
+        let check = check_deployment(
+            &gp,
+            &dir.path().join("library"),
+            &dir.path().join("loadout.json"),
+        );
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(
+            check.fix.is_some_and(|fix| fix.contains("gore mod undeploy")),
+            "a Problem must say what to do next"
+        );
     }
 
     #[test]
