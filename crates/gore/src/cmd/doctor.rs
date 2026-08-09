@@ -1123,7 +1123,10 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
             format!("no {} (nothing additive is mounted)", dir.display()),
         );
     }
-    let mut names = match file_names(&dir) {
+    // Every entry, not only the regular files. A `~mods` holding nothing but a subdirectory was
+    // reported empty and healthy, though whatever is in there is as much a thing sitting in the
+    // mount folder as a stray file is — and the engine reads neither.
+    let mut names = match entry_names(&dir) {
         Ok(names) => names,
         Err(error) => {
             return Check::new(
@@ -1943,6 +1946,25 @@ fn find_backups_under(
 /// installs where this happens — permissions, a half-mounted drive, I/O errors — are exactly the
 /// ones it exists for. Per-entry failures count the same way; a directory half-read is not a
 /// directory read.
+/// Every entry directly in `dir`, files and directories alike.
+///
+/// `file_names` answers what the backup scan needs — a `*.gore-bak` is a file — and dropping
+/// everything else made `~mods` report a folder holding only a subdirectory as empty.
+fn entry_names(dir: &Path) -> Result<Vec<String>, String> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("{} could not be read: {error}", dir.display())),
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| format!("{} could not be read: {error}", dir.display()))?;
+        names.push(entry.file_name().to_string_lossy().into_owned());
+    }
+    Ok(names)
+}
+
 fn file_names(dir: &Path) -> Result<Vec<String>, String> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -2885,6 +2907,30 @@ mod tests {
         std::fs::write(mods.join("zzz_MyTextures_P.pak"), b"pak").unwrap();
         let some = check_mods_folder(&gp);
         assert_eq!(some.items, ["zzz_MyTextures_P.pak"]);
+    }
+
+    #[test]
+    fn a_directory_in_mods_is_reported_rather_than_ignored() {
+        // Listing only regular files made a `~mods` holding nothing but a subdirectory come back
+        // as empty and healthy, though whatever is in there sits in the mount folder exactly as a
+        // stray file would — and the engine reads neither.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        let mods = gore_tex::container::mods_dir(&gp.root);
+        std::fs::create_dir_all(mods.join("leftover_extract_dir")).unwrap();
+
+        let check = check_mods_folder(&gp);
+        assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
+        assert!(
+            check
+                .items
+                .iter()
+                .any(|item| item.contains("leftover_extract_dir") && item.contains("not mounted")),
+            "{:?}",
+            check.items
+        );
     }
 
     #[test]

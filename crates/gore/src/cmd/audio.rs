@@ -611,10 +611,27 @@ pub fn extract(
             }
         };
         if let Err(error) = file.write_all(&wav) {
+            // The digest that identifies a finished file cannot identify this one: the write
+            // failed partway, so what is on disk is a prefix of unknown length. What can still be
+            // told is whether the path leads to the file this run opened, which is the same
+            // question and the only one that matters before deleting anything.
+            let ours = still_the_same_file(&file, &dest);
             drop(file);
-            let _ = std::fs::remove_file(&dest);
+            if ours {
+                let _ = std::fs::remove_file(&dest);
+            }
             roll_back(&published);
-            return Err(error).with_context(|| format!("writing '{}'", dest.display()));
+            return Err(error).with_context(|| match ours {
+                true => format!("writing '{}'", dest.display()),
+                // Left in place on purpose, and said so: something replaced the file between
+                // `create_new` opening it and this write failing, and deleting a file this run did
+                // not write is worse than leaving a partial one somebody can see and remove.
+                false => format!(
+                    "writing '{}' — something else replaced that file while it was being written, \
+                     so it was left as it is",
+                    dest.display()
+                ),
+            });
         }
         // Taken from the buffer, not from the file: this is what was written, with no window
         // between writing it and identifying it.
@@ -671,6 +688,44 @@ impl Published {
             return false;
         };
         digest_of(&bytes) == self.digest
+    }
+}
+
+/// A file's identity as this platform's stable API can express it.
+///
+/// Unix has the real thing — inode and device. Windows exposes `file_index`/`volume_serial_number`
+/// only behind an unstable feature, so the creation and last-write times stand in: both are
+/// 100-nanosecond NTFS values, and a file that replaced ours between `create_new` and a failed
+/// write would have to have been created at the very same tick to pass for it. That is a far
+/// narrower residual than the one it replaces, and it is stated rather than assumed.
+///
+/// `None` where nothing can be had, and `None` never compares equal to `None` in the use below:
+/// where identity cannot be established, nothing is deleted.
+#[cfg(windows)]
+fn identity_of(metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
+    use std::os::windows::fs::MetadataExt as _;
+    Some((metadata.creation_time(), metadata.last_write_time()))
+}
+
+#[cfg(unix)]
+fn identity_of(metadata: &std::fs::Metadata) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt as _;
+    Some((metadata.ino(), metadata.dev()))
+}
+
+#[cfg(not(any(windows, unix)))]
+fn identity_of(_: &std::fs::Metadata) -> Option<(u64, u64)> {
+    None
+}
+
+/// Whether the path still leads to the file this handle holds. `false` when either side cannot be
+/// identified, so an unknown answer never authorises a delete.
+fn still_the_same_file(file: &std::fs::File, path: &Path) -> bool {
+    let held = file.metadata().ok().and_then(|m| identity_of(&m));
+    let there = std::fs::metadata(path).ok().and_then(|m| identity_of(&m));
+    match (held, there) {
+        (Some(held), Some(there)) => held == there,
+        _ => false,
     }
 }
 
