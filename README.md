@@ -18,6 +18,43 @@
 The Flutter GUIs reuse the exact same Rust crates as the CLI through a
 `dart:ffi` bridge — the CLI is always the most complete surface.
 
+## What GORE can change, and what it cannot
+
+Two different things are worth keeping apart, because "the tests pass" and
+"somebody saw it in the game" are not the same claim. Every row below is
+sourced from the linked page, which carries the exact build ids and wording.
+
+| Area | What it changes | Has it been seen in the game? |
+|---|---|---|
+| [Item & stat values](docs/guide/items.md) | class defaults, as a UE4SS Lua mod | **Yes** — the running game writes one `UE4SS.log` line per applied override |
+| [Text & dialogs](docs/guide/text-and-dialogs.md) | the encrypted `.lcache`, in place | **Yes** — on BuildID 24539464, in both directions |
+| [Audio](docs/guide/audio.md) | samples inside FMOD `.bank` files | **Yes** — five `SFX.bank` samples and the menu music, heard on 24539464 |
+| [Voice-over](docs/guide/voice.md) | `replace` a recording in a language ZIP | **Yes** — two Diego lines, heard on 24539464 |
+| [Textures](docs/guide/textures.md) | additive UE5 IoStore triplet in `~mods\` | **Yes** — the main-menu logo, on 24539464, and it survived a game update |
+| [DataAssets](docs/guide/dataassets.md) | cooked DataAsset leaves, receipt-sealed | **Yes** — two edits watched on 2026-08-07 |
+| [Dialog topics](docs/guide/dialog-authoring.md) | a compiled AngelScript topic in a conversation | **Once**, on game 1.0.3 — with named gaps; read the status table on that page first |
+| [Bundling & deploying](docs/guide/bundles.md) | all of the above as one transactional unit | **Yes** — undeploy restored the 123 MB script cache to its recorded SHA-256, 92 of 93 saves byte-identical |
+
+Offline and needing no game running: [`doctor`](docs/guide/getting-started.md)
+(diagnose the setup), [`find`](docs/guide/find.md) (search the catalogs and the
+effect register), `location`, and the catalog builders.
+
+**What it cannot do:**
+
+- **Blueprint-generated exports.** A class whose name ends in `_C` has no schema
+  in the USMAP and cannot be bound — `inspect` refuses it rather than guessing.
+- **Voice on a new dialog line.** `voice add` writes a valid archive member, but
+  nothing plays a brand-new voice path until an authored topic speaks it, and
+  recorded voice on an authored topic is exactly what the dialog proof does not
+  certify. Replacing an existing recording is the path with evidence behind it.
+- **Edit your saves.** That is the [Save Editor](apps/save-editor/README.md).
+  The CLI has no save command and does not even link the save library.
+- **Install UE4SS.** Item and stat overrides do nothing without it, and GORE
+  neither ships nor installs it — `gore doctor` only tells you whether it is
+  there. See the UE4SS section of [Getting started](docs/guide/getting-started.md).
+- **Promise any of this on a build nobody has run it on.** The observations
+  above are one person, one install, and the build ids they name.
+
 ## Quick start
 
 Get `gore.exe` from a `gore-cli-v*`
