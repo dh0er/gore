@@ -83,6 +83,31 @@ pub fn notes_path(save_path: &Path) -> PathBuf {
         .join("npc_placements.json")
 }
 
+/// The note key for one backup FILE.
+///
+/// The same file name can exist twice — beside the save (the legacy location)
+/// and in `goresave_backups` — and both are listed and restorable. Keying on the
+/// name alone would let a snapshot of either overwrite the other's notes and let
+/// a restore install the wrong ones, so the copy that is NOT in the backups
+/// folder carries a prefix. The prefix is not a path: it must stay stable if the
+/// folder moves, exactly like the file-name keys around it.
+pub fn backup_key(save_path: &Path, backup_path: &Path) -> Option<String> {
+    let name = backup_path.file_name()?.to_str()?;
+    let in_backups_folder = backup_path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|folder| folder.to_str())
+        .is_some_and(|folder| folder == "goresave_backups");
+    // A path with no parent cannot be told apart; treat it as the save's own
+    // folder, which is where a bare file name resolves anyway.
+    let _ = save_path;
+    Some(if in_backups_folder {
+        name.to_string()
+    } else {
+        format!("beside-save/{name}")
+    })
+}
+
 fn save_key(save_path: &Path) -> String {
     save_path
         .file_name()
@@ -264,9 +289,10 @@ pub fn carry(source: &Path, destination: &Path) -> Result<(), CoreError> {
 /// lives inside `goresave_backups`, so deriving its note location from its own
 /// path would look for a second `goresave_backups` in there.
 pub fn snapshot_backup(save_path: &Path, backup_path: &Path) -> Result<(), CoreError> {
-    let Some(key) = backup_path.file_name().and_then(|value| value.to_str()) else {
+    let Some(key) = backup_key(save_path, backup_path) else {
         return Ok(());
     };
+    let key = key.as_str();
     // Wholesale, including the empty set. A backup file name can be reused —
     // delete and recreate inside the same timestamp second, or an earlier
     // cleanup that failed — and returning early would let the new backup inherit
@@ -473,15 +499,42 @@ mod tests {
         let dir = tempdir().unwrap();
         let save = dir.path().join("G1R-001.sav");
         let backup = dir.path().join("G1R-001.sav.bak.1");
+        let key = backup_key(&save, &backup).unwrap();
         record(&save, &[("Npc-A".to_string(), note())]).unwrap();
         snapshot_backup(&save, &backup).unwrap();
-        assert!(!read_notes_for(&save, "G1R-001.sav.bak.1").is_empty());
+        assert!(!read_notes_for(&save, &key).is_empty());
 
         // The live save is unpinned again, and the name is reused.
         clear(&save, &["Npc-A".to_string()]).unwrap();
         snapshot_backup(&save, &backup).unwrap();
 
-        assert!(read_notes_for(&save, "G1R-001.sav.bak.1").is_empty());
+        assert!(read_notes_for(&save, &key).is_empty());
+    }
+
+    #[test]
+    fn two_backups_of_one_name_in_two_locations_keep_separate_notes() {
+        // The same file name exists beside the save (legacy) and inside
+        // goresave_backups, and both are listed and restorable. One key for both
+        // would let a snapshot of either overwrite the other's undo metadata.
+        let dir = tempdir().unwrap();
+        let save = dir.path().join("G1R-001.sav");
+        let beside = dir.path().join("G1R-001.sav.bak.1");
+        let inside = dir
+            .path()
+            .join("goresave_backups")
+            .join("G1R-001.sav.bak.1");
+
+        let beside_key = backup_key(&save, &beside).unwrap();
+        let inside_key = backup_key(&save, &inside).unwrap();
+        assert_ne!(beside_key, inside_key);
+
+        record(&save, &[("Npc-A".to_string(), note())]).unwrap();
+        snapshot_backup(&save, &beside).unwrap();
+        clear(&save, &["Npc-A".to_string()]).unwrap();
+        snapshot_backup(&save, &inside).unwrap();
+
+        assert_eq!(read_notes_for(&save, &beside_key).get("Npc-A"), Some(&note()));
+        assert!(read_notes_for(&save, &inside_key).is_empty());
     }
 
     #[test]

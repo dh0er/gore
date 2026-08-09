@@ -556,35 +556,45 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             // has to capture what those pins replaced too — otherwise undoing a
             // pin later spends the only copy. Reported beside a completed write,
             // never turning one into a failure.
-            if let Some(backup) = result["backupPath"].as_str() {
-                if let Err(err) = placement::snapshot_backup(&path, Path::new(backup)) {
-                    result["placementNoteWarning"] = Value::String(err.to_string());
-                }
-            }
+            // The write snapshots its own backup's notes, before the guarded
+            // replace that can still abort; whatever it reports is the first
+            // entry here.
+            let mut note_warnings: Vec<String> = result["placementNoteWarning"]
+                .as_str()
+                .map(|warning| vec![warning.to_string()])
+                .unwrap_or_default();
             // Against the file the bytes actually landed in. With an outputPath
             // the move lives in the export, so the notes belong beside the
             // export — recording them against the source would leave the export
             // with no undo and give the untouched source a note for a move it
             // does not contain.
             let note_target = output_path.as_deref().unwrap_or(&path);
-            let outcome = (|| -> Result<(), CoreError> {
-                if note_target != path {
-                    // The export is a wholesale copy, so it starts from the
-                    // source's WHOLE note set — otherwise another NPC pinned in
-                    // the source arrives pinned with no undo, and notes left by
-                    // an earlier file of that name survive. This request's own
-                    // records and clears are the delta on top.
-                    placement::carry(&path, note_target)?;
+            if note_target != path {
+                // The export is a wholesale copy, so it starts from the source's
+                // WHOLE note set — otherwise another NPC pinned in the source
+                // arrives pinned with no undo, and notes left by an earlier file
+                // of that name survive. This request's own records and clears
+                // are the delta on top.
+                if let Err(err) = placement::carry(&path, note_target) {
+                    note_warnings.push(err.to_string());
                 }
-                if !placement_records.is_empty() || !placement_clears.is_empty() {
-                    placement::record(note_target, &placement_records)?;
-                    placement::clear(note_target, &placement_clears)?;
-                }
-                Ok(())
-            })();
-            if let Err(err) = outcome {
-                result["placementNoteWarning"] = Value::String(err.to_string());
             }
+            // Attempted even when the seeding above failed. These notes describe
+            // the move this very write put on disk, so they are the ones that
+            // matter most; letting an unreadable source sidecar suppress them
+            // would land pinned bytes with no undo at all.
+            if !placement_records.is_empty() || !placement_clears.is_empty() {
+                let outcome = placement::record(note_target, &placement_records)
+                    .and_then(|()| placement::clear(note_target, &placement_clears));
+                if let Err(err) = outcome {
+                    note_warnings.push(err.to_string());
+                }
+            }
+            result["placementNoteWarning"] = if note_warnings.is_empty() {
+                Value::Null
+            } else {
+                Value::String(note_warnings.join("; "))
+            };
             Ok(result)
         }
         "write_difficulty" => {
@@ -1760,7 +1770,7 @@ fn delete_backup(save_path: &Path, backup_path: &Path) -> Result<Value, CoreErro
     // duplicate-name caveat as the label: the identical file name can exist
     // twice, once beside the save and once in the backups folder, and both are
     // listed. A surviving copy keeps the notes that describe it.
-    let placement_warning = prune_backup_placement_notes(save_path, &file_name)
+    let placement_warning = prune_backup_placement_notes(save_path, backup_path)
         .err()
         .map(|err| err.to_string());
     Ok(json!({
@@ -1779,14 +1789,14 @@ fn delete_backup(save_path: &Path, backup_path: &Path) -> Result<Value, CoreErro
 /// would leave the editor offering to undo a move the restored bytes do not
 /// contain.
 fn restore_backup_placement_notes(save_path: &Path, backup_path: &Path) -> Result<(), CoreError> {
-    let Some(name) = backup_path.file_name().and_then(|value| value.to_str()) else {
+    let Some(key) = placement::backup_key(save_path, backup_path) else {
         return Ok(());
     };
     let save_name = save_path
         .file_name()
         .map(|value| value.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let notes = placement::read_notes_for_strict(save_path, name)?;
+    let notes = placement::read_notes_for_strict(save_path, &key)?;
     let live = placement::read_notes_for_strict(save_path, &save_name)?;
     if notes == live {
         return Ok(());
@@ -1798,15 +1808,22 @@ fn restore_backup_placement_notes(save_path: &Path, backup_path: &Path) -> Resul
 /// any more. The sibling of [`prune_backup_label`], and gated the same way: a
 /// surviving copy under the same name is still restorable, and restoring it
 /// without its notes would lose the routine its pins replaced.
-fn prune_backup_placement_notes(save_path: &Path, file_name: &str) -> Result<(), CoreError> {
+fn prune_backup_placement_notes(save_path: &Path, backup_path: &Path) -> Result<(), CoreError> {
+    let Some(key) = placement::backup_key(save_path, backup_path) else {
+        return Ok(());
+    };
+    // Keyed per LOCATION, so the surviving-copy check has to be too: the same
+    // name in the other location is a different backup with its own notes.
     let still_listed = list_save_backups(save_path)?
         .into_iter()
         .chain(list_persistent_data_list_backups_for_save(save_path)?)
-        .any(|item| item.file_name == file_name);
+        .any(|item| {
+            placement::backup_key(save_path, Path::new(&item.path)).as_deref() == Some(key.as_str())
+        });
     if still_listed {
         return Ok(());
     }
-    placement::forget_key(save_path, file_name)
+    placement::forget_key(save_path, &key)
 }
 
 /// Drop the label for `file_name` once no backup carries that name any more.
@@ -8604,6 +8621,14 @@ where
         (None, None)
     };
 
+    // Right after the backup file exists, and BEFORE the guarded replace that can
+    // still abort: an aborted write would otherwise leave a listed, restorable
+    // backup of a pinned save with no record of the routine its pins replaced.
+    let backup_note_warning = backup_path
+        .as_deref()
+        .and_then(|backup| placement::snapshot_backup(path, backup).err())
+        .map(|err| err.to_string());
+
     let tmp = ScratchFile::create(target, "tmp", &edited)?;
     inspect_save(tmp.path(), false)?;
     let persistent_tmp = if let Some(plan) = &persistent_sync {
@@ -8674,6 +8699,7 @@ where
             .as_ref()
             .map(|plan| plan.original != plan.edited)
             .unwrap_or(false),
+        "placementNoteWarning": backup_note_warning,
     }))
 }
 
