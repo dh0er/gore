@@ -1202,6 +1202,7 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
     // interruption between the two leaves the record alone in this folder. Exempting it as
     // bookkeeping then reported an interrupted deployment as an empty, healthy `~mods`.
     let mut record_problems: Vec<String> = Vec::new();
+    let canonical_dir = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
     for record in &bookkeeping {
         // Asked of the type `undeploy` reads, not of the JSON. Checking `files` by hand accepted a
         // record twice that undeploy cannot use — once for a member that was not a path, once for
@@ -1224,7 +1225,19 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
             // record holds, so a record naming `C:\\elsewhere\\zzz_Mod_P.utoc` while a file of that
             // name sits in `~mods` was reported healthy — and the cleanup it describes reaches
             // outside this folder entirely.
-            if !same_file(listed, &dir.join(&leaf)) {
+            //
+            // Compared by spelling, and deliberately not through `same_file`: that resolves
+            // symlinks, so an external path passed whenever `~mods\\A.utoc` was a link pointing at
+            // it — and undeploy removes the RECORDED path, deleting the target and leaving the
+            // link. The question is not which bytes a path reaches, but whether it is this
+            // folder's own child.
+            //
+            // Both spellings of the folder count: `deploy` canonicalizes `~mods` before recording,
+            // while this one comes from the configured game root, and a game reached through a
+            // junction would otherwise have every record refused.
+            if !same_path(listed, &dir.join(&leaf))
+                && !same_path(listed, &canonical_dir.join(&leaf))
+            {
                 record_problems.push(format!(
                     "{record}: lists {listed_path}, which is not this folder's {leaf}"
                 ));
@@ -3229,6 +3242,55 @@ mod tests {
         assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
         assert!(
             check.items.iter().any(|item| item.contains("not a usable deploy record")),
+            "{:?}",
+            check.items
+        );
+    }
+
+    #[test]
+    fn a_path_that_only_resolves_into_the_folder_is_not_this_folder_s_child() {
+        // The property that replaced `same_file`. That resolved aliases, so an external path
+        // passed whenever `~mods\A.utoc` was a symlink to it — and undeploy removes the RECORDED
+        // path, deleting the target and leaving the link behind.
+        //
+        // A symlink needs privileges this suite does not have, so the alias here is a spelling
+        // that canonicalizes to the same file and is not a direct child: `~mods\sub\..\A.utoc`.
+        // Nothing `deploy` writes ever looks like that — it records canonical paths — so refusing
+        // it costs nothing and pins the check as lexical.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        let mods = gore_tex::container::mods_dir(&gp.root);
+        std::fs::create_dir_all(mods.join("sub")).unwrap();
+        for name in ["zzz_A_P.utoc", "zzz_A_P.ucas", "zzz_A_P.pak"] {
+            std::fs::write(mods.join(name), b"x").unwrap();
+        }
+
+        let record = serde_json::json!({
+            "name": "zzz_A_P",
+            "files": [
+                mods.join("sub").join("..").join("zzz_A_P.utoc"),
+                mods.join("sub").join("..").join("zzz_A_P.ucas"),
+                mods.join("sub").join("..").join("zzz_A_P.pak"),
+            ],
+        });
+        std::fs::write(
+            mods.join("zzz_A_P.gore-deploy.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+
+        // Same bytes by canonicalization, and not this folder's child by spelling.
+        assert!(same_file(
+            &mods.join("sub").join("..").join("zzz_A_P.utoc"),
+            &mods.join("zzz_A_P.utoc")
+        ));
+
+        let check = check_mods_folder(&gp);
+        assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
+        assert!(
+            check.items.iter().any(|item| item.contains("not this folder's")),
             "{:?}",
             check.items
         );
