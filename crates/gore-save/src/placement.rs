@@ -224,16 +224,14 @@ pub fn record(save_path: &Path, records: &[(String, PlacementNote)]) -> Result<(
 /// record of what it replaced, locking the routine control for good.
 ///
 /// The source keeps its own notes: the bytes were copied, not moved, so both
-/// files describe the same pinned NPCs. Copying nothing is a no-op, and an
-/// existing note at the destination is replaced — it described the file that
-/// was just overwritten.
+/// files describe the same pinned NPCs.
+///
+/// Wholesale, including the empty case. Merging would let entries left behind by
+/// an earlier file of the destination's name survive and offer to undo moves the
+/// copied bytes do not contain — and a source with no notes has to CLEAR the
+/// destination key, not leave it be.
 pub fn carry(source: &Path, destination: &Path) -> Result<(), CoreError> {
-    let notes = read_notes(source);
-    if notes.is_empty() {
-        return Ok(());
-    }
-    let records: Vec<(String, PlacementNote)> = notes.into_iter().collect();
-    record(destination, &records)
+    snapshot_to_key(destination, &save_key(destination), read_notes(source))
 }
 
 /// Snapshot a save's notes under `key`, so a copy of the save keeps the record
@@ -390,6 +388,29 @@ mod tests {
 
         assert_eq!(read_notes(&destination).get("Npc-A"), Some(&note()));
         assert_eq!(read_notes(&source).get("Npc-A"), Some(&note()));
+    }
+
+    #[test]
+    fn a_copy_replaces_the_destination_s_notes_rather_than_merging_into_them() {
+        // The slot name may have been used before. A leftover entry would offer
+        // to undo a move the copied bytes do not contain — and a source with no
+        // notes has to clear the destination, not leave it standing.
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("external.sav");
+        let destination = dir.path().join("G1R-007.sav");
+        record(&destination, &[("Npc-Stale".to_string(), note())]).unwrap();
+        record(&source, &[("Npc-A".to_string(), note())]).unwrap();
+
+        carry(&source, &destination).unwrap();
+        assert_eq!(
+            read_notes(&destination).keys().collect::<Vec<_>>(),
+            ["Npc-A"]
+        );
+
+        // A source with nothing to say clears what the destination held.
+        let empty = dir.path().join("empty.sav");
+        carry(&empty, &destination).unwrap();
+        assert!(read_notes(&destination).is_empty());
     }
 
     #[test]
