@@ -127,18 +127,26 @@ item prefixes `itfo`/`itmi`/`itmw`/`itwr`/`itar`, carries `german_new` at all.
 `dia_` appears in both lists, though, so "it is dialog" does not settle it.
 Look the id up.
 
-### Getting it wrong reports success
+### Getting it wrong: written, and not the line you see
 
 Writing `german` on an id that also has `german_new` is accepted everywhere and
-changes nothing you can see. This is the whole of the feedback:
+changes nothing you can see. The cache really is rewritten; the game still shows
+the `german_new` line, because at the file level nothing was wrong — you edited
+a key that exists, and the game reads the other one.
 
-```
-Applied 1 edit(s) -> …\AlkimiaLocalization_00000000.lcache
-```
+Whether anything says so depends on the route:
 
-The cache really was rewritten. The game still shows the `german_new` line.
-There is no warning, because at the file level nothing was wrong: you edited a
-key that exists, and the game reads the other one.
+- **`gore loc import` does not.** This is the whole of the feedback:
+
+  ```
+  Applied 1 edit(s) -> …\AlkimiaLocalization_00000000.lcache
+  ```
+
+- **`gore mod deploy` and `gore mgr apply` do.** Both check the id's other
+  language slots before writing and report the edit as one the game will not
+  display, naming the id and the generation that hides it. The deployment
+  itself succeeded — the point of the wording is that this is an edit to
+  redirect at `german_new`, not a deployment to undo.
 
 Writing `german` on an id that has *only* `german_new` behaves differently
 depending on how the edit reaches the game:
