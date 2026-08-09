@@ -92,6 +92,16 @@ pub fn banks(game: Option<PathBuf>, json: bool, key: Option<String>) -> Result<(
                 dir.display()
             );
         }
+        // There, and not a directory. Folded into the sentence below it read as "no FMOD bank
+        // directory", which sends the reader to re-point `--game` or verify the game files —
+        // neither of which can put a directory where something else is already sitting, and the
+        // thing in the way never gets named.
+        Ok(_) => bail!(
+            "'{}' is not a directory. That path is fixed inside a Gothic 1 Remake install and the \
+             game's banks live in it, so nothing can create it while something else occupies that \
+             name: remove or rename what is there.",
+            dir.display()
+        ),
         _ => bail!(
             "no FMOD bank directory at '{}'. That path is fixed inside a Gothic 1 Remake install, \
              so either --game (or the configured game path) points at something that is not one, \
@@ -1462,6 +1472,34 @@ mod banks_tests {
 
     fn rows(dir: &Path) -> Vec<BankRow> {
         bank_rows(dir, GOTHIC_STUDIO_KEY).unwrap()
+    }
+
+    #[test]
+    fn something_occupying_the_bank_directory_is_named_rather_than_called_absent() {
+        // "No FMOD bank directory" sends the reader to re-point `--game` or verify the game files,
+        // and neither of those can put a directory where something else is already sitting. The
+        // path is fixed inside the install, so the only thing that helps is being told what is in
+        // the way.
+        let temp = TempDir::new().unwrap();
+        let desktop = temp.path().join("G1R").join("Content").join("FMOD").join("Desktop");
+        std::fs::create_dir_all(desktop.parent().unwrap()).unwrap();
+        std::fs::write(&desktop, b"not a directory").unwrap();
+
+        let error = super::banks(Some(temp.path().to_path_buf()), false, None)
+            .expect_err("a file where the bank directory belongs is not a listing");
+        let said = format!("{error}");
+        assert!(said.contains("is not a directory"), "{said}");
+        assert!(said.contains("remove or rename"), "{said}");
+        assert!(!said.contains("verify the game files"), "the install is not the problem: {said}");
+
+        // The control: with the path genuinely absent the sentence and the remedy stand as they
+        // were, so the branch is answering the obstruction and not every missing directory.
+        std::fs::remove_file(&desktop).unwrap();
+        let error = super::banks(Some(temp.path().to_path_buf()), false, None)
+            .expect_err("and neither is a directory that is not there");
+        let said = format!("{error}");
+        assert!(said.contains("no FMOD bank directory"), "{said}");
+        assert!(said.contains("verify the game files"), "{said}");
     }
 
     #[test]
