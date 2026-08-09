@@ -107,11 +107,13 @@ struct Check {
 
 impl Check {
     fn new(id: &'static str, title: &'static str, verdict: Verdict, detail: impl Into<String>) -> Self {
+        let detail = detail.into();
+        debug_assert!(is_one_line(&detail), "detail must be one line: {detail:?}");
         Self {
             id,
             title,
             verdict,
-            detail: detail.into(),
+            detail,
             items: Vec::new(),
             fix: None,
         }
@@ -123,9 +125,20 @@ impl Check {
     }
 
     fn with_fix(mut self, fix: impl Into<String>) -> Self {
-        self.fix = Some(fix.into());
+        let fix = fix.into();
+        debug_assert!(is_one_line(&fix), "fix must be one line: {fix:?}");
+        self.fix = Some(fix);
         self
     }
+}
+
+/// Every sentence this report prints is written across several source lines and joined by `\` at
+/// the end of each, so a stray second backslash puts a literal `\` and a newline into the middle
+/// of a sentence somebody reads in a terminal. It builds, it reads fine in the source, and it is
+/// only visible when the check actually fires — which is the least likely moment for anybody to
+/// notice. Nothing here is deliberately multi-line: lists go in `items`.
+fn is_one_line(text: &str) -> bool {
+    !text.contains('\n') && !text.contains('\r')
 }
 
 /// The whole report. The counts are at the top level so a `--json` caller can gate on them without
@@ -1072,9 +1085,9 @@ fn check_deployment(gp: &GamePaths, library: &Path, loadout_path: &Path) -> Chec
         )
         .with_items(items)
         .with_fix(
-            "that record is how 'gore mod undeploy' and 'gore mgr reset' know what to put back, \\
-             so deploy nothing further until it can be read. Run the same command from a shell \\
-             that can read the install; if the file itself is damaged, the deployment has to be \\
+            "that record is how 'gore mod undeploy' and 'gore mgr reset' know what to put back, \
+             so deploy nothing further until it can be read. Run the same command from a shell \
+             that can read the install; if the file itself is damaged, the deployment has to be \
              undone by hand from the *.gore-bak files the leftovers check lists",
         ),
     }
@@ -1101,7 +1114,7 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
                 format!("{} is a file, not a folder", dir.display()),
             )
             .with_fix(
-                "the game mounts additive overrides from that folder, and a deploy cannot create \\
+                "the game mounts additive overrides from that folder, and a deploy cannot create \
                  it while a file occupies its path. Remove or rename that file, then deploy again",
             );
         }
@@ -1677,7 +1690,7 @@ fn check_loc_catalog(
                 return Check::new("loc_catalog", "loc catalog", Verdict::Problem, problem)
                     .with_items(vec![format!("catalog: {}", catalog.display())])
                     .with_fix(
-                        "every tool that turns a text id into text reads that one file. Run \\
+                        "every tool that turns a text id into text reads that one file. Run \
                          'gore loc extract' to write it again",
                     );
             }
@@ -1745,8 +1758,8 @@ fn check_loc_catalog(
         )
         .with_items(items)
         .with_fix(
-            "a Gothic 1 Remake install keeps one in G1R\\\\Story\\\\Cache, so either this is not that \\
-             install or it is incomplete — the install check above says which. The catalog is \\
+            "a Gothic 1 Remake install keeps one in G1R\\Story\\Cache, so either this is not that \
+             install or it is incomplete — the install check above says which. The catalog is \
              still usable; it just cannot be told apart from a stale one here",
         );
     };
@@ -1945,8 +1958,8 @@ fn check_loc_catalog(
         )
         .with_items(items)
         .with_fix(
-            "the catalog itself is fine; what could not be read is the game's own cache, so \\
-             nothing here says the two disagree. Run the same command from a shell that can read \\
+            "the catalog itself is fine; what could not be read is the game's own cache, so \
+             nothing here says the two disagree. Run the same command from a shell that can read \
              the install to find out",
         ),
     }
@@ -2974,6 +2987,16 @@ mod tests {
             check.detail
         );
         assert!(check.fix.unwrap().contains("absolute"));
+    }
+
+    #[test]
+    fn a_sentence_broken_across_source_lines_is_not_a_sentence_with_a_backslash_in_it() {
+        // The guard `Check::new` and `with_fix` assert on. A doubled continuation backslash puts
+        // `\` and a line break in the middle of a printed sentence and nothing catches it until
+        // the check fires.
+        assert!(is_one_line("one line"));
+        assert!(!is_one_line("broken \\\n across"));
+        assert!(!is_one_line("broken \r\n across"));
     }
 
     #[test]
