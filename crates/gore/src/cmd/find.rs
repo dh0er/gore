@@ -620,11 +620,32 @@ fn query_terms(query: &str) -> Vec<String> {
     query
         .split_whitespace()
         .map(|word| {
-            word.trim_matches(|c: char| !(c.is_alphanumeric() || c == '_'))
-                .to_lowercase()
+            let word = word
+                .trim_matches(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .to_lowercase();
+            without_possessive(word)
         })
         .filter(|word| !word.is_empty())
         .collect()
+}
+
+/// `diego's` → `diego`, and everything else unchanged.
+///
+/// A possessive belongs to the sentence, not to the thing it names: `Diego's dialog` searched for
+/// `diego's`, which is in neither the id `PC_Diego` nor the display name `Diego`, and every term
+/// has to match. Only at the end — an apostrophe inside a word (`don't`) is part of it, and the
+/// text being searched carries it too.
+///
+/// Both apostrophes, because a pasted query brings the typographic one.
+fn without_possessive(word: String) -> String {
+    for suffix in ["'s", "\u{2019}s"] {
+        if let Some(stem) = word.strip_suffix(suffix) {
+            if !stem.is_empty() {
+                return stem.to_string();
+            }
+        }
+    }
+    word
 }
 
 /// The catalog rows a search can reach, which with `--domain` is not all of them.
@@ -2033,6 +2054,17 @@ mod tests {
 
         // A term that was nothing but punctuation is not a term.
         assert!(query_terms("?? --").is_empty());
+
+        // A possessive belongs to the sentence: `Diego's` is in neither the id `PC_Diego` nor the
+        // display name `Diego`, and every term has to match.
+        assert_eq!(query_terms("Diego's dialog"), vec!["diego", "dialog"]);
+        assert_eq!(query_terms("Diego\u{2019}s"), vec!["diego"]);
+
+        // Not inside a word, where the text being searched carries the apostrophe too.
+        assert_eq!(query_terms("don't"), vec!["don't"]);
+
+        // A word that merely ends in `s` keeps it.
+        assert_eq!(query_terms("Saturas"), vec!["saturas"]);
     }
 
     #[test]
