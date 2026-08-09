@@ -1019,7 +1019,16 @@ enum Occupant {
 /// makes it worth a shared answer rather than a fourth local fix.
 fn occupant(path: &Path, wanted: Wanted) -> Result<Occupant, String> {
     Ok(match present(path)? {
-        None => Occupant::Absent,
+        // Nothing the path RESOLVES to — which is not the same as nothing holding the name. A
+        // dangling link resolves to nothing and `fs::metadata` says `NotFound`, while the name is
+        // very much taken: `create_dir_all` on it fails, so "deploy will create it" is advice that
+        // cannot run. Asking without following the link is the only way to tell the two apart, and
+        // it is asked only here, where the answer decides whether somebody is sent to create
+        // something.
+        None => match std::fs::symlink_metadata(path) {
+            Ok(_) => Occupant::Obstruction,
+            Err(_) => Occupant::Absent,
+        },
         Some(metadata) => match wanted {
             Wanted::Folder if metadata.is_dir() => Occupant::Wanted,
             Wanted::File if metadata.is_file() => Occupant::Wanted,
@@ -1959,7 +1968,14 @@ fn check_loc_catalog(
         // `resolve_game_paths` finds the cache by listing that folder and answers `None` for a
         // folder it could not list as readily as for one holding no `.lcache`. Saying the install
         // has none sends the reader to verify game files while the folder sits there, unreadable.
-        if let Err(error) = std::fs::read_dir(cache_dir) {
+        //
+        // Opening the folder is not reading it. `resolve_game_paths` drops per-entry failures with
+        // `filter_map(|entry| entry.ok())`, so an entry that cannot be yielded also arrives here as
+        // "no .lcache" — and checking only that `read_dir` could be CONSTRUCTED missed exactly that
+        // half. The listing is consumed, so an error from either half is the answer.
+        if let Err(error) = std::fs::read_dir(cache_dir)
+            .and_then(|entries| entries.collect::<std::io::Result<Vec<_>>>())
+        {
             if error.kind() != std::io::ErrorKind::NotFound {
                 return Check::new(
                     "loc_catalog",
@@ -3407,6 +3423,46 @@ mod tests {
         let check = check_install(&gp);
         assert!(check.detail.contains("incomplete"), "{}", check.detail);
         assert!(check.fix.unwrap().contains("verify the game files"));
+    }
+
+    #[test]
+    fn a_link_that_leads_nowhere_still_holds_the_name() {
+        // `fs::metadata` follows a link, so a dangling one resolves to nothing and reads as
+        // absent. The name is taken all the same: `create_dir_all` on it fails, so "'gore mod
+        // deploy' creates that folder" is advice that cannot run, about a path nobody was told
+        // was occupied. Only a look that does NOT follow the link can tell the two apart.
+        let dir = tempfile::tempdir().unwrap();
+        let dangling = dir.path().join("Mods");
+        let target = dir.path().join("gone");
+        if try_symlink_dir(&target, &dangling).is_err() {
+            return; // links need privileges this machine may not grant
+        }
+        assert!(
+            std::fs::metadata(&dangling).is_err(),
+            "the fixture is only interesting while the link resolves to nothing"
+        );
+        assert!(
+            std::fs::create_dir_all(&dangling).is_err(),
+            "and while creating the folder over it really does fail"
+        );
+
+        assert!(matches!(occupant(&dangling, Wanted::Folder), Ok(Occupant::Obstruction)));
+
+        // The control: a name nothing holds is still absent.
+        let free = dir.path().join("nothing-here");
+        assert!(matches!(occupant(&free, Wanted::Folder), Ok(Occupant::Absent)));
+    }
+
+    /// A symlink at `link` pointing at `target`, which need not exist.
+    fn try_symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_dir(target, link)
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link)
+        }
     }
 
     #[test]
