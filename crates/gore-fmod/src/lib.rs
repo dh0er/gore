@@ -756,7 +756,14 @@ pub fn bank_summary(bank: &[u8], key: &[u8]) -> Result<BankSummary, String> {
         .iter()
         .map(|header| u32_le(header, 0x08) as usize)
         .collect();
-    for (slot_index, slot) in waveform_slots(bank)?.iter().enumerate() {
+    // Only when `read_bank` would use them. It takes the table positionally — slot `i` for sample
+    // `i` — and only if the two have the same length; any other length and it ignores every slot
+    // and maps each sample to itself. Validating them regardless made `banks` call a bank
+    // unreadable that `list` opens without touching the table at all, which is a false alarm and
+    // the opposite of what checking against the parser is for.
+    let slots = waveform_slots(bank)?;
+    let positional = counts.first().is_some_and(|count| slots.len() == *count);
+    for (slot_index, slot) in slots.iter().enumerate().filter(|_| positional) {
         let Some(count) = counts.get(slot.sub_bank) else {
             return Err(format!(
                 "waveform {slot_index} points at sub-bank {} and the bank has {}: the bank is \\
