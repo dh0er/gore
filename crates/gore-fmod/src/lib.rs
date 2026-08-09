@@ -1694,6 +1694,13 @@ fn find_top_list(b: &[u8]) -> Result<(usize, usize), String> {
     })
 }
 
+/// How many top-level chunk headers a walk will look at before giving up.
+///
+/// Every shipped bank carries its LIST as the second chunk, at offset 28. This is far past that on
+/// purpose: it is not a limit on real banks, it is a limit on a damaged one whose chunk sizes send
+/// the walk stepping through the whole file.
+const MAX_TOP_CHUNK_PROBES: usize = 4096;
+
 /// The two rules by which this file walks the top-level chunks for the LIST.
 ///
 /// They are not the same rule, and that is not an oversight worth quietly unifying: [`bank_shape`]
@@ -1721,7 +1728,18 @@ fn find_top_list_with(
     header_at: &mut dyn FnMut(usize) -> Result<Option<[u8; 8]>, String>,
 ) -> Result<(usize, usize), String> {
     let mut off = 0x0C;
+    let mut probes = 0usize;
     while off + 8 <= end {
+        // Chunks are followed by their declared size, and a declared size of zero advances by the
+        // 8-byte header alone. A damaged 260 MB bank whose top-level chunks all declare zero
+        // therefore walks it in 8-byte steps — 32 million of them, each a seek and a read on the
+        // on-disk route, which is not a bounded read but is very much a hang. The shipped banks
+        // put their LIST second, so this bound is three orders of magnitude past any real one, and
+        // reaching it means the same thing the walk running out means: there is no wrapper here.
+        probes += 1;
+        if probes > MAX_TOP_CHUNK_PROBES {
+            break;
+        }
         let Some(header) = header_at(off)? else { break };
         let sz = u32_le(&header, 4) as usize;
         if matches!(rule, TopWalk::Printable) && !printable(&header[0..4]) {
@@ -2603,6 +2621,45 @@ mod tests {
             bank_summary_probing(&path, GOTHIC_STUDIO_KEY, 0x40, max),
             bank_summary(&big_bank(), GOTHIC_STUDIO_KEY)
         );
+    }
+
+    #[test]
+    fn a_bank_of_zero_sized_chunks_does_not_walk_itself_to_a_standstill() {
+        // Bounding the READ was not bounding the work. A chunk that declares zero bytes advances
+        // the walk by its 8-byte header alone, so a damaged 260 MB bank whose top-level chunks all
+        // declare zero is walked in 8-byte steps — 32 million of them, each a seek and a read on
+        // the on-disk route. Nothing allocates and the command never comes back.
+        let mut bank = big_bank();
+        // A printable fourcc that is not LIST, and a zero size, all the way down: the walk cannot
+        // stop on the fourcc and cannot advance on the size.
+        for chunk in bank[0x0C..].chunks_mut(8) {
+            if chunk.len() == 8 {
+                chunk[0..4].copy_from_slice(b"JUNK");
+                chunk[4..8].copy_from_slice(&0u32.to_le_bytes());
+            }
+        }
+
+        let mut probes = 0usize;
+        let found = find_top_list_with(bank.len(), TopWalk::Any, &mut |off| {
+            probes += 1;
+            let mut header = [0u8; 8];
+            match bank.get(off..off + 8) {
+                Some(bytes) => {
+                    header.copy_from_slice(bytes);
+                    Ok(Some(header))
+                }
+                None => Ok(None),
+            }
+        });
+
+        assert!(found.is_err(), "there is no LIST in this bank");
+        assert!(
+            probes <= MAX_TOP_CHUNK_PROBES,
+            "the walk looked at {probes} headers in a {} byte bank",
+            bank.len()
+        );
+        // And the bound is what stopped it, rather than the file happening to be small.
+        assert!(bank.len() / 8 > MAX_TOP_CHUNK_PROBES, "the fixture has to be able to outrun it");
     }
 
     #[test]

@@ -94,16 +94,20 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// A file's modification time in nanoseconds since the epoch, or `None` where the filesystem does
-/// not offer one. Used only to notice a rewrite DURING the read, where the two readings are taken
-/// seconds apart at most; it is not evidence of identity, which is what the digest is for.
-fn source_modified(path: &Path) -> Option<u64> {
-    fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|since| u64::try_from(since.as_nanos()).ok())
+/// Whether the path still holds the bytes this run read, asked by reading it again.
+///
+/// This used to compare the modification time from before and after the read. A timestamp cannot
+/// answer it: FAT32 keeps whole seconds, and `gore loc import` publishes with a rename, so a cache
+/// replaced inside one tick reports the very same mtime. Everything downstream — the catalog, the
+/// digest, the doctor's freshness check — would then describe bytes the install no longer has,
+/// and say so with confidence.
+///
+/// It costs one more pass over the file (37 MB in the shipped install) next to decrypting it and
+/// writing a 28 MB catalog. What it cannot do is prove the file will still hold them a moment
+/// later; it proves the read was not overtaken while this run was working, which is the case that
+/// happens.
+fn still_holds(path: &Path, digest: &str) -> Result<bool, std::io::Error> {
+    Ok(sha256_hex(&fs::read(path)?) == digest)
 }
 
 /// True when the shared catalog file is present.
@@ -115,18 +119,25 @@ pub fn catalog_present() -> bool {
 /// `loc_catalog.json` + `loc_meta.json` into the shared `gore` dir.
 pub fn extract(hint: Option<&Path>) -> Result<LocMeta, LocStoreError> {
     let lcache = resolve_lcache(hint).ok_or(LocStoreError::NotFound)?;
-    let before_read = source_modified(&lcache);
     let enc = fs::read(&lcache).map_err(|source| LocStoreError::Read {
         path: lcache.display().to_string(),
         source,
     })?;
     let source_bytes = enc.len() as u64;
     // The digest of exactly what was read, so nothing about the file's own metadata has to be
-    // trusted later. The mtime is still taken again and compared with the one from before the read:
-    // a cache rewritten mid-read would hash to a mixture of two versions, and refusing is a better
-    // answer than recording a digest that matches neither.
-    let source_sha256 = Some(sha256_hex(&enc));
-    if source_modified(&lcache) != before_read {
+    // trusted later.
+    let digest = sha256_hex(&enc);
+    let lc = Lcache::decode(&enc)?;
+    let catalog = lc.export(false);
+
+    // Asked here rather than right after the read: everything published below describes these
+    // bytes, so the question is whether the install still has them at the moment of publishing,
+    // and the decode and export are where the time goes.
+    let unchanged = still_holds(&lcache, &digest).map_err(|source| LocStoreError::Read {
+        path: lcache.display().to_string(),
+        source,
+    })?;
+    if !unchanged {
         return Err(LocStoreError::Read {
             path: lcache.display().to_string(),
             source: std::io::Error::other(
@@ -134,8 +145,7 @@ pub fn extract(hint: Option<&Path>) -> Result<LocMeta, LocStoreError> {
             ),
         });
     }
-    let lc = Lcache::decode(&enc)?;
-    let catalog = lc.export(false);
+    let source_sha256 = Some(digest);
 
     let dir = paths::shared_data_dir();
     fs::create_dir_all(&dir).map_err(|source| LocStoreError::Write {
@@ -190,4 +200,37 @@ fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{sha256_hex, still_holds};
+
+    #[test]
+    fn a_same_length_rewrite_is_caught_where_a_timestamp_could_not_see_it() {
+        // This check used to be "did the modification time change while we read". FAT32 keeps
+        // whole seconds and `gore loc import` publishes with a rename, so a cache replaced inside
+        // one tick reports the very same mtime — and the catalog, the recorded digest and the
+        // doctor's freshness check would all have described bytes the install no longer has.
+        //
+        // Nothing here touches a timestamp, deliberately: that is the signal being replaced.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("AlkimiaLocalization_00000000.lcache");
+        std::fs::write(&cache, vec![0u8; 2048]).unwrap();
+        let digest = sha256_hex(&std::fs::read(&cache).unwrap());
+
+        assert!(still_holds(&cache, &digest).unwrap(), "unread and unchanged");
+
+        std::fs::write(&cache, vec![1u8; 2048]).unwrap();
+        assert_eq!(
+            std::fs::metadata(&cache).unwrap().len(),
+            2048,
+            "the fixture is only interesting while the length still matches"
+        );
+        assert!(!still_holds(&cache, &digest).unwrap(), "different bytes, same length");
+
+        // A file that cannot be read at all is not an answer of "unchanged".
+        std::fs::remove_file(&cache).unwrap();
+        assert!(still_holds(&cache, &digest).is_err());
+    }
 }
