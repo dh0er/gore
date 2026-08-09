@@ -1175,11 +1175,33 @@ fn hit_block(hit: &Hit<'_>) -> String {
         );
         match &entry.effect {
             Some(effect) => prose(&mut out, &format!("effect: {effect}")),
-            // `effect` is null when every observation refutes it, which is a
+            // `effect` is null when nothing was observed to happen, which is a
             // finding rather than a gap.
             None => {
                 if entry.status() == Status::Refuted {
-                    continuation(&mut out, "effect: none — every observation refutes it");
+                    // `Refuted` means at least one refutation and no
+                    // confirmation — it does NOT mean every observation refuted
+                    // it. The bundled `title` entry carries one refutation and
+                    // one unconfirmed report, and saying "every observation"
+                    // about it overstated the register's own evidence to a
+                    // reader who came here to weigh exactly that.
+                    let counts = entry.corroboration();
+                    let refuted = counts.refuted.observations;
+                    let total = refuted
+                        + counts.confirmed.observations
+                        + counts.unconfirmed.observations;
+                    continuation(
+                        &mut out,
+                        &match refuted == total {
+                            true => "effect: none — every observation refutes it".to_string(),
+                            // Only reachable with at least two observations, so
+                            // the plural holds.
+                            false => format!(
+                                "effect: none — {refuted} of {total} observations refute it and \
+                                 none confirms it"
+                            ),
+                        },
+                    );
                 }
             }
         }
@@ -1600,6 +1622,89 @@ mod tests {
         let block = hit_block(&hits[0]);
         assert!(!block.contains("register"), "{block}");
         assert!(block.contains("bundled catalog · item · food"), "{block}");
+    }
+
+    /// The same fixture with no effect at all, which is the state this report
+    /// calls a finding rather than a gap.
+    fn register_without_effect(domain: &str, id: &str, observations: &str) -> Register {
+        let json = format!(
+            r#"{{"format": 1, "domain": "{domain}", "entries": [
+                {{"id": "{id}", "effect": null,
+                  "note": "the cheapest smoke test there is",
+                  "observations": [{observations}]}}
+            ]}}"#
+        );
+        let source = RegisterSource::parse(&json, Provenance::Bundled, "test fixture")
+            .expect("the fixture is a valid register");
+        let mut register = Register::default();
+        register.push(source);
+        register
+    }
+
+    #[test]
+    fn a_refuted_entry_says_how_many_observations_actually_refuted_it() {
+        // `Refuted` means at least one refutation and no confirmation. It does
+        // not mean every observation refuted it, and the bundled `title` entry
+        // is exactly that shape: one refutation and one unconfirmed report.
+        // Claiming "every observation" there overstates the register's own
+        // evidence to a reader who came to weigh precisely that.
+        let register = register_without_effect(
+            "audio",
+            "title",
+            &format!(
+                "{},{}",
+                observation("unconfirmed", None, "24340829"),
+                observation("refuted", Some("das Titelthema lief normal"), "24340829")
+            ),
+        );
+        let hits = search(&[], &register, &terms("title"), None, None);
+        let block = hit_block(&hits[0]);
+        assert!(
+            block.contains("1 of 2 observations refute it and none confirms it"),
+            "{block}"
+        );
+        assert!(!block.contains("every observation"), "{block}");
+
+        // And where it IS every one, the shorter sentence still stands.
+        let register = register_without_effect(
+            "audio",
+            "title",
+            &observation("refuted", Some("das Titelthema lief normal"), "24340829"),
+        );
+        let hits = search(&[], &register, &terms("title"), None, None);
+        let block = hit_block(&hits[0]);
+        assert!(block.contains("every observation refutes it"), "{block}");
+    }
+
+    #[test]
+    fn the_bundled_register_does_not_claim_more_than_it_observed() {
+        // Against the shipped file rather than a fixture, because this is where
+        // the wrong sentence was actually printed. Every entry with no effect
+        // and a refuted standing has to describe its own tally correctly.
+        let register = Register::bundled().expect("the shipped register has to load");
+        let entries: Vec<_> = register
+            .entries()
+            .filter(|entry| entry.effect.is_none() && entry.status() == Status::Refuted)
+            .collect();
+        assert!(!entries.is_empty(), "the shipped register has to carry at least one");
+        for entry in entries {
+            let counts = entry.corroboration();
+            let total = counts.refuted.observations
+                + counts.confirmed.observations
+                + counts.unconfirmed.observations;
+            let hits = search(&[], &register, &terms(&entry.id), None, None);
+            let block = hit_block(&hits[0]);
+            if counts.refuted.observations == total {
+                assert!(block.contains("every observation refutes it"), "{}: {block}", entry.id);
+            } else {
+                assert!(
+                    !block.contains("every observation"),
+                    "{} has {} of {total} refuting and says otherwise: {block}",
+                    entry.id,
+                    counts.refuted.observations
+                );
+            }
+        }
     }
 
     #[test]
