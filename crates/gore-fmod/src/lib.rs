@@ -840,7 +840,20 @@ fn sub_bank_header(bank: &[u8], entry: &BankEntry, key: &[u8]) -> Result<Vec<u8>
             ))
         }
         size if size > 0 => size as u64,
-        _ => remaining,
+        // Not "the rest of the file". `parse_bank` records 0 for an old wrapper whose entries
+        // carry no length — "size reconstructed from FSB5 header for old banks" — and nothing in
+        // this toolkit reconstructs it: `decrypt_sub_bank` slices
+        // `fsb5_offset..fsb5_offset + fsb5_size` for every sub-bank `read_bank` reads, so a zero
+        // there is an empty block and `audio list` cannot open the file at all. Treating the
+        // remainder as the block let `banks` summarize, and mark complete, a bank no other command
+        // can touch.
+        _ => {
+            return Err(
+                "the bank's wrapper declares no length for an FSB5 block, and this toolkit reads \\
+                 blocks by the length the wrapper gives: the bank cannot be opened"
+                    .to_string(),
+            )
+        }
     };
     header_fits(&header, present)?;
 
@@ -1730,6 +1743,31 @@ mod truncation_tests {
         let truncated = header(1, 8, 0, 4096);
         let error = header_fits(&truncated, 64).expect_err("a declared 4 KB of audio is not there");
         assert!(error.contains("truncated"), "{error}");
+    }
+
+    #[test]
+    fn a_wrapper_declaring_no_length_is_refused_by_both_readers() {
+        // The property rather than the message: whatever `bank_summary` says about a bank,
+        // `read_bank` has to be able to say the same. A zero extent is where they had drifted
+        // apart — `banks` reconstructed a block from the rest of the file, `list` sliced an empty
+        // one and gave up.
+        let samples = numbered_pcm16_samples("SFX_UI_Click_", 3, 44_100);
+        let mut bank = pristine_bank_pcm16(&samples, GOTHIC_STUDIO_KEY).unwrap();
+        assert!(bank_summary(&bank, GOTHIC_STUDIO_KEY).is_ok());
+        assert!(super::read_bank(&bank, GOTHIC_STUDIO_KEY).is_ok());
+
+        let sndh = bank
+            .windows(4)
+            .position(|w| w == b"SNDH")
+            .expect("the fixture writes an SNDH chunk");
+        let size_field = sndh + 4 + 4 + 4 + 4;
+        bank[size_field..size_field + 4].copy_from_slice(&0u32.to_le_bytes());
+
+        assert!(
+            bank_summary(&bank, GOTHIC_STUDIO_KEY).is_err(),
+            "the summary must refuse what the reader refuses"
+        );
+        assert!(super::read_bank(&bank, GOTHIC_STUDIO_KEY).is_err());
     }
 
     #[test]
