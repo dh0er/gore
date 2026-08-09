@@ -224,6 +224,28 @@ void main() {
     expect(pending(tester)!.placementNotes, hasLength(1));
   });
 
+  testWidgets('no location to record means no checkbox to tick', (
+    tester,
+  ) async {
+    // A pin with no recordable position has no undo — the note needs the
+    // location it replaced. A box that queues nothing while staying visibly
+    // ticked is worse than no box.
+    await pumpPositionApp(
+      tester,
+      NpcPositionCoreService({
+        npc: const FakePose(
+          location: null,
+          routineClass: '/Script/Angelscript.DailyRoutine_A_Start',
+        ),
+      }),
+    );
+    await openPositionTab(tester);
+    await tester.tap(find.text(npc));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('npc-position:stay')), findsNothing);
+  });
+
   testWidgets('an NPC with no routine record offers no checkbox at all', (
     tester,
   ) async {

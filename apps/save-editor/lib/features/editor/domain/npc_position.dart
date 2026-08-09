@@ -282,9 +282,16 @@ class NpcPoseResult {
   final PlacementUndo? undo;
 
   /// Whether "keep him where I put him" can be offered: the routine leaf has to
-  /// be addressable and the core has to have named an inert class to put there.
+  /// be addressable, the core has to have named an inert class to put there, and
+  /// there has to be a location to write down.
+  ///
+  /// The last one because a pin without a recordable position has no undo: the
+  /// note needs the location it replaced. Offering a checkbox that queues
+  /// nothing while staying visibly ticked is worse than not offering it.
   bool get canPin =>
-      routineClassPath.isNotEmpty && (inertRoutineClass?.isNotEmpty ?? false);
+      routineClassPath.isNotEmpty &&
+      (inertRoutineClass?.isNotEmpty ?? false) &&
+      pose?.location != null;
 
   /// True once the NPC is already on the inert routine — he stays put as things
   /// stand, so the checkbox starts ticked and changing nothing changes nothing.

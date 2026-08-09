@@ -561,18 +561,29 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                     result["placementNoteWarning"] = Value::String(err.to_string());
                 }
             }
-            if !placement_records.is_empty() || !placement_clears.is_empty() {
-                // Against the file the bytes actually landed in. With an
-                // outputPath the move lives in the export, so the note belongs
-                // beside the export — recording it against the source would
-                // leave the exported save with no undo and give the untouched
-                // source a note for a move it does not contain.
-                let note_target = output_path.as_deref().unwrap_or(&path);
-                let outcome = placement::record(note_target, &placement_records)
-                    .and_then(|()| placement::clear(note_target, &placement_clears));
-                if let Err(err) = outcome {
-                    result["placementNoteWarning"] = Value::String(err.to_string());
+            // Against the file the bytes actually landed in. With an outputPath
+            // the move lives in the export, so the notes belong beside the
+            // export — recording them against the source would leave the export
+            // with no undo and give the untouched source a note for a move it
+            // does not contain.
+            let note_target = output_path.as_deref().unwrap_or(&path);
+            let outcome = (|| -> Result<(), CoreError> {
+                if note_target != path {
+                    // The export is a wholesale copy, so it starts from the
+                    // source's WHOLE note set — otherwise another NPC pinned in
+                    // the source arrives pinned with no undo, and notes left by
+                    // an earlier file of that name survive. This request's own
+                    // records and clears are the delta on top.
+                    placement::carry(&path, note_target)?;
                 }
+                if !placement_records.is_empty() || !placement_clears.is_empty() {
+                    placement::record(note_target, &placement_records)?;
+                    placement::clear(note_target, &placement_clears)?;
+                }
+                Ok(())
+            })();
+            if let Err(err) = outcome {
+                result["placementNoteWarning"] = Value::String(err.to_string());
             }
             Ok(result)
         }
