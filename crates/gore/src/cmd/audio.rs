@@ -786,37 +786,33 @@ impl Published {
     }
 }
 
-/// A name in the same directory that nothing else holds, taken rather than hoped for.
+/// A name in the same directory that nothing else can be holding or about to hold.
 ///
 /// Same directory because the move below has to be a rename and not a copy, and a rename across
 /// volumes is not one. The counter separates two files rolled back in one run.
 ///
-/// The name is CREATED here, with `create_new`, which fails if anything is already there. A
-/// process id plus a process-local counter is not unique across time: this code deliberately
-/// leaves quarantined files behind when it cannot restore them, and an operating system reuses
-/// process ids. A later run with the same id starts its counter at zero, produces the same name,
-/// and `rename` would have replaced that file — the foreign replacement an earlier rollback had
-/// gone out of its way to preserve. Reserving the name proves it was free instead of assuming it.
-fn reserve_quarantine(path: &Path) -> Result<PathBuf, String> {
+/// Nothing is created here. Two earlier shapes of this were both wrong: a process id plus a
+/// process-local counter REPEATS — this code deliberately leaves quarantined files behind when it
+/// cannot restore them, and an operating system reuses process ids, so a later run produced the
+/// same name and the rename replaced that file. Creating the name first to prove it was free only
+/// moved the problem: `rename` replaces its destination, so the placeholder itself was something
+/// that could be swapped between reserving it and moving onto it.
+///
+/// A name nothing can predict has neither failure. `RandomState` is seeded by the operating
+/// system, so the suffix does not repeat across runs and is not derived from anything an outside
+/// process can reproduce. What is left is a 2^-64 coincidence rather than a window between two
+/// calls — and std offers no rename that refuses an occupied destination to close even that.
+fn quarantine_path(path: &Path) -> PathBuf {
+    use std::hash::{BuildHasher, Hasher};
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    for _ in 0..64 {
-        let serial = NEXT.fetch_add(1, Ordering::Relaxed);
-        let mut name = path.file_name().unwrap_or_default().to_os_string();
-        name.push(format!(".gore-rm-{}-{serial}", std::process::id()));
-        let candidate = path.with_file_name(name);
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
-            Ok(_) => return Ok(candidate),
-            // Taken — by a previous run's leftover, or by this run a moment ago. Try the next.
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(format!("{}: {error}", candidate.display())),
-        }
-    }
-    Err("no free quarantine name beside the file after 64 tries".to_string())
+    let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+    let entropy = std::collections::hash_map::RandomState::new()
+        .build_hasher()
+        .finish();
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".gore-rm-{entropy:016x}-{serial}"));
+    path.with_file_name(name)
 }
 
 /// What became of a file this run tried to take back.
@@ -851,14 +847,8 @@ fn remove_our_file(path: &Path, ours: &dyn Fn(&Path) -> bool) -> Removal {
             Err(_) => Removal::Absent,
         };
     }
-    let quarantine = match reserve_quarantine(path) {
-        Ok(reserved) => reserved,
-        Err(error) => return Removal::Failed(error),
-    };
+    let quarantine = quarantine_path(path);
     if let Err(error) = std::fs::rename(path, &quarantine) {
-        // The reservation is an empty file this run made, and nothing moved onto it. Leaving it
-        // would litter the output directory with one per failed rollback.
-        let _ = std::fs::remove_file(&quarantine);
         return match error.kind() {
             std::io::ErrorKind::NotFound => Removal::Absent,
             _ => Removal::Failed(error.to_string()),
@@ -1474,40 +1464,41 @@ mod rollback_tests {
     }
 
     #[test]
-    fn a_quarantine_name_is_taken_rather_than_hoped_for() {
-        // A process id plus a process-local counter is not unique across time, and this code
-        // deliberately leaves quarantined files behind when it cannot restore them. A later run
-        // with a reused process id starts its counter at zero and produces the same name, and the
-        // move would have replaced that file — the foreign replacement an earlier rollback went
-        // out of its way to preserve.
+    fn a_quarantine_name_is_one_nothing_else_can_be_holding() {
+        // Two earlier shapes of this were both wrong. A process id plus a counter REPEATS — this
+        // code deliberately leaves quarantined files behind, and process ids are reused, so a
+        // later run produced the same name and the move replaced that file. Creating the name
+        // first to prove it was free only moved the problem: `rename` replaces its destination,
+        // so the placeholder was itself something that could be swapped in between.
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("0_line.wav");
 
-        let first = super::reserve_quarantine(&path).unwrap();
-        assert!(first.exists(), "the name is reserved by being created");
-        std::fs::write(&first, b"a previous run left this here").unwrap();
+        let first = super::quarantine_path(&path);
+        let second = super::quarantine_path(&path);
+        assert_ne!(first, second, "two names in one run are two names");
+        assert!(!first.exists() && !second.exists(), "nothing is created to be swapped");
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
 
-        let second = super::reserve_quarantine(&path).unwrap();
-        assert_ne!(first, second, "a taken name is not handed out again");
-        assert_eq!(
-            std::fs::read(&first).unwrap(),
-            b"a previous run left this here",
-            "and what was under it is untouched"
-        );
-
-        // Both are under the file they belong to, in its own directory, so the move can be a
-        // rename rather than a copy across volumes.
-        for reserved in [&first, &second] {
-            assert_eq!(reserved.parent(), path.parent());
-            let name = reserved.file_name().unwrap().to_string_lossy().into_owned();
+        // Under the file they belong to, in its own directory, so the move can be a rename rather
+        // than a copy across volumes.
+        for name in [&first, &second] {
+            assert_eq!(name.parent(), path.parent());
+            let name = name.file_name().unwrap().to_string_lossy().into_owned();
             assert!(name.starts_with("0_line.wav.gore-rm-"), "{name}");
+            // Not derived from anything an outside process can reproduce, which is what the
+            // process-id version was.
+            assert!(
+                !name.contains(&std::process::id().to_string()),
+                "the name must not be predictable from this process: {name}"
+            );
         }
     }
 
     #[test]
-    fn a_failed_move_leaves_no_reservation_behind() {
-        // The reservation is a real empty file. A rollback that cannot move anything onto it must
-        // not leave one beside every output it failed to take back.
+    fn a_move_that_takes_nothing_back_leaves_nothing_behind() {
+        // True by construction now that no placeholder is created, and worth holding: the two
+        // earlier shapes of the quarantine name both wrote to the directory before the move, and
+        // a rollback that fails must not litter it with one file per output it could not take.
         let temp = TempDir::new().unwrap();
         let entry = publish(temp.path(), "0_line.wav", b"ours");
         let path = entry.path.clone();
@@ -1520,7 +1511,7 @@ mod rollback_tests {
         assert_eq!(
             std::fs::read_dir(temp.path()).unwrap().count(),
             0,
-            "no reservation may outlive the move it was made for"
+            "a rollback that took nothing back must leave nothing beside it"
         );
     }
 
