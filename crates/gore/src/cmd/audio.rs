@@ -111,10 +111,23 @@ pub fn banks(game: Option<PathBuf>, json: bool, key: Option<String>) -> Result<(
     }
 
     let rows = bank_rows(&dir, &key_bytes(key))?;
+    let occupied = occupied_bank_names(&dir);
     if rows.is_empty() {
+        // Naming them here rather than only in the table, because this branch never reaches the
+        // table: "verify the game files" is the wrong move for a directory called `Music.bank`,
+        // and it is the only sentence somebody in this state would otherwise get.
+        let held = match occupied.is_empty() {
+            true => String::new(),
+            false => format!(
+                " {} entr(y/ies) there are named like a bank and are not files ({}); remove or \
+                 rename them.",
+                occupied.len(),
+                occupied.join(", ")
+            ),
+        };
         bail!(
             "'{}' holds no .bank files. A Gothic 1 Remake install keeps ten there, so this is an \
-             install to verify rather than a listing to read.",
+             install to verify rather than a listing to read.{held}",
             dir.display()
         );
     }
@@ -122,10 +135,10 @@ pub fn banks(game: Option<PathBuf>, json: bool, key: Option<String>) -> Result<(
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&banks_document(&dir, &rows))?
+            serde_json::to_string_pretty(&banks_document(&dir, &rows, &occupied))?
         );
     } else {
-        print!("{}", banks_table(&dir, &rows));
+        print!("{}", banks_table(&dir, &rows, &occupied));
     }
     Ok(())
 }
@@ -156,6 +169,16 @@ fn bank_rows(dir: &Path, key: &[u8]) -> Result<Vec<BankRow>> {
             path.extension()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("bank"))
         })
+        // A directory named `Music.bank` is not a bank the game can load, and counting it as one
+        // put it in `bank_count`, in the "N bank(s)" header, and past the "holds no .bank files"
+        // check — a listing claiming to describe the directory, describing something that is not
+        // in it. Reported separately by `occupied_bank_names` rather than dropped, because going
+        // silent about it is the same failure with the sign flipped.
+        //
+        // Only when the metadata says so. An entry whose type cannot be read stays a row and
+        // becomes an unreadable one, which is what it is — dropping it would print totals that
+        // describe a subset.
+        .filter(|path| !std::fs::metadata(path).is_ok_and(|meta| !meta.is_file()))
         .collect();
     paths.sort();
 
@@ -171,6 +194,29 @@ fn bank_rows(dir: &Path, key: &[u8]) -> Result<Vec<BankRow>> {
             BankRow { path, summary }
         })
         .collect())
+}
+
+/// Entries named like a bank that are not files, in directory order.
+///
+/// The listing above leaves them out because the game cannot load a directory, and this is what
+/// keeps that from being silent: somebody looking for `Music.bank` in a listing that does not
+/// mention it goes back to searching the filesystem, which is where they started.
+fn occupied_bank_names(dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| {
+            let path = entry.path();
+            path.extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("bank"))
+                && std::fs::metadata(&path).is_ok_and(|meta| !meta.is_file())
+        })
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
 }
 
 /// The counts the header states, so the table and the JSON document cannot claim different totals.
@@ -196,7 +242,7 @@ fn bank_totals(rows: &[BankRow]) -> (usize, usize, usize) {
     (with_samples, samples, unreadable)
 }
 
-fn banks_table(dir: &Path, rows: &[BankRow]) -> String {
+fn banks_table(dir: &Path, rows: &[BankRow], occupied: &[String]) -> String {
     use std::fmt::Write as _;
 
     let (with_samples, sample_total, unreadable) = bank_totals(rows);
@@ -258,12 +304,24 @@ fn banks_table(dir: &Path, rows: &[BankRow]) -> String {
             let _ = writeln!(out, "{:>7}  {:<8}  could not be read: {reason}", "", "");
         }
     }
+    // After the rows, because they are not rows: the game cannot load a directory, so counting one
+    // as a bank would put it in the header's total. Said all the same — somebody looking for
+    // `Music.bank` in a listing that never mentions it goes back to searching the filesystem.
+    if !occupied.is_empty() {
+        let _ = writeln!(
+            out,
+            "{} entr(y/ies) are named like a bank and are not files, so they are not counted \
+             above: {}. Remove or rename them.",
+            occupied.len(),
+            occupied.join(", ")
+        );
+    }
     out
 }
 
 /// The same shape `list --json` uses: the path under `bank`, the codec spelled the way `Codec`'s
 /// `Debug` spells it, and counts that answer their question without a reader subtracting anything.
-fn banks_document(dir: &Path, rows: &[BankRow]) -> serde_json::Value {
+fn banks_document(dir: &Path, rows: &[BankRow], occupied: &[String]) -> serde_json::Value {
     let (with_samples, sample_total, unreadable) = bank_totals(rows);
     let banks = rows
         .iter()
@@ -324,6 +382,10 @@ fn banks_document(dir: &Path, rows: &[BankRow]) -> serde_json::Value {
         "unreadable_count": unreadable,
         "totals_complete": unreadable == 0,
         "banks": banks,
+        // Not banks, and not silence either. The game cannot load a directory, so one named
+        // `Music.bank` is out of `bank_count` — but a caller that cannot see it has the same
+        // blind spot the count would have had.
+        "occupied_names": occupied,
     })
 }
 
@@ -1475,6 +1537,50 @@ mod banks_tests {
     }
 
     #[test]
+    fn a_directory_named_like_a_bank_is_not_counted_as_one_and_not_hidden_either() {
+        // The game cannot load a directory, so counting one put it in `bank_count`, in the "N
+        // bank(s)" header and past the "holds no .bank files" check — a listing describing
+        // something that is not in the directory it claims to describe. Dropping it silently
+        // would be the same failure with the sign flipped: somebody looking for `Music.bank` in
+        // a listing that never mentions it goes back to searching the filesystem.
+        let temp = TempDir::new().unwrap();
+        write_sample_bank(temp.path(), "SFX.bank", 3);
+        std::fs::create_dir_all(temp.path().join("Music.bank")).unwrap();
+
+        let rows = rows(temp.path());
+        assert_eq!(rows.len(), 1, "only the file is a bank: {:?}", rows.len());
+        let occupied = super::occupied_bank_names(temp.path());
+        assert_eq!(occupied, vec!["Music.bank".to_string()]);
+
+        let document = banks_document(temp.path(), &rows, &occupied);
+        assert_eq!(document["bank_count"], 1, "the directory is not a bank");
+        assert_eq!(document["occupied_names"][0], "Music.bank", "and it is not invisible");
+
+        let table = banks_table(temp.path(), &rows, &occupied);
+        assert!(table.contains("FMOD banks: 1 in"), "{table}");
+        assert!(table.contains("Music.bank"), "{table}");
+        assert!(table.contains("Remove or rename"), "{table}");
+
+        // And where it is the ONLY thing there, the command says so instead of reporting an
+        // install to verify — which is the wrong move for a directory somebody created.
+        let temp = TempDir::new().unwrap();
+        std::fs::create_dir_all(
+            temp.path()
+                .join("G1R")
+                .join("Content")
+                .join("FMOD")
+                .join("Desktop")
+                .join("Music.bank"),
+        )
+        .unwrap();
+        let error = super::banks(Some(temp.path().to_path_buf()), false, None)
+            .expect_err("a directory named like a bank is not a bank");
+        let said = format!("{error}");
+        assert!(said.contains("Music.bank"), "{said}");
+        assert!(said.contains("remove or rename"), "{said}");
+    }
+
+    #[test]
     fn something_occupying_the_bank_directory_is_named_rather_than_called_absent() {
         // "No FMOD bank directory" sends the reader to re-point `--game` or verify the game files,
         // and neither of those can put a directory where something else is already sitting. The
@@ -1516,7 +1622,7 @@ mod banks_tests {
         let rows = rows(temp.path());
         assert_eq!(rows.len(), 2, "both files are banks, so both are rows");
 
-        let table = banks_table(temp.path(), &rows);
+        let table = banks_table(temp.path(), &rows, &[]);
         assert!(
             table.contains("Master.bank") && table.contains("no sample data"),
             "the sample-free bank must be present and explained, got {table:?}"
@@ -1526,7 +1632,7 @@ mod banks_tests {
             "the header must count the files and the samples separately, got {table:?}"
         );
 
-        let document = banks_document(temp.path(), &rows);
+        let document = banks_document(temp.path(), &rows, &[]);
         assert_eq!(document["bank_count"], 2);
         assert_eq!(document["with_samples_count"], 1);
         assert_eq!(document["sample_count"], 7);
@@ -1549,10 +1655,10 @@ mod banks_tests {
         let rows = rows(temp.path());
         assert_eq!(rows.len(), 2);
 
-        let table = banks_table(temp.path(), &rows);
+        let table = banks_table(temp.path(), &rows, &[]);
         assert!(table.contains("partial count"), "{table:?}");
 
-        let document = banks_document(temp.path(), &rows);
+        let document = banks_document(temp.path(), &rows, &[]);
         assert_eq!(document["unreadable_count"], 1);
         assert_eq!(document["totals_complete"], false);
         assert_eq!(document["sample_count"], 7, "the readable bank still counts");
@@ -1592,13 +1698,13 @@ mod banks_tests {
         let expected = temp.path().join("SFX.bank").display().to_string();
 
         assert!(
-            banks_table(temp.path(), &rows).contains(&expected),
+            banks_table(temp.path(), &rows, &[]).contains(&expected),
             "the table must print a pasteable path"
         );
         // `bank` is the key `list --json` uses for the same string, so a caller can take this
         // field and pass it straight back as `--bank` without renaming anything.
         assert_eq!(
-            banks_document(temp.path(), &rows)["banks"][0]["bank"],
+            banks_document(temp.path(), &rows, &[])["banks"][0]["bank"],
             expected
         );
     }
@@ -1615,7 +1721,7 @@ mod banks_tests {
         let rows = rows(temp.path());
         assert_eq!(rows.len(), 2);
 
-        let table = banks_table(temp.path(), &rows);
+        let table = banks_table(temp.path(), &rows, &[]);
         assert!(
             table.contains("Broken.bank") && table.contains("could not be read:"),
             "the unreadable bank must be named together with why, got {table:?}"
@@ -1625,7 +1731,7 @@ mod banks_tests {
             "the readable banks must still be listed"
         );
 
-        let document = banks_document(temp.path(), &rows);
+        let document = banks_document(temp.path(), &rows, &[]);
         let broken = &document["banks"][0];
         assert_eq!(broken["name"], "Broken.bank");
         assert!(broken["error"]
@@ -1672,13 +1778,13 @@ mod banks_tests {
         std::fs::write(temp.path().join("SFX.bank"), injected).unwrap();
 
         let rows = rows(temp.path());
-        let table = banks_table(temp.path(), &rows);
+        let table = banks_table(temp.path(), &rows, &[]);
         assert!(
             table.contains("[injected") && table.contains("gore audio restore"),
             "an injected bank must be marked and the way back named, got {table:?}"
         );
 
-        let bank = &banks_document(temp.path(), &rows)["banks"][0];
+        let bank = &banks_document(temp.path(), &rows, &[])["banks"][0];
         assert_eq!(bank["injected"], true);
         assert_eq!(bank["sub_banks"], 2);
         // The count is still the shipped one. A replacement repoints a waveform, it never adds one,
@@ -1735,8 +1841,8 @@ mod banks_tests {
         std::fs::write(temp.path().join("Master.bank"), sample_free_bank()).unwrap();
 
         let rows = rows(temp.path());
-        let table = banks_table(temp.path(), &rows);
-        let document = banks_document(temp.path(), &rows);
+        let table = banks_table(temp.path(), &rows, &[]);
+        let document = banks_document(temp.path(), &rows, &[]);
 
         assert!(
             table.contains("FMOD banks: 3 in ")
