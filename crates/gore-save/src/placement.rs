@@ -109,6 +109,18 @@ pub fn read_notes_for(save_path: &Path, key: &str) -> SaveNotes {
     read_folder_notes(save_path).remove(key).unwrap_or_default()
 }
 
+/// [`read_notes_for`] for callers that are about to WRITE what they read.
+///
+/// The forgiving reader turns an unreadable sidecar into "no notes", which is
+/// right for a display and wrong for a transfer: copying that empty set onward
+/// would report success while quietly clearing the destination. Transfers need
+/// to tell an absent sidecar from a broken one.
+pub fn read_notes_for_strict(save_path: &Path, key: &str) -> Result<SaveNotes, CoreError> {
+    Ok(read_folder_notes_strict(save_path)?
+        .remove(key)
+        .unwrap_or_default())
+}
+
 /// The notes, with an existing-but-unreadable file reported as an error.
 ///
 /// Anything that REWRITES the file goes through this. The forgiving reader would
@@ -231,7 +243,29 @@ pub fn record(save_path: &Path, records: &[(String, PlacementNote)]) -> Result<(
 /// copied bytes do not contain — and a source with no notes has to CLEAR the
 /// destination key, not leave it be.
 pub fn carry(source: &Path, destination: &Path) -> Result<(), CoreError> {
-    snapshot_to_key(destination, &save_key(destination), read_notes(source))
+    let notes = read_notes_for_strict(source, &save_key(source))?;
+    snapshot_to_key(destination, &save_key(destination), notes)
+}
+
+/// Snapshot `save_path`'s notes under the file name of `backup_path`.
+///
+/// The backup captures the save AS IT IS, pinned NPCs included, so it has to
+/// capture what those pins replaced too — otherwise undoing the live pin spends
+/// the only copy and restoring this backup later brings `DailyRoutine_Empty`
+/// back with nothing to undo it.
+///
+/// The key is the backup's file NAME in the save's own folder map: a backup
+/// lives inside `goresave_backups`, so deriving its note location from its own
+/// path would look for a second `goresave_backups` in there.
+pub fn snapshot_backup(save_path: &Path, backup_path: &Path) -> Result<(), CoreError> {
+    let Some(key) = backup_path.file_name().and_then(|value| value.to_str()) else {
+        return Ok(());
+    };
+    let notes = read_notes_for_strict(save_path, &save_key(save_path))?;
+    if notes.is_empty() {
+        return Ok(());
+    }
+    snapshot_to_key(save_path, key, notes)
 }
 
 /// Snapshot a save's notes under `key`, so a copy of the save keeps the record
@@ -388,6 +422,40 @@ mod tests {
 
         assert_eq!(read_notes(&destination).get("Npc-A"), Some(&note()));
         assert_eq!(read_notes(&source).get("Npc-A"), Some(&note()));
+    }
+
+    #[test]
+    fn a_transfer_refuses_an_unreadable_sidecar_instead_of_reading_it_as_empty() {
+        // The forgiving reader is right for a display and wrong here: copying
+        // "no notes" onward would report success while clearing the destination.
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("external.sav");
+        let destination = dir.path().join("G1R-007.sav");
+        let path = notes_path(&source);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"{ this is not json").unwrap();
+
+        let err = carry(&source, &destination).unwrap_err();
+        assert!(
+            format!("{err}").contains("not readable NPC-placement JSON"),
+            "unexpected error: {err}"
+        );
+
+        let err = snapshot_backup(&source, &dir.path().join("external.sav.bak.1")).unwrap_err();
+        assert!(
+            format!("{err}").contains("not readable NPC-placement JSON"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn a_backup_of_a_save_with_no_notes_writes_nothing() {
+        let dir = tempdir().unwrap();
+        let save = dir.path().join("G1R-001.sav");
+
+        snapshot_backup(&save, &dir.path().join("G1R-001.sav.bak.1")).unwrap();
+
+        assert!(!notes_path(&save).exists());
     }
 
     #[test]
