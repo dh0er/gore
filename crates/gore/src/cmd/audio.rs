@@ -844,7 +844,13 @@ fn remove_our_file(path: &Path, ours: &dyn Fn(&Path) -> bool) -> Removal {
     if !ours(path) {
         return match std::fs::symlink_metadata(path) {
             Ok(_) => Removal::NotOurs,
-            Err(_) => Removal::Absent,
+            // Only "not there" is absent. Every other reason a path cannot be inspected — an ACL
+            // that changed under the run, an I/O error — was folded into it, so a file this run
+            // wrote and could not even look at was reported as a path with nothing on it, and the
+            // caller went on to say "Nothing was written" about a directory still holding it. The
+            // next attempt then collides on a path the message had just called clear.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Removal::Absent,
+            Err(error) => Removal::Failed(format!("could not be inspected: {error}")),
         };
     }
     let quarantine = quarantine_path(path);
@@ -1513,6 +1519,46 @@ mod rollback_tests {
             0,
             "a rollback that took nothing back must leave nothing beside it"
         );
+    }
+
+    #[test]
+    fn a_path_that_cannot_be_inspected_is_not_a_path_with_nothing_on_it() {
+        // Every other check in this toolkit separates "not there" from "could not tell", and this
+        // arm folded them together: an output directory whose permissions changed under the run
+        // made `symlink_metadata` fail, that came back as `Absent`, and the caller went on to say
+        // "Nothing was written" about a directory still holding the file. The next attempt then
+        // collides on a path the message had just called clear.
+        //
+        // Provoked without an ACL, which this suite cannot set. The cause here is synthetic — a
+        // path the operating system will not even accept — and the cause is not the point: what
+        // this arm has to get right is every inspection error that is not "not there". A path
+        // under a FILE was the first attempt and turned out to be `NotFound` on Windows, which is
+        // why the fixture asserts its own premise below.
+        let temp = TempDir::new().unwrap();
+        let unreachable = temp.path().join("0_line.wav\u{0}");
+        let error = std::fs::symlink_metadata(&unreachable).unwrap_err();
+        assert_ne!(
+            error.kind(),
+            std::io::ErrorKind::NotFound,
+            "the fixture is only interesting while the error is not 'not there': {error}"
+        );
+
+        let outcome = super::remove_our_file(&unreachable, &|_| false);
+        match outcome {
+            super::Removal::Failed(why) => assert!(why.contains("could not be inspected"), "{why}"),
+            _ => panic!("a path nobody could look at must not be reported as free"),
+        }
+
+        // And the caller keeps it, so the sentence names the path instead of claiming the run
+        // wrote nothing.
+        let entry = super::Published {
+            path: unreachable.clone(),
+            written: 1,
+            digest: super::digest_of(b"x"),
+        };
+        let kept = super::roll_back(std::slice::from_ref(&entry));
+        assert!(kept.contains("are still there"), "{kept}");
+        assert!(kept.contains("0_line.wav"), "{kept}");
     }
 
     #[test]
