@@ -1655,6 +1655,33 @@ fn check_leftovers(
         );
     }
 
+    // Ahead of every note below, and a Problem rather than one. The advice further down is to
+    // restore from these files — and neither `gore audio restore` nor `gore mod undeploy` can read
+    // a directory. An in-place edit writes exactly this path and fails on it, so what has to be
+    // said first is what is holding the name.
+    //
+    // Placed above the incomplete-scan and unreadable-record notes on purpose: this is something
+    // the scan DID establish, and it does not become less true because the walk ran out of budget
+    // or the deploy record could not be read. Below them it was reachable only when neither
+    // applied, which is the same mistake as sitting below the all-clear.
+    if !scan.occupied.is_empty() {
+        return Check::new(
+            "leftovers",
+            "leftovers",
+            Verdict::Problem,
+            format!(
+                "{} backup path(s) are occupied by something that is not a file",
+                scan.occupied.len()
+            ),
+        )
+        .with_items(scan.occupied.clone())
+        .with_fix(
+            "an in-place edit writes its pristine copy to exactly that name and cannot while \
+             something else holds it, and nothing can restore from it either. Remove or rename \
+             what is there",
+        );
+    }
+
     if !scan.complete {
         return Check::new(
             "leftovers",
@@ -1688,28 +1715,6 @@ fn check_leftovers(
         .with_fix(
             "the deployment check above reports that record failure with the command that \
              settles it; these backups are described by whatever it says",
-        );
-    }
-
-    // Ahead of the note below, and a Problem rather than one, because the advice down there is to
-    // restore from these files — and neither `gore audio restore` nor `gore mod undeploy` can read
-    // a directory. An in-place edit writes exactly this path and fails on it, so what has to be
-    // said first is what is holding the name.
-    if !scan.occupied.is_empty() {
-        return Check::new(
-            "leftovers",
-            "leftovers",
-            Verdict::Problem,
-            format!(
-                "{} backup path(s) are occupied by something that is not a file",
-                scan.occupied.len()
-            ),
-        )
-        .with_items(scan.occupied.clone())
-        .with_fix(
-            "an in-place edit writes its pristine copy to exactly that name and cannot while \
-             something else holds it, and nothing can restore from it either. Remove or rename \
-             what is there",
         );
     }
 
@@ -3138,6 +3143,16 @@ mod tests {
         let fix = check.fix.unwrap();
         assert!(fix.contains("Remove or rename"), "{fix}");
         assert!(!fix.contains("gore audio restore"), "nothing restores from a directory: {fix}");
+
+        // And it survives the branches that answer with a note about something else. A deploy
+        // record nobody could read does not make the directory less of a blocker, and reporting
+        // the note instead hid it — the same mistake as sitting below the all-clear, one branch
+        // further down.
+        let unreadable: Result<Option<Vec<PathBuf>>, String> =
+            Err("the deploy record could not be read".to_string());
+        let check = check_leftovers(&paths(root), &probe(root, false), &unreadable);
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("not a file"), "{}", check.detail);
 
         // The control: the same name as a real file is a backup again, with the note it had.
         std::fs::remove_dir(banks.join("SFX.bank.gore-bak")).unwrap();
