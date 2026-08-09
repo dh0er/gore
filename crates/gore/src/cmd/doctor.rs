@@ -1595,6 +1595,26 @@ fn catalog_problem(catalog: &Path, recorded_ids: Option<usize>) -> Option<String
 /// cache afterwards, which changes its size. Nothing breaks, but every tool that turns a text id
 /// into text is then reading the text the game no longer has, which reads exactly like an edit
 /// that did not take.
+/// Something occupies the catalog path and it is not a file.
+///
+/// Written once because both arms of the check below reach this state — with a provenance sidecar
+/// and without one — and the arm that had its own copy was fixed while its sibling kept telling
+/// the reader to run a command that cannot succeed. `gore loc extract` publishes with a rename,
+/// which does not replace a directory.
+fn obstructed_catalog(catalog: &Path) -> Check {
+    Check::new(
+        "loc_catalog",
+        "loc catalog",
+        Verdict::Problem,
+        format!("{} is not a file", catalog.display()),
+    )
+    .with_fix(
+        "every tool that turns a text id into text reads that path, and 'gore loc extract' cannot \
+         write it while something else occupies it. Remove or rename that, then run 'gore loc \
+         extract'",
+    )
+}
+
 fn check_loc_catalog(
     meta: Option<LocMeta>,
     catalog: &Path,
@@ -1638,20 +1658,7 @@ fn check_loc_catalog(
                  could not write one — re-run it to restore the record of which install this \
                  came from",
             ),
-            // Something is there and it is not a file. `gore loc extract` cannot publish the
-            // catalog over a directory, so recommending it would send the reader round the same
-            // failure while the thing in the way went unmentioned.
-            Ok(Some(_)) => Check::new(
-                "loc_catalog",
-                "loc catalog",
-                Verdict::Problem,
-                format!("{} is not a file", catalog.display()),
-            )
-            .with_fix(
-                "every tool that turns a text id into text reads that path, and 'gore loc \
-                 extract' cannot write it while something else occupies it. Remove or rename \
-                 that, then run 'gore loc extract'",
-            ),
+            Ok(Some(_)) => obstructed_catalog(catalog),
             Ok(None) => Check::new(
                 "loc_catalog",
                 "loc catalog",
@@ -1695,7 +1702,13 @@ fn check_loc_catalog(
                     );
             }
         }
-        Ok(_) => {
+        // Something is there and it is not a file — the same state the no-sidecar arm above
+        // reports, reached with a sidecar in hand. Folded into `Ok(_)` it came back as "the
+        // catalog is gone, run 'gore loc extract'", and that command publishes with a rename it
+        // cannot perform over a directory: the reader would run it, watch it fail, and never be
+        // told what is in the way.
+        Ok(Some(_)) => return obstructed_catalog(catalog),
+        Ok(None) => {
             return Check::new(
                 "loc_catalog",
                 "loc catalog",
@@ -3096,6 +3109,31 @@ mod tests {
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(check.detail.contains("is not a file"), "{}", check.detail);
         assert!(check.fix.unwrap().contains("Remove or rename"));
+    }
+
+    #[test]
+    fn the_obstruction_is_named_whether_or_not_a_sidecar_describes_the_catalog() {
+        // Two arms reach this state and only one of them had been fixed. With a record in hand the
+        // other reported "the catalog itself is gone" and recommended `gore loc extract`, which
+        // publishes with a rename and cannot replace a directory — so the reader runs it, watches
+        // it fail, and is never told what is in the way.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("AlkimiaLocalization_00000000.lcache");
+        std::fs::write(&cache, vec![0u8; 2048]).unwrap();
+        let catalog = dir.path().join("loc_catalog.json");
+        std::fs::create_dir_all(&catalog).unwrap();
+
+        for meta in [None, Some(meta_with_identity(&cache, 2048))] {
+            let described = meta.is_some();
+            let check = check_loc_catalog(meta, &catalog, Some(&cache), cache.parent().unwrap());
+            assert_eq!(check.verdict, Verdict::Problem, "sidecar={described}: {}", check.detail);
+            assert!(
+                check.detail.contains("is not a file"),
+                "sidecar={described}: {}",
+                check.detail
+            );
+            assert!(check.fix.unwrap().contains("Remove or rename"), "sidecar={described}");
+        }
     }
 
     #[test]
