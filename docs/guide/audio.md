@@ -77,6 +77,12 @@ still a row, carrying an `error` instead of a count: one damaged bank must not
 cost you the other nine. Passing the wrong `--key` puts every sample-carrying
 bank in exactly that state, and the error names the key as the thing to suspect.
 
+Something named like a bank that is not a file — a directory called
+`Music.bank`, say — is not a bank the game can load, so it is not a row and not
+in `bank_count`. It is listed under `occupied_names` and in the table's last
+line, because a listing that simply left it out would send you back to searching
+the folder you just asked about.
+
 ## Inspect a bank
 
 ```powershell
