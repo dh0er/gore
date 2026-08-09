@@ -12,11 +12,9 @@ import 'package:goresave/loc/loc_catalog_provider.dart';
 /// user asked for its orientation to be applied as well.
 ///
 /// Deliberately WRITE-AGNOSTIC — it carries no command, no path and no pending
-/// key. Its one caller today, the player transform editor, turns it into a
-/// `private.player.setTransform` edit; the dialog knows nothing about that.
-/// (It once served the NPC panel too. That panel is read-only now: the game
-/// restores an NPC's placement from the level and discards the saved pose — see
-/// `NpcPositionPanel`.)
+/// key. The player editor turns it into a `private.player.setTransform` edit and
+/// the NPC panel into a `private.typed.setValue` edit; the dialog knows about
+/// neither, which is what lets ONE dialog serve both callers.
 class LocationPick {
   const LocationPick({required this.spot, required this.applyRotation});
 

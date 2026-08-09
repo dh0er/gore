@@ -199,7 +199,7 @@ class EditorState {
       // key themselves through `setEditInvalid`: returning one here would let
       // `setNpcEditInvalid`'s `..remove(invalidNpcEditKey)` clear another
       // surface's block as a side effect.
-      if (key != storyStatePendingKey) {
+      if (key != storyStatePendingKey && !key.startsWith('npc.position:')) {
         legacyFallback ??= key;
       }
     }
@@ -853,9 +853,16 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (state.selectedActor == actor) return;
     // Switching actor abandons any in-progress invalid NPC field, so drop the
     // validation block — the previous NPC's stored (valid) draft survives.
+    // `npc.position:` is swept alongside `npc.attributes:` because the Position
+    // sub-tab keys itself through `setEditInvalid` (see position_detail.dart);
+    // without this, a stale block from the previous NPC would outlive the
+    // switch and disable Save for an actor whose fields are all valid.
     final invalid = Set<String>.from(state.invalidEditKeys)
       ..remove(state.invalidNpcEditKey)
-      ..removeWhere((key) => key.startsWith('npc.attributes:'));
+      ..removeWhere(
+        (key) =>
+            key.startsWith('npc.attributes:') || key.startsWith('npc.position:'),
+      );
     state = state.copyWith(selectedActor: actor, invalidEditKeys: invalid);
   }
 
@@ -1018,6 +1025,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final allEdits = <_KeyedEdit>[];
     var syncPersistent = false;
     var displayEditCount = 0;
+    // Placement notes belong to the SAVE, not to any one edit, so they are
+    // collected across every pending key and ride the first sub-write — the same
+    // one that takes the backup. The core only records them once those bytes are
+    // committed.
+    final placementNotes = <Map<String, Object?>>[];
+    final clearPlacementNotes = <String>[];
     for (final key in snapshotKeys) {
       final entry = state.pendingEdits[key]!;
       displayEditCount += entry.pendingCount;
@@ -1025,6 +1038,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
         allEdits.add(_KeyedEdit(key, edit));
       }
       if (entry.syncPersistentDataList) syncPersistent = true;
+      placementNotes.addAll(entry.placementNotes);
+      clearPlacementNotes.addAll(entry.clearPlacementNotes);
     }
 
     // The same typed property can be edited from two surfaces at once (the
@@ -1421,6 +1436,19 @@ class EditorNotifier extends StateNotifier<EditorState> {
       if (repairEdits.isNotEmpty)
         _SubWrite(edits: [for (final keyed in repairEdits) keyed.edit]),
     ];
+    // Hang the placement notes on whichever sub-write goes first. It is the one
+    // that takes the backup, and — for a position edit, which is never a
+    // splicing edit — the one that actually carries the move.
+    if (worklist.isNotEmpty &&
+        (placementNotes.isNotEmpty || clearPlacementNotes.isNotEmpty)) {
+      final first = worklist.first;
+      worklist[0] = _SubWrite(
+        edits: first.edits,
+        syncPersistentDataList: first.syncPersistentDataList,
+        placementNotes: placementNotes,
+        clearPlacementNotes: clearPlacementNotes,
+      );
+    }
 
     final n = displayEditCount;
     // Edit objects that committed bytes to disk, captured BEFORE the trailing
@@ -1454,6 +1482,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
                 // Backup-once: only the first sub-write snapshots the pristine file.
                 'backup': i == 0,
                 if (sub.syncPersistentDataList) 'syncPersistentDataList': true,
+                if (sub.placementNotes.isNotEmpty)
+                  'placementNotes': sub.placementNotes,
+                if (sub.clearPlacementNotes.isNotEmpty)
+                  'clearPlacementNotes': sub.clearPlacementNotes,
                 'edits': sub.edits,
               },
             );
@@ -3070,13 +3102,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
 
   /// Load a single NPC's saved pose (by GlobalId) from the core
   /// `private.npc.position` command for the currently selected save: the
-  /// character location/rotation plus the spawn location/rotation. Rotations
-  /// arrive as `{pitch, yaw, roll}`.
+  /// character location/rotation plus the spawn location/rotation reference,
+  /// each paired with the FULL typed path `private.typed.setValue` resolves —
+  /// so the position editor registers its edits through the same pending
+  /// mechanism the attribute editor uses (only the value is a struct, not a
+  /// scalar). Rotations arrive as `{pitch, yaw, roll}`.
   ///
-  /// READ-ONLY. The game restores an NPC's placement from the level, not from
-  /// the save — a runtime probe read back the original pre-edit values after
-  /// loading a save whose pose records had all been rewritten — so this pose is
-  /// displayed and never written (see `NpcPositionPanel`).
+  /// Writing this pose is an OPEN QUESTION, deliberately re-enabled — see
+  /// `NpcPositionPanel` for what the earlier in-game tests did and did not rule
+  /// out.
   ///
   /// Memoized per (save, GlobalId) exactly like [loadNpcAttributes]; a failed
   /// load is NOT cached so a transient error can retry.
@@ -3637,8 +3671,15 @@ bool _isInventoryTypedEdit(Map<String, Object?> edit) {
 /// to submit. Post-write convergence is done per-edit (matched by identity)
 /// rather than per-key, so a sub-write no longer needs to carry its keys.
 class _SubWrite {
-  const _SubWrite({required this.edits, this.syncPersistentDataList = false});
+  const _SubWrite({
+    required this.edits,
+    this.syncPersistentDataList = false,
+    this.placementNotes = const [],
+    this.clearPlacementNotes = const [],
+  });
 
   final List<Map<String, Object?>> edits;
   final bool syncPersistentDataList;
+  final List<Map<String, Object?>> placementNotes;
+  final List<String> clearPlacementNotes;
 }

@@ -645,6 +645,38 @@ class AppLocalizationsFr extends AppLocalizations {
   String get spawnPositionSection => 'Position d’apparition (référence)';
 
   @override
+  String get resetToSpawnPosition => 'Réinitialiser à la position d’apparition';
+
+  @override
+  String get positionOutOfRange =>
+      'La valeur doit être comprise entre −10 000 000 et 10 000 000';
+
+  @override
+  String get positionNotEditable =>
+      'La position enregistrée de ce personnage n’a pas pu être lue ; elle ne peut donc pas être modifiée.';
+
+  @override
+  String get positionNeverPlaced =>
+      'Ce personnage n’a jamais été placé dans le monde (position 0, 0, 0) — le jeu peut ignorer la position enregistrée.';
+
+  @override
+  String get npcStayInPlace => 'Désactiver sa routine quotidienne';
+
+  @override
+  String get npcStayInPlaceHint => 'Il reste alors où il se trouve.';
+
+  @override
+  String get npcStayInPlaceLocked =>
+      'Sa routine quotidienne d\'origine n\'est pas enregistrée : impossible d\'annuler ceci.';
+
+  @override
+  String get npcUndoPlacement => 'Annuler le déplacement';
+
+  @override
+  String get npcUndoPlacementStale =>
+      'La sauvegarde ne contient plus ce que ce déplacement avait écrit ; le restaurer effacerait ce qui s\'est passé depuis.';
+
+  @override
   String get positionNotReadable =>
       'La position enregistrée de ce personnage n’a pas pu être lue.';
 

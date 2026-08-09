@@ -643,6 +643,38 @@ class AppLocalizationsRu extends AppLocalizations {
   String get spawnPositionSection => 'Точка появления (справочно)';
 
   @override
+  String get resetToSpawnPosition => 'Вернуть к точке появления';
+
+  @override
+  String get positionOutOfRange =>
+      'Значение должно быть от −10 000 000 до 10 000 000';
+
+  @override
+  String get positionNotEditable =>
+      'Сохранённую позицию этого персонажа не удалось прочитать, поэтому её нельзя изменить.';
+
+  @override
+  String get positionNeverPlaced =>
+      'Этот персонаж ни разу не был размещён в мире (позиция 0, 0, 0) — игра может игнорировать сохранённую позицию.';
+
+  @override
+  String get npcStayInPlace => 'Отключить его распорядок дня';
+
+  @override
+  String get npcStayInPlaceHint => 'Тогда он останется на месте.';
+
+  @override
+  String get npcStayInPlaceLocked =>
+      'Его исходный распорядок дня не записан, поэтому отменить это больше нельзя.';
+
+  @override
+  String get npcUndoPlacement => 'Отменить перемещение';
+
+  @override
+  String get npcUndoPlacementStale =>
+      'В сохранении больше нет того, что записало это перемещение, поэтому восстановление отбросило бы всё, что произошло с тех пор.';
+
+  @override
   String get positionNotReadable =>
       'Сохранённую позицию этого персонажа не удалось прочитать.';
 

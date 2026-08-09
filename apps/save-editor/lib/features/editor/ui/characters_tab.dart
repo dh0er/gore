@@ -104,8 +104,8 @@ class CharactersTab extends ConsumerWidget {
 
     // Position: the player's transform editor (its only home — it used to sit
     // in the Attribute tab's HeroStatsCard sidebar) and, for an NPC, the saved
-    // pose from `private.npc.position` READ-ONLY (the game restores an NPC's
-    // placement from the level; see PositionDetail). Orphans have no actor and
+    // pose from `private.npc.position` (editable again while the placement
+    // question is open — see NpcPositionPanel). Orphans have no actor and
     // therefore no stored pose, so they get the same clean empty state as
     // Attribute/Inventar/Ereignisse.
     final Widget positionBody = isOrphan

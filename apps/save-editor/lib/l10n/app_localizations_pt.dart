@@ -642,6 +642,38 @@ class AppLocalizationsPt extends AppLocalizations {
   String get spawnPositionSection => 'Posição de nascimento (referência)';
 
   @override
+  String get resetToSpawnPosition => 'Repor na posição de nascimento';
+
+  @override
+  String get positionOutOfRange =>
+      'O valor tem de estar entre −10 000 000 e 10 000 000';
+
+  @override
+  String get positionNotEditable =>
+      'Não foi possível ler a posição guardada desta personagem, pelo que não pode ser editada.';
+
+  @override
+  String get positionNeverPlaced =>
+      'Esta personagem nunca foi colocada no mundo (posição 0, 0, 0) — o jogo pode ignorar a posição guardada.';
+
+  @override
+  String get npcStayInPlace => 'Desativar a rotina diária dele';
+
+  @override
+  String get npcStayInPlaceHint => 'Fica então onde está.';
+
+  @override
+  String get npcStayInPlaceLocked =>
+      'A rotina diária original dele não está registada, por isso já não é possível anular.';
+
+  @override
+  String get npcUndoPlacement => 'Anular a deslocação';
+
+  @override
+  String get npcUndoPlacementStale =>
+      'O jogo guardado já não contém o que essa deslocação escreveu, por isso restaurá-la descartaria o que aconteceu entretanto.';
+
+  @override
   String get positionNotReadable =>
       'Não foi possível ler a posição guardada desta personagem.';
 
@@ -3386,6 +3418,38 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get spawnPositionSection => 'Posição de spawn (referência)';
+
+  @override
+  String get resetToSpawnPosition => 'Redefinir para a posição de spawn';
+
+  @override
+  String get positionOutOfRange =>
+      'O valor deve estar entre −10.000.000 e 10.000.000';
+
+  @override
+  String get positionNotEditable =>
+      'Não foi possível ler a posição salva deste personagem, portanto ela não pode ser editada.';
+
+  @override
+  String get positionNeverPlaced =>
+      'Este personagem nunca foi colocado no mundo (posição 0, 0, 0) — o jogo pode ignorar a posição salva.';
+
+  @override
+  String get npcStayInPlace => 'Desativar a rotina diária dele';
+
+  @override
+  String get npcStayInPlaceHint => 'Ele então fica onde está.';
+
+  @override
+  String get npcStayInPlaceLocked =>
+      'A rotina diária original dele não está registrada, então não é mais possível desfazer.';
+
+  @override
+  String get npcUndoPlacement => 'Desfazer a mudança';
+
+  @override
+  String get npcUndoPlacementStale =>
+      'O jogo salvo não contém mais o que essa mudança escreveu, então restaurá-la descartaria o que aconteceu desde então.';
 
   @override
   String get positionNotReadable =>

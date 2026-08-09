@@ -623,6 +623,33 @@ class AppLocalizationsZh extends AppLocalizations {
   String get spawnPositionSection => '出生位置（参考）';
 
   @override
+  String get resetToSpawnPosition => '重置为出生位置';
+
+  @override
+  String get positionOutOfRange => '数值必须介于 −10,000,000 与 10,000,000 之间';
+
+  @override
+  String get positionNotEditable => '无法读取该角色已保存的位置，因此无法编辑。';
+
+  @override
+  String get positionNeverPlaced => '该角色从未在世界中放置过（位置 0, 0, 0）——游戏可能会忽略已保存的位置。';
+
+  @override
+  String get npcStayInPlace => '停用他的日常作息';
+
+  @override
+  String get npcStayInPlaceHint => '他會留在原地。';
+
+  @override
+  String get npcStayInPlaceLocked => '他原本的日常作息沒有被記錄下來，因此無法再還原。';
+
+  @override
+  String get npcUndoPlacement => '撤銷這次移動';
+
+  @override
+  String get npcUndoPlacementStale => '存檔已不再是這次移動當時寫入的樣子，還原會丟棄此後發生的變化。';
+
+  @override
   String get positionNotReadable => '无法读取该角色已保存的位置。';
 
   @override
@@ -3274,6 +3301,33 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get spawnPositionSection => '出生位置（参考）';
+
+  @override
+  String get resetToSpawnPosition => '重置为出生位置';
+
+  @override
+  String get positionOutOfRange => '数值必须介于 −10,000,000 与 10,000,000 之间';
+
+  @override
+  String get positionNotEditable => '无法读取该角色已保存的位置，因此无法编辑。';
+
+  @override
+  String get positionNeverPlaced => '该角色从未在世界中放置过（位置 0, 0, 0）——游戏可能会忽略已保存的位置。';
+
+  @override
+  String get npcStayInPlace => '停用他的日常作息';
+
+  @override
+  String get npcStayInPlaceHint => '他会留在原地。';
+
+  @override
+  String get npcStayInPlaceLocked => '他原本的日常作息没有被记录下来，因此无法再还原。';
+
+  @override
+  String get npcUndoPlacement => '撤销这次移动';
+
+  @override
+  String get npcUndoPlacementStale => '存档已不再是这次移动当时写入的样子，还原会丢弃此后发生的变化。';
 
   @override
   String get positionNotReadable => '无法读取该角色已保存的位置。';
