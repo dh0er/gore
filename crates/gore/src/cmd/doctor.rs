@@ -295,6 +295,7 @@ fn collect(explicit: Option<&Path>) -> Report {
     checks.push(check_loc_catalog(
         gore_loc::loc_store::status(),
         &gore_loc::paths::loc_catalog_path(),
+        &gore_loc::paths::loc_meta_path(),
         gp.lcache.as_deref(),
         &gp.cache_dir,
     ));
@@ -1742,6 +1743,32 @@ fn catalog_problem(catalog: &Path, recorded_ids: Option<usize>) -> Option<String
     }
 }
 
+/// Something occupies one of the two paths `gore loc extract` writes, and it is not a file.
+///
+/// Written once because several arms reach this state — the catalog with a provenance sidecar and
+/// without one, and now the sidecar itself — and the arm that had its own copy was fixed while its
+/// sibling kept telling the reader to run a command that cannot succeed. `gore loc extract`
+/// publishes both with a rename, which does not replace a directory, and its cleanup cannot remove
+/// one either.
+fn obstructed_loc_file(path: &Path, fix: &str) -> Check {
+    Check::new(
+        "loc_catalog",
+        "loc catalog",
+        Verdict::Problem,
+        format!("{} is not a file", path.display()),
+    )
+    .with_fix(fix)
+}
+
+fn obstructed_catalog(catalog: &Path) -> Check {
+    obstructed_loc_file(
+        catalog,
+        "every tool that turns a text id into text reads that path, and 'gore loc extract' cannot \
+         write it while something else occupies it. Remove or rename that, then run 'gore loc \
+         extract'",
+    )
+}
+
 /// Does the shared localized-text catalog still describe the installed `.lcache`?
 ///
 /// `gore loc status` reports the source path and size the catalog was extracted from, and that can
@@ -1749,29 +1776,10 @@ fn catalog_problem(catalog: &Path, recorded_ids: Option<usize>) -> Option<String
 /// cache afterwards, which changes its size. Nothing breaks, but every tool that turns a text id
 /// into text is then reading the text the game no longer has, which reads exactly like an edit
 /// that did not take.
-/// Something occupies the catalog path and it is not a file.
-///
-/// Written once because both arms of the check below reach this state — with a provenance sidecar
-/// and without one — and the arm that had its own copy was fixed while its sibling kept telling
-/// the reader to run a command that cannot succeed. `gore loc extract` publishes with a rename,
-/// which does not replace a directory.
-fn obstructed_catalog(catalog: &Path) -> Check {
-    Check::new(
-        "loc_catalog",
-        "loc catalog",
-        Verdict::Problem,
-        format!("{} is not a file", catalog.display()),
-    )
-    .with_fix(
-        "every tool that turns a text id into text reads that path, and 'gore loc extract' cannot \
-         write it while something else occupies it. Remove or rename that, then run 'gore loc \
-         extract'",
-    )
-}
-
 fn check_loc_catalog(
     meta: Option<LocMeta>,
     catalog: &Path,
+    meta_path: &Path,
     installed: Option<&Path>,
     cache_dir: &Path,
 ) -> Check {
@@ -1799,6 +1807,24 @@ fn check_loc_catalog(
                 "every tool that turns a text id into text reads that one file. Run \
                  'gore loc extract' to write it again",
             ),
+            // `status()` answers `None` for a sidecar that is missing, unreadable, malformed —
+            // and for one that is a directory. Only the last of those makes the advice below
+            // impossible to follow: `extract` publishes the sidecar with a rename and cleans up
+            // with `remove_file`, and neither touches a directory. Asked here rather than folded
+            // in, so the reader is told what is in the way instead of re-running a command that
+            // will fail the same way again.
+            Ok(Some(metadata))
+                if metadata.is_file()
+                    && matches!(occupant(meta_path, Wanted::File), Ok(Occupant::Obstruction)) =>
+            {
+                obstructed_loc_file(
+                    meta_path,
+                    "the catalog itself is fine; what is occupied is the path 'gore loc extract' \
+                     writes its provenance sidecar to, so it cannot record which install the \
+                     catalog came from. Remove or rename that, then run 'gore loc extract'",
+                )
+                .with_items(vec![format!("catalog: {}", catalog.display())])
+            }
             Ok(Some(metadata)) if metadata.is_file() => Check::new(
                 "loc_catalog",
                 "loc catalog",
@@ -3027,6 +3053,24 @@ mod tests {
     /// its catalog holds is not a healthy pair, and the checks that use it are about the INSTALL.
     const FIXTURE_IDS: usize = 1;
 
+    /// `check_loc_catalog` with the provenance sidecar simply absent, which is the state every
+    /// test below is written against — they are about the catalog and the install. The one test
+    /// that is about the sidecar calls the real function and passes its own path.
+    fn loc_check(
+        meta: Option<LocMeta>,
+        catalog: &Path,
+        installed: Option<&Path>,
+        cache_dir: &Path,
+    ) -> Check {
+        check_loc_catalog(
+            meta,
+            catalog,
+            &catalog.with_file_name("no-such-loc_meta.json"),
+            installed,
+            cache_dir,
+        )
+    }
+
     fn extracted_catalog(dir: &Path) -> PathBuf {
         let path = dir.join("loc_catalog.json");
         std::fs::write(&path, br#"{"itfo_apple":{"german":"Apfel"}}"#).unwrap();
@@ -3074,7 +3118,7 @@ mod tests {
         let cache = dir.path().join("AlkimiaLocalization_00000000.lcache");
         std::fs::write(&cache, vec![0u8; 2048]).unwrap();
 
-        let check = check_loc_catalog(
+        let check = loc_check(
             Some(meta(&cache, 1024)),
             &extracted_catalog(dir.path()),
             Some(&cache),
@@ -3084,7 +3128,7 @@ mod tests {
         assert!(check.detail.contains("stale"), "{}", check.detail);
         assert!(check.fix.unwrap().contains("gore loc extract"));
 
-        let fresh = check_loc_catalog(
+        let fresh = loc_check(
             Some(meta(&cache, 2048)),
             &extracted_catalog(dir.path()),
             Some(&cache),
@@ -3106,7 +3150,7 @@ mod tests {
         let recorded = meta_with_identity(&cache, 2048);
         assert!(recorded.source_sha256.is_some(), "the fixture must record one");
 
-        let unchanged = check_loc_catalog(
+        let unchanged = loc_check(
             Some(recorded.clone()),
             &extracted_catalog(dir.path()),
             Some(&cache),
@@ -3124,7 +3168,7 @@ mod tests {
         // leave it identical through exactly this edit.
         std::fs::write(&cache, vec![1u8; 2048]).unwrap();
 
-        let rewritten = check_loc_catalog(
+        let rewritten = loc_check(
             Some(recorded),
             &extracted_catalog(dir.path()),
             Some(&cache),
@@ -3147,7 +3191,7 @@ mod tests {
         let mut same_second = meta(&cache, 2048);
         same_second.extracted_at -= 1;
 
-        let check = check_loc_catalog(
+        let check = loc_check(
             Some(same_second),
             &extracted_catalog(dir.path()),
             Some(&cache),
@@ -3173,7 +3217,7 @@ mod tests {
         before.extracted_at = before.extracted_at.saturating_sub(60);
         std::fs::write(&cache, vec![1u8; 2048]).unwrap();
 
-        let check = check_loc_catalog(
+        let check = loc_check(
             Some(before),
             &extracted_catalog(dir.path()),
             Some(&cache),
@@ -3197,7 +3241,7 @@ mod tests {
         let elsewhere = dir.path().join("other.lcache");
         std::fs::write(&here, vec![0u8; 64]).unwrap();
 
-        let check = check_loc_catalog(
+        let check = loc_check(
             Some(meta(&elsewhere, 64)),
             &extracted_catalog(dir.path()),
             Some(&here),
@@ -3262,7 +3306,7 @@ mod tests {
         let mut relative = meta(&here, 64);
         relative.source_path = "cache\\AlkimiaLocalization_00000000.lcache".into();
 
-        let check = check_loc_catalog(
+        let check = loc_check(
             Some(relative),
             &extracted_catalog(dir.path()),
             Some(&here),
@@ -3312,7 +3356,7 @@ mod tests {
         let cache = dir.path().join("AlkimiaLocalization_00000000.lcache");
         std::fs::write(&cache, vec![0u8; 1024]).unwrap();
 
-        let check = check_loc_catalog(
+        let check = loc_check(
             Some(meta(&cache, 1024)),
             &dir.path().join("loc_catalog.json"),
             Some(&cache),
@@ -3335,7 +3379,7 @@ mod tests {
         let broken = dir.path().join("loc_catalog.json");
         std::fs::write(&broken, br#"{"itfo_apple":{"german":"Apf"#).unwrap();
 
-        let check = check_loc_catalog(Some(meta_with_identity(&cache, 2048)), &broken, Some(&cache), cache.parent().unwrap());
+        let check = loc_check(Some(meta_with_identity(&cache, 2048)), &broken, Some(&cache), cache.parent().unwrap());
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(check.detail.contains("cannot be loaded"), "{}", check.detail);
         assert!(check.fix.unwrap().contains("gore loc extract"));
@@ -3354,7 +3398,7 @@ mod tests {
         std::fs::write(&catalog, br#"{"itfo_apple":{"german":42}}"#).unwrap();
 
         let check =
-            check_loc_catalog(Some(meta_with_identity(&cache, 2048)), &catalog, Some(&cache), cache.parent().unwrap());
+            loc_check(Some(meta_with_identity(&cache, 2048)), &catalog, Some(&cache), cache.parent().unwrap());
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(check.detail.contains("cannot be loaded"), "{}", check.detail);
     }
@@ -3370,7 +3414,7 @@ mod tests {
         std::fs::write(&catalog, br#"{"a":{"german":"x"},"b":{"german":"y"}}"#).unwrap();
 
         let check =
-            check_loc_catalog(Some(meta_with_identity(&cache, 2048)), &catalog, Some(&cache), cache.parent().unwrap());
+            loc_check(Some(meta_with_identity(&cache, 2048)), &catalog, Some(&cache), cache.parent().unwrap());
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(check.detail.contains("holds 2 ids"), "{}", check.detail);
     }
@@ -3384,10 +3428,40 @@ mod tests {
         let catalog = dir.path().join("loc_catalog.json");
         std::fs::create_dir_all(&catalog).unwrap();
 
-        let check = check_loc_catalog(None, &catalog, None, dir.path());
+        let check = loc_check(None, &catalog, None, dir.path());
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(check.detail.contains("is not a file"), "{}", check.detail);
         assert!(check.fix.unwrap().contains("Remove or rename"));
+    }
+
+    #[test]
+    fn a_sidecar_path_that_is_occupied_is_named_instead_of_called_missing() {
+        // `status()` answers None for a sidecar that is missing, unreadable, malformed — and for
+        // one that is a directory. Only the last makes the advice impossible: `gore loc extract`
+        // publishes the sidecar with a rename and cleans up with `remove_file`, and neither
+        // touches a directory. Folded together, the report told somebody to re-run a command that
+        // fails the same way every time, and never named what was in the way.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("AlkimiaLocalization_00000000.lcache");
+        std::fs::write(&cache, vec![0u8; 2048]).unwrap();
+        let catalog = extracted_catalog(dir.path());
+        let sidecar = dir.path().join("loc_meta.json");
+        std::fs::create_dir_all(&sidecar).unwrap();
+
+        let check = check_loc_catalog(None, &catalog, &sidecar, Some(&cache), cache.parent().unwrap());
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("loc_meta.json"), "{}", check.detail);
+        assert!(check.detail.contains("is not a file"), "{}", check.detail);
+        let fix = check.fix.unwrap();
+        assert!(fix.contains("Remove or rename"), "{fix}");
+        assert!(fix.contains("the catalog itself is fine"), "{fix}");
+
+        // The control: with nothing at that path the catalog is still reported as usable, so the
+        // branch is answering the obstruction and not every absent sidecar.
+        std::fs::remove_dir(&sidecar).unwrap();
+        let check = check_loc_catalog(None, &catalog, &sidecar, Some(&cache), cache.parent().unwrap());
+        assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
+        assert!(check.fix.unwrap().contains("usable as it is"));
     }
 
     #[test]
@@ -3404,7 +3478,7 @@ mod tests {
 
         for meta in [None, Some(meta_with_identity(&cache, 2048))] {
             let described = meta.is_some();
-            let check = check_loc_catalog(meta, &catalog, Some(&cache), cache.parent().unwrap());
+            let check = loc_check(meta, &catalog, Some(&cache), cache.parent().unwrap());
             assert_eq!(check.verdict, Verdict::Problem, "sidecar={described}: {}", check.detail);
             assert!(
                 check.detail.contains("is not a file"),
@@ -3423,7 +3497,7 @@ mod tests {
         let catalog = dir.path().join("loc_catalog.json");
         std::fs::write(&catalog, br#"{"itfo_apple":{"german":"Apf"#).unwrap();
 
-        let check = check_loc_catalog(None, &catalog, None, dir.path());
+        let check = loc_check(None, &catalog, None, dir.path());
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(check.detail.contains("cannot be loaded"), "{}", check.detail);
     }
@@ -3438,7 +3512,7 @@ mod tests {
         let catalog = dir.path().join("loc_catalog.json");
         std::fs::write(&catalog, br#"{"itfo_apple":{"german":"Apfel"}}"#).unwrap();
 
-        let check = check_loc_catalog(None, &catalog, None, dir.path());
+        let check = loc_check(None, &catalog, None, dir.path());
         assert_eq!(check.verdict, Verdict::Note);
         assert!(check.detail.contains("is there"), "{}", check.detail);
         let fix = check.fix.unwrap();
@@ -3449,7 +3523,7 @@ mod tests {
     #[test]
     fn no_extracted_catalog_names_the_command_that_makes_one() {
         let dir = tempfile::tempdir().unwrap();
-        let check = check_loc_catalog(None, &dir.path().join("loc_catalog.json"), None, dir.path());
+        let check = loc_check(None, &dir.path().join("loc_catalog.json"), None, dir.path());
         assert_eq!(check.verdict, Verdict::Note);
         assert!(check.fix.unwrap().contains("gore loc extract"));
     }
@@ -3474,7 +3548,7 @@ mod tests {
         let occupied = dir.path().join("Cache");
         std::fs::write(&occupied, b"not a folder").unwrap();
 
-        let check = check_loc_catalog(
+        let check = loc_check(
             Some(meta_with_identity(&cache, 2048)),
             &catalog,
             None,
@@ -3487,7 +3561,7 @@ mod tests {
         // The control: a folder that genuinely is not there stays the note it was, so the branch
         // above is answering the listing error and not simply every absent cache.
         let absent = dir.path().join("no-such-cache");
-        let check = check_loc_catalog(
+        let check = loc_check(
             Some(meta_with_identity(&cache, 2048)),
             &catalog,
             None,
