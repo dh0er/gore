@@ -251,6 +251,13 @@ pub enum NameIndexState {
     /// for a catalog that exists and is broken, and reporting a read failure as
     /// an absence would hide it forever.
     Unreadable { path: PathBuf, detail: String },
+    /// Something occupies that path and it is not a file. Distinct from
+    /// [`NameIndexState::Unreadable`] for the same reason that one is distinct
+    /// from `Absent`: every other read failure is answered by re-running `gore
+    /// loc extract`, and that is the one answer this state cannot use —
+    /// extraction publishes the catalog with a rename, which does not replace a
+    /// directory.
+    Obstructed { path: PathBuf },
 }
 
 impl NameIndexState {
@@ -285,6 +292,12 @@ impl NameIndexState {
             NameIndexState::Unreadable { path, detail } => format!(
                 "display names: NOT searched — the shared loc catalog at {} could not be read: \
                  {detail}. Re-run `gore loc extract` to rebuild it",
+                path.display()
+            ),
+            NameIndexState::Obstructed { path } => format!(
+                "display names: NOT searched — {} is not a file, and `gore loc extract` writes \
+                 the catalog there by renaming onto it, which cannot replace what is in the way. \
+                 Remove or rename it, then run `gore loc extract`",
                 path.display()
             ),
         }
@@ -322,7 +335,13 @@ fn load_name_index_at(path: PathBuf, wanted: &HashSet<String>) -> NameIndexState
             return NameIndexState::Absent;
         }
         Err(error) => {
-            return NameIndexState::Unreadable { path, detail: error.to_string() };
+            // A directory at the catalog path fails the read like any other broken catalog, and
+            // the advice that fits every other one — re-run the extraction — is the only advice
+            // that cannot work here.
+            return match std::fs::symlink_metadata(&path) {
+                Ok(metadata) if !metadata.is_file() => NameIndexState::Obstructed { path },
+                _ => NameIndexState::Unreadable { path, detail: error.to_string() },
+            };
         }
     };
     match parse_name_index(&text, wanted) {
@@ -352,6 +371,14 @@ pub(crate) fn catalog_health(path: &std::path::Path) -> Result<CatalogHealth, St
     match load_name_index_at(path.to_path_buf(), &wanted) {
         NameIndexState::Ready(index) => Ok(CatalogHealth::Loadable { ids: index.total_ids }),
         NameIndexState::Unreadable { detail, .. } => Ok(CatalogHealth::Unreadable(detail)),
+        // Also the caller's own question, and it answers it first with its own sentence: the
+        // doctor reaches `obstructed_catalog` before it ever gets here. Reported rather than
+        // folded into `Loadable`, so a future caller that does not look first is not told a
+        // directory is a usable catalog.
+        NameIndexState::Obstructed { path } => Ok(CatalogHealth::Unreadable(format!(
+            "{} is not a file",
+            path.display()
+        ))),
         // Absent is the caller's own question; it has already looked.
         NameIndexState::Absent => Ok(CatalogHealth::Loadable { ids: 0 }),
     }
@@ -2137,13 +2164,28 @@ mod tests {
         let absent = load_name_index_at(dir.path().join("nothing-here.json"), &wanted);
         assert!(matches!(absent, NameIndexState::Absent), "{absent:?}");
 
-        // A directory where a file is expected: reading it fails with something other than
-        // NotFound on every platform, without needing permissions the suite may not have.
-        let unreadable = load_name_index_at(dir.path().to_path_buf(), &wanted);
+        // There and broken: the file reads, and what is in it is not a catalog. This is what
+        // "unreadable" is for, and re-running the extraction is the right answer to it.
+        let broken = dir.path().join("broken.json");
+        std::fs::write(&broken, br#"{"itfo_apple":{"german":"Apf"#).unwrap();
+        let unreadable = load_name_index_at(broken, &wanted);
         assert!(
             matches!(unreadable, NameIndexState::Unreadable { .. }),
             "{unreadable:?}"
         );
+        assert!(unreadable.notice(&[]).contains("Re-run"), "{}", unreadable.notice(&[]));
+
+        // There and not a file, which is a third answer: `gore loc extract` publishes the catalog
+        // by renaming onto that path and cannot replace a directory, so the advice above is the
+        // one thing this state cannot use.
+        let occupied = load_name_index_at(dir.path().to_path_buf(), &wanted);
+        assert!(
+            matches!(occupied, NameIndexState::Obstructed { .. }),
+            "{occupied:?}"
+        );
+        let said = occupied.notice(&[]);
+        assert!(said.contains("is not a file"), "{said}");
+        assert!(said.contains("Remove or rename"), "{said}");
     }
 
     #[test]
