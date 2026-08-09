@@ -18,31 +18,29 @@
 The Flutter GUIs reuse the exact same Rust crates as the CLI through a
 `dart:ffi` bridge — the CLI is always the most complete surface.
 
-## What you can change, and what does not work yet
+## What you can change
 
-Each row links the page that carries the evidence — build ids, what was seen,
-and the exact wording. "Works" here means somebody watched it happen in the
-running game; where that is not so, the right-hand column says it.
+**Status** is how complete the tooling is, not how much has been tested. The
+right-hand column is where the catch lives, and each page carries the evidence:
+build ids, what was seen, and what has not been.
 
-| Area | What you can do | Not yet |
-|---|---|---|
-| [Item & stat values](docs/guide/items.md) | Change any class default the game reads at startup — item value and weight, weapon damage, NPC stats — from a small `overrides.toml`. Ships as a UE4SS Lua mod. | Needs [UE4SS](docs/guide/getting-started.md); without it the mod sits there and does nothing. GORE does not install it. |
-| [Text & dialogs](docs/guide/text-and-dialogs.md) | Replace **any** text in the game: all 43,851 ids across 19 languages — dialog lines, item names, journal entries, UI. New ids can be added. | An id often carries several language generations, and the game reads the newest. Write the wrong one and the file changes while the screen does not — `gore mod deploy` warns, `gore loc import` does not. |
-| [Audio](docs/guide/audio.md) | Replace music and sound effects inside the encrypted FMOD banks, at any length — the replacement does not have to match the original's duration. | Which surface plays which sample is documented nowhere — you pick by listening. Your WAV is re-encoded to PCM16, so the bank grows by the audio you add. |
-| [Voice-over](docs/guide/voice.md) | Replace any existing recording in a language archive, copy-on-write — the original is never modified. | Adding a **new** voice path is written and validated, but nothing has been heard playing one — a new line needs a new dialog to speak it. Encode Vorbis: Opus passes the CLI and is then refused by Mod Studio's build, and no Opus take has been heard in game. |
-| [Textures](docs/guide/textures.md) | Replace game textures. Ships additively as a UE5 IoStore triplet in `~mods\`, so no game file is touched. | Anything living in `G1R-Windows.pak` — the mouse cursors, `DefaultEngine.ini` — is not reachable this way and needs the pak route instead. |
-| [DataAssets](docs/guide/dataassets.md) | Edit cooked DataAsset values byte-exactly, receipt-sealed, also additively. | A Blueprint-generated export (class name ending `_C`) has no schema and cannot be bound — `inspect` refuses it rather than guessing. |
-| [Scripts (AngelScript)](docs/guide/scripts.md) | Decompile the shipping cache to readable AngelScript, edit it, and compile with the game's own executable. Add whole new modules, and splice one module back into the vanilla cache. A new dialog option authored this way has been seen in a real conversation. | Decompilation is lossy: it is reverse-engineering-stage tooling, some helpers do not round-trip, and `emit-all` does not emit generated `__InitDefaults` as editable source. `gore as bytediff` exists to measure what a recompile changed. Do not ship a whole regenerated cache. What happens when a player *clicks* an authored option is untested. |
-| [Bundling & deploying](docs/guide/bundles.md) · [many mods](docs/guide/mod-manager.md) | Put all of the above in one bundle that deploys and undeploys as a unit, transactionally. `gore mgr` runs several together with load order and a conflict report, and imports **foreign** mods too: zips and folders, loose `_P.pak`, IoStore triplets, UE4SS Lua mod folders, raw file replacements. | The foreign path has been walked end to end once, with one triplet. |
+| Area | What you can do | Status | The catch |
+|---|---|---|---|
+| [Item & stat values](docs/guide/items.md) | Change what items are worth, what weapons do, what NPCs have | Full | Needs UE4SS, which GORE does not install |
+| [Text & dialogs](docs/guide/text-and-dialogs.md) | Replace any text in the game, in any of its 19 languages | Full | An id can carry several language versions and the game shows the newest |
+| [Audio](docs/guide/audio.md) | Replace music and sound effects | Full | Finding which sound plays where is guesswork |
+| [Voice-over](docs/guide/voice.md) | Replace spoken lines | Partly | Adding a *new* line's audio is built but has never been heard in game |
+| [Textures](docs/guide/textures.md) | Replace textures | Full | A few, like the mouse cursors, sit somewhere this route cannot reach |
+| [DataAssets](docs/guide/dataassets.md) | Edit cooked game data | Partly | Only assets the engine describes natively; Blueprint ones are refused |
+| [Scripts](docs/guide/scripts.md) | Read the game's script code, change it, add your own | Partly | Reverse-engineered and lossy — recompiled code is not always identical |
+| [Mods & load order](docs/guide/bundles.md) | Ship all of the above as one mod, and run many together | Full | Other people's mods are supported, on one end-to-end run |
 
-Offline and needing no game running: [`doctor`](docs/guide/getting-started.md)
-(diagnose the setup), [`find`](docs/guide/find.md) (search the catalogs and the
-effect register), `location`, and the catalog builders.
+Offline, no game needed: [`doctor`](docs/guide/getting-started.md#check-the-setup) checks
+your setup, [`find`](docs/guide/find.md) searches the catalogs.
 
-Two things GORE will not do at all: **edit your saves** — that is the
-[Save Editor](apps/save-editor/README.md), and the CLI does not even link the
-save library — and **install UE4SS** for you. And everything above was seen by
-one person, on one install, on the builds those pages name.
+GORE will not edit your saves — that is the
+[Save Editor](apps/save-editor/README.md) — and everything above was seen by one
+person, on one install.
 
 ## Quick start
 
