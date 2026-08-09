@@ -885,6 +885,34 @@ void main() {
     expect(notifier.state.lastWriteMessage, contains('npc_placements.json'));
   });
 
+  test('a restore says when the backup\'s undo notes did not follow', () async {
+    // The bytes are the backup's either way; only the notes describing them
+    // failed. Unreported, the restored save can hold a pinned NPC while the
+    // sidecar says nothing about the routine that pin replaced.
+    final core = _RestoreWarningCoreService(
+      scanData: {
+        'saves': [
+          {
+            'path': r'C:\tmp\saves\G1R-001.sav',
+            'slot': 'G1R-001',
+            'format': 'GSAV',
+            'fileSize': 914367,
+            'sha1': 'abc',
+            'status': 'ok',
+            'playerSaveName': 'Auto',
+          },
+        ],
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    await pumpEventQueue();
+
+    await notifier.restoreBackup(r'C:\tmp\saves\G1R-001.sav.bak.1');
+
+    expect(notifier.state.lastWriteMessage, contains('npc_placements.json'));
+  });
+
   test('a failed undo note survives a later sub-write failing', () async {
     // The committed sub-write put the move on disk; a later failure does not
     // take it back. Reporting only the save error would leave an NPC pinned
@@ -5221,6 +5249,34 @@ class _PlacementWarningCoreService extends _RecordingCoreService {
         'ok': true,
         'data': {
           'backupPath': r'C:\tmp\saves\G1R-001.sav.bak.1',
+          'placementNoteWarning':
+              r'C:\tmp\saves\goresave_backups\npc_placements.json is not '
+              'readable NPC-placement JSON',
+        },
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// Restores a backup successfully but reports that the placement notes that
+/// describe it could not be installed.
+class _RestoreWarningCoreService extends _RecordingCoreService {
+  _RestoreWarningCoreService({super.scanData});
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'restore_backup') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': true,
+        'data': {
+          'restoredFrom': r'C:\tmp\saves\G1R-001.sav.bak.1',
           'placementNoteWarning':
               r'C:\tmp\saves\goresave_backups\npc_placements.json is not '
               'readable NPC-placement JSON',

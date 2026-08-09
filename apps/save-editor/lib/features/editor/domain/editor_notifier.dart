@@ -2200,9 +2200,18 @@ class EditorNotifier extends StateNotifier<EditorState> {
         'backup': true,
       },
       failureMessage: (details) => _l10n.editorProfileAssignmentFailed(details),
-      message: (data) => save.isExternal
-          ? _l10n.editorSaveImportedAssigned(profileId)
-          : _l10n.editorSaveAssigned(profileId),
+      message: (data) {
+        final assigned = save.isExternal
+            ? _l10n.editorSaveImportedAssigned(profileId)
+            : _l10n.editorSaveAssigned(profileId);
+        // An import copies the save's undo notes across after the bytes land.
+        // If that failed, the imported save can hold a pinned NPC with no
+        // record of the routine the pin replaced.
+        final noteWarning = data['placementNoteWarning'];
+        return noteWarning is String && noteWarning.isNotEmpty
+            ? '$assigned\n${_l10n.editorPlacementNoteFailed(noteWarning)}'
+            : assigned;
+      },
       beforeRefresh: _persistSettings,
     );
     if (!ok) {
@@ -2408,7 +2417,16 @@ class EditorNotifier extends StateNotifier<EditorState> {
           companionPresent && !companionRestored && !targetIsPdl
           ? _l10n.editorRestoredBackupWithoutCompanion(backupPath)
           : _l10n.editorRestoredBackup(backupPath);
-      state = state.copyWith(lastWriteMessage: restoreMessage);
+      // The bytes are the backup's either way; only the undo notes that describe
+      // them failed to follow. Unreported, the restored save can hold a pinned
+      // NPC while the sidecar says nothing about the routine that pin replaced.
+      final noteWarning = data?['placementNoteWarning'];
+      state = state.copyWith(
+        lastWriteMessage: noteWarning is String && noteWarning.isNotEmpty
+            ? '$restoreMessage\n'
+                  '${_l10n.editorPlacementNoteFailed(noteWarning)}'
+            : restoreMessage,
+      );
       // Rescan so the sidebar/profile summary reflect the rolled-back public
       // name and PersistentDataList metadata, not just the detail pane.
       // refresh() also centrally clears all pending edits (avoids mutating
@@ -2446,12 +2464,20 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // could not drop comes back as a warning on an otherwise successful
       // response. Say so: the leftover would otherwise be inherited unannounced
       // by the next backup that lands under the same file name.
-      final warning = (response['data'] as Map?)?['labelWarning'];
-      state = state.copyWith(
-        lastWriteMessage: warning is String && warning.isNotEmpty
-            ? _l10n.editorDeletedBackupWithLabelWarning(backupPath, warning)
-            : _l10n.editorDeletedBackup(backupPath),
-      );
+      final data = (response['data'] as Map?);
+      final warning = data?['labelWarning'];
+      var message = warning is String && warning.isNotEmpty
+          ? _l10n.editorDeletedBackupWithLabelWarning(backupPath, warning)
+          : _l10n.editorDeletedBackup(backupPath);
+      // Same story for the undo notes this backup carried: a snapshot that
+      // could not be dropped would be inherited by the next backup to land
+      // under the same file name.
+      final noteWarning = data?['placementNoteWarning'];
+      if (noteWarning is String && noteWarning.isNotEmpty) {
+        message =
+            '$message\n${_l10n.editorPlacementNoteFailed(noteWarning)}';
+      }
+      state = state.copyWith(lastWriteMessage: message);
       await refreshBackups();
     }, failureMessage: (details) => _l10n.editorDeleteBackupFailed(details));
   }
