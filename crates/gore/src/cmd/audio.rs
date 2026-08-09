@@ -153,10 +153,10 @@ fn bank_rows(dir: &Path, key: &[u8]) -> Result<Vec<BankRow>> {
         .into_iter()
         .map(|path| {
             // Reading is the whole cost here, and this listing exists so as not to pay it: the
-            // summary needs the RIFF wrapper and a few dozen bytes at each FSB5 offset, so the ten
-            // banks cost kilobytes instead of a pass over ~520 MB. Reading each file whole to hand
-            // it to `bank_summary` paid exactly the price the summary was written to avoid, and
-            // allocated 260 MB for `SFX.bank` on the way.
+            // summary needs the RIFF wrapper and a few dozen bytes at each FSB5 offset, which is
+            // about 20 MB across the ten shipped banks instead of a pass over ~520 MB. Reading
+            // each file whole to hand it to `bank_summary` paid exactly the price the summary was
+            // written to avoid, and allocated 260 MB for `SFX.bank` on the way.
             let summary = gore_fmod::bank_summary_at(&path, key);
             BankRow { path, summary }
         })
@@ -758,12 +758,48 @@ fn remove_our_file(path: &Path, ours: &dyn Fn(&Path) -> bool) -> Removal {
     }
     if !ours(&quarantine) {
         // Something replaced our file in the window above and this moved that instead. Put it back
-        // where it was; if even that fails, the name it is under now has to be said, or somebody's
-        // file has quietly vanished from where they left it.
-        return match std::fs::rename(&quarantine, path) {
-            Ok(()) => Removal::NotOurs,
-            Err(error) => Removal::Failed(format!(
-                "something else replaced it and it could not be put back, it is now at {}: {error}",
+        // where it was — but `rename` silently overwrites its destination, and by now a third file
+        // may have been created on that path. Restoring over it would destroy exactly what this
+        // whole dance exists to protect, so the restore is a link that refuses to overwrite:
+        // `hard_link` fails when the destination exists, in one operation, with no window between
+        // asking whether the path is free and taking it.
+        return match std::fs::hard_link(&quarantine, path) {
+            Ok(()) => match std::fs::remove_file(&quarantine) {
+                Ok(()) => Removal::NotOurs,
+                // The file IS back where it belongs; only the extra name is left over. Saying so
+                // is better than calling the restore a failure.
+                Err(error) => Removal::Failed(format!(
+                    "something else replaced it, it was put back, and the copy at {} could not be \
+                     cleaned up: {error}",
+                    quarantine.display()
+                )),
+            },
+            // Links are not universal — FAT32 has none — so a filesystem that cannot do this is
+            // not the same as a path that is taken. Renaming back is the fallback, and it is not
+            // done blind: only onto a path with nothing on it. The window that leaves is between
+            // that look and the rename, which is what `hard_link` closes where it works.
+            Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => {
+                match std::fs::symlink_metadata(path) {
+                    Err(_) => match std::fs::rename(&quarantine, path) {
+                        Ok(()) => Removal::NotOurs,
+                        Err(error) => Removal::Failed(format!(
+                            "something else replaced it and it could not be put back, it is now \
+                             at {}: {error}",
+                            quarantine.display()
+                        )),
+                    },
+                    Ok(_) => Removal::Failed(format!(
+                        "something else replaced it, and another file has taken that path since, \
+                         so it was left at {} rather than written over the newer one",
+                        quarantine.display()
+                    )),
+                }
+            }
+            // The path is occupied again. Whatever is there now is newer than what this holds,
+            // and this run has no claim on either.
+            Err(_) => Removal::Failed(format!(
+                "something else replaced it, and another file has taken that path since, so it \
+                 was left at {} rather than written over the newer one",
                 quarantine.display()
             )),
         };
@@ -1230,6 +1266,47 @@ mod rollback_tests {
         // And a path with nothing on it is not a failure to report.
         let outcome = super::remove_our_file(&entry.path, &|path| entry.is_ours_at(path));
         assert!(matches!(outcome, super::Removal::Absent));
+    }
+
+    #[test]
+    fn a_path_taken_again_is_not_written_over_by_the_file_that_was_moved_off_it() {
+        // The far end of the same race. Our file is replaced, the move takes the replacement, and
+        // then a third file lands on the path — at which point putting the replacement back means
+        // destroying something newer, which is the exact harm this code exists to avoid.
+        // `rename` would have done it silently.
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("0_line.wav");
+        std::fs::write(&path, b"the replacement").unwrap();
+
+        let answers = std::cell::Cell::new(0u32);
+        let taken = path.clone();
+        let outcome = super::remove_our_file(&path, &|_| {
+            answers.set(answers.get() + 1);
+            if answers.get() == 2 {
+                // The path is free at this moment — the move emptied it — and somebody fills it.
+                std::fs::write(&taken, b"a newer file entirely").unwrap();
+                return false;
+            }
+            true
+        });
+
+        match outcome {
+            super::Removal::Failed(why) => {
+                assert!(why.contains("taken that path"), "{why}");
+                assert!(why.contains("gore-rm-"), "the file has to be findable: {why}");
+            }
+            _ => panic!("a path taken again cannot be reported as a clean outcome"),
+        }
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"a newer file entirely",
+            "the newer file must be exactly as it was left"
+        );
+        assert_eq!(
+            std::fs::read_dir(temp.path()).unwrap().count(),
+            2,
+            "and the moved one is still there, under the name the message gives"
+        );
     }
 
     #[test]

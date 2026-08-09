@@ -756,6 +756,7 @@ pub fn bank_summary(bank: &[u8], key: &[u8]) -> Result<BankSummary, String> {
     summarize(
         bank,
         bank.len(),
+        WRAPPER_MAX_BYTES,
         &mut |offset, len| {
             Ok(offset
                 .checked_add(len)
@@ -775,10 +776,21 @@ pub fn bank_summary(bank: &[u8], key: &[u8]) -> Result<BankSummary, String> {
 fn summarize(
     wrapper: &[u8],
     file_len: usize,
+    max: usize,
     read: &mut dyn FnMut(usize, usize) -> Result<Option<Vec<u8>>, String>,
     key: &[u8],
 ) -> Result<BankSummary, String> {
     let bank = wrapper;
+    // Asked here so both routes answer the same. A wrapper the on-disk route refuses to read is a
+    // wrapper the in-memory route must refuse to walk, or the two would disagree about the same
+    // damaged file — and telling them apart by which one was used is the failure this whole
+    // shared body exists to prevent.
+    if let Ok((off, size)) = find_top_list(bank) {
+        let declared = off.saturating_add(8).saturating_add(size).min(file_len);
+        if let Some(error) = oversized_wrapper(declared, max) {
+            return Err(error);
+        }
+    }
     let entries = match bank_shape_within(bank, file_len)? {
         BankShape::SampleFree => return Ok(BankSummary::SampleFree),
         BankShape::Entries(entries) => entries,
@@ -841,20 +853,48 @@ fn summarize(
     })
 }
 
-/// How much of a bank is read before its wrapper has been walked. The shipped banks put their
-/// top-level LIST within the first few kilobytes; this is generous enough that no shipped bank
-/// needs the second read below, and small enough that ten of them cost less than one page of
-/// `SFX.bank`.
+/// How much of a bank is read before its wrapper has been walked.
+///
+/// Every shipped bank puts the LIST header itself at offset 28, so this always covers finding it;
+/// what it does not always cover is the LIST body, and half the shipped banks take the second read
+/// below. Measured on the shipped install: `Music_*`/`SFX_*NotDemo` 506 B, `VO` 55 KB,
+/// `CINEMATICS` 90 KB, `Master.strings` 142 KB, `Music` 1.0 MB, `Master` 5.1 MB, `SFX` 13.8 MB.
+/// Raising this to cover those would read the whole wrapper of every bank whether or not the walk
+/// needs it; two reads of exactly what is declared is the cheaper shape.
 const WRAPPER_PROBE_BYTES: usize = 64 * 1024;
+
+/// The largest wrapper this will materialize before calling the bank damaged.
+///
+/// Against the measurements above, roughly five times the largest shipped wrapper. Past it, the
+/// declared size is corrupt — and honouring it means allocating hundreds of megabytes to report
+/// that a file is damaged, which is the moment that cost is least wanted. Refused in [`summarize`]
+/// rather than here, so a caller holding the bytes already gets the same answer as one reading the
+/// file; a genuine bank with a wrapper this large would be refused by both.
+const WRAPPER_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+/// Whether a declared wrapper extent is past what this reads at all.
+///
+/// `max` is a parameter and not the constant so both routes can be driven past it from a test
+/// without a 64 MB fixture — and driven past it TOGETHER, which is what shows they still answer
+/// alike about a bank neither of them will read.
+fn oversized_wrapper(needed: usize, max: usize) -> Option<String> {
+    (needed > max).then(|| {
+        format!(
+            "the bank's wrapper declares {needed} bytes of metadata and this reads at most \
+             {max}: the size field is corrupt, or this is not a bank"
+        )
+    })
+}
 
 /// [`bank_summary`] for a bank on disk, reading its wrapper and the FSB5 headers and nothing else.
 ///
 /// `bank_summary` needs the caller to have the whole file in memory first, which for a directory
 /// listing is roughly 520 MB of reads and a 260 MB allocation for `SFX.bank` — the cost the
 /// summary exists to avoid, paid before it is called. What it actually reads is the RIFF wrapper
-/// and a few dozen bytes at each FSB5 offset.
+/// and a few dozen bytes at each FSB5 offset: about 20 MB across the ten shipped banks, most of it
+/// `SFX.bank`'s own 13.8 MB of sample metadata.
 pub fn bank_summary_at(path: &std::path::Path, key: &[u8]) -> Result<BankSummary, String> {
-    bank_summary_probing(path, key, WRAPPER_PROBE_BYTES)
+    bank_summary_probing(path, key, WRAPPER_PROBE_BYTES, WRAPPER_MAX_BYTES)
 }
 
 /// [`bank_summary_at`] with the first read's size in the caller's hands, so the grow-once path is
@@ -863,6 +903,7 @@ fn bank_summary_probing(
     path: &std::path::Path,
     key: &[u8],
     probe: usize,
+    max: usize,
 ) -> Result<BankSummary, String> {
     let mut file =
         std::fs::File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
@@ -883,6 +924,10 @@ fn bank_summary_probing(
         }
         _ => Ok(None),
     })?;
+    // Before the read, not after: the point of the limit is not to allocate that much.
+    if let Some(error) = oversized_wrapper(needed, max) {
+        return Err(error);
+    }
     if needed > wrapper.len() {
         wrapper = read_at(&mut file, 0, needed)?;
     }
@@ -890,6 +935,7 @@ fn bank_summary_probing(
     summarize(
         &wrapper,
         file_len,
+        max,
         &mut |offset, len| {
             match offset.checked_add(len) {
                 Some(end) if end <= file_len => read_at(&mut file, offset, len).map(Some),
@@ -2447,11 +2493,50 @@ mod tests {
         assert!(matches!(whole, Ok(BankSummary::Samples { .. })), "{whole:?}");
         for probe in [1, 0x18, 64, 256, bank.len(), bank.len() * 2] {
             assert_eq!(
-                bank_summary_probing(&path, GOTHIC_STUDIO_KEY, probe),
+                bank_summary_probing(&path, GOTHIC_STUDIO_KEY, probe, WRAPPER_MAX_BYTES),
                 whole,
                 "a {probe}-byte first read changed the answer"
             );
         }
+    }
+
+    #[test]
+    fn a_wrapper_declaring_more_than_this_reads_is_refused_by_both_routes_alike() {
+        // The other half of the bounded fallback: a LIST whose size field is corrupt still parses,
+        // and clamping the extent to the file made the on-disk route materialize the whole bank —
+        // hundreds of megabytes to report that a file is damaged. Refused instead, in the shared
+        // body, so a caller holding the bytes gets the same sentence as one reading the file.
+        let dir = tempfile::tempdir().unwrap();
+        let mut bank = big_bank();
+        let (list_off, list_size) = find_top_list(&bank).unwrap();
+        let honest = list_off + 8 + list_size;
+
+        // Past the end of the file, which is what a corrupt size field looks like.
+        bank[list_off + 4..list_off + 8].copy_from_slice(&u32::MAX.to_le_bytes());
+        let path = write_bank(dir.path(), "oversized.bank", &bank);
+
+        // A limit below the file rather than a 64 MB fixture, driven through both routes at once.
+        let max = honest;
+        let from_disk = bank_summary_probing(&path, GOTHIC_STUDIO_KEY, 0x40, max);
+        let from_memory = summarize(
+            &bank,
+            bank.len(),
+            max,
+            &mut |offset, len| Ok(bank.get(offset..offset + len).map(<[u8]>::to_vec)),
+            GOTHIC_STUDIO_KEY,
+        );
+        assert_eq!(from_disk, from_memory, "one route read what the other refused");
+        let error = from_disk.unwrap_err();
+        assert!(error.contains("declares"), "{error}");
+        assert!(error.contains("corrupt"), "{error}");
+
+        // And the honest wrapper still goes through at the same limit, so the refusal is about the
+        // declaration and not about the bank being large.
+        let path = write_bank(dir.path(), "honest.bank", &big_bank());
+        assert_eq!(
+            bank_summary_probing(&path, GOTHIC_STUDIO_KEY, 0x40, max),
+            bank_summary(&big_bank(), GOTHIC_STUDIO_KEY)
+        );
     }
 
     #[test]
@@ -2494,7 +2579,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = write_bank(dir.path(), "damaged.bank", &bank);
         assert_eq!(
-            bank_summary_probing(&path, GOTHIC_STUDIO_KEY, 0x40),
+            bank_summary_probing(&path, GOTHIC_STUDIO_KEY, 0x40, WRAPPER_MAX_BYTES),
             bank_summary(&bank, GOTHIC_STUDIO_KEY)
         );
     }
@@ -2513,6 +2598,7 @@ mod tests {
         let summary = summarize(
             &bank[..wrapper_end],
             bank.len(),
+            WRAPPER_MAX_BYTES,
             &mut |offset, len| {
                 fetched += len;
                 Ok(bank.get(offset..offset + len).map(<[u8]>::to_vec))
