@@ -963,15 +963,20 @@ pub struct Rot3 {
 /// `{mapKey}` for map keys), rooted at the private root — exactly like
 /// [`NpcAttributeRow`]'s `base_path`/`current_path`.
 ///
-/// **This pose is a SNAPSHOT, not an input.** `private.typed.setValue` can
-/// address these leaves and the bytes do change, but the game discards them on
-/// load: a UE4SS runtime probe rewrote `CharacterLocation`, `SpawnLocation` and
-/// `DailyRoutineClass` for two NPCs (one streamed out, one simulated), loaded
-/// the byte-verified save, and read back the ORIGINAL pre-edit values in every
-/// field. Placement authority is the level's WorldPointActor named in the NPC's
-/// GlobalId. NPC *attributes* in the same `{CharacterStates}` blob do apply, so
-/// the blob is read — these records are simply never used. Reading stays
-/// worthwhile (CLI, MCP, diagnostics); do not build a mover on top of it.
+/// **`CharacterLocation` IS applied on load — verified in-game.** Written alone
+/// it places the NPC there and his daily routine then walks him back. Written
+/// together with `DailyRoutineByGlobalId{id}.DailyRoutineClass =
+/// /Script/Angelscript.DailyRoutine_Empty` (the one class of 2777 whose bytecode
+/// does nothing) he stays — proven by a controlled pair in one save. An earlier
+/// round of tests concluded the opposite; it moved two NPCs that both had an
+/// active routine task, and then set `DailyRoutine_Empty_StayAtSpawn`, whose
+/// `Activate_Implementation` snaps to `GetPreferredLocation().StartingPosition`
+/// — the level actor, never the save.
+///
+/// Related shape: 96.6% of the named human NPCs in a real save have a
+/// `CharacterLocation` matching an `InteractionSpots.json` freepoint in X/Y to
+/// under 0.01 units, so this field normally just records a pawn standing on its
+/// routine spot.
 ///
 /// **Why the rotations are renamed here and nowhere else.** The generic property
 /// parser collapses BOTH the `Vector` and the `Rotator` descriptor into the same
@@ -1039,6 +1044,42 @@ pub fn npc_position(root: &RootObject, id: &str) -> Result<NpcPose, CoreError> {
         spawn_location_path: member_path("SpawnLocation"),
         spawn_rotation_path: member_path("SpawnRotation"),
     })
+}
+
+/// The map holding each character's current daily routine, a sibling of
+/// `PositionByGlobalId` in the same character-state blob.
+const DAILY_ROUTINE_MAP: &str = "DailyRoutineByGlobalId";
+/// The class path of the routine an NPC is currently on, e.g.
+/// `/Script/Angelscript.DailyRoutine_OC_KDF_Milten_WaitYard`.
+const DAILY_ROUTINE_CLASS: &str = "DailyRoutineClass";
+/// The one routine class whose bytecode does nothing at all — no
+/// `Activate_Implementation`, no `HandleAvatarChanged`, just a constructor. It is
+/// what pins a moved NPC in place; every other routine walks or teleports him
+/// back. Not to be confused with `DailyRoutine_Empty_StayAtSpawn`, which snaps to
+/// `GetPreferredLocation().StartingPosition` — the LEVEL actor, never the save.
+pub const INERT_ROUTINE_CLASS: &str = "/Script/Angelscript.DailyRoutine_Empty";
+
+/// NPC `id`'s current `DailyRoutineClass` and the typed path addressing it.
+///
+/// The path is returned even when the value is absent, so a caller can write one
+/// where the record exists but the member does not. `None` for the whole result
+/// means the save has no `DailyRoutineByGlobalId` entry for this NPC — nothing to
+/// address, and nothing to restore later.
+pub fn npc_routine_class(root: &RootObject, id: &str) -> Option<(Option<String>, Vec<String>)> {
+    let (mut path, property) = find_property_by_name(root, DAILY_ROUTINE_MAP)?;
+    let PropertyValue::Map { entries, .. } = &property.value else {
+        return None;
+    };
+    let value = lookup_entry(entries, id)?;
+    path.push(map_key_segment(id));
+    path.push(DAILY_ROUTINE_CLASS.to_string());
+    let class = match struct_member(value, DAILY_ROUTINE_CLASS) {
+        Some(PropertyValue::Object(text))
+        | Some(PropertyValue::Str(text))
+        | Some(PropertyValue::Name(text)) => Some(text.clone()),
+        _ => None,
+    };
+    Some((class, path))
 }
 
 /// Full typed path (from the private root) to NPC `id`'s inventory container —

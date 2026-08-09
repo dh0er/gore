@@ -2,6 +2,7 @@ pub mod codec_backend;
 mod codec_calibration;
 pub mod factions;
 pub mod npc;
+pub mod placement;
 pub mod properties;
 pub mod skills;
 pub mod startsaves;
@@ -527,16 +528,38 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .get("syncPersistentDataList")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            // Parsed BEFORE the write so a malformed note fails the request
+            // instead of the save landing with no undo recorded for it.
+            let placement_records = match payload.get("placementNotes") {
+                Some(value) => placement::parse_records(value)?,
+                None => Vec::new(),
+            };
+            let placement_clears = match payload.get("clearPlacementNotes") {
+                Some(value) => placement::parse_clears(value)?,
+                None => Vec::new(),
+            };
             let kraken_backend = codec_backend::KrakenBackend::default();
             let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
-            Ok(write_save_internal(
+            let mut result = write_save_internal(
                 &path,
                 &edits,
                 backup,
                 output_path.as_deref(),
                 codec_backend,
                 sync_persistent_data_list,
-            )?)
+            )?;
+            // Only after the save bytes are on disk: a note recorded for a write
+            // that then failed would offer to restore an NPC nobody moved. The
+            // sidecar is an affordance, so a failure to write it is reported
+            // beside a successful save rather than turning it into an error.
+            if !placement_records.is_empty() || !placement_clears.is_empty() {
+                let outcome = placement::record(&path, &placement_records)
+                    .and_then(|()| placement::clear(&path, &placement_clears));
+                if let Err(err) = outcome {
+                    result["placementNoteWarning"] = Value::String(err.to_string());
+                }
+            }
+            Ok(result)
         }
         "write_difficulty" => {
             let req: DifficultyRequest =
@@ -2238,12 +2261,12 @@ struct PendingReplace {
 /// rather than only timestamps/lengths, prevents a same-size or coarse-mtime
 /// concurrent save from being mistaken for the original.
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum FileSnapshot {
+pub(crate) enum FileSnapshot {
     Missing,
     Present(Vec<u8>),
 }
 
-fn snapshot_file(path: &Path) -> Result<FileSnapshot, CoreError> {
+pub(crate) fn snapshot_file(path: &Path) -> Result<FileSnapshot, CoreError> {
     match fs::read(path) {
         Ok(bytes) => Ok(FileSnapshot::Present(bytes)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(FileSnapshot::Missing),
@@ -2355,7 +2378,7 @@ fn unique_sidecar_candidate(target: &Path, label: &str) -> PathBuf {
 /// after a successful atomic rename the old staging path simply no longer
 /// exists. Same-directory placement is required by the no-replace rename
 /// primitives and avoids cross-volume publication.
-struct ScratchFile {
+pub(crate) struct ScratchFile {
     path: PathBuf,
 }
 
@@ -2548,7 +2571,7 @@ fn map_locked_file_error(err: std::io::Error, context: &str) -> CoreError {
 /// an existing file it atomically claims the path first, verifies the claimed
 /// bytes, then installs the staged file with an atomic no-clobber rename. Thus
 /// there is no check/rename gap in which another writer can be overwritten.
-fn begin_replace_if_unchanged(
+pub(crate) fn begin_replace_if_unchanged(
     target: &Path,
     staged: &Path,
     expected: &FileSnapshot,
@@ -6184,7 +6207,54 @@ fn npc_position_command(
     let root = decode_private_root_cached(path, backend)?;
 
     let pose = npc::npc_position(&root, id)?;
-    Ok(json!({ "pose": pose }))
+    let (routine_class, routine_path) = match npc::npc_routine_class(&root, id) {
+        Some((class, path)) => (class, Some(path)),
+        None => (None, None),
+    };
+    Ok(json!({
+        "pose": pose,
+        "routineClass": routine_class,
+        "routineClassPath": routine_path,
+        "inertRoutineClass": npc::INERT_ROUTINE_CLASS,
+        "undo": placement_undo(path, id, &root),
+    }))
+}
+
+/// The recorded undo for NPC `id`, or `null` when none was kept.
+///
+/// `restorable` is the honest half. A note says what the editor replaced AND what
+/// it wrote; if the save no longer holds what it wrote — the player saved in
+/// game and the NPC moved on, or another tool touched him — then restoring the
+/// note would silently discard whatever happened since. The button is offered
+/// only while the note still describes the save in front of it.
+fn placement_undo(save_path: &Path, id: &str, root: &properties::RootObject) -> Value {
+    let Some(note) = placement::read_notes(save_path).remove(id) else {
+        return Value::Null;
+    };
+    let current_location = npc::npc_position(root, id)
+        .ok()
+        .and_then(|pose| pose.location)
+        .map(|point| [point.x, point.y, point.z]);
+    let current_routine = npc::npc_routine_class(root, id).and_then(|(class, _)| class);
+    let location_matches = current_location == Some(note.written_location);
+    // A note that did not touch the routine imposes no condition on it.
+    let routine_matches = note
+        .written_routine_class
+        .as_ref()
+        .is_none_or(|written| current_routine.as_ref() == Some(written));
+    json!({
+        "originalLocation": {
+            "x": note.original_location[0],
+            "y": note.original_location[1],
+            "z": note.original_location[2],
+        },
+        "originalRoutineClass": note.original_routine_class,
+        // Two verdicts, because there are two controls. Giving the NPC his
+        // routine back only needs the routine to be untouched since; taking the
+        // whole move back needs the position to be untouched as well.
+        "routineRestorable": routine_matches,
+        "restorable": location_matches && routine_matches,
+    })
 }
 
 /// Build the inventory summary for one actor's MainContainer from a parsed
