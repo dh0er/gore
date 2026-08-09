@@ -421,20 +421,32 @@ fn check_game_path(
         );
     };
 
-    match present(root) {
-        Ok(Some(metadata)) if metadata.is_dir() => {}
-        Ok(_) => {
+    match occupant(root, Wanted::Folder) {
+        Ok(Occupant::Wanted) => {}
+        Ok(found) => {
             return Check::new(
                 "game_path",
                 "game path",
                 Verdict::Problem,
-                format!("{} (source: {source}) does not exist", root.display()),
+                match found {
+                    Occupant::Obstruction => {
+                        format!("{} (source: {source}) is not a folder", root.display())
+                    }
+                    _ => format!("{} (source: {source}) does not exist", root.display()),
+                },
             )
             .with_items(items)
-            .with_fix(
-                "the path resolved but there is no directory there — the game moved, or the \
-                 drive is not mounted. Set it again with 'gore config set game-path <path>'",
-            );
+            .with_fix(match found {
+                // Nothing about this reads like a moved install, and the two usual causes below
+                // would send somebody looking for a drive that is mounted and a game that never
+                // moved.
+                Occupant::Obstruction => "the configured path resolves to something that is not a \
+                                          directory, so no part of the install can be under it. \
+                                          Point the config at the install with 'gore config set \
+                                          game-path <path>'",
+                _ => "the path resolved but there is no directory there — the game moved, or the \
+                      drive is not mounted. Set it again with 'gore config set game-path <path>'",
+            });
         }
         // The configured path is right and something is stopping this process from reading it.
         // Telling somebody their install does not exist is the one answer that makes them break a
@@ -565,16 +577,46 @@ fn check_ue4ss(gp: &GamePaths) -> Check {
         )
         .with_fix("run the same command from a shell that can read the install")
     };
-    let ue4ss_present = match present(&ue4ss) {
-        Ok(metadata) => metadata.is_some_and(|metadata| metadata.is_dir()),
+    // Named separately from "not there" because every fix below is a command that writes to the
+    // path, and none of them can while something else holds it.
+    let obstructed = |path: &Path, wanted: Wanted, blocked: &str| {
+        Check::new(
+            "ue4ss",
+            "UE4SS",
+            Verdict::Problem,
+            format!("{} is not {}", path.display(), wanted.name()),
+        )
+        .with_fix(format!(
+            "{blocked} cannot create it while something else occupies that path. Remove or rename \
+             what is there first"
+        ))
+    };
+    let ue4ss_present = match occupant(&ue4ss, Wanted::Folder) {
+        Ok(Occupant::Wanted) => true,
+        Ok(Occupant::Absent) => false,
+        Ok(Occupant::Obstruction) => {
+            return obstructed(&ue4ss, Wanted::Folder, "installing UE4SS there")
+        }
         Err(error) => return unreadable(error),
     };
-    let dll_present = match present(&dll) {
-        Ok(metadata) => metadata.is_some_and(|metadata| metadata.is_file()),
+    let dll_present = match occupant(&dll, Wanted::File) {
+        Ok(Occupant::Wanted) => true,
+        Ok(Occupant::Absent) => false,
+        Ok(Occupant::Obstruction) => {
+            return obstructed(&dll, Wanted::File, "installing UE4SS there")
+        }
         Err(error) => return unreadable(error),
     };
-    let mods_present = match present(mods) {
-        Ok(metadata) => metadata.is_some_and(|metadata| metadata.is_dir()),
+    let mods_present = match occupant(mods, Wanted::Folder) {
+        Ok(Occupant::Wanted) => true,
+        Ok(Occupant::Absent) => false,
+        Ok(Occupant::Obstruction) => {
+            return obstructed(
+                mods,
+                Wanted::Folder,
+                "'gore mod deploy' and 'gore gen -o <mods dir>' both create that folder, and they",
+            )
+        }
         Err(error) => return unreadable(error),
     };
     // UE4SS.dll is the payload; something has to load it. The game imports a proxy DLL, and the one
@@ -582,8 +624,15 @@ fn check_ue4ss(gp: &GamePaths) -> Check {
     // aside for a regen, so its name is not a guess. Without it the payload sits there unloaded and
     // every deployed override does nothing, which is the symptom this check exists to name.
     let proxy = ue4ss.parent().map(|win64| win64.join("dwmapi.dll"));
-    let proxy_present = match proxy.as_deref().map(present) {
-        Some(Ok(metadata)) => metadata.is_some_and(|metadata| metadata.is_file()),
+    let proxy_present = match proxy
+        .as_deref()
+        .map(|path| occupant(path, Wanted::File).map(|found| (path, found)))
+    {
+        Some(Ok((_, Occupant::Wanted))) => true,
+        Some(Ok((_, Occupant::Absent))) => false,
+        Some(Ok((path, Occupant::Obstruction))) => {
+            return obstructed(path, Wanted::File, "putting the loader proxy there")
+        }
         Some(Err(error)) => return unreadable(error),
         // No parent directory to look in. Not a shape this check can judge, and not one it should
         // invent a finding about.
@@ -634,9 +683,10 @@ fn check_ue4ss(gp: &GamePaths) -> Check {
 
     let mut items = vec![format!("UE4SS.dll: {}", dll.display())];
     let settings = ue4ss.join("UE4SS-settings.ini");
-    match present(&settings) {
-        Ok(Some(metadata)) if metadata.is_file() => {}
-        Ok(_) => items.push("UE4SS-settings.ini: not there".to_string()),
+    match occupant(&settings, Wanted::File) {
+        Ok(Occupant::Wanted) => {}
+        Ok(Occupant::Absent) => items.push("UE4SS-settings.ini: not there".to_string()),
+        Ok(Occupant::Obstruction) => items.push("UE4SS-settings.ini: not a file".to_string()),
         Err(error) => items.push(format!("UE4SS-settings.ini: {error}")),
     }
     let log = ue4ss.join("UE4SS.log");
@@ -726,8 +776,24 @@ struct Ue4ssMod {
 /// and warning about those would fire on every healthy install.
 fn check_ue4ss_mods(gp: &GamePaths) -> Check {
     let mods = &gp.ue4ss_mods;
-    let mods_present = match present(mods) {
-        Ok(metadata) => metadata.is_some_and(|metadata| metadata.is_dir()),
+    let mods_present = match occupant(mods, Wanted::Folder) {
+        Ok(Occupant::Wanted) => true,
+        Ok(Occupant::Absent) => false,
+        // Skipping this one says "no Mods folder", which reads as an install that simply has no
+        // mods yet — while the folder every override is deployed into cannot be created at all.
+        Ok(Occupant::Obstruction) => {
+            return Check::new(
+                "ue4ss_mods",
+                "UE4SS mods",
+                Verdict::Problem,
+                format!("{} is not a folder", mods.display()),
+            )
+            .with_fix(
+                "UE4SS loads mods from that folder and 'gore mod deploy' creates it, and neither \
+                 can while something else occupies that path. Remove or rename what is there \
+                 first",
+            );
+        }
         // Reported rather than skipped: "no Mods folder" is the answer that hides the competing
         // override this check exists to find.
         Err(error) => {
@@ -845,6 +911,51 @@ fn present(path: &Path) -> Result<Option<std::fs::Metadata>, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(format!("{} could not be read: {error}", path.display())),
     }
+}
+
+/// What a check needs to find at a path.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Wanted {
+    Folder,
+    File,
+}
+
+impl Wanted {
+    fn name(self) -> &'static str {
+        match self {
+            Wanted::Folder => "a folder",
+            Wanted::File => "a file",
+        }
+    }
+}
+
+/// Three answers where a boolean gave two.
+#[derive(PartialEq, Eq)]
+enum Occupant {
+    Absent,
+    /// What the caller needs, and nothing to say about it.
+    Wanted,
+    /// Something else: a file where a folder belongs, or a folder where a file belongs.
+    Obstruction,
+}
+
+/// Whether the path holds what a check needs, holds something else, or holds nothing.
+///
+/// [`present`] separated "not there" from "could not tell"; this separates "not there" from "there,
+/// and not what you need". Folded together with `is_some_and(|m| m.is_dir())` they both come out
+/// `false`, every sentence downstream then says the path is missing, and the fix names the command
+/// that creates it — a command that cannot succeed while something else sits on that path. Three
+/// separate reports on this file were that one mistake, in three different checks, which is what
+/// makes it worth a shared answer rather than a fourth local fix.
+fn occupant(path: &Path, wanted: Wanted) -> Result<Occupant, String> {
+    Ok(match present(path)? {
+        None => Occupant::Absent,
+        Some(metadata) => match wanted {
+            Wanted::Folder if metadata.is_dir() => Occupant::Wanted,
+            Wanted::File if metadata.is_file() => Occupant::Wanted,
+            _ => Occupant::Obstruction,
+        },
+    })
 }
 
 fn read_ue4ss_mods(mods: &Path) -> Result<Vec<Ue4ssMod>, String> {
@@ -2382,6 +2493,96 @@ mod tests {
             fix.contains("different proxy name"),
             "a legitimate other proxy must not read as a fault: {fix}"
         );
+    }
+
+    #[test]
+    fn a_file_where_a_ue4ss_folder_belongs_is_the_obstruction_and_not_an_empty_install() {
+        // The whole family in one table, because fixing one of these at a time is what produced
+        // three reports. Each of these paths is one a fix below tells somebody to create, and a
+        // file sitting on it makes that command fail — so "not installed yet" is advice that
+        // cannot work, given about a path nobody was told is occupied.
+        //
+        // Ordered outermost first: each row builds on the one above, so the check under test is
+        // the one that reaches that path at all.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        let ue4ss = ue4ss_dir(&gp);
+        let win64 = ue4ss.parent().unwrap().to_path_buf();
+
+        // The UE4SS folder itself.
+        std::fs::write(&ue4ss, b"not a folder").unwrap();
+        let check = check_ue4ss(&gp);
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("is not a folder"), "{}", check.detail);
+        assert!(check.fix.unwrap().contains("Remove or rename"));
+        std::fs::remove_file(&ue4ss).unwrap();
+        std::fs::create_dir_all(&ue4ss).unwrap();
+
+        // UE4SS.dll as a directory: the payload cannot be written there.
+        let dll = ue4ss.join("UE4SS.dll");
+        std::fs::create_dir_all(&dll).unwrap();
+        let check = check_ue4ss(&gp);
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("is not a file"), "{}", check.detail);
+        std::fs::remove_dir(&dll).unwrap();
+        std::fs::write(&dll, b"dll").unwrap();
+
+        // The loader proxy, same shape.
+        let proxy = win64.join("dwmapi.dll");
+        std::fs::create_dir_all(&proxy).unwrap();
+        let check = check_ue4ss(&gp);
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("dwmapi.dll"), "{}", check.detail);
+        assert!(check.detail.contains("is not a file"), "{}", check.detail);
+        std::fs::remove_dir(&proxy).unwrap();
+        std::fs::write(&proxy, b"proxy").unwrap();
+
+        // And `Mods\`, which is the path the report actually came in about — reached by both the
+        // UE4SS check and the mod listing, so both are asked.
+        std::fs::write(&gp.ue4ss_mods, b"not a folder").unwrap();
+        let check = check_ue4ss(&gp);
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("is not a folder"), "{}", check.detail);
+        let fix = check.fix.unwrap();
+        assert!(fix.contains("Remove or rename"), "{fix}");
+        assert!(
+            !fix.contains("both create it"),
+            "recommending the command that cannot run is the defect: {fix}"
+        );
+
+        let listing = check_ue4ss_mods(&gp);
+        assert_eq!(listing.verdict, Verdict::Problem, "{}", listing.detail);
+        assert!(listing.detail.contains("is not a folder"), "{}", listing.detail);
+
+        // The control. With every path the right kind, none of the above fires.
+        std::fs::remove_file(&gp.ue4ss_mods).unwrap();
+        std::fs::create_dir_all(&gp.ue4ss_mods).unwrap();
+        let check = check_ue4ss(&gp);
+        assert_eq!(check.verdict, Verdict::Ok, "{}", check.detail);
+    }
+
+    #[test]
+    fn a_game_path_pointing_at_a_file_is_not_reported_as_a_moved_install() {
+        // "does not exist" plus "the game moved, or the drive is not mounted" sends somebody
+        // looking for a drive that is mounted, about a path that resolved perfectly well.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("not-an-install");
+        std::fs::write(&file, b"x").unwrap();
+
+        let check = check_game_path(Some(&file), None, Some(&file));
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("is not a folder"), "{}", check.detail);
+        let fix = check.fix.unwrap();
+        assert!(!fix.contains("drive is not mounted"), "{fix}");
+        assert!(fix.contains("gore config set game-path"), "{fix}");
+
+        // The control: a path that really is not there keeps the sentence it had.
+        let gone = dir.path().join("gone");
+        let check = check_game_path(Some(&gone), None, Some(&gone));
+        assert!(check.detail.contains("does not exist"), "{}", check.detail);
+        assert!(check.fix.unwrap().contains("drive is not mounted"));
     }
 
     /// Write a UE4SS mod folder; `generated` decides whether its main.lua carries the marker.
