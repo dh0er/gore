@@ -1036,6 +1036,7 @@ name = "gore-fmod"
 version = "0.0.0"
 dependencies = [
  "lewton",
+ "tempfile",
 ]
 
 [[package]]

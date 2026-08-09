@@ -152,12 +152,12 @@ fn bank_rows(dir: &Path, key: &[u8]) -> Result<Vec<BankRow>> {
     Ok(paths
         .into_iter()
         .map(|path| {
-            // Reading is the whole cost here: `bank_summary` decrypts 60 bytes per bank, so the
-            // ten files cost one pass over ~520 MB of disk and nothing else.
-            let summary = match std::fs::read(&path) {
-                Ok(bytes) => gore_fmod::bank_summary(&bytes, key),
-                Err(e) => Err(format!("{e}")),
-            };
+            // Reading is the whole cost here, and this listing exists so as not to pay it: the
+            // summary needs the RIFF wrapper and a few dozen bytes at each FSB5 offset, so the ten
+            // banks cost kilobytes instead of a pass over ~520 MB. Reading each file whole to hand
+            // it to `bank_summary` paid exactly the price the summary was written to avoid, and
+            // allocated 260 MB for `SFX.bank` on the way.
+            let summary = gore_fmod::bank_summary_at(&path, key);
             BankRow { path, summary }
         })
         .collect())

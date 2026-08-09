@@ -12,3 +12,8 @@ test-fixtures = []
 
 [dependencies]
 lewton = "0.10"
+
+[dev-dependencies]
+# `bank_summary_at` reads a bank from disk, so proving it agrees with the in-memory reader needs a
+# bank on disk.
+tempfile = "3"

@@ -307,6 +307,23 @@ pub fn parse_bank(b: &[u8]) -> Result<Vec<BankEntry>, String> {
 }
 
 fn bank_shape(b: &[u8]) -> Result<BankShape, String> {
+    bank_shape_within(b, b.len())
+}
+
+/// The shape from the wrapper alone.
+///
+/// `b` starts at the beginning of the file and must reach at least the end of the top-level LIST
+/// chunk; everything walked below lives inside it. `file_len` is the length of the whole file,
+/// which is not `b.len()` when only the wrapper was read — the FSB5 payloads sit in the `SND `
+/// chunk after that LIST, and for `SFX.bank` they are 260 MB nobody reading a listing needs.
+///
+/// Callers holding the whole file pass `b.len()` for both, so there is one parser and not two that
+/// can drift apart.
+fn bank_shape_within(b: &[u8], file_len: usize) -> Result<BankShape, String> {
+    debug_assert!(
+        file_len >= b.len(),
+        "the prefix read cannot be longer than the file it came from"
+    );
     if b.len() < 0x18 || &b[0x00..0x04] != b"RIFF" || &b[0x08..0x0C] != b"FEV " {
         return Err("not a RIFF/FEV bank".into());
     }
@@ -391,9 +408,13 @@ fn bank_shape(b: &[u8]) -> Result<BankShape, String> {
     // carrying its whole FSB5 payload be told it is intact and empty. Neither subtraction can
     // underflow: `b.len() >= 0x18` from the header check, and the PROJ/BNKI check above proved
     // `list_body + 8 <= b.len()`.
+    // The file's own length, not the prefix that was read: both of these compare a declared extent
+    // against where the file actually ends. A wrapper-only read would otherwise satisfy them for
+    // any bank whose prefix happens to end where the LIST does, and a bank still carrying its
+    // whole FSB5 payload would be reported as intact and empty.
     let sample_free = sndh_size == 0
-        && b.len() - 8 == u32_le(b, 0x04) as usize
-        && b.len() - list_body == u32_le(b, list_body - 4) as usize;
+        && file_len - 8 == u32_le(b, 0x04) as usize
+        && file_len - list_body == u32_le(b, list_body - 4) as usize;
     if sample_free {
         return Ok(BankShape::SampleFree);
     }
@@ -732,7 +753,33 @@ pub enum BankSummary {
 /// really has, and a directory listing that dropped six of ten files while claiming to describe the
 /// directory would mislead worse than no listing at all.
 pub fn bank_summary(bank: &[u8], key: &[u8]) -> Result<BankSummary, String> {
-    let entries = match bank_shape(bank)? {
+    summarize(
+        bank,
+        bank.len(),
+        &mut |offset, len| {
+            Ok(offset
+                .checked_add(len)
+                .and_then(|end| bank.get(offset..end))
+                .map(<[u8]>::to_vec))
+        },
+        key,
+    )
+}
+
+/// The whole of [`bank_summary`], over bytes it does not have to hold.
+///
+/// `wrapper` is the file from its start through at least the end of its top-level LIST chunk —
+/// every chunk this walks lives in there. `read` fetches the small ranges at the FSB5 offsets,
+/// which sit in the `SND ` chunk after that LIST. One body, so the in-memory and the on-disk route
+/// cannot answer differently about the same bank.
+fn summarize(
+    wrapper: &[u8],
+    file_len: usize,
+    read: &mut dyn FnMut(usize, usize) -> Result<Option<Vec<u8>>, String>,
+    key: &[u8],
+) -> Result<BankSummary, String> {
+    let bank = wrapper;
+    let entries = match bank_shape_within(bank, file_len)? {
         BankShape::SampleFree => return Ok(BankSummary::SampleFree),
         BankShape::Entries(entries) => entries,
     };
@@ -745,7 +792,7 @@ pub fn bank_summary(bank: &[u8], key: &[u8]) -> Result<BankSummary, String> {
     // this summary called intact.
     let mut headers = Vec::with_capacity(entries.len());
     for entry in &entries {
-        headers.push(sub_bank_header(bank, entry, key)?);
+        headers.push(sub_bank_header_from(read, file_len, entry, key)?);
     }
     // And where the waveforms point. Every block parsing does not mean the bank plays: a slot
     // naming a sub-bank that is not there, or a subsound past the end of the one it names, is
@@ -766,7 +813,7 @@ pub fn bank_summary(bank: &[u8], key: &[u8]) -> Result<BankSummary, String> {
     for (slot_index, slot) in slots.iter().enumerate().filter(|_| positional) {
         let Some(count) = counts.get(slot.sub_bank) else {
             return Err(format!(
-                "waveform {slot_index} points at sub-bank {} and the bank has {}: the bank is \\
+                "waveform {slot_index} points at sub-bank {} and the bank has {}: the bank is \
                  damaged, or a replacement was written against a different one",
                 slot.sub_bank,
                 counts.len()
@@ -774,7 +821,7 @@ pub fn bank_summary(bank: &[u8], key: &[u8]) -> Result<BankSummary, String> {
         };
         if slot.subsound >= *count {
             return Err(format!(
-                "waveform {slot_index} points at subsound {} of sub-bank {}, which holds {count}: \\
+                "waveform {slot_index} points at subsound {} of sub-bank {}, which holds {count}: \
                  the bank is damaged, or a replacement was written against a different one",
                 slot.subsound, slot.sub_bank
             ));
@@ -794,6 +841,78 @@ pub fn bank_summary(bank: &[u8], key: &[u8]) -> Result<BankSummary, String> {
     })
 }
 
+/// How much of a bank is read before its wrapper has been walked. The shipped banks put their
+/// top-level LIST within the first few kilobytes; this is generous enough that no shipped bank
+/// needs the second read below, and small enough that ten of them cost less than one page of
+/// `SFX.bank`.
+const WRAPPER_PROBE_BYTES: usize = 64 * 1024;
+
+/// [`bank_summary`] for a bank on disk, reading its wrapper and the FSB5 headers and nothing else.
+///
+/// `bank_summary` needs the caller to have the whole file in memory first, which for a directory
+/// listing is roughly 520 MB of reads and a 260 MB allocation for `SFX.bank` — the cost the
+/// summary exists to avoid, paid before it is called. What it actually reads is the RIFF wrapper
+/// and a few dozen bytes at each FSB5 offset.
+pub fn bank_summary_at(path: &std::path::Path, key: &[u8]) -> Result<BankSummary, String> {
+    bank_summary_probing(path, key, WRAPPER_PROBE_BYTES)
+}
+
+/// [`bank_summary_at`] with the first read's size in the caller's hands, so the grow-once path is
+/// reachable from a test without a bank carrying tens of thousands of waveforms.
+fn bank_summary_probing(
+    path: &std::path::Path,
+    key: &[u8],
+    probe: usize,
+) -> Result<BankSummary, String> {
+    let mut file =
+        std::fs::File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let file_len = file
+        .metadata()
+        .map_err(|error| format!("{}: {error}", path.display()))?
+        .len();
+    let file_len = usize::try_from(file_len).map_err(|_| "bank is larger than this address space")?;
+
+    // The wrapper, grown once if this bank's LIST reaches past the probe. Two reads at worst, and
+    // in an install that ships these banks, one.
+    let mut wrapper = read_at(&mut file, 0, probe.min(file_len))?;
+    if let Ok((list_off, list_size)) = find_top_list(&wrapper) {
+        let needed = list_off.saturating_add(8).saturating_add(list_size).min(file_len);
+        if needed > wrapper.len() {
+            wrapper = read_at(&mut file, 0, needed)?;
+        }
+    } else if file_len > wrapper.len() {
+        // No LIST in the probe. Either the bank is damaged or its wrapper is laid out unlike any
+        // shipped one; reading the file settles which, and reports the same error `bank_summary`
+        // would. Guessing a larger probe would only move the same cliff.
+        wrapper = read_at(&mut file, 0, file_len)?;
+    }
+
+    summarize(
+        &wrapper,
+        file_len,
+        &mut |offset, len| {
+            match offset.checked_add(len) {
+                Some(end) if end <= file_len => read_at(&mut file, offset, len).map(Some),
+                // Past the end of the file is the bank being truncated, which is the caller's
+                // sentence to write — not a read error.
+                _ => Ok(None),
+            }
+        },
+        key,
+    )
+}
+
+/// Exactly `len` bytes at `offset`, or the reason there are not that many.
+fn read_at(file: &mut std::fs::File, offset: usize, len: usize) -> Result<Vec<u8>, String> {
+    use std::io::{Read, Seek};
+    file.seek(std::io::SeekFrom::Start(offset as u64))
+        .map_err(|error| format!("seeking to {offset}: {error}"))?;
+    let mut buffer = vec![0u8; len];
+    file.read_exact(&mut buffer)
+        .map_err(|error| format!("reading {len} bytes at {offset}: {error}"))?;
+    Ok(buffer)
+}
+
 /// One sub-bank's decrypted header, refused unless it is both the right shape and all there.
 ///
 /// The magic proves the key; it does not prove the file. A block cut off after its header still
@@ -805,15 +924,23 @@ pub fn bank_summary(bank: &[u8], key: &[u8]) -> Result<BankSummary, String> {
 /// The extent arithmetic is `parse_fsb5`'s, which is what would have to succeed later: the sample
 /// table, the name table and the audio are all declared in the header, so their total can be
 /// checked without reading any of them.
-fn sub_bank_header(bank: &[u8], entry: &BankEntry, key: &[u8]) -> Result<Vec<u8>, String> {
-    let end = entry
+/// `read(offset, len)` yields those bytes, `Ok(None)` if they run past the end of the file, and
+/// `Err` if the read itself failed — two states a listing must not confuse, since one is a damaged
+/// bank and the other is a disk or a permission. A caller holding the whole bank hands over a
+/// slice and takes the same path, so nothing about WHAT is checked depends on where the bytes came
+/// from.
+fn sub_bank_header_from(
+    read: &mut dyn FnMut(usize, usize) -> Result<Option<Vec<u8>>, String>,
+    file_len: usize,
+    entry: &BankEntry,
+    key: &[u8],
+) -> Result<Vec<u8>, String> {
+    entry
         .fsb5_offset
         .checked_add(FSB5_HEADER_LEN)
         .ok_or("FSB5 offset out of range (corrupt bank)")?;
-    let mut header = bank
-        .get(entry.fsb5_offset..end)
-        .ok_or("FSB5 header runs past the end of the file (truncated bank)")?
-        .to_vec();
+    let mut header = read(entry.fsb5_offset, FSB5_HEADER_LEN)?
+        .ok_or("FSB5 header runs past the end of the file (truncated bank)")?;
     fsb5_decrypt(&mut header, key);
     if &header[0..4] != b"FSB5" {
         // The realistic cause by far, since every other field is read from this same block: a key
@@ -826,7 +953,7 @@ fn sub_bank_header(bank: &[u8], entry: &BankEntry, key: &[u8]) -> Result<Vec<u8>
         ));
     }
 
-    let remaining = (bank.len() - entry.fsb5_offset) as u64;
+    let remaining = (file_len - entry.fsb5_offset) as u64;
     let present = match entry.fsb5_size {
         // Checked, not clamped. `min` quietly replaced a declared extent that runs past the end of
         // the file with the bytes that are there, so a block whose own tables fit inside the
@@ -849,7 +976,7 @@ fn sub_bank_header(bank: &[u8], entry: &BankEntry, key: &[u8]) -> Result<Vec<u8>
         // can touch.
         _ => {
             return Err(
-                "the bank's wrapper declares no length for an FSB5 block, and this toolkit reads \\
+                "the bank's wrapper declares no length for an FSB5 block, and this toolkit reads \
                  blocks by the length the wrapper gives: the bank cannot be opened"
                     .to_string(),
             )
@@ -873,10 +1000,8 @@ fn sub_bank_header(bank: &[u8], entry: &BankEntry, key: &[u8]) -> Result<Vec<u8>
         .saturating_add(shdr_size)
         .saturating_add(names_size)
         .min(present as usize);
-    let mut metadata = bank
-        .get(entry.fsb5_offset..entry.fsb5_offset + metadata_end)
-        .ok_or("FSB5 metadata runs past the end of the file (truncated bank)")?
-        .to_vec();
+    let mut metadata = read(entry.fsb5_offset, metadata_end)?
+        .ok_or("FSB5 metadata runs past the end of the file (truncated bank)")?;
     fsb5_decrypt(&mut metadata, key);
     walk_sample_headers(
         &metadata,
@@ -2182,6 +2307,112 @@ mod tests {
             }
         );
         assert_eq!(view.codec(), Codec::Pcm16, "the fixture's codec has to be read, not assumed");
+    }
+
+    /// A bank whose audio is far larger than the wrapper probe, so that reading the wrapper is
+    /// visibly not reading the file. 400 KB of PCM against a wrapper of a few hundred bytes.
+    fn big_bank() -> Vec<u8> {
+        let samples = [ramp("SFX_Big_00", 44_100, 100_000), ramp("SFX_Big_01", 44_100, 100_000)];
+        let bank = test_fixture::pristine_bank_pcm16(&samples, GOTHIC_STUDIO_KEY).unwrap();
+        assert!(
+            bank.len() > WRAPPER_PROBE_BYTES,
+            "the fixture has to be bigger than the probe to say anything: {} bytes",
+            bank.len()
+        );
+        bank
+    }
+
+    fn write_bank(dir: &std::path::Path, name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn summarising_a_bank_on_disk_says_exactly_what_summarising_its_bytes_says() {
+        // `audio banks` reads from disk and every test above reads from memory. Two routes to one
+        // answer is how a listing starts contradicting `audio list` about a file — so the route
+        // that ships is compared against the one that is tested, on every shape that reaches it,
+        // errors included: a wrong key and a truncated bank have to fail the same way too.
+        let dir = tempfile::tempdir().unwrap();
+        let injected = replace_samples(
+            &two_sample_bank(),
+            GOTHIC_STUDIO_KEY,
+            vec![("SFX_UI_Click_00".into(), ramp("tone", 44_100, 8))],
+        )
+        .unwrap();
+        let big = big_bank();
+        let truncated = big[..big.len() / 2].to_vec();
+
+        let shapes: Vec<(&str, Vec<u8>, &[u8])> = vec![
+            ("two-sample", two_sample_bank(), GOTHIC_STUDIO_KEY),
+            ("sample-free", test_fixture::sample_free_bank(), GOTHIC_STUDIO_KEY),
+            ("injected", injected, GOTHIC_STUDIO_KEY),
+            ("bigger-than-the-probe", big, GOTHIC_STUDIO_KEY),
+            ("truncated", truncated, GOTHIC_STUDIO_KEY),
+            ("wrong-key", two_sample_bank(), b"not-the-studio-key"),
+            ("not-a-bank", b"RIFFnope".to_vec(), GOTHIC_STUDIO_KEY),
+        ];
+
+        for (label, bytes, key) in shapes {
+            let path = write_bank(dir.path(), &format!("{label}.bank"), &bytes);
+            assert_eq!(
+                bank_summary_at(&path, key),
+                bank_summary(&bytes, key),
+                "the two routes disagree about the {label} bank"
+            );
+        }
+    }
+
+    #[test]
+    fn a_wrapper_that_reaches_past_the_first_read_is_read_again_rather_than_misparsed() {
+        // The shipped banks all fit the probe, so the second read is the branch nothing would
+        // exercise until an install turned up whose bank has a longer metadata chunk — and the
+        // failure would be a wrong answer, not an error, since a wrapper cut short still walks.
+        let dir = tempfile::tempdir().unwrap();
+        let bank = two_sample_bank();
+        let path = write_bank(dir.path(), "grown.bank", &bank);
+
+        let whole = bank_summary(&bank, GOTHIC_STUDIO_KEY);
+        assert!(matches!(whole, Ok(BankSummary::Samples { .. })), "{whole:?}");
+        for probe in [1, 0x18, 64, 256, bank.len(), bank.len() * 2] {
+            assert_eq!(
+                bank_summary_probing(&path, GOTHIC_STUDIO_KEY, probe),
+                whole,
+                "a {probe}-byte first read changed the answer"
+            );
+        }
+    }
+
+    #[test]
+    fn summarising_reads_the_wrapper_and_the_headers_and_not_the_audio() {
+        // The claim `audio banks` is built on. Agreement above would still hold if the disk route
+        // read all 520 MB, so what it reads is counted here rather than assumed: everything the
+        // summary fetches outside the wrapper is FSB5 metadata, and the audio those blocks declare
+        // is never touched.
+        let bank = big_bank();
+        let (list_off, list_size) = find_top_list(&bank).unwrap();
+        let wrapper_end = list_off + 8 + list_size;
+
+        let mut fetched = 0usize;
+        let summary = summarize(
+            &bank[..wrapper_end],
+            bank.len(),
+            &mut |offset, len| {
+                fetched += len;
+                Ok(bank.get(offset..offset + len).map(<[u8]>::to_vec))
+            },
+            GOTHIC_STUDIO_KEY,
+        )
+        .unwrap();
+
+        assert_eq!(summary, bank_summary(&bank, GOTHIC_STUDIO_KEY).unwrap());
+        let read = wrapper_end + fetched;
+        assert!(
+            read * 20 < bank.len(),
+            "a summary read {read} of {} bytes, which is not a shortcut",
+            bank.len()
+        );
     }
 
     #[test]
