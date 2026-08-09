@@ -629,6 +629,7 @@
   "editorNoDifficultyChanges": "Нет изменений сложности для записи",
   "editorDifficultyWritten": "Сложность записана в профиль (создана резервная копия)",
   "editorChangesSavedWithBackup": "{count, plural, one{Сохранено {count} изменение и создана резервная копия} few{Сохранено {count} изменения и создана резервная копия} many{Сохранено {count} изменений и создана резервная копия} other{Сохранено {count} изменения и создана резервная копия}}",
+  "editorPlacementNoteFailed": "Перемещение сохранено, но записать заметку для его отмены не удалось: {details}",
   "editorProfileNotFound": "Профиль {profileId} не найден.",
   "editorNoFreeSaveSlot": "В папке сохранений игры нет свободных слотов (G1R-001–G1R-999).",
   "editorSaveImportedAssigned": "Сохранение импортировано и назначено профилю {profileId}",

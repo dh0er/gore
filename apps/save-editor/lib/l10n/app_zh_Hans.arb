@@ -629,6 +629,7 @@
   "editorNoDifficultyChanges": "没有需要保存的难度更改",
   "editorDifficultyWritten": "难度已写入存档配置（已创建备份）",
   "editorChangesSavedWithBackup": "已保存 {count} 项更改并创建备份",
+  "editorPlacementNoteFailed": "移动已保存，但无法写入用于还原的记录：{details}",
   "editorProfileNotFound": "未找到存档配置 {profileId}。",
   "editorNoFreeSaveSlot": "游戏存档文件夹中没有可用的存档槽位（G1R-001 至 G1R-999）。",
   "editorSaveImportedAssigned": "存档已导入并分配给存档配置 {profileId}",

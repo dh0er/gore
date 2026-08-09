@@ -2219,6 +2219,11 @@ class AppLocalizationsIt extends AppLocalizations {
   }
 
   @override
+  String editorPlacementNoteFailed(String details) {
+    return 'Lo spostamento è stato salvato, ma non è stato possibile scrivere la sua nota di annullamento: $details';
+  }
+
+  @override
   String editorProfileNotFound(int profileId) {
     return 'Profilo $profileId non trovato.';
   }

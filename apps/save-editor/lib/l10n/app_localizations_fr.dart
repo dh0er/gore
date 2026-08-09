@@ -2228,6 +2228,11 @@ class AppLocalizationsFr extends AppLocalizations {
   }
 
   @override
+  String editorPlacementNoteFailed(String details) {
+    return 'Le déplacement a été enregistré, mais sa note d\'annulation n\'a pas pu être écrite : $details';
+  }
+
+  @override
   String editorProfileNotFound(int profileId) {
     return 'Profil $profileId introuvable.';
   }

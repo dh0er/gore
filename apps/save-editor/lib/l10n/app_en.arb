@@ -1112,6 +1112,8 @@
   "editorDifficultyWritten": "Difficulty written to the profile (backup created)",
   "editorChangesSavedWithBackup": "{count, plural, =1{1 change saved with backup} other{{count} changes saved with backup}}",
   "@editorChangesSavedWithBackup": {"placeholders": {"count": {"type": "int"}}},
+  "editorPlacementNoteFailed": "The move was saved, but its undo note could not be written: {details}",
+  "@editorPlacementNoteFailed": {"placeholders": {"details": {"type": "String"}}},
   "editorProfileNotFound": "Profile {profileId} was not found.",
   "@editorProfileNotFound": {"placeholders": {"profileId": {"type": "int"}}},
   "editorNoFreeSaveSlot": "No free save slot is available in the game save folder (G1R-001 through G1R-999).",

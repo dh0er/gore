@@ -57,6 +57,28 @@ List<NpcStructEdit> npcPositionDraftsFromPending(PendingSaveEdit? pending) {
   return drafts;
 }
 
+/// The routine class queued for this NPC, or null when none is.
+///
+/// The sibling of [npcPositionDraftsFromPending] for the one edit that is NOT a
+/// struct: without it a revisit would read the checkbox off the SAVE while a
+/// routine swap sat queued, and the next keystroke would rebuild the entry
+/// without it — saving the move as position-only, which is exactly the move that
+/// does not stick.
+String? npcPositionRoutineFromPending(PendingSaveEdit? pending) {
+  if (pending == null) return null;
+  for (final edit in pending.edits) {
+    if (edit['path'] != 'private.typed.setValue') continue;
+    final value = edit['value'];
+    if (value is! Map) continue;
+    final path = value['path'];
+    if (path is! List || path.isEmpty) continue;
+    if (path.last != 'DailyRoutineClass') continue;
+    final queued = value['value'];
+    if (queued is String && queued.isNotEmpty) return queued;
+  }
+  return null;
+}
+
 /// The "Position" DETAIL body (fifth Charaktere sub-tab). Actor-aware exactly
 /// like [AttributeDetail]: the player gets the existing
 /// [PlayerTransformEditor] (its ONLY home now — see hero_stats_card.dart), an
@@ -139,6 +161,8 @@ class PositionDetail extends ConsumerWidget {
         editable: editable,
         initialPending: () =>
             npcPositionDraftsFromPending(notifier.pendingEditFor(pendingKey)),
+        initialPendingRoutine: () =>
+            npcPositionRoutineFromPending(notifier.pendingEditFor(pendingKey)),
         onPendingChanged: (draft, validationError) {
           if (validationError != null) {
             // Blocks the global Save button while a field is unusable — unlike
@@ -221,6 +245,7 @@ class NpcPositionPanel extends StatefulWidget {
     required this.editable,
     required this.reloadKey,
     this.initialPending,
+    this.initialPendingRoutine,
   });
 
   final Future<NpcPoseResult> Function() load;
@@ -229,6 +254,12 @@ class NpcPositionPanel extends StatefulWidget {
   /// supplied so a revisit RESUMES from them. Evaluated on each (re)load so it
   /// reflects the current registry.
   final List<NpcStructEdit> Function()? initialPending;
+
+  /// The routine class already queued for this NPC, if any. Read on each
+  /// (re)load so the checkbox resumes from the QUEUE rather than from the save:
+  /// they differ exactly while a pin is pending, which is when getting it wrong
+  /// silently turns a "stay there" move into a position-only one.
+  final String? Function()? initialPendingRoutine;
 
   /// Called whenever the set of pending edits changes. [edits] holds one entry
   /// per differing group (location and/or rotation). [validationError] is
@@ -342,7 +373,15 @@ class _NpcPositionPanelState extends State<NpcPositionPanel> {
       // The box shows the NPC's CURRENT state, so it starts ticked only for one
       // already on the inert routine. Off for everyone else: wiping a schedule
       // is a deliberate act, not something a position edit does on the side.
-      _stayInPlace = result.isPinned;
+      //
+      // A QUEUED routine swap wins over the stored state — that is the whole
+      // point of a revisit resuming from the registry — and it decides the box
+      // in both directions: the inert class means a pending pin, any other class
+      // means a pending restore.
+      final queued = widget.initialPendingRoutine?.call();
+      _stayInPlace = queued != null
+          ? queued == result.inertRoutineClass
+          : result.isPinned;
       _restoring = false;
       _seedControllers();
     });

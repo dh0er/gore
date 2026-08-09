@@ -2223,6 +2223,11 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
+  String editorPlacementNoteFailed(String details) {
+    return 'Перемещение сохранено, но записать заметку для его отмены не удалось: $details';
+  }
+
+  @override
   String editorProfileNotFound(int profileId) {
     return 'Профиль $profileId не найден.';
   }

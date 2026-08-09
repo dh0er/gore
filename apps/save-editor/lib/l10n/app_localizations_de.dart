@@ -2213,6 +2213,11 @@ class AppLocalizationsDe extends AppLocalizations {
   }
 
   @override
+  String editorPlacementNoteFailed(String details) {
+    return 'Die Versetzung wurde gespeichert, aber ihre Rücknahme-Notiz konnte nicht geschrieben werden: $details';
+  }
+
+  @override
   String editorProfileNotFound(int profileId) {
     return 'Profil $profileId wurde nicht gefunden.';
   }

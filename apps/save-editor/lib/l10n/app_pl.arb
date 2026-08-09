@@ -629,6 +629,7 @@
   "editorNoDifficultyChanges": "Brak zmian poziomu trudności do zapisania",
   "editorDifficultyWritten": "Poziom trudności zapisano w profilu (utworzono kopię zapasową)",
   "editorChangesSavedWithBackup": "{count, plural, =1{Zapisano 1 zmianę i utworzono kopię zapasową} few{Zapisano {count} zmiany i utworzono kopię zapasową} many{Zapisano {count} zmian i utworzono kopię zapasową} other{Zapisano {count} zmian i utworzono kopię zapasową}}",
+  "editorPlacementNoteFailed": "Przeniesienie zostało zapisane, ale nie udało się zapisać notatki do cofnięcia: {details}",
   "editorProfileNotFound": "Nie znaleziono profilu {profileId}.",
   "editorNoFreeSaveSlot": "W folderze zapisów gry nie ma wolnego slotu zapisu (od G1R-001 do G1R-999).",
   "editorSaveImportedAssigned": "Zapis zaimportowano i przypisano do profilu {profileId}",

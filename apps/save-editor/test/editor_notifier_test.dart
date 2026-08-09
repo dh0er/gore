@@ -788,6 +788,103 @@ void main() {
     expect(notifier.state.pendingEdits.containsKey('publicName'), isTrue);
   });
 
+  test('a failed save keeps the placement undo note with its edits', () async {
+    // Regression: the pending entry was rebuilt from `edits` alone, so a retry
+    // after a failed save would commit the NPC move WITHOUT recording the note —
+    // pinning him with no way back to the routine the move replaced.
+    final core = _FailingWriteCoreService(
+      scanData: {
+        'saves': [
+          {
+            'path': r'C:\tmp\saves\G1R-001.sav',
+            'slot': 'G1R-001',
+            'format': 'GSAV',
+            'fileSize': 914367,
+            'sha1': 'abc',
+            'status': 'ok',
+            'playerSaveName': 'Auto',
+          },
+        ],
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    await pumpEventQueue();
+    notifier.setPendingEdit(
+      'npc.position:A',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.setValue',
+            'value': {
+              'path': ['x'],
+              'value': {'x': 1.0, 'y': 2.0, 'z': 3.0},
+            },
+          },
+        ],
+        placementNotes: [
+          {
+            'npc': 'A',
+            'note': {
+              'original_location': [0.0, 0.0, 0.0],
+              'original_routine_class': '/Script/Angelscript.DailyRoutine_A',
+              'written_location': [1.0, 2.0, 3.0],
+              'written_routine_class': '/Script/Angelscript.DailyRoutine_Empty',
+            },
+          },
+        ],
+        clearPlacementNotes: ['B'],
+      ),
+    );
+
+    final ok = await notifier.saveAllPending();
+
+    expect(ok, isFalse);
+    final kept = notifier.state.pendingEdits['npc.position:A'];
+    expect(kept, isNotNull);
+    expect(kept!.placementNotes, hasLength(1));
+    expect(kept.placementNotes.single['npc'], 'A');
+    expect(kept.clearPlacementNotes, ['B']);
+  });
+
+  test('a failed undo note is reported beside the successful save', () async {
+    // The core writes the note AFTER the bytes land and reports a failure beside
+    // a good save rather than failing it. Left unread, the UI would announce
+    // success and clear the drafts while the routine the pin replaced was gone
+    // with nothing recording it.
+    final core = _PlacementWarningCoreService(
+      scanData: {
+        'saves': [
+          {
+            'path': r'C:\tmp\saves\G1R-001.sav',
+            'slot': 'G1R-001',
+            'format': 'GSAV',
+            'fileSize': 914367,
+            'sha1': 'abc',
+            'status': 'ok',
+            'playerSaveName': 'Auto',
+          },
+        ],
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    await pumpEventQueue();
+    notifier.setPendingEdit(
+      'npc.position:A',
+      const PendingSaveEdit(
+        edits: [
+          {'path': 'public.m_PlayerSaveName', 'value': 'New Name'},
+        ],
+      ),
+    );
+
+    final ok = await notifier.saveAllPending();
+
+    expect(ok, isTrue);
+    expect(notifier.state.lastWriteMessage, contains('npc_placements.json'));
+  });
+
   test(
     'saveAllPending on partial commit clears only the committed snapshot keys',
     () async {
@@ -5046,6 +5143,35 @@ class _StoryCasFailureCoreService extends _RecordingCoreService {
         'error': {
           'code': 'story_value_conflict',
           'message': 'story CAS mismatch: Stone_OreArmor changed on disk',
+        },
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// Succeeds the write but reports that the placement sidecar could not be
+/// written — the shape the core uses when the save is good and only the undo
+/// note failed.
+class _PlacementWarningCoreService extends _RecordingCoreService {
+  _PlacementWarningCoreService({super.scanData});
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'write_save') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': true,
+        'data': {
+          'backupPath': r'C:\tmp\saves\G1R-001.sav.bak.1',
+          'placementNoteWarning':
+              r'C:\tmp\saves\goresave_backups\npc_placements.json is not '
+              'readable NPC-placement JSON',
         },
       };
     }

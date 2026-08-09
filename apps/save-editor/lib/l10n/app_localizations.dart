@@ -3812,6 +3812,12 @@ abstract class AppLocalizations {
   /// **'{count, plural, =1{1 change saved with backup} other{{count} changes saved with backup}}'**
   String editorChangesSavedWithBackup(int count);
 
+  /// No description provided for @editorPlacementNoteFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The move was saved, but its undo note could not be written: {details}'**
+  String editorPlacementNoteFailed(String details);
+
   /// No description provided for @editorProfileNotFound.
   ///
   /// In en, this message translates to:

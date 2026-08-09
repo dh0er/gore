@@ -629,6 +629,7 @@
   "editorNoDifficultyChanges": "Não há alterações de dificuldade para guardar",
   "editorDifficultyWritten": "Dificuldade guardada no perfil (cópia de segurança criada)",
   "editorChangesSavedWithBackup": "{count, plural, =1{1 alteração guardada com uma cópia de segurança} other{{count} alterações guardadas com uma cópia de segurança}}",
+  "editorPlacementNoteFailed": "A deslocação foi guardada, mas não foi possível escrever a sua nota de anulação: {details}",
   "editorProfileNotFound": "O perfil {profileId} não foi encontrado.",
   "editorNoFreeSaveSlot": "Não há nenhum slot de gravação livre na pasta de jogos guardados (G1R-001 a G1R-999).",
   "editorSaveImportedAssigned": "Jogo guardado importado e atribuído ao perfil {profileId}",

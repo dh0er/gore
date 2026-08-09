@@ -2119,6 +2119,11 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
+  String editorPlacementNoteFailed(String details) {
+    return '移動已儲存，但無法寫入用於還原的記錄：$details';
+  }
+
+  @override
   String editorProfileNotFound(int profileId) {
     return '未找到存档配置 $profileId。';
   }
@@ -4796,6 +4801,11 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   @override
   String editorChangesSavedWithBackup(int count) {
     return '已保存 $count 项更改并创建备份';
+  }
+
+  @override
+  String editorPlacementNoteFailed(String details) {
+    return '移动已保存，但无法写入用于还原的记录：$details';
   }
 
   @override

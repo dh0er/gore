@@ -629,6 +629,7 @@
   "editorNoDifficultyChanges": "Não há alterações de dificuldade para salvar",
   "editorDifficultyWritten": "Dificuldade salva no perfil (backup criado)",
   "editorChangesSavedWithBackup": "{count, plural, =1{1 alteração salva com backup} other{{count} alterações salvas com backup}}",
+  "editorPlacementNoteFailed": "A mudança foi salva, mas não foi possível escrever a nota para desfazê-la: {details}",
   "editorProfileNotFound": "O perfil {profileId} não foi encontrado.",
   "editorNoFreeSaveSlot": "Não há nenhum slot livre na pasta de jogos salvos (G1R-001 a G1R-999).",
   "editorSaveImportedAssigned": "Jogo salvo importado e atribuído ao perfil {profileId}",

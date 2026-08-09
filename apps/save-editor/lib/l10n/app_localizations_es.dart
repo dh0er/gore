@@ -2213,6 +2213,11 @@ class AppLocalizationsEs extends AppLocalizations {
   }
 
   @override
+  String editorPlacementNoteFailed(String details) {
+    return 'El traslado se guardó, pero no se pudo escribir su nota para deshacerlo: $details';
+  }
+
+  @override
   String editorProfileNotFound(int profileId) {
     return 'No se encontró el perfil $profileId.';
   }

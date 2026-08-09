@@ -629,6 +629,7 @@
   "editorNoDifficultyChanges": "Keine Schwierigkeitsänderungen zum Speichern",
   "editorDifficultyWritten": "Schwierigkeit im Profil gespeichert (Sicherung erstellt)",
   "editorChangesSavedWithBackup": "{count, plural, =1{1 Änderung mit Sicherung gespeichert} other{{count} Änderungen mit Sicherung gespeichert}}",
+  "editorPlacementNoteFailed": "Die Versetzung wurde gespeichert, aber ihre Rücknahme-Notiz konnte nicht geschrieben werden: {details}",
   "editorProfileNotFound": "Profil {profileId} wurde nicht gefunden.",
   "editorNoFreeSaveSlot": "Im Spielstandordner ist kein freier Slot verfügbar (G1R-001 bis G1R-999).",
   "editorSaveImportedAssigned": "Spielstand importiert und dem Profil {profileId} zugewiesen",

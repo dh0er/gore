@@ -2149,6 +2149,11 @@ class AppLocalizationsJa extends AppLocalizations {
   }
 
   @override
+  String editorPlacementNoteFailed(String details) {
+    return '移動は保存されましたが、取り消し用の記録を書き込めませんでした: $details';
+  }
+
+  @override
   String editorProfileNotFound(int profileId) {
     return 'プロフィール $profileId が見つかりません。';
   }

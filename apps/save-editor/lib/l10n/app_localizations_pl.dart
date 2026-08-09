@@ -2230,6 +2230,11 @@ class AppLocalizationsPl extends AppLocalizations {
   }
 
   @override
+  String editorPlacementNoteFailed(String details) {
+    return 'Przeniesienie zostało zapisane, ale nie udało się zapisać notatki do cofnięcia: $details';
+  }
+
+  @override
   String editorProfileNotFound(int profileId) {
     return 'Nie znaleziono profilu $profileId.';
   }

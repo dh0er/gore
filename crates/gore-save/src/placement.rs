@@ -313,6 +313,23 @@ mod tests {
     }
 
     #[test]
+    fn a_note_belongs_to_the_file_the_bytes_landed_in() {
+        // An export writes the moved bytes to `outputPath` and leaves the source
+        // alone, so the note belongs beside the export. Recording it against the
+        // source would leave the exported save with no undo and hand an
+        // untouched file a note for a move it does not contain.
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("G1R-001.sav");
+        let export = dir.path().join("exported").join("G1R-009.sav");
+        fs::create_dir_all(export.parent().unwrap()).unwrap();
+        record(&export, &[("Npc-A".to_string(), note())]).unwrap();
+
+        assert_eq!(read_notes(&export).get("Npc-A"), Some(&note()));
+        assert!(read_notes(&source).is_empty());
+        assert!(!notes_path(&source).exists());
+    }
+
+    #[test]
     fn an_unreadable_file_blocks_a_write_instead_of_being_overwritten() {
         let dir = tempdir().unwrap();
         let save = dir.path().join("G1R-001.sav");

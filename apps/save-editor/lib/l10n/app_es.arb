@@ -629,6 +629,7 @@
   "editorNoDifficultyChanges": "No hay cambios de dificultad que guardar",
   "editorDifficultyWritten": "Dificultad guardada en el perfil (se creó una copia de seguridad)",
   "editorChangesSavedWithBackup": "{count, plural, =1{1 cambio guardado con copia de seguridad} other{{count} cambios guardados con copia de seguridad}}",
+  "editorPlacementNoteFailed": "El traslado se guardó, pero no se pudo escribir su nota para deshacerlo: {details}",
   "editorProfileNotFound": "No se encontró el perfil {profileId}.",
   "editorNoFreeSaveSlot": "No hay ninguna ranura libre en la carpeta de partidas del juego (de G1R-001 a G1R-999).",
   "editorSaveImportedAssigned": "Partida importada y asignada al perfil {profileId}",

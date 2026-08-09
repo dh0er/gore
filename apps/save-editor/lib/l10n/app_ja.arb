@@ -629,6 +629,7 @@
   "editorNoDifficultyChanges": "保存する難易度の変更はありません",
   "editorDifficultyWritten": "難易度をプロフィールに保存しました（バックアップを作成しました）",
   "editorChangesSavedWithBackup": "{count} 件の変更を保存し、バックアップを作成しました",
+  "editorPlacementNoteFailed": "移動は保存されましたが、取り消し用の記録を書き込めませんでした: {details}",
   "editorProfileNotFound": "プロフィール {profileId} が見つかりません。",
   "editorNoFreeSaveSlot": "ゲームのセーブフォルダーに空きスロットがありません（G1R-001～G1R-999）。",
   "editorSaveImportedAssigned": "セーブデータをインポートし、プロフィール {profileId} に割り当てました",

@@ -171,6 +171,59 @@ void main() {
     expect(pending(tester)!.placementNotes, isEmpty);
   });
 
+  testWidgets('a queued pin survives leaving the NPC and coming back', (
+    tester,
+  ) async {
+    // Regression: the box was reseeded from the SAVE on every revisit while the
+    // queue still held the routine swap, so the next keystroke rebuilt the entry
+    // without it and the move saved as position-only — the one shape that does
+    // not stick.
+    await pumpPositionApp(
+      tester,
+      NpcPositionCoreService({
+        npc: const FakePose(
+          location: (11.0, 12.0, 13.0),
+          routineClass: '/Script/Angelscript.DailyRoutine_A_Start',
+        ),
+        'Lizard-B': const FakePose(location: (1.0, 2.0, 3.0)),
+      }),
+    );
+    await openPositionTab(tester);
+    await tester.tap(find.text(npc));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(positionField('location:x'), '999');
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('npc-position:stay')));
+    await tester.pumpAndSettle();
+    expect(routineEdit(tester), isNotNull);
+
+    // Away and back.
+    await tester.tap(find.text('Lizard-B'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(npc));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<CheckboxListTile>(
+            find.byKey(const ValueKey('npc-position:stay')),
+          )
+          .value,
+      isTrue,
+      reason: 'the box has to resume from the queue, not from the save',
+    );
+
+    // The keystroke that used to drop it.
+    await tester.enterText(positionField('location:y'), '888');
+    await tester.pumpAndSettle();
+
+    final routine = routineEdit(tester);
+    expect(routine, isNotNull, reason: 'the pin must still be queued');
+    expect((routine!['value'] as Map)['value'], kFakeInertRoutine);
+    expect(pending(tester)!.placementNotes, hasLength(1));
+  });
+
   testWidgets('an NPC with no routine record offers no checkbox at all', (
     tester,
   ) async {

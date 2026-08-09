@@ -2214,6 +2214,11 @@ class AppLocalizationsPt extends AppLocalizations {
   }
 
   @override
+  String editorPlacementNoteFailed(String details) {
+    return 'A deslocação foi guardada, mas não foi possível escrever a sua nota de anulação: $details';
+  }
+
+  @override
   String editorProfileNotFound(int profileId) {
     return 'O perfil $profileId não foi encontrado.';
   }
@@ -4988,6 +4993,11 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
       one: '1 alteração salva com backup',
     );
     return '$_temp0';
+  }
+
+  @override
+  String editorPlacementNoteFailed(String details) {
+    return 'A mudança foi salva, mas não foi possível escrever a nota para desfazê-la: $details';
   }
 
   @override

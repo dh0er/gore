@@ -629,6 +629,7 @@
   "editorNoDifficultyChanges": "Nessuna modifica alla difficoltà da salvare",
   "editorDifficultyWritten": "Difficoltà salvata nel profilo (backup creato)",
   "editorChangesSavedWithBackup": "{count, plural, =1{1 modifica salvata con backup} other{{count} modifiche salvate con backup}}",
+  "editorPlacementNoteFailed": "Lo spostamento è stato salvato, ma non è stato possibile scrivere la sua nota di annullamento: {details}",
   "editorProfileNotFound": "Profilo {profileId} non trovato.",
   "editorNoFreeSaveSlot": "Non sono disponibili slot liberi nella cartella dei salvataggi del gioco (da G1R-001 a G1R-999).",
   "editorSaveImportedAssigned": "Salvataggio importato e assegnato al profilo {profileId}",

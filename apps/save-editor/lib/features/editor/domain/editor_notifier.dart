@@ -1463,6 +1463,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // The first (backup-taking) sub-write's response data drives the success
     // message: its `backupPath` is the one pristine snapshot for this Save.
     Map<String, Object?> firstData = const {};
+    // The core writes the undo note AFTER the bytes land and reports a failure
+    // beside a successful save rather than failing it. Unreported, the user
+    // would be told the pin succeeded while the routine it replaced was lost
+    // with nothing recording it.
+    String? placementNoteWarning;
     String? failureError;
     var ok = false;
     await _withLoading(() async {
@@ -1502,9 +1507,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
             failureError = _l10n.editorSaveFailed(_errorDetails(response));
             break;
           }
-          if (i == 0) {
-            firstData =
-                (response['data'] as Map?)?.cast<String, Object?>() ?? const {};
+          final data =
+              (response['data'] as Map?)?.cast<String, Object?>() ?? const {};
+          if (i == 0) firstData = data;
+          final warning = data['placementNoteWarning'];
+          if (warning is String && warning.isNotEmpty) {
+            placementNoteWarning ??= warning;
           }
           committedEdits.addAll(sub.edits);
           state = state.copyWith(
@@ -1517,11 +1525,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
 
         if (failureError == null) {
           // All sub-writes succeeded.
+          final saved = _backupMessage(
+            _l10n.editorChangesSavedWithBackup(n),
+            firstData,
+          );
           state = state.copyWith(
-            lastWriteMessage: _backupMessage(
-              _l10n.editorChangesSavedWithBackup(n),
-              firstData,
-            ),
+            lastWriteMessage: placementNoteWarning == null
+                ? saved
+                : '$saved\n'
+                      '${_l10n.editorPlacementNoteFailed(placementNoteWarning!)}',
           );
           // Single trailing refresh after the last successful write.
           await refresh();
@@ -1573,6 +1585,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
             PendingSaveEdit(
               edits: remaining,
               syncPersistentDataList: entry.value.syncPersistentDataList,
+              // Carried, not dropped: a retry of the still-unwritten edits must
+              // still record its undo note. Re-recording one whose sub-write did
+              // commit is harmless — the note is keyed by NPC and identical — but
+              // losing it would leave an NPC pinned with no way back.
+              placementNotes: entry.value.placementNotes,
+              clearPlacementNotes: entry.value.clearPlacementNotes,
               displayCount: entry.value.displayCount,
             ),
           );
@@ -1598,6 +1616,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
         result[entry.key] = PendingSaveEdit(
           edits: remaining,
           syncPersistentDataList: entry.value.syncPersistentDataList,
+          // See the same carry in the converge loop above: an undo note has to
+          // survive a partial save, or the retry pins an NPC with no way back.
+          placementNotes: entry.value.placementNotes,
+          clearPlacementNotes: entry.value.clearPlacementNotes,
           displayCount: entry.value.displayCount,
         );
       }

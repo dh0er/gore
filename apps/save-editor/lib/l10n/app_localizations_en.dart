@@ -2199,6 +2199,11 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String editorPlacementNoteFailed(String details) {
+    return 'The move was saved, but its undo note could not be written: $details';
+  }
+
+  @override
   String editorProfileNotFound(int profileId) {
     return 'Profile $profileId was not found.';
   }
