@@ -885,6 +885,58 @@ void main() {
     expect(notifier.state.lastWriteMessage, contains('npc_placements.json'));
   });
 
+  test('a failed undo note survives a later sub-write failing', () async {
+    // The committed sub-write put the move on disk; a later failure does not
+    // take it back. Reporting only the save error would leave an NPC pinned
+    // with the routine it replaced recorded nowhere.
+    final core = _WarnThenFailCoreService(
+      scanData: {
+        'saves': [
+          {
+            'path': r'C:\tmp\saves\G1R-001.sav',
+            'slot': 'G1R-001',
+            'format': 'GSAV',
+            'fileSize': 914367,
+            'sha1': 'abc',
+            'status': 'ok',
+            'playerSaveName': 'Auto',
+          },
+        ],
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    await pumpEventQueue();
+    // Two splicing edits → two sequential writes; the first commits.
+    notifier.setPendingEdit(
+      'npc.revive:A',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.npc.revive',
+            'value': {'id': 'A'},
+          },
+        ],
+      ),
+    );
+    notifier.setPendingEdit(
+      'npc.revive:B',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.npc.revive',
+            'value': {'id': 'B'},
+          },
+        ],
+      ),
+    );
+
+    final ok = await notifier.saveAllPending();
+
+    expect(ok, isFalse);
+    expect(notifier.state.error, contains('npc_placements.json'));
+  });
+
   test(
     'saveAllPending on partial commit clears only the committed snapshot keys',
     () async {
@@ -5165,6 +5217,44 @@ class _PlacementWarningCoreService extends _RecordingCoreService {
       requests.add(
         _RecordedRequest(command, Map<String, Object?>.from(payload)),
       );
+      return {
+        'ok': true,
+        'data': {
+          'backupPath': r'C:\tmp\saves\G1R-001.sav.bak.1',
+          'placementNoteWarning':
+              r'C:\tmp\saves\goresave_backups\npc_placements.json is not '
+              'readable NPC-placement JSON',
+        },
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// Commits the first write_save with a placement warning, then fails the
+/// second. The move is on disk either way, so the warning has to outlive the
+/// later failure.
+class _WarnThenFailCoreService extends _RecordingCoreService {
+  _WarnThenFailCoreService({super.scanData});
+
+  var _writes = 0;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'write_save') {
+      _writes++;
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      if (_writes >= 2) {
+        return {
+          'ok': false,
+          'error': {'message': 'write failed'},
+        };
+      }
       return {
         'ok': true,
         'data': {

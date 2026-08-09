@@ -1554,7 +1554,16 @@ class EditorNotifier extends StateNotifier<EditorState> {
         // that case rather than re-targeted at the wrong save. Restoring inside
         // the inspection re-seed means kept-alive editors rehydrate WITH them.
         await refresh(preservedEdits: preserved, preservedForPath: savePath);
-        state = state.copyWith(error: failureError);
+        // A sub-write that COMMITTED may still have failed to write its undo
+        // note, and that survives the failure of a later sub-write: the move is
+        // on disk either way, so reporting only the save error would leave an
+        // NPC pinned with the replaced routine recorded nowhere.
+        state = state.copyWith(
+          error: placementNoteWarning == null
+              ? failureError
+              : '$failureError\n'
+                    '${_l10n.editorPlacementNoteFailed(placementNoteWarning!)}',
+        );
       } finally {
         // A thrown _execute (e.g. CoreWorkerException from the persistent worker
         // isolate) skips the in-loop clear above; guarantee the determinate bar
