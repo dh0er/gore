@@ -634,8 +634,13 @@ pub fn run(query: Vec<String>, domain: Option<String>, max: usize, json: bool) -
 ///
 /// Every term has to match, so one stray character removes a result entirely: `gore find healing
 /// potion?` searched for `potion?`, which is in no id and no display name, and answered that
-/// nothing matches. Trimmed only at the edges — punctuation inside a word belongs to it, and an id
-/// like `/Game/UI/T_Logo` or `ItFo_Apple` is mostly punctuation.
+/// nothing matches.
+///
+/// Punctuation inside a word is a separator too, and for the same reason: `main-menu logo` kept
+/// `main-menu` as one literal, so every entry whose prose says "main menu" was unreachable from a
+/// query this command invites people to type. An id pasted whole still works — `/Game/UI/T_Logo`
+/// becomes three terms, all of which that id contains — because matching is by substring and every
+/// piece of a word is a substring of it. See [`is_word_char`] for what stays joined.
 ///
 /// The rule is "keep letters, digits and `_`" rather than "drop ASCII punctuation", because a
 /// query is usually pasted. Typographic quotes, dashes and the German „…“ pass an
@@ -645,14 +650,31 @@ pub fn run(query: Vec<String>, domain: Option<String>, max: usize, json: bool) -
 fn query_terms(query: &str) -> Vec<String> {
     query
         .split_whitespace()
-        .map(|word| {
+        .flat_map(|word| {
             let word = word
                 .trim_matches(|c: char| !(c.is_alphanumeric() || c == '_'))
                 .to_lowercase();
             without_possessive(word)
+                .split(|c: char| !is_word_char(c))
+                .filter(|piece| piece.chars().any(|c| c.is_alphanumeric() || c == '_'))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
         })
-        .filter(|word| !word.is_empty())
         .collect()
+}
+
+/// What stays inside a term when a word is split.
+///
+/// Punctuation INSIDE a word used to survive, because only the edges were trimmed: `main-menu`
+/// stayed one mandatory literal, and every entry whose prose says "main menu" was then out of
+/// reach of a query this command invites people to type. Splitting cannot narrow anything —
+/// matching is by substring, so any text holding `main-menu` holds `main` and `menu` too.
+///
+/// `_` stays a word character because identifiers are built from it, and splitting `itfo_apple`
+/// would turn one precise term into two loose ones. The apostrophe stays for the reason
+/// [`without_possessive`] gives: it is part of `don't`, and the text being searched carries it.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_' || c == '\'' || c == '\u{2019}'
 }
 
 /// `diego's` → `diego`, and everything else unchanged.
@@ -2179,8 +2201,16 @@ mod tests {
         );
         assert_eq!(query_terms("\"Apfel\","), vec!["apfel"]);
 
-        // Only at the edges. Ids are mostly punctuation, and an underscore is part of the word.
-        assert_eq!(query_terms("/Game/UI/T_Logo"), vec!["game/ui/t_logo"]);
+        // Inside a word too. `main-menu` stayed one mandatory literal, so every entry whose prose
+        // says "main menu" was unreachable from a query this command invites people to type.
+        assert_eq!(query_terms("main-menu logo"), vec!["main", "menu", "logo"]);
+        assert_eq!(query_terms("old\u{2014}dialog"), vec!["old", "dialog"]);
+
+        // A pasted id splits and still finds itself: matching is by substring, so every piece of
+        // a word is a substring of it, and the id carries all of them.
+        assert_eq!(query_terms("/Game/UI/T_Logo"), vec!["game", "ui", "t_logo"]);
+        // The underscore is what identifiers are built from, so it stays: splitting here would
+        // turn one precise term into two loose ones.
         assert_eq!(query_terms("ItFo_Apple"), vec!["itfo_apple"]);
 
         // A term that was nothing but punctuation is not a term.
@@ -2196,6 +2226,29 @@ mod tests {
 
         // A word that merely ends in `s` keeps it.
         assert_eq!(query_terms("Saturas"), vec!["saturas"]);
+    }
+
+    #[test]
+    fn a_hyphenated_query_reaches_prose_that_spells_the_words_apart() {
+        // The defect as somebody meets it: this command advertises symptom searches, and a symptom
+        // written the way people write it — `main-menu logo` — could not reach an entry whose own
+        // text says "main menu". One character, and the result set went to nothing.
+        let register = register_with(
+            "texture",
+            "/Game/UI/T_LogoRemake",
+            &observation("confirmed", Some("magenta"), "24340829"),
+            "Main menu wordmark",
+        );
+
+        let apart = search(&[], &register, &terms("main menu"), None, None);
+        assert_eq!(apart.len(), 1, "the fixture has to be reachable at all");
+
+        let joined = search(&[], &register, &query_terms("main-menu"), None, None);
+        assert_eq!(joined.len(), 1, "a hyphen must not decide whether prose is searchable");
+
+        // And the em dash a pasted sentence brings.
+        let dashed = search(&[], &register, &query_terms("main\u{2014}menu"), None, None);
+        assert_eq!(dashed.len(), 1, "typographic dashes separate words too");
     }
 
     #[test]
