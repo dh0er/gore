@@ -736,7 +736,7 @@ mod tests {
             ),
             (
                 "I edited the german text but the dialog still shows the old line",
-                "text-and-dialogs#getting-it-wrong-reports-success",
+                "text-and-dialogs#getting-it-wrong-written-and-not-the-line-you-see",
             ),
             (
                 "changed a texture but the game looks the same",

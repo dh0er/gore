@@ -685,6 +685,37 @@ mod tests {
     }
 
     #[test]
+    fn no_description_carries_a_swallowed_line_continuation() {
+        // Every text here is written across source lines and joined with a trailing `\`. Drop the
+        // backslash and there is no error, no newline and no complaint — just the next line's
+        // indentation sitting in the middle of a sentence an agent is handed. Two of these were in
+        // the table, and the only way anybody saw them was reading the rendered output.
+        let padded = |text: &str| text.contains("   ");
+        for group in GROUPS {
+            assert!(!padded(group.summary), "{}: {:?}", group.tool, group.summary);
+            for command in group.commands {
+                assert!(
+                    !padded(command.summary),
+                    "{}/{}: {:?}",
+                    group.tool,
+                    command.sub,
+                    command.summary
+                );
+                for arg in command.args {
+                    assert!(
+                        !padded(arg.help),
+                        "{}/{} {}: {:?}",
+                        group.tool,
+                        command.sub,
+                        arg.name,
+                        arg.help
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn exclusive_sets_name_real_arguments() {
         for group in GROUPS {
             for command in group.commands {

@@ -101,7 +101,8 @@ const DOCTOR_ARGS: &[ArgSpec] = &[ArgSpec::new(
     "game",
     Long("game"),
     Path,
-    "Game install root (the folder containing G1R/). Falls back to the configured game path, then      Steam auto-detect",
+    "Game install root (the folder containing G1R/). Falls back to the configured game path, then \
+     Steam auto-detect",
     false,
 )];
 
@@ -125,7 +126,10 @@ pub const DOCTOR: GroupSpec = GroupSpec {
     tool: "gore_doctor",
     title: "gore doctor",
     cli: "",
-    summary: "One read-only pass over the setup: where the game is and where that came from,               whether UE4SS is installed (item and stat overrides silently do nothing without               it), which UE4SS mods are enabled, what is deployed, what is left over from an               interrupted run, and whether the shared text catalog still matches the install.",
+    summary: "One read-only pass over the setup: where the game is and where that came from, \
+              whether UE4SS is installed (item and stat overrides silently do nothing without \
+              it), which UE4SS mods are enabled, what is deployed, what is left over from an \
+              interrupted run, and whether the shared text catalog still matches the install.",
     shape: GroupShape::Flat,
     commands: DOCTOR_COMMANDS,
 };

@@ -108,7 +108,7 @@ struct Check {
 impl Check {
     fn new(id: &'static str, title: &'static str, verdict: Verdict, detail: impl Into<String>) -> Self {
         let detail = detail.into();
-        debug_assert!(is_one_line(&detail), "detail must be one line: {detail:?}");
+        debug_assert!(is_prose(&detail), "detail must be one unpadded line: {detail:?}");
         Self {
             id,
             title,
@@ -126,19 +126,24 @@ impl Check {
 
     fn with_fix(mut self, fix: impl Into<String>) -> Self {
         let fix = fix.into();
-        debug_assert!(is_one_line(&fix), "fix must be one line: {fix:?}");
+        debug_assert!(is_prose(&fix), "fix must be one unpadded line: {fix:?}");
         self.fix = Some(fix);
         self
     }
 }
 
 /// Every sentence this report prints is written across several source lines and joined by `\` at
-/// the end of each, so a stray second backslash puts a literal `\` and a newline into the middle
-/// of a sentence somebody reads in a terminal. It builds, it reads fine in the source, and it is
-/// only visible when the check actually fires — which is the least likely moment for anybody to
-/// notice. Nothing here is deliberately multi-line: lists go in `items`.
-fn is_one_line(text: &str) -> bool {
-    !text.contains('\n') && !text.contains('\r')
+/// the end of each, which fails in two directions.
+///
+/// A stray second backslash puts a literal `\` and a newline into the middle of a sentence. A
+/// missing one leaves no newline at all and the next line's indentation instead — a run of spaces
+/// mid-sentence. Both build, both read fine in the source, and both are visible only when the
+/// check actually fires, which is the least likely moment for anybody to notice. The guard caught
+/// the first shape and not the second, and the second was sitting in this file at the time.
+///
+/// Nothing here is deliberately multi-line or deliberately padded: lists go in `items`.
+fn is_prose(text: &str) -> bool {
+    !text.contains('\n') && !text.contains('\r') && !text.contains("   ")
 }
 
 /// The whole report. The counts are at the top level so a `--json` caller can gate on them without
@@ -762,9 +767,17 @@ fn check_ue4ss(gp: &GamePaths) -> Check {
 struct Ue4ssMod {
     name: String,
     /// UE4SS loads a folder because an `enabled.txt` sits in it; that empty file is the switch.
-    enabled: bool,
+    /// Three states, not two — see the field's assignment for why "not there" and "there and not
+    /// a file" have to stay apart.
+    switch: Occupant,
     /// Its `Scripts\main.lua` starts with [`GENERATED_MARKER`], so GORE wrote it.
     generated: bool,
+}
+
+impl Ue4ssMod {
+    fn enabled(&self) -> bool {
+        self.switch == Occupant::Wanted
+    }
 }
 
 /// What is in `ue4ss\Mods\`, and which of it will run.
@@ -838,14 +851,14 @@ fn check_ue4ss_mods(gp: &GamePaths) -> Check {
         );
     }
 
-    let enabled = found.iter().filter(|m| m.enabled).count();
+    let enabled = found.iter().filter(|m| m.enabled()).count();
     let items = found
         .iter()
         .map(|m| {
             format!(
                 "{} [{}]{}",
                 m.name,
-                if m.enabled { "enabled" } else { "disabled" },
+                if m.enabled() { "enabled" } else { "disabled" },
                 if m.generated { " gore override" } else { "" }
             )
         })
@@ -853,7 +866,7 @@ fn check_ue4ss_mods(gp: &GamePaths) -> Check {
 
     let competing: Vec<&Ue4ssMod> = found
         .iter()
-        .filter(|m| m.enabled && m.generated)
+        .filter(|m| m.enabled() && m.generated)
         .collect();
     let detail = format!("{} mod folder(s), {enabled} enabled", found.len());
 
@@ -875,16 +888,40 @@ fn check_ue4ss_mods(gp: &GamePaths) -> Check {
     // report gets read to explain. A Note and not a Problem: deleting that file is also how the
     // branch above tells people to settle a conflict, so being disabled is a legitimate state. What
     // was missing is that the consequence was visible nowhere but in a bracket inside `items`.
+    // Ahead of the dormant note, and a Problem rather than one: the note's advice is to put an
+    // empty `enabled.txt` back, and that cannot be done while something else holds the name. Being
+    // switched off is a state somebody chose; this is a mess somebody has to clean up, and folding
+    // the two together left the reader following advice that could not run.
+    let blocked: Vec<&str> = found
+        .iter()
+        .filter(|m| m.switch == Occupant::Obstruction)
+        .map(|m| m.name.as_str())
+        .collect();
+    if !blocked.is_empty() {
+        return Check::new("ue4ss_mods", "UE4SS mods", Verdict::Problem, detail)
+            .with_items(items)
+            .with_fix(format!(
+                "{} mod folder(s) have something that is not a file where enabled.txt belongs \
+                 ({}). UE4SS reads that name to decide whether to load the folder, and nothing \
+                 can write the switch while it is occupied. Remove or rename what is there",
+                blocked.len(),
+                blocked.join(", ")
+            ));
+    }
+
     let dormant: Vec<&str> = found
         .iter()
-        .filter(|m| m.generated && !m.enabled)
+        .filter(|m| m.generated && !m.enabled())
         .map(|m| m.name.as_str())
         .collect();
     if !dormant.is_empty() {
         return Check::new("ue4ss_mods", "UE4SS mods", Verdict::Note, detail)
             .with_items(items)
             .with_fix(format!(
-                "{} GORE-generated override mod(s) have no enabled.txt, so UE4SS skips them and                  the class defaults they set are never applied ({}). If you disabled them on                  purpose there is nothing to do; otherwise put an empty enabled.txt back in the                  folder, or deploy the bundle again — it carries one",
+                "{} GORE-generated override mod(s) have no enabled.txt, so UE4SS skips them and \
+                 the class defaults they set are never applied ({}). If you disabled them on \
+                 purpose there is nothing to do; otherwise put an empty enabled.txt back in the \
+                 folder, or deploy the bundle again — it carries one",
                 dormant.len(),
                 dormant.join(", ")
             ));
@@ -979,7 +1016,13 @@ fn read_ue4ss_mods(mods: &Path) -> Result<Vec<Ue4ssMod>, String> {
         found.push(Ue4ssMod {
             // An `enabled.txt` that cannot be read is not an absent one. Since a generated override
             // without it is now reported as doing nothing, guessing here would invent that finding.
-            enabled: present(&dir.join("enabled.txt"))?.is_some_and(|m| m.is_file()),
+            //
+            // And "not a file" is not "not there" either: the advice for a dormant mod is to put
+            // an empty `enabled.txt` back, which cannot be done while something else holds that
+            // name. Whether UE4SS loads a folder whose switch is a directory is not something this
+            // report knows or claims — what it can say is that the switch is not the file it is
+            // supposed to be, and that the usual remedy will not run.
+            switch: occupant(&dir.join("enabled.txt"), Wanted::File)?,
             // Propagated rather than defaulted: a marker that cannot be read is not a mod that
             // carries no overrides, and treating it as one is how a competing generated override
             // would disappear from a report whose whole job is to find it.
@@ -991,7 +1034,7 @@ fn read_ue4ss_mods(mods: &Path) -> Result<Vec<Ue4ssMod>, String> {
     // listing is capped, so plain alphabetical order would spend the whole cap on the disabled
     // stock mods and cut off the handful that actually run — which is the only part anyone asked
     // about.
-    found.sort_by_key(|m| (!m.enabled, m.name.to_lowercase()));
+    found.sort_by_key(|m| (!m.enabled(), m.name.to_lowercase()));
     Ok(found)
 }
 
@@ -2631,6 +2674,38 @@ mod tests {
     }
 
     #[test]
+    fn something_that_is_not_a_file_at_enabled_txt_is_the_obstruction_not_a_disabled_mod() {
+        // Folded into "no enabled.txt", the report told somebody to put an empty one back — which
+        // cannot be done while a directory holds that name, so the advice fails and the thing in
+        // the way is never mentioned. Being switched off is a state somebody chose; this is a mess
+        // somebody has to clean up, which is why it is a Problem and comes first.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        std::fs::create_dir_all(&gp.ue4ss_mods).unwrap();
+        make_mod(&gp.ue4ss_mods, "Blocked", false, true);
+        std::fs::create_dir_all(gp.ue4ss_mods.join("Blocked").join("enabled.txt")).unwrap();
+
+        let check = check_ue4ss_mods(&gp);
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        let fix = check.fix.unwrap();
+        assert!(fix.contains("Blocked"), "{fix}");
+        assert!(fix.contains("Remove or rename"), "{fix}");
+        assert!(
+            !fix.contains("put an empty enabled.txt back"),
+            "the advice that cannot run is the defect: {fix}"
+        );
+
+        // The control: the same mod with the switch simply absent keeps the dormant note, so the
+        // branch above is answering the obstruction and not every disabled generated mod.
+        std::fs::remove_dir(gp.ue4ss_mods.join("Blocked").join("enabled.txt")).unwrap();
+        let check = check_ue4ss_mods(&gp);
+        assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
+        assert!(check.fix.unwrap().contains("put an empty enabled.txt back"));
+    }
+
+    #[test]
     fn a_generated_override_without_enabled_txt_is_reported_as_doing_nothing() {
         // The other half of "I deployed it and nothing changed": the folder is there, the overrides
         // are in it, and UE4SS never reads it because the marker file is gone.
@@ -3204,13 +3279,16 @@ mod tests {
     }
 
     #[test]
-    fn a_sentence_broken_across_source_lines_is_not_a_sentence_with_a_backslash_in_it() {
-        // The guard `Check::new` and `with_fix` assert on. A doubled continuation backslash puts
-        // `\` and a line break in the middle of a printed sentence and nothing catches it until
-        // the check fires.
-        assert!(is_one_line("one line"));
-        assert!(!is_one_line("broken \\\n across"));
-        assert!(!is_one_line("broken \r\n across"));
+    fn a_sentence_broken_across_source_lines_is_still_one_sentence() {
+        // The guard `Check::new` and `with_fix` assert on, and it has to catch the continuation
+        // failing in both directions. Nothing catches either until the check fires.
+        assert!(is_prose("one line"));
+        // Doubled: a literal backslash and a line break land mid-sentence.
+        assert!(!is_prose("broken \\\n across"));
+        assert!(!is_prose("broken \r\n across"));
+        // Missing: no line break at all, and the next line's indentation instead. The guard used
+        // to pass this, and a fix string in this very file was carrying it at the time.
+        assert!(!is_prose("broken            across"));
     }
 
     #[test]

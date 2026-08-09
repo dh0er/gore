@@ -436,7 +436,8 @@ const VOICE_ADD_ARGS: &[ArgSpec] = &[
         "ogg",
         Long("ogg"),
         Path,
-        "Ogg file to add — Vorbis or Opus. A WAV needs converting first: ffmpeg -i line.wav -c:a          libvorbis -ar 48000 -ac 1 -q:a 5 line.ogg",
+        "Ogg file to add — Vorbis or Opus. A WAV needs converting first: ffmpeg -i line.wav -c:a \
+         libvorbis -ar 48000 -ac 1 -q:a 5 line.ogg",
         true,
     ),
     VOICE_OUT_ZIP,
@@ -450,7 +451,8 @@ const VOICE_REPLACE_ARGS: &[ArgSpec] = &[
         "ogg",
         Long("ogg"),
         Path,
-        "Ogg replacement file — Vorbis or Opus. A WAV needs converting first: ffmpeg -i line.wav          -c:a libvorbis -ar 48000 -ac 1 -q:a 5 line.ogg",
+        "Ogg replacement file — Vorbis or Opus. A WAV needs converting first: ffmpeg -i \
+         line.wav -c:a libvorbis -ar 48000 -ac 1 -q:a 5 line.ogg",
         true,
     ),
     VOICE_OUT_ZIP,
