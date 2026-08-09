@@ -2954,6 +2954,40 @@ mod tests {
     }
 
     #[test]
+    fn a_record_listing_half_a_triplet_is_reported() {
+        // `undeploy` deletes exactly what the record lists, so a record holding a subset undoes
+        // to a folder still carrying the container files it left out. `deploy` takes three paths
+        // by signature, so a shorter list never came from it.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        let mods = gore_tex::container::mods_dir(&gp.root);
+        std::fs::create_dir_all(&mods).unwrap();
+        std::fs::write(mods.join("zzz_MyTextures_P.utoc"), b"toc").unwrap();
+        std::fs::write(mods.join("zzz_MyTextures_P.ucas"), b"cas").unwrap();
+        std::fs::write(mods.join("zzz_MyTextures_P.pak"), b"pak").unwrap();
+
+        let record = serde_json::json!({
+            "name": "zzz_MyTextures_P",
+            "files": [mods.join("zzz_MyTextures_P.utoc")],
+        });
+        std::fs::write(
+            mods.join("zzz_MyTextures_P.gore-deploy.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+
+        let check = check_mods_folder(&gp);
+        assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
+        assert!(
+            check.items.iter().any(|item| item.contains("triplet of three")),
+            "{:?}",
+            check.items
+        );
+    }
+
+    #[test]
     fn a_record_missing_the_fields_undeploy_needs_is_reported() {
         // `{"files":[...]}` with no `name` deserializes into nothing undeploy can use, and a
         // hand-written check that looked only at `files` accepted it twice. The question is asked
@@ -2998,8 +3032,10 @@ mod tests {
         // The real files are here and mount fine.
         std::fs::write(mods.join("zzz_MyTextures_P.utoc"), b"toc").unwrap();
         std::fs::write(mods.join("zzz_MyTextures_P.ucas"), b"cas").unwrap();
+        std::fs::write(mods.join("zzz_MyTextures_P.pak"), b"pak").unwrap();
 
-        // The record names the same basenames somewhere else.
+        // A whole triplet, so the count and extension checks pass and this test stays about the
+        // one thing it is for: the record names those basenames somewhere else entirely.
         let elsewhere = dir.path().join("elsewhere");
         std::fs::create_dir_all(&elsewhere).unwrap();
         let record = serde_json::json!({
@@ -3007,6 +3043,7 @@ mod tests {
             "files": [
                 elsewhere.join("zzz_MyTextures_P.utoc"),
                 elsewhere.join("zzz_MyTextures_P.ucas"),
+                elsewhere.join("zzz_MyTextures_P.pak"),
             ],
         });
         std::fs::write(

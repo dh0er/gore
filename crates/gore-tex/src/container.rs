@@ -2989,10 +2989,38 @@ pub fn deploy_record_files(path: &Path) -> std::result::Result<Vec<PathBuf>, Str
     let bytes = std::fs::read(path).map_err(|error| format!("could not be read ({error})"))?;
     let record: DeployRecord = serde_json::from_slice(&bytes)
         .map_err(|error| format!("is not a usable deploy record ({error})"))?;
-    match record.files.is_empty() {
-        true => Err("lists no files".to_string()),
-        false => Ok(record.files),
+
+    // A whole triplet or nothing. [`deploy`] takes `&[PathBuf; 3]` — the count is the signature,
+    // not a convention — and [`undeploy`] deletes exactly what the record lists, so a record
+    // holding a subset undeploys to a folder still carrying the container files it left out. A
+    // non-empty check accepted that.
+    //
+    // The three extensions are the same contract, spelled in that function's own doc. The file
+    // STEM is not checked against the record name: the triplet's names come from wherever it was
+    // built, and nothing here establishes they must match, so requiring it could refuse a record
+    // `undeploy` handles perfectly well.
+    if record.files.len() != 3 {
+        return Err(format!(
+            "lists {} file(s); a deployed container is a triplet of three",
+            record.files.len()
+        ));
     }
+    let mut extensions: Vec<String> = record
+        .files
+        .iter()
+        .map(|file| {
+            file.extension()
+                .map(|extension| extension.to_string_lossy().to_lowercase())
+                .unwrap_or_default()
+        })
+        .collect();
+    extensions.sort();
+    if extensions != ["pak", "ucas", "utoc"] {
+        return Err(format!(
+            "lists {extensions:?}; a deployed container is a .utoc, a .ucas and a .pak"
+        ));
+    }
+    Ok(record.files)
 }
 
 /// Copy a Zen triplet (`[utoc, ucas, pak]`) into the game's `~mods` override folder
