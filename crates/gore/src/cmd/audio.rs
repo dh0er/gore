@@ -819,8 +819,12 @@ enum Removal {
 /// authorises the delete is made about a file no other writer can still reach.
 ///
 /// The residual is a replacement landing between the first check and the rename: the rename then
-/// moves a file that is not ours, the second check says so, and it is moved back. That window is
-/// two calls wide instead of a check and a read, and the recovery is named rather than silent.
+/// moves a file that is not ours and the second check says so. Putting it back is a `hard_link`,
+/// which refuses an occupied destination in one operation — never a look followed by a rename,
+/// because a file created between those two is destroyed by the code that exists not to destroy
+/// one. Where that cannot be done at all, on a filesystem with no links, the file stays under the
+/// quarantine name and the message says where. That costs somebody a rename; guessing costs them
+/// a file.
 fn remove_our_file(path: &Path, ours: &dyn Fn(&Path) -> bool) -> Removal {
     if !ours(path) {
         return match std::fs::symlink_metadata(path) {
@@ -853,34 +857,24 @@ fn remove_our_file(path: &Path, ours: &dyn Fn(&Path) -> bool) -> Removal {
                     quarantine.display()
                 )),
             },
-            // Links are not universal — FAT32 has none — so a filesystem that cannot do this is
-            // not the same as a path that is taken. Renaming back is the fallback, and it is not
-            // done blind: only onto a path with nothing on it. The window that leaves is between
-            // that look and the rename, which is what `hard_link` closes where it works.
-            Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => {
-                match std::fs::symlink_metadata(path) {
-                    Err(_) => match std::fs::rename(&quarantine, path) {
-                        Ok(()) => Removal::NotOurs,
-                        Err(error) => Removal::Failed(format!(
-                            "something else replaced it and it could not be put back, it is now \
-                             at {}: {error}",
-                            quarantine.display()
-                        )),
-                    },
-                    Ok(_) => Removal::Failed(format!(
-                        "something else replaced it, and another file has taken that path since, \
-                         so it was left at {} rather than written over the newer one",
-                        quarantine.display()
-                    )),
-                }
-            }
-            // The path is occupied again. Whatever is there now is newer than what this holds,
-            // and this run has no claim on either.
-            Err(_) => Removal::Failed(format!(
-                "something else replaced it, and another file has taken that path since, so it \
-                 was left at {} rather than written over the newer one",
-                quarantine.display()
-            )),
+            // The path is taken again, or links are not available at all — FAT32 has none. Both
+            // end here, and neither is worth a fallback: looking at the path and then renaming
+            // onto it is two operations with a window between them, and a file created in that
+            // window is destroyed by the very code whose whole purpose is not to destroy one.
+            // Leaving it under a name the message gives costs somebody a rename. Guessing wrong
+            // costs them a file.
+            Err(error) => Removal::Failed(match error.kind() {
+                std::io::ErrorKind::AlreadyExists => format!(
+                    "something else replaced it, and another file has taken that path since, so \
+                     it was left at {} rather than written over the newer one",
+                    quarantine.display()
+                ),
+                _ => format!(
+                    "something else replaced it and it could not be put back without risking \
+                     whatever is on that path now ({error}), so it was left at {}",
+                    quarantine.display()
+                ),
+            }),
         };
     }
     match std::fs::remove_file(&quarantine) {
