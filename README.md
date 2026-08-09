@@ -33,7 +33,7 @@ build ids, what was seen, and what has not been.
 | [Textures](docs/guide/textures.md) | Replace textures | Full | A few, like the mouse cursors, sit somewhere this route cannot reach |
 | [DataAssets](docs/guide/dataassets.md) | Edit cooked game data | Partly | Only assets the engine describes natively; Blueprint ones are refused |
 | [Scripts](docs/guide/scripts.md) | Read the game's script code, change it, add your own | Partly | Reverse-engineered and lossy — recompiled code is not always identical |
-| [Mods & load order](docs/guide/bundles.md) | Ship all of the above as one mod, and run many together | Full | Other people's mods are supported, on one end-to-end run |
+| [Mods & load order](docs/guide/bundles.md) | Ship all of the above as one mod, run many together, and install other people's mods alongside yours | Full | Installing a mod GORE did not build has one end-to-end run behind it |
 
 Offline, no game needed: [`doctor`](docs/guide/getting-started.md#check-the-setup) checks
 your setup, [`find`](docs/guide/find.md) searches the catalogs.
