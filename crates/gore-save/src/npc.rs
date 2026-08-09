@@ -1071,14 +1071,18 @@ pub fn npc_routine_class(root: &RootObject, id: &str) -> Option<(Option<String>,
         return None;
     };
     let value = lookup_entry(entries, id)?;
-    path.push(map_key_segment(id));
-    path.push(DAILY_ROUTINE_CLASS.to_string());
-    let class = match struct_member(value, DAILY_ROUTINE_CLASS) {
-        Some(PropertyValue::Object(text))
-        | Some(PropertyValue::Str(text))
-        | Some(PropertyValue::Name(text)) => Some(text.clone()),
+    // The member has to BE there. `private.typed.setValue` patches an existing
+    // property and cannot create a missing one, so handing back a path for an
+    // absent `DailyRoutineClass` would advertise a write that fails at save
+    // time — the caller reads "a path came back" as "this leaf is writable".
+    let class = match struct_member(value, DAILY_ROUTINE_CLASS)? {
+        PropertyValue::Object(text) | PropertyValue::Str(text) | PropertyValue::Name(text) => {
+            Some(text.clone())
+        }
         _ => None,
     };
+    path.push(map_key_segment(id));
+    path.push(DAILY_ROUTINE_CLASS.to_string());
     Some((class, path))
 }
 

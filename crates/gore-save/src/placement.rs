@@ -101,9 +101,12 @@ pub fn read_folder_notes(save_path: &Path) -> FolderNotes {
 
 /// The notes recorded for one save.
 pub fn read_notes(save_path: &Path) -> SaveNotes {
-    read_folder_notes(save_path)
-        .remove(&save_key(save_path))
-        .unwrap_or_default()
+    read_notes_for(save_path, &save_key(save_path))
+}
+
+/// The notes recorded under an explicit key of `save_path`'s folder map.
+pub fn read_notes_for(save_path: &Path, key: &str) -> SaveNotes {
+    read_folder_notes(save_path).remove(key).unwrap_or_default()
 }
 
 /// The notes, with an existing-but-unreadable file reported as an error.
@@ -165,8 +168,20 @@ pub fn mutate_notes<F>(save_path: &Path, mutate: F) -> Result<(), CoreError>
 where
     F: Fn(&mut SaveNotes),
 {
+    mutate_notes_for(save_path, &save_key(save_path), mutate)
+}
+
+/// [`mutate_notes`] against an explicit key in the SAME folder map.
+///
+/// A backup lives inside `goresave_backups`, so deriving its note location from
+/// its own path would look for a second `goresave_backups` inside that folder.
+/// The map is the save folder's; only the key is the backup's file name.
+pub fn mutate_notes_for<F>(save_path: &Path, key: &str, mutate: F) -> Result<(), CoreError>
+where
+    F: Fn(&mut SaveNotes),
+{
     let path = notes_path(save_path);
-    let key = save_key(save_path);
+    let key = key.to_string();
     let mut last_conflict = None;
     for _ in 0..8 {
         let before = snapshot_file(&path)?;
@@ -199,6 +214,44 @@ pub fn record(save_path: &Path, records: &[(String, PlacementNote)]) -> Result<(
             notes.insert(npc.clone(), note.clone());
         }
     })
+}
+
+/// Copy `source`'s notes so they also describe `destination`.
+///
+/// A save that is copied — imported into a profile, restored from a backup —
+/// carries its pinned NPCs with it, but the notes are keyed by file name and
+/// would stay behind. The copy would then hold `DailyRoutine_Empty` with no
+/// record of what it replaced, locking the routine control for good.
+///
+/// The source keeps its own notes: the bytes were copied, not moved, so both
+/// files describe the same pinned NPCs. Copying nothing is a no-op, and an
+/// existing note at the destination is replaced — it described the file that
+/// was just overwritten.
+pub fn carry(source: &Path, destination: &Path) -> Result<(), CoreError> {
+    let notes = read_notes(source);
+    if notes.is_empty() {
+        return Ok(());
+    }
+    let records: Vec<(String, PlacementNote)> = notes.into_iter().collect();
+    record(destination, &records)
+}
+
+/// Snapshot a save's notes under `key`, so a copy of the save keeps the record
+/// of what its pinned NPCs replaced.
+///
+/// Wholesale, not merged: `key` names a file whose whole note set is being
+/// replaced, and a leftover note from an older file of the same name would
+/// describe a move that copy does not contain.
+pub fn snapshot_to_key(save_path: &Path, key: &str, notes: SaveNotes) -> Result<(), CoreError> {
+    mutate_notes_for(save_path, key, |target| {
+        target.clear();
+        target.extend(notes.iter().map(|(id, note)| (id.clone(), note.clone())));
+    })
+}
+
+/// Drop every note under `key`. Used when the file it described is gone.
+pub fn forget_key(save_path: &Path, key: &str) -> Result<(), CoreError> {
+    mutate_notes_for(save_path, key, |notes| notes.clear())
 }
 
 /// Drop the notes for `npcs`. Dropping one that is not there is not an error —
@@ -322,6 +375,76 @@ mod tests {
 
         assert_eq!(read_notes(&first).keys().collect::<Vec<_>>(), ["Npc-A"]);
         assert_eq!(read_notes(&second).keys().collect::<Vec<_>>(), ["Npc-B"]);
+    }
+
+    #[test]
+    fn a_copied_save_takes_the_notes_with_it_and_leaves_the_source_its_own() {
+        // The bytes were copied, not moved, so both files hold the same pinned
+        // NPCs and both need the record of what those pins replaced.
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("external.sav");
+        let destination = dir.path().join("G1R-007.sav");
+        record(&source, &[("Npc-A".to_string(), note())]).unwrap();
+
+        carry(&source, &destination).unwrap();
+
+        assert_eq!(read_notes(&destination).get("Npc-A"), Some(&note()));
+        assert_eq!(read_notes(&source).get("Npc-A"), Some(&note()));
+    }
+
+    #[test]
+    fn a_backup_snapshot_is_keyed_in_the_save_s_own_map() {
+        // A backup lives INSIDE goresave_backups, so deriving its note location
+        // from its own path would look for a second goresave_backups in there.
+        let dir = tempdir().unwrap();
+        let save = dir.path().join("G1R-001.sav");
+        record(&save, &[("Npc-A".to_string(), note())]).unwrap();
+
+        snapshot_to_key(&save, "G1R-001.sav.bak.1", read_notes(&save)).unwrap();
+
+        assert_eq!(
+            read_notes_for(&save, "G1R-001.sav.bak.1").get("Npc-A"),
+            Some(&note())
+        );
+        // One file, both keys — not a second map beside the backup.
+        assert_eq!(read_folder_notes(&save).len(), 2);
+    }
+
+    #[test]
+    fn a_snapshot_replaces_what_that_key_held_rather_than_merging() {
+        // The key names a FILE. A leftover note from an older file of the same
+        // name would describe a move the current one does not contain.
+        let dir = tempdir().unwrap();
+        let save = dir.path().join("G1R-001.sav");
+        snapshot_to_key(
+            &save,
+            "G1R-001.sav.bak.1",
+            SaveNotes::from([("Npc-Old".to_string(), note())]),
+        )
+        .unwrap();
+
+        snapshot_to_key(
+            &save,
+            "G1R-001.sav.bak.1",
+            SaveNotes::from([("Npc-New".to_string(), note())]),
+        )
+        .unwrap();
+
+        let kept = read_notes_for(&save, "G1R-001.sav.bak.1");
+        assert_eq!(kept.keys().collect::<Vec<_>>(), ["Npc-New"]);
+    }
+
+    #[test]
+    fn forgetting_a_key_leaves_the_other_keys_alone() {
+        let dir = tempdir().unwrap();
+        let save = dir.path().join("G1R-001.sav");
+        record(&save, &[("Npc-A".to_string(), note())]).unwrap();
+        snapshot_to_key(&save, "G1R-001.sav.bak.1", read_notes(&save)).unwrap();
+
+        forget_key(&save, "G1R-001.sav.bak.1").unwrap();
+
+        assert!(read_notes_for(&save, "G1R-001.sav.bak.1").is_empty());
+        assert_eq!(read_notes(&save).get("Npc-A"), Some(&note()));
     }
 
     #[test]

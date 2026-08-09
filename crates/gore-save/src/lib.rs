@@ -1736,12 +1736,44 @@ fn delete_backup(save_path: &Path, backup_path: &Path) -> Result<Value, CoreErro
     let label_warning = prune_backup_label(save_path, &file_name)
         .err()
         .map(|err| err.to_string());
+    // Same rule for the placement snapshot this backup carried: the file it
+    // described is gone, so leaving its notes behind would hand them to the next
+    // backup that happens to reuse the name.
+    let placement_warning = placement::forget_key(save_path, &file_name)
+        .err()
+        .map(|err| err.to_string());
     Ok(json!({
         "path": backup_path.display().to_string(),
         "fileName": file_name,
         "deleted": true,
         "labelWarning": label_warning,
+        "placementNoteWarning": placement_warning,
     }))
+}
+
+/// Put the notes that belong to `backup_path` back onto `save_path`.
+///
+/// Wholesale, including the empty case: a backup taken before anyone was pinned
+/// carries no notes, and restoring it while leaving the live notes in place
+/// would leave the editor offering to undo a move the restored bytes do not
+/// contain.
+fn restore_backup_placement_notes(save_path: &Path, backup_path: &Path) -> Result<(), CoreError> {
+    let Some(name) = backup_path.file_name().and_then(|value| value.to_str()) else {
+        return Ok(());
+    };
+    let notes = placement::read_notes_for(save_path, name);
+    let live = placement::read_notes(save_path);
+    if notes == live {
+        return Ok(());
+    }
+    placement::snapshot_to_key(
+        save_path,
+        &save_path
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        notes,
+    )
 }
 
 /// Drop the label for `file_name` once no backup carries that name any more.
@@ -2100,10 +2132,19 @@ where
         slot_pending.commit();
     }
 
+    // The restored bytes are the backup's, so the notes describing them must be
+    // too — including "none", which is why the save's set is replaced wholesale
+    // rather than merged. Reported beside a completed restore, never turning one
+    // into a failure: the file on disk is already the backup's.
+    let placement_note_warning = restore_backup_placement_notes(path, backup_path)
+        .err()
+        .map(|err| err.to_string());
+
     Ok(json!({
         "path": path,
         "restoredFrom": backup_path,
         "backupPath": current_backup_path,
+        "placementNoteWarning": placement_note_warning,
         "previousSha1": sha1_hex(&original),
         "restoredSha1": sha1_hex(&backup_data),
         "bytesChanged": original != backup_data,
@@ -2728,6 +2769,18 @@ fn create_backup_bytes_avoiding_at_epoch(
         if let Err(error) = write_reserved_backup(file, bytes) {
             let _ = fs::remove_file(&backup_path);
             return Err(CoreError::Io(error.to_string()));
+        }
+        // The backup captures the save AS IT IS, pinned NPCs included, so it has
+        // to capture what those pins replaced too. Without this the user undoes
+        // a pin, the live note is spent, and restoring this backup later brings
+        // DailyRoutine_Empty back with no record of the routine it replaced.
+        // A snapshot that cannot be written must not fail the backup itself: the
+        // bytes are already safe on disk, which is the point of the call.
+        if let Some(name) = backup_path.file_name().and_then(|value| value.to_str()) {
+            let notes = placement::read_notes(path);
+            if !notes.is_empty() {
+                let _ = placement::snapshot_to_key(path, name, notes);
+            }
         }
         return Ok(backup_path);
     }
@@ -4305,6 +4358,18 @@ where
     }
     invalidate_decoded_payload_cache(target_path);
 
+    // An imported save carries its pinned NPCs with it, but the notes are keyed
+    // by file name and would stay with the source — leaving the import holding
+    // DailyRoutine_Empty with no record of what it replaced. Copied after the
+    // bytes land, and reported beside a good import rather than failing one.
+    let placement_note_warning = if importing {
+        placement::carry(save_path, target_path)
+            .err()
+            .map(|err| err.to_string())
+    } else {
+        None
+    };
+
     Ok(json!({
         "path": target_path,
         "sourcePath": save_path,
@@ -4316,6 +4381,7 @@ where
         "publicProfileUpdated": public_profile_updated,
         "backupPath": backup_path,
         "persistentBackupPath": persistent_backup_path,
+        "placementNoteWarning": placement_note_warning,
     }))
 }
 
