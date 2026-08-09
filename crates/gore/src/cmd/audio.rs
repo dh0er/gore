@@ -740,7 +740,16 @@ fn roll_back(published: &[Published]) -> String {
         // attempt collides there — reporting the rollback as complete sent the reader back into
         // the same wall. Kept deliberately, and named.
         if !entry.is_still_ours() {
-            stuck.push(format!("{} (changed by something else; left alone)", entry.path.display()));
+            // Only when something is actually there. `is_still_ours` is also false for a path
+            // that is simply gone — deleted by hand, or by another run — and warning about a
+            // collision on a path that is free is the opposite of the help this sentence exists
+            // to give.
+            if std::fs::metadata(&entry.path).is_ok() {
+                stuck.push(format!(
+                    "{} (changed by something else; left alone)",
+                    entry.path.display()
+                ));
+            }
             continue;
         }
         if let Err(error) = std::fs::remove_file(&entry.path) {
@@ -1073,6 +1082,17 @@ mod rollback_tests {
         assert!(kept.contains("left alone"), "{kept}");
         assert!(kept.contains("1_line.wav"), "{kept}");
         assert!(theirs.path.exists(), "somebody else's file must survive the rollback");
+
+        // A path that is simply gone is not retained: warning about a collision on a free path
+        // is the opposite of the help this sentence exists to give.
+        let temp = TempDir::new().unwrap();
+        let mut vanished = publish(temp.path(), "2_line.wav", b"bytes");
+        vanished.digest = super::digest_of(b"something else entirely");
+        std::fs::remove_file(&vanished.path).unwrap();
+        assert!(
+            super::roll_back(std::slice::from_ref(&vanished)).is_empty(),
+            "a path nobody occupies is not something to warn about"
+        );
 
         // And a clean rollback still says nothing, so the caller's own sentence stands alone.
         let temp = TempDir::new().unwrap();

@@ -1619,7 +1619,21 @@ fn check_loc_catalog(meta: Option<LocMeta>, catalog: &Path, installed: Option<&P
                  could not write one — re-run it to restore the record of which install this \
                  came from",
             ),
-            Ok(_) => Check::new(
+            // Something is there and it is not a file. `gore loc extract` cannot publish the
+            // catalog over a directory, so recommending it would send the reader round the same
+            // failure while the thing in the way went unmentioned.
+            Ok(Some(_)) => Check::new(
+                "loc_catalog",
+                "loc catalog",
+                Verdict::Problem,
+                format!("{} is not a file", catalog.display()),
+            )
+            .with_fix(
+                "every tool that turns a text id into text reads that path, and 'gore loc \
+                 extract' cannot write it while something else occupies it. Remove or rename \
+                 that, then run 'gore loc extract'",
+            ),
+            Ok(None) => Check::new(
                 "loc_catalog",
                 "loc catalog",
                 Verdict::Note,
@@ -3010,6 +3024,21 @@ mod tests {
             check_loc_catalog(Some(meta_with_identity(&cache, 2048)), &catalog, Some(&cache));
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(check.detail.contains("holds 2 ids"), "{}", check.detail);
+    }
+
+    #[test]
+    fn something_that_is_not_a_file_at_the_catalog_path_is_the_obstruction() {
+        // `gore loc extract` cannot publish the catalog over a directory, so "no catalog has been
+        // extracted" sends the reader round that same failure while the thing in the way is never
+        // named.
+        let dir = tempfile::tempdir().unwrap();
+        let catalog = dir.path().join("loc_catalog.json");
+        std::fs::create_dir_all(&catalog).unwrap();
+
+        let check = check_loc_catalog(None, &catalog, None);
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("is not a file"), "{}", check.detail);
+        assert!(check.fix.unwrap().contains("Remove or rename"));
     }
 
     #[test]
