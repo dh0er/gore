@@ -1137,17 +1137,61 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
         }
     }
 
-    if !inert.is_empty() {
+    // What each record CLAIMS is there. `container::deploy` publishes the record before copying
+    // the triplet — "Write the record FIRST", so undeploy can always clean up after a crash — so an
+    // interruption between the two leaves the record alone in this folder. Exempting it as
+    // bookkeeping then reported an interrupted deployment as an empty, healthy `~mods`.
+    let mut record_problems: Vec<String> = Vec::new();
+    for record in &bookkeeping {
+        let listed = match std::fs::read(dir.join(record)) {
+            Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                Ok(json) => json,
+                // A record that cannot be parsed is not bookkeeping either: undeploy reads this
+                // file to know what to remove, and cannot.
+                Err(error) => {
+                    record_problems.push(format!("{record}: not valid JSON ({error})"));
+                    continue;
+                }
+            },
+            Err(error) => {
+                record_problems.push(format!("{record}: could not be read ({error})"));
+                continue;
+            }
+        };
+        let Some(files) = listed.get("files").and_then(|files| files.as_array()) else {
+            record_problems.push(format!("{record}: lists no files"));
+            continue;
+        };
+        for listed_path in files.iter().filter_map(|file| file.as_str()) {
+            let leaf = Path::new(listed_path)
+                .file_name()
+                .map(|leaf| leaf.to_string_lossy().into_owned())
+                .unwrap_or_else(|| listed_path.to_string());
+            if !names.iter().any(|name| name.eq_ignore_ascii_case(&leaf)) {
+                record_problems.push(format!("{record}: lists {leaf}, which is not here"));
+            }
+        }
+    }
+
+    if !inert.is_empty() || !record_problems.is_empty() {
         return Check::new(
             "mods_folder",
             "~mods",
             Verdict::Note,
-            format!(
-                "{} file(s) mounted from {}, and {} the engine will not read",
-                mounted.len(),
-                dir.display(),
-                inert.len()
-            ),
+            match record_problems.is_empty() {
+                true => format!(
+                    "{} file(s) mounted from {}, and {} the engine will not read",
+                    mounted.len(),
+                    dir.display(),
+                    inert.len()
+                ),
+                false => format!(
+                    "{} file(s) mounted from {}, and a deployment record that does not describe \
+                     what is there",
+                    mounted.len(),
+                    dir.display()
+                ),
+            },
         )
         .with_items(
             names
@@ -1161,12 +1205,14 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
                         name.clone()
                     }
                 })
+                .chain(record_problems.iter().cloned())
                 .collect::<Vec<_>>(),
         )
         .with_fix(
             "a .utoc needs the .ucas beside it, and the pair is what gets read — half of one is \
-             an override that will not appear however correct it is. Re-deploy the mod that put \
-             it there, or delete the leftover",
+             an override that will not appear however correct it is. A record naming files that \
+             are not here is a deploy that stopped partway, because the record is written before \
+             them. Re-deploy the mod that put it there, or delete the leftover",
         );
     }
 
@@ -2826,11 +2872,61 @@ mod tests {
         std::fs::write(mods.join("zzz_MyTextures_P.utoc"), b"toc").unwrap();
         std::fs::write(mods.join("zzz_MyTextures_P.ucas"), b"cas").unwrap();
         std::fs::write(mods.join("zzz_MyTextures_P.pak"), b"pak").unwrap();
-        std::fs::write(mods.join("zzz_MyTextures_P.gore-deploy.json"), b"{}").unwrap();
+        // A real record, listing what deploy copied in. `{}` was a stub, and a stub does not
+        // describe a correctly deployed mod — which is what this test is about.
+        let record = serde_json::json!({
+            "name": "zzz_MyTextures_P",
+            "files": [
+                mods.join("zzz_MyTextures_P.utoc"),
+                mods.join("zzz_MyTextures_P.ucas"),
+                mods.join("zzz_MyTextures_P.pak"),
+            ],
+        });
+        std::fs::write(
+            mods.join("zzz_MyTextures_P.gore-deploy.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
 
         let check = check_mods_folder(&gp);
         assert_eq!(check.verdict, Verdict::Ok, "{}", check.detail);
         assert!(check.fix.is_none());
+    }
+
+    #[test]
+    fn a_record_whose_files_are_not_there_is_an_interrupted_deployment() {
+        // `container::deploy` writes the record FIRST, so undeploy can clean up after a crash.
+        // An interruption between that and copying the triplet leaves the record alone, and
+        // exempting it as bookkeeping reported the folder as empty and healthy.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        let mods = gore_tex::container::mods_dir(&gp.root);
+        std::fs::create_dir_all(&mods).unwrap();
+
+        let record = serde_json::json!({
+            "name": "zzz_MyTextures_P",
+            "files": [
+                mods.join("zzz_MyTextures_P.utoc"),
+                mods.join("zzz_MyTextures_P.ucas"),
+                mods.join("zzz_MyTextures_P.pak"),
+            ],
+        });
+        std::fs::write(
+            mods.join("zzz_MyTextures_P.gore-deploy.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+
+        let check = check_mods_folder(&gp);
+        assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
+        assert!(
+            check.items.iter().any(|item| item.contains("which is not here")),
+            "{:?}",
+            check.items
+        );
+        assert!(check.fix.unwrap().contains("stopped partway"));
     }
 
     #[test]
