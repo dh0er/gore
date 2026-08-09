@@ -4515,6 +4515,45 @@ fn prepare_target_identities(plan: &mut DeployPlan, prior: Option<&DeployRecord>
 ///    (fs ops only); if a commit write fails, the partial deploy is rolled back to pristine.
 ///
 /// Single active mod.
+/// A language's stem and how new it is: `german` < `german_new` < `german_newer`.
+pub(crate) fn generation(language: &str) -> (&str, u8) {
+    match language
+        .strip_suffix("_newer")
+        .map(|stem| (stem, 2))
+        .or_else(|| language.strip_suffix("_new").map(|stem| (stem, 1)))
+    {
+        Some(pair) => pair,
+        None => (language, 0),
+    }
+}
+
+/// The language the game shows INSTEAD of the one just written, if any.
+///
+/// An id carrying both `german` and `german_new` displays the newer one — observed in game, both
+/// directions — so an edit to the older generation applies, is written, and changes nothing on
+/// screen. Nothing else in a deploy reports it, because nothing else went wrong.
+///
+/// `also_written` suppresses it when the same run writes the winning generation too, which is what
+/// the guide recommends and must not be nagged about.
+///
+/// Shared with the manager's own localization composer: it applies the same bundles by a different
+/// route, and a check living in only one of the two is a check the other route's users do not have.
+pub(crate) fn shadowing_generation<'a>(
+    carried: &'a [String],
+    written_folded: &str,
+    also_written: impl Fn(&str) -> bool,
+) -> Option<&'a String> {
+    let (stem, rank) = generation(written_folded);
+    carried
+        .iter()
+        .filter(|carried_lang| {
+            let (other_stem, other_rank) = generation(carried_lang);
+            other_stem == stem && other_rank > rank
+        })
+        .max_by_key(|carried_lang| generation(carried_lang).1)
+        .filter(|winner| !also_written(winner))
+}
+
 pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
     let manifest_bytes = read_safe_bundle_file(
         bundle_dir,
@@ -5592,17 +5631,6 @@ fn prepare(
                 /// assumed — nothing in the file states that `_newer` outranks `_new`; that came
                 /// from watching the game display the newer one. The stems it produces from the
                 /// shipped header are exactly two ladders, german and english, and nothing else.
-                fn generation(language: &str) -> (&str, u8) {
-                    match language
-                        .strip_suffix("_newer")
-                        .map(|stem| (stem, 2))
-                        .or_else(|| language.strip_suffix("_new").map(|stem| (stem, 1)))
-                    {
-                        Some(pair) => pair,
-                        None => (language, 0),
-                    }
-                }
-
                 let mut lc = gore_loc::loc::Lcache::decode(&pristine)?;
                 let declared: BTreeMap<String, String> = lc
                     .languages()
@@ -5649,21 +5677,13 @@ fn prepare(
                             // Suppressed when this same bundle also writes the winning generation
                             // for this id, which is the practice the guide recommends and must not
                             // be nagged about.
-                            let (stem, rank) = generation(folded_set);
-                            if let Some(winner) = carried
-                                .iter()
-                                .filter(|carried_lang| {
-                                    let (other_stem, other_rank) = generation(carried_lang);
-                                    other_stem == stem && other_rank > rank
-                                })
-                                .max_by_key(|carried_lang| generation(carried_lang).1)
+                            if let Some(winner) =
+                                shadowing_generation(&carried, folded_set, |w| langs.contains_key(w))
                             {
-                                if !langs.contains_key(winner) {
-                                    plan.loc_shadowed.push(format!(
-                                        "'{id}' also carries '{winner}', which the game displays \
-                                         instead of '{set}'"
-                                    ));
-                                }
+                                plan.loc_shadowed.push(format!(
+                                    "'{id}' also carries '{winner}', which the game displays \
+                                     instead of '{set}'"
+                                ));
                             }
                         }
                     } else {
