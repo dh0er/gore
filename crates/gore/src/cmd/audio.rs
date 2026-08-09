@@ -735,7 +735,12 @@ fn still_the_same_file(file: &std::fs::File, path: &Path) -> bool {
 fn roll_back(published: &[Published]) -> String {
     let mut stuck: Vec<String> = Vec::new();
     for entry in published {
+        // Not ours any more: something replaced it while this run was working, and deleting it
+        // would destroy that. It is still ON the path this run wrote to, though, so the next
+        // attempt collides there — reporting the rollback as complete sent the reader back into
+        // the same wall. Kept deliberately, and named.
         if !entry.is_still_ours() {
+            stuck.push(format!("{} (changed by something else; left alone)", entry.path.display()));
             continue;
         }
         if let Err(error) = std::fs::remove_file(&entry.path) {
@@ -753,7 +758,7 @@ fn describe_stuck(stuck: &[String]) -> String {
     match stuck.is_empty() {
         true => String::new(),
         false => format!(
-            " {} file(s) written by this run could not be removed and are still there: {}.",
+            " {} file(s) this run wrote are still there: {}.",
             stuck.len(),
             stuck.join(", ")
         ),
@@ -1053,9 +1058,21 @@ mod rollback_tests {
         assert!(super::describe_stuck(&[]).is_empty());
 
         let said = super::describe_stuck(&["C:/out/0_line.wav (Access is denied)".to_string()]);
-        assert!(said.contains("could not be removed and are still there"), "{said}");
+        assert!(said.contains("are still there"), "{said}");
         assert!(said.contains("0_line.wav"), "{said}");
         assert!(said.contains("Access is denied"), "{said}");
+
+        // A file something else replaced is kept AND named: it still occupies the path this run
+        // wrote to, so the next attempt collides there, and silence sent the reader into the same
+        // wall twice.
+        let temp = TempDir::new().unwrap();
+        let mut theirs = publish(temp.path(), "1_line.wav", b"original bytes");
+        std::fs::write(&theirs.path, b"replaced bytes").unwrap();
+        theirs.digest = super::digest_of(b"something else entirely");
+        let kept = super::roll_back(std::slice::from_ref(&theirs));
+        assert!(kept.contains("left alone"), "{kept}");
+        assert!(kept.contains("1_line.wav"), "{kept}");
+        assert!(theirs.path.exists(), "somebody else's file must survive the rollback");
 
         // And a clean rollback still says nothing, so the caller's own sentence stands alone.
         let temp = TempDir::new().unwrap();

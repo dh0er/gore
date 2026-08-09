@@ -1551,34 +1551,26 @@ enum Written {
     NoTimestamp,
 }
 
-/// Whether the shared catalog is something a reader can use, and nothing if it is.
+/// Whether the shared catalog is something `gore find` can use, and nothing if it is.
 ///
-/// `gore find` deserializes this file to build its name index and gives up when it cannot. The
-/// doctor comparing only the catalog's METADATA with the install would report a truncated catalog
-/// as current, which is exactly the two-commands-one-file disagreement worth catching here.
-///
-/// The ids are read and the values skipped — 43,851 keys against ~28 MB of text nobody needs for
-/// this question — and their number is compared with what the extraction recorded. A file that
-/// parses but holds a different number of ids than its own sidecar claims is not one the sidecar
-/// describes.
+/// The question is put to that command rather than answered here. Two attempts at answering it
+/// locally were both weaker than the loader — checking only that the file exists, then parsing it
+/// with every value ignored — and a third would have been stronger than it, because the loader
+/// type-checks only the ids it wants. Asking it is the only version that agrees by construction.
 fn catalog_problem(catalog: &Path, recorded_ids: Option<usize>) -> Option<String> {
-    let bytes = match std::fs::read(catalog) {
-        Ok(bytes) => bytes,
-        Err(error) => return Some(format!("the catalog could not be read: {error}")),
-    };
-    let ids: std::collections::HashMap<String, serde::de::IgnoredAny> =
-        match serde_json::from_slice(&bytes) {
-            Ok(ids) => ids,
-            Err(error) => return Some(format!("the catalog is not readable JSON: {error}")),
-        };
-    // The count only means something against a sidecar. Without one there is nothing to disagree
-    // with, and the file having parsed is the whole of what can be established.
-    match recorded_ids {
-        Some(recorded) if ids.len() != recorded => Some(format!(
-            "the catalog holds {} ids and its record says {recorded}",
-            ids.len()
-        )),
-        _ => None,
+    match super::find::catalog_health(catalog) {
+        Ok(super::find::CatalogHealth::Unreadable(detail)) => {
+            Some(format!("the catalog cannot be loaded: {detail}"))
+        }
+        // The count only means something against a sidecar. Without one there is nothing to
+        // disagree with, and the file having loaded is the whole of what can be established.
+        Ok(super::find::CatalogHealth::Loadable { ids }) => match recorded_ids {
+            Some(recorded) if ids != recorded => Some(format!(
+                "the catalog holds {ids} ids and its record says {recorded}"
+            )),
+            _ => None,
+        },
+        Err(why) => Some(format!("the catalog could not be checked: {why}")),
     }
 }
 
@@ -2982,8 +2974,26 @@ mod tests {
 
         let check = check_loc_catalog(Some(meta_with_identity(&cache, 2048)), &broken, Some(&cache));
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
-        assert!(check.detail.contains("not readable JSON"), "{}", check.detail);
+        assert!(check.detail.contains("cannot be loaded"), "{}", check.detail);
         assert!(check.fix.unwrap().contains("gore loc extract"));
+    }
+
+    #[test]
+    fn a_row_of_the_wrong_shape_is_caught_where_find_would_catch_it() {
+        // The id count is right and one wanted row is not language-to-string. Parsing with every
+        // value ignored passed this; `find` deserializes exactly that row and gives up, so the
+        // doctor said healthy about a catalog `find` refuses.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("AlkimiaLocalization_00000000.lcache");
+        std::fs::write(&cache, vec![0u8; 2048]).unwrap();
+
+        let catalog = dir.path().join("loc_catalog.json");
+        std::fs::write(&catalog, br#"{"itfo_apple":{"german":42}}"#).unwrap();
+
+        let check =
+            check_loc_catalog(Some(meta_with_identity(&cache, 2048)), &catalog, Some(&cache));
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("cannot be loaded"), "{}", check.detail);
     }
 
     #[test]
@@ -3012,7 +3022,7 @@ mod tests {
 
         let check = check_loc_catalog(None, &catalog, None);
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
-        assert!(check.detail.contains("not readable JSON"), "{}", check.detail);
+        assert!(check.detail.contains("cannot be loaded"), "{}", check.detail);
     }
 
     #[test]

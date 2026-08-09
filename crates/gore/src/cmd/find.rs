@@ -331,6 +331,32 @@ fn load_name_index_at(path: PathBuf, wanted: &HashSet<String>) -> NameIndexState
     }
 }
 
+/// What `gore find` makes of a catalog file: how many ids it holds, or why it cannot be loaded.
+pub(crate) enum CatalogHealth {
+    Loadable { ids: usize },
+    Unreadable(String),
+}
+
+/// Ask this command whether a catalog is one it can use.
+///
+/// `gore doctor` is the caller, and its own attempt at this was weaker than the real thing twice
+/// over: first it checked only that the file existed, then it parsed with every value ignored — so
+/// a row like `"itfo_apple": {"german": 42}` passed while the loader below deserializes exactly
+/// that row as language-to-string and gives up. Validating every row instead would have been
+/// stricter than the loader, which skips the ids it does not want; asking the loader is the only
+/// answer that matches by construction.
+pub(crate) fn catalog_health(path: &std::path::Path) -> Result<CatalogHealth, String> {
+    let register = Register::bundled().map_err(|error| error.to_string())?;
+    let catalog = bundled_catalog().map_err(|error| error.to_string())?;
+    let wanted = wanted_loc_ids(&catalog, &register);
+    match load_name_index_at(path.to_path_buf(), &wanted) {
+        NameIndexState::Ready(index) => Ok(CatalogHealth::Loadable { ids: index.total_ids }),
+        NameIndexState::Unreadable { detail, .. } => Ok(CatalogHealth::Unreadable(detail)),
+        // Absent is the caller's own question; it has already looked.
+        NameIndexState::Absent => Ok(CatalogHealth::Loadable { ids: 0 }),
+    }
+}
+
 /// The parse behind [`load_name_index`], separated from the path so it can be exercised directly.
 ///
 /// `end()` is the reason this is not a one-liner. `serde_json::from_str` checks that nothing
