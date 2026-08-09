@@ -200,6 +200,7 @@ class NpcPlacementDraft {
 class PlacementUndo {
   const PlacementUndo({
     required this.originalLocation,
+    required this.originalRotation,
     required this.originalRoutineClass,
     required this.restorable,
     required this.routineRestorable,
@@ -211,6 +212,7 @@ class PlacementUndo {
     if (location == null) return null;
     return PlacementUndo(
       originalLocation: location,
+      originalRotation: Rot3.fromJson(value['originalRotation']),
       originalRoutineClass: value['originalRoutineClass'] as String?,
       restorable: value['restorable'] == true,
       routineRestorable: value['routineRestorable'] == true,
@@ -218,6 +220,10 @@ class PlacementUndo {
   }
 
   final Vec3 originalLocation;
+
+  /// The facing the move replaced, when it changed one. Null when the move left
+  /// the facing alone — a restore then leaves it alone too.
+  final Rot3? originalRotation;
 
   /// The routine the NPC was on. Null when he had no routine record at all — a
   /// restore then puts the position back and writes no routine, rather than

@@ -53,11 +53,15 @@ class FakeUndo {
   const FakeUndo({
     this.originalLocation = const (7.0, 8.0, 9.0),
     this.originalRoutineClass = '/Script/Angelscript.DailyRoutine_A_Start',
+    this.originalRotation,
     this.restorable = true,
     this.routineRestorable,
   });
 
   final (double, double, double) originalLocation;
+
+  /// The facing the move replaced, when it changed one.
+  final (double, double, double)? originalRotation;
   final String? originalRoutineClass;
   final bool restorable;
 
@@ -275,6 +279,8 @@ class NpcPositionCoreService implements GoresaveCoreService {
             if (pose.undo != null)
               'undo': {
                 'originalLocation': _vec3(pose.undo!.originalLocation),
+                if (pose.undo!.originalRotation != null)
+                  'originalRotation': _rot3(pose.undo!.originalRotation),
                 'originalRoutineClass': pose.undo!.originalRoutineClass,
                 'restorable': pose.undo!.restorable,
                 'routineRestorable':

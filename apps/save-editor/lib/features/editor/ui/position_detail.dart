@@ -524,6 +524,14 @@ class _NpcPositionPanelState extends State<NpcPositionPanel> {
     if (location == null || before == null) {
       return NpcPlacementDraft(edits: edits);
     }
+    // The facing joins the note only when the move changes it — the picker can
+    // apply a spot's heading. Restoring the position while leaving the new
+    // facing would strand it, because clearing the note takes the only record of
+    // the old one with it.
+    final rotation = _currentRotation();
+    final rotationBefore = pose.rotation;
+    final movesRotation =
+        rotation != null && rotationBefore != null && rotation != rotationBefore;
     return NpcPlacementDraft(
       edits: edits,
       routineClassPath: result.routineClassPath,
@@ -532,9 +540,17 @@ class _NpcPositionPanelState extends State<NpcPositionPanel> {
         'npc': widget.npcId,
         'note': {
           'original_location': [before.x, before.y, before.z],
+          if (movesRotation)
+            'original_rotation': [
+              rotationBefore.pitch,
+              rotationBefore.yaw,
+              rotationBefore.roll,
+            ],
           if (result.routineClass != null)
             'original_routine_class': result.routineClass,
           'written_location': [location.x, location.y, location.z],
+          if (movesRotation)
+            'written_rotation': [rotation.pitch, rotation.yaw, rotation.roll],
           'written_routine_class': result.inertRoutineClass,
         },
       },
@@ -558,6 +574,12 @@ class _NpcPositionPanelState extends State<NpcPositionPanel> {
       _x.text = formatHeroValue(undo.originalLocation.x);
       _y.text = formatHeroValue(undo.originalLocation.y);
       _z.text = formatHeroValue(undo.originalLocation.z);
+    }
+    final rotation = undo.originalRotation;
+    if (rotation != null && _canEditRotation) {
+      _pitch.text = formatHeroValue(rotation.pitch);
+      _yaw.text = formatHeroValue(rotation.yaw);
+      _roll.text = formatHeroValue(rotation.roll);
     }
     _recompute();
   }

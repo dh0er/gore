@@ -45,8 +45,18 @@ pub struct PlacementNote {
     /// there, rather than inventing a routine the save never had.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original_routine_class: Option<String>,
+    /// `CharacterRotation` before the move, when the move changed it — the
+    /// location picker can apply a spot's facing, and a restore that put the
+    /// position back but left the new facing would strand it, because clearing
+    /// the note takes the only record of the old one with it. `None` when the
+    /// move left the facing alone, which then imposes no condition on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_rotation: Option<[f64; 3]>,
     /// `CharacterLocation` the move wrote.
     pub written_location: [f64; 3],
+    /// `CharacterRotation` the move wrote, paired with `original_rotation`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub written_rotation: Option<[f64; 3]>,
     /// `DailyRoutineClass` the move wrote. `None` when the move deliberately
     /// left the routine alone (the NPC was moved but not pinned).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -135,15 +145,15 @@ fn publish(path: &Path, expected: &FileSnapshot, notes: &FolderNotes) -> Result<
     Ok(())
 }
 
+/// Drop the file once the last note is gone, so an untouched save folder keeps
+/// no leftovers.
+///
+/// Through the shared claim-guarded delete rather than "replace, release, then
+/// unlink": releasing the claim first leaves a window in which another editor
+/// publishes a fresh sidecar that the unlink then throws away — and an ignored
+/// unlink error would hide it.
 fn remove(path: &Path, expected: &FileSnapshot) -> Result<(), CoreError> {
-    if matches!(expected, FileSnapshot::Missing) {
-        return Ok(());
-    }
-    let empty = ScratchFile::create(path, "tmp-placements", &[])?;
-    let pending = begin_replace_if_unchanged(path, empty.path(), expected)?;
-    pending.commit();
-    let _ = fs::remove_file(path);
-    Ok(())
+    crate::remove_sidecar_if_unchanged(path, expected, "claim-placements", "placements")
 }
 
 /// Apply `mutate` to this save's notes and publish the result.
@@ -270,8 +280,10 @@ mod tests {
     fn note() -> PlacementNote {
         PlacementNote {
             original_location: [1.0, 2.0, 3.0],
+            original_rotation: None,
             original_routine_class: Some("/Script/Angelscript.DailyRoutine_A_Start".to_string()),
             written_location: [4.0, 5.0, 6.0],
+            written_rotation: None,
             written_routine_class: Some(
                 "/Script/Angelscript.DailyRoutine_Empty".to_string(),
             ),

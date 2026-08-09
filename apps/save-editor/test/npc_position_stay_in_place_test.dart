@@ -265,6 +265,45 @@ void main() {
     expect(pending(tester)!.placementNotes, isEmpty);
   });
 
+  testWidgets('a move that turns him records and restores the facing too', (
+    tester,
+  ) async {
+    // The picker can apply a spot's heading. Restoring the position while
+    // leaving the new facing would strand it: clearing the note takes the only
+    // record of the old one with it.
+    await openNpc(
+      tester,
+      coreWith(routineClass: '/Script/Angelscript.DailyRoutine_A_Start'),
+    );
+
+    await tester.enterText(positionField('location:x'), '999');
+    await tester.enterText(positionField('rotation:yaw'), '90');
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('npc-position:stay')));
+    await tester.pumpAndSettle();
+
+    final note = (pending(tester)!.placementNotes.single['note'] as Map)
+        .cast<String, Object?>();
+    expect(note['original_rotation'], [14.0, 15.0, 16.0]);
+    expect(note['written_rotation'], [14.0, 90.0, 16.0]);
+
+    // And a restore puts that facing back.
+    await pumpPositionApp(
+      tester,
+      coreWith(
+        routineClass: kFakeInertRoutine,
+        undo: const FakeUndo(originalRotation: (14.0, 15.0, 16.0)),
+      ),
+    );
+    await openPositionTab(tester);
+    await tester.tap(find.text(npc));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('npc-position:undo')));
+    await tester.pumpAndSettle();
+
+    expect(positionFieldText(tester, 'rotation:yaw'), '15');
+  });
+
   testWidgets('a note the save no longer matches cannot be restored', (
     tester,
   ) async {

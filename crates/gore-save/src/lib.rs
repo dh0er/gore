@@ -1621,15 +1621,22 @@ where
     }))
 }
 
-/// Delete the label map, but only while it still holds `expected`.
+/// Delete a sidecar map, but only while it still holds `expected`.
 ///
 /// Checking and then deleting leaves a window in which another editor publishes
 /// a fresh map that this delete then throws away. So the file is first moved
 /// aside — one atomic step that also takes it out of everyone else's way — and
 /// only dropped for good once the claimed bytes turn out to be the expected
 /// ones. Anything else goes back where it came from.
-fn remove_backup_names(path: &Path, expected: &FileSnapshot) -> Result<(), CoreError> {
-    let claim = ScratchFile::create(path, "claim-labels", &[])?;
+///
+/// `subject` names the map in the two error messages ("labels", "placements").
+pub(crate) fn remove_sidecar_if_unchanged(
+    path: &Path,
+    expected: &FileSnapshot,
+    claim_prefix: &str,
+    subject: &str,
+) -> Result<(), CoreError> {
+    let claim = ScratchFile::create(path, claim_prefix, &[])?;
     // The scratch file only reserved a free name; the claim is the move itself.
     fs::remove_file(claim.path())?;
     match fs::rename(path, claim.path()) {
@@ -1639,7 +1646,7 @@ fn remove_backup_names(path: &Path, expected: &FileSnapshot) -> Result<(), CoreE
             return match expected {
                 FileSnapshot::Missing => Ok(()),
                 FileSnapshot::Present(_) => Err(CoreError::Update(format!(
-                    "{} vanished while its labels were being tidied",
+                    "{} vanished while its {subject} were being tidied",
                     path.display()
                 ))),
             };
@@ -1658,9 +1665,13 @@ fn remove_backup_names(path: &Path, expected: &FileSnapshot) -> Result<(), CoreE
         std::mem::forget(claim);
     }
     Err(CoreError::Update(format!(
-        "{} changed while its labels were being tidied",
+        "{} changed while its {subject} were being tidied",
         path.display()
     )))
+}
+
+fn remove_backup_names(path: &Path, expected: &FileSnapshot) -> Result<(), CoreError> {
+    remove_sidecar_if_unchanged(path, expected, "claim-labels", "labels")
 }
 
 /// Write `names` to `path`, but only while the file still holds `expected`.
@@ -6242,7 +6253,15 @@ fn placement_undo(save_path: &Path, id: &str, root: &properties::RootObject) -> 
         .and_then(|pose| pose.location)
         .map(|point| [point.x, point.y, point.z]);
     let current_routine = npc::npc_routine_class(root, id).and_then(|(class, _)| class);
-    let location_matches = current_location == Some(note.written_location);
+    let location_matches = current_location
+        .is_some_and(|current| triplet_matches_stored(current, note.written_location));
+    let rotation_matches = note.written_rotation.is_none_or(|written| {
+        npc::npc_position(root, id)
+            .ok()
+            .and_then(|pose| pose.rotation)
+            .map(|angles| [angles.pitch, angles.yaw, angles.roll])
+            .is_some_and(|current| triplet_matches_stored(current, written))
+    });
     // A note that did not touch the routine imposes no condition on it.
     let routine_matches = note
         .written_routine_class
@@ -6254,13 +6273,31 @@ fn placement_undo(save_path: &Path, id: &str, root: &properties::RootObject) -> 
             "y": note.original_location[1],
             "z": note.original_location[2],
         },
+        "originalRotation": note.original_rotation.map(|value| json!({
+            "pitch": value[0],
+            "yaw": value[1],
+            "roll": value[2],
+        })),
         "originalRoutineClass": note.original_routine_class,
         // Two verdicts, because there are two controls. Giving the NPC his
         // routine back only needs the routine to be untouched since; taking the
-        // whole move back needs the position to be untouched as well.
+        // whole move back needs the pose to be untouched as well.
         "routineRestorable": routine_matches,
-        "restorable": location_matches && routine_matches,
+        "restorable": location_matches && rotation_matches && routine_matches,
     })
+}
+
+/// Whether a stored coordinate triplet still equals the one a note recorded.
+///
+/// Exact, plus the f32 round-trip. `CharacterLocation` is normally three f64,
+/// but a 12-byte `Vector` is written as three f32, so a note holding the
+/// entered f64 would never equal what reads back — marking every fresh note
+/// stale and killing the undo before it was ever offered.
+fn triplet_matches_stored(current: [f64; 3], noted: [f64; 3]) -> bool {
+    current
+        .iter()
+        .zip(noted.iter())
+        .all(|(current, noted)| *current == *noted || *current == *noted as f32 as f64)
 }
 
 /// Build the inventory summary for one actor's MainContainer from a parsed
