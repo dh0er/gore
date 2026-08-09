@@ -1542,7 +1542,10 @@ fn check_leftovers(
     // itself stayed put and unmentioned.
     let (scan, scan_error) = match find_backups(gp) {
         Ok(scan) => (scan, None),
-        Err(error) => (BackupScan { found: Vec::new(), complete: false }, Some(error)),
+        Err(error) => (
+            BackupScan { found: Vec::new(), occupied: Vec::new(), complete: false },
+            Some(error),
+        ),
     };
     let backups = scan.found;
 
@@ -1640,7 +1643,10 @@ fn check_leftovers(
     }
 
     // `artifact_count` is 0 from here: the branch above returned on every other value.
-    if backups.is_empty() && scan.complete {
+    // `occupied` counts here too. Without it this returned "no leftover backups" for an install
+    // whose backup NAME is held by a directory — `found` is empty in exactly that case, so the
+    // branch that reports it sat below this one and could never be reached.
+    if backups.is_empty() && scan.occupied.is_empty() && scan.complete {
         return Check::new(
             "leftovers",
             "leftovers",
@@ -1682,6 +1688,28 @@ fn check_leftovers(
         .with_fix(
             "the deployment check above reports that record failure with the command that \
              settles it; these backups are described by whatever it says",
+        );
+    }
+
+    // Ahead of the note below, and a Problem rather than one, because the advice down there is to
+    // restore from these files — and neither `gore audio restore` nor `gore mod undeploy` can read
+    // a directory. An in-place edit writes exactly this path and fails on it, so what has to be
+    // said first is what is holding the name.
+    if !scan.occupied.is_empty() {
+        return Check::new(
+            "leftovers",
+            "leftovers",
+            Verdict::Problem,
+            format!(
+                "{} backup path(s) are occupied by something that is not a file",
+                scan.occupied.len()
+            ),
+        )
+        .with_items(scan.occupied.clone())
+        .with_fix(
+            "an in-place edit writes its pristine copy to exactly that name and cannot while \
+             something else holds it, and nothing can restore from it either. Remove or rename \
+             what is there",
         );
     }
 
@@ -2228,10 +2256,18 @@ fn find_backups(gp: &GamePaths) -> Result<BackupScan, String> {
         g1r.join("Script"),
     ];
     let mut found: Vec<String> = Vec::new();
+    let mut occupied: Vec<String> = Vec::new();
     for dir in &dirs {
-        for name in file_names(dir)? {
-            if name.ends_with(".gore-bak") {
-                found.push(dir.join(name).display().to_string());
+        // Every entry, not `file_names`: that one keeps only files, so a DIRECTORY sitting on a
+        // backup name was skipped here in silence — and an in-place edit writes exactly that path.
+        for entry in mods_entries(dir)? {
+            if !entry.name.ends_with(".gore-bak") {
+                continue;
+            }
+            let path = dir.join(&entry.name).display().to_string();
+            match entry.is_file {
+                true => found.push(path),
+                false => occupied.push(path),
             }
         }
     }
@@ -2244,17 +2280,23 @@ fn find_backups(gp: &GamePaths) -> Result<BackupScan, String> {
     let mut budget = MAX_BACKUP_SCAN_ENTRIES;
     let mut complete = true;
     for subtree in [g1r.join("Content"), g1r.join("Config")] {
-        complete &= find_backups_under(&subtree, &mut found, &mut budget)?;
+        complete &= find_backups_under(&subtree, &mut found, &mut occupied, &mut budget)?;
     }
 
     found.sort();
     found.dedup();
-    Ok(BackupScan { found, complete })
+    occupied.sort();
+    occupied.dedup();
+    Ok(BackupScan { found, occupied, complete })
 }
 
 /// What a scan of the install's backup locations found, and whether it got to the end.
 struct BackupScan {
     found: Vec<String>,
+    /// Backup NAMES that are not files. `gore audio restore` and `gore mod undeploy` both read a
+    /// backup to put its bytes back, and neither can read a directory — so these need their own
+    /// sentence rather than the advice the real ones get.
+    occupied: Vec<String>,
     /// False when the walk ran out of budget. A scan that stopped early cannot support "there are
     /// no leftovers", which is the one answer this check must never give without having looked.
     complete: bool,
@@ -2271,6 +2313,7 @@ const MAX_BACKUP_SCAN_ENTRIES: usize = 200_000;
 fn find_backups_under(
     dir: &Path,
     found: &mut Vec<String>,
+    occupied: &mut Vec<String>,
     budget: &mut usize,
 ) -> Result<bool, String> {
     let entries = match std::fs::read_dir(dir) {
@@ -2297,13 +2340,20 @@ fn find_backups_under(
         if kind.is_symlink() {
             continue;
         }
-        if kind.is_dir() {
-            complete &= find_backups_under(&path, found, budget)?;
-        } else if path
+        // The NAME decides first, and the kind only after. A directory called `SFX.bank.gore-bak`
+        // was descended into and never reported, so an empty one produced "no leftover backups" —
+        // while an in-place `gore audio replace` writes exactly that path and fails on it, with
+        // the report having just said nothing was in the way.
+        let is_backup_name = path
             .file_name()
-            .is_some_and(|name| name.to_string_lossy().ends_with(".gore-bak"))
-        {
-            found.push(path.display().to_string());
+            .is_some_and(|name| name.to_string_lossy().ends_with(".gore-bak"));
+        if is_backup_name {
+            match kind.is_file() {
+                true => found.push(path.display().to_string()),
+                false => occupied.push(path.display().to_string()),
+            }
+        } else if kind.is_dir() {
+            complete &= find_backups_under(&path, found, occupied, budget)?;
         }
     }
     Ok(complete)
@@ -3063,6 +3113,38 @@ mod tests {
             "{:?}",
             check.items
         );
+    }
+
+    #[test]
+    fn a_directory_on_a_backup_name_is_reported_and_not_walked_into() {
+        // The scan descended into a directory called `SFX.bank.gore-bak` and never mentioned it,
+        // so an empty one produced "no locks, journals or leftover backups" — while an in-place
+        // `gore audio replace` writes exactly that path and fails on it. And it cannot be answered
+        // with the note the real backups get: nothing restores from a directory.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let banks = paths(root).fmod_desktop;
+        std::fs::create_dir_all(banks.join("SFX.bank.gore-bak")).unwrap();
+
+        let check = check_leftovers(&paths(root), &probe(root, false), &nothing_deployed());
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("not a file"), "{}", check.detail);
+        assert!(
+            check.items.iter().any(|item| item.contains("SFX.bank.gore-bak")),
+            "{:?}",
+            check.items
+        );
+        let fix = check.fix.unwrap();
+        assert!(fix.contains("Remove or rename"), "{fix}");
+        assert!(!fix.contains("gore audio restore"), "nothing restores from a directory: {fix}");
+
+        // The control: the same name as a real file is a backup again, with the note it had.
+        std::fs::remove_dir(banks.join("SFX.bank.gore-bak")).unwrap();
+        std::fs::write(banks.join("SFX.bank.gore-bak"), b"pristine").unwrap();
+        let check = check_leftovers(&paths(root), &probe(root, false), &nothing_deployed());
+        assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
+        assert!(check.fix.unwrap().contains("gore audio restore"));
     }
 
     #[test]
