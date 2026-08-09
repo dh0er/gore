@@ -146,6 +146,21 @@ struct Report {
 
 impl Report {
     fn new(game_root: Option<&Path>, game_source: &'static str, checks: Vec<Check>) -> Self {
+        // The type's contract, enforced where every report passes rather than remembered at each
+        // of the several dozen places a `Check` is built. Two arms shipped without a fix and were
+        // found by a reviewer reading the code; a report that names a problem and no next step is
+        // the half nobody can act on.
+        debug_assert!(
+            checks
+                .iter()
+                .all(|check| check.verdict != Verdict::Problem || check.fix.is_some()),
+            "every problem must carry a fix: {:?}",
+            checks
+                .iter()
+                .filter(|check| check.verdict == Verdict::Problem && check.fix.is_none())
+                .map(|check| check.id)
+                .collect::<Vec<_>>()
+        );
         let count = |want: Verdict| checks.iter().filter(|c| c.verdict == want).count();
         Self {
             game_root: game_root.map(|p| p.display().to_string()),
@@ -1111,6 +1126,7 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
                 Verdict::Problem,
                 format!("could not inspect the additive mod folder: {error}"),
             )
+            .with_fix("run the same command from a shell that can read the install")
         }
     };
     names.sort_by_key(|name| name.to_lowercase());
@@ -2971,6 +2987,18 @@ mod tests {
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(check.detail.contains("is a file, not a folder"), "{}", check.detail);
         assert!(check.fix.unwrap().contains("Remove or rename"));
+    }
+
+    #[test]
+    #[should_panic(expected = "every problem must carry a fix")]
+    fn the_report_refuses_a_problem_with_no_next_step() {
+        // Proof that the guard in `Report::new` fires. A debug assertion nobody has seen trip is
+        // an assumption, not a check — and this contract has now been broken twice by hand.
+        Report::new(
+            None,
+            "config",
+            vec![Check::new("ue4ss", "UE4SS", Verdict::Problem, "not installed")],
+        );
     }
 
     #[test]
