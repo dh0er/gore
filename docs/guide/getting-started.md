@@ -188,9 +188,29 @@ beside each other. If the `ue4ss` folder is not there at all, you do not have it
 and an override mod will sit in the install doing nothing, with nothing on either
 side reporting a problem.
 
-> **TODO (maintainer):** put the canonical UE4SS download link here, and the
-> version this path was last checked against. Neither is recorded anywhere in
-> this repository, and a guessed link would be worse than none.
+**Where to get it.** UE4SS is [UE4SS-RE/RE-UE4SS](https://github.com/UE4SS-RE/RE-UE4SS)
+on GitHub (MIT). GORE neither ships nor installs it.
+
+Read the release list before you download, because the newest *tagged* release
+is not the newest build:
+
+| Channel | What it is |
+|---|---|
+| `v3.0.1` | the latest stable tag — published **February 2024**, which predates this game |
+| `experimental-latest` | a rolling prerelease, rebuilt continuously from `main` |
+
+Everything in this guide was checked against an **experimental** build, the one
+this machine runs: `v3.0.1 Beta #0`, git `272ce2f8` (7 June 2026). Note the
+version string — experimental assets are still named `UE4SS_v3.0.1-<n>-g<sha>.zip`,
+so "v3.0.1" alone does not tell you which of the two you have. The git SHA does.
+
+To see what you have, read the second line of `UE4SS.log`:
+
+```
+[…] UE4SS - v3.0.1 Beta #0 - Git SHA #272ce2f8
+```
+
+Nothing here has been tested against the 2024 stable tag.
 
 Inside `Mods\`, each mod is one folder holding `Scripts\main.lua` and an empty
 `enabled.txt`. That empty file is the switch — UE4SS loads a folder because
