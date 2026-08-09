@@ -29,11 +29,11 @@ build ids, what was seen, and what has not been.
 | [Item & stat values](docs/guide/items.md) | Change what items are worth, what weapons do, what NPCs have | Full | Needs UE4SS, which GORE does not install |
 | [Text & dialogs](docs/guide/text-and-dialogs.md) | Replace any text in the game, in any of its 19 languages | Full | An id can carry several language versions and the game shows the newest |
 | [Audio](docs/guide/audio.md) | Replace music and sound effects | Full | Finding which sound plays where is guesswork |
-| [Voice-over](docs/guide/voice.md) | Replace spoken lines | Partly | Adding a *new* line's audio is built but has never been heard in game |
-| [Textures](docs/guide/textures.md) | Replace textures | Full | A few, like the mouse cursors, sit somewhere this route cannot reach |
+| [Voice-over](docs/guide/voice.md) | Replace spoken lines | Partly | You can add audio for a brand-new line, but nobody has heard one play yet |
+| [Textures](docs/guide/textures.md) | Replace textures | Full | A few, like the mouse cursors, are stored somewhere this cannot reach |
 | [DataAssets](docs/guide/dataassets.md) | Edit cooked game data | Partly | Only assets the engine describes natively; Blueprint ones are refused |
 | [Scripts](docs/guide/scripts.md) | Read the game's script code, change it, add your own | Partly | Reverse-engineered and lossy — recompiled code is not always identical |
-| [Mods & load order](docs/guide/bundles.md) | Ship all of the above as one mod, run many together, and install other people's mods alongside yours | Full | Installing a mod GORE did not build has one end-to-end run behind it |
+| [Mods & load order](docs/guide/bundles.md) | Ship all of the above as one mod, run many together, and install other people's mods alongside yours | Full | Installing mods from other people has only been tried once |
 
 Offline, no game needed: [`doctor`](docs/guide/getting-started.md#check-the-setup) checks
 your setup, [`find`](docs/guide/find.md) searches the catalogs.
