@@ -1126,8 +1126,8 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
     // Every entry, not only the regular files. A `~mods` holding nothing but a subdirectory was
     // reported empty and healthy, though whatever is in there is as much a thing sitting in the
     // mount folder as a stray file is — and the engine reads neither.
-    let mut names = match entry_names(&dir) {
-        Ok(names) => names,
+    let mut entries = match mods_entries(&dir) {
+        Ok(entries) => entries,
         Err(error) => {
             return Check::new(
                 "mods_folder",
@@ -1138,7 +1138,8 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
             .with_fix("run the same command from a shell that can read the install")
         }
     };
-    names.sort_by_key(|name| name.to_lowercase());
+    entries.sort_by_key(|entry| entry.name.to_lowercase());
+    let names: Vec<String> = entries.iter().map(|entry| entry.name.clone()).collect();
     if names.is_empty() {
         return Check::new(
             "mods_folder",
@@ -1154,8 +1155,15 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
     let mut mounted: Vec<String> = Vec::new();
     let mut inert: Vec<String> = Vec::new();
     let mut bookkeeping: Vec<String> = Vec::new();
-    for name in &names {
+    for entry in &entries {
+        let name = &entry.name;
         let lower = name.to_lowercase();
+        // A directory matches every suffix rule below and mounts nothing. Listing all entries is
+        // what made that reachable, so the kind has to decide before the name does.
+        if !entry.is_file {
+            inert.push(name.clone());
+            continue;
+        }
         // `gore_tex::container::deploy` writes `<name>.gore-deploy.json` here to record what it
         // copied in, and undeploy reads it back. It is not something the engine mounts and not
         // something wrong — flagging it turned every correctly deployed texture mod into a warning
@@ -1168,14 +1176,16 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
             bookkeeping.push(name.clone());
             continue;
         }
+        // The sibling has to be a file too, for the same reason.
+        let file_named = |wanted: String| {
+            entries
+                .iter()
+                .any(|other| other.is_file && other.name.to_lowercase() == wanted)
+        };
         let mountable = if let Some(stem) = lower.strip_suffix(".utoc") {
-            names
-                .iter()
-                .any(|other| other.to_lowercase() == format!("{stem}.ucas"))
+            file_named(format!("{stem}.ucas"))
         } else if let Some(stem) = lower.strip_suffix(".ucas") {
-            names
-                .iter()
-                .any(|other| other.to_lowercase() == format!("{stem}.utoc"))
+            file_named(format!("{stem}.utoc"))
         } else {
             // A loose `.pak` mounts on its own. Anything else in here is not something the engine
             // reads from this folder.
@@ -1946,23 +1956,35 @@ fn find_backups_under(
 /// installs where this happens — permissions, a half-mounted drive, I/O errors — are exactly the
 /// ones it exists for. Per-entry failures count the same way; a directory half-read is not a
 /// directory read.
+/// One entry directly in `~mods`, and whether it is a file.
+///
+/// The kind travels with the name because the name alone decides nothing: the engine mounts files,
+/// and a DIRECTORY called `zzz_Mod_P.pak` matches every suffix rule there is.
+struct ModsEntry {
+    name: String,
+    is_file: bool,
+}
+
 /// Every entry directly in `dir`, files and directories alike.
 ///
 /// `file_names` answers what the backup scan needs — a `*.gore-bak` is a file — and dropping
 /// everything else made `~mods` report a folder holding only a subdirectory as empty.
-fn entry_names(dir: &Path) -> Result<Vec<String>, String> {
+fn mods_entries(dir: &Path) -> Result<Vec<ModsEntry>, String> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(format!("{} could not be read: {error}", dir.display())),
     };
-    let mut names = Vec::new();
+    let mut found = Vec::new();
     for entry in entries {
         let entry = entry
             .map_err(|error| format!("{} could not be read: {error}", dir.display()))?;
-        names.push(entry.file_name().to_string_lossy().into_owned());
+        found.push(ModsEntry {
+            name: entry.file_name().to_string_lossy().into_owned(),
+            is_file: present(&entry.path())?.is_some_and(|metadata| metadata.is_file()),
+        });
     }
-    Ok(names)
+    Ok(found)
 }
 
 fn file_names(dir: &Path) -> Result<Vec<String>, String> {
@@ -2907,6 +2929,34 @@ mod tests {
         std::fs::write(mods.join("zzz_MyTextures_P.pak"), b"pak").unwrap();
         let some = check_mods_folder(&gp);
         assert_eq!(some.items, ["zzz_MyTextures_P.pak"]);
+    }
+
+    #[test]
+    fn a_directory_named_like_a_container_is_not_mounted() {
+        // Listing every entry made this reachable: the suffix rules match a name, and a directory
+        // called `zzz_Mod_P.pak` — or a pair of directories named `.utoc`/`.ucas` — matches them
+        // exactly as a file would while the engine mounts none of it.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        let mods = gore_tex::container::mods_dir(&gp.root);
+        std::fs::create_dir_all(mods.join("zzz_Fake_P.pak")).unwrap();
+        std::fs::create_dir_all(mods.join("zzz_Pair_P.utoc")).unwrap();
+        std::fs::create_dir_all(mods.join("zzz_Pair_P.ucas")).unwrap();
+
+        let check = check_mods_folder(&gp);
+        assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
+        for name in ["zzz_Fake_P.pak", "zzz_Pair_P.utoc", "zzz_Pair_P.ucas"] {
+            assert!(
+                check
+                    .items
+                    .iter()
+                    .any(|item| item.contains(name) && item.contains("not mounted")),
+                "{name} must not count as mounted: {:?}",
+                check.items
+            );
+        }
     }
 
     #[test]
