@@ -338,7 +338,14 @@ fn load_name_index_at(path: PathBuf, wanted: &HashSet<String>) -> NameIndexState
             // A directory at the catalog path fails the read like any other broken catalog, and
             // the advice that fits every other one — re-run the extraction — is the only advice
             // that cannot work here.
-            return match std::fs::symlink_metadata(&path) {
+            //
+            // Through the link, not at it. `symlink_metadata` would call a symlink "not a file"
+            // and send somebody to delete a link that resolves perfectly well to a catalog whose
+            // read failed for an entirely different reason. The question here is what the path
+            // RESOLVES to, because that is what `gore loc extract` renames onto; the opposite
+            // call in `cmd::audio` asks the opposite question — whether the path is still the
+            // file that run created — and a link is not.
+            return match std::fs::metadata(&path) {
                 Ok(metadata) if !metadata.is_file() => NameIndexState::Obstructed { path },
                 _ => NameIndexState::Unreadable { path, detail: error.to_string() },
             };
@@ -2186,6 +2193,38 @@ mod tests {
         let said = occupied.notice(&[]);
         assert!(said.contains("is not a file"), "{said}");
         assert!(said.contains("Remove or rename"), "{said}");
+
+        // Asked through a link, not at it: what decides is where the path resolves, because that
+        // is what the extraction renames onto. A link to a directory is still an obstruction; a
+        // link to a catalog is not one, and calling it one would send somebody to delete a link
+        // that works. The failing-read half of that second case needs a permission this suite
+        // cannot set, so what is pinned here is that the link is followed at all.
+        let link = dir.path().join("link-to-a-directory.json");
+        if try_symlink(dir.path(), &link).is_ok() {
+            let through = load_name_index_at(link, &wanted);
+            assert!(
+                matches!(through, NameIndexState::Obstructed { .. }),
+                "{through:?}"
+            );
+        } else {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "this has to run where links can be made"
+            );
+        }
+    }
+
+    /// A symlink at `link` pointing at `target`, or the reason there is none. Creating one needs
+    /// privileges a plain Windows session may not have, so the caller fails only where it can.
+    fn try_symlink(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_dir(target, link)
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link)
+        }
     }
 
     #[test]
