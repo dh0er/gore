@@ -18,42 +18,31 @@
 The Flutter GUIs reuse the exact same Rust crates as the CLI through a
 `dart:ffi` bridge — the CLI is always the most complete surface.
 
-## What GORE can change, and what it cannot
+## What you can change, and what does not work yet
 
-Two different things are worth keeping apart, because "the tests pass" and
-"somebody saw it in the game" are not the same claim. Every row below is
-sourced from the linked page, which carries the exact build ids and wording.
+Each row links the page that carries the evidence — build ids, what was seen,
+and the exact wording. "Works" here means somebody watched it happen in the
+running game; where that is not so, the right-hand column says it.
 
-| Area | What it changes | Has it been seen in the game? |
+| Area | What you can do | Not yet |
 |---|---|---|
-| [Item & stat values](docs/guide/items.md) | class defaults, as a UE4SS Lua mod | **Yes** — the running game writes one `UE4SS.log` line per applied override |
-| [Text & dialogs](docs/guide/text-and-dialogs.md) | the encrypted `.lcache`, in place | **Yes** — on BuildID 24539464, in both directions |
-| [Audio](docs/guide/audio.md) | samples inside FMOD `.bank` files | **Yes** — five `SFX.bank` samples and the menu music, heard on 24539464 |
-| [Voice-over](docs/guide/voice.md) | `replace` a recording in a language ZIP | **Yes** — two Diego lines, heard on 24539464 |
-| [Textures](docs/guide/textures.md) | additive UE5 IoStore triplet in `~mods\` | **Yes** — the main-menu logo, on 24539464, and it survived a game update |
-| [DataAssets](docs/guide/dataassets.md) | cooked DataAsset leaves, receipt-sealed | **Yes** — two edits watched on 2026-08-07 |
-| [Dialog topics](docs/guide/dialog-authoring.md) | a compiled AngelScript topic in a conversation | **Once**, on game 1.0.3 — with named gaps; read the status table on that page first |
-| [Bundling & deploying](docs/guide/bundles.md) | all of the above as one transactional unit | **Yes** — undeploy restored the 123 MB script cache to its recorded SHA-256, 92 of 93 saves byte-identical |
+| [Item & stat values](docs/guide/items.md) | Change any class default the game reads at startup — item value and weight, weapon damage, NPC stats — from a small `overrides.toml`. Ships as a UE4SS Lua mod. | Needs [UE4SS](docs/guide/getting-started.md); without it the mod sits there and does nothing. GORE does not install it. |
+| [Text & dialogs](docs/guide/text-and-dialogs.md) | Replace **any** text in the game: all 43,851 ids across 19 languages — dialog lines, item names, journal entries, UI. New ids can be added. | An id often carries several language generations, and the game reads the newest. Write the wrong one and the file changes while the screen does not — `gore mod deploy` warns, `gore loc import` does not. |
+| [Audio](docs/guide/audio.md) | Replace music and sound effects inside the encrypted FMOD banks, at any length — the replacement does not have to match the original's duration. | Which surface plays which sample is documented nowhere — you pick by listening. Your WAV is re-encoded to PCM16, so the bank grows by the audio you add. |
+| [Voice-over](docs/guide/voice.md) | Replace any existing recording in a language archive, copy-on-write — the original is never modified. | Adding a **new** voice path is written and validated, but nothing has been heard playing one — a new line needs a new dialog to speak it. Encode Vorbis: Opus passes the CLI and is then refused by Mod Studio's build, and no Opus take has been heard in game. |
+| [Textures](docs/guide/textures.md) | Replace game textures. Ships additively as a UE5 IoStore triplet in `~mods\`, so no game file is touched. | Anything living in `G1R-Windows.pak` — the mouse cursors, `DefaultEngine.ini` — is not reachable this way and needs the pak route instead. |
+| [DataAssets](docs/guide/dataassets.md) | Edit cooked DataAsset values byte-exactly, receipt-sealed, also additively. | A Blueprint-generated export (class name ending `_C`) has no schema and cannot be bound — `inspect` refuses it rather than guessing. |
+| [Scripts (AngelScript)](docs/guide/scripts.md) | Decompile the shipping cache to readable AngelScript, edit it, and compile with the game's own executable. Add whole new modules, and splice one module back into the vanilla cache. A new dialog option authored this way has been seen in a real conversation. | Decompilation is lossy: it is reverse-engineering-stage tooling, some helpers do not round-trip, and `emit-all` does not emit generated `__InitDefaults` as editable source. `gore as bytediff` exists to measure what a recompile changed. Do not ship a whole regenerated cache. What happens when a player *clicks* an authored option is untested. |
+| [Bundling & deploying](docs/guide/bundles.md) · [many mods](docs/guide/mod-manager.md) | Put all of the above in one bundle that deploys and undeploys as a unit, transactionally. `gore mgr` runs several together with load order and a conflict report, and imports **foreign** mods too: zips and folders, loose `_P.pak`, IoStore triplets, UE4SS Lua mod folders, raw file replacements. | The foreign path has been walked end to end once, with one triplet. |
 
 Offline and needing no game running: [`doctor`](docs/guide/getting-started.md)
 (diagnose the setup), [`find`](docs/guide/find.md) (search the catalogs and the
 effect register), `location`, and the catalog builders.
 
-**What it cannot do:**
-
-- **Blueprint-generated exports.** A class whose name ends in `_C` has no schema
-  in the USMAP and cannot be bound — `inspect` refuses it rather than guessing.
-- **Voice on a new dialog line.** `voice add` writes a valid archive member, but
-  nothing plays a brand-new voice path until an authored topic speaks it, and
-  recorded voice on an authored topic is exactly what the dialog proof does not
-  certify. Replacing an existing recording is the path with evidence behind it.
-- **Edit your saves.** That is the [Save Editor](apps/save-editor/README.md).
-  The CLI has no save command and does not even link the save library.
-- **Install UE4SS.** Item and stat overrides do nothing without it, and GORE
-  neither ships nor installs it — `gore doctor` only tells you whether it is
-  there. See the UE4SS section of [Getting started](docs/guide/getting-started.md).
-- **Promise any of this on a build nobody has run it on.** The observations
-  above are one person, one install, and the build ids they name.
+Two things GORE will not do at all: **edit your saves** — that is the
+[Save Editor](apps/save-editor/README.md), and the CLI does not even link the
+save library — and **install UE4SS** for you. And everything above was seen by
+one person, on one install, on the builds those pages name.
 
 ## Quick start
 
