@@ -1110,7 +1110,11 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
         // copied in, and undeploy reads it back. It is not something the engine mounts and not
         // something wrong — flagging it turned every correctly deployed texture mod into a warning
         // about an incomplete container.
-        if lower.contains(".gore-deploy.json") {
+        //
+        // Exactly that name, though. The same function writes `<name>.gore-deploy.json.tmp` first
+        // and renames it, so a `.tmp` left behind is a publication that did not finish — which is
+        // a finding, and a `contains` check filed it as housekeeping.
+        if lower.ends_with(".gore-deploy.json") {
             bookkeeping.push(name.clone());
             continue;
         }
@@ -2827,6 +2831,28 @@ mod tests {
         let check = check_mods_folder(&gp);
         assert_eq!(check.verdict, Verdict::Ok, "{}", check.detail);
         assert!(check.fix.is_none());
+    }
+
+    #[test]
+    fn a_half_written_deploy_record_is_not_filed_as_bookkeeping() {
+        // `container::deploy` writes `<name>.gore-deploy.json.tmp` and renames it, so a `.tmp`
+        // left in `~mods` is a publication that did not finish. A `contains` check filed it with
+        // the finished record and reported the folder as fine.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        let mods = gore_tex::container::mods_dir(&gp.root);
+        std::fs::create_dir_all(&mods).unwrap();
+        std::fs::write(mods.join("zzz_MyTextures_P.gore-deploy.json.tmp"), b"{}").unwrap();
+
+        let check = check_mods_folder(&gp);
+        assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
+        assert!(
+            check.items.iter().any(|item| item.contains(".tmp") && item.contains("not mounted")),
+            "{:?}",
+            check.items
+        );
     }
 
     #[test]

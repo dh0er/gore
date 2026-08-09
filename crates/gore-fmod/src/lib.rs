@@ -826,10 +826,21 @@ fn sub_bank_header(bank: &[u8], entry: &BankEntry, key: &[u8]) -> Result<Vec<u8>
         ));
     }
 
+    let remaining = (bank.len() - entry.fsb5_offset) as u64;
     let present = match entry.fsb5_size {
-        // The wrapper's chunk size when it has one, but never more than the file actually holds.
-        size if size > 0 => (size as u64).min((bank.len() - entry.fsb5_offset) as u64),
-        _ => (bank.len() - entry.fsb5_offset) as u64,
+        // Checked, not clamped. `min` quietly replaced a declared extent that runs past the end of
+        // the file with the bytes that are there, so a block whose own tables fit inside the
+        // remainder summarized fine — and `decrypt_sub_bank` then slices
+        // `fsb5_offset..fsb5_offset + fsb5_size` and rejects the same bank as out of range.
+        // Clamping is how a check turns into a guess about the value it was given.
+        size if size > 0 && size as u64 > remaining => {
+            return Err(format!(
+                "an FSB5 block is declared {size} bytes long and only {remaining} are left \
+                 in the file: the bank is truncated"
+            ))
+        }
+        size if size > 0 => size as u64,
+        _ => remaining,
     };
     header_fits(&header, present)?;
 
@@ -1722,6 +1733,31 @@ mod truncation_tests {
     }
 
     #[test]
+    fn a_wrapper_extent_past_the_end_of_the_file_is_refused() {
+        // The SNDH entry says how long the embedded FSB5 is. Taking the smaller of that and what
+        // is left in the file made a block whose own tables fit inside the remainder summarize
+        // fine, while `decrypt_sub_bank` slices `fsb5_offset..fsb5_offset + fsb5_size` and rejects
+        // the same bank.
+        let samples = numbered_pcm16_samples("SFX_UI_Click_", 3, 44_100);
+        let mut bank = pristine_bank_pcm16(&samples, GOTHIC_STUDIO_KEY).unwrap();
+        assert!(bank_summary(&bank, GOTHIC_STUDIO_KEY).is_ok());
+
+        // The entry is the 8 bytes after SNDH's size field and its 4-byte chunk-version prefix:
+        // absolute offset, then size. Only the size is touched, so the block still starts where it
+        // did and only its declared length becomes a lie.
+        let sndh = bank
+            .windows(4)
+            .position(|w| w == b"SNDH")
+            .expect("the fixture writes an SNDH chunk");
+        let size_field = sndh + 4 + 4 + 4 + 4;
+        bank[size_field..size_field + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+
+        let error = bank_summary(&bank, GOTHIC_STUDIO_KEY)
+            .expect_err("a block longer than the file must not summarize");
+        assert!(error.contains("are left in the file"), "{error}");
+    }
+
+    #[test]
     fn a_bank_cut_off_after_its_header_is_not_summarized_as_intact() {
         let samples = numbered_pcm16_samples("SFX_UI_Click_", 4, 44_100);
         let bank = pristine_bank_pcm16(&samples, GOTHIC_STUDIO_KEY).unwrap();
@@ -1736,12 +1772,13 @@ mod truncation_tests {
         let cut = &bank[..bank.len() - 64];
         let error = bank_summary(cut, GOTHIC_STUDIO_KEY)
             .expect_err("a truncated bank must not summarize as intact");
-        // Specifically the extent check, not the older "header runs past the end" one: that message
-        // also says "truncated", so asserting on that word alone would pass whether or not the
-        // declared block size was ever compared with the bytes present.
+        // The wrapper extent is what catches this now: the SNDH entry still declares the block's
+        // full length while the file is 64 bytes shorter, which is an earlier and more precise
+        // reading of the same damage than the header's own totals. `header_fits` keeps its own
+        // coverage in `a_sample_table_too_small_for_its_own_count_is_refused`.
         assert!(
-            error.contains("declares") && error.contains("are there"),
-            "the extent check is what must have refused this: {error}"
+            error.contains("are left in the file"),
+            "the wrapper extent is what must have refused this: {error}"
         );
         assert!(error.contains("truncated"), "{error}");
     }
