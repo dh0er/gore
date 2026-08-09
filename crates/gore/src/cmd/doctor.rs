@@ -2318,9 +2318,15 @@ fn sort_backup(
     found: &mut Vec<String>,
     occupied: &mut Vec<String>,
 ) -> bool {
-    let is_backup_name = path
-        .file_name()
-        .is_some_and(|name| name.to_string_lossy().ends_with(".gore-bak"));
+    // Case folded, because Windows folds it: `SFX.bank.GORE-BAK` and `SFX.bank.gore-bak` are one
+    // file there, and the second is the name the backup step derives — so a differently-cased one
+    // is consumed or collided with by exactly the operations this check exists to warn about,
+    // while a case-sensitive compare left it out of both scans.
+    let is_backup_name = path.file_name().is_some_and(|name| {
+        name.to_string_lossy()
+            .to_ascii_lowercase()
+            .ends_with(".gore-bak")
+    });
     if !is_backup_name {
         return false;
     }
@@ -3176,6 +3182,20 @@ mod tests {
         let fix = check.fix.unwrap();
         assert!(fix.contains("Remove or rename"), "{fix}");
         assert!(!fix.contains("gore audio restore"), "nothing restores from a directory: {fix}");
+
+        // Windows folds case, so `SFX.bank.GORE-BAK` IS the file the backup step writes as
+        // `SFX.bank.gore-bak` — the next operation consumes or collides with it, and a
+        // case-sensitive compare left it out of the scan entirely.
+        std::fs::remove_dir(banks.join("SFX.bank.gore-bak")).unwrap();
+        std::fs::write(banks.join("Music.bank.GORE-BAK"), b"pristine").unwrap();
+        let check = check_leftovers(&paths(root), &probe(root, false), &nothing_deployed());
+        assert!(
+            check.items.iter().any(|item| item.contains("Music.bank.GORE-BAK")),
+            "{:?}",
+            check.items
+        );
+        std::fs::remove_file(banks.join("Music.bank.GORE-BAK")).unwrap();
+        std::fs::create_dir_all(banks.join("SFX.bank.gore-bak")).unwrap();
 
         // A LINK on a backup name is the same blocker, in both halves of the scan: the deploy
         // step refuses a link there as flatly as a directory, and the bytes at the end of one

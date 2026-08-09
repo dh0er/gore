@@ -7573,7 +7573,10 @@ fn record_path_matches_class(relative: &Path, class: RecordPathClass) -> bool {
         }
         RecordPathClass::BackupFile => {
             let relative = relative.to_string_lossy();
-            relative.ends_with(".gore-bak")
+            // Folded here too, so one record describes the same file on Windows however it was
+            // cased when it was written. The slice below is unaffected: the suffix is the same
+            // length whatever its case.
+            relative.to_ascii_lowercase().ends_with(".gore-bak")
                 && record_path_matches_class(
                     Path::new(&relative[..relative.len() - ".gore-bak".len()]),
                     RecordPathClass::LiveFile,
@@ -7696,7 +7699,10 @@ fn loose_target_allowed(relative: &Path) -> bool {
         return false;
     }
     let last = parts.last().expect("length was checked above");
-    if last.ends_with(".gore-bak") {
+    // Case folded, because Windows folds it. A loose target named `X.GORE-BAK` is the very file
+    // the backup step writes as `X.gore-bak`, so a case-sensitive compare let a bundle address a
+    // backup as if it were a live file — the one thing this guard exists to refuse.
+    if last.to_ascii_lowercase().ends_with(".gore-bak") {
         return false;
     }
     // Every component was checked with `is_safe_filename` above, so the file-name predicate the
