@@ -570,13 +570,6 @@ pub fn extract(
     // where it was. What remains undistinguished is a rewrite that also restores the old timestamp,
     // which no editor does by accident. A real file identity (inode, file index) would not close it
     // either — an in-place rewrite keeps that too — so the mtime is the signal that matters here.
-    let roll_back = |published: &[Published]| {
-        for entry in published {
-            if entry.is_still_ours() {
-                let _ = std::fs::remove_file(&entry.path);
-            }
-        }
-    };
 
     for i in indices {
         let wav = match view.extract_wav(i) {
@@ -597,17 +590,22 @@ pub fn extract(
         {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                roll_back(&published);
+                let stuck = roll_back(&published);
                 bail!(
                     "'{}' already exists; extract writes one file per sample under a name taken \
-                     from the bank, so this would replace it. Nothing was written. Delete it, or \
-                     pass a different --out.",
-                    dest.display()
+                     from the bank, so this would replace it.{} Delete it, or pass a different \
+                     --out.",
+                    dest.display(),
+                    match stuck.is_empty() {
+                        true => " Nothing was written.".to_string(),
+                        false => stuck,
+                    }
                 );
             }
             Err(error) => {
-                roll_back(&published);
-                return Err(error).with_context(|| format!("creating '{}'", dest.display()));
+                let stuck = roll_back(&published);
+                return Err(error)
+                    .with_context(|| format!("creating '{}'{stuck}", dest.display()));
             }
         };
         if let Err(error) = file.write_all(&wav) {
@@ -620,15 +618,15 @@ pub fn extract(
             if ours {
                 let _ = std::fs::remove_file(&dest);
             }
-            roll_back(&published);
+            let stuck = roll_back(&published);
             return Err(error).with_context(|| match ours {
-                true => format!("writing '{}'", dest.display()),
+                true => format!("writing '{}'{stuck}", dest.display()),
                 // Left in place on purpose, and said so: something replaced the file between
                 // `create_new` opening it and this write failing, and deleting a file this run did
                 // not write is worse than leaving a partial one somebody can see and remove.
                 false => format!(
                     "writing '{}' — something else replaced that file while it was being written, \
-                     so it was left as it is",
+                     so it was left as it is{stuck}",
                     dest.display()
                 ),
             });
@@ -726,6 +724,39 @@ fn still_the_same_file(file: &std::fs::File, path: &Path) -> bool {
     match (held, there) {
         (Some(held), Some(there)) => held == there,
         _ => false,
+    }
+}
+
+/// Undo this run's own writes, and return what it could NOT undo.
+///
+/// Discarding that and then telling the caller "Nothing was written" claimed a clean rollback the
+/// code had not established — and a file left behind is exactly what makes the obvious retry
+/// collide again, on a path the message had just called clear.
+fn roll_back(published: &[Published]) -> String {
+    let mut stuck: Vec<String> = Vec::new();
+    for entry in published {
+        if !entry.is_still_ours() {
+            continue;
+        }
+        if let Err(error) = std::fs::remove_file(&entry.path) {
+            stuck.push(format!("{} ({error})", entry.path.display()));
+        }
+    }
+    describe_stuck(&stuck)
+}
+
+/// The sentence a caller appends to its own error. Separated from the removal so the wording can
+/// be exercised: making `remove_file` fail on demand needs an ACL this suite cannot set, and
+/// Windows deletes a file happily through an open handle — `File::open` shares delete access —
+/// so there is no portable way to provoke the failure itself.
+fn describe_stuck(stuck: &[String]) -> String {
+    match stuck.is_empty() {
+        true => String::new(),
+        false => format!(
+            " {} file(s) written by this run could not be removed and are still there: {}.",
+            stuck.len(),
+            stuck.join(", ")
+        ),
     }
 }
 
@@ -1012,6 +1043,25 @@ mod rollback_tests {
             "the fixture is only interesting while the length still matches"
         );
         assert!(!entry.is_still_ours());
+    }
+
+    #[test]
+    fn a_rollback_that_could_not_remove_everything_says_so() {
+        // The wording is what the caller pastes into its own error, and the claim that used to be
+        // there — "Nothing was written" — was the thing worth fixing. A file left behind is also
+        // what makes the obvious retry collide again, on a path the message had called clear.
+        assert!(super::describe_stuck(&[]).is_empty());
+
+        let said = super::describe_stuck(&["C:/out/0_line.wav (Access is denied)".to_string()]);
+        assert!(said.contains("could not be removed and are still there"), "{said}");
+        assert!(said.contains("0_line.wav"), "{said}");
+        assert!(said.contains("Access is denied"), "{said}");
+
+        // And a clean rollback still says nothing, so the caller's own sentence stands alone.
+        let temp = TempDir::new().unwrap();
+        let entry = publish(temp.path(), "0_line.wav", b"bytes");
+        assert!(super::roll_back(std::slice::from_ref(&entry)).is_empty());
+        assert!(!entry.path.exists(), "a clean rollback removes what it wrote");
     }
 
     #[test]
