@@ -18,11 +18,7 @@
 The Flutter GUIs reuse the exact same Rust crates as the CLI through a
 `dart:ffi` bridge — the CLI is always the most complete surface.
 
-## What you can change
-
-**Status** is how complete the tooling is, not how much has been tested. The
-right-hand column is where the catch lives, and each page carries the evidence:
-build ids, what was seen, and what has not been.
+## Status
 
 | Area | What you can do | Status | The catch |
 |---|---|---|---|
@@ -34,9 +30,6 @@ build ids, what was seen, and what has not been.
 | [DataAssets](docs/guide/dataassets.md) | Edit cooked game data | Partly | Only assets the engine describes natively; Blueprint ones are refused |
 | [Scripts](docs/guide/scripts.md) | Read the game's script code, change it, add your own | Partly | Reverse-engineered and lossy — recompiled code is not always identical |
 | [Mods & load order](docs/guide/bundles.md) | Ship all of the above as one mod, run many together, and install mods that GORE did not build — plain zips, pak files, UE4SS mod folders | Full | Nobody else's mod has been through it: the one end-to-end test used a file GORE made itself |
-
-Offline, no game needed: [`doctor`](docs/guide/getting-started.md#check-the-setup) checks
-your setup, [`find`](docs/guide/find.md) searches the catalogs.
 
 GORE will not edit your saves — that is the
 [Save Editor](apps/save-editor/README.md) — and everything above was seen by one

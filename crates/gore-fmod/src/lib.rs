@@ -1211,8 +1211,10 @@ fn header_fits(header: &[u8], present: u64) -> Result<(), String> {
     // `list` reads and prints: the same disagreement as before with the sign reversed, and a
     // refusal the reader does not back is the worse half of it.
     //
-    // Audio declared past the end of the block is still caught, by `extract_wav`, where those
-    // bytes are actually wanted.
+    // Audio declared past the end of the block is caught by `extract_wav`, where those bytes are
+    // actually wanted. That sentence used to be false: `extract_wav` clamped the range to the
+    // block and handed back a shorter recording, reported as a success. It refuses now, so the
+    // division of labour here is real — this checks what it can read, that checks what it plays.
     let declared = base
         .saturating_add(shdr_size)
         .saturating_add(u32_le(header, 0x10) as u64);
@@ -1402,8 +1404,18 @@ pub fn extract_wav(block: &[u8], fsb: &Fsb5, index: usize) -> Result<Vec<u8>, St
         if declared > 0 {
             len = len.min(declared);
         }
-        let end = (start + len).min(block.len());
-        let audio = block.get(start..end).ok_or("sample data out of range")?;
+        // Refused, not clamped. `min(block.len())` turned a block cut short into a shorter WAV
+        // that `extract` reported as a success — the recording came out quietly missing its tail,
+        // which is worse than an error, because nothing about it looks wrong until somebody plays
+        // it. The summary's own comment claimed this arm caught that, and it did the opposite.
+        let end = start.checked_add(len).ok_or("sample extent out of range (corrupt bank)")?;
+        let audio = block.get(start..end).ok_or_else(|| {
+            format!(
+                "sample '{}' runs to {end} and the block holds {}: the bank is truncated",
+                s.name,
+                block.len()
+            )
+        })?;
         // Truncated rather than refused: an odd length means one dangling byte, and dropping it
         // costs half a sample of the tail where erroring would cost the whole recording.
         let pcm: Vec<i16> = audio
@@ -2529,6 +2541,31 @@ mod tests {
                 "a {probe}-byte first read changed the answer"
             );
         }
+    }
+
+    #[test]
+    fn audio_cut_short_is_refused_rather_than_handed_back_shorter() {
+        // `extract_wav` clamped the sample's range to the block, so a truncated bank produced a
+        // WAV missing its tail and `gore audio extract` called that a success. Nothing about the
+        // file looks wrong until somebody plays it, which is the worst shape a failure can take.
+        let bank = two_sample_bank();
+        let entry = parse_bank(&bank).unwrap()[0];
+        let end = entry.fsb5_offset + entry.fsb5_size;
+
+        // Whole, it reads.
+        assert!(read_bank(&bank, GOTHIC_STUDIO_KEY).is_ok());
+
+        // A block cut short by a hundred bytes: the tables still parse, the audio does not fit.
+        let mut cut = bank.clone();
+        cut.truncate(end - 100);
+        let error = match read_bank(&cut, GOTHIC_STUDIO_KEY) {
+            Err(error) => error,
+            Ok(_) => panic!("a block cut short must not read as a whole bank"),
+        };
+        assert!(
+            error.contains("truncated") || error.contains("out of range"),
+            "the error has to name the shape of the damage, got {error:?}"
+        );
     }
 
     #[test]
