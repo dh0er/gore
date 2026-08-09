@@ -692,6 +692,13 @@ impl Published {
 
     /// The same question about a path this file may have been moved to.
     fn is_ours_at(&self, path: &Path) -> bool {
+        // What this run created was a regular file, through `create_new`. Anything else on that
+        // path now is a replacement, whatever it points at — and both `metadata` and `read` follow
+        // a link, so a symlink aimed at a file with these very bytes answered every question below
+        // as if it were ours. Rollback would then have deleted somebody's link.
+        if !is_regular_file(path) {
+            return false;
+        }
         let Ok(metadata) = std::fs::metadata(path) else {
             return false;
         };
@@ -840,9 +847,23 @@ fn identity_of(_: &std::fs::Metadata) -> Option<(u64, u64)> {
     None
 }
 
+/// Whether the path holds a regular file — not a link to one, not a directory, not a device.
+///
+/// `symlink_metadata` looks AT the path instead of through it, which is the whole point: every
+/// other question here is about the bytes at the other end of a link, and a link is not the file
+/// this run wrote.
+fn is_regular_file(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+}
+
 /// Whether the path still leads to the file this handle holds. `false` when either side cannot be
 /// identified, so an unknown answer never authorises a delete.
 fn still_the_same_file(file: &std::fs::File, path: &Path) -> bool {
+    // Same reason as in `is_ours_at`: a link that resolves to the object this handle holds is
+    // still not the object this run created on that path.
+    if !is_regular_file(path) {
+        return false;
+    }
     let held = file.metadata().ok().and_then(|m| identity_of(&m));
     let there = std::fs::metadata(path).ok().and_then(|m| identity_of(&m));
     match (held, there) {
@@ -1266,6 +1287,58 @@ mod rollback_tests {
         // And a path with nothing on it is not a failure to report.
         let outcome = super::remove_our_file(&entry.path, &|path| entry.is_ours_at(path));
         assert!(matches!(outcome, super::Removal::Absent));
+    }
+
+    /// A symlink at `link` pointing at `target`, or the reason there is none.
+    ///
+    /// Creating one needs privileges a plain Windows session does not have, so this test cannot
+    /// simply assume it. It also must not quietly pass where it CAN run — the CI runner creates
+    /// them fine — so the caller fails there and skips only on a developer machine.
+    fn try_symlink(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_file(target, link)
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link)
+        }
+    }
+
+    #[test]
+    fn a_link_put_in_our_place_is_not_ours_however_identical_the_bytes_are() {
+        // `metadata` and `read` both follow a link, so a symlink aimed at a file carrying exactly
+        // these bytes answered every ownership question as if it were this run's own output —
+        // and rollback deleted somebody's link. What this run created was a regular file; nothing
+        // else on that path is it, whatever it resolves to.
+        let temp = TempDir::new().unwrap();
+        let entry = publish(temp.path(), "0_line.wav", b"ours");
+        let elsewhere = temp.path().join("theirs.wav");
+        std::fs::write(&elsewhere, b"ours").unwrap();
+        std::fs::remove_file(&entry.path).unwrap();
+
+        if let Err(error) = try_symlink(&elsewhere, &entry.path) {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "this test has to run where links can be made: {error}"
+            );
+            eprintln!("skipped: creating a symlink needs privileges here ({error})");
+            return;
+        }
+
+        assert_eq!(
+            std::fs::read(&entry.path).unwrap(),
+            b"ours",
+            "the fixture is only interesting while the link resolves to identical bytes"
+        );
+        assert!(
+            !entry.is_still_ours(),
+            "identical bytes through a link are still not this run's file"
+        );
+        let kept = super::roll_back(std::slice::from_ref(&entry));
+        assert!(kept.contains("left alone"), "{kept}");
+        assert!(entry.path.exists(), "the link must survive the rollback");
+        assert!(elsewhere.exists(), "and so must what it points at");
     }
 
     #[test]
