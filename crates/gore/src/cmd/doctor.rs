@@ -1538,6 +1538,35 @@ enum Written {
     NoTimestamp,
 }
 
+/// Whether the shared catalog is something a reader can use, and nothing if it is.
+///
+/// `gore find` deserializes this file to build its name index and gives up when it cannot. The
+/// doctor comparing only the catalog's METADATA with the install would report a truncated catalog
+/// as current, which is exactly the two-commands-one-file disagreement worth catching here.
+///
+/// The ids are read and the values skipped — 43,851 keys against ~28 MB of text nobody needs for
+/// this question — and their number is compared with what the extraction recorded. A file that
+/// parses but holds a different number of ids than its own sidecar claims is not one the sidecar
+/// describes.
+fn catalog_problem(catalog: &Path, recorded_ids: usize) -> Option<String> {
+    let bytes = match std::fs::read(catalog) {
+        Ok(bytes) => bytes,
+        Err(error) => return Some(format!("the catalog could not be read: {error}")),
+    };
+    let ids: std::collections::HashMap<String, serde::de::IgnoredAny> =
+        match serde_json::from_slice(&bytes) {
+            Ok(ids) => ids,
+            Err(error) => return Some(format!("the catalog is not readable JSON: {error}")),
+        };
+    match ids.len() == recorded_ids {
+        true => None,
+        false => Some(format!(
+            "the catalog holds {} ids and its record says {recorded_ids}",
+            ids.len()
+        )),
+    }
+}
+
 /// Does the shared localized-text catalog still describe the installed `.lcache`?
 ///
 /// `gore loc status` reports the source path and size the catalog was extracted from, and that can
@@ -1592,7 +1621,23 @@ fn check_loc_catalog(meta: Option<LocMeta>, catalog: &Path, installed: Option<&P
     // this point is about how well the catalog matches the install, which is not a question worth
     // answering about a catalog that is not there.
     match present(catalog) {
-        Ok(Some(metadata)) if metadata.is_file() => {}
+        Ok(Some(metadata)) if metadata.is_file() => {
+            // Being a file is not being a catalog. Everything below compares the catalog with the
+            // INSTALL and can report all of it healthy while the catalog itself is truncated —
+            // and `gore find` then refuses the same file when it loads its name index, which is
+            // the disagreement between two commands about one file this report exists to prevent.
+            //
+            // Parsed with the values skipped, the way `find` reads it: the ids are what
+            // `id_count` counts, and their values are ~28 MB nobody here needs.
+            if let Some(problem) = catalog_problem(catalog, meta.id_count) {
+                return Check::new("loc_catalog", "loc catalog", Verdict::Problem, problem)
+                    .with_items(vec![format!("catalog: {}", catalog.display())])
+                    .with_fix(
+                        "every tool that turns a text id into text reads that one file. Run \\
+                         'gore loc extract' to write it again",
+                    );
+            }
+        }
         Ok(_) => {
             return Check::new(
                 "loc_catalog",
@@ -2613,6 +2658,10 @@ mod tests {
     /// look rewritten since, which is the opposite of the fresh case these tests describe.
     /// A shared catalog that exists, for the checks that are about how well it matches the install
     /// rather than about whether it is there.
+    /// One id, and `meta` records one id. A fixture whose sidecar claims a different number than
+    /// its catalog holds is not a healthy pair, and the checks that use it are about the INSTALL.
+    const FIXTURE_IDS: usize = 1;
+
     fn extracted_catalog(dir: &Path) -> PathBuf {
         let path = dir.join("loc_catalog.json");
         std::fs::write(&path, br#"{"itfo_apple":{"german":"Apfel"}}"#).unwrap();
@@ -2632,7 +2681,7 @@ mod tests {
         LocMeta {
             source_path: source.display().to_string(),
             source_bytes: bytes,
-            id_count: 43851,
+            id_count: FIXTURE_IDS,
             languages: vec!["german".into(), "english".into()],
             extracted_at,
             // The ladder below is what a catalog without this field falls back to, and these
@@ -2885,6 +2934,40 @@ mod tests {
         assert_eq!(check.verdict, Verdict::Problem);
         assert!(check.detail.contains("the catalog itself is gone"), "{}", check.detail);
         assert!(check.fix.unwrap().contains("gore loc extract"));
+    }
+
+    #[test]
+    fn a_truncated_catalog_is_not_reported_as_current() {
+        // Everything else in this check compares the catalog with the INSTALL, and all of it can
+        // come back healthy while the catalog itself is unreadable — `gore find` then refuses the
+        // same file when it builds its name index.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("AlkimiaLocalization_00000000.lcache");
+        std::fs::write(&cache, vec![0u8; 2048]).unwrap();
+
+        let broken = dir.path().join("loc_catalog.json");
+        std::fs::write(&broken, br#"{"itfo_apple":{"german":"Apf"#).unwrap();
+
+        let check = check_loc_catalog(Some(meta_with_identity(&cache, 2048)), &broken, Some(&cache));
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("not readable JSON"), "{}", check.detail);
+        assert!(check.fix.unwrap().contains("gore loc extract"));
+    }
+
+    #[test]
+    fn a_catalog_holding_other_ids_than_its_record_claims_is_reported() {
+        // Parses, and is not the catalog the sidecar describes.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("AlkimiaLocalization_00000000.lcache");
+        std::fs::write(&cache, vec![0u8; 2048]).unwrap();
+
+        let catalog = dir.path().join("loc_catalog.json");
+        std::fs::write(&catalog, br#"{"a":{"german":"x"},"b":{"german":"y"}}"#).unwrap();
+
+        let check =
+            check_loc_catalog(Some(meta_with_identity(&cache, 2048)), &catalog, Some(&cache));
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("holds 2 ids"), "{}", check.detail);
     }
 
     #[test]
