@@ -2978,6 +2978,23 @@ struct DeployRecord {
     files: Vec<PathBuf>,
 }
 
+/// The files a deploy record claims it copied in, or why it cannot be used.
+///
+/// Exists so a caller can ask whether a record is one `undeploy` could act on without
+/// reimplementing its schema — `gore doctor` checked `files` by hand and twice accepted a record
+/// this function rejects, once for a member that was not a path and once for a missing `name`.
+/// Deserialized into the very type undeploy reads, so the two cannot disagree about what a record
+/// is.
+pub fn deploy_record_files(path: &Path) -> std::result::Result<Vec<PathBuf>, String> {
+    let bytes = std::fs::read(path).map_err(|error| format!("could not be read ({error})"))?;
+    let record: DeployRecord = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("is not a usable deploy record ({error})"))?;
+    match record.files.is_empty() {
+        true => Err("lists no files".to_string()),
+        false => Ok(record.files),
+    }
+}
+
 /// Copy a Zen triplet (`[utoc, ucas, pak]`) into the game's `~mods` override folder
 /// and write a JSON deploy record listing the copied file paths. Returns the path to
 /// the record (`<mods>/<name>.gore-deploy.json`).

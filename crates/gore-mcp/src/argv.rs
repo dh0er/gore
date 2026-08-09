@@ -981,6 +981,17 @@ fn list(command: &CommandSpec, spec: &ArgSpec, value: &Value) -> Result<Vec<Stri
         });
     };
 
+    // Present and empty is not present. `{"query": []}` satisfied the required-argument check and
+    // then rendered no tokens at all, so `gore find --json --` was spawned and clap's complaint
+    // came back in place of a validation error naming the argument.
+    if spec.required && elements.is_empty() {
+        return Err(BuildError::MissingRequired {
+            sub: command.sub,
+            name: spec.name,
+            kind: "a list with at least one value".into(),
+        });
+    }
+
     elements
         .iter()
         .map(|element| match spec.kind {
@@ -1446,6 +1457,21 @@ mod tests {
                 "the message must say this is not a permission problem: {rendered}"
             );
         }
+    }
+
+    #[test]
+    fn a_required_list_with_nothing_in_it_is_a_missing_argument() {
+        // `{"query": []}` satisfied the required-argument check and rendered no tokens, so
+        // `gore find --json --` was spawned and clap's complaint came back in place of a
+        // validation error naming the argument.
+        let rendered = build_with("gore_find", "find", json!({ "query": [] }), &options())
+            .expect_err("an empty required list must not build a command line")
+            .to_string();
+        assert!(rendered.contains("`query`"), "{rendered}");
+        assert!(rendered.contains("at least one value"), "{rendered}");
+
+        // One value is enough, and an optional list may still be empty.
+        assert!(build_with("gore_find", "find", json!({ "query": ["apple"] }), &options()).is_ok());
     }
 
     #[test]

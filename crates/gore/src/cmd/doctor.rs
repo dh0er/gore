@@ -1190,53 +1190,19 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
     // bookkeeping then reported an interrupted deployment as an empty, healthy `~mods`.
     let mut record_problems: Vec<String> = Vec::new();
     for record in &bookkeeping {
-        let listed = match std::fs::read(dir.join(record)) {
-            Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
-                Ok(json) => json,
-                // A record that cannot be parsed is not bookkeeping either: undeploy reads this
-                // file to know what to remove, and cannot.
-                Err(error) => {
-                    record_problems.push(format!("{record}: not valid JSON ({error})"));
-                    continue;
-                }
-            },
-            Err(error) => {
-                record_problems.push(format!("{record}: could not be read ({error})"));
+        // Asked of the type `undeploy` reads, not of the JSON. Checking `files` by hand accepted a
+        // record twice that undeploy cannot use — once for a member that was not a path, once for
+        // a missing `name` — because a hand-written check knows the half of the schema whoever
+        // wrote it was thinking about.
+        let files = match gore_tex::container::deploy_record_files(&dir.join(record)) {
+            Ok(files) => files,
+            Err(why) => {
+                record_problems.push(format!("{record}: {why}"));
                 continue;
             }
         };
-        // The shape `container::undeploy` deserializes: `files` as a list of paths. Checking only
-        // that it is an array and skipping every member that is not a string accepted
-        // `{"files":[null]}` without a word, and undeploy cannot read that as `Vec<PathBuf>` — so
-        // the cleanup this record exists for is broken while the report says nothing.
-        let listed_files = listed
-            .get("files")
-            .and_then(|files| files.as_array())
-            .map(|files| {
-                files
-                    .iter()
-                    .map(|file| file.as_str().map(str::to_string))
-                    .collect::<Option<Vec<String>>>()
-            });
-        let files = match listed_files {
-            Some(Some(files)) if !files.is_empty() => files,
-            Some(Some(_)) => {
-                record_problems.push(format!("{record}: lists no files"));
-                continue;
-            }
-            Some(None) => {
-                record_problems.push(format!(
-                    "{record}: its file list holds something that is not a path"
-                ));
-                continue;
-            }
-            None => {
-                record_problems.push(format!("{record}: has no file list"));
-                continue;
-            }
-        };
-        for listed_path in &files {
-            let listed = Path::new(listed_path);
+        for listed in &files {
+            let listed_path = listed.display().to_string();
             let leaf = listed
                 .file_name()
                 .map(|leaf| leaf.to_string_lossy().into_owned())
@@ -2985,6 +2951,36 @@ mod tests {
         let check = check_mods_folder(&gp);
         assert_eq!(check.verdict, Verdict::Ok, "{}", check.detail);
         assert!(check.fix.is_none());
+    }
+
+    #[test]
+    fn a_record_missing_the_fields_undeploy_needs_is_reported() {
+        // `{"files":[...]}` with no `name` deserializes into nothing undeploy can use, and a
+        // hand-written check that looked only at `files` accepted it twice. The question is asked
+        // of the type undeploy reads now, so the two cannot disagree about what a record is.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        let mods = gore_tex::container::mods_dir(&gp.root);
+        std::fs::create_dir_all(&mods).unwrap();
+        std::fs::write(mods.join("zzz_MyTextures_P.utoc"), b"toc").unwrap();
+        std::fs::write(mods.join("zzz_MyTextures_P.ucas"), b"cas").unwrap();
+
+        let record = serde_json::json!({ "files": [mods.join("zzz_MyTextures_P.utoc")] });
+        std::fs::write(
+            mods.join("zzz_MyTextures_P.gore-deploy.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+
+        let check = check_mods_folder(&gp);
+        assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
+        assert!(
+            check.items.iter().any(|item| item.contains("not a usable deploy record")),
+            "{:?}",
+            check.items
+        );
     }
 
     #[test]
