@@ -2378,13 +2378,12 @@ fn find_backups_under(
         let kind = std::fs::symlink_metadata(&path)
             .map_err(|error| format!("{} could not be read: {error}", path.display()))?
             .file_type();
-        if kind.is_symlink() {
-            continue;
-        }
         // The NAME decides first, and the kind only after. A directory called `SFX.bank.gore-bak`
         // was descended into and never reported, so an empty one produced "no leftover backups" —
         // while an in-place `gore audio replace` writes exactly that path and fails on it, with
-        // the report having just said nothing was in the way.
+        // the report having just said nothing was in the way. A LINK on that name is the same
+        // blocker, which is why this runs before the skip below rather than after it: the skip is
+        // about not FOLLOWING a link, and it was also swallowing the name.
         if sort_backup(&path, &kind, found, occupied) {
             continue;
         }
@@ -3195,6 +3194,22 @@ mod tests {
                 check.items
             );
             std::fs::remove_file(banks.join("SFX.bank.gore-bak")).unwrap();
+
+            // The RECURSIVE half too. The four fixed folders and the Content/Config walk reach
+            // these names by different code, and the first version of this fix left the walk's
+            // link skip above the name check — so the walk still swallowed it while this test,
+            // which only used a fixed folder, went green anyway.
+            let deep = root.join("G1R").join("Content").join("Slate");
+            std::fs::create_dir_all(&deep).unwrap();
+            try_symlink_file(&elsewhere, &deep.join("Normal.PNG.gore-bak")).unwrap();
+            let check = check_leftovers(&paths(root), &probe(root, false), &nothing_deployed());
+            assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+            assert!(
+                check.items.iter().any(|item| item.contains("Normal.PNG.gore-bak")),
+                "{:?}",
+                check.items
+            );
+            std::fs::remove_file(deep.join("Normal.PNG.gore-bak")).unwrap();
         }
         std::fs::create_dir_all(banks.join("SFX.bank.gore-bak")).unwrap();
 
