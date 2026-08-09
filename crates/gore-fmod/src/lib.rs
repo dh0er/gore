@@ -991,14 +991,21 @@ fn header_fits(header: &[u8], present: u64) -> Result<(), String> {
     let base = sample_table_base(header) as u64;
     let samples = u32_le(header, 0x08) as u64;
     let shdr_size = u32_le(header, 0x0C) as u64;
+    // The TABLES, not the audio. `parse_fsb5` reads the sample headers and the name table out of
+    // the block, and bounds every sample offset by the declared `data_size` — it never compares
+    // that size against the block it was handed. Including it here made `banks` refuse a bank
+    // `list` reads and prints: the same disagreement as before with the sign reversed, and a
+    // refusal the reader does not back is the worse half of it.
+    //
+    // Audio declared past the end of the block is still caught, by `extract_wav`, where those
+    // bytes are actually wanted.
     let declared = base
         .saturating_add(shdr_size)
-        .saturating_add(u32_le(header, 0x10) as u64)
-        .saturating_add(u32_le(header, 0x14) as u64);
+        .saturating_add(u32_le(header, 0x10) as u64);
     if declared > present {
         return Err(format!(
-            "an FSB5 block declares {declared} bytes and only {present} are there: the bank is \
-             truncated, so its sample table and audio cannot be read"
+            "an FSB5 block declares {declared} bytes of tables and only {present} are there: the \
+             bank is truncated, so its sample table cannot be read"
         ));
     }
 
@@ -1739,10 +1746,19 @@ mod truncation_tests {
         assert!(error.contains("cannot hold them"), "{error}");
         assert!(error.contains("1000"), "{error}");
 
-        // And the truncation check still fires on its own.
+        // And the truncation check still fires on its own: 0x3C of header plus an 8-byte table is
+        // 68 bytes, and 64 are there.
         let truncated = header(1, 8, 0, 4096);
-        let error = header_fits(&truncated, 64).expect_err("a declared 4 KB of audio is not there");
+        let error = header_fits(&truncated, 64).expect_err("the table itself is not all there");
         assert!(error.contains("truncated"), "{error}");
+
+        // Audio declared past the end of the block is NOT this check's business: `parse_fsb5`
+        // bounds sample offsets by that declared size and never compares it with the block, so
+        // refusing here made `banks` reject a bank `list` reads and prints.
+        assert!(
+            header_fits(&truncated, 68).is_ok(),
+            "the tables fit; the audio is `extract_wav`'s to complain about"
+        );
     }
 
     #[test]
