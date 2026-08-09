@@ -617,20 +617,29 @@ pub fn extract(
             // the one that was verified and not whatever the name leads to a moment later. The
             // handle stays valid across the rename and still identifies the object it was opened
             // on, which is what makes it usable as the second check.
-            let ours = matches!(
-                remove_our_file(&dest, &|path| still_the_same_file(&file, path)),
-                Removal::Removed
-            );
+            let removal = remove_our_file(&dest, &|path| still_the_same_file(&file, path));
             drop(file);
             let stuck = roll_back(&published);
-            return Err(error).with_context(|| match ours {
-                true => format!("writing '{}'{stuck}", dest.display()),
+            // One sentence per outcome. Folded to a boolean, three different endings came out as
+            // "something else replaced that file" — including a partial file that is still ours
+            // and sitting there, which is the one case where saying so matters most.
+            return Err(error).with_context(|| match removal {
+                Removal::Removed | Removal::Absent => {
+                    format!("writing '{}'{stuck}", dest.display())
+                }
                 // Left in place on purpose, and said so: something replaced the file between
                 // `create_new` opening it and this write failing, and deleting a file this run did
                 // not write is worse than leaving a partial one somebody can see and remove.
-                false => format!(
+                Removal::NotOurs => format!(
                     "writing '{}' — something else replaced that file while it was being written, \
                      so it was left as it is{stuck}",
+                    dest.display()
+                ),
+                // Ours, still there, and it could not be taken back. The retry collides on this
+                // path, so the reason has to travel with the path rather than be read as somebody
+                // else's file.
+                Removal::Failed(why) => format!(
+                    "writing '{}' — the partial file could not be removed ({why}){stuck}",
                     dest.display()
                 ),
             });
@@ -1221,6 +1230,24 @@ mod rollback_tests {
         // And a path with nothing on it is not a failure to report.
         let outcome = super::remove_our_file(&entry.path, &|path| entry.is_ours_at(path));
         assert!(matches!(outcome, super::Removal::Absent));
+    }
+
+    #[test]
+    fn a_file_that_disappears_before_the_move_is_absent_and_not_a_failure() {
+        // The three endings that are not `Removed` are three different sentences, and folding them
+        // together is what the last report was about. This one is reachable on demand: the file is
+        // gone by the time the move runs, which is a path with nothing left on it — not a removal
+        // that failed, and not somebody else's file.
+        let temp = TempDir::new().unwrap();
+        let entry = publish(temp.path(), "0_line.wav", b"ours");
+
+        let path = entry.path.clone();
+        let outcome = super::remove_our_file(&entry.path, &|_| {
+            let _ = std::fs::remove_file(&path);
+            true
+        });
+        assert!(matches!(outcome, super::Removal::Absent), "nothing is there to have failed on");
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
     }
 
     #[test]
