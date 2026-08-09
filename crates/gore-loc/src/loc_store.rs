@@ -130,9 +130,9 @@ pub fn extract(hint: Option<&Path>) -> Result<LocMeta, LocStoreError> {
     let lc = Lcache::decode(&enc)?;
     let catalog = lc.export(false);
 
-    // Asked here rather than right after the read: everything published below describes these
-    // bytes, so the question is whether the install still has them at the moment of publishing,
-    // and the decode and export are where the time goes.
+    // An early exit, not the guarantee: the decode and the export are where the time goes, and a
+    // cache already replaced by now is one whose 28 MB catalog is not worth writing. What decides
+    // whether anything is published is the same question asked again after that write.
     let unchanged = still_holds(&lcache, &digest).map_err(|source| LocStoreError::Read {
         path: lcache.display().to_string(),
         source,
@@ -145,7 +145,6 @@ pub fn extract(hint: Option<&Path>) -> Result<LocMeta, LocStoreError> {
             ),
         });
     }
-    let source_sha256 = Some(digest);
 
     let dir = paths::shared_data_dir();
     fs::create_dir_all(&dir).map_err(|source| LocStoreError::Write {
@@ -163,16 +162,43 @@ pub fn extract(hint: Option<&Path>) -> Result<LocMeta, LocStoreError> {
         }
     })?;
 
+    let meta_path = paths::loc_meta_path();
+    // Asked once more, because writing 28 MB takes long enough for a `gore loc import` to land
+    // inside it. What must not survive that is the SIDECAR: the catalog is a file somebody can
+    // re-extract, while `source_sha256` is the claim every later freshness check trusts, and
+    // publishing it for bytes the install no longer has is how a stale catalog gets called
+    // current. Dropping any previous sidecar for the same reason the write-failure path below
+    // does — next to a freshly written catalog it would describe an older extraction.
+    //
+    // The window this leaves is the meta write itself, a few hundred bytes rather than 28 MB. It
+    // is not zero. Closing it needs extract and import to hold one lock, and the lock this
+    // toolkit has refuses to be taken while the game is running — which is exactly when reading
+    // the text is a reasonable thing to do.
+    let unchanged = still_holds(&lcache, &digest).map_err(|source| LocStoreError::Read {
+        path: lcache.display().to_string(),
+        source,
+    })?;
+    if !unchanged {
+        let _ = fs::remove_file(&meta_path);
+        return Err(LocStoreError::Read {
+            path: lcache.display().to_string(),
+            source: std::io::Error::other(
+                "the .lcache changed while the catalog was being written — the catalog on disk is \
+                 from the previous bytes and nothing records it as current. Run 'gore loc extract' \
+                 again",
+            ),
+        });
+    }
+
     let meta = LocMeta {
         source_path: lcache.display().to_string(),
         source_bytes,
         id_count: catalog.len(),
         languages: lc.languages(),
         extracted_at: now_unix(),
-        source_sha256,
+        source_sha256: Some(digest),
         catalog_path: catalog_path.display().to_string(),
     };
-    let meta_path = paths::loc_meta_path();
     if let Err(source) = write_atomic(&meta_path, &serde_json::to_vec_pretty(&meta)?) {
         // The fresh catalog is already in place; a leftover meta would describe
         // the *previous* extraction (stale source/counts/timestamp). Drop it so
