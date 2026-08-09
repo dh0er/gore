@@ -58,6 +58,17 @@ $GAME = 'D:\SteamLibrary\steamapps\common\Gothic 1 Remake'
 gore config set game-path $GAME     # or: gore config detect
 ```
 
+Check what you have before you rely on it:
+
+```powershell
+gore doctor
+```
+
+It answers whether that path really is the game, whether UE4SS is there, what is
+deployed, and what an interrupted run left behind. Every line that is not `ok`
+carries a `fix:` line. Worth running now: the mod below is a UE4SS mod, and
+without UE4SS it installs cleanly and then does nothing at all.
+
 Then make apples worth 500 gold. Save this as `overrides.toml`:
 
 ```toml
