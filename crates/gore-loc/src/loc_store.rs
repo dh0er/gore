@@ -163,40 +163,13 @@ pub fn extract(hint: Option<&Path>) -> Result<LocMeta, LocStoreError> {
     })?;
 
     let meta_path = paths::loc_meta_path();
-    // Asked once more, because writing 28 MB takes long enough for a `gore loc import` to land
-    // inside it. What must not survive that is the SIDECAR: the catalog is a file somebody can
-    // re-extract, while `source_sha256` is the claim every later freshness check trusts, and
-    // publishing it for bytes the install no longer has is how a stale catalog gets called
-    // current. Dropping any previous sidecar for the same reason the write-failure path below
-    // does — next to a freshly written catalog it would describe an older extraction.
-    //
-    // The window this leaves is the meta write itself, a few hundred bytes rather than 28 MB. It
-    // is not zero. Closing it needs extract and import to hold one lock, and the lock this
-    // toolkit has refuses to be taken while the game is running — which is exactly when reading
-    // the text is a reasonable thing to do.
-    let unchanged = still_holds(&lcache, &digest).map_err(|source| LocStoreError::Read {
-        path: lcache.display().to_string(),
-        source,
-    })?;
-    if !unchanged {
-        let _ = fs::remove_file(&meta_path);
-        return Err(LocStoreError::Read {
-            path: lcache.display().to_string(),
-            source: std::io::Error::other(
-                "the .lcache changed while the catalog was being written — the catalog on disk is \
-                 from the previous bytes and nothing records it as current. Run 'gore loc extract' \
-                 again",
-            ),
-        });
-    }
-
     let meta = LocMeta {
         source_path: lcache.display().to_string(),
         source_bytes,
         id_count: catalog.len(),
         languages: lc.languages(),
         extracted_at: now_unix(),
-        source_sha256: Some(digest),
+        source_sha256: Some(digest.clone()),
         catalog_path: catalog_path.display().to_string(),
     };
     if let Err(source) = write_atomic(&meta_path, &serde_json::to_vec_pretty(&meta)?) {
@@ -207,6 +180,32 @@ pub fn extract(hint: Option<&Path>) -> Result<LocMeta, LocStoreError> {
         return Err(LocStoreError::Write {
             path: meta_path.display().to_string(),
             source,
+        });
+    }
+
+    // Asked once more, after everything is on disk, because writing 28 MB takes long enough for a
+    // `gore loc import` to land inside it.
+    //
+    // The sidecar is written either way, and an earlier version of this deleted it here, which
+    // was backwards. `source_sha256` describes the CATALOG — the bytes it was built from — and
+    // that stays true whatever the install does afterwards. It is also the only thing that lets
+    // anyone notice: `gore doctor` re-reads the installed cache, compares it against this digest,
+    // and reports the catalog as stale. Removing the sidecar threw away the very record that
+    // makes the staleness visible and left a catalog the doctor calls "usable as it is".
+    //
+    // What this run must not do is report success, and it does not.
+    let unchanged = still_holds(&lcache, &digest).map_err(|source| LocStoreError::Read {
+        path: lcache.display().to_string(),
+        source,
+    })?;
+    if !unchanged {
+        return Err(LocStoreError::Read {
+            path: lcache.display().to_string(),
+            source: std::io::Error::other(
+                "the .lcache changed while the catalog was being written — what is on disk was \
+                 built from the previous bytes, and 'gore doctor' will report it as stale until \
+                 'gore loc extract' is run again",
+            ),
         });
     }
     Ok(meta)
