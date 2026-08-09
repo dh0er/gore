@@ -1745,10 +1745,11 @@ fn delete_backup(save_path: &Path, backup_path: &Path) -> Result<Value, CoreErro
     let label_warning = prune_backup_label(save_path, &file_name)
         .err()
         .map(|err| err.to_string());
-    // Same rule for the placement snapshot this backup carried: the file it
-    // described is gone, so leaving its notes behind would hand them to the next
-    // backup that happens to reuse the name.
-    let placement_warning = placement::forget_key(save_path, &file_name)
+    // Same rule for the placement snapshot this backup carried — and the same
+    // duplicate-name caveat as the label: the identical file name can exist
+    // twice, once beside the save and once in the backups folder, and both are
+    // listed. A surviving copy keeps the notes that describe it.
+    let placement_warning = prune_backup_placement_notes(save_path, &file_name)
         .err()
         .map(|err| err.to_string());
     Ok(json!({
@@ -1780,6 +1781,21 @@ fn restore_backup_placement_notes(save_path: &Path, backup_path: &Path) -> Resul
         return Ok(());
     }
     placement::snapshot_to_key(save_path, &save_name, notes)
+}
+
+/// Drop the placement snapshot for `file_name` once no backup carries that name
+/// any more. The sibling of [`prune_backup_label`], and gated the same way: a
+/// surviving copy under the same name is still restorable, and restoring it
+/// without its notes would lose the routine its pins replaced.
+fn prune_backup_placement_notes(save_path: &Path, file_name: &str) -> Result<(), CoreError> {
+    let still_listed = list_save_backups(save_path)?
+        .into_iter()
+        .chain(list_persistent_data_list_backups_for_save(save_path)?)
+        .any(|item| item.file_name == file_name);
+    if still_listed {
+        return Ok(());
+    }
+    placement::forget_key(save_path, file_name)
 }
 
 /// Drop the label for `file_name` once no backup carries that name any more.

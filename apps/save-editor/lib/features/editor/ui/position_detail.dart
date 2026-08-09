@@ -510,26 +510,33 @@ class _NpcPositionPanelState extends State<NpcPositionPanel> {
       final undo = result.undo;
       final location = _currentLocation();
       final before = pose.location;
-      if (!_stayInPlace ||
-          undo == null ||
-          !undo.restorable ||
-          location == null ||
-          before == null ||
-          location == before) {
-        return NpcPlacementDraft(edits: edits);
-      }
       final rotation = _currentRotation();
       final rotationBefore = pose.rotation;
+      // A rotation-only edit needs the refresh just as much: the note names the
+      // facing the save must still hold, so leaving the old one in it goes stale
+      // the moment this edit lands.
       final movesRotation =
           rotation != null &&
           rotationBefore != null &&
           rotation != rotationBefore;
+      final movesLocation =
+          location != null && before != null && location != before;
+      if (!_stayInPlace ||
+          undo == null ||
+          !undo.restorable ||
+          location == null ||
+          !(movesLocation || movesRotation)) {
+        return NpcPlacementDraft(edits: edits);
+      }
       // The ORIGINAL half is the first pin's, not this move's: a restore has to
       // reach the state before the NPC was ever pinned, and the current routine
       // is already the inert one.
-      final originalRotation = movesRotation
-          ? (undo.originalRotation ?? rotationBefore)
-          : undo.originalRotation;
+      final originalRotation =
+          undo.originalRotation ?? (movesRotation ? rotationBefore : null);
+      // Once the note carries an original facing it has to carry the written one
+      // too, or the core stops checking the facing for staleness while the undo
+      // still restores it — and an in-game turn would be silently overwritten.
+      final writtenRotation = originalRotation == null ? null : rotation;
       return NpcPlacementDraft(
         edits: edits,
         note: {
@@ -549,8 +556,12 @@ class _NpcPositionPanelState extends State<NpcPositionPanel> {
             if (undo.originalRoutineClass != null)
               'original_routine_class': undo.originalRoutineClass,
             'written_location': [location.x, location.y, location.z],
-            if (movesRotation)
-              'written_rotation': [rotation.pitch, rotation.yaw, rotation.roll],
+            if (writtenRotation != null)
+              'written_rotation': [
+                writtenRotation.pitch,
+                writtenRotation.yaw,
+                writtenRotation.roll,
+              ],
             'written_routine_class': result.inertRoutineClass,
           },
         },

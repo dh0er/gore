@@ -354,6 +354,54 @@ void main() {
     );
   });
 
+  testWidgets('turning a pinned NPC refreshes his note as well', (
+    tester,
+  ) async {
+    // A rotation-only edit needs the refresh just as much: the note names the
+    // facing the save must still hold.
+    await openNpc(
+      tester,
+      coreWith(
+        routineClass: kFakeInertRoutine,
+        undo: const FakeUndo(originalRotation: (1.0, 2.0, 3.0)),
+      ),
+    );
+
+    await tester.enterText(positionField('rotation:yaw'), '90');
+    await tester.pumpAndSettle();
+
+    final note = (pending(tester)!.placementNotes.single['note'] as Map)
+        .cast<String, Object?>();
+    expect(note['original_rotation'], [1.0, 2.0, 3.0]);
+    expect(
+      note['written_rotation'],
+      [14.0, 90.0, 16.0],
+      reason: 'a note that restores a facing must also guard it',
+    );
+    expect(note['written_location'], [11.0, 12.0, 13.0]);
+  });
+
+  testWidgets('a second move keeps guarding the facing the first one wrote', (
+    tester,
+  ) async {
+    // Otherwise the core stops checking the facing while the undo still
+    // restores it, and an in-game turn is silently overwritten.
+    await openNpc(
+      tester,
+      coreWith(
+        routineClass: kFakeInertRoutine,
+        undo: const FakeUndo(originalRotation: (1.0, 2.0, 3.0)),
+      ),
+    );
+
+    await tester.enterText(positionField('location:x'), '999');
+    await tester.pumpAndSettle();
+
+    final note = (pending(tester)!.placementNotes.single['note'] as Map)
+        .cast<String, Object?>();
+    expect(note['written_rotation'], [14.0, 15.0, 16.0]);
+  });
+
   testWidgets('an NPC already on the inert routine queues no second swap', (
     tester,
   ) async {
