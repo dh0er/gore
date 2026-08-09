@@ -150,14 +150,15 @@ depending on how the edit reaches the game:
   error: editing info_bau_2_daslager_15_00/german: language 'german' not found for key 'info_bau_2_daslager_15_00'
   ```
 
-- **A bundle's `loc_edits` drops it silently.** Per
-  `crates/gore-mod/src/lib.rs`, deploy checks only that the key is one of the 19
-  the install's cache header declares, then discards the result of the write. A
-  key this install does not declare at all, and an id that has no slot for a
-  declared key, are both best-effort skips rather than errors — deliberately, so
-  that a mod built against a different game version still deploys. Deploy
-  succeeds, the `.lcache` is rewritten, the `*.gore-bak` backup is taken, and
-  the line in game is unchanged. `gore mod build` cannot catch it either: it
+- **A bundle's `loc_edits` skips it, and says so.** Per
+  `crates/gore-mod/src/lib.rs`, deploy checks that the key is one of the 19 the
+  install's cache header declares. A key this install does not declare at all,
+  and an id that has no slot for a declared key, are both best-effort skips
+  rather than errors — deliberately, so that a mod built against a different
+  game version still deploys. Deploy succeeds, the `.lcache` is rewritten, the
+  `*.gore-bak` backup is taken, and the line in game is unchanged — but the
+  command lists every edit it skipped, with its id and language, so a deployment
+  that changed less than it was asked to no longer looks like one that did not. `gore mod build` cannot catch it either: it
   copies `loc_edits` into the bundle unvalidated, because whether a key fits an
   id is a property of the install, not of the spec.
 

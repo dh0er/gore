@@ -42,12 +42,13 @@ instead of surviving to a deploy that was always going to reject it.
 carries `german` (the original 1998 text) and `german_new` (the remake's
 rewrite), plus three English generations; where an id has both German keys the
 game displays `german_new` — observed once, on BuildID 24539464. That is why
-the example above writes both. An edit
-whose key a given id does not carry is **silently dropped at deploy** — the
-bundle deploys, the `.lcache` is rewritten, the `*.gore-bak` backup is taken,
-and the line in game is unchanged. Unlike `audio.bank`, `build` cannot refuse
-it, because whether a key fits an id is a property of the install's cache rather
-than of the spec. Check the id in a `gore loc export` and see
+the example above writes both. An edit whose key a given id does not carry is
+**still not written, and `gore mod deploy` now names it**: the bundle deploys,
+the `.lcache` is rewritten, the `*.gore-bak` backup is taken, the line in game is
+unchanged, and the command prints the id and language it could not write. Unlike
+`audio.bank`, `build` cannot refuse it up front, because whether a key fits an id
+is a property of the install's cache rather than of the spec — so the report at
+deploy time is where you find out. Check the id in a `gore loc export` and see
 [which language key to write](text-and-dialogs.md#which-language-key-to-write).
 
 **`overrides` class and field names are checked only if you ask.** Pass

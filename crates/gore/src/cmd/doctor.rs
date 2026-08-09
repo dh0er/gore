@@ -1236,10 +1236,21 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
             }
         };
         for listed_path in &files {
-            let leaf = Path::new(listed_path)
+            let listed = Path::new(listed_path);
+            let leaf = listed
                 .file_name()
                 .map(|leaf| leaf.to_string_lossy().into_owned())
                 .unwrap_or_else(|| listed_path.clone());
+            // The whole path, not its last component. `container::undeploy` deletes the paths this
+            // record holds, so a record naming `C:\\elsewhere\\zzz_Mod_P.utoc` while a file of that
+            // name sits in `~mods` was reported healthy — and the cleanup it describes reaches
+            // outside this folder entirely.
+            if !same_file(listed, &dir.join(&leaf)) {
+                record_problems.push(format!(
+                    "{record}: lists {listed_path}, which is not this folder's {leaf}"
+                ));
+                continue;
+            }
             if !names.iter().any(|name| name.eq_ignore_ascii_case(&leaf)) {
                 record_problems.push(format!("{record}: lists {leaf}, which is not here"));
             }
@@ -2974,6 +2985,50 @@ mod tests {
         let check = check_mods_folder(&gp);
         assert_eq!(check.verdict, Verdict::Ok, "{}", check.detail);
         assert!(check.fix.is_none());
+    }
+
+    #[test]
+    fn a_record_pointing_outside_the_folder_is_not_healthy() {
+        // `container::undeploy` deletes the paths the record holds. Comparing only the last
+        // component called this record fine because a file of that NAME sits in `~mods`, while
+        // the cleanup it describes reaches somewhere else entirely.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        let mods = gore_tex::container::mods_dir(&gp.root);
+        std::fs::create_dir_all(&mods).unwrap();
+
+        // The real files are here and mount fine.
+        std::fs::write(mods.join("zzz_MyTextures_P.utoc"), b"toc").unwrap();
+        std::fs::write(mods.join("zzz_MyTextures_P.ucas"), b"cas").unwrap();
+
+        // The record names the same basenames somewhere else.
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let record = serde_json::json!({
+            "name": "zzz_MyTextures_P",
+            "files": [
+                elsewhere.join("zzz_MyTextures_P.utoc"),
+                elsewhere.join("zzz_MyTextures_P.ucas"),
+            ],
+        });
+        std::fs::write(
+            mods.join("zzz_MyTextures_P.gore-deploy.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+
+        let check = check_mods_folder(&gp);
+        assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
+        assert!(
+            check
+                .items
+                .iter()
+                .any(|item| item.contains("not this folder's")),
+            "{:?}",
+            check.items
+        );
     }
 
     #[test]
