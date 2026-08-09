@@ -122,18 +122,25 @@ struct Candidate {
 /// Words, not whitespace runs. `split_whitespace` left the punctuation attached, so a query ending
 /// `…in game, mod has no effect` searched for the literal term `game,` and matched only the
 /// occurrences that happen to carry a comma. Anything that is not alphanumeric ends a word, except
-/// `_` and `-`, which the guide uses inside the names an agent searches for (`SFX_UI_Action_…`,
-/// `mod-studio`).
+/// `_`, which the guide uses inside the names an agent searches for (`SFX_UI_Action_…`).
+///
+/// A hyphen ends a word too, though the guide uses it in names like `mod-studio`. It has to: this
+/// search takes prose, and prose gets hyphenated — `game-path configuration` kept `game-path` as
+/// one term and could not score a section saying "game path", which is how the guide spells it.
+/// Nothing is lost the other way, because a term matches at any word boundary and `-` is one:
+/// `mod` and `studio` both hit the text `mod-studio`, and both hit its slug, so the section that
+/// is actually about it scores twice rather than not at all.
 ///
 /// Single characters are dropped: `item's damage` splits into `item`, `s`, `damage`, and `s` starts
 /// a word in `so`, `sealed` and several thousand other places. Duplicates are dropped too, so a
 /// repeated word cannot buy a section a second helping of the same evidence.
 fn terms_of(query: &str) -> Vec<String> {
     let mut terms: Vec<String> = Vec::new();
-    for word in query.to_lowercase().split(|character: char| {
-        !character.is_alphanumeric() && character != '_' && character != '-'
-    }) {
-        let word = word.trim_matches(|character| character == '_' || character == '-');
+    for word in query
+        .to_lowercase()
+        .split(|character: char| !character.is_alphanumeric() && character != '_')
+    {
+        let word = word.trim_matches(|character| character == '_');
         if word.chars().count() < 2 || terms.iter().any(|seen| seen == word) {
             continue;
         }
@@ -559,10 +566,32 @@ mod tests {
         assert_eq!(terms_of("nothing changed."), vec!["nothing", "changed"]);
         // A one-character fragment is noise: `s` starts a word in `so`, `sealed` and thousands more.
         assert_eq!(terms_of("an item's damage"), vec!["an", "item", "damage"]);
-        // The names an agent searches for keep their inner punctuation.
-        assert_eq!(terms_of("SFX_UI_Action mod-studio"), vec!["sfx_ui_action", "mod-studio"]);
+        // An underscore is part of the names an agent searches for; a hyphen is not, because prose
+        // gets hyphenated. `game-path configuration` kept `game-path` as one term and could not
+        // score a section saying "game path", which is how the guide spells it.
+        assert_eq!(
+            terms_of("SFX_UI_Action mod-studio"),
+            vec!["sfx_ui_action", "mod", "studio"]
+        );
+        assert_eq!(terms_of("game-path configuration"), vec!["game", "path", "configuration"]);
         // A word repeated in a sentence must not buy a second helping of the same evidence.
         assert_eq!(terms_of("the mod is the mod"), vec!["the", "mod", "is"]);
+    }
+
+    #[test]
+    fn hyphenating_a_prose_query_does_not_change_the_answer() {
+        // The defect as an agent meets it. This search takes sentences, and a sentence gets
+        // hyphenated: `game-path` was one mandatory literal, so a section spelling it "game path"
+        // — which is how the guide spells it — could not score at all.
+        for (joined, apart) in [
+            ("game-path configuration", "game path configuration"),
+            ("mod-studio dialogs", "mod studio dialogs"),
+        ] {
+            let joined = where_(&search(joined, 5));
+            let apart = where_(&search(apart, 5));
+            assert!(!apart.is_empty(), "the separated query has to reach something: {apart:?}");
+            assert_eq!(joined, apart, "one hyphen changed the answer");
+        }
     }
 
     #[test]
