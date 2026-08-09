@@ -875,16 +875,16 @@ fn bank_summary_probing(
     // The wrapper, grown once if this bank's LIST reaches past the probe. Two reads at worst, and
     // in an install that ships these banks, one.
     let mut wrapper = read_at(&mut file, 0, probe.min(file_len))?;
-    if let Ok((list_off, list_size)) = find_top_list(&wrapper) {
-        let needed = list_off.saturating_add(8).saturating_add(list_size).min(file_len);
-        if needed > wrapper.len() {
-            wrapper = read_at(&mut file, 0, needed)?;
+    let needed = wrapper_extent(&wrapper, file_len, &mut |off| match off.checked_add(8) {
+        Some(end) if end <= file_len => {
+            let mut header = [0u8; 8];
+            header.copy_from_slice(&read_at(&mut file, off, 8)?);
+            Ok(Some(header))
         }
-    } else if file_len > wrapper.len() {
-        // No LIST in the probe. Either the bank is damaged or its wrapper is laid out unlike any
-        // shipped one; reading the file settles which, and reports the same error `bank_summary`
-        // would. Guessing a larger probe would only move the same cliff.
-        wrapper = read_at(&mut file, 0, file_len)?;
+        _ => Ok(None),
+    })?;
+    if needed > wrapper.len() {
+        wrapper = read_at(&mut file, 0, needed)?;
     }
 
     summarize(
@@ -900,6 +900,36 @@ fn bank_summary_probing(
         },
         key,
     )
+}
+
+/// How far into the file the wrapper has to reach, found without reading a chunk body.
+///
+/// Zero when no walk finds a LIST at all: the prefix already in hand then goes to the parser,
+/// which reports the malformed wrapper itself. Reading the rest of the file to look would put the
+/// whole cost back — and put it back exactly when `banks` is being run to diagnose a damaged bank,
+/// which is the case that reaches here.
+fn wrapper_extent(
+    probe: &[u8],
+    file_len: usize,
+    header_at: &mut dyn FnMut(usize) -> Result<Option<[u8; 8]>, String>,
+) -> Result<usize, String> {
+    // Never more than the file holds. The FSB5 payloads are outside the LIST, which is what keeps
+    // this small for a 260 MB bank.
+    let extent = |list: Result<(usize, usize), String>| match list {
+        Ok((off, size)) => off.saturating_add(8).saturating_add(size).min(file_len),
+        Err(_) => 0,
+    };
+    let mut needed = extent(find_top_list(probe));
+    if needed > 0 && needed <= probe.len() {
+        return Ok(needed);
+    }
+    // Either no LIST inside the probe, or one that reaches past it. Both rules are walked because
+    // the two readers of this wrapper do not agree on one, and a prefix cut to the shorter answer
+    // would hide the LIST from the other.
+    for rule in [TopWalk::Printable, TopWalk::Any] {
+        needed = needed.max(extent(find_top_list_with(file_len, rule, header_at)));
+    }
+    Ok(needed)
 }
 
 /// Exactly `len` bytes at `offset`, or the reason there are not that many.
@@ -1596,17 +1626,57 @@ pub fn build_fsb5_pcm16_multi(samples: &[Pcm16Sample]) -> Result<Vec<u8>, String
 
 // ---------- inject a new FSB5 + repoint one WAV reference ----------
 fn find_top_list(b: &[u8]) -> Result<(usize, usize), String> {
+    find_top_list_with(b.len(), TopWalk::Printable, &mut |off| {
+        Ok(b.get(off..off + 8).map(|header| {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(header);
+            bytes
+        }))
+    })
+}
+
+/// The two rules by which this file walks the top-level chunks for the LIST.
+///
+/// They are not the same rule, and that is not an oversight worth quietly unifying: [`bank_shape`]
+/// walks every chunk it is given, while [`find_top_list`] stops at the first fourcc that is not
+/// printable ASCII rather than follow a size read out of noise. A wrapper read from disk has to
+/// cover whatever EITHER of them would reach in memory, or a bank would summarize differently
+/// depending on how it was read.
+#[derive(Clone, Copy)]
+enum TopWalk {
+    /// [`find_top_list`]'s: stop at a fourcc that cannot be one.
+    Printable,
+    /// [`bank_shape`]'s: follow every declared size.
+    Any,
+}
+
+/// The same walk over chunk headers alone.
+///
+/// Top-level chunks are 8 bytes of header and a body this skips over, so finding the LIST costs
+/// one header read per chunk and never touches a body. `header_at` yields the eight bytes at an
+/// offset, or `None` where the file ends before them. Shared with the slice version so a bank read
+/// from disk and the same bank in memory cannot disagree about where its metadata is.
+fn find_top_list_with(
+    end: usize,
+    rule: TopWalk,
+    header_at: &mut dyn FnMut(usize) -> Result<Option<[u8; 8]>, String>,
+) -> Result<(usize, usize), String> {
     let mut off = 0x0C;
-    while off + 8 <= b.len() {
-        let cc = &b[off..off + 4];
-        let sz = u32_le(b, off + 4) as usize;
-        if !printable(cc) {
+    while off + 8 <= end {
+        let Some(header) = header_at(off)? else { break };
+        let sz = u32_le(&header, 4) as usize;
+        if matches!(rule, TopWalk::Printable) && !printable(&header[0..4]) {
             break;
         }
-        if cc == b"LIST" {
+        if &header[0..4] == b"LIST" {
             return Ok((off, sz));
         }
-        off += 8 + sz;
+        // A corrupt size that overflows the offset ends the walk instead of wrapping it back into
+        // the file. The slice version could not overflow: `end` was a buffer it had already read.
+        match off.checked_add(8).and_then(|off| off.checked_add(sz)) {
+            Some(next) => off = next,
+            None => break,
+        }
     }
     Err("no top-level LIST".into())
 }
@@ -2382,6 +2452,51 @@ mod tests {
                 "a {probe}-byte first read changed the answer"
             );
         }
+    }
+
+    #[test]
+    fn a_damaged_bank_with_no_wrapper_to_find_is_not_read_whole_to_say_so() {
+        // The case that reaches the fallback is a bank `banks` is being run to diagnose, and
+        // reading the file to report it damaged put back the whole cost the prefix read exists to
+        // avoid — the worst moment to allocate 260 MB. The walk needs the 8-byte chunk headers and
+        // nothing between them, so what it touches is counted rather than assumed.
+        let mut bank = big_bank();
+        // A RIFF header, then noise where the chunk table belongs: nothing that walks this finds a
+        // LIST, under either rule.
+        for byte in bank[0x0C..].iter_mut() {
+            *byte = 0xFF;
+        }
+
+        let probe = &bank[..0x40];
+        let mut read = 0usize;
+        let needed = wrapper_extent(probe, bank.len(), &mut |off| {
+            read += 8;
+            let mut header = [0u8; 8];
+            match bank.get(off..off + 8) {
+                Some(bytes) => {
+                    header.copy_from_slice(bytes);
+                    Ok(Some(header))
+                }
+                None => Ok(None),
+            }
+        })
+        .unwrap();
+
+        assert_eq!(needed, 0, "there is no LIST to find, so nothing more should be read");
+        assert!(
+            (probe.len() + read) * 20 < bank.len(),
+            "locating the wrapper touched {} of {} bytes",
+            probe.len() + read,
+            bank.len()
+        );
+
+        // And the answer is still the one a full read gives.
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_bank(dir.path(), "damaged.bank", &bank);
+        assert_eq!(
+            bank_summary_probing(&path, GOTHIC_STUDIO_KEY, 0x40),
+            bank_summary(&bank, GOTHIC_STUDIO_KEY)
+        );
     }
 
     #[test]

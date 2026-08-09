@@ -613,11 +613,15 @@ pub fn extract(
             // failed partway, so what is on disk is a prefix of unknown length. What can still be
             // told is whether the path leads to the file this run opened, which is the same
             // question and the only one that matters before deleting anything.
-            let ours = still_the_same_file(&file, &dest);
+            // Through the same move-then-decide path as rollback, so the file that gets deleted is
+            // the one that was verified and not whatever the name leads to a moment later. The
+            // handle stays valid across the rename and still identifies the object it was opened
+            // on, which is what makes it usable as the second check.
+            let ours = matches!(
+                remove_our_file(&dest, &|path| still_the_same_file(&file, path)),
+                Removal::Removed
+            );
             drop(file);
-            if ours {
-                let _ = std::fs::remove_file(&dest);
-            }
             let stuck = roll_back(&published);
             return Err(error).with_context(|| match ours {
                 true => format!("writing '{}'{stuck}", dest.display()),
@@ -674,7 +678,12 @@ impl Published {
     /// Unreadable counts as not ours: rollback exists to undo this run's own writes, and a file it
     /// cannot even look at is not one it should delete.
     fn is_still_ours(&self) -> bool {
-        let Ok(metadata) = std::fs::metadata(&self.path) else {
+        self.is_ours_at(&self.path)
+    }
+
+    /// The same question about a path this file may have been moved to.
+    fn is_ours_at(&self, path: &Path) -> bool {
+        let Ok(metadata) = std::fs::metadata(path) else {
             return false;
         };
         // Cheap reject first: a different length cannot be the same content, and this spares the
@@ -682,10 +691,80 @@ impl Published {
         if metadata.len() != self.written {
             return false;
         }
-        let Ok(bytes) = std::fs::read(&self.path) else {
+        let Ok(bytes) = std::fs::read(path) else {
             return false;
         };
         digest_of(&bytes) == self.digest
+    }
+}
+
+/// A name in the same directory that nothing else is writing to.
+///
+/// Same directory because the move below has to be a rename and not a copy, and a rename across
+/// volumes is not one. The counter is what makes two files rolled back in the same run, and two
+/// runs started in the same instant, not collide on one quarantine name.
+fn quarantine_path(path: &Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".gore-rm-{}-{serial}", std::process::id()));
+    path.with_file_name(name)
+}
+
+/// What became of a file this run tried to take back.
+enum Removal {
+    Removed,
+    /// Nothing on the path, so nothing to undo.
+    Absent,
+    /// Something else's file is there now. Left exactly as found.
+    NotOurs,
+    Failed(String),
+}
+
+/// Delete a file this run wrote, deciding about the file rather than about the path.
+///
+/// Verifying a path and then unlinking it are two resolutions of one name, and whatever arrives
+/// between them is what gets deleted — someone else's file, destroyed by a rollback whose whole
+/// purpose is to touch only this run's own writes. Renaming first moves the object off the
+/// contested name in one operation, onto a name nothing else knows, so the verification that
+/// authorises the delete is made about a file no other writer can still reach.
+///
+/// The residual is a replacement landing between the first check and the rename: the rename then
+/// moves a file that is not ours, the second check says so, and it is moved back. That window is
+/// two calls wide instead of a check and a read, and the recovery is named rather than silent.
+fn remove_our_file(path: &Path, ours: &dyn Fn(&Path) -> bool) -> Removal {
+    if !ours(path) {
+        return match std::fs::symlink_metadata(path) {
+            Ok(_) => Removal::NotOurs,
+            Err(_) => Removal::Absent,
+        };
+    }
+    let quarantine = quarantine_path(path);
+    if let Err(error) = std::fs::rename(path, &quarantine) {
+        return match error.kind() {
+            std::io::ErrorKind::NotFound => Removal::Absent,
+            _ => Removal::Failed(error.to_string()),
+        };
+    }
+    if !ours(&quarantine) {
+        // Something replaced our file in the window above and this moved that instead. Put it back
+        // where it was; if even that fails, the name it is under now has to be said, or somebody's
+        // file has quietly vanished from where they left it.
+        return match std::fs::rename(&quarantine, path) {
+            Ok(()) => Removal::NotOurs,
+            Err(error) => Removal::Failed(format!(
+                "something else replaced it and it could not be put back, it is now at {}: {error}",
+                quarantine.display()
+            )),
+        };
+    }
+    match std::fs::remove_file(&quarantine) {
+        Ok(()) => Removal::Removed,
+        Err(error) => Removal::Failed(format!(
+            "moved to {} and could not be deleted: {error}",
+            quarantine.display()
+        )),
     }
 }
 
@@ -735,25 +814,21 @@ fn still_the_same_file(file: &std::fs::File, path: &Path) -> bool {
 fn roll_back(published: &[Published]) -> String {
     let mut stuck: Vec<String> = Vec::new();
     for entry in published {
-        // Not ours any more: something replaced it while this run was working, and deleting it
-        // would destroy that. It is still ON the path this run wrote to, though, so the next
-        // attempt collides there — reporting the rollback as complete sent the reader back into
-        // the same wall. Kept deliberately, and named.
-        if !entry.is_still_ours() {
-            // Only when something is actually there. `is_still_ours` is also false for a path
-            // that is simply gone — deleted by hand, or by another run — and warning about a
-            // collision on a path that is free is the opposite of the help this sentence exists
-            // to give.
-            if std::fs::metadata(&entry.path).is_ok() {
-                stuck.push(format!(
-                    "{} (changed by something else; left alone)",
-                    entry.path.display()
-                ));
+        match remove_our_file(&entry.path, &|path| entry.is_ours_at(path)) {
+            Removal::Removed => {}
+            // Gone already — deleted by hand, or by another run. Warning about a collision on a
+            // path that is free is the opposite of the help this sentence exists to give.
+            Removal::Absent => {}
+            // Something replaced it while this run was working, and deleting that would destroy
+            // it. It is still ON the path this run wrote to, though, so the next attempt collides
+            // there — reporting the rollback as complete sent the reader back into the same wall.
+            Removal::NotOurs => stuck.push(format!(
+                "{} (changed by something else; left alone)",
+                entry.path.display()
+            )),
+            Removal::Failed(error) => {
+                stuck.push(format!("{} ({error})", entry.path.display()))
             }
-            continue;
-        }
-        if let Err(error) = std::fs::remove_file(&entry.path) {
-            stuck.push(format!("{} ({error})", entry.path.display()));
         }
     }
     describe_stuck(&stuck)
@@ -1099,6 +1174,53 @@ mod rollback_tests {
         let entry = publish(temp.path(), "0_line.wav", b"bytes");
         assert!(super::roll_back(std::slice::from_ref(&entry)).is_empty());
         assert!(!entry.path.exists(), "a clean rollback removes what it wrote");
+    }
+
+    #[test]
+    fn a_file_that_arrives_between_the_check_and_the_delete_is_not_the_one_deleted() {
+        // Verifying a path and then unlinking it are two resolutions of one name, and whatever
+        // lands between them is what gets destroyed — by a rollback whose entire purpose is to
+        // touch only this run's own writes. The move-then-decide path makes the second look happen
+        // on a name nothing else knows, and this drives the window itself: the verifier answers
+        // yes, then no, which is exactly what a replacement arriving in between looks like.
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("0_line.wav");
+        std::fs::write(&path, b"somebody else's audio").unwrap();
+
+        let answers = std::cell::Cell::new(0u32);
+        let outcome = super::remove_our_file(&path, &|_| {
+            answers.set(answers.get() + 1);
+            answers.get() == 1
+        });
+
+        assert_eq!(answers.get(), 2, "the second look is the point of the exercise");
+        assert!(matches!(outcome, super::Removal::NotOurs), "a foreign file must survive");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"somebody else's audio",
+            "and survive under the name it was left at"
+        );
+        let left: Vec<_> = std::fs::read_dir(temp.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(left.len(), 1, "no quarantine name may be left behind: {left:?}");
+    }
+
+    #[test]
+    fn removing_our_own_file_takes_the_file_and_leaves_nothing_beside_it() {
+        // The ordinary path, and the control for the test above: the same code deletes when both
+        // looks agree, and leaves no quarantine name behind when it does.
+        let temp = TempDir::new().unwrap();
+        let entry = publish(temp.path(), "0_line.wav", b"ours");
+
+        let outcome = super::remove_our_file(&entry.path, &|path| entry.is_ours_at(path));
+        assert!(matches!(outcome, super::Removal::Removed));
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
+
+        // And a path with nothing on it is not a failure to report.
+        let outcome = super::remove_our_file(&entry.path, &|path| entry.is_ours_at(path));
+        assert!(matches!(outcome, super::Removal::Absent));
     }
 
     #[test]
