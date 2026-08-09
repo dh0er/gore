@@ -9,6 +9,27 @@ production integration paths, and the safe validation order. The runtime
 evidence, hook-order contract, and current limits behind dialog-topic
 insertion are documented in [Dialog runtime internals](../reference/dialog-runtime.md).
 
+## What is proven, and what is not
+
+Read this before you build on it. Everything below is capability; this table is
+status. The evidence and the exact wording behind each line are in
+[Dialog runtime internals](../reference/dialog-runtime.md) — this is a summary
+of that page, not a second claim.
+
+| | |
+|---|---|
+| **Shown in game** | An authored topic rendered in a real conversation on Gothic 1 Remake **1.0.3**: caption independently confirmed, `RENDER_PASS`, the same object and exact class once each in both observed arrays. `gore mod undeploy` then restored the 123,394,250-byte shipping cache to its recorded SHA-256, with 92 of 93 saves byte-identical. |
+| **Not certified by that proof** | Selecting the topic. Authored knowledge or quest changes. **Recorded voice on an authored topic.** Save effects on the selection side. |
+| **Not qualified at all** | Steam build `24340829`. Runtime version 3 — it has a frozen offline candidate for `24169431`, which never completed the same clean visual requalification. |
+| **Unproven** | Automatic discovery: that every class in a new module reaches an already constructed `ConversationTopicSet`. |
+
+One consequence worth stating plainly, because it spans two guide pages:
+`gore voice add` writes a valid archive member, but nothing plays a brand-new
+voice path until a line exists that resolves to it — which is an authored topic,
+which is the thing above that is not certified for recorded voice. `gore voice
+replace`, against a line the game already speaks, is the deployment path with
+evidence behind it ([voice.md](voice.md)).
+
 ## Minimal compiled topic
 
 Derive from the existing conversation root for the target NPC. This exact

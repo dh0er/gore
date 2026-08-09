@@ -187,7 +187,17 @@ writes a save/quest/knowledge field.
 
 - Automatic discovery for a new module remains unproven.
 - The controlled visual proof currently covers Gothic 1 Remake 1.0.3 with
-  UE4SS 3.0.1. Both the reviewed v0.4 fixture and version 1 of the exact adapter
+  UE4SS 3.0.1. That version string does not identify a build: RE-UE4SS's stable
+  tag `v3.0.1` is from February 2024, and its rolling `experimental-latest`
+  assets are also named `UE4SS_v3.0.1-<n>-g<sha>`, so only the git SHA tells the
+  two apart (see the UE4SS section of [getting-started](../guide/getting-started.md)).
+  The build installed on the machine that ran this proof reports git `272ce2f8`,
+  whose commit is dated 7 June 2026 — an experimental one, not the stable tag.
+  That it is also the build the proof ran under rests on the maintainer stating
+  UE4SS was installed once and never replaced; the `UE4SS.dll` on disk carries a
+  9 June 2026 build timestamp, which is consistent with that, and a file
+  creation date of 7 August 2026, which is not evidence either way because
+  re-extracting the same archive resets it. Both the reviewed v0.4 fixture and version 1 of the exact adapter
   emitted by the parameterized production generator completed the clean live
   visual proof. Runtime version 3 has a frozen offline candidate for the older
   build `24169431`: its deterministic builds, batch class preflight, observer
