@@ -501,11 +501,19 @@ fn check_install(gp: &GamePaths) -> Check {
     ];
 
     let mut missing: Vec<String> = Vec::new();
+    let mut obstructed: Vec<String> = Vec::new();
     let mut unreadable: Vec<String> = Vec::new();
     for (label, path, want_dir) in &required {
-        match present(path) {
-            Ok(Some(metadata)) if metadata.is_dir() == *want_dir => {}
-            Ok(_) => missing.push((*label).to_string()),
+        let wanted = match want_dir {
+            true => Wanted::Folder,
+            false => Wanted::File,
+        };
+        match occupant(path, wanted) {
+            Ok(Occupant::Wanted) => {}
+            Ok(Occupant::Absent) => missing.push((*label).to_string()),
+            Ok(Occupant::Obstruction) => {
+                obstructed.push(format!("{label} (there, and not {})", wanted.name()))
+            }
             Err(error) => unreadable.push(format!("{label}: {error}")),
         }
     }
@@ -528,6 +536,30 @@ fn check_install(gp: &GamePaths) -> Check {
         .with_fix(
             "nothing here says the install is wrong, only that it could not be looked at. Run \
              the same command from a shell that can read it",
+        );
+    }
+
+    // Ahead of "missing", because neither fix below addresses it. A directory named
+    // `G1R-Win64-Shipping.exe` would be read as "this is not the game" and send somebody to
+    // repoint a configuration that is pointing exactly where it should; a file sitting on
+    // `Story\Cache` would be called something Steam can restore, and Steam cannot write a folder
+    // over a file it did not put there. What has to happen first is that the thing in the way is
+    // named.
+    if !obstructed.is_empty() {
+        return Check::new(
+            "install",
+            "install",
+            Verdict::Problem,
+            format!(
+                "{} of the {} entries that identify the install are occupied by something else",
+                obstructed.len(),
+                required.len()
+            ),
+        )
+        .with_items(obstructed)
+        .with_fix(
+            "the path is right and something else is sitting on it, so neither repointing the \
+             config nor verifying the game files reaches it. Remove or rename what is there",
         );
     }
 
@@ -3333,6 +3365,48 @@ mod tests {
         // Missing: no line break at all, and the next line's indentation instead. The guard used
         // to pass this, and a fix string in this very file was carrying it at the time.
         assert!(!is_prose("broken            across"));
+    }
+
+    #[test]
+    fn an_install_path_occupied_by_the_wrong_kind_of_thing_is_not_a_missing_one() {
+        // The last of this file's paths where "not there" and "there, and not what you need" came
+        // out as one answer, and the one I left alone a few rounds ago on the grounds that Steam
+        // would restore it. Steam restores files it is missing; it does not write a folder over a
+        // file somebody else put there, and it certainly does not fix a configuration this would
+        // otherwise tell you to repoint while it points exactly where it should.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        assert_eq!(check_install(&gp).verdict, Verdict::Ok, "the fixture starts healthy");
+
+        // A directory where the executable belongs: the arm that reads "this is not the game".
+        std::fs::remove_file(&gp.executable).unwrap();
+        std::fs::create_dir_all(&gp.executable).unwrap();
+        let check = check_install(&gp);
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("occupied by something else"), "{}", check.detail);
+        assert!(check.items.iter().any(|item| item.contains("not a file")), "{:?}", check.items);
+        let fix = check.fix.unwrap();
+        assert!(fix.contains("Remove or rename"), "{fix}");
+        assert!(!fix.contains("gore config set game-path"), "the path is right: {fix}");
+        std::fs::remove_dir(&gp.executable).unwrap();
+        std::fs::write(&gp.executable, b"exe").unwrap();
+
+        // A file where a required folder belongs: the arm that reads "verify the game files".
+        let cache = root.join("G1R").join("Story").join("Cache");
+        std::fs::remove_dir_all(&cache).unwrap();
+        std::fs::write(&cache, b"not a folder").unwrap();
+        let check = check_install(&gp);
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.items.iter().any(|item| item.contains("not a folder")), "{:?}", check.items);
+        assert!(!check.fix.unwrap().contains("verify the game files"));
+
+        // The control: genuinely absent keeps the sentence and the remedy it had.
+        std::fs::remove_file(&cache).unwrap();
+        let check = check_install(&gp);
+        assert!(check.detail.contains("incomplete"), "{}", check.detail);
+        assert!(check.fix.unwrap().contains("verify the game files"));
     }
 
     #[test]
