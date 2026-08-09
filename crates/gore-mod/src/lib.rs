@@ -3039,6 +3039,10 @@ pub struct GamePaths {
     pub ue4ss_mods: PathBuf,
     pub fmod_desktop: PathBuf,
     pub voice_over: PathBuf,
+    /// The folder `lcache` was searched in. `lcache` is `None` both for a folder holding no
+    /// `.lcache` and for one that could not be listed at all, and a caller that wants to tell
+    /// those apart has to look at the folder itself — without rebuilding the `G1R` folding above.
+    pub cache_dir: PathBuf,
     pub lcache: Option<PathBuf>,
     pub script_cache: PathBuf,
 }
@@ -3105,9 +3109,10 @@ pub fn resolve_game_paths(root: &Path) -> GamePaths {
     } else {
         root.join("G1R")
     };
+    let cache_dir = g1r.join("Story").join("Cache");
     let lcache = {
-        let cache = g1r.join("Story").join("Cache");
-        std::fs::read_dir(&cache).ok().and_then(|rd| {
+        let cache = &cache_dir;
+        std::fs::read_dir(cache).ok().and_then(|rd| {
             let mut matches: Vec<PathBuf> = rd
                 .filter_map(|e| e.ok())
                 .map(|e| e.path())
@@ -3139,6 +3144,7 @@ pub fn resolve_game_paths(root: &Path) -> GamePaths {
             .join("Mods"),
         fmod_desktop: g1r.join("Content").join("FMOD").join("Desktop"),
         voice_over: g1r.join("Story").join("VoiceOver"),
+        cache_dir,
         lcache,
         script_cache: g1r.join("Script").join("PrecompiledScript_Shipping.Cache"),
     }
@@ -4507,15 +4513,14 @@ fn prepare_target_identities(plan: &mut DeployPlan, prior: Option<&DeployRecord>
     Ok(())
 }
 
-/// Deploy a built bundle dir into the game at `game_root`. Two phases so a previous working
-/// deployment is never lost to a failed new one:
-/// 1. **prepare** — decode/inject/encode every change in memory; on any error the game is
-///    untouched and the previous mod stays active.
-/// 2. **commit** — revert the previous mod's footprint this deploy won't overwrite, then apply
-///    (fs ops only); if a commit write fails, the partial deploy is rolled back to pristine.
+/// Split a language tag into its stem and generation rank: `german` -> (german, 0), `german_new`
+/// -> (german, 1), `english_newer` -> (english, 2).
 ///
-/// Single active mod.
-/// A language's stem and how new it is: `german` < `german_new` < `german_newer`.
+/// Derived from the suffix rather than a fixed list of names, so a cache that grows another
+/// generation is covered without a code change. Only the ORDER is assumed — nothing in the file
+/// states that `_newer` outranks `_new`; that came from watching the game display the newer one.
+/// The stems it produces from the shipped header are exactly two ladders, german and english, and
+/// nothing else.
 pub(crate) fn generation(language: &str) -> (&str, u8) {
     match language
         .strip_suffix("_newer")
@@ -4554,6 +4559,14 @@ pub(crate) fn shadowing_generation<'a>(
         .filter(|winner| !also_written(winner))
 }
 
+/// Deploy a built bundle dir into the game at `game_root`. Two phases so a previous working
+/// deployment is never lost to a failed new one:
+/// 1. **prepare** — decode/inject/encode every change in memory; on any error the game is
+///    untouched and the previous mod stays active.
+/// 2. **commit** — revert the previous mod's footprint this deploy won't overwrite, then apply
+///    (fs ops only); if a commit write fails, the partial deploy is rolled back to pristine.
+///
+/// Single active mod.
 pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
     let manifest_bytes = read_safe_bundle_file(
         bundle_dir,
@@ -5623,14 +5636,6 @@ fn prepare(
                         pending.1.insert(set.to_ascii_lowercase(), (set, text));
                     }
                 }
-                /// Split a language tag into its stem and generation rank: `german` -> (german, 0),
-                /// `german_new` -> (german, 1), `english_newer` -> (english, 2).
-                ///
-                /// Derived from the suffix rather than a fixed list of names, so a cache that
-                /// grows another generation is covered without a code change. Only the ORDER is
-                /// assumed — nothing in the file states that `_newer` outranks `_new`; that came
-                /// from watching the game display the newer one. The stems it produces from the
-                /// shipped header are exactly two ladders, german and english, and nothing else.
                 let mut lc = gore_loc::loc::Lcache::decode(&pristine)?;
                 let declared: BTreeMap<String, String> = lc
                     .languages()

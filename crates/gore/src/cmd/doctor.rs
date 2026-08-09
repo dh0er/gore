@@ -278,6 +278,7 @@ fn collect(explicit: Option<&Path>) -> Report {
         gore_loc::loc_store::status(),
         &gore_loc::paths::loc_catalog_path(),
         gp.lcache.as_deref(),
+        &gp.cache_dir,
     ));
 
     Report::new(Some(&gp.root), source, checks)
@@ -1581,7 +1582,12 @@ fn catalog_problem(catalog: &Path, recorded_ids: Option<usize>) -> Option<String
 /// cache afterwards, which changes its size. Nothing breaks, but every tool that turns a text id
 /// into text is then reading the text the game no longer has, which reads exactly like an edit
 /// that did not take.
-fn check_loc_catalog(meta: Option<LocMeta>, catalog: &Path, installed: Option<&Path>) -> Check {
+fn check_loc_catalog(
+    meta: Option<LocMeta>,
+    catalog: &Path,
+    installed: Option<&Path>,
+    cache_dir: &Path,
+) -> Check {
     let Some(meta) = meta else {
         // `status()` reads `loc_meta.json` only, and returns `None` for a missing, unreadable or
         // malformed sidecar alike. `extract` DELETES that sidecar when it cannot write it, on
@@ -1712,6 +1718,25 @@ fn check_loc_catalog(meta: Option<LocMeta>, catalog: &Path, installed: Option<&P
     ];
 
     let Some(installed) = installed else {
+        // `resolve_game_paths` finds the cache by listing that folder and answers `None` for a
+        // folder it could not list as readily as for one holding no `.lcache`. Saying the install
+        // has none sends the reader to verify game files while the folder sits there, unreadable.
+        if let Err(error) = std::fs::read_dir(cache_dir) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                return Check::new(
+                    "loc_catalog",
+                    "loc catalog",
+                    Verdict::Problem,
+                    format!("{} could not be listed: {error}", cache_dir.display()),
+                )
+                .with_items(items)
+                .with_fix(
+                    "the game's own text cache lives in that folder, and nothing here could \
+                     look inside it. Run the same command from a shell that can read the \
+                     install",
+                );
+            }
+        }
         return Check::new(
             "loc_catalog",
             "loc catalog",
@@ -2751,6 +2776,7 @@ mod tests {
             Some(meta(&cache, 1024)),
             &extracted_catalog(dir.path()),
             Some(&cache),
+            cache.parent().unwrap(),
         );
         assert_eq!(check.verdict, Verdict::Problem);
         assert!(check.detail.contains("stale"), "{}", check.detail);
@@ -2760,6 +2786,7 @@ mod tests {
             Some(meta(&cache, 2048)),
             &extracted_catalog(dir.path()),
             Some(&cache),
+            cache.parent().unwrap(),
         );
         assert_eq!(fresh.verdict, Verdict::Ok);
     }
@@ -2781,6 +2808,7 @@ mod tests {
             Some(recorded.clone()),
             &extracted_catalog(dir.path()),
             Some(&cache),
+            cache.parent().unwrap(),
         );
         assert_eq!(unchanged.verdict, Verdict::Ok, "{}", unchanged.detail);
         assert!(
@@ -2798,6 +2826,7 @@ mod tests {
             Some(recorded),
             &extracted_catalog(dir.path()),
             Some(&cache),
+            cache.parent().unwrap(),
         );
         assert_eq!(rewritten.verdict, Verdict::Problem, "{}", rewritten.detail);
         assert!(rewritten.detail.contains("same length"), "{}", rewritten.detail);
@@ -2820,6 +2849,7 @@ mod tests {
             Some(same_second),
             &extracted_catalog(dir.path()),
             Some(&cache),
+            cache.parent().unwrap(),
         );
         assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
         assert!(check.detail.contains("cannot be told"), "{}", check.detail);
@@ -2845,6 +2875,7 @@ mod tests {
             Some(before),
             &extracted_catalog(dir.path()),
             Some(&cache),
+            cache.parent().unwrap(),
         );
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(
@@ -2868,6 +2899,7 @@ mod tests {
             Some(meta(&elsewhere, 64)),
             &extracted_catalog(dir.path()),
             Some(&here),
+            here.parent().unwrap(),
         );
         assert_eq!(check.verdict, Verdict::Note);
         assert!(check.detail.contains("different file"), "{}", check.detail);
@@ -2932,6 +2964,7 @@ mod tests {
             Some(relative),
             &extracted_catalog(dir.path()),
             Some(&here),
+            here.parent().unwrap(),
         );
         assert_eq!(check.verdict, Verdict::Note);
         assert!(check.detail.contains("cannot be told"), "{}", check.detail);
@@ -2968,6 +3001,7 @@ mod tests {
             Some(meta(&cache, 1024)),
             &dir.path().join("loc_catalog.json"),
             Some(&cache),
+            cache.parent().unwrap(),
         );
         assert_eq!(check.verdict, Verdict::Problem);
         assert!(check.detail.contains("the catalog itself is gone"), "{}", check.detail);
@@ -2986,7 +3020,7 @@ mod tests {
         let broken = dir.path().join("loc_catalog.json");
         std::fs::write(&broken, br#"{"itfo_apple":{"german":"Apf"#).unwrap();
 
-        let check = check_loc_catalog(Some(meta_with_identity(&cache, 2048)), &broken, Some(&cache));
+        let check = check_loc_catalog(Some(meta_with_identity(&cache, 2048)), &broken, Some(&cache), cache.parent().unwrap());
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(check.detail.contains("cannot be loaded"), "{}", check.detail);
         assert!(check.fix.unwrap().contains("gore loc extract"));
@@ -3005,7 +3039,7 @@ mod tests {
         std::fs::write(&catalog, br#"{"itfo_apple":{"german":42}}"#).unwrap();
 
         let check =
-            check_loc_catalog(Some(meta_with_identity(&cache, 2048)), &catalog, Some(&cache));
+            check_loc_catalog(Some(meta_with_identity(&cache, 2048)), &catalog, Some(&cache), cache.parent().unwrap());
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(check.detail.contains("cannot be loaded"), "{}", check.detail);
     }
@@ -3021,7 +3055,7 @@ mod tests {
         std::fs::write(&catalog, br#"{"a":{"german":"x"},"b":{"german":"y"}}"#).unwrap();
 
         let check =
-            check_loc_catalog(Some(meta_with_identity(&cache, 2048)), &catalog, Some(&cache));
+            check_loc_catalog(Some(meta_with_identity(&cache, 2048)), &catalog, Some(&cache), cache.parent().unwrap());
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(check.detail.contains("holds 2 ids"), "{}", check.detail);
     }
@@ -3035,7 +3069,7 @@ mod tests {
         let catalog = dir.path().join("loc_catalog.json");
         std::fs::create_dir_all(&catalog).unwrap();
 
-        let check = check_loc_catalog(None, &catalog, None);
+        let check = check_loc_catalog(None, &catalog, None, dir.path());
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(check.detail.contains("is not a file"), "{}", check.detail);
         assert!(check.fix.unwrap().contains("Remove or rename"));
@@ -3049,7 +3083,7 @@ mod tests {
         let catalog = dir.path().join("loc_catalog.json");
         std::fs::write(&catalog, br#"{"itfo_apple":{"german":"Apf"#).unwrap();
 
-        let check = check_loc_catalog(None, &catalog, None);
+        let check = check_loc_catalog(None, &catalog, None, dir.path());
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(check.detail.contains("cannot be loaded"), "{}", check.detail);
     }
@@ -3064,7 +3098,7 @@ mod tests {
         let catalog = dir.path().join("loc_catalog.json");
         std::fs::write(&catalog, br#"{"itfo_apple":{"german":"Apfel"}}"#).unwrap();
 
-        let check = check_loc_catalog(None, &catalog, None);
+        let check = check_loc_catalog(None, &catalog, None, dir.path());
         assert_eq!(check.verdict, Verdict::Note);
         assert!(check.detail.contains("is there"), "{}", check.detail);
         let fix = check.fix.unwrap();
@@ -3075,9 +3109,52 @@ mod tests {
     #[test]
     fn no_extracted_catalog_names_the_command_that_makes_one() {
         let dir = tempfile::tempdir().unwrap();
-        let check = check_loc_catalog(None, &dir.path().join("loc_catalog.json"), None);
+        let check = check_loc_catalog(None, &dir.path().join("loc_catalog.json"), None, dir.path());
         assert_eq!(check.verdict, Verdict::Note);
         assert!(check.fix.unwrap().contains("gore loc extract"));
+    }
+
+    #[test]
+    fn a_cache_folder_that_cannot_be_listed_is_not_a_cache_folder_without_a_lcache() {
+        // `resolve_game_paths` locates the `.lcache` by listing that folder and drops the listing
+        // error, so `lcache: None` covers "nothing matching in there" and "could not look" alike.
+        // The install check above passes either way — it reads the folder's metadata, which an
+        // unlistable folder still has — and this one then sent the reader to verify game files
+        // over a folder whose contents nobody had seen.
+        //
+        // A file where the folder belongs stands in for the ACL case the report describes: both
+        // fail `read_dir` with something other than `NotFound`, which is the whole distinction
+        // this branch draws. Denying the listing by ACL needs privileges the test suite does not
+        // have here.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("AlkimiaLocalization_00000000.lcache");
+        std::fs::write(&cache, vec![0u8; 2048]).unwrap();
+        let catalog = extracted_catalog(dir.path());
+
+        let occupied = dir.path().join("Cache");
+        std::fs::write(&occupied, b"not a folder").unwrap();
+
+        let check = check_loc_catalog(
+            Some(meta_with_identity(&cache, 2048)),
+            &catalog,
+            None,
+            &occupied,
+        );
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("could not be listed"), "{}", check.detail);
+        assert!(check.fix.unwrap().contains("shell that can read"));
+
+        // The control: a folder that genuinely is not there stays the note it was, so the branch
+        // above is answering the listing error and not simply every absent cache.
+        let absent = dir.path().join("no-such-cache");
+        let check = check_loc_catalog(
+            Some(meta_with_identity(&cache, 2048)),
+            &catalog,
+            None,
+            &absent,
+        );
+        assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
+        assert!(check.detail.contains("no AlkimiaLocalization"), "{}", check.detail);
     }
 
     #[test]
