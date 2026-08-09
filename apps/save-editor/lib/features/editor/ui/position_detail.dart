@@ -501,9 +501,60 @@ class _NpcPositionPanelState extends State<NpcPositionPanel> {
     if (result == null || pose == null || !result.canPin) {
       return NpcPlacementDraft(edits: edits);
     }
-    // The box mirrors the NPC's stored state, so only a DIFFERENCE is a write.
+    // The box mirrors the NPC's stored state, so only a DIFFERENCE is a routine
+    // write — but an already-pinned NPC being moved AGAIN still has to refresh
+    // its note. The note says what the save must still hold for a restore to be
+    // honest; leaving the old position in it would mark it stale the moment this
+    // move lands, stranding the original position and routine it records.
     if (_stayInPlace == result.isPinned) {
-      return NpcPlacementDraft(edits: edits);
+      final undo = result.undo;
+      final location = _currentLocation();
+      final before = pose.location;
+      if (!_stayInPlace ||
+          undo == null ||
+          !undo.restorable ||
+          location == null ||
+          before == null ||
+          location == before) {
+        return NpcPlacementDraft(edits: edits);
+      }
+      final rotation = _currentRotation();
+      final rotationBefore = pose.rotation;
+      final movesRotation =
+          rotation != null &&
+          rotationBefore != null &&
+          rotation != rotationBefore;
+      // The ORIGINAL half is the first pin's, not this move's: a restore has to
+      // reach the state before the NPC was ever pinned, and the current routine
+      // is already the inert one.
+      final originalRotation = movesRotation
+          ? (undo.originalRotation ?? rotationBefore)
+          : undo.originalRotation;
+      return NpcPlacementDraft(
+        edits: edits,
+        note: {
+          'npc': widget.npcId,
+          'note': {
+            'original_location': [
+              undo.originalLocation.x,
+              undo.originalLocation.y,
+              undo.originalLocation.z,
+            ],
+            if (originalRotation != null)
+              'original_rotation': [
+                originalRotation.pitch,
+                originalRotation.yaw,
+                originalRotation.roll,
+              ],
+            if (undo.originalRoutineClass != null)
+              'original_routine_class': undo.originalRoutineClass,
+            'written_location': [location.x, location.y, location.z],
+            if (movesRotation)
+              'written_rotation': [rotation.pitch, rotation.yaw, rotation.roll],
+            'written_routine_class': result.inertRoutineClass,
+          },
+        },
+      );
     }
     if (!_stayInPlace) {
       // Unticked: give the routine back. The class comes from the note, because

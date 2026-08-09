@@ -325,6 +325,35 @@ void main() {
     );
   });
 
+  testWidgets('moving an already-pinned NPC refreshes his note', (
+    tester,
+  ) async {
+    // The note says what the save must still hold for a restore to be honest.
+    // Leaving the old position in it marks it stale the moment this move lands,
+    // stranding the original position and routine it records.
+    await openNpc(
+      tester,
+      coreWith(routineClass: kFakeInertRoutine, undo: const FakeUndo()),
+    );
+
+    await tester.enterText(positionField('location:x'), '999');
+    await tester.pumpAndSettle();
+
+    expect(routineEdit(tester), isNull, reason: 'he is already on it');
+    final note = (pending(tester)!.placementNotes.single['note'] as Map)
+        .cast<String, Object?>();
+    expect(note['written_location'], [999.0, 12.0, 13.0]);
+    expect(
+      note['original_location'],
+      [7.0, 8.0, 9.0],
+      reason: 'a restore has to reach the state before the FIRST pin',
+    );
+    expect(
+      note['original_routine_class'],
+      '/Script/Angelscript.DailyRoutine_A_Start',
+    );
+  });
+
   testWidgets('an NPC already on the inert routine queues no second swap', (
     tester,
   ) async {

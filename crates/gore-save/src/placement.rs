@@ -168,6 +168,12 @@ fn publish(path: &Path, expected: &FileSnapshot, notes: &FolderNotes) -> Result<
 /// publishes a fresh sidecar that the unlink then throws away — and an ignored
 /// unlink error would hide it.
 fn remove(path: &Path, expected: &FileSnapshot) -> Result<(), CoreError> {
+    // Nothing was there to begin with. Short-circuited because the claim below
+    // stages a file beside the target, which fails outright when the backups
+    // folder does not exist yet — the common case for a save nobody has pinned.
+    if matches!(expected, FileSnapshot::Missing) {
+        return Ok(());
+    }
     crate::remove_sidecar_if_unchanged(path, expected, "claim-placements", "placements")
 }
 
@@ -261,10 +267,11 @@ pub fn snapshot_backup(save_path: &Path, backup_path: &Path) -> Result<(), CoreE
     let Some(key) = backup_path.file_name().and_then(|value| value.to_str()) else {
         return Ok(());
     };
+    // Wholesale, including the empty set. A backup file name can be reused —
+    // delete and recreate inside the same timestamp second, or an earlier
+    // cleanup that failed — and returning early would let the new backup inherit
+    // the deleted one's notes and install them on restore.
     let notes = read_notes_for_strict(save_path, &save_key(save_path))?;
-    if notes.is_empty() {
-        return Ok(());
-    }
     snapshot_to_key(save_path, key, notes)
 }
 
@@ -456,6 +463,25 @@ mod tests {
         snapshot_backup(&save, &dir.path().join("G1R-001.sav.bak.1")).unwrap();
 
         assert!(!notes_path(&save).exists());
+    }
+
+    #[test]
+    fn a_reused_backup_name_does_not_inherit_the_old_file_s_notes() {
+        // A name can come back: delete and recreate inside the same timestamp
+        // second, or an earlier cleanup that failed. The new backup must not
+        // install the deleted one's undo metadata on restore.
+        let dir = tempdir().unwrap();
+        let save = dir.path().join("G1R-001.sav");
+        let backup = dir.path().join("G1R-001.sav.bak.1");
+        record(&save, &[("Npc-A".to_string(), note())]).unwrap();
+        snapshot_backup(&save, &backup).unwrap();
+        assert!(!read_notes_for(&save, "G1R-001.sav.bak.1").is_empty());
+
+        // The live save is unpinned again, and the name is reused.
+        clear(&save, &["Npc-A".to_string()]).unwrap();
+        snapshot_backup(&save, &backup).unwrap();
+
+        assert!(read_notes_for(&save, "G1R-001.sav.bak.1").is_empty());
     }
 
     #[test]
