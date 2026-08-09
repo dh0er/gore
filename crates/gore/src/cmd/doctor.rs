@@ -1561,7 +1561,7 @@ enum Written {
 /// this question — and their number is compared with what the extraction recorded. A file that
 /// parses but holds a different number of ids than its own sidecar claims is not one the sidecar
 /// describes.
-fn catalog_problem(catalog: &Path, recorded_ids: usize) -> Option<String> {
+fn catalog_problem(catalog: &Path, recorded_ids: Option<usize>) -> Option<String> {
     let bytes = match std::fs::read(catalog) {
         Ok(bytes) => bytes,
         Err(error) => return Some(format!("the catalog could not be read: {error}")),
@@ -1571,12 +1571,14 @@ fn catalog_problem(catalog: &Path, recorded_ids: usize) -> Option<String> {
             Ok(ids) => ids,
             Err(error) => return Some(format!("the catalog is not readable JSON: {error}")),
         };
-    match ids.len() == recorded_ids {
-        true => None,
-        false => Some(format!(
-            "the catalog holds {} ids and its record says {recorded_ids}",
+    // The count only means something against a sidecar. Without one there is nothing to disagree
+    // with, and the file having parsed is the whole of what can be established.
+    match recorded_ids {
+        Some(recorded) if ids.len() != recorded => Some(format!(
+            "the catalog holds {} ids and its record says {recorded}",
             ids.len()
         )),
+        _ => None,
     }
 }
 
@@ -1594,7 +1596,24 @@ fn check_loc_catalog(meta: Option<LocMeta>, catalog: &Path, installed: Option<&P
         // purpose, rather than leave one describing the previous extraction — so "no metadata" is
         // a state a successful extraction can leave behind, with the catalog itself in place and
         // perfectly usable by `gore find`, Mod Studio and the save editor.
+        // Read before the match so the file is parsed once, whichever arm answers.
+        let problem = catalog_problem(catalog, None);
         return match present(catalog) {
+            // Being a file is not being a catalog here either. The `Some(meta)` path learned that
+            // one commit ago and this one did not, so a truncated catalog with no sidecar was
+            // still called usable — while `gore find` refuses the same file. Asked once: this
+            // parses ~28 MB, and reading it twice to phrase one sentence is no trade at all.
+            Ok(Some(metadata)) if metadata.is_file() && problem.is_some() => Check::new(
+                "loc_catalog",
+                "loc catalog",
+                Verdict::Problem,
+                problem.unwrap_or_default(),
+            )
+            .with_items(vec![format!("catalog: {}", catalog.display())])
+            .with_fix(
+                "every tool that turns a text id into text reads that one file. Run \
+                 'gore loc extract' to write it again",
+            ),
             Ok(Some(metadata)) if metadata.is_file() => Check::new(
                 "loc_catalog",
                 "loc catalog",
@@ -1642,7 +1661,7 @@ fn check_loc_catalog(meta: Option<LocMeta>, catalog: &Path, installed: Option<&P
             //
             // Parsed with the values skipped, the way `find` reads it: the ids are what
             // `id_count` counts, and their values are ~28 MB nobody here needs.
-            if let Some(problem) = catalog_problem(catalog, meta.id_count) {
+            if let Some(problem) = catalog_problem(catalog, Some(meta.id_count)) {
                 return Check::new("loc_catalog", "loc catalog", Verdict::Problem, problem)
                     .with_items(vec![format!("catalog: {}", catalog.display())])
                     .with_fix(
@@ -2981,6 +3000,19 @@ mod tests {
             check_loc_catalog(Some(meta_with_identity(&cache, 2048)), &catalog, Some(&cache));
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(check.detail.contains("holds 2 ids"), "{}", check.detail);
+    }
+
+    #[test]
+    fn a_broken_catalog_with_no_metadata_is_not_called_usable() {
+        // The sibling of the branch above, and the one the previous commit left behind: no
+        // sidecar AND a truncated catalog was reported as usable, while `gore find` refuses it.
+        let dir = tempfile::tempdir().unwrap();
+        let catalog = dir.path().join("loc_catalog.json");
+        std::fs::write(&catalog, br#"{"itfo_apple":{"german":"Apf"#).unwrap();
+
+        let check = check_loc_catalog(None, &catalog, None);
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("not readable JSON"), "{}", check.detail);
     }
 
     #[test]
