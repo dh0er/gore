@@ -3050,6 +3050,44 @@ mod tests {
     }
 
     #[test]
+    fn a_record_whose_utoc_and_ucas_are_different_containers_is_reported() {
+        // Three files with the right extensions are not a container. Undeploying `A.utoc`,
+        // `B.ucas`, `C.pak` deletes one half of each real pair and leaves the other halves — and
+        // the extension check alone called it healthy.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        let gp = paths(root);
+        let mods = gore_tex::container::mods_dir(&gp.root);
+        std::fs::create_dir_all(&mods).unwrap();
+        for name in ["zzz_A_P.utoc", "zzz_A_P.ucas", "zzz_B_P.utoc", "zzz_B_P.ucas", "zzz_C_P.pak"] {
+            std::fs::write(mods.join(name), b"x").unwrap();
+        }
+
+        let record = serde_json::json!({
+            "name": "zzz_A_P",
+            "files": [
+                mods.join("zzz_A_P.utoc"),
+                mods.join("zzz_B_P.ucas"),
+                mods.join("zzz_C_P.pak"),
+            ],
+        });
+        std::fs::write(
+            mods.join("zzz_A_P.gore-deploy.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+
+        let check = check_mods_folder(&gp);
+        assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
+        assert!(
+            check.items.iter().any(|item| item.contains("not the same container")),
+            "{:?}",
+            check.items
+        );
+    }
+
+    #[test]
     fn a_record_listing_half_a_triplet_is_reported() {
         // `undeploy` deletes exactly what the record lists, so a record holding a subset undoes
         // to a folder still carrying the container files it left out. `deploy` takes three paths

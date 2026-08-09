@@ -2995,10 +2995,15 @@ pub fn deploy_record_files(path: &Path) -> std::result::Result<Vec<PathBuf>, Str
     // holding a subset undeploys to a folder still carrying the container files it left out. A
     // non-empty check accepted that.
     //
-    // The three extensions are the same contract, spelled in that function's own doc. The file
-    // STEM is not checked against the record name: the triplet's names come from wherever it was
-    // built, and nothing here establishes they must match, so requiring it could refuse a record
-    // `undeploy` handles perfectly well.
+    // The three extensions are the same contract, spelled in that function's own doc, and the
+    // `.utoc` and `.ucas` must share a stem: that is what makes them a pair rather than two files,
+    // and the reader says so by deriving one from the other with `with_extension("ucas")`. A record
+    // listing `A.utoc`, `B.ucas`, `C.pak` satisfies the extensions and is not a container — and
+    // undeploying it deletes one half of each real pair and leaves the others.
+    //
+    // The `.pak` stem is not required to match. Nothing in the format pairs it with the other two;
+    // the one caller in this repo happens to build all three from a single name, but that is its
+    // choice and not this format's rule.
     if record.files.len() != 3 {
         return Err(format!(
             "lists {} file(s); a deployed container is a triplet of three",
@@ -3019,6 +3024,25 @@ pub fn deploy_record_files(path: &Path) -> std::result::Result<Vec<PathBuf>, Str
         return Err(format!(
             "lists {extensions:?}; a deployed container is a .utoc, a .ucas and a .pak"
         ));
+    }
+
+    let stem_of = |wanted: &str| {
+        record
+            .files
+            .iter()
+            .find(|file| {
+                file.extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case(wanted))
+            })
+            .and_then(|file| file.file_stem())
+            .map(|stem| stem.to_string_lossy().to_lowercase())
+    };
+    if stem_of("utoc") != stem_of("ucas") {
+        return Err(
+            "lists a .utoc and a .ucas that are not the same container: the reader opens a .utoc \
+             with the .ucas of the same name"
+                .to_string(),
+        );
     }
     Ok(record.files)
 }
