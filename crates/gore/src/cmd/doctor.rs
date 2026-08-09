@@ -147,17 +147,23 @@ struct Report {
 impl Report {
     fn new(game_root: Option<&Path>, game_source: &'static str, checks: Vec<Check>) -> Self {
         // The type's contract, enforced where every report passes rather than remembered at each
-        // of the several dozen places a `Check` is built. Two arms shipped without a fix and were
-        // found by a reviewer reading the code; a report that names a problem and no next step is
-        // the half nobody can act on.
+        // of the several dozen places a `Check` is built. Several arms shipped without a fix and
+        // were found by a reviewer reading the code; a report that names something wrong and no
+        // next step is the half nobody can act on.
+        //
+        // Notes as well as problems, which the first version of this missed — and a Note is where
+        // the next one turned up, one round later. `Skipped` is exempt: it says a check could not
+        // run, and the reason it could not is reported by whichever check established that.
+        let owes_a_fix =
+            |check: &Check| matches!(check.verdict, Verdict::Problem | Verdict::Note);
         debug_assert!(
             checks
                 .iter()
-                .all(|check| check.verdict != Verdict::Problem || check.fix.is_some()),
-            "every problem must carry a fix: {:?}",
+                .all(|check| !owes_a_fix(check) || check.fix.is_some()),
+            "every problem and note must carry a fix: {:?}",
             checks
                 .iter()
-                .filter(|check| check.verdict == Verdict::Problem && check.fix.is_none())
+                .filter(|check| owes_a_fix(check) && check.fix.is_none())
                 .map(|check| check.id)
                 .collect::<Vec<_>>()
         );
@@ -1199,15 +1205,41 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
                 continue;
             }
         };
-        let Some(files) = listed.get("files").and_then(|files| files.as_array()) else {
-            record_problems.push(format!("{record}: lists no files"));
-            continue;
+        // The shape `container::undeploy` deserializes: `files` as a list of paths. Checking only
+        // that it is an array and skipping every member that is not a string accepted
+        // `{"files":[null]}` without a word, and undeploy cannot read that as `Vec<PathBuf>` — so
+        // the cleanup this record exists for is broken while the report says nothing.
+        let listed_files = listed
+            .get("files")
+            .and_then(|files| files.as_array())
+            .map(|files| {
+                files
+                    .iter()
+                    .map(|file| file.as_str().map(str::to_string))
+                    .collect::<Option<Vec<String>>>()
+            });
+        let files = match listed_files {
+            Some(Some(files)) if !files.is_empty() => files,
+            Some(Some(_)) => {
+                record_problems.push(format!("{record}: lists no files"));
+                continue;
+            }
+            Some(None) => {
+                record_problems.push(format!(
+                    "{record}: its file list holds something that is not a path"
+                ));
+                continue;
+            }
+            None => {
+                record_problems.push(format!("{record}: has no file list"));
+                continue;
+            }
         };
-        for listed_path in files.iter().filter_map(|file| file.as_str()) {
+        for listed_path in &files {
             let leaf = Path::new(listed_path)
                 .file_name()
                 .map(|leaf| leaf.to_string_lossy().into_owned())
-                .unwrap_or_else(|| listed_path.to_string());
+                .unwrap_or_else(|| listed_path.clone());
             if !names.iter().any(|name| name.eq_ignore_ascii_case(&leaf)) {
                 record_problems.push(format!("{record}: lists {leaf}, which is not here"));
             }
@@ -1613,7 +1645,12 @@ fn check_loc_catalog(meta: Option<LocMeta>, catalog: &Path, installed: Option<&P
             Verdict::Note,
             format!("{summary}, but this install has no AlkimiaLocalization .lcache to compare it against"),
         )
-        .with_items(items);
+        .with_items(items)
+        .with_fix(
+            "a Gothic 1 Remake install keeps one in G1R\\\\Story\\\\Cache, so either this is not that \\
+             install or it is incomplete — the install check above says which. The catalog is \\
+             still usable; it just cannot be told apart from a stale one here",
+        );
     };
 
     // `gore loc extract --lcache some\\path.lcache` records the spelling it was given, and this
@@ -1808,7 +1845,12 @@ fn check_loc_catalog(meta: Option<LocMeta>, catalog: &Path, installed: Option<&P
             Verdict::Note,
             format!("{summary}, but the installed cache could not be read: {error}"),
         )
-        .with_items(items),
+        .with_items(items)
+        .with_fix(
+            "the catalog itself is fine; what could not be read is the game's own cache, so \\
+             nothing here says the two disagree. Run the same command from a shell that can read \\
+             the install to find out",
+        ),
     }
 }
 
@@ -2990,14 +3032,26 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "every problem must carry a fix")]
+    #[should_panic(expected = "every problem and note must carry a fix")]
     fn the_report_refuses_a_problem_with_no_next_step() {
         // Proof that the guard in `Report::new` fires. A debug assertion nobody has seen trip is
-        // an assumption, not a check — and this contract has now been broken twice by hand.
+        // an assumption, not a check — and this contract has now been broken three times by hand.
         Report::new(
             None,
             "config",
             vec![Check::new("ue4ss", "UE4SS", Verdict::Problem, "not installed")],
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "every problem and note must carry a fix")]
+    fn the_report_refuses_a_note_with_no_next_step() {
+        // The verdict the first version of the guard left out, which is where the next omission
+        // turned up one round later.
+        Report::new(
+            None,
+            "config",
+            vec![Check::new("loc_catalog", "loc catalog", Verdict::Note, "could not be read")],
         );
     }
 

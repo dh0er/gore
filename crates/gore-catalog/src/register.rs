@@ -395,7 +395,11 @@ impl Entry {
 
     /// Substring match over id, effect and note, against an already-folded
     /// needle.
-    fn matches(&self, folded_needle: &str) -> bool {
+    ///
+    /// Public because a caller holding the entries for one id has to be able to ask the same
+    /// question `Register::search` asks across all of them — `gore find` answers a term from
+    /// whichever layer carries it, and that is one of the layers.
+    pub fn matches(&self, folded_needle: &str) -> bool {
         let mut haystacks = std::iter::once(self.id.as_str())
             .chain(self.effect.as_deref())
             .chain(self.note.as_deref());

@@ -483,10 +483,19 @@ fn contains(haystack: &str, folded_needle: &str) -> bool {
 /// `gore find healing` answers with twelve items, because no name contains the
 /// two words in that order. "Find me the healing potion" is the sentence this
 /// command was built for.
+/// Which of a catalog row's fields answered for the query, or nothing when one term is answered
+/// nowhere.
+///
+/// `annotations` are the register entries recorded against this row's id, and they count as one of
+/// the places a term may be answered. Without them each layer had to satisfy the whole query on its
+/// own: `gore find food trader` found nothing, because `food` is the apple's bundled CATEGORY and
+/// `trader` is in what somebody wrote about it in the register, and neither half is a query either
+/// layer can satisfy alone. A person asking that question is describing one thing, not two.
 fn match_catalog(
     entry: &CatalogEntry,
     terms: &[String],
     index: Option<&NameIndex>,
+    annotations: &[&Entry],
 ) -> Option<Vec<Matched>> {
     let names = index.and_then(|index| index.get(entry.loc_id())).unwrap_or(&[]);
     let mut found: BTreeSet<Matched> = BTreeSet::new();
@@ -522,6 +531,16 @@ fn match_catalog(
             if contains(&name.text, term) {
                 here.push(Matched::Name(name.language.clone()));
             }
+        }
+        // Last, so a term the row itself answers is never explained as register text: the
+        // register searches ids too, and "register text" under an id the query is visibly inside
+        // explains nothing.
+        if here.is_empty()
+            && annotations
+                .iter()
+                .any(|annotation| annotation.matches(&term.to_lowercase()))
+        {
+            here.push(Matched::Register);
         }
         if here.is_empty() {
             return None;
@@ -683,7 +702,8 @@ pub fn search<'a>(
     let mut seen: HashMap<(String, String), usize> = HashMap::new();
 
     for entry in catalog.iter().filter(|entry| in_scope(entry.domain)) {
-        let Some(matched) = match_catalog(entry, terms, index) else {
+        let annotations = register.lookup(&entry.id, Some(entry.domain));
+        let Some(matched) = match_catalog(entry, terms, index, &annotations) else {
             continue;
         };
         let key = (entry.domain.to_string(), entry.id.to_lowercase());
@@ -2051,6 +2071,31 @@ mod tests {
         for hit in &hits {
             assert_eq!(hit.register.len(), 1, "{:?}", hit.register);
         }
+    }
+
+    #[test]
+    fn one_query_may_be_answered_by_two_layers_at_once() {
+        // `gore find food trader`: `food` is the apple's bundled category, `trader` is in what
+        // somebody recorded about it. Requiring each layer to satisfy the whole query on its own
+        // found nothing — the catalog rejected it for lacking `trader`, the register for lacking
+        // `food` — though a person asking that is describing one thing.
+        let catalog = vec![apple()];
+        let register = register_with(
+            "item",
+            "ItFo_Apple",
+            &observation("confirmed", Some("843"), "24539464"),
+            "the price a trader pays for it",
+        );
+
+        let hits = search(&catalog, &register, &terms("food trader"), None, None);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].id, "ItFo_Apple");
+        assert!(hits[0].matched.contains(&Matched::Category), "{:?}", hits[0].matched);
+        assert!(hits[0].matched.contains(&Matched::Register), "{:?}", hits[0].matched);
+
+        // A term no layer answers still finds nothing: the query got easier to satisfy, not
+        // meaningless.
+        assert!(search(&catalog, &register, &terms("food dragon"), None, None).is_empty());
     }
 
     #[test]
