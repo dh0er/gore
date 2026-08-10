@@ -1568,6 +1568,21 @@ fn preflight_zip(
                 "zip entry {raw_name:?} has an unsafe path; refusing to extract"
             )));
         };
+        let rel_path = Path::new(&rel);
+        let directory_depth = if entry.is_dir() {
+            rel_path.components().count()
+        } else {
+            rel_path
+                .parent()
+                .map(|parent| parent.components().count())
+                .unwrap_or(0)
+        };
+        if directory_depth > limits.max_directory_depth {
+            return Err(ModError::Other(format!(
+                "ZIP entry nesting depth limit exceeded for {raw_name:?}: {directory_depth} > {}",
+                limits.max_directory_depth
+            )));
+        }
         if entry.is_symlink() {
             return Err(ModError::Other(format!(
                 "ZIP entry {raw_name:?} is a symbolic link; refusing to extract"
@@ -3191,6 +3206,25 @@ mod tests {
             "unexpected error: {error}"
         );
         assert_failed_import_left_nothing(&total_lib);
+
+        let depth_zip = temp.path().join("too-deep.zip");
+        zip_entries(&depth_zip, &[("d0/d1/d2/file.lcache", b"x", stored)]);
+        let depth_lib = temp.path().join("depth-lib");
+        let error = import_with_limits(
+            &depth_lib,
+            &depth_zip,
+            ImportLimits {
+                max_directory_depth: 2,
+                ..DEFAULT_IMPORT_LIMITS
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("ZIP entry nesting depth limit exceeded"),
+            "unexpected error: {error}"
+        );
+        assert_failed_import_left_nothing(&depth_lib);
     }
 
     #[test]
