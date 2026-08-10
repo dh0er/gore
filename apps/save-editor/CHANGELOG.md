@@ -10,11 +10,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- An NPC can be moved again, with the same location picker the hero has.
-- An NPC's daily routine can be switched off, which is what makes a move stick:
-  without it he walks back within seconds. It can be switched back on again —
-  the editor notes down the routine it replaced, because the savegame no longer
-  holds it anywhere — as long as the savegame still holds what was written.
+- An NPC can be moved, with the same location picker the hero has.
+- An NPC's daily routine can be switched off, so he stays where he was put
+  instead of walking back within seconds. It can be switched back on again, as
+  long as the savegame still holds what the move wrote.
+
+### Fixed
+
+- Version 1.2.1 said an NPC's position cannot be changed because the game
+  restores it from the level. That was wrong.
 
 ## [1.2.1] - 2026-08-03
 
