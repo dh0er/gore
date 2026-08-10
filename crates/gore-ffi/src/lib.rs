@@ -188,6 +188,10 @@
 //! - `script_compile_install_state_v1` is a bounded, strictly read-only native preflight for the
 //!   shipping-game process and every known compile/recovery artifact. It returns display-only
 //!   paths and never creates, removes, renames, repairs, launches, or writes anything.
+//! - `mgr_preflight_v1` accepts one explicit game root plus optional native Manager path
+//!   overrides and returns seven fixed-order, bounded first-run findings. It never falls back to
+//!   config/Steam discovery, reconciles imports, probes by writing, repairs recovery state, or
+//!   claims that Apply is ready; all returned paths are display-only evidence.
 //! - `authoring_store_inspect_revision3_installed_dataasset_v1` accepts only one exact managed
 //!   revision-3 head, installed package-snapshot seals, game/Store roots, and a candidate ordinal.
 //!   It rebuilds every native authority and returns bounded whole-package fixed-leaf inspection
@@ -245,6 +249,7 @@ mod authoring_voice_take_remove_revision3;
 mod authoring_voice_take_status_revision3;
 mod authoring_voice_target_revision3;
 mod dataasset;
+mod mgr_preflight;
 mod script_compile_report;
 mod texture_preview;
 mod transport;
@@ -349,6 +354,7 @@ const CORE_COMMANDS: &[&str] = &[
     "mgr_apply",
     "mgr_import",
     "mgr_library_list",
+    mgr_preflight::COMMAND,
     "mgr_remove",
     "mgr_set_loadout",
     "mgr_status",
@@ -442,7 +448,7 @@ enum DispatchProbeError {
 
 /// Finds the top-level command without allocating attacker-sized JSON keys or payload values.
 ///
-/// Raw Store routes must see their original wire under their command-local cap before a generic
+/// Strict raw routes must see their original wire under their command-local cap before a generic
 /// `Value` tree exists. A command spelling is the only allocation here, and even its maximally
 /// escaped wire form is capped before decoding. Unknown values are skipped with a fixed-depth
 /// byte scanner. Once a raw command is found, its closed duplicate-safe parser owns all remaining
@@ -487,7 +493,7 @@ fn probe_dispatch_command(input: &str) -> Result<Option<String>, DispatchProbeEr
             if command.len() > MAX_DISPATCH_COMMAND_BYTES {
                 return Err(DispatchProbeError::CommandTooLong);
             }
-            if revision3_store_raw_route(&command).is_some() {
+            if command == mgr_preflight::COMMAND || revision3_store_raw_route(&command).is_some() {
                 return Ok(Some(command));
             }
             last_command = Some(command);
@@ -809,6 +815,9 @@ fn dispatch(input: &str) -> Value {
             return err("BAD_REQUEST", "invalid request json");
         }
     };
+    if command == mgr_preflight::COMMAND {
+        return mgr_preflight::mgr_preflight_v1_raw(input);
+    }
     // These security-sensitive Store routes see the original wire before any generic
     // payload `Value` exists. Route-local parsers enforce their smaller envelope caps before
     // decoding nested strings.
@@ -2028,6 +2037,7 @@ mod tests {
                     "mgr_apply",
                     "mgr_import",
                     "mgr_library_list",
+                    "mgr_preflight_v1",
                     "mgr_remove",
                     "mgr_set_loadout",
                     "mgr_status",
