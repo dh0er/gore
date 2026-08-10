@@ -641,6 +641,38 @@ class AppLocalizationsDe extends AppLocalizations {
   String get spawnPositionSection => 'Spawn-Position (Referenz)';
 
   @override
+  String get resetToSpawnPosition => 'Auf Spawn zurücksetzen';
+
+  @override
+  String get positionOutOfRange =>
+      'Wert muss zwischen −10.000.000 und 10.000.000 liegen';
+
+  @override
+  String get positionNotEditable =>
+      'Die gespeicherte Position dieses Charakters konnte nicht gelesen werden und lässt sich daher nicht bearbeiten.';
+
+  @override
+  String get positionNeverPlaced =>
+      'Dieser Charakter wurde nie in der Welt platziert (Position 0, 0, 0) — das Spiel ignoriert die gespeicherte Position möglicherweise.';
+
+  @override
+  String get npcStayInPlace => 'Tagesablauf deaktivieren';
+
+  @override
+  String get npcStayInPlaceHint => 'Er bleibt dann an seinem Platz stehen.';
+
+  @override
+  String get npcStayInPlaceLocked =>
+      'Sein ursprünglicher Tagesablauf ist nicht festgehalten, das lässt sich daher nicht mehr aufheben.';
+
+  @override
+  String get npcUndoPlacement => 'Versetzung zurücknehmen';
+
+  @override
+  String get npcUndoPlacementStale =>
+      'Der Spielstand enthält nicht mehr, was diese Versetzung geschrieben hat. Zurücksetzen würde verwerfen, was seither geschah.';
+
+  @override
   String get positionNotReadable =>
       'Die gespeicherte Position dieses Charakters konnte nicht gelesen werden.';
 
@@ -2178,6 +2210,11 @@ class AppLocalizationsDe extends AppLocalizations {
       one: '1 Änderung mit Sicherung gespeichert',
     );
     return '$_temp0';
+  }
+
+  @override
+  String editorPlacementNoteFailed(String details) {
+    return 'Die Versetzung wurde gespeichert, aber ihre Rücknahme-Notiz konnte nicht geschrieben werden: $details';
   }
 
   @override

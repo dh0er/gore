@@ -30,13 +30,59 @@ class FakePose {
     this.rotation = const (0.0, 0.0, 0.0),
     this.spawnLocation,
     this.spawnRotation,
+    this.routineClass,
+    this.undo,
   });
 
   final (double, double, double)? location;
   final (double, double, double)? rotation;
   final (double, double, double)? spawnLocation;
   final (double, double, double)? spawnRotation;
+
+  /// The NPC's current daily-routine class. Null means the save has no routine
+  /// record for him, which is how the core reports "nothing to pin" — the
+  /// routine path is then withheld too.
+  final String? routineClass;
+
+  /// A recorded undo, as `private.npc.position` reports it.
+  final FakeUndo? undo;
 }
+
+/// A recorded placement undo for the fake core.
+class FakeUndo {
+  const FakeUndo({
+    this.originalLocation = const (7.0, 8.0, 9.0),
+    this.originalRoutineClass = '/Script/Angelscript.DailyRoutine_A_Start',
+    this.originalRotation,
+    this.restorable = true,
+    this.routineRestorable,
+  });
+
+  final (double, double, double) originalLocation;
+
+  /// The facing the move replaced, when it changed one.
+  final (double, double, double)? originalRotation;
+  final String? originalRoutineClass;
+  final bool restorable;
+
+  /// Whether the ROUTINE alone can be put back. Defaults to [restorable]: a
+  /// changed position is the usual reason the whole move cannot be undone while
+  /// the routine still can, so a test that wants them to differ says so.
+  final bool? routineRestorable;
+}
+
+/// The inert routine class the fake core advertises, matching the real one.
+const String kFakeInertRoutine = '/Script/Angelscript.DailyRoutine_Empty';
+
+/// The typed path `private.npc.position` reports for the routine class leaf.
+List<String> routinePath(String npcId) => [
+  'm_GenericData',
+  '{CharacterStates}',
+  'AnyCharacterType',
+  'DailyRoutineByGlobalId',
+  '{$npcId}',
+  'DailyRoutineClass',
+];
 
 /// The typed path shape `private.npc.position` reports for one pose member.
 List<String> posePath(String npcId, String leaf) => [
@@ -227,6 +273,19 @@ class NpcPositionCoreService implements GoresaveCoreService {
               'spawnLocationPath': posePath(id, 'SpawnLocation'),
               'spawnRotationPath': posePath(id, 'SpawnRotation'),
             },
+            'routineClass': pose.routineClass,
+            if (pose.routineClass != null) 'routineClassPath': routinePath(id),
+            'inertRoutineClass': kFakeInertRoutine,
+            if (pose.undo != null)
+              'undo': {
+                'originalLocation': _vec3(pose.undo!.originalLocation),
+                if (pose.undo!.originalRotation != null)
+                  'originalRotation': _rot3(pose.undo!.originalRotation),
+                'originalRoutineClass': pose.undo!.originalRoutineClass,
+                'restorable': pose.undo!.restorable,
+                'routineRestorable':
+                    pose.undo!.routineRestorable ?? pose.undo!.restorable,
+              },
           },
         };
       case 'write_save':
@@ -282,10 +341,9 @@ Future<LocationCatalog> loadBundledCatalog(WidgetTester tester) async {
   return catalog;
 }
 
-/// Open the location picker from the button above the PLAYER's transform fields
+/// Open the shared location picker from the button above the position fields
 /// and choose the spot named [spotName], optionally ticking the opt-in
-/// "apply the spot's orientation" box first. The NPC panel has no picker — its
-/// pose is read-only (see NpcPositionPanel).
+/// "apply the spot's orientation" box first.
 Future<void> pickLocationSpot(
   WidgetTester tester,
   String spotName, {
@@ -324,6 +382,17 @@ Future<void> openPositionTab(WidgetTester tester) async {
   await tester.tap(find.widgetWithText(Tab, 'Position'));
   await tester.pumpAndSettle();
 }
+
+/// Finder for one of the six editable position fields, e.g. `location:x`.
+Finder positionField(String id) => find.byKey(ValueKey('npc-position:$id'));
+
+/// The live text of one position field.
+String positionFieldText(WidgetTester tester, String id) => tester
+    .widget<EditableText>(
+      find.descendant(of: positionField(id), matching: find.byType(EditableText)),
+    )
+    .controller
+    .text;
 
 /// The live editor state (for asserting on pending-registry KEYS).
 ProviderContainer positionContainer(WidgetTester tester) =>

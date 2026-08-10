@@ -631,6 +631,35 @@ class AppLocalizationsJa extends AppLocalizations {
   String get spawnPositionSection => 'スポーン位置（参考）';
 
   @override
+  String get resetToSpawnPosition => 'スポーン位置に戻す';
+
+  @override
+  String get positionOutOfRange => '値は −10,000,000 から 10,000,000 の間で指定してください';
+
+  @override
+  String get positionNotEditable => 'このキャラクターの保存された位置を読み取れなかったため、編集できません。';
+
+  @override
+  String get positionNeverPlaced =>
+      'このキャラクターはワールドに配置されたことがありません（位置 0, 0, 0）。ゲームは保存された位置を無視する場合があります。';
+
+  @override
+  String get npcStayInPlace => '日課を無効にする';
+
+  @override
+  String get npcStayInPlaceHint => 'その場にとどまります。';
+
+  @override
+  String get npcStayInPlaceLocked => '元の日課が記録されていないため、これはもう元に戻せません。';
+
+  @override
+  String get npcUndoPlacement => '移動を取り消す';
+
+  @override
+  String get npcUndoPlacementStale =>
+      'セーブデータにはこの移動が書き込んだ内容がもう残っていません。元に戻すと、その後の変更が失われます。';
+
+  @override
   String get positionNotReadable => 'このキャラクターの保存された位置を読み取れませんでした。';
 
   @override
@@ -2117,6 +2146,11 @@ class AppLocalizationsJa extends AppLocalizations {
   @override
   String editorChangesSavedWithBackup(int count) {
     return '$count 件の変更を保存し、バックアップを作成しました';
+  }
+
+  @override
+  String editorPlacementNoteFailed(String details) {
+    return '移動は保存されましたが、取り消し用の記録を書き込めませんでした: $details';
   }
 
   @override

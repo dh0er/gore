@@ -642,6 +642,38 @@ class AppLocalizationsPl extends AppLocalizations {
   String get spawnPositionSection => 'Pozycja odrodzenia (odniesienie)';
 
   @override
+  String get resetToSpawnPosition => 'Przywróć pozycję odrodzenia';
+
+  @override
+  String get positionOutOfRange =>
+      'Wartość musi mieścić się w zakresie od −10 000 000 do 10 000 000';
+
+  @override
+  String get positionNotEditable =>
+      'Nie udało się odczytać zapisanej pozycji tej postaci, więc nie można jej edytować.';
+
+  @override
+  String get positionNeverPlaced =>
+      'Ta postać nigdy nie została umieszczona w świecie (pozycja 0, 0, 0) — gra może zignorować zapisaną pozycję.';
+
+  @override
+  String get npcStayInPlace => 'Wyłącz jego plan dnia';
+
+  @override
+  String get npcStayInPlaceHint => 'Zostanie wtedy tam, gdzie jest.';
+
+  @override
+  String get npcStayInPlaceLocked =>
+      'Jego pierwotny plan dnia nie został zapisany, więc nie można już tego cofnąć.';
+
+  @override
+  String get npcUndoPlacement => 'Cofnij przeniesienie';
+
+  @override
+  String get npcUndoPlacementStale =>
+      'Zapis nie zawiera już tego, co zapisało to przeniesienie, więc przywrócenie odrzuciłoby to, co zdarzyło się później.';
+
+  @override
   String get positionNotReadable =>
       'Nie udało się odczytać zapisanej pozycji tej postaci.';
 
@@ -2195,6 +2227,11 @@ class AppLocalizationsPl extends AppLocalizations {
       one: 'Zapisano 1 zmianę i utworzono kopię zapasową',
     );
     return '$_temp0';
+  }
+
+  @override
+  String editorPlacementNoteFailed(String details) {
+    return 'Przeniesienie zostało zapisane, ale nie udało się zapisać notatki do cofnięcia: $details';
   }
 
   @override

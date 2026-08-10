@@ -639,6 +639,38 @@ class AppLocalizationsEn extends AppLocalizations {
   String get spawnPositionSection => 'Spawn position (reference)';
 
   @override
+  String get resetToSpawnPosition => 'Reset to spawn position';
+
+  @override
+  String get positionOutOfRange =>
+      'Value must be between −10,000,000 and 10,000,000';
+
+  @override
+  String get positionNotEditable =>
+      'The stored position could not be read for this character, so it cannot be edited.';
+
+  @override
+  String get positionNeverPlaced =>
+      'This character has never been placed in the world (position 0, 0, 0) — the game may ignore the stored position.';
+
+  @override
+  String get npcStayInPlace => 'Disable his daily routine';
+
+  @override
+  String get npcStayInPlaceHint => 'He then stays where he is.';
+
+  @override
+  String get npcStayInPlaceLocked =>
+      'His original daily routine is not recorded, so this can no longer be undone.';
+
+  @override
+  String get npcUndoPlacement => 'Take the move back';
+
+  @override
+  String get npcUndoPlacementStale =>
+      'The savegame no longer holds what that move wrote, so restoring it would discard what happened since.';
+
+  @override
   String get positionNotReadable =>
       'The stored position could not be read for this character.';
 
@@ -2164,6 +2196,11 @@ class AppLocalizationsEn extends AppLocalizations {
       one: '1 change saved with backup',
     );
     return '$_temp0';
+  }
+
+  @override
+  String editorPlacementNoteFailed(String details) {
+    return 'The move was saved, but its undo note could not be written: $details';
   }
 
   @override

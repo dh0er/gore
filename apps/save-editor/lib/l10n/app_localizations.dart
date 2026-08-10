@@ -1226,6 +1226,60 @@ abstract class AppLocalizations {
   /// **'Spawn position (reference)'**
   String get spawnPositionSection;
 
+  /// No description provided for @resetToSpawnPosition.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset to spawn position'**
+  String get resetToSpawnPosition;
+
+  /// No description provided for @positionOutOfRange.
+  ///
+  /// In en, this message translates to:
+  /// **'Value must be between −10,000,000 and 10,000,000'**
+  String get positionOutOfRange;
+
+  /// No description provided for @positionNotEditable.
+  ///
+  /// In en, this message translates to:
+  /// **'The stored position could not be read for this character, so it cannot be edited.'**
+  String get positionNotEditable;
+
+  /// No description provided for @positionNeverPlaced.
+  ///
+  /// In en, this message translates to:
+  /// **'This character has never been placed in the world (position 0, 0, 0) — the game may ignore the stored position.'**
+  String get positionNeverPlaced;
+
+  /// No description provided for @npcStayInPlace.
+  ///
+  /// In en, this message translates to:
+  /// **'Disable his daily routine'**
+  String get npcStayInPlace;
+
+  /// No description provided for @npcStayInPlaceHint.
+  ///
+  /// In en, this message translates to:
+  /// **'He then stays where he is.'**
+  String get npcStayInPlaceHint;
+
+  /// No description provided for @npcStayInPlaceLocked.
+  ///
+  /// In en, this message translates to:
+  /// **'His original daily routine is not recorded, so this can no longer be undone.'**
+  String get npcStayInPlaceLocked;
+
+  /// No description provided for @npcUndoPlacement.
+  ///
+  /// In en, this message translates to:
+  /// **'Take the move back'**
+  String get npcUndoPlacement;
+
+  /// No description provided for @npcUndoPlacementStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The savegame no longer holds what that move wrote, so restoring it would discard what happened since.'**
+  String get npcUndoPlacementStale;
+
   /// No description provided for @positionNotReadable.
   ///
   /// In en, this message translates to:
@@ -3757,6 +3811,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'{count, plural, =1{1 change saved with backup} other{{count} changes saved with backup}}'**
   String editorChangesSavedWithBackup(int count);
+
+  /// No description provided for @editorPlacementNoteFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The move was saved, but its undo note could not be written: {details}'**
+  String editorPlacementNoteFailed(String details);
 
   /// No description provided for @editorProfileNotFound.
   ///
