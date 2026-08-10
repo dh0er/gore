@@ -102,6 +102,16 @@ pub fn banks(game: Option<PathBuf>, json: bool, key: Option<String>) -> Result<(
              name: remove or rename what is there.",
             dir.display()
         ),
+        // Nothing the path RESOLVES to. A dangling link resolves to nothing and reports
+        // `NotFound`, while the name is taken — so this fell into the sentence below, which sends
+        // the reader to re-point `--game` or verify game files, and neither can create a
+        // directory while a link holds its name. Asked without following the link, which is the
+        // only way to tell "there is nothing here" from "there is something unusable here".
+        _ if std::fs::symlink_metadata(&dir).is_ok() => bail!(
+            "'{}' is a link that leads nowhere. The game's banks live at that fixed path and \
+             nothing can create it while the link holds the name: remove or rename it.",
+            dir.display()
+        ),
         _ => bail!(
             "no FMOD bank directory at '{}'. That path is fixed inside a Gothic 1 Remake install, \
              so either --game (or the configured game path) points at something that is not one, \
@@ -1705,9 +1715,25 @@ mod banks_tests {
         assert!(said.contains("remove or rename"), "{said}");
         assert!(!said.contains("verify the game files"), "the install is not the problem: {said}");
 
+        // A dangling link resolves to nothing, so it reported the directory as absent and sent
+        // the reader to verify game files — which cannot create it while the link holds the name.
+        std::fs::remove_file(&desktop).unwrap();
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_dir(temp.path().join("gone"), &desktop);
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(temp.path().join("gone"), &desktop);
+        if linked.is_ok() {
+            let error = super::banks(Some(temp.path().to_path_buf()), false, None)
+                .expect_err("a link that leads nowhere is not an empty install");
+            let said = format!("{error}");
+            assert!(said.contains("leads nowhere"), "{said}");
+            assert!(said.contains("remove or rename"), "{said}");
+            assert!(!said.contains("verify the game files"), "{said}");
+            std::fs::remove_dir(&desktop).unwrap();
+        }
+
         // The control: with the path genuinely absent the sentence and the remedy stand as they
         // were, so the branch is answering the obstruction and not every missing directory.
-        std::fs::remove_file(&desktop).unwrap();
         let error = super::banks(Some(temp.path().to_path_buf()), false, None)
             .expect_err("and neither is a directory that is not there");
         let said = format!("{error}");

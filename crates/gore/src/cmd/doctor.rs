@@ -1296,25 +1296,30 @@ fn check_deployment(gp: &GamePaths, library: &Path, loadout_path: &Path) -> Chec
 /// would still be mounted.
 fn check_mods_folder(gp: &GamePaths) -> Check {
     let dir = gore_tex::container::mods_dir(&gp.root);
-    let dir_present = match present(&dir) {
-        Ok(Some(metadata)) if metadata.is_dir() => true,
+    // Through `occupant`, which is where the three-way answer lives. This match kept its own copy
+    // with only two of the three cases, so a DANGLING link at that name resolved to nothing, came
+    // back as absent, and the check said `ok` — while `container::deploy` cannot create `~mods`
+    // while a link holds the name.
+    let dir_present = match occupant(&dir, Wanted::Folder) {
+        Ok(Occupant::Wanted) => true,
         // Something is there and it is not a folder. Reduced to `false`, this reported "no ~mods
         // (nothing additive is mounted)" as an `ok` — while `container::deploy` cannot create the
         // directory it needs and every additive texture or DataAsset deployment fails against a
         // report that said the path was simply empty.
-        Ok(Some(_)) => {
+        Ok(Occupant::Obstruction) => {
             return Check::new(
                 "mods_folder",
                 "~mods",
                 Verdict::Problem,
-                format!("{} is a file, not a folder", dir.display()),
+                format!("{} is not a folder", dir.display()),
             )
             .with_fix(
                 "the game mounts additive overrides from that folder, and a deploy cannot create \
-                 it while a file occupies its path. Remove or rename that file, then deploy again",
+                 it while something else holds that name. Remove or rename what is there, then \
+                 deploy again",
             );
         }
-        Ok(None) => false,
+        Ok(Occupant::Absent) => false,
         Err(error) => {
             return Check::new(
                 "mods_folder",
@@ -4285,8 +4290,27 @@ mod tests {
 
         let check = check_mods_folder(&gp);
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
-        assert!(check.detail.contains("is a file, not a folder"), "{}", check.detail);
+        assert!(check.detail.contains("is not a folder"), "{}", check.detail);
         assert!(check.fix.unwrap().contains("Remove or rename"));
+
+        // A DANGLING link at that name is the same blocker and used to be the `ok` verdict: it
+        // resolves to nothing, so the old two-case match read it as absent while
+        // `container::deploy` cannot create `~mods` while the link holds the name.
+        std::fs::remove_file(&mods).unwrap();
+        if try_symlink_dir(&root.join("gone"), &mods).is_ok() {
+            assert!(
+                std::fs::create_dir_all(&mods).is_err(),
+                "the fixture only means something while creating the folder really fails"
+            );
+            let check = check_mods_folder(&gp);
+            assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+            assert!(check.detail.contains("is not a folder"), "{}", check.detail);
+            std::fs::remove_dir(&mods).unwrap();
+        }
+
+        // The control: with the name free it is the ordinary "nothing additive is mounted".
+        let check = check_mods_folder(&gp);
+        assert_ne!(check.verdict, Verdict::Problem, "{}", check.detail);
     }
 
     #[test]

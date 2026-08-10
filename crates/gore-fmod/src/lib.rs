@@ -334,14 +334,14 @@ fn bank_shape_within(b: &[u8], file_len: usize) -> Result<BankShape, String> {
     // 260 MB bank whose chunks all declare zero still stepped through it 8 bytes at a time; and
     // the two copies had to be kept to the same rule by hand. `TopWalk::Any` is exactly what this
     // loop did — follow every declared size, with no guard on the fourcc.
-    let list_body = find_top_list_with(b.len(), TopWalk::Any, &mut |off| {
+    let (list_body, list_size) = find_top_list_with(b.len(), TopWalk::Any, &mut |off| {
         Ok(b.get(off..off + 8).map(|header| {
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(header);
             bytes
         }))
     })
-    .map(|(off, _)| off + 8)
+    .map(|(off, size)| (off + 8, size))
     .map_err(|_| "no top-level LIST chunk".to_string())?;
 
     if list_body + 8 > b.len() {
@@ -359,7 +359,11 @@ fn bank_shape_within(b: &[u8], file_len: usize) -> Result<BankShape, String> {
 
     // walk sub-chunks starting just after PROJ; find SNDH (direct or nested in LIST).
     let mut off = list_body + 4;
-    let end = b.len();
+    // Bounded by the LIST this is walking, not by the file. Scanning to the end of the
+    // buffer meant an SNDH lying OUTSIDE the LIST still counted — and then the two routes
+    // disagreed, because the on-disk one reads a prefix that stops where the LIST says it
+    // does. A chunk outside the chunk that contains it is not part of the wrapper.
+    let end = b.len().min(list_body.saturating_add(list_size));
     let (mut sndh_off, mut sndh_size) = (0usize, 0usize);
     while sndh_off == 0 && off + 8 <= end {
         let ctype = u32_be(b, off);
