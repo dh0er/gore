@@ -908,6 +908,20 @@ fn remove_our_file(path: &Path, ours: &dyn Fn(&Path) -> bool) -> Removal {
             }),
         };
     }
+    // A gap remains between that check and this unlink, and it cannot be closed here.
+    //
+    // Every operation available — remove, rename, reopen — resolves the path again, so none of
+    // them acts on the object that was verified. Deleting the object a handle refers to needs
+    // `SetFileInformationByHandle` or `unlinkat`, and `std` exposes neither.
+    //
+    // A metadata identity check in front of the unlink would look like it narrowed this and does
+    // not: NTFS file tunneling hands a file deleted and recreated under the same name its old
+    // creation AND last-write time, measured on this machine, so the replacement this is supposed
+    // to catch is exactly the case it cannot see. Left out rather than shipped as reassurance.
+    //
+    // What remains is an outside process writing to a name it can only have learnt from a
+    // filesystem event, between two consecutive syscalls, at a path nothing else has a reason to
+    // touch, in the seconds after a failed extraction.
     match std::fs::remove_file(&quarantine) {
         Ok(()) => Removal::Removed,
         Err(error) => Removal::Failed(format!(
@@ -920,10 +934,17 @@ fn remove_our_file(path: &Path, ours: &dyn Fn(&Path) -> bool) -> Removal {
 /// A file's identity as this platform's stable API can express it.
 ///
 /// Unix has the real thing — inode and device. Windows exposes `file_index`/`volume_serial_number`
-/// only behind an unstable feature, so the creation and last-write times stand in: both are
-/// 100-nanosecond NTFS values, and a file that replaced ours between `create_new` and a failed
-/// write would have to have been created at the very same tick to pass for it. That is a far
-/// narrower residual than the one it replaces, and it is stated rather than assumed.
+/// only behind an unstable feature, so the creation and last-write times stand in.
+///
+/// On Windows that stand-in is weaker than the tick resolution suggests, and this used to claim
+/// otherwise. NTFS **file tunneling** hands a file that was deleted and recreated under the same
+/// name its previous creation AND last-write time, for a window of seconds — measured on this
+/// machine, both stamps identical across a delete-and-rewrite. So the replacement most likely to
+/// happen is precisely the one these two values cannot see.
+///
+/// It is still worth taking where nothing better exists: the partial-write path cannot hash, since
+/// what is on disk is a prefix of unknown length. Where the content IS known, the digest decides
+/// and this does not.
 ///
 /// `None` where nothing can be had, and `None` never compares equal to `None` in the use below:
 /// where identity cannot be established, nothing is deleted.
@@ -1729,7 +1750,14 @@ mod banks_tests {
             assert!(said.contains("leads nowhere"), "{said}");
             assert!(said.contains("remove or rename"), "{said}");
             assert!(!said.contains("verify the game files"), "{said}");
+            // Not one call for both: Windows made a directory symlink, which `remove_file`
+            // refuses, while Unix made a symlink object, which `remove_dir` refuses with
+            // `NotADirectory`. Either alone panics on the other platform, after the assertions
+            // above have already passed — green here and broken everywhere else.
+            #[cfg(windows)]
             std::fs::remove_dir(&desktop).unwrap();
+            #[cfg(unix)]
+            std::fs::remove_file(&desktop).unwrap();
         }
 
         // The control: with the path genuinely absent the sentence and the remedy stand as they

@@ -3657,6 +3657,23 @@ mod tests {
         }
     }
 
+    /// Remove a symlink made by [`try_symlink_dir`].
+    ///
+    /// Not one call for both platforms: Windows makes a directory symlink, which `remove_file`
+    /// refuses, while Unix makes a symlink object, which `remove_dir` refuses with
+    /// `NotADirectory`. Using either alone panics on the other platform, after the assertions
+    /// have already passed — a test that is green here and broken everywhere else.
+    fn remove_symlink(link: &Path) -> std::io::Result<()> {
+        #[cfg(windows)]
+        {
+            std::fs::remove_dir(link)
+        }
+        #[cfg(unix)]
+        {
+            std::fs::remove_file(link)
+        }
+    }
+
     /// A symlink at `link` pointing at `target`, which need not exist.
     fn try_symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
         #[cfg(windows)]
@@ -4305,7 +4322,7 @@ mod tests {
             let check = check_mods_folder(&gp);
             assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
             assert!(check.detail.contains("is not a folder"), "{}", check.detail);
-            std::fs::remove_dir(&mods).unwrap();
+            remove_symlink(&mods).unwrap();
         }
 
         // The control: with the name free it is the ordinary "nothing additive is mounted".
