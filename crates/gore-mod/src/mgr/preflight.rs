@@ -136,6 +136,11 @@ struct LoadoutInspection {
     ue4ss: Ue4ssRequirement,
 }
 
+struct InstallMutationInspection {
+    check: PreflightCheckV1,
+    blocks_deployment_recovery: bool,
+}
+
 enum EvidenceFailure {
     Problem(String),
     Unknown(String),
@@ -211,7 +216,7 @@ where
     let install = inspect_install(root.directory.as_ref());
     let loadout = inspect_loadout(library_dir, loadout_path);
     let loadout_healthy = loadout.check.state == PreflightStateV1::Ok;
-    let (deployment, deployment_recovery_seen) = inspect_deployment(
+    let (mut deployment, deployment_recovery_seen) = inspect_deployment(
         root.root.as_deref(),
         library_dir,
         loadout.loadout.as_ref(),
@@ -225,6 +230,13 @@ where
         deploy_recovery,
     );
     let ue4ss = inspect_ue4ss(root.directory.as_ref(), loadout.ue4ss);
+    defer_deployment_action(
+        &mut deployment,
+        &install,
+        &install_mutation.check,
+        install_mutation.blocks_deployment_recovery,
+        &ue4ss,
+    );
     let write_access = PreflightCheckV1::new(
         PreflightCheckIdV1::WriteAccess,
         PreflightStateV1::Unverified,
@@ -240,11 +252,57 @@ where
             install,
             loadout.check,
             deployment,
-            install_mutation,
+            install_mutation.check,
             ue4ss,
             write_access,
         ],
     }
+}
+
+fn defer_deployment_action(
+    deployment: &mut PreflightCheckV1,
+    install: &PreflightCheckV1,
+    install_mutation: &PreflightCheckV1,
+    install_mutation_blocks_recovery: bool,
+    ue4ss: &PreflightCheckV1,
+) {
+    let applies_loadout = matches!(deployment.action, "apply_loadout" | "reapply_after_update");
+    let mutates_install = applies_loadout
+        || matches!(
+            deployment.action,
+            "recover_deployment" | "remove_studio_deployment"
+        );
+    if !mutates_install {
+        return;
+    }
+
+    let blocker = if install_mutation.state != PreflightStateV1::Ok
+        && (applies_loadout || install_mutation_blocks_recovery)
+    {
+        Some((install_mutation, "InstallMutation"))
+    } else if applies_loadout && install.state != PreflightStateV1::Ok {
+        Some((install, "Install"))
+    } else if applies_loadout
+        && matches!(
+            ue4ss.state,
+            PreflightStateV1::Problem | PreflightStateV1::Unknown
+        )
+    {
+        Some((ue4ss, "UE4SS"))
+    } else {
+        None
+    };
+    let Some((blocker, label)) = blocker else {
+        return;
+    };
+    deployment.action = blocker.action;
+    deployment.detail = bounded_text(
+        &format!(
+            "{}; resolve the {label} finding before this deployment action",
+            deployment.detail,
+        ),
+        MAX_DETAIL_BYTES,
+    );
 }
 
 fn inspect_game_root(selected: &Path) -> RootInspection {
@@ -995,19 +1053,22 @@ fn inspect_install_mutation<P, R>(
     deployment_recovery_seen: bool,
     install_state: P,
     deploy_recovery: R,
-) -> PreflightCheckV1
+) -> InstallMutationInspection
 where
     P: FnOnce(&Path) -> InstallCompileStateProbe,
     R: FnOnce(&Path) -> crate::Result<bool>,
 {
     let Some(game_root) = game_root else {
-        return PreflightCheckV1::new(
-            PreflightCheckIdV1::InstallMutation,
-            PreflightStateV1::Unknown,
-            "install_mutation_not_inspected",
-            "select_game_root",
-            "process, lock, and recovery state need a readable game root",
-        );
+        return InstallMutationInspection {
+            check: PreflightCheckV1::new(
+                PreflightCheckIdV1::InstallMutation,
+                PreflightStateV1::Unknown,
+                "install_mutation_not_inspected",
+                "select_game_root",
+                "process, lock, and recovery state need a readable game root",
+            ),
+            blocks_deployment_recovery: true,
+        };
     };
     let probe = install_state(game_root);
     let recovery = deploy_recovery(game_root);
@@ -1060,53 +1121,71 @@ where
         items.push(format!("deploy recovery inspection: {error}"));
     }
 
+    if probe.game_process == InstallCompileGameProcessDisposition::Running
+        || probe.disposition == InstallCompileStateDisposition::GameProcessRunning
+    {
+        return InstallMutationInspection {
+            check: PreflightCheckV1::new(
+                PreflightCheckIdV1::InstallMutation,
+                PreflightStateV1::Problem,
+                "game_process_running",
+                "close_game",
+                "the shipping game process is running",
+            )
+            .with_items(items),
+            blocks_deployment_recovery: true,
+        };
+    }
     if probe.disposition == InstallCompileStateDisposition::InspectionFailed
         || probe.game_process == InstallCompileGameProcessDisposition::InspectionFailed
         || !probe.issues.is_empty()
         || recovery.is_err()
     {
-        return PreflightCheckV1::new(
-            PreflightCheckIdV1::InstallMutation,
-            PreflightStateV1::Unknown,
-            "install_mutation_inspection_failed",
-            "inspect_permissions",
-            "process or recovery state could not be established safely",
-        )
-        .with_items(items);
+        return InstallMutationInspection {
+            check: PreflightCheckV1::new(
+                PreflightCheckIdV1::InstallMutation,
+                PreflightStateV1::Unknown,
+                "install_mutation_inspection_failed",
+                "inspect_permissions",
+                "process or recovery state could not be established safely",
+            )
+            .with_items(items),
+            blocks_deployment_recovery: true,
+        };
     }
-    if probe.game_process == InstallCompileGameProcessDisposition::Running
-        || probe.disposition == InstallCompileStateDisposition::GameProcessRunning
-    {
-        return PreflightCheckV1::new(
-            PreflightCheckIdV1::InstallMutation,
-            PreflightStateV1::Problem,
-            "game_process_running",
-            "close_game",
-            "the shipping game process is running",
-        )
-        .with_items(items);
+    let probe_recovery = probe.disposition
+        == InstallCompileStateDisposition::RecoveryArtifactsPresent
+        || !probe.artifacts.is_empty();
+    let independent_deploy_recovery =
+        recovery.is_ok_and(|required| required) && !deployment_recovery_seen;
+    let independent_recovery = probe_recovery || independent_deploy_recovery;
+    if deployment_recovery_seen || independent_recovery {
+        return InstallMutationInspection {
+            check: PreflightCheckV1::new(
+                PreflightCheckIdV1::InstallMutation,
+                PreflightStateV1::Problem,
+                "install_recovery_required",
+                if independent_recovery {
+                    "recover_install"
+                } else {
+                    "recover_deployment"
+                },
+                "a lock, journal, backup, or deploy recovery record blocks a new install mutation",
+            )
+            .with_items(items),
+            blocks_deployment_recovery: independent_recovery,
+        };
     }
-    if deployment_recovery_seen
-        || recovery.is_ok_and(|required| required)
-        || probe.disposition == InstallCompileStateDisposition::RecoveryArtifactsPresent
-        || !probe.artifacts.is_empty()
-    {
-        return PreflightCheckV1::new(
+    InstallMutationInspection {
+        check: PreflightCheckV1::new(
             PreflightCheckIdV1::InstallMutation,
-            PreflightStateV1::Problem,
-            "install_recovery_required",
-            "recover_install",
-            "a lock, journal, backup, or deploy recovery record blocks a new install mutation",
-        )
-        .with_items(items);
+            PreflightStateV1::Ok,
+            "install_mutation_clear",
+            "none",
+            "the game is closed and no known GORE recovery artifact is present",
+        ),
+        blocks_deployment_recovery: false,
     }
-    PreflightCheckV1::new(
-        PreflightCheckIdV1::InstallMutation,
-        PreflightStateV1::Ok,
-        "install_mutation_clear",
-        "none",
-        "the game is closed and no known GORE recovery artifact is present",
-    )
 }
 
 fn inspect_ue4ss(
@@ -1759,6 +1838,111 @@ mod tests {
     }
 
     #[test]
+    fn deployment_actions_defer_to_relevant_preflight_blockers() {
+        let ok_install = PreflightCheckV1::new(
+            PreflightCheckIdV1::Install,
+            PreflightStateV1::Ok,
+            "install_recognized",
+            "none",
+            "ok",
+        );
+        let bad_install = PreflightCheckV1::new(
+            PreflightCheckIdV1::Install,
+            PreflightStateV1::Problem,
+            "install_incomplete",
+            "verify_game_files",
+            "bad",
+        );
+        let clear_mutation = PreflightCheckV1::new(
+            PreflightCheckIdV1::InstallMutation,
+            PreflightStateV1::Ok,
+            "install_mutation_clear",
+            "none",
+            "clear",
+        );
+        let running = PreflightCheckV1::new(
+            PreflightCheckIdV1::InstallMutation,
+            PreflightStateV1::Problem,
+            "game_process_running",
+            "close_game",
+            "running",
+        );
+        let no_ue4ss = PreflightCheckV1::new(
+            PreflightCheckIdV1::Ue4ss,
+            PreflightStateV1::NotRequired,
+            "ue4ss_not_required",
+            "none",
+            "not required",
+        );
+        let missing_ue4ss = PreflightCheckV1::new(
+            PreflightCheckIdV1::Ue4ss,
+            PreflightStateV1::Problem,
+            "ue4ss_dll_missing",
+            "install_ue4ss",
+            "missing",
+        );
+        let deployment = || {
+            PreflightCheckV1::new(
+                PreflightCheckIdV1::Deployment,
+                PreflightStateV1::Problem,
+                "deployment_changes_pending",
+                "apply_loadout",
+                "pending",
+            )
+        };
+
+        let mut blocked_by_process = deployment();
+        defer_deployment_action(
+            &mut blocked_by_process,
+            &bad_install,
+            &running,
+            true,
+            &missing_ue4ss,
+        );
+        assert_eq!(blocked_by_process.action, "close_game");
+
+        let mut blocked_by_install = deployment();
+        defer_deployment_action(
+            &mut blocked_by_install,
+            &bad_install,
+            &clear_mutation,
+            false,
+            &missing_ue4ss,
+        );
+        assert_eq!(blocked_by_install.action, "verify_game_files");
+
+        let mut blocked_by_ue4ss = deployment();
+        defer_deployment_action(
+            &mut blocked_by_ue4ss,
+            &ok_install,
+            &clear_mutation,
+            false,
+            &missing_ue4ss,
+        );
+        assert_eq!(blocked_by_ue4ss.action, "install_ue4ss");
+
+        let mut recovery = PreflightCheckV1::new(
+            PreflightCheckIdV1::Deployment,
+            PreflightStateV1::Problem,
+            "deployment_recovery_required",
+            "recover_deployment",
+            "recover",
+        );
+        defer_deployment_action(
+            &mut recovery,
+            &bad_install,
+            &clear_mutation,
+            false,
+            &missing_ue4ss,
+        );
+        assert_eq!(recovery.action, "recover_deployment");
+
+        let mut healthy = deployment();
+        defer_deployment_action(&mut healthy, &ok_install, &clear_mutation, false, &no_ue4ss);
+        assert_eq!(healthy.action, "apply_loadout");
+    }
+
+    #[test]
     fn process_recovery_and_inspection_failures_fail_closed() {
         let install = install_fixture();
         let running = InstallCompileStateProbe {
@@ -1777,6 +1961,51 @@ mod tests {
             |_| Ok(false),
         );
         assert_eq!(state.checks[4].code, "game_process_running");
+
+        let deferred = run_with(
+            install.path(),
+            &install.path().join("library"),
+            &install.path().join("loadout.json"),
+            |_, _, _| {
+                Ok(ManagerStatus::ChangesPending {
+                    deployed: Vec::new(),
+                    target: Vec::new(),
+                })
+            },
+            |_| running.clone(),
+            |_| Ok(false),
+        );
+        assert_eq!(deferred.checks[3].code, "deployment_changes_pending");
+        assert_eq!(deferred.checks[3].action, "close_game");
+        assert_eq!(deferred.checks[4].action, "close_game");
+
+        let running_with_errors = InstallCompileStateProbe {
+            disposition: InstallCompileStateDisposition::GameProcessRunning,
+            safe_to_compile: false,
+            game_process: InstallCompileGameProcessDisposition::Running,
+            artifacts: Vec::new(),
+            issues: vec![InstallCompileInspectionIssue {
+                kind: InstallCompileInspectionIssueKind::ArtifactMetadata,
+                path: None,
+                path_truncated: false,
+                message: "metadata denied".to_owned(),
+                message_truncated: false,
+            }],
+        };
+        let known_running = run_with(
+            install.path(),
+            &install.path().join("library"),
+            &install.path().join("loadout.json"),
+            |_, _, _| Ok(ManagerStatus::NothingDeployed),
+            |_| running_with_errors.clone(),
+            |_| Err(crate::ModError::Other("recovery denied".to_owned())),
+        );
+        assert_eq!(known_running.checks[4].code, "game_process_running");
+        assert_eq!(known_running.checks[4].action, "close_game");
+        assert!(known_running.checks[4]
+            .items
+            .iter()
+            .any(|item| item.contains("recovery denied")));
 
         let state = run_with(
             install.path(),
@@ -1797,11 +2026,35 @@ mod tests {
             |_| Ok(false),
         );
         assert_eq!(state.checks[3].code, "deployment_recovery_required");
+        assert_eq!(state.checks[3].action, "recover_deployment");
         assert_eq!(state.checks[4].code, "install_recovery_required");
+        assert_eq!(state.checks[4].action, "recover_deployment");
         assert!(state.checks[4]
             .items
             .iter()
             .any(|item| item == "deployment status: recovery required"));
+
+        let independent_recovery = InstallCompileStateProbe {
+            disposition: InstallCompileStateDisposition::RecoveryArtifactsPresent,
+            safe_to_compile: false,
+            game_process: InstallCompileGameProcessDisposition::NotRunning,
+            artifacts: vec![InstallCompileArtifact {
+                kind: InstallCompileArtifactKind::CompileLock,
+                path: "C:/game/.gore-as-compile.lock".to_owned(),
+                path_truncated: false,
+            }],
+            issues: Vec::new(),
+        };
+        let state = run_with(
+            install.path(),
+            &install.path().join("library"),
+            &install.path().join("loadout.json"),
+            |_, _, _| Ok(ManagerStatus::RecoveryRequired),
+            |_| independent_recovery.clone(),
+            |_| Ok(false),
+        );
+        assert_eq!(state.checks[3].action, "recover_install");
+        assert_eq!(state.checks[4].action, "recover_install");
 
         let failed = InstallCompileStateProbe {
             disposition: InstallCompileStateDisposition::InspectionFailed,
