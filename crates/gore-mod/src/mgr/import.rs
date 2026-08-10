@@ -1039,22 +1039,7 @@ fn materialize(source: &Path, staging: &Path, limits: ImportLimits) -> crate::Re
             // preflighted before the selected file is written, so a bad sibling leaves no partial
             // payload behind. A lone loose `_P.pak` simply has no siblings to pull.
             if ext == "utoc" || ext == "ucas" || ext == "pak" {
-                for sib_ext in ["utoc", "ucas", "pak"] {
-                    if sib_ext == ext {
-                        continue;
-                    }
-                    let sib = source.with_extension(sib_ext);
-                    match std::fs::symlink_metadata(&sib) {
-                        Ok(_) => sources.push(sib),
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(error) => {
-                            return Err(crate::io(&format!(
-                                "reading import sibling metadata {}",
-                                sib.display()
-                            ))(error))
-                        }
-                    }
-                }
+                sources = direct_container_members(source, limits)?;
             }
             materialize_single_file_set(&sources, staging, limits)
         }
@@ -1063,6 +1048,95 @@ fn materialize(source: &Path, staging: &Path, limits: ImportLimits) -> crate::Re
              or a known game file (.lcache/.bank/PrecompiledScript*.Cache)",
             source.display()
         ))),
+    }
+}
+
+/// Enumerate the selected container member's directory before staging any bytes. Besides finding
+/// same-base siblings through the same portable Windows identity used by folder/ZIP imports, this
+/// makes an otherwise-hidden split member (`.ucas.N`, `.utoc.N`, or `.pak.N`) a hard refusal.
+fn direct_container_members(source: &Path, limits: ImportLimits) -> crate::Result<Vec<PathBuf>> {
+    // Bind relative or aliased input to the opened file's final path. `read_dir("")` is invalid,
+    // and comparing an enumerated absolute entry with the caller's relative spelling would add the
+    // selected member twice.
+    let selected_file = open_file_nofollow(source, "selected container import member")?;
+    let selected = selected_file.path().to_path_buf();
+    drop(selected_file);
+    let selected_name = selected
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            ModError::Other(format!(
+                "single-file import name is not valid Unicode: {}",
+                selected.display()
+            ))
+        })?;
+    let (selected_base, _) = primary_iostore_member(selected_name).ok_or_else(|| {
+        ModError::Other(format!(
+            "selected container member has an unsupported name: {selected_name:?}"
+        ))
+    })?;
+    let selected_base_key = portable_windows_key(selected_base);
+    let parent = selected
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(parent).map_err(crate::io(&format!(
+        "reading import siblings in {}",
+        parent.display()
+    )))? {
+        let entry = entry.map_err(crate::io("reading import sibling entry"))?;
+        check_import_limit(
+            "single-file import entry count",
+            entries.len() as u64 + 1,
+            limits.max_zip_entries as u64,
+        )?;
+        entries.push(entry);
+    }
+    entries.sort_by_key(|entry| entry.file_name());
+
+    let mut sources = vec![selected.clone()];
+    for entry in entries {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let lower_name = portable_windows_key(&name);
+        if partitioned_iostore_member_base(&lower_name)
+            .is_some_and(|base| portable_windows_key(base) == selected_base_key)
+        {
+            return Err(ModError::Other(format!(
+                "unsupported multipart IoStore member {:?}; the manager cannot deploy partitioned container payloads",
+                entry.path().display().to_string()
+            )));
+        }
+        if primary_iostore_member(&name)
+            .is_some_and(|(base, _)| portable_windows_key(base) == selected_base_key)
+        {
+            let sibling = open_file_nofollow(&entry.path(), "container import sibling")?;
+            if !same_opened_import_path(sibling.path(), &selected) {
+                sources.push(sibling.path().to_path_buf());
+            }
+        }
+    }
+    Ok(sources)
+}
+
+fn same_opened_import_path(left: &Path, right: &Path) -> bool {
+    // Both paths come from an opened handle. Keep this case-sensitive so distinct entries in a
+    // case-sensitive directory are retained and then rejected as competing portable destinations.
+    left == right
+}
+
+fn primary_iostore_member(name: &str) -> Option<(&str, &'static str)> {
+    let (base, extension) = name.rsplit_once('.')?;
+    if extension.eq_ignore_ascii_case("utoc") {
+        Some((base, "utoc"))
+    } else if extension.eq_ignore_ascii_case("ucas") {
+        Some((base, "ucas"))
+    } else if extension.eq_ignore_ascii_case("pak") {
+        Some((base, "pak"))
+    } else {
+        None
     }
 }
 
@@ -1109,7 +1183,7 @@ fn materialize_single_file_set(
                 "single-file import has an unsafe file name: {file_name:?}"
             )));
         }
-        let folded = file_name.to_lowercase();
+        let folded = portable_windows_key(&file_name);
         if let Some(first) = destinations.insert(folded, file_name.clone()) {
             return Err(ModError::Other(format!(
                 "single-file import members {first:?} and {file_name:?} have the same portable destination"
@@ -1494,6 +1568,21 @@ fn preflight_zip(
                 "zip entry {raw_name:?} has an unsafe path; refusing to extract"
             )));
         };
+        let rel_path = Path::new(&rel);
+        let directory_depth = if entry.is_dir() {
+            rel_path.components().count()
+        } else {
+            rel_path
+                .parent()
+                .map(|parent| parent.components().count())
+                .unwrap_or(0)
+        };
+        if directory_depth > limits.max_directory_depth {
+            return Err(ModError::Other(format!(
+                "ZIP entry nesting depth limit exceeded for {raw_name:?}: {directory_depth} > {}",
+                limits.max_directory_depth
+            )));
+        }
         if entry.is_symlink() {
             return Err(ModError::Other(format!(
                 "ZIP entry {raw_name:?} is a symbolic link; refusing to extract"
@@ -1534,7 +1623,7 @@ fn preflight_zip(
             limits.max_zip_total_uncompressed_bytes,
         )?;
 
-        let key = rel.replace('\\', "/").to_lowercase();
+        let key = portable_windows_key(&rel);
         if let Some(first) = targets.insert(key, raw_name.clone()) {
             return Err(ModError::Other(format!(
                 "ZIP entries {first:?} and {raw_name:?} have the same portable extraction path"
@@ -1595,15 +1684,15 @@ fn safe_zip_entry(name: &str, max_path_bytes: usize) -> Option<String> {
 /// subdir, so entries are uniformly "mod dirs inside the entry" and a later deploy-copy of the
 /// mod dir can never drag the sidecar along.
 fn wrap_root_ue4ss(staging: &Path, name: &str) -> crate::Result<()> {
-    if !staging.join("Scripts").join("main.lua").is_file() {
+    if !staged_regular_file_exists(&staging.join("Scripts").join("main.lua"))? {
         return Ok(());
     }
     let tmp = staging.join(".gore-wrap");
     std::fs::create_dir(&tmp).map_err(crate::io("creating wrap dir"))?;
-    let entries: Vec<_> = std::fs::read_dir(staging)
-        .map_err(crate::io("reading staging"))?
-        .filter_map(|e| e.ok())
-        .collect();
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(staging).map_err(crate::io("reading staging"))? {
+        entries.push(entry.map_err(crate::io("reading staging entry for UE4SS wrap"))?);
+    }
     for e in entries {
         if e.file_name().to_string_lossy() == ".gore-wrap" {
             continue;
@@ -1629,34 +1718,38 @@ fn wrap_root_ue4ss(staging: &Path, name: &str) -> crate::Result<()> {
 /// No-op when there's no manifest, or the manifest is already at the root (the common flat case,
 /// and every foreign import, which has no `gore-mod.json`).
 fn reroot_nested_bundle(staging: &Path) -> crate::Result<()> {
-    let Some(bundle_dir) = find_manifest_dir(staging) else {
+    let Some(bundle_dir) = find_manifest_dir(staging)? else {
         return Ok(());
     };
     if bundle_dir == staging {
         return Ok(()); // already rooted at the bundle
     }
+    validate_reroot_chain(staging, &bundle_dir)?;
     // Stash the nested bundle subtree at a fresh sibling under `staging` first (a valid rename:
     // `.gore-reroot` is NOT inside `bundle_dir`, so this doesn't move a dir into itself). Then clear
     // the old wrapper dirs and hoist the stashed bundle's children up to the root.
     let stash = staging.join(".gore-reroot");
-    if stash.exists() {
-        std::fs::remove_dir_all(&stash).map_err(crate::io("clearing reroot stash"))?;
+    if metadata_if_present(&stash)?.is_some() {
+        return Err(ModError::Other(format!(
+            "nested gore-mod import uses reserved reroot path: {}",
+            stash.display()
+        )));
     }
     std::fs::rename(&bundle_dir, &stash).map_err(crate::io("stashing nested bundle"))?;
 
-    // Remove every remaining top-level entry (the emptied wrapper dirs and any stray sibling files
-    // shipped alongside the bundle folder) so only the hoisted bundle content remains.
-    for e in std::fs::read_dir(staging).map_err(crate::io("reading staging for reroot"))? {
-        let e = e.map_err(crate::io("reading staging entry"))?;
-        if e.file_name() == std::ffi::OsStr::new(".gore-reroot") {
-            continue;
+    // Remove only wrapper directories that became empty. Benign README/license/thumbnail siblings
+    // remain under their original wrapper path; deployable or reserved siblings were rejected by
+    // the preflight above, so nothing actionable is silently dropped from the imported entry.
+    let mut wrapper = bundle_dir.parent();
+    while let Some(path) = wrapper {
+        if path == staging {
+            break;
         }
-        let p = e.path();
-        let md = std::fs::symlink_metadata(&p).map_err(crate::io("stat reroot leftover"))?;
-        if md.is_dir() {
-            std::fs::remove_dir_all(&p).map_err(crate::io("removing wrapper dir"))?;
-        } else {
-            std::fs::remove_file(&p).map_err(crate::io("removing stray sibling"))?;
+        let parent = path.parent();
+        match std::fs::remove_dir(path) {
+            Ok(()) => wrapper = parent,
+            Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => break,
+            Err(error) => return Err(crate::io("removing empty gore-mod wrapper")(error)),
         }
     }
 
@@ -1670,6 +1763,195 @@ fn reroot_nested_bundle(staging: &Path) -> crate::Result<()> {
     Ok(())
 }
 
+/// Check that re-rooting cannot hide or overwrite content. Benign wrapper extras are retained, but
+/// anything the foreign scanner could deploy is refused rather than being left outside the
+/// manifest contract. Root-name collisions are also refused before the first rename.
+fn validate_reroot_chain(staging: &Path, bundle_dir: &Path) -> crate::Result<()> {
+    let relative = bundle_dir.strip_prefix(staging).map_err(|_| {
+        ModError::Other(format!(
+            "nested gore-mod manifest root escapes staging: {}",
+            bundle_dir.display()
+        ))
+    })?;
+    let top_wrapper = relative
+        .components()
+        .next()
+        .and_then(|component| match component {
+            std::path::Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            ModError::Other(format!(
+                "nested gore-mod manifest has an unsafe wrapper root: {}",
+                bundle_dir.display()
+            ))
+        })?;
+    let top_wrapper_key = portable_windows_key(top_wrapper);
+    let mut top_wrapper_will_be_removed = true;
+    let mut current = staging.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(expected) = component else {
+            return Err(ModError::Other(format!(
+                "nested gore-mod manifest has an unsafe wrapper path: {}",
+                bundle_dir.display()
+            )));
+        };
+        if expected == std::ffi::OsStr::new(".gore-reroot") {
+            return Err(ModError::Other(format!(
+                "nested gore-mod wrapper uses reserved reroot path: {}",
+                bundle_dir.display()
+            )));
+        }
+        let mut entries = Vec::new();
+        for entry in std::fs::read_dir(&current).map_err(crate::io(&format!(
+            "reading gore-mod wrapper {}",
+            current.display()
+        )))? {
+            entries.push(entry.map_err(crate::io(&format!(
+                "reading gore-mod wrapper entry in {}",
+                current.display()
+            )))?);
+        }
+        let expected_entry = entries
+            .iter()
+            .find(|entry| entry.file_name() == expected)
+            .ok_or_else(|| {
+                ModError::Other(format!(
+                    "nested gore-mod wrapper chain changed while being inspected: {}",
+                    current.display()
+                ))
+            })?;
+        let entry_type = expected_entry.file_type().map_err(crate::io(&format!(
+            "reading gore-mod wrapper entry type {}",
+            expected_entry.path().display()
+        )))?;
+        let entry_metadata = std::fs::symlink_metadata(expected_entry.path())
+            .map_err(crate::io("reading gore-mod wrapper entry metadata"))?;
+        if import_metadata_is_link(&entry_metadata) {
+            return Err(ModError::Other(format!(
+                "nested gore-mod wrapper is a symbolic link or reparse point: {}",
+                expected_entry.path().display()
+            )));
+        }
+        if !entry_type.is_dir() || !entry_metadata.is_dir() {
+            return Err(ModError::Other(format!(
+                "nested gore-mod wrapper is not a directory: {}",
+                expected_entry.path().display()
+            )));
+        }
+        let below_staging_root = current != staging;
+        for sibling in entries.iter().filter(|entry| entry.file_name() != expected) {
+            if let Some(deployable) = find_deployable_reroot_sibling(&sibling.path(), 0)? {
+                return Err(ModError::Other(format!(
+                    "nested gore-mod manifest has deployable or reserved sibling content outside its contract: {}",
+                    deployable.display()
+                )));
+            }
+            // A benign sibling below the staging root keeps the top wrapper non-empty after the
+            // bundle subtree moves to the stash. The root entry therefore remains collision-relevant.
+            if below_staging_root {
+                top_wrapper_will_be_removed = false;
+            }
+        }
+        current = expected_entry.path();
+    }
+
+    // Hoisting the bundle's direct children must be create-new with respect to every retained root
+    // sibling. `.gore-reroot` is reserved for the temporary stash itself.
+    for entry in std::fs::read_dir(bundle_dir).map_err(crate::io(&format!(
+        "reading nested gore-mod root {}",
+        bundle_dir.display()
+    )))? {
+        let entry = entry.map_err(crate::io("reading nested gore-mod root entry"))?;
+        let name = entry.file_name();
+        let name_key = name.to_str().map(portable_windows_key).ok_or_else(|| {
+            ModError::Other(format!(
+                "nested gore-mod content name is not valid Unicode: {}",
+                entry.path().display()
+            ))
+        })?;
+        let occupied = metadata_if_present(&staging.join(&name))?.is_some();
+        let occupied_only_by_removable_wrapper =
+            occupied && top_wrapper_will_be_removed && name_key == top_wrapper_key;
+        if name == std::ffi::OsStr::new(".gore-reroot")
+            || (occupied && !occupied_only_by_removable_wrapper)
+        {
+            return Err(ModError::Other(format!(
+                "nested gore-mod content would collide while re-rooting: {}",
+                entry.path().display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn find_deployable_reroot_sibling(path: &Path, depth: usize) -> crate::Result<Option<PathBuf>> {
+    let sibling_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            ModError::Other(format!(
+                "nested gore-mod sibling name is not valid Unicode: {}",
+                path.display()
+            ))
+        })?;
+    if sibling_name.eq_ignore_ascii_case(META_FILE)
+        || sibling_name.eq_ignore_ascii_case(".gore-reroot")
+    {
+        return Ok(Some(path.to_path_buf()));
+    }
+    let metadata = std::fs::symlink_metadata(path).map_err(crate::io(&format!(
+        "reading nested gore-mod sibling metadata {}",
+        path.display()
+    )))?;
+    if import_metadata_is_link(&metadata) {
+        return Err(ModError::Other(format!(
+            "nested gore-mod sibling is a symbolic link or reparse point: {}",
+            path.display()
+        )));
+    }
+    if metadata.is_file() {
+        let lower = sibling_name.to_ascii_lowercase();
+        let deployable = lower.ends_with(".utoc")
+            || lower.ends_with(".ucas")
+            || is_partitioned_iostore_member(&lower)
+            || lower.ends_with(".pak")
+            || lower.ends_with(".lcache")
+            || lower.ends_with(".bank")
+            || (lower.starts_with("precompiledscript") && lower.ends_with(".cache"));
+        return Ok(deployable.then(|| path.to_path_buf()));
+    }
+    if !metadata.is_dir() {
+        return Err(ModError::Other(format!(
+            "nested gore-mod sibling is neither a regular file nor a directory: {}",
+            path.display()
+        )));
+    }
+    if staged_regular_file_exists(&path.join("Scripts").join("main.lua"))? {
+        return Ok(Some(path.to_path_buf()));
+    }
+    if depth >= MAX_SCAN_DEPTH {
+        return Err(ModError::Other(format!(
+            "nested gore-mod sibling nesting depth limit exceeded at {}",
+            path.display()
+        )));
+    }
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(path).map_err(crate::io(&format!(
+        "scanning nested gore-mod sibling {}",
+        path.display()
+    )))? {
+        entries.push(entry.map_err(crate::io("reading nested gore-mod sibling entry"))?);
+    }
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        if let Some(deployable) = find_deployable_reroot_sibling(&entry.path(), depth + 1)? {
+            return Ok(Some(deployable));
+        }
+    }
+    Ok(None)
+}
+
 // ── Detection ───────────────────────────────────────────────────────────────
 
 /// Detect what the staged tree is: a goremod bundle (`gore-mod.json` at the root or nested at
@@ -1678,7 +1960,7 @@ fn detect(
     staging: &Path,
     limits: ImportLimits,
 ) -> crate::Result<(Option<ModManifest>, Vec<ComponentInfo>)> {
-    if let Some(bundle_dir) = find_manifest_dir(staging) {
+    if let Some(bundle_dir) = find_manifest_dir(staging)? {
         let bytes = read_bounded_bundle_file(
             &bundle_dir,
             Path::new("gore-mod.json"),
@@ -1699,34 +1981,107 @@ fn detect(
     }
 }
 
-/// First dir at depth ≤2 (BFS, sorted — deterministic) containing `gore-mod.json`.
-fn find_manifest_dir(root: &Path) -> Option<PathBuf> {
-    if root.join("gore-mod.json").is_file() {
-        return Some(root.to_path_buf());
+/// Find the sole `gore-mod.json` in the bounded staged tree. Only a manifest at depth ≤2 is a
+/// supported bundle root, but deeper manifests are still detected and refused rather than letting
+/// their payload fall through to the foreign scanner. Until two manifests have already proved
+/// ambiguity, every directory-entry and file-type failure is authoritative: choosing a different
+/// visible manifest after an incomplete scan could discard content during re-rooting.
+const MANIFEST_AMBIGUITY_EVIDENCE_LIMIT: usize = 2;
+
+fn find_manifest_dir(root: &Path) -> crate::Result<Option<PathBuf>> {
+    let mut manifests = Vec::<(PathBuf, usize)>::with_capacity(MANIFEST_AMBIGUITY_EVIDENCE_LIMIT);
+    find_manifest_dirs(root, 0, &mut manifests)?;
+    manifests.sort_by(|(left, _), (right, _)| left.cmp(right));
+    if manifests.len() > 1 {
+        let paths = manifests
+            .iter()
+            .map(|(path, _)| path.join("gore-mod.json").display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(ModError::Other(format!(
+            "ambiguous gore-mod import: multiple gore-mod.json manifests found (first two; at least two exist): {paths}"
+        )));
     }
-    let mut level = vec![root.to_path_buf()];
-    for _ in 0..2 {
-        let mut next = Vec::new();
-        for dir in &level {
-            let Ok(rd) = std::fs::read_dir(dir) else {
-                continue;
-            };
-            let mut subs: Vec<PathBuf> = rd
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-                .map(|e| e.path())
-                .collect();
-            subs.sort();
-            for sub in subs {
-                if sub.join("gore-mod.json").is_file() {
-                    return Some(sub);
-                }
-                next.push(sub);
-            }
+    let Some((manifest_dir, depth)) = manifests.pop() else {
+        return Ok(None);
+    };
+    if depth > 2 {
+        return Err(ModError::Other(format!(
+            "gore-mod.json is nested too deeply for a supported bundle layout (depth {depth} > 2): {}",
+            manifest_dir.join("gore-mod.json").display()
+        )));
+    }
+    Ok(Some(manifest_dir))
+}
+
+fn find_manifest_dirs(
+    dir: &Path,
+    depth: usize,
+    manifests: &mut Vec<(PathBuf, usize)>,
+) -> crate::Result<()> {
+    if manifests.len() >= MANIFEST_AMBIGUITY_EVIDENCE_LIMIT {
+        return Ok(());
+    }
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(dir).map_err(crate::io(&format!(
+        "scanning for gore-mod.json in {}",
+        dir.display()
+    )))? {
+        entries.push(entry.map_err(crate::io(&format!(
+            "reading manifest-scan entry in {}",
+            dir.display()
+        )))?);
+    }
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        if manifests.len() >= MANIFEST_AMBIGUITY_EVIDENCE_LIMIT {
+            break;
         }
-        level = next;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(crate::io(&format!(
+            "reading manifest-scan entry type {}",
+            path.display()
+        )))?;
+        let metadata = std::fs::symlink_metadata(&path).map_err(crate::io(&format!(
+            "reading manifest-scan metadata {}",
+            path.display()
+        )))?;
+        if import_metadata_is_link(&metadata) {
+            return Err(ModError::Other(format!(
+                "manifest scan encountered a symbolic link or reparse point: {}",
+                path.display()
+            )));
+        }
+        if file_type.is_file() != metadata.is_file() || file_type.is_dir() != metadata.is_dir() {
+            return Err(ModError::Other(format!(
+                "manifest-scan entry changed type while being inspected: {}",
+                path.display()
+            )));
+        }
+        let is_manifest = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.eq_ignore_ascii_case("gore-mod.json"));
+        if file_type.is_file() && is_manifest {
+            manifests.push((dir.to_path_buf(), depth));
+        } else if file_type.is_dir() {
+            if depth >= MAX_SCAN_DEPTH {
+                return Err(ModError::Other(format!(
+                    "manifest scan nesting depth limit exceeded at {}: {} > {}",
+                    path.display(),
+                    depth + 1,
+                    MAX_SCAN_DEPTH
+                )));
+            }
+            find_manifest_dirs(&path, depth + 1, manifests)?;
+        } else if !file_type.is_file() {
+            return Err(ModError::Other(format!(
+                "manifest scan encountered a non-file, non-directory entry: {}",
+                path.display()
+            )));
+        }
     }
-    None
+    Ok(())
 }
 
 /// Map a goremod manifest to library components, reading each payload to extract its targets.
@@ -1902,7 +2257,7 @@ fn goremod_components(
                     gore_vo::validate_ogg(&ogg, &voice_limits)
                         .map_err(|e| ModError::Voice(format!("{}: {e}", edit.ogg)))?;
                     let target = format!("{}|{}", edit.archive, edit.archive_path);
-                    targets.insert(target.replace('\\', "/").to_lowercase(), target);
+                    targets.insert(portable_windows_key(&target), target);
                 }
                 ComponentInfo::VoiceArchivePatch {
                     rel: join_rel(prefix, path),
@@ -2050,98 +2405,303 @@ fn import_metadata_is_link(metadata: &std::fs::Metadata) -> bool {
 
 /// Walk the staged tree and collect foreign components (deterministic: sorted per dir).
 fn scan_foreign(root: &Path) -> crate::Result<Vec<ComponentInfo>> {
-    let mut out = Vec::new();
-    scan_dir(root, root, 0, &mut out)?;
-    Ok(out)
+    let mut scan = ForeignScan::default();
+    scan_dir(root, root, 0, &mut scan)?;
+    scan.finish(root)
+}
+
+#[derive(Debug, Default)]
+struct ForeignScan {
+    components: Vec<(String, String, ComponentInfo)>,
+    iostore: BTreeMap<String, IoStoreMembers>,
+    raw_targets: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Default)]
+struct IoStoreMembers {
+    rel_base: Option<String>,
+    utoc: Option<PathBuf>,
+    ucas: Option<PathBuf>,
+    pak: Option<PathBuf>,
+}
+
+impl ForeignScan {
+    fn push_component(&mut self, rel: String, component: ComponentInfo) {
+        self.components
+            .push((rel.to_ascii_lowercase(), rel, component));
+    }
+
+    fn push_raw(&mut self, rel: String, target_file: RawTarget) -> crate::Result<()> {
+        let target_key = match &target_file {
+            RawTarget::Lcache => "lcache".to_owned(),
+            RawTarget::Bank { name } => format!("bank:{}", portable_windows_key(name)),
+            RawTarget::ScriptCache => "script_cache".to_owned(),
+        };
+        if let Some(first) = self.raw_targets.insert(target_key.clone(), rel.clone()) {
+            return Err(ModError::Other(format!(
+                "foreign import contains duplicate raw deployment target {target_key:?}: {first:?} and {rel:?}"
+            )));
+        }
+        self.push_component(rel.clone(), ComponentInfo::RawFile { rel, target_file });
+        Ok(())
+    }
+
+    fn record_iostore_member(
+        &mut self,
+        root: &Path,
+        path: &Path,
+        extension: &str,
+    ) -> crate::Result<()> {
+        let actual_extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| {
+                ModError::Other(format!(
+                    "IoStore member extension is not valid Unicode: {}",
+                    path.display()
+                ))
+            })?;
+        if actual_extension != extension {
+            return Err(ModError::Other(format!(
+                "IoStore member name is not exactly reconstructable during Apply: expected lowercase .{extension}, found {actual_extension:?} in {}",
+                path.display()
+            )));
+        }
+        let rel_base = rel_str(root, &path.with_extension(""));
+        let portable_base = portable_windows_key(&rel_base);
+        let members = self.iostore.entry(portable_base.clone()).or_default();
+        if let Some(first_base) = &members.rel_base {
+            if first_base != &rel_base {
+                return Err(ModError::Other(format!(
+                    "IoStore member names are not exactly reconstructable during Apply: {first_base:?} and {rel_base:?} differ in spelling"
+                )));
+            }
+        } else {
+            members.rel_base = Some(rel_base);
+        }
+        let slot = match extension {
+            "utoc" => &mut members.utoc,
+            "ucas" => &mut members.ucas,
+            "pak" => &mut members.pak,
+            _ => unreachable!("record_iostore_member called for {extension}"),
+        };
+        if let Some(first) = slot.replace(path.to_path_buf()) {
+            return Err(ModError::Other(format!(
+                "foreign import contains duplicate .{extension} members for IoStore base {portable_base:?}: {} and {}",
+                first.display(),
+                path.display()
+            )));
+        }
+        Ok(())
+    }
+
+    fn finish(mut self, root: &Path) -> crate::Result<Vec<ComponentInfo>> {
+        for (_, members) in std::mem::take(&mut self.iostore) {
+            let observed_base = members
+                .rel_base
+                .expect("IoStore member groups always record a relative base");
+            if members.utoc.is_some() || members.ucas.is_some() {
+                let mut missing = Vec::new();
+                if members.utoc.is_none() {
+                    missing.push(".utoc");
+                }
+                if members.ucas.is_none() {
+                    missing.push(".ucas");
+                }
+                if !missing.is_empty() {
+                    return Err(ModError::Other(format!(
+                        "incomplete IoStore set {observed_base:?}: missing {}",
+                        missing.join(" and ")
+                    )));
+                }
+                // The manager's established deploy contract requires the mountable pair. A same-
+                // stem `.pak` stub is supported and copied when present, but is not required.
+                let utoc = members.utoc.expect("checked above");
+                let rel_base = rel_str(root, &utoc.with_extension(""));
+                let targets = gore_tex::container::list_packages(&utoc).unwrap_or_default();
+                self.push_component(
+                    rel_str(root, &utoc),
+                    ComponentInfo::Triplet { rel_base, targets },
+                );
+            } else if let Some(pak) = members.pak {
+                let is_loose_pak = pak
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.to_ascii_lowercase().ends_with("_p.pak"));
+                if is_loose_pak {
+                    let rel = rel_str(root, &pak);
+                    // Read through the mount point, because this is the game-root-relative
+                    // conflict namespace. Container parsing intentionally remains best-effort.
+                    let targets = gore_tex::container::list_pak_files_from_game_root(&pak)
+                        .unwrap_or_default();
+                    self.push_component(rel.clone(), ComponentInfo::LoosePak { rel, targets });
+                } else {
+                    return Err(ModError::Other(format!(
+                        "unsupported standalone .pak member {observed_base:?}: only a loose *_P.pak or the optional same-stem member of an IoStore pair can be deployed"
+                    )));
+                }
+            }
+        }
+        self.components
+            .sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+        Ok(self
+            .components
+            .into_iter()
+            .map(|(_, _, component)| component)
+            .collect())
+    }
 }
 
 /// Deepest directory nesting `scan_dir` will descend into. Real mods are shallow; a cap here
-/// bounds the recursion so a symlink loop (or a maliciously deep archive) can't recurse forever
-/// / overflow the stack — past the cap we just stop descending (files already at that depth are
-/// still classified).
+/// bounds the recursion so a maliciously deep tree cannot overflow the stack. Required descent
+/// past the cap is rejected; content is never silently omitted.
 const MAX_SCAN_DEPTH: usize = 16;
 
-fn scan_dir(
-    root: &Path,
-    dir: &Path,
-    depth: usize,
-    out: &mut Vec<ComponentInfo>,
-) -> crate::Result<()> {
-    let mut entries: Vec<std::fs::DirEntry> = std::fs::read_dir(dir)
-        .map_err(crate::io(&format!("scanning {}", dir.display())))?
-        .filter_map(|e| e.ok())
-        .collect();
+fn scan_dir(root: &Path, dir: &Path, depth: usize, scan: &mut ForeignScan) -> crate::Result<()> {
+    let mut entries = Vec::new();
+    for entry in
+        std::fs::read_dir(dir).map_err(crate::io(&format!("scanning {}", dir.display())))?
+    {
+        entries.push(entry.map_err(crate::io(&format!(
+            "reading foreign-scan entry in {}",
+            dir.display()
+        )))?);
+    }
     entries.sort_by_key(|e| e.file_name());
     for e in entries {
         let path = e.path();
-        let Ok(ft) = e.file_type() else { continue };
+        let ft = e.file_type().map_err(crate::io(&format!(
+            "reading foreign-scan entry type {}",
+            path.display()
+        )))?;
+        let metadata = std::fs::symlink_metadata(&path).map_err(crate::io(&format!(
+            "reading foreign-scan metadata {}",
+            path.display()
+        )))?;
+        if import_metadata_is_link(&metadata) {
+            return Err(ModError::Other(format!(
+                "foreign scan encountered a symbolic link or reparse point: {}",
+                path.display()
+            )));
+        }
+        if ft.is_file() != metadata.is_file() || ft.is_dir() != metadata.is_dir() {
+            return Err(ModError::Other(format!(
+                "foreign-scan entry changed type while being inspected: {}",
+                path.display()
+            )));
+        }
         if ft.is_dir() {
-            if path.join("Scripts").join("main.lua").is_file() {
+            if staged_regular_file_exists(&path.join("Scripts").join("main.lua"))? {
                 // A UE4SS Lua mod dir is one opaque component; don't scan inside it.
                 let name = e.file_name().to_string_lossy().into_owned();
-                out.push(ComponentInfo::Ue4ssLua {
-                    name,
-                    rel: rel_str(root, &path),
-                    targets: Vec::new(),
-                    opaque: true,
-                });
+                let rel = rel_str(root, &path);
+                scan.push_component(
+                    rel.clone(),
+                    ComponentInfo::Ue4ssLua {
+                        name,
+                        rel,
+                        targets: Vec::new(),
+                        opaque: true,
+                    },
+                );
             } else if depth < MAX_SCAN_DEPTH {
-                // Stop descending past the cap — a symlink loop would otherwise recurse forever.
-                scan_dir(root, &path, depth + 1, out)?;
+                scan_dir(root, &path, depth + 1, scan)?;
+            } else {
+                return Err(ModError::Other(format!(
+                    "foreign scan nesting depth limit exceeded at {}: {} > {}",
+                    path.display(),
+                    depth + 1,
+                    MAX_SCAN_DEPTH
+                )));
             }
         } else if ft.is_file() {
-            classify_file(root, &path, out);
+            classify_file(root, &path, scan)?;
+        } else {
+            return Err(ModError::Other(format!(
+                "foreign scan encountered a non-file, non-directory entry: {}",
+                path.display()
+            )));
         }
     }
     Ok(())
 }
 
+fn staged_regular_file_exists(path: &Path) -> crate::Result<bool> {
+    let Some(metadata) = metadata_if_present(path)? else {
+        return Ok(false);
+    };
+    if import_metadata_is_link(&metadata) {
+        return Err(ModError::Other(format!(
+            "foreign scan encountered a symbolic link or reparse point: {}",
+            path.display()
+        )));
+    }
+    if metadata.is_file() {
+        Ok(true)
+    } else if metadata.is_dir() {
+        Ok(false)
+    } else {
+        Err(ModError::Other(format!(
+            "foreign scan encountered a non-file, non-directory entry: {}",
+            path.display()
+        )))
+    }
+}
+
 /// Classify one foreign file into a component (or nothing). Target extraction is best-effort:
 /// an unparsable container still imports, just with an empty (unknown) footprint.
-fn classify_file(root: &Path, path: &Path, out: &mut Vec<ComponentInfo>) {
-    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-        return;
-    };
+fn classify_file(root: &Path, path: &Path, scan: &mut ForeignScan) -> crate::Result<()> {
+    let name = path.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
+        ModError::Other(format!(
+            "foreign scan file name is not valid Unicode: {}",
+            path.display()
+        ))
+    })?;
     let lower = name.to_ascii_lowercase();
     let rel = rel_str(root, path);
-    if lower.starts_with("precompiledscript") && lower.ends_with(".cache") {
-        out.push(ComponentInfo::RawFile {
-            rel,
-            target_file: RawTarget::ScriptCache,
-        });
+    if is_partitioned_iostore_member(&lower) {
+        return Err(ModError::Other(format!(
+            "unsupported multipart IoStore member {rel:?}; the manager cannot deploy partitioned container payloads"
+        )));
+    } else if lower.starts_with("precompiledscript") && lower.ends_with(".cache") {
+        scan.push_raw(rel, RawTarget::ScriptCache)?;
     } else if lower.ends_with(".lcache") {
-        out.push(ComponentInfo::RawFile {
-            rel,
-            target_file: RawTarget::Lcache,
-        });
+        scan.push_raw(rel, RawTarget::Lcache)?;
     } else if lower.ends_with(".bank") {
-        out.push(ComponentInfo::RawFile {
+        scan.push_raw(
             rel,
-            target_file: RawTarget::Bank {
+            RawTarget::Bank {
                 name: name.to_string(),
             },
-        });
-    } else if lower.ends_with(".utoc") {
-        // Only a complete pair is mountable; a lone .utoc is not importable on its own.
-        if path.with_extension("ucas").is_file() {
-            let targets = gore_tex::container::list_packages(path).unwrap_or_default();
-            out.push(ComponentInfo::Triplet {
-                rel_base: rel_str(root, &path.with_extension("")),
-                targets,
-            });
-        }
-    } else if lower.ends_with("_p.pak") && !path.with_extension("utoc").is_file() {
-        // A pak WITH a sibling .utoc belongs to that triplet, not to a loose-pak component.
-        //
-        // Read through the mount point, because the conflict namespace these targets land in is
-        // game-root-relative and a pak index is not: UnrealPak folds a common leading directory
-        // into the mount point, so a cursor pak names its entry `Normal.PNG` while it claims
-        // `G1R/Content/Slate/Cursors/Normal/Normal.PNG`. Comparing the raw index against real
-        // destinations misses the overlap that matters and invents ones between two paks that
-        // merely share a leaf name.
-        let targets = gore_tex::container::list_pak_files_from_game_root(path).unwrap_or_default();
-        out.push(ComponentInfo::LoosePak { rel, targets });
+        )?;
+    } else if let Some(extension) = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .filter(|extension| matches!(extension.as_str(), "utoc" | "ucas" | "pak"))
+    {
+        // Record all three possible members first. Finalization sees the complete staged tree and
+        // can reject every orphan pair member even when another valid mixed component was found.
+        scan.record_iostore_member(root, path, &extension)?;
     }
+    Ok(())
+}
+
+fn partitioned_iostore_member_base(lower_name: &str) -> Option<&str> {
+    for marker in [".ucas.", ".utoc."] {
+        if let Some((base, suffix)) = lower_name.rsplit_once(marker) {
+            if !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Some(base);
+            }
+        }
+    }
+    lower_name.rsplit_once(".pak.").and_then(|(base, suffix)| {
+        (!suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())).then_some(base)
+    })
+}
+
+fn is_partitioned_iostore_member(lower_name: &str) -> bool {
+    partitioned_iostore_member_base(lower_name).is_some()
 }
 
 /// Kind for a foreign import: the single component class, or Mixed for ≥2 classes.
@@ -2180,6 +2740,11 @@ fn rel_str(root: &Path, p: &Path) -> String {
             .join("/"),
         Err(_) => p.display().to_string(),
     }
+}
+
+/// Portable Windows identity for untrusted relative names: slash-normalized and Unicode-lowercase.
+fn portable_windows_key(value: &str) -> String {
+    value.replace('\\', "/").to_lowercase()
 }
 
 /// Join a bundle-dir prefix (may be "") and a manifest-relative path with '/'.
@@ -2585,6 +3150,16 @@ mod tests {
         );
     }
 
+    struct RemoveFilesOnDrop(Vec<PathBuf>);
+
+    impl Drop for RemoveFilesOnDrop {
+        fn drop(&mut self) {
+            for path in &self.0 {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+
     #[test]
     fn zip_resource_limits_preflight_all_entries_and_leave_no_partial_import() {
         let temp = tempfile::tempdir().unwrap();
@@ -2661,6 +3236,25 @@ mod tests {
             "unexpected error: {error}"
         );
         assert_failed_import_left_nothing(&total_lib);
+
+        let depth_zip = temp.path().join("too-deep.zip");
+        zip_entries(&depth_zip, &[("d0/d1/d2/file.lcache", b"x", stored)]);
+        let depth_lib = temp.path().join("depth-lib");
+        let error = import_with_limits(
+            &depth_lib,
+            &depth_zip,
+            ImportLimits {
+                max_directory_depth: 2,
+                ..DEFAULT_IMPORT_LIMITS
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("ZIP entry nesting depth limit exceeded"),
+            "unexpected error: {error}"
+        );
+        assert_failed_import_left_nothing(&depth_lib);
     }
 
     #[test]
@@ -3501,6 +4095,146 @@ mod tests {
         assert!(!entry.join("Wrap").exists(), "wrapper dropped");
     }
 
+    #[test]
+    fn nested_bundle_reroot_preserves_benign_wrapper_siblings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let bundle = mk_goremod_bundle(tmp.path());
+        let source = tmp.path().join("wrapped-source");
+        let nested = source.join("Wrap/Sub");
+        fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        fs::rename(bundle, &nested).unwrap();
+        fs::write(source.join("README.txt"), b"read me").unwrap();
+        fs::write(source.join("Wrap/LICENSE.txt"), b"license").unwrap();
+
+        let meta = import(&lib, &source).unwrap();
+        let entry = lib.join(meta.id);
+        assert!(entry.join("gore-mod.json").is_file());
+        assert_eq!(fs::read(entry.join("README.txt")).unwrap(), b"read me");
+        assert_eq!(
+            fs::read(entry.join("Wrap/LICENSE.txt")).unwrap(),
+            b"license"
+        );
+    }
+
+    #[test]
+    fn nested_bundle_can_hoist_content_named_like_its_removed_wrapper() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let bundle = mk_goremod_bundle(tmp.path());
+        let source = tmp.path().join("same-name-wrapper");
+        let nested = source.join("Wrap");
+        fs::create_dir_all(&source).unwrap();
+        fs::rename(bundle, &nested).unwrap();
+        fs::create_dir(nested.join("Wrap")).unwrap();
+        fs::write(nested.join("Wrap/README.txt"), b"inner payload").unwrap();
+
+        let meta = import(&lib, &source).unwrap();
+        let entry = lib.join(meta.id);
+        assert!(entry.join("gore-mod.json").is_file());
+        assert_eq!(
+            fs::read(entry.join("Wrap/README.txt")).unwrap(),
+            b"inner payload"
+        );
+    }
+
+    #[test]
+    fn retained_wrapper_sibling_still_blocks_a_same_name_hoist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let bundle = mk_goremod_bundle(tmp.path());
+        let source = tmp.path().join("retained-wrapper");
+        let nested = source.join("Wrap/Sub");
+        fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        fs::rename(bundle, &nested).unwrap();
+        fs::create_dir(nested.join("Wrap")).unwrap();
+        fs::write(nested.join("Wrap/README.txt"), b"inner payload").unwrap();
+        fs::write(source.join("Wrap/LICENSE.txt"), b"retains wrapper").unwrap();
+
+        let error = import(&lib, &source).unwrap_err().to_string();
+        assert!(error.contains("would collide while re-rooting"), "{error}");
+        assert_failed_import_left_nothing(&lib);
+    }
+
+    #[test]
+    fn nested_bundle_reroot_rejects_deployable_siblings_without_activation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let bundle = mk_goremod_bundle(tmp.path());
+        let source = tmp.path().join("wrapped-source");
+        let nested = source.join("Wrap/Sub");
+        fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        fs::rename(bundle, &nested).unwrap();
+        fs::write(source.join("outside.pak"), b"must not be dropped").unwrap();
+
+        let error = import(&lib, &source).unwrap_err().to_string();
+        assert!(error.contains("deployable or reserved sibling"), "{error}");
+        assert_failed_import_left_nothing(&lib);
+    }
+
+    #[test]
+    fn ambiguous_or_too_deep_gore_mod_manifests_never_fall_back_to_foreign() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cases = ["multiple", "root-and-nested", "too-deep"];
+        for case in cases {
+            let source = tmp.path().join(format!("source-{case}"));
+            fs::create_dir_all(&source).unwrap();
+            fs::write(source.join("visible_P.pak"), b"otherwise importable").unwrap();
+            match case {
+                "multiple" => {
+                    for child in ["A", "B"] {
+                        let dir = source.join(child);
+                        fs::create_dir_all(&dir).unwrap();
+                        fs::write(dir.join("gore-mod.json"), b"{}").unwrap();
+                    }
+                }
+                "root-and-nested" => {
+                    fs::write(source.join("gore-mod.json"), b"{}").unwrap();
+                    let nested = source.join("Nested");
+                    fs::create_dir_all(&nested).unwrap();
+                    fs::write(nested.join("gore-mod.json"), b"{}").unwrap();
+                }
+                "too-deep" => {
+                    let nested = source.join("A/B/C");
+                    fs::create_dir_all(&nested).unwrap();
+                    fs::write(nested.join("gore-mod.json"), b"{}").unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let lib = tmp.path().join(format!("lib-{case}"));
+            let error = import(&lib, &source).unwrap_err().to_string();
+            if case == "too-deep" {
+                assert!(error.contains("nested too deeply"), "{case}: {error}");
+            } else {
+                assert!(error.contains("multiple gore-mod.json"), "{case}: {error}");
+            }
+            assert_failed_import_left_nothing(&lib);
+        }
+    }
+
+    #[test]
+    fn ambiguous_manifest_error_retains_only_bounded_first_two_evidence_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("many-manifests");
+        for index in 0..64 {
+            let dir = source.join(format!("manifest-{index:03}"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("gore-mod.json"), b"{}").unwrap();
+        }
+
+        let error = find_manifest_dir(&source).unwrap_err().to_string();
+
+        assert!(error.contains("first two"), "{error}");
+        assert!(error.contains("manifest-000"), "{error}");
+        assert!(error.contains("manifest-001"), "{error}");
+        assert!(!error.contains("manifest-002"), "{error}");
+        assert!(
+            error.len() < 1_024,
+            "ambiguity error grew unexpectedly: {} bytes",
+            error.len()
+        );
+    }
+
     /// [import 4] Zip entries that would escape the staging dir (`..`) abort the import,
     /// nothing is extracted outside, and the staging dir is cleaned up.
     #[test]
@@ -3607,6 +4341,57 @@ mod tests {
         );
     }
 
+    #[test]
+    fn case_distinct_iostore_members_are_refused_before_activation() {
+        for (case, utoc, ucas, pak) in [
+            ("ascii", "MixedCase.utoc", "mixedcase.ucas", None),
+            ("unicode", "Ä.utoc", "ä.ucas", None),
+            (
+                "optional-pak",
+                "Consistent.utoc",
+                "Consistent.ucas",
+                Some("consistent.pak"),
+            ),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let lib = tmp.path().join("lib");
+            let source = tmp.path().join(case);
+            fs::create_dir_all(&source).unwrap();
+            fs::write(source.join(utoc), b"utoc").unwrap();
+            fs::write(source.join(ucas), b"ucas").unwrap();
+            if let Some(pak) = pak {
+                fs::write(source.join(pak), b"pak").unwrap();
+            }
+
+            let error = import(&lib, &source).unwrap_err().to_string();
+            assert!(
+                error.contains("not exactly reconstructable during Apply"),
+                "unexpected {case} error: {error}"
+            );
+            assert!(
+                !lib.exists() || fs::read_dir(&lib).unwrap().next().is_none(),
+                "refused {case} import must not publish a library entry"
+            );
+        }
+    }
+
+    #[test]
+    fn case_distinct_iostore_extension_is_refused_before_activation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let source = tmp.path().join("UppercaseExtension");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("Exact.UTOC"), b"utoc").unwrap();
+        fs::write(source.join("Exact.ucas"), b"ucas").unwrap();
+
+        let error = import(&lib, &source).unwrap_err().to_string();
+        assert!(
+            error.contains("expected lowercase .utoc"),
+            "unexpected extension error: {error}"
+        );
+        assert!(!lib.exists() || fs::read_dir(&lib).unwrap().next().is_none());
+    }
+
     /// [import 6b] Importing the `.utoc` FILE directly pulls its same-stem siblings along.
     #[test]
     fn import_utoc_file_copies_siblings() {
@@ -3628,6 +4413,348 @@ mod tests {
         let entry = lib.join(&meta.id);
         assert!(entry.join("bar.ucas").is_file());
         assert!(entry.join("bar.pak").is_file());
+    }
+
+    #[test]
+    fn relative_direct_container_selection_is_enumerated_once() {
+        let current = std::env::current_dir().unwrap();
+        let placeholder = tempfile::Builder::new()
+            .prefix("gore-relative-container-")
+            .suffix(".utoc")
+            .tempfile_in(&current)
+            .unwrap();
+        let utoc = placeholder.path().to_path_buf();
+        placeholder.close().unwrap();
+        let ucas = utoc.with_extension("ucas");
+        let _cleanup = RemoveFilesOnDrop(vec![utoc.clone(), ucas.clone()]);
+        fs::write(&utoc, b"utoc").unwrap();
+        fs::write(&ucas, b"ucas").unwrap();
+        let selected = PathBuf::from(utoc.file_name().unwrap());
+        assert!(selected
+            .parent()
+            .is_some_and(|parent| parent.as_os_str().is_empty()));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let meta = import(&lib, &selected).unwrap();
+
+        assert_eq!(meta.kind, ModKind::ForeignTriplet);
+        let entry = lib.join(meta.id);
+        assert_eq!(
+            fs::read(entry.join(utoc.file_name().unwrap())).unwrap(),
+            b"utoc"
+        );
+        assert_eq!(
+            fs::read(entry.join(ucas.file_name().unwrap())).unwrap(),
+            b"ucas"
+        );
+    }
+
+    #[test]
+    fn incomplete_iostore_sets_are_rejected_even_beside_valid_foreign_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cases: &[(&str, &[&str], &str)] = &[
+            ("orphan-utoc", &["broken.utoc"], ".ucas"),
+            ("orphan-ucas", &["broken.ucas"], ".utoc"),
+            ("utoc-and-pak", &["broken_P.utoc", "broken_P.pak"], ".ucas"),
+            ("ucas-and-pak", &["broken_P.ucas", "broken_P.pak"], ".utoc"),
+        ];
+        for &(case, members, missing) in cases {
+            let source = tmp.path().join(case);
+            fs::create_dir_all(&source).unwrap();
+            fs::write(source.join("valid_P.pak"), b"valid loose pak").unwrap();
+            fs::write(source.join("Music.bank"), b"valid raw file").unwrap();
+            for member in members {
+                fs::write(source.join(member), b"incomplete").unwrap();
+            }
+            let lib = tmp.path().join(format!("lib-{case}"));
+            let error = import(&lib, &source).unwrap_err().to_string();
+            assert!(error.contains("incomplete IoStore set"), "{case}: {error}");
+            assert!(error.contains(missing), "{case}: {error}");
+            assert_failed_import_left_nothing(&lib);
+        }
+    }
+
+    #[test]
+    fn directly_selected_incomplete_iostore_member_leaves_library_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("direct");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("broken_P.ucas"), b"ucas").unwrap();
+        fs::write(source.join("broken_P.pak"), b"pak").unwrap();
+        let lib = tmp.path().join("lib");
+
+        let error = import(&lib, &source.join("broken_P.ucas"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("incomplete IoStore set"), "{error}");
+        assert!(error.contains(".utoc"), "{error}");
+        assert_failed_import_left_nothing(&lib);
+    }
+
+    #[test]
+    fn directly_selected_multipart_reimport_preserves_previous_entry_byte_for_byte() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("direct-multipart");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("pair.utoc"), b"old utoc").unwrap();
+        fs::write(source.join("pair.ucas"), b"old ucas").unwrap();
+        let selected = source.join("pair.utoc");
+        let lib = tmp.path().join("lib");
+        let before = import(&lib, &selected).unwrap();
+        let entry = lib.join(&before.id);
+        let before_utoc = fs::read(entry.join("pair.utoc")).unwrap();
+        let before_ucas = fs::read(entry.join("pair.ucas")).unwrap();
+        let before_sidecar = fs::read(entry.join(META_FILE)).unwrap();
+
+        fs::write(&selected, b"new utoc").unwrap();
+        fs::write(source.join("pair.ucas"), b"new ucas").unwrap();
+        fs::write(source.join("pair.ucas.1"), b"split payload").unwrap();
+        let error = import(&lib, &selected).unwrap_err().to_string();
+        assert!(error.contains("unsupported multipart IoStore"), "{error}");
+        assert!(error.contains("pair.ucas.1"), "{error}");
+
+        assert_eq!(fs::read(entry.join("pair.utoc")).unwrap(), before_utoc);
+        assert_eq!(fs::read(entry.join("pair.ucas")).unwrap(), before_ucas);
+        assert_eq!(fs::read(entry.join(META_FILE)).unwrap(), before_sidecar);
+        assert_eq!(list(&lib).unwrap(), vec![before]);
+        let mut library_names: Vec<_> = fs::read_dir(&lib)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        library_names.sort();
+        assert_eq!(library_names, vec![entry.file_name().unwrap().to_owned()]);
+    }
+
+    #[test]
+    fn zip_with_hidden_incomplete_iostore_set_is_rejected_before_activation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let archive = tmp.path().join("incomplete.zip");
+        zip_entries(
+            &archive,
+            &[
+                (
+                    "valid_P.pak",
+                    b"valid loose pak",
+                    zip::CompressionMethod::Stored,
+                ),
+                ("broken_P.ucas", b"ucas", zip::CompressionMethod::Stored),
+                ("broken_P.pak", b"pak", zip::CompressionMethod::Stored),
+            ],
+        );
+        let lib = tmp.path().join("lib");
+
+        let error = import(&lib, &archive).unwrap_err().to_string();
+        assert!(error.contains("incomplete IoStore set"), "{error}");
+        assert!(error.contains(".utoc"), "{error}");
+        assert_failed_import_left_nothing(&lib);
+    }
+
+    #[test]
+    fn multipart_iostore_leftovers_are_not_hidden_by_a_valid_pair() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("multipart");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("broken.utoc"), b"utoc").unwrap();
+        fs::write(source.join("broken.ucas"), b"ucas").unwrap();
+        fs::write(source.join("broken.ucas.1"), b"partition").unwrap();
+        fs::write(source.join("valid_P.pak"), b"valid loose pak").unwrap();
+        let lib = tmp.path().join("lib");
+
+        let error = import(&lib, &source).unwrap_err().to_string();
+        assert!(error.contains("unsupported multipart IoStore"), "{error}");
+        assert!(error.contains("broken.ucas.1"), "{error}");
+        assert_failed_import_left_nothing(&lib);
+    }
+
+    #[test]
+    fn split_pak_members_are_rejected_in_folders_and_zips() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let folder = tmp.path().join("split-pak-folder");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("valid_P.pak"), b"valid loose pak").unwrap();
+        fs::write(folder.join("broken_P.pak.1"), b"split payload").unwrap();
+        let folder_lib = tmp.path().join("folder-lib");
+        let error = import(&folder_lib, &folder).unwrap_err().to_string();
+        assert!(error.contains("unsupported multipart IoStore"), "{error}");
+        assert!(error.contains("broken_P.pak.1"), "{error}");
+        assert_failed_import_left_nothing(&folder_lib);
+
+        let archive = tmp.path().join("split-pak.zip");
+        zip_entries(
+            &archive,
+            &[
+                (
+                    "valid_P.pak",
+                    b"valid loose pak",
+                    zip::CompressionMethod::Stored,
+                ),
+                (
+                    "broken_P.pak.7",
+                    b"split payload",
+                    zip::CompressionMethod::Stored,
+                ),
+            ],
+        );
+        let zip_lib = tmp.path().join("zip-lib");
+        let error = import(&zip_lib, &archive).unwrap_err().to_string();
+        assert!(error.contains("unsupported multipart IoStore"), "{error}");
+        assert!(error.contains("broken_P.pak.7"), "{error}");
+        assert_failed_import_left_nothing(&zip_lib);
+
+        let paired_folder = tmp.path().join("split-optional-pair-pak");
+        fs::create_dir_all(&paired_folder).unwrap();
+        fs::write(paired_folder.join("bar.utoc"), b"utoc").unwrap();
+        fs::write(paired_folder.join("bar.ucas"), b"ucas").unwrap();
+        fs::write(paired_folder.join("bar.pak.1"), b"split payload").unwrap();
+        let paired_lib = tmp.path().join("paired-lib");
+        let error = import(&paired_lib, &paired_folder).unwrap_err().to_string();
+        assert!(error.contains("unsupported multipart IoStore"), "{error}");
+        assert!(error.contains("bar.pak.1"), "{error}");
+        assert_failed_import_left_nothing(&paired_lib);
+    }
+
+    #[test]
+    fn unsupported_standalone_pak_is_rejected_without_replacing_or_hiding_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("standalone-pak-folder");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("valid_P.pak"), b"old loose pak").unwrap();
+        let lib = tmp.path().join("folder-lib");
+        let before = import(&lib, &source).unwrap();
+        let entry = lib.join(&before.id);
+        let before_pak = fs::read(entry.join("valid_P.pak")).unwrap();
+        let before_sidecar = fs::read(entry.join(META_FILE)).unwrap();
+
+        fs::write(source.join("valid_P.pak"), b"new loose pak").unwrap();
+        fs::write(source.join("hidden.pak"), b"unsupported payload").unwrap();
+        let error = import(&lib, &source).unwrap_err().to_string();
+        assert!(error.contains("unsupported standalone .pak"), "{error}");
+        assert!(error.contains("hidden"), "{error}");
+        assert_eq!(fs::read(entry.join("valid_P.pak")).unwrap(), before_pak);
+        assert_eq!(fs::read(entry.join(META_FILE)).unwrap(), before_sidecar);
+        assert_eq!(list(&lib).unwrap(), vec![before]);
+        let library_names = fs::read_dir(&lib)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(library_names, vec![entry.file_name().unwrap().to_owned()]);
+
+        let archive = tmp.path().join("standalone-pak.zip");
+        zip_entries(
+            &archive,
+            &[
+                ("valid_P.pak", b"loose pak", zip::CompressionMethod::Stored),
+                (
+                    "hidden.pak",
+                    b"unsupported payload",
+                    zip::CompressionMethod::Stored,
+                ),
+            ],
+        );
+        let zip_lib = tmp.path().join("zip-lib");
+        let error = import(&zip_lib, &archive).unwrap_err().to_string();
+        assert!(error.contains("unsupported standalone .pak"), "{error}");
+        assert!(error.contains("hidden"), "{error}");
+        assert_failed_import_left_nothing(&zip_lib);
+    }
+
+    #[test]
+    fn refused_iostore_reimport_preserves_the_previous_library_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("PairMod");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("pair.utoc"), b"old utoc").unwrap();
+        fs::write(source.join("pair.ucas"), b"old ucas").unwrap();
+        let lib = tmp.path().join("lib");
+        let before = import(&lib, &source).unwrap();
+        let entry = lib.join(&before.id);
+        let before_sidecar = fs::read(entry.join(META_FILE)).unwrap();
+
+        fs::remove_file(source.join("pair.ucas")).unwrap();
+        fs::write(source.join("pair.utoc"), b"new but incomplete").unwrap();
+        let error = import(&lib, &source).unwrap_err().to_string();
+        assert!(error.contains("incomplete IoStore set"), "{error}");
+        assert_eq!(fs::read(entry.join("pair.utoc")).unwrap(), b"old utoc");
+        assert_eq!(fs::read(entry.join("pair.ucas")).unwrap(), b"old ucas");
+        assert_eq!(fs::read(entry.join(META_FILE)).unwrap(), before_sidecar);
+        assert_eq!(list(&lib).unwrap(), vec![before]);
+    }
+
+    #[test]
+    fn duplicate_raw_deployment_targets_are_rejected_case_insensitively() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cases = [
+            (
+                "lcache",
+                vec![("A/one.lcache", b"a".as_slice()), ("B/two.lcache", b"b")],
+                "lcache",
+            ),
+            (
+                "script-cache",
+                vec![
+                    ("A/PrecompiledScript_One.Cache", b"a".as_slice()),
+                    ("B/PrecompiledScript_Two.Cache", b"b"),
+                ],
+                "script_cache",
+            ),
+            (
+                "bank-case",
+                vec![("A/SFX.bank", b"a".as_slice()), ("B/sfx.BANK", b"b")],
+                "bank:sfx.bank",
+            ),
+        ];
+        for (case, files, target) in cases {
+            let source = tmp.path().join(case);
+            for &(relative, bytes) in &files {
+                let path = source.join(relative);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, bytes).unwrap();
+            }
+            let lib = tmp.path().join(format!("lib-{case}"));
+            let error = import(&lib, &source).unwrap_err().to_string();
+            assert!(error.contains("duplicate raw deployment target"), "{error}");
+            assert!(error.contains(target), "{error}");
+            for (relative, _) in files {
+                assert!(error.contains(relative), "{case}: {error}");
+            }
+            assert_failed_import_left_nothing(&lib);
+        }
+    }
+
+    #[test]
+    fn duplicate_bank_targets_are_rejected_with_unicode_case_folding() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("unicode-bank-case");
+        for (relative, bytes) in [("A/Ä.bank", b"a"), ("B/ä.BANK", b"b")] {
+            let path = source.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        let lib = tmp.path().join("lib");
+
+        let error = import(&lib, &source).unwrap_err().to_string();
+        assert!(error.contains("duplicate raw deployment target"), "{error}");
+        assert!(error.contains("bank:ä.bank"), "{error}");
+        assert!(error.contains("A/Ä.bank"), "{error}");
+        assert!(error.contains("B/ä.BANK"), "{error}");
+        assert_failed_import_left_nothing(&lib);
+    }
+
+    #[test]
+    fn foreign_scan_rejects_links_instead_of_omitting_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("staged");
+        fs::create_dir_all(&root).unwrap();
+        let outside = tmp.path().join("outside_P.pak");
+        fs::write(&outside, b"outside").unwrap();
+        if !make_file_link(&outside, &root.join("linked_P.pak")) {
+            return;
+        }
+
+        let error = scan_foreign(&root).unwrap_err().to_string();
+        assert!(error.contains("symbolic link or reparse point"), "{error}");
     }
 
     /// [import 7] All-raw-files dir → ForeignRawfile with one RawFile component per file and
