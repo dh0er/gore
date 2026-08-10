@@ -935,7 +935,10 @@ void main() {
     final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
     await pumpEventQueue();
-    // Two splicing edits → two sequential writes; the first commits.
+    // Batching packs peers into one write, so the two sub-writes this test needs
+    // come from an ordinary edit plus a `private.story.apply`, which is
+    // permanently exclusive. The revive commits (with the undo-note warning),
+    // the trailing story write fails.
     notifier.setPendingEdit(
       'npc.revive:A',
       const PendingSaveEdit(
@@ -947,21 +950,25 @@ void main() {
         ],
       ),
     );
-    notifier.setPendingEdit(
-      'npc.revive:B',
-      const PendingSaveEdit(
-        edits: [
-          {
-            'path': 'private.npc.revive',
-            'value': {'id': 'B'},
-          },
-        ],
+    notifier.setStoryStateEdit(
+      const StoryStateEdit(
+        id: 'Chapter',
+        present: true,
+        rawValue: 3,
+        expectedStored: true,
+        expectedRawValue: 2,
       ),
     );
 
     final ok = await notifier.saveAllPending();
 
     expect(ok, isFalse);
+    // Two sub-writes really were issued — otherwise the fake never reaches its
+    // failure branch and the assertion below would prove nothing.
+    expect(
+      core.requests.where((request) => request.command == 'write_save'),
+      hasLength(2),
+    );
     expect(notifier.state.error, contains('npc_placements.json'));
   });
 
@@ -988,8 +995,9 @@ void main() {
       final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-      // Two splicing edits → two sequential writes. Keys sort so 'npc.revive:A'
-      // (first write, commits) precedes 'npc.revive:B' (second write, fails).
+      // An ordinary splicing edit plus a `private.story.apply`: story is
+      // permanently exclusive, so the batch is packed into exactly two
+      // sub-writes. The revive commits (first write), the story write fails.
       notifier.setPendingEdit(
         'npc.revive:A',
         const PendingSaveEdit(
@@ -1001,15 +1009,13 @@ void main() {
           ],
         ),
       );
-      notifier.setPendingEdit(
-        'npc.revive:B',
-        const PendingSaveEdit(
-          edits: [
-            {
-              'path': 'private.npc.revive',
-              'value': {'id': 'B'},
-            },
-          ],
+      notifier.setStoryStateEdit(
+        const StoryStateEdit(
+          id: 'Chapter',
+          present: true,
+          rawValue: 3,
+          expectedStored: true,
+          expectedRawValue: 2,
         ),
       );
 
@@ -1018,9 +1024,16 @@ void main() {
 
       expect(ok, isFalse);
       expect(notifier.state.error, isNotNull);
+      expect(
+        core.requests.where((request) => request.command == 'write_save'),
+        hasLength(2),
+      );
       // First write committed → its key is cleared; the failed second's key stays.
       expect(notifier.state.pendingEdits.containsKey('npc.revive:A'), isFalse);
-      expect(notifier.state.pendingEdits.containsKey('npc.revive:B'), isTrue);
+      expect(
+        notifier.state.pendingEdits.containsKey(storyStatePendingKey),
+        isTrue,
+      );
       // The committed edit changed the file, so the panes must be refreshed from
       // disk even though a later sub-write failed. refresh() begins with a
       // scan_save_dir, so exactly one ADDITIONAL scan proves the partial-commit
@@ -1049,6 +1062,8 @@ void main() {
       );
       final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      // Ordinary edit + exclusive `private.story.apply` = two sub-writes, so the
+      // fake's throw lands on a genuine SECOND write after the first committed.
       notifier.setPendingEdit(
         'npc.revive:A',
         const PendingSaveEdit(
@@ -1060,15 +1075,13 @@ void main() {
           ],
         ),
       );
-      notifier.setPendingEdit(
-        'npc.revive:B',
-        const PendingSaveEdit(
-          edits: [
-            {
-              'path': 'private.npc.revive',
-              'value': {'id': 'B'},
-            },
-          ],
+      notifier.setStoryStateEdit(
+        const StoryStateEdit(
+          id: 'Chapter',
+          present: true,
+          rawValue: 3,
+          expectedStored: true,
+          expectedRawValue: 2,
         ),
       );
 
@@ -1077,8 +1090,15 @@ void main() {
 
       expect(ok, isFalse);
       expect(notifier.state.error, contains('native worker died'));
+      expect(
+        core.requests.where((request) => request.command == 'write_save'),
+        hasLength(2),
+      );
       expect(notifier.state.pendingEdits.containsKey('npc.revive:A'), isFalse);
-      expect(notifier.state.pendingEdits.containsKey('npc.revive:B'), isTrue);
+      expect(
+        notifier.state.pendingEdits.containsKey(storyStatePendingKey),
+        isTrue,
+      );
       expect(core.refreshScans, scansBefore + 1);
       expect(notifier.state.saveProgress, isNull);
     },
@@ -1087,10 +1107,11 @@ void main() {
   test(
     'partial commit keeps the uncommitted add when several share one key',
     () async {
-      // Regression: several inventory adds queue under ONE pending key but each
-      // is its own sequential write_save. Commit tracking is per-EDIT, so when a
-      // later add fails the earlier committed add must not drag the still-unwritten
-      // add out of pending — the user must keep the failed one for retry.
+      // Regression: one pending key can still span several sequential
+      // write_saves — batching packs peers together, but an exclusive edit
+      // always starts a new sub-write. Commit tracking is per-EDIT, so when the
+      // later sub-write fails the earlier committed edit must not drag the
+      // still-unwritten one out of pending — the user must keep it for retry.
       final core = _FailSecondWriteCoreService(
         scanData: {
           'saves': [
@@ -1109,20 +1130,25 @@ void main() {
       final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-      // Two adds under ONE key → two sequential splicing writes: the first
-      // commits, the second fails.
+      // An add and an exclusive `private.story.apply` under ONE key → two
+      // sequential writes: the add commits, the story write fails.
       notifier.setPendingEdit(
         'inventory:player',
-        const PendingSaveEdit(
+        PendingSaveEdit(
           edits: [
-            {
+            const <String, Object?>{
               'path': 'private.inventory.addItem',
               'value': {'path': '/Game/Item_A', 'count': 1},
             },
-            {
-              'path': 'private.inventory.addItem',
-              'value': {'path': '/Game/Item_B', 'count': 1},
-            },
+            storyStateApplyEdit(const [
+              StoryStateEdit(
+                id: 'Chapter',
+                present: true,
+                rawValue: 3,
+                expectedStored: true,
+                expectedRawValue: 2,
+              ),
+            ]),
           ],
         ),
       );
@@ -1131,15 +1157,25 @@ void main() {
 
       expect(ok, isFalse);
       expect(notifier.state.error, isNotNull);
-      // The key survives, carrying ONLY the second (uncommitted) add — the first
-      // committed and is gone; the second never wrote and stays for retry.
+      // The two edits of that one key really did split across two sub-writes.
+      final writes = core.requests
+          .where((request) => request.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(2));
+      expect(
+        (writes.first.payload['edits'] as List).single,
+        containsPair('path', 'private.inventory.addItem'),
+      );
+      expect(
+        (writes.last.payload['edits'] as List).single,
+        containsPair('path', storyStateApplyPath),
+      );
+      // The key survives, carrying ONLY the uncommitted story edit — the add
+      // committed and is gone; the story edit never wrote and stays for retry.
       final pending = notifier.state.pendingEdits['inventory:player'];
       expect(pending, isNotNull);
       expect(pending!.edits, hasLength(1));
-      expect(pending.edits.single['value'], {
-        'path': '/Game/Item_B',
-        'count': 1,
-      });
+      expect(pending.edits.single['path'], storyStateApplyPath);
     },
   );
 
@@ -1192,6 +1228,8 @@ void main() {
       final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
+      // Ordinary edit + exclusive `private.story.apply` = two sub-writes; the
+      // first commits, the second fails.
       notifier.setPendingEdit(
         'npc.revive:A',
         const PendingSaveEdit(
@@ -1203,25 +1241,30 @@ void main() {
           ],
         ),
       );
-      notifier.setPendingEdit(
-        'npc.revive:B',
-        const PendingSaveEdit(
-          edits: [
-            {
-              'path': 'private.npc.revive',
-              'value': {'id': 'B'},
-            },
-          ],
+      notifier.setStoryStateEdit(
+        const StoryStateEdit(
+          id: 'Chapter',
+          present: true,
+          rawValue: 3,
+          expectedStored: true,
+          expectedRawValue: 2,
         ),
       );
 
       final ok = await notifier.saveAllPending();
 
       expect(ok, isFalse);
+      expect(
+        core.requests.where((request) => request.command == 'write_save'),
+        hasLength(2),
+      );
       // Slot switched to the only remaining save…
       expect(notifier.state.selectedPath, r'C:\tmp\saves\G1R-002.sav');
       // …so the uncommitted edit was dropped, NOT re-targeted at G1R-002.
-      expect(notifier.state.pendingEdits.containsKey('npc.revive:B'), isFalse);
+      expect(
+        notifier.state.pendingEdits.containsKey(storyStatePendingKey),
+        isFalse,
+      );
       expect(notifier.state.pendingEdits.containsKey('npc.revive:A'), isFalse);
     },
   );
@@ -1541,11 +1584,18 @@ void main() {
     final writes = core.requests
         .where((request) => request.command == 'write_save')
         .toList();
-    expect(writes, hasLength(2));
+    // Both intents are saved together. The requirement is the ORDER: the
+    // index-addressed All-data edit resolves against the pre-splice layout,
+    // so it must precede the structural relationship edit for the other NPC.
+    expect(writes, hasLength(1));
+    expect(
+      (writes.single.payload['edits'] as List).map((e) => (e as Map)['path']),
+      ['private.typed.setValue', 'private.npc.setRelationship'],
+    );
   });
 
   test(
-    'saveAllPending splits a splicing edit and a typed edit into separate writes',
+    'saveAllPending orders a typed edit ahead of a splicing edit in one write',
     () async {
       final core = _RecordingCoreService();
       final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
@@ -1580,39 +1630,26 @@ void main() {
       final ok = await notifier.saveAllPending();
 
       expect(ok, isTrue);
-      // No "must be saved on its own" guard fires anymore — the split replaces it.
+      // No "must be saved on its own" guard fires anymore — the ordering
+      // inside one write_save replaces it.
       expect(notifier.state.error, isNull);
       final writes = core.requests
           .where((r) => r.command == 'write_save')
           .toList();
-      // Two writes: the splicing removeItem on its own + the typed setValue batch.
-      expect(writes, hasLength(2));
-      // Each splicing edit is its own single-edit write.
-      final splicing = writes.firstWhere(
-        (w) => (w.payload['edits'] as List).any(
-          (e) => (e as Map)['path'] == 'private.inventory.removeItem',
-        ),
-      );
-      expect(splicing.payload['edits'], hasLength(1));
-      // The typed edit lands in its own (fixed) batch with no splicing peer.
-      final fixed = writes.firstWhere(
-        (w) => (w.payload['edits'] as List).any(
-          (e) => (e as Map)['path'] == 'private.typed.setValue',
-        ),
-      );
+      // One write; the fixed typed edit LEADS so it resolves against the layout
+      // the user saw, and the splicing removeItem follows it.
+      expect(writes, hasLength(1));
       expect(
-        (fixed.payload['edits'] as List).every(
-          (e) => (e as Map)['path'] == 'private.typed.setValue',
-        ),
-        isTrue,
+        (writes.single.payload['edits'] as List).map((e) => (e as Map)['path']),
+        ['private.typed.setValue', 'private.inventory.removeItem'],
       );
       // All pending cleared after success.
       expect(notifier.state.pendingEdits, isEmpty);
     },
   );
 
-  test('saveAllPending splits a mixed batch: revive alone, addItem alone, '
-      'setValue batched — with backup only on the first write', () async {
+  test('saveAllPending orders a mixed batch fixed-first, splices after — '
+      'with the backup on the one write', () async {
     final core = _RecordingCoreService();
     final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
@@ -1658,38 +1695,29 @@ void main() {
     final writes = core.requests
         .where((r) => r.command == 'write_save')
         .toList();
-    // revive alone + addItem alone + the fixed setValue batch = three writes.
-    expect(writes, hasLength(3));
-
-    bool writeHas(_RecordedRequest w, String path) =>
-        (w.payload['edits'] as List).any((e) => (e as Map)['path'] == path);
-
-    final reviveWrite = writes.firstWhere(
-      (w) => writeHas(w, 'private.npc.revive'),
+    // All three ride ONE write, in the order that keeps every intent intact:
+    // the fixed setAttribute first (so a splice cannot retarget it), then the
+    // splicing addItem and revive.
+    expect(writes, hasLength(1));
+    expect(
+      (writes.single.payload['edits'] as List).map((e) => (e as Map)['path']),
+      [
+        'private.player.setAttribute',
+        'private.inventory.addItem',
+        'private.npc.revive',
+      ],
     );
-    expect(reviveWrite.payload['edits'], hasLength(1));
-    final addItemWrite = writes.firstWhere(
-      (w) => writeHas(w, 'private.inventory.addItem'),
-    );
-    expect(addItemWrite.payload['edits'], hasLength(1));
-    final fixedWrite = writes.firstWhere(
-      (w) => writeHas(w, 'private.player.setAttribute'),
-    );
-    expect(fixedWrite.payload['edits'], hasLength(1));
 
-    // Backup-once: exactly one write carries backup:true (the first), the
-    // rest backup:false — one pristine snapshot per Save.
+    // Backup-once: exactly one write carries backup:true — one pristine
+    // snapshot per Save.
     final backupTrue = writes.where((w) => w.payload['backup'] == true);
     expect(backupTrue, hasLength(1));
     expect(writes.first.payload['backup'], isTrue);
-    for (final w in writes.skip(1)) {
-      expect(w.payload['backup'], isFalse);
-    }
     expect(notifier.state.pendingEdits, isEmpty);
   });
 
   test(
-    'saveAllPending issues two writes for two distinct splicing edits',
+    'saveAllPending batches two distinct splicing edits into one ordered write',
     () async {
       final core = _RecordingCoreService();
       final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
@@ -1724,14 +1752,15 @@ void main() {
       final writes = core.requests
           .where((r) => r.command == 'write_save')
           .toList();
-      // Two separate single-edit writes — never batched together.
-      expect(writes, hasLength(2));
-      for (final w in writes) {
-        expect(w.payload['edits'], hasLength(1));
-      }
-      // Backup on the first write only.
-      expect(writes.first.payload['backup'], isTrue);
-      expect(writes.last.payload['backup'], isFalse);
+      // Neither splice is addressed by an index the other could shift, so both
+      // ride one write — in their stable pending-key order.
+      expect(writes, hasLength(1));
+      expect(
+        (writes.single.payload['edits'] as List).map((e) => (e as Map)['path']),
+        ['private.knowledge.addCharacter', 'private.npc.revive'],
+      );
+      // Backup-once: the single write takes it.
+      expect(writes.single.payload['backup'], isTrue);
     },
   );
 
@@ -1797,11 +1826,12 @@ void main() {
       final writes = core.requests
           .where((request) => request.command == 'write_save')
           .toList();
-      expect(writes, hasLength(4));
-      final edits = [
-        for (final write in writes)
-          (write.payload['edits'] as List).single as Map,
-      ];
+      // The four splices ride ONE write, so the order INSIDE its payload is now
+      // the only thing keeping the glossary add ahead of the removal (an add
+      // needs a surviving SegmentUnlocked event as its byte template) and the
+      // other splices in their original relative position.
+      expect(writes, hasLength(1));
+      final edits = (writes.single.payload['edits'] as List).cast<Map>();
       expect(edits.map((edit) => edit['path']), [
         'private.glossary.setSegment',
         'private.inventory.addItem',
@@ -1814,7 +1844,7 @@ void main() {
   );
 
   test(
-    'saveAllPending puts syncPersistentDataList on the fixed-batch write only',
+    'saveAllPending sets syncPersistentDataList exactly once, on the backup write',
     () async {
       final core = _RecordingCoreService();
       final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
@@ -1846,21 +1876,18 @@ void main() {
       final writes = core.requests
           .where((r) => r.command == 'write_save')
           .toList();
-      expect(writes, hasLength(2));
-      // The fixed batch (public name) carries the sync flag; the splicing
-      // revive write must not.
-      final fixed = writes.firstWhere(
-        (w) => (w.payload['edits'] as List).any(
-          (e) => (e as Map)['path'] == 'public.m_PlayerSaveName',
-        ),
+      // Both edits ride one write; the flag is set exactly ONCE and lands on
+      // the write that also takes the backup, so the PersistentDataList.sav
+      // companion is only ever updated beside a restorable snapshot.
+      final synced = writes.where(
+        (w) => w.payload['syncPersistentDataList'] == true,
       );
-      expect(fixed.payload['syncPersistentDataList'], isTrue);
-      final splicing = writes.firstWhere(
-        (w) => (w.payload['edits'] as List).any(
-          (e) => (e as Map)['path'] == 'private.npc.revive',
-        ),
+      expect(synced, hasLength(1));
+      expect(synced.single.payload['backup'], isTrue);
+      expect(
+        (synced.single.payload['edits'] as List).map((e) => (e as Map)['path']),
+        ['public.m_PlayerSaveName', 'private.npc.revive'],
       );
-      expect(splicing.payload.containsKey('syncPersistentDataList'), isFalse);
     },
   );
 
@@ -1966,11 +1993,18 @@ void main() {
 
       final ok = await notifier.saveAllPending();
       expect(ok, isTrue);
-      // Both saved: the NPC Def edit in the fixed batch, the hero skill trailing.
+      // Both saved. The packing rule only splits an ordinal-addressed edit that
+      // comes AFTER an ordinal-invalidating one; here the Def edit's `[0]`
+      // carries the ordinal and the skill edit (the invalidating producer) is
+      // ordered behind it, so nothing splits — they share ONE write, Def first.
       final writes = core.requests
           .where((r) => r.command == 'write_save')
           .toList();
-      expect(writes, hasLength(2));
+      expect(writes, hasLength(1));
+      expect(
+        (writes.single.payload['edits'] as List).map((e) => (e as Map)['path']),
+        ['private.typed.setValue', 'private.skills.set'],
+      );
     },
   );
 
@@ -2150,18 +2184,19 @@ void main() {
       final writes = core.requests
           .where((r) => r.command == 'write_save')
           .toList();
-      expect(writes, hasLength(2));
-      bool writeHas(_RecordedRequest w, String path) =>
-          (w.payload['edits'] as List).any((e) => (e as Map)['path'] == path);
-      final fixedIndex = writes.indexWhere(
-        (w) => writeHas(w, 'private.typed.setValue'),
+      // Both edits ride one write; the core applies a batch sequentially, so
+      // position in the payload is what orders them now.
+      expect(writes, hasLength(1));
+      final paths = (writes.single.payload['edits'] as List)
+          .map((e) => (e as Map)['path'])
+          .toList();
+      // The fixed Health edit is applied BEFORE the revive, so revive's HP
+      // (the last write to the NPC's HP) is final on disk.
+      expect(
+        paths.indexOf('private.typed.setValue'),
+        lessThan(paths.indexOf('private.npc.revive')),
       );
-      final reviveIndex = writes.indexWhere(
-        (w) => writeHas(w, 'private.npc.revive'),
-      );
-      // The fixed Health batch is issued BEFORE the revive write, so revive's
-      // HP (the last write to the NPC's HP) is final on disk.
-      expect(fixedIndex, lessThan(reviveIndex));
+      expect(paths, ['private.typed.setValue', 'private.npc.revive']);
     },
   );
 
@@ -2206,7 +2241,11 @@ void main() {
       final writes = core.requests
           .where((r) => r.command == 'write_save')
           .toList();
-      expect(writes, hasLength(2));
+      // The flag is set exactly once, on the write that also takes the backup.
+      expect(
+        writes.where((w) => w.payload['syncPersistentDataList'] == true),
+        hasLength(1),
+      );
       final synced = writes.singleWhere(
         (w) => w.payload['syncPersistentDataList'] == true,
       );

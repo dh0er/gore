@@ -15,10 +15,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   instead of walking back within seconds. It can be switched back on again, as
   long as the savegame still holds what the move wrote.
 
+### Changed
+
+- Saving is much faster. A save with eight changed values took eleven seconds
+  and now takes one. Changes that used to be written one after another are
+  written together, so a mixed save runs in a single pass instead of one per
+  change.
+
 ### Fixed
 
 - Version 1.2.1 said an NPC's position cannot be changed because the game
   restores it from the level. That was wrong.
+- Removing an item from a list and then editing another item in the same list
+  could change the wrong one.
 
 ## [1.2.1] - 2026-08-03
 

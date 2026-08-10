@@ -1404,38 +1404,64 @@ class EditorNotifier extends StateNotifier<EditorState> {
         )
         .toList();
 
-    // Build the worklist: ONE write for the fixed-size batch (if any) FIRST,
-    // then one write per splicing edit. Backup is taken on the FIRST sub-write
-    // only, so a Save makes exactly one pristine snapshot regardless of
-    // sub-write count.
-    //
-    // The fixed batch leads for two reasons:
-    //  - It carries syncPersistentDataList, so making it the backup-taking write
-    //    means the PersistentDataList.sav companion is updated WITH a restorable
-    //    companion backup (the synced write must be the one that takes backup).
-    //  - A splicing npc.revive writes HP (restore→Max). Running the fixed batch
-    //    first means a conflicting manual Health edit on the SAME NPC is applied
-    //    BEFORE revive, so the Revive action's HP wins (last write).
-    // If there is no fixed batch, the first splice takes backup:true instead.
-    final worklist = <_SubWrite>[
-      if (fixedBatch.isNotEmpty)
-        _SubWrite(
-          edits: [for (final keyed in fixedBatch) keyed.edit],
-          // syncPersistentDataList keys off a public/fixed edit, so it rides the
-          // fixed-size batch.
-          syncPersistentDataList: syncPersistent,
-        ),
-      for (final keyed in orderedSplicing) _SubWrite(edits: [keyed.edit]),
-      // All skill edits together, in their own trailing write: they batch safely
-      // among themselves but must not share a write with an index-addressed peer
-      // (see skillPath above).
-      if (skillEdits.isNotEmpty)
-        _SubWrite(edits: [for (final keyed in skillEdits) keyed.edit]),
-      // Last: the slot repair, so every id-addressed edit above resolved against
-      // the ids the user saw (see repairSlotsPath).
-      if (repairEdits.isNotEmpty)
-        _SubWrite(edits: [for (final keyed in repairEdits) keyed.edit]),
+    // The edits in the exact order they must reach the core, which applies a batch
+    // sequentially against one payload and re-resolves every edit's target as it
+    // goes. All the ordering this method computed above is preserved by simple
+    // concatenation:
+    //  - the fixed batch leads. It carries syncPersistentDataList, so it is the
+    //    backup-taking write; and a manual Health edit lands before a splicing
+    //    npc.revive's HP restore, so the Revive action still wins as last writer.
+    //  - the splices keep glossary adds ahead of removals and array removals
+    //    index-descending.
+    //  - skills follow, then the slot repair, so every id-addressed edit above
+    //    resolved against the ids the user actually saw.
+    //  - story goes last: it always needs its own write, and putting it at the end
+    //    keeps it from taking the backup away from the syncPersistentDataList one.
+    final ordered = <_KeyedEdit>[
+      ...fixedBatch,
+      ...orderedSplicing.where((k) => k.edit['path'] != storyStateApplyPath),
+      ...skillEdits,
+      ...repairEdits,
+      ...orderedSplicing.where((k) => k.edit['path'] == storyStateApplyPath),
     ];
+
+    // Pack that sequence into as few write_saves as the core will accept. It only
+    // refuses one combination — an edit addressed by an index or slot id placed
+    // after an edit that can change how many elements a container holds — so a new
+    // sub-write starts exactly when the next edit would hit that rule, plus one
+    // each for the two operations that must stand alone. In practice a whole
+    // editing session lands in a single write instead of one per splicing edit.
+    final worklist = <_SubWrite>[];
+    var current = <Map<String, Object?>>[];
+    var currentMayInvalidateOrdinals = false;
+    // syncPersistentDataList keys off a public/fixed edit, so it belongs to the
+    // first batch — which is also the one that takes the backup, so the companion
+    // file is updated with a restorable snapshot beside it.
+    var syncPending = syncPersistent;
+    void flush() {
+      if (current.isEmpty) return;
+      worklist.add(
+        _SubWrite(edits: current, syncPersistentDataList: syncPending),
+      );
+      syncPending = false;
+      current = <Map<String, Object?>>[];
+      currentMayInvalidateOrdinals = false;
+    }
+
+    for (final keyed in ordered) {
+      if (_exclusiveEditPaths.contains(keyed.edit['path'])) {
+        flush();
+        worklist.add(_SubWrite(edits: [keyed.edit]));
+        continue;
+      }
+      if (currentMayInvalidateOrdinals && _carriesCallerOrdinal(keyed.edit)) {
+        flush();
+      }
+      current.add(keyed.edit);
+      currentMayInvalidateOrdinals =
+          currentMayInvalidateOrdinals || _mayInvalidateOrdinals(keyed.edit);
+    }
+    flush();
     // Hang the placement notes on whichever sub-write goes first. It is the one
     // that takes the backup, and — for a position edit, which is never a
     // splicing edit — the one that actually carries the move.
@@ -3670,6 +3696,76 @@ const _typedEditPaths = {
   'private.typed.arrayRemove',
   'private.typed.arrayDuplicate',
 };
+
+/// Edits that must be the only edit in their `write_save`, whatever else is
+/// pending. Both are refused as peers by the core: a story batch takes its
+/// compare-and-set snapshot from the payload as it enters and proves its own
+/// postconditions before committing, and a reset replaces the whole inventory.
+const _exclusiveEditPaths = {
+  storyStateApplyPath,
+  'private.inventory.reset',
+};
+
+/// Whether [edit] can change how many elements a container holds, or renumber
+/// inventory slot ids — the only two things that invalidate an index or slot id a
+/// later edit in the same write was addressed with.
+///
+/// Mirrors `may_invalidate_caller_ordinals` in crates/gore-save/src/lib.rs. Keep the
+/// two in step: the core rejects the write outright when they disagree.
+bool _mayInvalidateOrdinals(Map<String, Object?> edit) {
+  final path = edit['path'];
+  if (path is! String) return true;
+  if (_typedEditPaths.contains(path) && path != 'private.typed.setValue') {
+    // setAdd/setRemove change a set's cardinality, arrayRemove/arrayDuplicate an
+    // array's length.
+    return true;
+  }
+  return const {
+    'private.inventory.addItem',
+    'private.inventory.removeItem',
+    'private.inventory.reset',
+    'private.inventory.repairSlots',
+    'private.knowledge.addCharacter',
+    'private.knowledge.setEntry',
+    'private.npc.revive',
+    'private.npc.setRelationship',
+    'private.glossary.setSegment',
+    'private.skills.set',
+    storyStateApplyPath,
+  }.contains(path);
+}
+
+/// Whether [edit] addresses its target with an index or slot id the user's view of
+/// the save supplied — something an earlier length change would silently retarget.
+///
+/// Mirrors `carries_caller_ordinal` in crates/gore-save/src/lib.rs.
+bool _carriesCallerOrdinal(Map<String, Object?> edit) {
+  final path = edit['path'];
+  if (path is! String) return false;
+  final value = edit['value'];
+  if (path == 'private.typed.arrayRemove' ||
+      path == 'private.typed.arrayDuplicate') {
+    return true;
+  }
+  if (_typedEditPaths.contains(path)) {
+    final raw = value is Map ? value['path'] : null;
+    return raw is List &&
+        raw.whereType<String>().any(
+          (segment) => segment.startsWith('[') && segment.endsWith(']'),
+        );
+  }
+  if (path == 'private.inventory.setItemCount') {
+    // A slot id is an index by invariant. The player path carries an ordinal even
+    // without one: it finds the stack through a positional scan of the payload
+    // rather than through the typed tree.
+    return (value is Map ? value['slotId'] : null) != null ||
+        (value is Map ? value['actorId'] : null) == null;
+  }
+  if (path == 'private.inventory.removeItem') {
+    return (value is Map ? value['slotId'] : null) != null;
+  }
+  return false;
+}
 
 /// A raw typed edit that reaches a slot — INTO one (its id, its count, a set or
 /// array inside its payload, anything below `m_Slots/[i]`) or AT the slot array
