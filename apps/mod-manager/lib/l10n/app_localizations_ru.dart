@@ -9,6 +9,9 @@ class AppLocalizationsRu extends AppLocalizations {
   AppLocalizationsRu([String locale = 'ru']) : super(locale);
 
   @override
+  String get statusUnknown => 'Неизвестно';
+
+  @override
   String get recoveryAction => 'Восстановить';
 
   @override

@@ -567,6 +567,10 @@ void main() {
       container.read(statusProvider).error,
       contains('status refresh failed'),
     );
+    expect(container.read(statusProvider).status, isNull);
+    expect(container.read(statusProvider).statusRoot, isNull);
+    expect(find.text(l10n.statusUnknown), findsOneWidget);
+    expect(find.text(l10n.statusNothingDeployed), findsNothing);
     expect(applyButton().onPressed, isNull);
     expect(
       core.calls.where((call) => call.command == 'mgr_status').length,
@@ -917,6 +921,74 @@ void main() {
       find.widgetWithText(FilledButton, l10n.actionApply),
     );
     expect(applyBtn.onPressed, isNotNull); // enabled
+  });
+
+  testWidgets('future deployment state is shown as Unknown and cannot Apply', (
+    tester,
+  ) async {
+    final exe = _makeGameExe();
+    final fake = FakeGoreCoreFfiService(
+      responses: {
+        'mgr_library_list': _libraryList(),
+        'mgr_analyze': {'ok': true, 'conflicts': []},
+        'mgr_status': {
+          'ok': true,
+          'status': {'state': 'future_manager_state'},
+        },
+      },
+    );
+    await tester.pumpWidget(_appWith(fake, exePath: exe));
+    await tester.pumpAndSettle();
+
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    expect(find.text(l10n.statusUnknown), findsOneWidget);
+    expect(find.text(l10n.statusNothingDeployed), findsNothing);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, l10n.actionApply),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('known non-studio postflight does not offer stale takeover', (
+    tester,
+  ) async {
+    final exe = _makeGameExe();
+    final fake = FakeGoreCoreFfiService(
+      responses: {
+        'mgr_library_list': _libraryList(),
+        'mgr_analyze': {'ok': true, 'conflicts': []},
+        'mgr_status': {
+          'ok': true,
+          'status': {'state': 'nothing_deployed'},
+        },
+        'mgr_apply': {
+          'ok': false,
+          'error': {
+            'code': 'STUDIO_DEPLOY_ACTIVE',
+            'message': 'studio owned the install during apply',
+          },
+        },
+      },
+    );
+    await tester.pumpWidget(_appWith(fake, exePath: exe));
+    await tester.pumpAndSettle();
+
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    await tester.tap(find.widgetWithText(FilledButton, l10n.actionApply));
+    await tester.pumpAndSettle();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(HomePage)),
+    );
+    expect(container.read(statusProvider).studioActive, isFalse);
+    expect(find.text(l10n.statusNothingDeployed), findsOneWidget);
+    expect(find.text(l10n.statusStudioDeploy), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('conflict panel groups by target and bolds the winner', (

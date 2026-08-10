@@ -1,5 +1,9 @@
 {
   "@@locale": "en",
+  "statusUnknown": "Unknown",
+  "@statusUnknown": {
+    "description": "Deployment status is unavailable or uses an unsupported future state."
+  },
   "recoveryAction": "Recover",
   "recoveryRequiredConfirm": "Recover the interrupted deployment and remove any partially deployed files?",
   "statusRecoveryRequired": "Recovery required",

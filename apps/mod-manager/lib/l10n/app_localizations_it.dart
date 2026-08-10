@@ -9,6 +9,9 @@ class AppLocalizationsIt extends AppLocalizations {
   AppLocalizationsIt([String locale = 'it']) : super(locale);
 
   @override
+  String get statusUnknown => 'Sconosciuto';
+
+  @override
   String get recoveryAction => 'Ripristina';
 
   @override

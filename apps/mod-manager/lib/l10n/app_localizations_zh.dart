@@ -9,6 +9,9 @@ class AppLocalizationsZh extends AppLocalizations {
   AppLocalizationsZh([String locale = 'zh']) : super(locale);
 
   @override
+  String get statusUnknown => '未知';
+
+  @override
   String get recoveryAction => '恢复';
 
   @override
@@ -250,6 +253,9 @@ class AppLocalizationsZh extends AppLocalizations {
 /// The translations for Chinese, using the Han script (`zh_Hans`).
 class AppLocalizationsZhHans extends AppLocalizationsZh {
   AppLocalizationsZhHans() : super('zh_Hans');
+
+  @override
+  String get statusUnknown => '未知';
 
   @override
   String get recoveryAction => '恢复';

@@ -1,5 +1,6 @@
 {
   "@@locale": "pt_BR",
+  "statusUnknown": "Desconhecido",
   "recoveryAction": "Recuperar",
   "recoveryRequiredConfirm": "Recuperar a implantação interrompida e remover os arquivos parcialmente implantados?",
   "statusRecoveryRequired": "Recuperação necessária",

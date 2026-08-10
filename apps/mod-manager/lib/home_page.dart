@@ -399,12 +399,17 @@ class _ModsTab extends ConsumerWidget {
 
     // Apply is enabled when the enabled loadout differs from what's deployed —
     // including the first-ever deploy (nothing_deployed + >=1 enabled mod).
+    final statusForCurrentRoot = status.statusRoot == gameRoot
+        ? status.status
+        : null;
+    final studioActiveForCurrentRoot =
+        status.gameRoot == gameRoot && status.studioActive;
     final applyEnabled = canApply(
-      status.status,
+      statusForCurrentRoot,
       library,
       gameRoot != null,
       status.busy,
-      status.studioActive,
+      studioActiveForCurrentRoot,
       statusError: status.error,
     );
 
@@ -458,6 +463,7 @@ class _ModsTab extends ConsumerWidget {
               const SizedBox(width: 12),
               _StatusChip(
                 state: status,
+                currentRoot: gameRoot,
                 onStudioTap: operationsBusy || gameRoot == null
                     ? null
                     : () => _promptTakeOver(context, ref),
@@ -616,11 +622,13 @@ enum _OverflowAction { refresh, undeployAll }
 class _StatusChip extends StatelessWidget {
   const _StatusChip({
     required this.state,
+    required this.currentRoot,
     required this.onStudioTap,
     required this.onRecoveryTap,
   });
 
   final StatusState state;
+  final String? currentRoot;
   final VoidCallback? onStudioTap;
   final VoidCallback? onRecoveryTap;
 
@@ -628,12 +636,16 @@ class _StatusChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
-    final status = state.status;
+    // Even before the path-change listener starts a refresh, never display
+    // authority that belongs to another game installation.
+    final rootMatches = state.statusRoot == currentRoot;
+    final status = rootMatches ? state.status : null;
 
     // studioActive (from a blocked apply) also surfaces the studio chip even
     // if mgr_status hasn't been re-read as studio_deploy_active yet.
     final isStudio =
-        status is ManagerStatusStudioDeployActive || state.studioActive;
+        status is ManagerStatusStudioDeployActive ||
+        (state.gameRoot == currentRoot && state.studioActive);
 
     final (String label, Color bg, Color fg, IconData icon) = switch (status) {
       ManagerStatusInSync() => (
@@ -679,10 +691,10 @@ class _StatusChip extends StatelessWidget {
         Icons.lock_outline,
       ),
       _ => (
-        l10n.statusNothingDeployed,
+        l10n.statusUnknown,
         scheme.surfaceContainerHighest,
         scheme.onSurfaceVariant,
-        Icons.circle_outlined,
+        Icons.help_outline,
       ),
     };
 

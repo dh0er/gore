@@ -1,5 +1,6 @@
 {
   "@@locale": "pl",
+  "statusUnknown": "Nieznany",
   "recoveryAction": "Odzyskaj",
   "recoveryRequiredConfirm": "Odzyskać przerwane wdrożenie i usunąć częściowo wdrożone pliki?",
   "statusRecoveryRequired": "Wymagane odzyskiwanie",

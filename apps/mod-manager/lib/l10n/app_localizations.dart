@@ -116,6 +116,12 @@ abstract class AppLocalizations {
     Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hans'),
   ];
 
+  /// Deployment status is unavailable or uses an unsupported future state.
+  ///
+  /// In en, this message translates to:
+  /// **'Unknown'**
+  String get statusUnknown;
+
   /// No description provided for @recoveryAction.
   ///
   /// In en, this message translates to:

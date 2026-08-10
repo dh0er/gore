@@ -1,5 +1,6 @@
 {
   "@@locale": "de",
+  "statusUnknown": "Unbekannt",
   "recoveryAction": "Wiederherstellen",
   "recoveryRequiredConfirm": "Unterbrochene Bereitstellung wiederherstellen und alle teilweise bereitgestellten Dateien entfernen?",
   "statusRecoveryRequired": "Wiederherstellung erforderlich",

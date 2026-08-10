@@ -1,5 +1,6 @@
 {
   "@@locale": "ru",
+  "statusUnknown": "Неизвестно",
   "recoveryAction": "Восстановить",
   "recoveryRequiredConfirm": "Восстановить прерванное развёртывание и удалить частично развёрнутые файлы?",
   "statusRecoveryRequired": "Требуется восстановление",
