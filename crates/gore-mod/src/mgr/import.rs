@@ -2407,10 +2407,31 @@ impl ForeignScan {
         path: &Path,
         extension: &str,
     ) -> crate::Result<()> {
+        let actual_extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| {
+                ModError::Other(format!(
+                    "IoStore member extension is not valid Unicode: {}",
+                    path.display()
+                ))
+            })?;
+        if actual_extension != extension {
+            return Err(ModError::Other(format!(
+                "IoStore member name is not exactly reconstructable during Apply: expected lowercase .{extension}, found {actual_extension:?} in {}",
+                path.display()
+            )));
+        }
         let rel_base = rel_str(root, &path.with_extension(""));
         let portable_base = portable_windows_key(&rel_base);
         let members = self.iostore.entry(portable_base.clone()).or_default();
-        if members.rel_base.is_none() {
+        if let Some(first_base) = &members.rel_base {
+            if first_base != &rel_base {
+                return Err(ModError::Other(format!(
+                    "IoStore member names are not exactly reconstructable during Apply: {first_base:?} and {rel_base:?} differ in spelling"
+                )));
+            }
+        } else {
             members.rel_base = Some(rel_base);
         }
         let slot = match extension {
@@ -4218,43 +4239,54 @@ mod tests {
     }
 
     #[test]
-    fn iostore_pair_members_share_a_portable_case_folded_stem() {
-        let tmp = tempfile::tempdir().unwrap();
-        let lib = tmp.path().join("lib");
-        let source = tmp.path().join("CaseFoldedPair");
-        fs::create_dir_all(&source).unwrap();
-        fs::write(source.join("MixedCase.utoc"), b"utoc").unwrap();
-        fs::write(source.join("mixedcase.ucas"), b"ucas").unwrap();
+    fn case_distinct_iostore_members_are_refused_before_activation() {
+        for (case, utoc, ucas, pak) in [
+            ("ascii", "MixedCase.utoc", "mixedcase.ucas", None),
+            ("unicode", "Ä.utoc", "ä.ucas", None),
+            (
+                "optional-pak",
+                "Consistent.utoc",
+                "Consistent.ucas",
+                Some("consistent.pak"),
+            ),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let lib = tmp.path().join("lib");
+            let source = tmp.path().join(case);
+            fs::create_dir_all(&source).unwrap();
+            fs::write(source.join(utoc), b"utoc").unwrap();
+            fs::write(source.join(ucas), b"ucas").unwrap();
+            if let Some(pak) = pak {
+                fs::write(source.join(pak), b"pak").unwrap();
+            }
 
-        let meta = import(&lib, &source).unwrap();
-        assert_eq!(meta.kind, ModKind::ForeignTriplet);
-        assert_eq!(
-            meta.components,
-            vec![ComponentInfo::Triplet {
-                rel_base: "MixedCase".into(),
-                targets: vec![],
-            }]
-        );
+            let error = import(&lib, &source).unwrap_err().to_string();
+            assert!(
+                error.contains("not exactly reconstructable during Apply"),
+                "unexpected {case} error: {error}"
+            );
+            assert!(
+                !lib.exists() || fs::read_dir(&lib).unwrap().next().is_none(),
+                "refused {case} import must not publish a library entry"
+            );
+        }
     }
 
     #[test]
-    fn iostore_pair_members_share_a_unicode_case_folded_stem() {
+    fn case_distinct_iostore_extension_is_refused_before_activation() {
         let tmp = tempfile::tempdir().unwrap();
         let lib = tmp.path().join("lib");
-        let source = tmp.path().join("UnicodePair");
+        let source = tmp.path().join("UppercaseExtension");
         fs::create_dir_all(&source).unwrap();
-        fs::write(source.join("Ä.utoc"), b"utoc").unwrap();
-        fs::write(source.join("ä.ucas"), b"ucas").unwrap();
+        fs::write(source.join("Exact.UTOC"), b"utoc").unwrap();
+        fs::write(source.join("Exact.ucas"), b"ucas").unwrap();
 
-        let meta = import(&lib, &source).unwrap();
-        assert_eq!(meta.kind, ModKind::ForeignTriplet);
-        assert_eq!(
-            meta.components,
-            vec![ComponentInfo::Triplet {
-                rel_base: "Ä".into(),
-                targets: vec![],
-            }]
+        let error = import(&lib, &source).unwrap_err().to_string();
+        assert!(
+            error.contains("expected lowercase .utoc"),
+            "unexpected extension error: {error}"
         );
+        assert!(!lib.exists() || fs::read_dir(&lib).unwrap().next().is_none());
     }
 
     /// [import 6b] Importing the `.utoc` FILE directly pulls its same-stem siblings along.
