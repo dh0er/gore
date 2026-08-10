@@ -1,14 +1,14 @@
-# GORE
+# ⚔️ GORE
 
 **GORE** (Go-thic Re-make) is a vibe-coded modding and save-editing toolsuite for Gothic 1 Remake. One Rust engine, one CLI, and three Windows apps built on top of it.
 
 [<img src="docs/images/screenshot_dark.png" alt="GORE Save Editor" width="600"/>](docs/images/screenshot_light.png)
 
-## Tools
+## 🧰 Tools
 
-| Tool | What it does | Status |
+| <div style="width:150px">Tool</div> | What it does | <div style="width:150px">Status</div> |
 |---|---|---|
-| **[GORE CLI](docs/guide/README.md)** | All modding from the terminal: item values, text and dialogs, audio, voice, textures, DataAssets, scripts. Start here. | ⚗️ Experimental use |
+| **[CLI](docs/guide/README.md)** | All modding from the terminal: item values, text and dialogs, audio, voice, textures, DataAssets, scripts. Start here. | ⚗️ Experimental use |
 | **[Mod Studio](apps/mod-studio/README.md)** | No-code Windows GUI over the same engine, for *authoring* one mod. | 🚧 Work in progress |
 | **[Mod Manager](apps/mod-manager/README.md)** | Windows GUI for installing and ordering *many* mods together. | 🚧 Work in progress |
 | **[Save Editor](apps/save-editor/README.md)** | Windows GUI for editing your save files. Never touches the game install. | ✅ Ready to use |
@@ -18,24 +18,24 @@
 The Flutter GUIs reuse the exact same Rust crates as the CLI through a
 `dart:ffi` bridge — the CLI is always the most complete surface.
 
-## Status
+## 📊 Status
 
-| Area | What you can do | Status | The catch |
+| Area | Status | What you can do | The catch |
 |---|---|---|---|
-| [Item & stat values](docs/guide/items.md) | Change what items are worth, what weapons do, what NPCs have | Full | Needs UE4SS, which GORE does not install |
-| [Text & dialogs](docs/guide/text-and-dialogs.md) | Replace any text in the game, in any of its 19 languages | Full | An id can carry several language versions and the game shows the newest |
-| [Audio](docs/guide/audio.md) | Replace music and sound effects | Full | Finding which sound plays where is guesswork |
-| [Voice-over](docs/guide/voice.md) | Replace spoken lines | Partly | You can add audio for a brand-new line, but nobody has heard one play yet |
-| [Textures](docs/guide/textures.md) | Replace textures | Full | A few, like the mouse cursors, are stored somewhere this cannot reach |
-| [DataAssets](docs/guide/dataassets.md) | Edit cooked game data | Partly | Only assets the engine describes natively; Blueprint ones are refused |
-| [Scripts](docs/guide/scripts.md) | Read the game's script code, change it, add your own | Partly | Reverse-engineered and lossy — recompiled code is not always identical |
-| [Mods & load order](docs/guide/bundles.md) | Ship all of the above as one mod, run many together, and install mods that GORE did not build — plain zips, pak files, UE4SS mod folders | Full | Nobody else's mod has been through it: the one end-to-end test used a file GORE made itself |
+| [Item & stat values](docs/guide/items.md) | Full | Change what items are worth, what weapons do, what NPCs have | Needs UE4SS, which GORE does not install |
+| [Text & dialogs](docs/guide/text-and-dialogs.md) | Full | Replace any text in the game, in any of its 19 languages | An id can carry several language versions and the game shows the newest |
+| [Audio](docs/guide/audio.md) | Full | Replace music and sound effects | Finding which sound plays where is guesswork |
+| [Voice-over](docs/guide/voice.md) | Partly | Replace spoken lines | You can add audio for a brand-new line, but nobody has heard one play yet |
+| [Textures](docs/guide/textures.md) | Full | Replace textures | A few, like the mouse cursors, are stored somewhere this cannot reach |
+| [DataAssets](docs/guide/dataassets.md) | Partly | Edit cooked game data | Only assets the engine describes natively; Blueprint ones are refused |
+| [Scripts](docs/guide/scripts.md) | Partly | Read the game's script code, change it, add your own | Reverse-engineered and lossy — recompiled code is not always identical |
+| [Mods & load order](docs/guide/bundles.md) | Full | Ship all of the above as one mod, run many together, and install mods that GORE did not build — plain zips, pak files, UE4SS mod folders | Nobody else's mod has been through it: the one end-to-end test used a file GORE made itself |
 
 GORE will not edit your saves — that is the
 [Save Editor](apps/save-editor/README.md) — and everything above was seen by one
 person, on one install.
 
-## Quick start
+## 🚀 Quick start
 
 Get `gore.exe` from a `gore-cli-v*`
 [release](https://github.com/dh0er/gore/releases), or build it:
@@ -80,7 +80,7 @@ gore gen overrides.toml -o "$GAME\G1R\Binaries\Win64\ue4ss\Mods"
 
 Full walkthrough: [Getting started](docs/guide/getting-started.md).
 
-## Vibe Modding
+## 🤖 Vibe Modding
 
 You can mod with AI agents by installing the plugin, or by manually installing the skill and mcp tools.
 
@@ -127,24 +127,24 @@ New-Item -ItemType Junction `
 For unattended use, add `--allow-write` and/or `--allow-game-launch` to
 `gore mcp serve` to pre-approve writes or game launches. Compiling requires both.
 
-## Documentation
+## 📚 Documentation
 
 Everything lives in [`docs/`](docs/README.md).
 
 | | |
 |---|---|
-| [Getting started](docs/guide/getting-started.md) | Install, configure, first mod, which tool for which job |
-| [Item & stat values](docs/guide/items.md) | `overrides.toml` → UE4SS Lua CDO override mod |
-| [Text & dialogs](docs/guide/text-and-dialogs.md) | Decrypt, edit, re-encrypt the localization `.lcache` |
-| [Audio](docs/guide/audio.md) · [Voice-over](docs/guide/voice.md) | FMOD bank samples; voice-over ZIP archives |
-| [Textures](docs/guide/textures.md) · [DataAssets](docs/guide/dataassets.md) | Additive UE5 IoStore Zen triplets |
-| [Scripts](docs/guide/scripts.md) | Decompile, recompile, and splice the AngelScript cache |
-| [Bundling & deploying](docs/guide/bundles.md) | One spec → one mod that deploys as a unit |
-| [Running many mods](docs/guide/mod-manager.md) | `gore mgr`: library, load order, conflicts |
-| [CLI reference](docs/guide/cli-reference.md) | Every command, subcommand, and flag |
-| [AI assistants](docs/guide/mcp.md) | Install the plugin, or wire the MCP server up by hand; what gets confirmed with you |
-| [Mod Studio](docs/guide/mod-studio.md) | The no-code GUI: NPCs, quests, voice, project backups |
-| [Building](docs/development.md) | Toolchain, `build.py`, repo layout, crates, versioning |
+| 🏁 [Getting started](docs/guide/getting-started.md) | Install, configure, first mod, which tool for which job |
+| 🍎 [Item & stat values](docs/guide/items.md) | `overrides.toml` → UE4SS Lua CDO override mod |
+| 💬 [Text & dialogs](docs/guide/text-and-dialogs.md) | Decrypt, edit, re-encrypt the localization `.lcache` |
+| 🔊 [Audio](docs/guide/audio.md) · 🎙️ [Voice-over](docs/guide/voice.md) | FMOD bank samples; voice-over ZIP archives |
+| 🖼️ [Textures](docs/guide/textures.md) · 📦 [DataAssets](docs/guide/dataassets.md) | Additive UE5 IoStore Zen triplets |
+| 📜 [Scripts](docs/guide/scripts.md) | Decompile, recompile, and splice the AngelScript cache |
+| 📦 [Bundling & deploying](docs/guide/bundles.md) | One spec → one mod that deploys as a unit |
+| 🧩 [Running many mods](docs/guide/mod-manager.md) | `gore mgr`: library, load order, conflicts |
+| ⌨️ [CLI reference](docs/guide/cli-reference.md) | Every command, subcommand, and flag |
+| 🤖 [AI assistants](docs/guide/mcp.md) | Install the plugin, or wire the MCP server up by hand; what gets confirmed with you |
+| 🖥️ [Mod Studio](docs/guide/mod-studio.md) | The no-code GUI: NPCs, quests, voice, project backups |
+| 🔧 [Building](docs/development.md) | Toolchain, `build.py`, repo layout, crates, versioning |
 
 The CLI release zip carries the same guide offline: `docs\guide.html` is one
 browsable file with a collapsible sidebar, and `docs\*.md` is the same content in
@@ -156,7 +156,7 @@ Implementation contracts behind the commands — receipt semantics, seal
 guarantees, why a patch is refused — live separately in
 [`docs/reference/`](docs/reference/README.md). They are not part of the guide.
 
-## Build
+## 🔨 Build
 
 Requires Windows 10+, a stable Rust toolchain, Python 3, Visual Studio 2022
 with "Desktop development with C++", and — for the GUI apps — Flutter with
@@ -181,6 +181,6 @@ on the exact commit before any product build.
 
 Details, repo layout, and the crate table: [Building](docs/development.md).
 
-## License
+## 📄 License
 
 MIT. See [LICENSE](LICENSE).
