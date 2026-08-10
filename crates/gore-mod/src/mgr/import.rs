@@ -1773,6 +1773,21 @@ fn validate_reroot_chain(staging: &Path, bundle_dir: &Path) -> crate::Result<()>
             bundle_dir.display()
         ))
     })?;
+    let top_wrapper = relative
+        .components()
+        .next()
+        .and_then(|component| match component {
+            std::path::Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            ModError::Other(format!(
+                "nested gore-mod manifest has an unsafe wrapper root: {}",
+                bundle_dir.display()
+            ))
+        })?;
+    let top_wrapper_key = portable_windows_key(top_wrapper);
+    let mut top_wrapper_will_be_removed = true;
     let mut current = staging.to_path_buf();
     for component in relative.components() {
         let std::path::Component::Normal(expected) = component else {
@@ -1824,12 +1839,18 @@ fn validate_reroot_chain(staging: &Path, bundle_dir: &Path) -> crate::Result<()>
                 expected_entry.path().display()
             )));
         }
+        let below_staging_root = current != staging;
         for sibling in entries.iter().filter(|entry| entry.file_name() != expected) {
             if let Some(deployable) = find_deployable_reroot_sibling(&sibling.path(), 0)? {
                 return Err(ModError::Other(format!(
                     "nested gore-mod manifest has deployable or reserved sibling content outside its contract: {}",
                     deployable.display()
                 )));
+            }
+            // A benign sibling below the staging root keeps the top wrapper non-empty after the
+            // bundle subtree moves to the stash. The root entry therefore remains collision-relevant.
+            if below_staging_root {
+                top_wrapper_will_be_removed = false;
             }
         }
         current = expected_entry.path();
@@ -1843,8 +1864,17 @@ fn validate_reroot_chain(staging: &Path, bundle_dir: &Path) -> crate::Result<()>
     )))? {
         let entry = entry.map_err(crate::io("reading nested gore-mod root entry"))?;
         let name = entry.file_name();
+        let name_key = name.to_str().map(portable_windows_key).ok_or_else(|| {
+            ModError::Other(format!(
+                "nested gore-mod content name is not valid Unicode: {}",
+                entry.path().display()
+            ))
+        })?;
+        let occupied = metadata_if_present(&staging.join(&name))?.is_some();
+        let occupied_only_by_removable_wrapper =
+            occupied && top_wrapper_will_be_removed && name_key == top_wrapper_key;
         if name == std::ffi::OsStr::new(".gore-reroot")
-            || metadata_if_present(&staging.join(&name))?.is_some()
+            || (occupied && !occupied_only_by_removable_wrapper)
         {
             return Err(ModError::Other(format!(
                 "nested gore-mod content would collide while re-rooting: {}",
@@ -4085,6 +4115,45 @@ mod tests {
             fs::read(entry.join("Wrap/LICENSE.txt")).unwrap(),
             b"license"
         );
+    }
+
+    #[test]
+    fn nested_bundle_can_hoist_content_named_like_its_removed_wrapper() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let bundle = mk_goremod_bundle(tmp.path());
+        let source = tmp.path().join("same-name-wrapper");
+        let nested = source.join("Wrap");
+        fs::create_dir_all(&source).unwrap();
+        fs::rename(bundle, &nested).unwrap();
+        fs::create_dir(nested.join("Wrap")).unwrap();
+        fs::write(nested.join("Wrap/README.txt"), b"inner payload").unwrap();
+
+        let meta = import(&lib, &source).unwrap();
+        let entry = lib.join(meta.id);
+        assert!(entry.join("gore-mod.json").is_file());
+        assert_eq!(
+            fs::read(entry.join("Wrap/README.txt")).unwrap(),
+            b"inner payload"
+        );
+    }
+
+    #[test]
+    fn retained_wrapper_sibling_still_blocks_a_same_name_hoist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let bundle = mk_goremod_bundle(tmp.path());
+        let source = tmp.path().join("retained-wrapper");
+        let nested = source.join("Wrap/Sub");
+        fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        fs::rename(bundle, &nested).unwrap();
+        fs::create_dir(nested.join("Wrap")).unwrap();
+        fs::write(nested.join("Wrap/README.txt"), b"inner payload").unwrap();
+        fs::write(source.join("Wrap/LICENSE.txt"), b"retains wrapper").unwrap();
+
+        let error = import(&lib, &source).unwrap_err().to_string();
+        assert!(error.contains("would collide while re-rooting"), "{error}");
+        assert_failed_import_left_nothing(&lib);
     }
 
     #[test]
