@@ -76,6 +76,53 @@ class ModEntryMetaView {
   final List<ComponentView> components;
 }
 
+/// How completely a component's metadata describes its conflict footprint.
+enum FootprintCoverage { exact, partial, advisory, opaque }
+
+FootprintCoverage _footprintCoverage(
+  Map<String, Object?> json,
+  String kind,
+  List<String> targets,
+  bool opaque,
+) {
+  // A present but future/invalid value is not safe to infer through. Missing is
+  // different: it means an older DLL, for which the current native derivation
+  // can be reproduced conservatively from the unchanged component contract.
+  if (json.containsKey('coverage')) {
+    return switch (json['coverage']) {
+      'exact' => FootprintCoverage.exact,
+      'partial' => FootprintCoverage.partial,
+      'advisory' => FootprintCoverage.advisory,
+      'opaque' => FootprintCoverage.opaque,
+      _ => FootprintCoverage.opaque,
+    };
+  }
+
+  return switch (kind) {
+    'ue4ss_lua' =>
+      !opaque
+          ? FootprintCoverage.exact
+          : targets.isNotEmpty
+          ? FootprintCoverage.partial
+          : FootprintCoverage.opaque,
+    'triplet' =>
+      targets.isNotEmpty
+          ? FootprintCoverage.advisory
+          : FootprintCoverage.opaque,
+    'loose_pak' =>
+      targets.isNotEmpty ? FootprintCoverage.exact : FootprintCoverage.opaque,
+    'loc_patch' ||
+    'audio_patch' ||
+    'texture_patch' ||
+    'angel_script_patch' ||
+    'file_patch' ||
+    'pak_file_patch' ||
+    'voice_archive_patch' ||
+    'raw_file' => FootprintCoverage.exact,
+    _ => FootprintCoverage.opaque,
+  };
+}
+
 /// One deployable component of a mod. [kind] is the raw serde `type` tag:
 /// `ue4ss_lua` (name, rel, targets, opaque), `loc_patch` / `audio_patch` /
 /// `texture_patch` / `angel_script_patch` (rel, targets), `triplet`
@@ -85,6 +132,7 @@ class ModEntryMetaView {
 class ComponentView {
   const ComponentView({
     required this.kind,
+    required this.coverage,
     this.name,
     this.rel,
     this.targets = const [],
@@ -95,12 +143,15 @@ class ComponentView {
 
   factory ComponentView.fromJson(Map<String, Object?> json) {
     final kind = _stringOr(json['type'], 'unknown');
+    final targets = _stringList(json['targets']);
+    final opaque = json['opaque'] == true;
     return ComponentView(
       kind: kind,
+      coverage: _footprintCoverage(json, kind, targets, opaque),
       name: _optString(json['name']),
       rel: _optString(json['rel']) ?? _optString(json['rel_base']),
-      targets: _stringList(json['targets']),
-      opaque: json['opaque'] == true,
+      targets: targets,
+      opaque: opaque,
       rawFileTarget: kind == 'raw_file'
           ? RawFileTargetView.fromJson(json['target_file'])
           : null,
@@ -111,6 +162,10 @@ class ComponentView {
   /// Raw component type tag (see class doc); never null, `unknown` when the
   /// tag is missing.
   final String kind;
+
+  /// How completely [targets] (or [rawFileTarget]) describe this component's
+  /// footprint. This does not claim anything about runtime precedence.
+  final FootprintCoverage coverage;
 
   /// Script name (`ue4ss_lua` only).
   final String? name;
@@ -212,9 +267,9 @@ class LoadoutView {
   final List<LoadoutEntryView> entries;
 
   Map<String, Object?> toJson() => {
-        'format': format,
-        'entries': [for (final entry in entries) entry.toJson()],
-      };
+    'format': format,
+    'entries': [for (final entry in entries) entry.toJson()],
+  };
 }
 
 /// One conflict between mods of the current loadout (`mgr_analyze`).
@@ -305,7 +360,7 @@ class ManagerStatusRecoveryRequired extends ManagerStatusView {
 /// touch the install until that deploy is undone on the studio side.
 class ManagerStatusStudioDeployActive extends ManagerStatusView {
   ManagerStatusStudioDeployActive(super.raw)
-      : modName = _optString(raw['mod_name']) ?? '';
+    : modName = _optString(raw['mod_name']) ?? '';
 
   /// Name of the studio-deployed mod ('' when the DLL omitted it).
   final String modName;
@@ -328,8 +383,8 @@ class ManagerStatusInSync extends ManagerStatusView {
 /// The loadout was edited since the last apply: deployed != target.
 class ManagerStatusChangesPending extends ManagerStatusView {
   ManagerStatusChangesPending(super.raw)
-      : deployed = _loadoutOrNull(raw['deployed']),
-        target = _loadoutOrNull(raw['target']);
+    : deployed = _loadoutOrNull(raw['deployed']),
+      target = _loadoutOrNull(raw['target']);
 
   final LoadoutView? deployed;
   final LoadoutView? target;

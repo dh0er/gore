@@ -2820,6 +2820,7 @@ impl Drop for StagingGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mgr::FootprintCoverage;
     use crate::{
         build_bundle, write_bundle, BuildSpec, LooseFileReplacement, ModMeta, ScriptModule,
         VoiceArchiveEdit, VoicePatchOp,
@@ -3812,6 +3813,12 @@ mod tests {
                 ..
             }) if targets == &["ItFo_Apple.m_Value"]
         ));
+        let lua = meta
+            .components
+            .iter()
+            .find(|component| matches!(component, ComponentInfo::Ue4ssLua { .. }))
+            .unwrap();
+        assert_eq!(lua.footprint_coverage(), FootprintCoverage::Partial);
         let persisted: ModEntryMeta =
             serde_json::from_slice(&fs::read(lib.join(&meta.id).join(META_FILE)).unwrap()).unwrap();
         assert_eq!(persisted, meta);
@@ -3851,6 +3858,12 @@ mod tests {
                 ..
             }) if targets.is_empty()
         ));
+        let lua = meta
+            .components
+            .iter()
+            .find(|component| matches!(component, ComponentInfo::Ue4ssLua { .. }))
+            .unwrap();
+        assert_eq!(lua.footprint_coverage(), FootprintCoverage::Exact);
     }
 
     #[test]
@@ -3888,6 +3901,12 @@ mod tests {
                 ..
             }) if targets.is_empty()
         ));
+        let lua = meta
+            .components
+            .iter()
+            .find(|component| matches!(component, ComponentInfo::Ue4ssLua { .. }))
+            .unwrap();
+        assert_eq!(lua.footprint_coverage(), FootprintCoverage::Opaque);
     }
 
     #[test]
@@ -4280,6 +4299,11 @@ mod tests {
                 targets: vec![]
             }]
         );
+        assert_eq!(
+            meta.components[0].footprint_coverage(),
+            FootprintCoverage::Opaque,
+            "an unreadable Pak keeps importing with an explicitly unknown footprint"
+        );
         assert!(lib.join(&meta.id).join("foo_P.pak").is_file());
     }
 
@@ -4310,6 +4334,11 @@ mod tests {
                 rel_base: "zzz_foo_P".into(),
                 targets: vec![]
             }]
+        );
+        assert_eq!(
+            meta.components[0].footprint_coverage(),
+            FootprintCoverage::Opaque,
+            "an unreadable IoStore container keeps importing with an explicitly unknown footprint"
         );
         // All three members were staged into the entry.
         let entry = lib.join(&meta.id);
@@ -4409,6 +4438,10 @@ mod tests {
                 rel_base: "bar".into(),
                 targets: vec![]
             }]
+        );
+        assert_eq!(
+            meta.components[0].footprint_coverage(),
+            FootprintCoverage::Opaque
         );
         let entry = lib.join(&meta.id);
         assert!(entry.join("bar.ucas").is_file());
@@ -4832,6 +4865,11 @@ mod tests {
                 targets: vec![],
                 opaque: true,
             }]
+        );
+        assert_eq!(
+            meta.components[0].footprint_coverage(),
+            FootprintCoverage::Opaque,
+            "a foreign UE4SS tree has no complete declared script footprint"
         );
         let entry = lib.join(&meta.id);
         assert!(entry
