@@ -8936,10 +8936,13 @@ fn apply_private_edits(
             ))),
         })
         .collect::<Result<Vec<_>, _>>()?;
-    // One StoryApply may contain many value-addressed story changes and applies
-    // them transactionally on its own scratch payload. Keep that transaction
-    // isolated from peer outer edits: its insert/remove branches can splice the
-    // StoryPropertyValues map and invalidate offsets/indices held by a peer.
+    // One StoryApply may contain many value-addressed story changes and applies them
+    // transactionally on its own scratch payload. It stays exclusive for TRANSACTION
+    // SCOPE, not for index shifting (the position rule below would already cover
+    // that): it takes its compare-and-set snapshot from the payload as it enters,
+    // which a peer ordered before it would have already changed, and it proves its
+    // own postconditions before committing, which a peer ordered after it could
+    // quietly undo.
     if edit_specs
         .iter()
         .any(|edit| matches!(edit, PrivateEdit::StoryApply(_)))
@@ -8950,132 +8953,146 @@ fn apply_private_edits(
                 .to_string(),
         ));
     }
-    // Structural edits (arrayRemove, arrayDuplicate, addItem, removeItem) change
-    // the length of array or set data; a second such edit in the same batch
-    // would silently target shifted offsets/indices.  Reject the batch
-    // instead of guessing the caller's intent.
-    let structural_array_edits = edit_specs
+    // A reset swaps the whole m_Inventory value for the start save's copy, so every
+    // container under it changes size — including the byte region the player-inventory
+    // scan (see `inventory_item_region`) searches, which is located positionally rather
+    // than through the typed tree. It is a once-per-save wholesale operation with
+    // nothing to gain from sharing a write.
+    if edit_specs
         .iter()
-        .filter(|edit| {
-            matches!(
-                edit,
-                PrivateEdit::TypedContainer(PrivateTypedContainerEdit {
-                    edit: properties::ContainerEdit::ArrayRemove(_)
-                        | properties::ContainerEdit::ArrayDuplicate(_),
-                    ..
-                }) | PrivateEdit::InventoryAddItem(_)
-                    | PrivateEdit::InventoryRemoveItem(_)
-                    | PrivateEdit::InventoryReset(_)
-                    | PrivateEdit::GlossarySetSegment(_)
-            )
-        })
-        .count();
-    if structural_array_edits > 1 {
-        return Err(CoreError::UnsupportedEdit(format!(
-            "a write may contain at most one structural array edit \
-             (arrayRemove/arrayDuplicate/addItem/removeItem); got {structural_array_edits} — \
-             indices shift after each structural change, submit them as \
-             separate writes"
-        )));
-    }
-    // A splicing structural edit inserts or removes bytes mid-payload and shifts
-    // every byte after the splice point:
-    //   - inventory addItem/removeItem splice the MainContainer slot array,
-    //   - inventory.reset replaces the whole m_Inventory value with a
-    //     differently-sized reference (start-save) copy,
-    //   - knowledge.addCharacter inserts a new entry into the
-    //     CharacterKnowledgeByUniqueName MapProperty, and
-    //   - npc.revive strips the authoritative State.Dead/KillBounty/Executed loose
-    //     tags from LooseTagsByGlobalId, removes defeat/kill memory events from
-    //     MemorizedEvents (own + cross-owner), drops the m_SavedInventories corpse
-    //     entry, and restores HP — each a separate re-parse/splice.
-    // Any peer edit in the same batch is unsafe: a later edit resolves its target
-    // against the pre-splice layout — an in-place setItemCount patches stale byte
-    // offsets, and a typed setValue re-resolves a now-shifted array index — so it
-    // can corrupt the save or hit the wrong slot. Require such an edit to stand alone.
-    let splicing_structural_edits = edit_specs
-        .iter()
-        .filter(|edit| {
-            matches!(
-                edit,
-                PrivateEdit::InventoryAddItem(_)
-                    | PrivateEdit::InventoryRemoveItem(_)
-                    | PrivateEdit::InventoryReset(_)
-                    | PrivateEdit::KnowledgeAddCharacter(_)
-                    | PrivateEdit::KnowledgeSetEntry(_)
-                    | PrivateEdit::NpcRevive(_)
-                    | PrivateEdit::NpcRelationship(_)
-                    | PrivateEdit::GlossarySetSegment(_)
-            )
-        })
-        .count();
-    if splicing_structural_edits >= 1 && edit_specs.len() > 1 {
+        .any(|edit| matches!(edit, PrivateEdit::InventoryReset(_)))
+        && edit_specs.len() != 1
+    {
         return Err(CoreError::UnsupportedEdit(
-            "a write containing private.inventory.addItem, private.inventory.removeItem, \
-             private.inventory.reset, private.knowledge.addCharacter, private.knowledge.setEntry, \
-             private.npc.revive, \
-             private.npc.setRelationship, or private.glossary.setSegment \
-             must contain no other edits — the structural splice (slot-array, map insert, or \
-             memory-event removal) shifts the byte offsets and array indices later edits \
-             resolve against; submit them as separate writes"
+            "private.inventory.reset replaces the whole inventory and must be the only \
+             edit in a write; save the other inventory changes separately"
                 .to_string(),
         ));
     }
-    // A private.skills.set that learns or unlearns splices the hero's
-    // ActiveEffects array (duplicate/remove an element). It is value-addressed
-    // (resolves by skill base and re-parses), so multiple skill edits batch
-    // safely among themselves, and peers whose paths resolve by NAME/map-key
-    // (hero attributes, game time, …) re-resolve correctly after the splice.
-    // But a peer that resolves by an ARRAY INDEX — an arrayRemove/arrayDuplicate,
-    // or a typed edit whose path steps through `[i]` (e.g. an All-Data edit under
-    // `.../ActiveEffects/[i]/…`) — would resolve against the post-splice layout
-    // and hit the wrong element. (Inventory/knowledge/npc splices already stand
-    // alone above.) Reject that mix; the skill edit's structurality isn't known
-    // until apply time, so guard conservatively.
-    let has_skill_edit = edit_specs
-        .iter()
-        .any(|edit| matches!(edit, PrivateEdit::SkillSet(_)));
-    if has_skill_edit {
-        let has_index_addressed_peer = edit_specs.iter().any(|edit| match edit {
-            PrivateEdit::TypedContainer(container) => {
-                matches!(
-                    container.edit,
-                    properties::ContainerEdit::ArrayRemove(_)
-                        | properties::ContainerEdit::ArrayDuplicate(_)
-                ) || container
-                    .path
-                    .iter()
-                    .any(|seg| matches!(seg, properties::PathSeg::Index(_)))
-            }
-            PrivateEdit::TypedSetValue(set_value) => set_value
-                .path
-                .iter()
-                .any(|seg| matches!(seg, properties::PathSeg::Index(_))),
-            _ => false,
-        });
-        if has_index_addressed_peer {
-            return Err(CoreError::UnsupportedEdit(
-                "a write containing private.skills.set (which can add or remove an \
-                 element in the hero's ActiveEffects array) must not also contain an \
-                 index-addressed edit — an arrayRemove/arrayDuplicate, or a typed \
-                 edit whose path steps through an array index (e.g. under \
-                 ActiveEffects/[i]); the skill splice shifts the indices those edits \
-                 resolve against, so submit them as separate writes"
-                    .to_string(),
-            ));
+    // Every `apply_*` re-parses the payload it is handed, so a batch can never carry a
+    // stale BYTE OFFSET from one edit into the next. What a batch CAN invalidate is a
+    // caller-supplied ORDINAL: an array index or slot id the caller read off an
+    // inspection taken before this write. Reject exactly that — an ordinal-carrying
+    // edit positioned AFTER an edit that can change how many elements a container
+    // holds, or renumber inventory slot ids — and let everything else share one write.
+    //
+    // Position is what makes this usable: a caller that wants both simply submits the
+    // index-addressed edit first, or orders its array removals index-descending.
+    if let Some(producer) = edit_specs.iter().position(may_invalidate_caller_ordinals) {
+        if let Some(consumer) = edit_specs[producer + 1..]
+            .iter()
+            .position(carries_caller_ordinal)
+            .map(|offset| producer + 1 + offset)
+        {
+            return Err(CoreError::UnsupportedEdit(format!(
+                "{} (edit {consumer}) addresses an element by index or slot id, but \
+                 {} (edit {producer}) earlier in the same write can change how many \
+                 elements a container holds, or renumber inventory slot ids — the index \
+                 would resolve against the changed layout and silently hit the wrong \
+                 element. Put the index-addressed edit first, or save it separately.",
+                edits[consumer].path, edits[producer].path
+            )));
         }
     }
     let mut private_payload = decompress_private_payload(data, &stream, backend)?;
+    // One parse shared by the whole batch. Every edit re-resolves its target, so the
+    // sequence still behaves exactly as separate writes did — it just stops re-parsing
+    // 120 MB per edit when nothing moved.
+    let mut root_cache = PayloadRoot::default();
     for edit in &edit_specs {
-        apply_private_edit_to_payload(&mut private_payload, edit)?;
+        apply_private_edit_to_payload(&mut private_payload, edit, &mut root_cache)?;
     }
-    let compressed_stream = rebuild_compressed_stream(&stream, &private_payload, backend)?;
+    let compressed_stream = rebuild_compressed_stream(&stream, data, &private_payload, backend)?;
     Ok(build_gsav(
         parts.version,
         parts.public_payload,
         &compressed_stream,
         parts.trailer,
     ))
+}
+
+/// True for an edit that can change the ELEMENT COUNT of a container (array length,
+/// set cardinality, map entry count) or RENUMBER inventory slot ids.
+///
+/// Those are the only two things that can invalidate a caller-supplied ordinal.
+/// Moving bytes does not: every `apply_*` re-parses the payload it is handed, so no
+/// edit inherits an offset from the one before it.
+fn may_invalidate_caller_ordinals(edit: &PrivateEdit) -> bool {
+    match edit {
+        // setAdd/setRemove change a set's cardinality; arrayRemove/arrayDuplicate
+        // change an array's length.
+        PrivateEdit::TypedContainer(_) => true,
+        // Appends a slot when no blank one is free, and renumbers ids on that path.
+        PrivateEdit::InventoryAddItem(_) => true,
+        // Blanks a slot in place and proves the length is unchanged — but then calls
+        // normalize_slot_ids, which rewrites every m_Id in the container.
+        PrivateEdit::InventoryRemoveItem(_) => true,
+        // Exists to rewrite misaligned m_Ids.
+        PrivateEdit::InventoryRepairSlots => true,
+        // Swaps the whole m_Inventory value for the start save's.
+        PrivateEdit::InventoryReset(_) => true,
+        // Map insert into CharacterKnowledgeByUniqueName.
+        PrivateEdit::KnowledgeAddCharacter(_) => true,
+        // May insert a character and set-add/set-remove an entry.
+        PrivateEdit::KnowledgeSetEntry(_) => true,
+        // Removes memory events across owners and drops the corpse map entry.
+        PrivateEdit::NpcRevive(_) => true,
+        // Inserts a missing relationship entry.
+        PrivateEdit::NpcRelationship(_) => true,
+        // Duplicates a template unlock event, or removes one.
+        PrivateEdit::GlossarySetSegment(_) => true,
+        // Learn duplicates an ActiveEffects element, unlearn removes one.
+        PrivateEdit::SkillSet(_) => true,
+        // Splices the StoryPropertyValues map. Already exclusive; listed so the
+        // classification is complete rather than relying on the other guard.
+        PrivateEdit::StoryApply(_) => true,
+
+        // Ordinal-stable below. A setValue resolves to a scalar, a string or a
+        // native struct; none of the three can add or drop a container element.
+        PrivateEdit::TypedSetValue(_) => false,
+        // Fixed-size boolean patches.
+        PrivateEdit::FactionsForgive(_) => false,
+        // Fresh whole-payload string scan, then a string patch.
+        PrivateEdit::FString(_) | PrivateEdit::PlayerName(_) | PrivateEdit::ProfileName(_) => false,
+        // Patch a fixed number of bytes in place; they cannot change any length.
+        PrivateEdit::PlayerAttribute(_)
+        | PrivateEdit::PlayerTransform(_)
+        | PrivateEdit::InventoryItemCount(_) => false,
+    }
+}
+
+/// True for an edit that carries a CALLER-SUPPLIED ordinal — an index, a slot id, or
+/// a positional assumption the caller derived from an inspection taken before this
+/// write.
+///
+/// Edits that re-derive their own indices at apply time (addItem's free slot,
+/// removeItem's path match, a skill's effect element, revive's events) are not
+/// consumers, however structural they are.
+fn carries_caller_ordinal(edit: &PrivateEdit) -> bool {
+    match edit {
+        PrivateEdit::TypedContainer(container) => {
+            matches!(
+                container.edit,
+                properties::ContainerEdit::ArrayRemove(_)
+                    | properties::ContainerEdit::ArrayDuplicate(_)
+            ) || container
+                .path
+                .iter()
+                .any(|seg| matches!(seg, properties::PathSeg::Index(_)))
+        }
+        PrivateEdit::TypedSetValue(set_value) => set_value
+            .path
+            .iter()
+            .any(|seg| matches!(seg, properties::PathSeg::Index(_))),
+        // A slot id is an index by invariant (m_Id == position), so a renumber
+        // retargets it. The player path carries an ordinal even without one: it
+        // locates the stack through a positional region scan over the whole payload
+        // rather than through the typed tree, so anything that resizes the inventory
+        // moves the window it searches.
+        PrivateEdit::InventoryItemCount(edit) => edit.slot_id.is_some() || edit.actor_id.is_none(),
+        PrivateEdit::InventoryRemoveItem(edit) => edit.slot_id.is_some(),
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -10011,29 +10028,60 @@ fn apply_private_typed_set_value_edit_to_payload(
     payload: &mut Vec<u8>,
     edit: &PrivateTypedSetValueEdit,
 ) -> Result<(), CoreError> {
-    let root = properties::parse_private_root(payload)?;
-    let resolved = properties::resolve_chain(&root.properties, &edit.path)?;
-    let value = coerce_typed_value(resolved.target, &edit.value)?;
-    let target = resolved.target.clone();
+    apply_private_typed_set_value_edit_to_payload_reusing(
+        payload,
+        edit,
+        &mut PayloadRoot::default(),
+    )
+}
+
+/// As above, but resolving through a [`PayloadRoot`] shared with the rest of the
+/// write, so a batch of typed edits parses the payload once instead of once each.
+///
+/// Reading only the STRUCTURE is enough here, and that is what makes the sharing
+/// sound: [`properties::resolve_chain`] matches names, map keys and array indices —
+/// none of which an in-place `patch_scalar` can touch, since it has no string arm and
+/// a map key is not a `Property` it could address — while [`coerce_typed_value`] reads
+/// the target's `type_name`, its `tag_flags` native-serialize bit, and its value's
+/// variant, which a same-sized scalar write cannot change either.
+fn apply_private_typed_set_value_edit_to_payload_reusing(
+    payload: &mut Vec<u8>,
+    edit: &PrivateTypedSetValueEdit,
+    cache: &mut PayloadRoot,
+) -> Result<(), CoreError> {
+    let (target, enclosing_size_fields, value) = {
+        let root = cache.structural(payload)?;
+        let resolved = properties::resolve_chain(&root.properties, &edit.path)?;
+        let value = coerce_typed_value(resolved.target, &edit.value)?;
+        (
+            resolved.target.clone(),
+            resolved.enclosing_size_fields.clone(),
+            value,
+        )
+    };
     match value {
-        TypedSetValue::Scalar(scalar) => properties::patch_scalar(payload, &target, scalar),
+        TypedSetValue::Scalar(scalar) => {
+            properties::patch_scalar(payload, &target, scalar)?;
+            // Same bytes in the same places: the tree still describes the payload,
+            // only the values it decoded are now a step behind.
+            cache.note_in_place_write();
+            Ok(())
+        }
         TypedSetValue::Text(text) => {
             // Length-changing patch: work on a scratch copy and prove with a
             // strict re-parse that every enclosing size field was fixed up, so
             // a bug cannot corrupt the caller's payload (or the save).
             let mut patched = payload.clone();
-            properties::patch_string(
-                &mut patched,
-                &target,
-                &resolved.enclosing_size_fields,
-                &text,
-            )?;
-            properties::parse_private_root(&patched).map_err(|err| {
+            properties::patch_string(&mut patched, &target, &enclosing_size_fields, &text)?;
+            let proof = properties::parse_private_root(&patched).map_err(|err| {
                 CoreError::Parse(format!(
                     "string patch produced an inconsistent payload: {err}"
                 ))
             })?;
             *payload = patched;
+            // That proof was parsed from exactly the bytes just installed, so it is
+            // also the next edit's resolve parse.
+            cache.adopt(proof);
             Ok(())
         }
         TypedSetValue::NativeStruct(bytes) => {
@@ -10041,18 +10089,14 @@ fn apply_private_typed_set_value_edit_to_payload(
             // proof as variable-length tag containers. The original payload is
             // untouched unless a strict full parse accepts the replacement.
             let mut patched = payload.clone();
-            properties::patch_value_bytes(
-                &mut patched,
-                &target,
-                &resolved.enclosing_size_fields,
-                &bytes,
-            )?;
-            properties::parse_private_root(&patched).map_err(|error| {
+            properties::patch_value_bytes(&mut patched, &target, &enclosing_size_fields, &bytes)?;
+            let proof = properties::parse_private_root(&patched).map_err(|error| {
                 CoreError::Parse(format!(
                     "native struct patch produced an inconsistent payload: {error}"
                 ))
             })?;
             *payload = patched;
+            cache.adopt(proof);
             Ok(())
         }
     }
@@ -10528,7 +10572,132 @@ fn decompress_private_payload_with_limit(
     Ok((out, chunks_to_decode))
 }
 
+/// The private payload parsed once and reused across the edits of a single write.
+///
+/// Parsing a real save's 120 MB payload costs about as much as the whole codec, and a
+/// batch of edits used to pay it once per edit. Reuse needs care, though, because
+/// [`properties::parse_private_root`] returns a tree carrying BOTH byte offsets and
+/// decoded values, and the two survive different things:
+///
+///  * STRUCTURE — names, type names, descriptors, `value_offset`, `value_size`,
+///    element counts, map keys. Survives an in-place [`properties::patch_scalar`],
+///    which writes exactly `value_size` bytes at `value_offset` and has no string arm.
+///  * VALUES — the decoded `PropertyValue`s. Any write to the payload makes them lie,
+///    and a caller that decides something from them (whether an inventory slot is a
+///    clean template, say) would decide it from the pre-edit save.
+///
+/// So [`PayloadRoot::fresh`] is the default and re-parses after any write, while
+/// [`PayloadRoot::structural`] is an explicit opt-in for a caller whose read set is
+/// provably structural. A `PayloadRoot` belongs to exactly ONE buffer — appliers that
+/// patch a scratch copy must give that copy its own.
+#[derive(Default)]
+struct PayloadRoot {
+    root: Option<properties::RootObject>,
+    /// A byte was written since `root` was parsed, so its decoded values are stale
+    /// even though its offsets still hold.
+    values_stale: bool,
+}
+
+impl PayloadRoot {
+    /// The tree's structure only: offsets, sizes, names, keys and counts agree with
+    /// `payload`, but its decoded values may predate an in-place write. Callers must
+    /// read nothing else.
+    fn structural(&mut self, payload: &[u8]) -> Result<&properties::RootObject, CoreError> {
+        if let Some(root) = &self.root {
+            debug_assert!(
+                spine_still_describes(root, payload),
+                "a cached payload parse outlived a patch that moved bytes"
+            );
+        } else {
+            self.root = Some(properties::parse_private_root(payload)?);
+            self.values_stale = false;
+        }
+        Ok(self.root.as_ref().expect("just parsed"))
+    }
+
+    /// The whole tree, decoded values included, agreeing with `payload`.
+    fn fresh(&mut self, payload: &[u8]) -> Result<&properties::RootObject, CoreError> {
+        if self.values_stale {
+            self.root = None;
+        }
+        self.structural(payload)
+    }
+
+    /// Record a patch that wrote over existing bytes without moving any.
+    fn note_in_place_write(&mut self) {
+        self.values_stale = true;
+    }
+
+    /// Drop the parse. Required after anything that can move a byte — every
+    /// `patch_string` / `patch_value_bytes` / `patch_container` / splice, and every
+    /// wholesale `*payload = patched`, whatever the observed length delta.
+    fn invalidate(&mut self) {
+        self.root = None;
+        self.values_stale = false;
+    }
+
+    /// Take over a tree that was parsed FROM the bytes being installed, so an
+    /// applier's closing proof-parse doubles as the next edit's resolve parse.
+    fn adopt(&mut self, root: properties::RootObject) {
+        self.root = Some(root);
+        self.values_stale = false;
+    }
+}
+
+/// Debug-only check that a cached tree still describes `payload`'s layout. Compares
+/// the top-level spine, which is what a missing [`PayloadRoot::invalidate`] would
+/// break: a length change anywhere shifts every offset after it.
+#[cfg(debug_assertions)]
+fn spine_still_describes(root: &properties::RootObject, payload: &[u8]) -> bool {
+    let Ok(fresh) = properties::parse_private_root(payload) else {
+        return false;
+    };
+    fresh.consumed == root.consumed
+        && fresh.properties.len() == root.properties.len()
+        && fresh
+            .properties
+            .iter()
+            .zip(root.properties.iter())
+            .all(|(fresh, cached)| {
+                fresh.name == cached.name
+                    && fresh.type_name == cached.type_name
+                    && fresh.value_offset == cached.value_offset
+                    && fresh.value_size == cached.value_size
+            })
+}
+
+#[cfg(not(debug_assertions))]
+fn spine_still_describes(_root: &properties::RootObject, _payload: &[u8]) -> bool {
+    true
+}
+
 fn apply_private_edit_to_payload(
+    payload: &mut Vec<u8>,
+    edit: &PrivateEdit,
+    cache: &mut PayloadRoot,
+) -> Result<(), CoreError> {
+    match edit {
+        // The one edit that reuses the batch's parse: it resolves by name, key and
+        // index and patches a scalar in place, so nothing it reads can go stale.
+        PrivateEdit::TypedSetValue(edit) => {
+            apply_private_typed_set_value_edit_to_payload_reusing(payload, edit, cache)
+        }
+        // Re-parses for its own reads, but hands its closing proof parse to the next
+        // edit — the case that matters when several items are added in one write.
+        PrivateEdit::InventoryAddItem(edit) => {
+            apply_private_inventory_add_item_to_payload_reusing(payload, edit, cache)
+        }
+        // Everything else parses for itself and may move bytes, so the batch's parse
+        // is dropped rather than handed to a later edit that would resolve against a
+        // layout this one changed. A new variant lands here and inherits that.
+        edit => {
+            cache.invalidate();
+            apply_private_edit_to_payload_uncached(payload, edit)
+        }
+    }
+}
+
+fn apply_private_edit_to_payload_uncached(
     payload: &mut Vec<u8>,
     edit: &PrivateEdit,
 ) -> Result<(), CoreError> {
@@ -11920,14 +12089,32 @@ fn apply_private_inventory_add_item_to_payload(
     payload: &mut Vec<u8>,
     edit: &PrivateInventoryAddItemEdit,
 ) -> Result<(), CoreError> {
+    apply_private_inventory_add_item_to_payload_reusing(
+        payload,
+        edit,
+        &mut PayloadRoot::default(),
+    )
+}
+
+/// As above, but resolving through a [`PayloadRoot`] shared with the rest of the write
+/// so several adds in one write do not each re-parse the payload from scratch.
+fn apply_private_inventory_add_item_to_payload_reusing(
+    payload: &mut Vec<u8>,
+    edit: &PrivateInventoryAddItemEdit,
+    cache: &mut PayloadRoot,
+) -> Result<(), CoreError> {
     // 1. Typed parse + locate the MainContainer by enum value in m_Keys.
-    let root = properties::parse_private_root(payload).map_err(|err| {
+    //    `fresh`, not `structural`: picking a clean template slot reads DECODED
+    //    values (see property_carries_state), so a tree that predates an in-place
+    //    write by an earlier edit in the batch could call a dirty slot clean and let
+    //    the new item inherit its state.
+    let root = cache.fresh(payload).map_err(|err| {
         CoreError::Parse(format!(
             "private.inventory.addItem requires a typed-parsable private payload: {err}"
         ))
     })?;
     let inventory_path =
-        resolve_inventory_path(&root, edit.actor_id.as_deref()).ok_or_else(|| {
+        resolve_inventory_path(root, edit.actor_id.as_deref()).ok_or_else(|| {
             CoreError::Parse(
                 "private payload has no m_Inventory property; cannot add an item".to_string(),
             )
@@ -11937,7 +12124,7 @@ fn apply_private_inventory_add_item_to_payload(
         segments.extend_from_slice(suffix);
         properties::parse_path(&segments)
     };
-    let slots_suffix = main_container_slots_suffix(&root, &inventory_path)?;
+    let slots_suffix = main_container_slots_suffix(root, &inventory_path)?;
     let main_index = main_container_index_from_suffix(&slots_suffix);
     let slots_segs = child_segments(&slots_suffix)?;
     let chain = properties::resolve_chain(&root.properties, &slots_segs)?;
@@ -12003,7 +12190,7 @@ fn apply_private_inventory_add_item_to_payload(
             payload[range].to_vec()
         } else {
             needs_type_patch = true;
-            donor_slot_template_bytes(payload, &root, &inventory_path, main_index)?.ok_or_else(
+            donor_slot_template_bytes(payload, root, &inventory_path, main_index)?.ok_or_else(
                 || {
                     CoreError::UnsupportedEdit(
                         "no inventory container has a clean (state-free) slot to use as a \
@@ -12166,6 +12353,9 @@ fn apply_private_inventory_add_item_to_payload(
         ));
     }
     *payload = patched;
+    // The proof parse above was taken from exactly these bytes, so the next edit in
+    // the batch can resolve against it instead of parsing the payload again.
+    cache.adopt(reparsed);
     Ok(())
 }
 
@@ -13387,8 +13577,21 @@ fn find_item_count_value_offset(
         .and_then(|(count_idx, _)| i32_value_offset_at(payload, refs, count_idx))
 }
 
+/// How many previous chunks are decoded at once while looking for carry-over
+/// candidates. The backend parallelises within a window; the window bound keeps the
+/// comparison from holding a second full copy of a 120 MB payload in memory.
+const CARRY_OVER_WINDOW: usize = 64;
+
+/// Rebuild the private stream around an edited payload.
+///
+/// `source` is the file the `template` was parsed from, so the previous stream's
+/// compressed bytes are still addressable. Most edits touch a handful of bytes, and
+/// re-encoding the ~900 untouched chunks of a real save is the single most expensive
+/// thing a write does — so chunks whose plaintext did not change keep the bytes they
+/// already had (see [`carry_over_unchanged_chunks`]).
 fn rebuild_compressed_stream(
     template: &CompressedStream,
+    source: &[u8],
     private_payload: &[u8],
     backend: &dyn codec_backend::CodecBackend,
 ) -> Result<Vec<u8>, CoreError> {
@@ -13412,46 +13615,165 @@ fn rebuild_compressed_stream(
         .iter()
         .map(|chunk| chunk.len() as u64)
         .collect::<Vec<_>>();
-    let encode_chunks = payload_chunks
+    let carried = carry_over_unchanged_chunks(
+        template,
+        source,
+        max_chunk_size,
+        &payload_chunks,
+        backend,
+    );
+    let dirty = (0..payload_chunks.len())
+        .filter(|index| carried[*index].is_none())
+        .collect::<Vec<_>>();
+
+    let encode_chunks = dirty
         .iter()
-        .map(|chunk| codec_backend::CodecEncodeChunk {
-            input: chunk,
+        .map(|&index| codec_backend::CodecEncodeChunk {
+            input: payload_chunks[index],
             level: 6,
         })
         .collect::<Vec<_>>();
-    let compressed_chunks = backend.compress_many(&encode_chunks)?;
-    if compressed_chunks.len() != payload_chunks.len() {
+    let encoded_chunks = backend.compress_many(&encode_chunks)?;
+    if encoded_chunks.len() != dirty.len() {
         return Err(CoreError::Codec(format!(
             "codec backend compressed {} chunks, expected {}",
-            compressed_chunks.len(),
-            payload_chunks.len()
+            encoded_chunks.len(),
+            dirty.len()
         )));
     }
-    let decode_chunks = compressed_chunks
+    // Post-compress validation covers every chunk this write emits, as it always has:
+    // the carried-over ones were proved by the decode-and-compare that selected them,
+    // so only the freshly encoded ones still need decoding here.
+    let decode_chunks = encoded_chunks
         .iter()
-        .zip(payload_chunks.iter())
-        .map(|(compressed, original)| codec_backend::CodecDecodeChunk {
+        .zip(dirty.iter())
+        .map(|(compressed, &index)| codec_backend::CodecDecodeChunk {
             input: compressed,
-            expected_size: original.len(),
+            expected_size: payload_chunks[index].len(),
         })
         .collect::<Vec<_>>();
     let roundtrip_chunks = backend.decompress_many(&decode_chunks)?;
-    if roundtrip_chunks.len() != payload_chunks.len() {
+    if roundtrip_chunks.len() != dirty.len() {
         return Err(CoreError::Codec(format!(
             "codec backend post-compress validation decoded {} chunks, expected {}",
             roundtrip_chunks.len(),
-            payload_chunks.len()
+            dirty.len()
         )));
     }
-    for (roundtrip, original) in roundtrip_chunks.iter().zip(payload_chunks.iter()) {
-        if roundtrip != original {
+    for (roundtrip, &index) in roundtrip_chunks.iter().zip(dirty.iter()) {
+        if roundtrip != payload_chunks[index] {
             return Err(CoreError::Codec(
                 "codec backend failed post-compress validation".to_string(),
             ));
         }
     }
 
+    let mut encoded = encoded_chunks.into_iter();
+    let mut compressed_chunks = Vec::with_capacity(payload_chunks.len());
+    for reused in carried {
+        compressed_chunks.push(match reused {
+            Some(bytes) => bytes.to_vec(),
+            None => encoded
+                .next()
+                .expect("one encoded chunk per index without carry-over bytes"),
+        });
+    }
+
     build_compressed_stream_v2(template, &compressed_chunks, &uncompressed_sizes)
+}
+
+/// Pick out the chunks whose compressed bytes can be carried over from `source`
+/// unchanged.
+///
+/// A previous chunk qualifies only when it describes exactly the same plaintext window
+/// as the new chunk at its index — real saves use a uniform 128 KiB table, but the
+/// parser accepts ragged ones (see [`parse_compressed_stream`]), so the alignment is
+/// checked rather than assumed — and when decoding it reproduces that new chunk
+/// byte-for-byte.
+///
+/// That decode is what makes the carry-over safe: the emitted bytes are proved to
+/// decode to the plaintext they claim, which is exactly what the post-compress
+/// validation proves for a re-encoded chunk. A chunk that fails any test simply goes
+/// back through the encoder, so a ragged or damaged source stream costs speed, never
+/// correctness.
+fn carry_over_unchanged_chunks<'a>(
+    template: &CompressedStream,
+    source: &'a [u8],
+    max_chunk_size: usize,
+    payload_chunks: &[&[u8]],
+    backend: &dyn codec_backend::CodecBackend,
+) -> Vec<Option<&'a [u8]>> {
+    let candidates = aligned_previous_chunks(template, source, max_chunk_size, payload_chunks);
+    let mut carried = vec![None; payload_chunks.len()];
+    let candidate_indices = (0..payload_chunks.len())
+        .filter(|index| candidates[*index].is_some())
+        .collect::<Vec<_>>();
+    for window in candidate_indices.chunks(CARRY_OVER_WINDOW) {
+        let decode_chunks = window
+            .iter()
+            .map(|&index| codec_backend::CodecDecodeChunk {
+                input: candidates[index].expect("windows only hold candidate indices"),
+                expected_size: payload_chunks[index].len(),
+            })
+            .collect::<Vec<_>>();
+        // A previous chunk that will not decode is simply not reused; the payload it
+        // would have described was already decoded successfully by the caller.
+        let Ok(decoded) = backend.decompress_many(&decode_chunks) else {
+            continue;
+        };
+        if decoded.len() != window.len() {
+            continue;
+        }
+        for (plain, &index) in decoded.iter().zip(window.iter()) {
+            if plain.as_slice() == payload_chunks[index] {
+                carried[index] = candidates[index];
+            }
+        }
+    }
+    carried
+}
+
+/// The previous stream's compressed bytes for each new chunk index, but only where the
+/// two tables line up: the previous chunk must start at `index * max_chunk_size` in
+/// plaintext (i.e. every chunk before it was full) and hold as many plaintext bytes as
+/// the new chunk at that index.
+fn aligned_previous_chunks<'a>(
+    template: &CompressedStream,
+    source: &'a [u8],
+    max_chunk_size: usize,
+    payload_chunks: &[&[u8]],
+) -> Vec<Option<&'a [u8]>> {
+    let mut candidates = vec![None; payload_chunks.len()];
+    let mut plain_offset = 0usize;
+    for (index, chunk) in template.chunks.iter().enumerate() {
+        let starts_where_the_new_chunk_does = index
+            .checked_mul(max_chunk_size)
+            .is_some_and(|expected| expected == plain_offset);
+        let Some(next_offset) = plain_offset.checked_add(chunk.uncompressed_size as usize) else {
+            break;
+        };
+        plain_offset = next_offset;
+        if !starts_where_the_new_chunk_does {
+            continue;
+        }
+        let Some(new_chunk) = payload_chunks.get(index) else {
+            continue;
+        };
+        if new_chunk.len() as u64 != chunk.uncompressed_size {
+            continue;
+        }
+        let Some(end) = chunk
+            .compressed_offset
+            .checked_add(chunk.compressed_size as usize)
+        else {
+            continue;
+        };
+        let Some(bytes) = source.get(chunk.compressed_offset..end) else {
+            continue;
+        };
+        candidates[index] = Some(bytes);
+    }
+    candidates
 }
 
 fn build_compressed_stream_v2(
@@ -15736,6 +16058,25 @@ mod tests {
         out
     }
 
+    /// First offset at which `needle` occurs in `haystack`, for asserting that a
+    /// string an edit was supposed to write really reached the payload.
+    fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack
+            .windows(needle.len())
+            .position(|window| window == needle)
+    }
+
+    /// The private payload of a written test save, decoded with the same fake
+    /// backend that wrote it.
+    fn decoded_private_payload_for_tests(
+        file_bytes: &[u8],
+        backend: &dyn codec_backend::CodecBackend,
+    ) -> Vec<u8> {
+        let parts = split_gsav(file_bytes).unwrap();
+        let stream = parse_compressed_stream(file_bytes, 13 + parts.public_payload.len()).unwrap();
+        decompress_private_payload(file_bytes, &stream, backend).unwrap()
+    }
+
     fn compressed_stream_with_one_chunk(compressed: &[u8], uncompressed_size: usize) -> Vec<u8> {
         compressed_stream_with_chunks(&[(compressed.to_vec(), uncompressed_size as u64)])
     }
@@ -15807,6 +16148,58 @@ mod tests {
             let mut out = b"CMP:".to_vec();
             out.extend_from_slice(input);
             Ok(out)
+        }
+    }
+
+    /// Same trivial `CMP:` framing as [`PrefixCodecBackend`], but it counts how many
+    /// chunks were handed to the encoder, so a test can pin down that a write only
+    /// re-encodes what it actually changed.
+    struct CountingCodecBackend {
+        compressed_chunks: Mutex<usize>,
+    }
+
+    impl CountingCodecBackend {
+        fn new() -> Self {
+            Self {
+                compressed_chunks: Mutex::new(0),
+            }
+        }
+
+        fn compressed_chunks(&self) -> usize {
+            *self.compressed_chunks.lock().unwrap()
+        }
+
+        fn seed(plain: &[u8]) -> Vec<u8> {
+            let mut out = b"CMP:".to_vec();
+            out.extend_from_slice(plain);
+            out
+        }
+    }
+
+    impl codec_backend::CodecBackend for CountingCodecBackend {
+        fn probe(&self) -> Result<codec_backend::CodecBackendProbe, CoreError> {
+            Ok(codec_backend::CodecBackendProbe {
+                backend: "counting_test_codec".to_string(),
+                available: true,
+                can_decompress: true,
+                can_compress: true,
+                status: "ready".to_string(),
+                profile: None,
+                resolution_mode: None,
+                details: json!({}),
+            })
+        }
+
+        fn decompress(&self, input: &[u8], _expected_size: usize) -> Result<Vec<u8>, CoreError> {
+            input
+                .strip_prefix(b"CMP:")
+                .map(|payload| payload.to_vec())
+                .ok_or_else(|| CoreError::Codec("unexpected test compressed payload".to_string()))
+        }
+
+        fn compress(&self, input: &[u8], _level: u8) -> Result<Vec<u8>, CoreError> {
+            *self.compressed_chunks.lock().unwrap() += 1;
+            Ok(Self::seed(input))
         }
     }
 
@@ -18834,6 +19227,78 @@ mod tests {
         assert_eq!(value["private"]["inventory"]["items"][0]["count"], 99);
     }
 
+    /// Re-encoding every chunk is what makes a write slow: a real save is ~900 chunks
+    /// and a scalar edit dirties one of them. A write must therefore hand the encoder
+    /// only the chunks whose plaintext changed and carry the rest over verbatim.
+    #[test]
+    fn write_save_reencodes_only_the_chunks_an_edit_touched() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let output_path = dir.path().join("G1R-001-edited.sav");
+
+        // The edited property sits at the very end, so an in-place patch of it can only
+        // dirty the trailing chunk.
+        let mut payload = fstring("/Script/Test.Save");
+        payload.push(0);
+        payload.extend_from_slice(&private_str_property("m_Filler", &"x".repeat(400)));
+        payload.extend_from_slice(&int_property("m_Gold", 250));
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+
+        // A full leading chunk plus a shorter tail, so the rebuild's own
+        // `chunks(max_chunk_size)` split lines up with this table.
+        let split = payload.len().div_ceil(2);
+        let (head, tail) = payload.split_at(split);
+        let head_compressed = CountingCodecBackend::seed(head);
+        let tail_compressed = CountingCodecBackend::seed(tail);
+        let stream = compressed_stream_with_chunks(&[
+            (head_compressed.clone(), head.len() as u64),
+            (tail_compressed, tail.len() as u64),
+        ]);
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+
+        let backend = CountingCodecBackend::new();
+        write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.typed.setValue",
+                "value": { "path": ["m_Gold"], "value": 999 }
+            })],
+            false,
+            Some(&output_path),
+            Some(&backend),
+        )
+        .unwrap();
+
+        assert_eq!(
+            backend.compressed_chunks(),
+            1,
+            "only the chunk holding the edited property may be re-encoded"
+        );
+
+        // The untouched chunk keeps the exact bytes it had, so the written stream is a
+        // mix of carried-over and freshly encoded chunks.
+        let written = fs::read(&output_path).unwrap();
+        let parts = split_gsav(&written).unwrap();
+        let rebuilt = parse_compressed_stream(&written, 13 + parts.public_payload.len()).unwrap();
+        assert_eq!(rebuilt.chunks.len(), 2);
+        let head_range = rebuilt.chunks[0].compressed_offset
+            ..rebuilt.chunks[0].compressed_offset + rebuilt.chunks[0].compressed_size as usize;
+        assert_eq!(&written[head_range], head_compressed.as_slice());
+
+        // ... and the mixed stream still decodes to the edited payload.
+        let decoded = decompress_private_payload(&written, &rebuilt, &backend).unwrap();
+        let root = properties::parse_private_root(&decoded).unwrap();
+        assert_eq!(
+            root.properties.last().map(|property| &property.value),
+            Some(&properties::PropertyValue::Int(999))
+        );
+    }
+
     #[test]
     fn inspect_save_decodes_private_stream_with_codec_backend() {
         let dir = tempdir().unwrap();
@@ -19902,7 +20367,7 @@ mod tests {
         .unwrap_err();
         assert!(
             err.to_string()
-                .contains("at most one structural array edit"),
+                .contains("addresses an element by index or slot id"),
             "unexpected error: {err}"
         );
         assert!(
@@ -19927,12 +20392,119 @@ mod tests {
     }
 
     #[test]
-    fn write_save_rejects_inventory_structural_edit_with_peer() {
+    fn array_remove_retargets_a_later_index_addressed_edit() {
+        // The hazard the ordinal guard exists to stop, proven with the guard out of
+        // the way: removing element 0 shifts every later slot down one, so a queued
+        // edit on [1] — an index the caller derived from the PRE-write inspection,
+        // where [1] was the Apple — lands on whatever moved into that position.
+        let mut payload = typed_inventory_private_payload(
+            &[],
+            &[
+                inv_item_slot(
+                    0,
+                    INV_MAIN_LABEL,
+                    "/Script/Angelscript.ItMi_Orenugget",
+                    3,
+                    &inv_empty_payload_map(),
+                ),
+                inv_item_slot(
+                    1,
+                    INV_MAIN_LABEL,
+                    "/Script/Angelscript.ItFo_Apple",
+                    1,
+                    &inv_empty_payload_map(),
+                ),
+                inv_item_slot(
+                    2,
+                    INV_MAIN_LABEL,
+                    "/Script/Angelscript.ItFo_Cheese",
+                    7,
+                    &inv_empty_payload_map(),
+                ),
+            ],
+        );
+        let slots = inv_slots_prefix(1);
+        let count_segs = |index: usize| {
+            let mut path = slots.clone();
+            path.extend([
+                format!("[{index}]"),
+                "m_SlotData".to_string(),
+                "m_ItemCount".to_string(),
+            ]);
+            properties::parse_path(&path).unwrap()
+        };
+        let count_at = |payload: &[u8], index: usize| {
+            let root = properties::parse_private_root(payload).unwrap();
+            match properties::resolve(&root.properties, &count_segs(index))
+                .unwrap()
+                .value
+            {
+                properties::PropertyValue::Int(value) => value,
+                ref other => panic!("m_ItemCount is not an Int: {other:?}"),
+            }
+        };
+
+        apply_private_edit_to_payload(
+            &mut payload,
+            &PrivateEdit::TypedContainer(PrivateTypedContainerEdit {
+                path: properties::parse_path(&slots).unwrap(),
+                edit: properties::ContainerEdit::ArrayRemove(0),
+            }),
+            &mut PayloadRoot::default(),
+        )
+        .unwrap();
+        apply_private_edit_to_payload(
+            &mut payload,
+            &PrivateEdit::TypedSetValue(PrivateTypedSetValueEdit {
+                // The caller meant the Apple.
+                path: count_segs(1),
+                value: json!(99),
+            }),
+            &mut PayloadRoot::default(),
+        )
+        .unwrap();
+
+        assert_eq!(count_at(&payload, 0), 1, "the Apple is left untouched");
+        assert_eq!(count_at(&payload, 1), 99, "the Cheese was silently retargeted");
+    }
+
+    #[test]
+    fn private_edits_apply_in_submitted_order() {
+        // The ordinal guard is position-based and callers order their edits
+        // deliberately (array removals index-descending, glossary unlocks before
+        // removals, a slot repair last), so submission order is part of the contract.
+        // Anything that sorted or grouped the batch would break those rules silently.
+        let mut payload = fstring("/Script/Test.Save");
+        payload.push(0);
+        payload.extend_from_slice(&int_property("m_Gold", 1));
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+
+        let gold = |value: i32| {
+            PrivateEdit::TypedSetValue(PrivateTypedSetValueEdit {
+                path: properties::parse_path(&["m_Gold".to_string()]).unwrap(),
+                value: json!(value),
+            })
+        };
+        let mut cache = PayloadRoot::default();
+        apply_private_edit_to_payload(&mut payload, &gold(2), &mut cache).unwrap();
+        apply_private_edit_to_payload(&mut payload, &gold(3), &mut cache).unwrap();
+
+        let root = properties::parse_private_root(&payload).unwrap();
+        assert_eq!(
+            root.properties[0].value,
+            properties::PropertyValue::Int(3),
+            "the last edit in the batch must win"
+        );
+    }
+
+    #[test]
+    fn write_save_rejects_an_index_addressed_peer_after_a_length_change() {
         // An inventory add/remove must stand alone: a peer edit in the same
         // write resolves against the pre-splice layout and would be corrupted.
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
-        let private_payload = inventory_payload_for_add_item_tests();
+        let private_payload = typed_inventory_private_payload(&[], &default_main_slots());
         let seed_compressed = b"seed-peer".to_vec();
         let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
         fs::write(
@@ -19945,16 +20517,24 @@ mod tests {
             seed_uncompressed: private_payload,
         };
 
+        // The add appends a slot, so the queued edit's `[1]` — an index the caller
+        // read off the PRE-write inspection — would resolve against a different array.
+        let mut count_path = inv_slots_prefix(1);
+        count_path.extend([
+            "[1]".to_string(),
+            "m_SlotData".to_string(),
+            "m_ItemCount".to_string(),
+        ]);
         let err = write_save_with_codec_backend(
             &path,
             &[
                 json!({
                     "path": "private.inventory.addItem",
-                    "value": { "path": "/Script/Angelscript.ItMi_Orenugget", "count": 1 }
+                    "value": { "path": "/Script/Angelscript.ItFo_Cheese", "count": 1 }
                 }),
                 json!({
                     "path": "private.typed.setValue",
-                    "value": { "path": ["m_MaxQuick"], "value": 9 }
+                    "value": { "path": count_path, "value": 9 }
                 }),
             ],
             false,
@@ -19962,8 +20542,10 @@ mod tests {
             Some(&backend),
         )
         .unwrap_err();
+        assert!(matches!(err, CoreError::UnsupportedEdit(_)), "got: {err}");
         assert!(
-            err.to_string().contains("must contain no other edits"),
+            err.to_string()
+                .contains("addresses an element by index or slot id"),
             "unexpected error: {err}"
         );
     }
@@ -20000,7 +20582,8 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            err.to_string().contains("must contain no other edits"),
+            err.to_string()
+                .contains("must be the only edit in a write"),
             "unexpected error: {err}"
         );
     }
@@ -20063,7 +20646,7 @@ mod tests {
             seed_uncompressed: private_payload,
         };
 
-        let err = write_save_with_codec_backend(
+        let response = write_save_with_codec_backend(
             &path,
             &[
                 json!({
@@ -20071,24 +20654,28 @@ mod tests {
                     "value": { "value": "OC_TEST_BrandNew" }
                 }),
                 json!({
-                    "path": "private.typed.setValue",
-                    "value": { "path": ["m_MaxQuick"], "value": 9 }
+                    "path": "private.knowledge.addCharacter",
+                    "value": { "value": "OC_TEST_SecondNew" }
                 }),
             ],
             false,
             None,
             Some(&backend),
         )
-        .unwrap_err();
-        assert!(
-            err.to_string().contains("must contain no other edits"),
-            "unexpected error: {err}"
-        );
-        // The error must call out the map-insert case, not only inventory.
-        assert!(
-            err.to_string().contains("private.knowledge.addCharacter"),
-            "error should mention the knowledge op: {err}"
-        );
+        .unwrap();
+        assert_eq!(response["editsApplied"], 2);
+
+        // Each insert re-parses the map it is handed, so neither carries an ordinal
+        // the other could shift.
+        let written = fs::read(&path).unwrap();
+        let payload = decoded_private_payload_for_tests(&written, &backend);
+        for expected in [b"OC_TEST_BrandNew".as_slice(), b"OC_TEST_SecondNew".as_slice()] {
+            assert!(
+                find_subslice(&payload, expected).is_some(),
+                "inserted character is missing from the written payload: {}",
+                String::from_utf8_lossy(expected)
+            );
+        }
     }
 
     #[test]
@@ -21875,8 +22462,29 @@ mod tests {
                 "value": "EQuestState::Available"
             }),
         };
-        let err = apply_private_edits(&data, &[&glossary, &peer], Some(&backend)).unwrap_err();
-        assert!(matches!(err, CoreError::UnsupportedEdit(_)));
+        // The peer resolves its quest by MAP KEY, which the glossary splice cannot
+        // move, so the two share one write.
+        let edited = apply_private_edits(&data, &[&glossary, &peer], Some(&backend)).unwrap();
+        let payload = decoded_private_payload_for_tests(&edited, &backend);
+        assert!(
+            find_subslice(&payload, b"DocumentSegment_Glossary_Meatbug_Entry2").is_some(),
+            "the unlocked segment is missing from the written payload"
+        );
+        let root = properties::parse_private_root(&payload).unwrap();
+        let state = properties::resolve(
+            &root.properties,
+            &properties::parse_path(&[
+                "QuestDataByClass".to_string(),
+                "{/Script/Angelscript.Quest_OldCamp_SLEEPER}".to_string(),
+                "CurrentState".to_string(),
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            state.value,
+            properties::PropertyValue::Enum("EQuestState::Available".to_string())
+        );
     }
 
     #[test]
@@ -25341,12 +25949,12 @@ mod tests {
     }
 
     #[test]
-    fn parse_private_inventory_add_item_rejects_two_in_batch() {
-        // Two addItem edits in one batch must be rejected as structural edits
-        // (array-length changes) for the same reason as two arrayDuplicate ops.
+    fn parse_private_inventory_add_item_accepts_two_in_batch() {
+        // Two addItem edits share one write: each re-derives its own free slot from
+        // the payload it is handed, so neither depends on an index the other moved.
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
-        let private_payload = inventory_payload_for_add_item_tests();
+        let private_payload = typed_inventory_private_payload(&[], &default_main_slots());
         let seed_compressed = b"seed-2add".to_vec();
         let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
         fs::write(
@@ -25359,13 +25967,13 @@ mod tests {
             seed_uncompressed: private_payload,
         };
 
-        let err = write_save_with_codec_backend(
+        let response = write_save_with_codec_backend(
             &path,
             &[
                 json!({
                     "path": "private.inventory.addItem",
                     "value": {
-                        "path": "/Script/Angelscript.ItMi_Orenugget",
+                        "path": "/Script/Angelscript.ItFo_Cheese",
                         "count": 1
                     }
                 }),
@@ -25381,16 +25989,23 @@ mod tests {
             None,
             Some(&backend),
         )
-        .unwrap_err();
-        assert!(
-            matches!(err, CoreError::UnsupportedEdit(_)),
-            "expected UnsupportedEdit for two addItem in batch, got: {err}"
-        );
-        assert!(
-            err.to_string()
-                .contains("at most one structural array edit"),
-            "unexpected error message: {err}"
-        );
+        .unwrap();
+        assert_eq!(response["editsApplied"], 2);
+
+        // Each add re-derives its own free slot at apply time, so neither carries an
+        // ordinal the other could invalidate.
+        let written = fs::read(&path).unwrap();
+        let payload = decoded_private_payload_for_tests(&written, &backend);
+        for expected in [
+            b"/Script/Angelscript.ItFo_Cheese".as_slice(),
+            b"/Script/Angelscript.ItAt_Lurker_01".as_slice(),
+        ] {
+            assert!(
+                find_subslice(&payload, expected).is_some(),
+                "batched add is missing from the written payload: {}",
+                String::from_utf8_lossy(expected)
+            );
+        }
     }
 
     #[test]
@@ -25447,7 +26062,7 @@ mod tests {
         );
         assert!(
             err.to_string()
-                .contains("at most one structural array edit"),
+                .contains("addresses an element by index or slot id"),
             "unexpected error message: {err}"
         );
     }
@@ -26598,7 +27213,7 @@ mod tests {
             seed_uncompressed: private_payload,
         };
 
-        let err = write_save_with_codec_backend(
+        let response = write_save_with_codec_backend(
             &path,
             &[
                 json!({
@@ -26614,16 +27229,23 @@ mod tests {
             None,
             Some(&backend),
         )
-        .unwrap_err();
-        assert!(
-            matches!(err, CoreError::UnsupportedEdit(_)),
-            "expected UnsupportedEdit for two removeItem in batch, got: {err}"
-        );
-        assert!(
-            err.to_string()
-                .contains("at most one structural array edit"),
-            "unexpected error message: {err}"
-        );
+        .unwrap();
+        assert_eq!(response["editsApplied"], 2);
+
+        // Each removal matches its own item path against the payload it is handed,
+        // so the first one's slot renumbering cannot retarget the second.
+        let written = fs::read(&path).unwrap();
+        let payload = decoded_private_payload_for_tests(&written, &backend);
+        for gone in [
+            b"/Script/Angelscript.ItMi_Orenugget".as_slice(),
+            b"/Script/Angelscript.ItFo_Apple".as_slice(),
+        ] {
+            assert!(
+                find_subslice(&payload, gone).is_none(),
+                "removed item is still in the written payload: {}",
+                String::from_utf8_lossy(gone)
+            );
+        }
     }
 
     #[test]
@@ -26644,7 +27266,7 @@ mod tests {
             seed_uncompressed: private_payload,
         };
 
-        let err = write_save_with_codec_backend(
+        let response = write_save_with_codec_backend(
             &path,
             &[
                 json!({
@@ -26660,15 +27282,18 @@ mod tests {
             None,
             Some(&backend),
         )
-        .unwrap_err();
+        .unwrap();
+        assert_eq!(response["editsApplied"], 2);
+
+        let written = fs::read(&path).unwrap();
+        let payload = decoded_private_payload_for_tests(&written, &backend);
         assert!(
-            matches!(err, CoreError::UnsupportedEdit(_)),
-            "expected UnsupportedEdit for addItem + removeItem, got: {err}"
+            find_subslice(&payload, b"/Script/Angelscript.ItFo_Cheese").is_some(),
+            "the added item is missing from the written payload"
         );
         assert!(
-            err.to_string()
-                .contains("at most one structural array edit"),
-            "unexpected error message: {err}"
+            find_subslice(&payload, b"/Script/Angelscript.ItMi_Orenugget").is_none(),
+            "the removed item is still in the written payload"
         );
     }
 
