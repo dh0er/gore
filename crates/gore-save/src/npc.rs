@@ -1000,6 +1000,14 @@ pub struct NpcPose {
     pub rotation_path: Vec<String>,
     pub spawn_location_path: Vec<String>,
     pub spawn_rotation_path: Vec<String>,
+    /// True when the pose is stored in the compact 12-byte form (three f32).
+    ///
+    /// A caller comparing a remembered f64 against what reads back needs this:
+    /// only in the compact form does a write round-trip through f32, so only
+    /// there may a value that differs in the low bits still be "unchanged".
+    /// Applying that tolerance to the normal 24-byte form would let a real
+    /// later move pass as untouched.
+    pub compact: bool,
 }
 
 /// Read NPC `id`'s saved pose out of the `_Position` map, each leaf paired with
@@ -1033,8 +1041,13 @@ pub fn npc_position(root: &RootObject, id: &str) -> Result<NpcPose, CoreError> {
     };
     let point = |name: &str| triplet(name).map(|(x, y, z)| Vec3 { x, y, z });
     let rotation = |name: &str| triplet(name).map(|(pitch, yaw, roll)| Rot3 { pitch, yaw, roll });
+    let compact = matches!(
+        struct_member(value, "CharacterLocation"),
+        Some(PropertyValue::Struct(StructValue::Vector3f { .. }))
+    );
 
     Ok(NpcPose {
+        compact,
         location: point("CharacterLocation"),
         rotation: rotation("CharacterRotation"),
         spawn_location: point("SpawnLocation"),

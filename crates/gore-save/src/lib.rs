@@ -2130,6 +2130,13 @@ where
         ),
         None => (create_backup_bytes_avoiding(path, &original, &[])?, None),
     };
+    // Before the staging and the two guarded replaces below, any of which can
+    // still abort: an aborted restore would otherwise leave this safety backup
+    // listed with a pinned save in it and no record of the routine those pins
+    // replaced.
+    let backup_note_warning = placement::snapshot_backup(path, &current_backup_path)
+        .err()
+        .map(|err| err.to_string());
 
     // Stage both writes in unique same-directory files and validate before
     // committing either. Fixed temp names let concurrent restores overwrite
@@ -2186,10 +2193,13 @@ where
     // too — including "none", which is why the save's set is replaced wholesale
     // rather than merged. Reported beside a completed restore, never turning one
     // into a failure: the file on disk is already the backup's.
-    let placement_note_warning = placement::snapshot_backup(path, &current_backup_path)
-        .and_then(|()| restore_backup_placement_notes(path, backup_path))
+    let placement_note_warning = restore_backup_placement_notes(path, backup_path)
         .err()
         .map(|err| err.to_string());
+    let placement_note_warning = match (backup_note_warning, placement_note_warning) {
+        (Some(first), Some(second)) => Some(format!("{first}; {second}")),
+        (first, second) => first.or(second),
+    };
 
     Ok(json!({
         "path": path,
@@ -4364,6 +4374,14 @@ where
         (None, None)
     };
 
+    // Before the staging and the two guarded replaces below, any of which can
+    // still abort and leave this backup listed without the record of what its
+    // pins replaced.
+    let backup_note_warning = backup_path
+        .as_deref()
+        .and_then(|backup| placement::snapshot_backup(target_path, backup).err())
+        .map(|err| err.to_string());
+
     let save_tmp = ScratchFile::create(target_path, "tmp-assign", &save_edited)?;
     let persistent_tmp = ScratchFile::create(persistent_path, "tmp-assign", &persistent_edited)?;
     inspect_save(save_tmp.path(), false)?;
@@ -4401,20 +4419,17 @@ where
     // by file name and would stay with the source — leaving the import holding
     // DailyRoutine_Empty with no record of what it replaced. Copied after the
     // bytes land, and reported beside a good import rather than failing one.
-    let placement_note_warning = backup_path
-        .as_deref()
-        .map_or(Ok(()), |backup| {
-            placement::snapshot_backup(target_path, Path::new(backup))
-        })
-        .and_then(|()| {
-            if importing {
-                placement::carry(save_path, target_path)
-            } else {
-                Ok(())
-            }
-        })
-        .err()
-        .map(|err| err.to_string());
+    let carry_warning = if importing {
+        placement::carry(save_path, target_path)
+            .err()
+            .map(|err| err.to_string())
+    } else {
+        None
+    };
+    let placement_note_warning = match (backup_note_warning, carry_warning) {
+        (Some(first), Some(second)) => Some(format!("{first}; {second}")),
+        (first, second) => first.or(second),
+    };
 
     Ok(json!({
         "path": target_path,
@@ -6360,19 +6375,20 @@ fn placement_undo(save_path: &Path, id: &str, root: &properties::RootObject) -> 
     let Some(note) = placement::read_notes(save_path).remove(id) else {
         return Value::Null;
     };
-    let current_location = npc::npc_position(root, id)
-        .ok()
-        .and_then(|pose| pose.location)
+    let pose = npc::npc_position(root, id).ok();
+    let compact = pose.as_ref().is_some_and(|pose| pose.compact);
+    let current_location = pose
+        .as_ref()
+        .and_then(|pose| pose.location.as_ref())
         .map(|point| [point.x, point.y, point.z]);
     let current_routine = npc::npc_routine_class(root, id).and_then(|(class, _)| class);
     let location_matches = current_location
-        .is_some_and(|current| triplet_matches_stored(current, note.written_location));
+        .is_some_and(|current| triplet_matches_stored(current, note.written_location, compact));
     let rotation_matches = note.written_rotation.is_none_or(|written| {
-        npc::npc_position(root, id)
-            .ok()
-            .and_then(|pose| pose.rotation)
+        pose.as_ref()
+            .and_then(|pose| pose.rotation.as_ref())
             .map(|angles| [angles.pitch, angles.yaw, angles.roll])
-            .is_some_and(|current| triplet_matches_stored(current, written))
+            .is_some_and(|current| triplet_matches_stored(current, written, compact))
     });
     // A note that did not touch the routine imposes no condition on it.
     let routine_matches = note
@@ -6401,15 +6417,19 @@ fn placement_undo(save_path: &Path, id: &str, root: &properties::RootObject) -> 
 
 /// Whether a stored coordinate triplet still equals the one a note recorded.
 ///
-/// Exact, plus the f32 round-trip. `CharacterLocation` is normally three f64,
-/// but a 12-byte `Vector` is written as three f32, so a note holding the
-/// entered f64 would never equal what reads back — marking every fresh note
-/// stale and killing the undo before it was ever offered.
-fn triplet_matches_stored(current: [f64; 3], noted: [f64; 3]) -> bool {
-    current
-        .iter()
-        .zip(noted.iter())
-        .all(|(current, noted)| *current == *noted || *current == *noted as f32 as f64)
+/// Exact — and, for a save that stores the pose in the compact 12-byte form,
+/// also the f32 round-trip: a write there narrows to f32, so a note holding the
+/// entered f64 would never equal what reads back, marking every fresh note stale
+/// and killing the undo before it was ever offered.
+///
+/// The tolerance is gated on that form on purpose. Applied to the normal 24-byte
+/// pose it would accept anything within an f32 step — about a whole unit out at
+/// world coordinates — so a real later move could pass as untouched and be
+/// overwritten by a restore.
+fn triplet_matches_stored(current: [f64; 3], noted: [f64; 3], compact: bool) -> bool {
+    current.iter().zip(noted.iter()).all(|(current, noted)| {
+        *current == *noted || (compact && *current == *noted as f32 as f64)
+    })
 }
 
 /// Build the inventory summary for one actor's MainContainer from a parsed
