@@ -10,7 +10,9 @@ import '../../loc/game_lang.dart';
 /// and app/game language. Holds no local state — everything is wired to
 /// Riverpod providers so the panel can be rebuilt freely on tab switches.
 class SettingsTab extends ConsumerWidget {
-  const SettingsTab({super.key});
+  const SettingsTab({required this.gamePathFocusNode, super.key});
+
+  final FocusNode gamePathFocusNode;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -26,6 +28,7 @@ class SettingsTab extends ConsumerWidget {
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 720),
         child: ListView(
+          key: const ValueKey('settings-scroll-view'),
           padding: const EdgeInsets.all(24),
           children: [
             // --- Appearance (theme mode + UI scale) ---------------------
@@ -39,19 +42,16 @@ class SettingsTab extends ConsumerWidget {
                       children: [
                         const Icon(Icons.palette_outlined),
                         const SizedBox(width: 8),
-                        Text(l10n.appearanceTitle,
-                            style: textTheme.titleMedium),
+                        Text(
+                          l10n.appearanceTitle,
+                          style: textTheme.titleMedium,
+                        ),
                       ],
                     ),
                     const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        SizedBox(
-                          width: 90,
-                          child:
-                              Text(l10n.theme, style: textTheme.labelLarge),
-                        ),
-                        SegmentedButton<ThemeMode>(
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final selector = SegmentedButton<ThemeMode>(
                           segments: [
                             ButtonSegment(
                               value: ThemeMode.light,
@@ -73,16 +73,46 @@ class SettingsTab extends ConsumerWidget {
                           onSelectionChanged: (selection) => ref
                               .read(themeModeProvider.notifier)
                               .setThemeMode(selection.first),
-                        ),
-                      ],
+                        );
+                        final compact =
+                            constraints.maxWidth < 680 ||
+                            MediaQuery.textScalerOf(context).scale(1) > 1.35;
+                        if (compact) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(l10n.theme, style: textTheme.labelLarge),
+                              const SizedBox(height: 8),
+                              SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                child: selector,
+                              ),
+                            ],
+                          );
+                        }
+                        return Row(
+                          children: [
+                            SizedBox(
+                              width: 90,
+                              child: Text(
+                                l10n.theme,
+                                style: textTheme.labelLarge,
+                              ),
+                            ),
+                            selector,
+                          ],
+                        );
+                      },
                     ),
                     const SizedBox(height: 16),
                     Row(
                       children: [
                         SizedBox(
                           width: 90,
-                          child:
-                              Text(l10n.uiScale, style: textTheme.labelLarge),
+                          child: Text(
+                            l10n.uiScale,
+                            style: textTheme.labelLarge,
+                          ),
                         ),
                         Expanded(
                           child: Slider(
@@ -137,21 +167,34 @@ class SettingsTab extends ConsumerWidget {
                         onPressed: () =>
                             ref.read(gameExePathProvider.notifier).clear(),
                       ),
-                    OutlinedButton(
-                      onPressed: () async {
-                        final group = XTypeGroup(
-                          label: l10n.settingsGameExe,
-                          extensions: const ['exe'],
-                        );
-                        final file =
-                            await openFile(acceptedTypeGroups: [group]);
-                        if (file != null) {
-                          ref
-                              .read(gameExePathProvider.notifier)
-                              .set(file.path);
-                        }
-                      },
-                      child: Text(l10n.settingsGameExePick),
+                    Builder(
+                      builder: (pickerContext) => OutlinedButton(
+                        key: const ValueKey('settings-game-exe-pick'),
+                        focusNode: gamePathFocusNode,
+                        onFocusChange: (hasFocus) {
+                          if (hasFocus) {
+                            Scrollable.ensureVisible(
+                              pickerContext,
+                              alignment: 0.5,
+                            );
+                          }
+                        },
+                        onPressed: () async {
+                          final group = XTypeGroup(
+                            label: l10n.settingsGameExe,
+                            extensions: const ['exe'],
+                          );
+                          final file = await openFile(
+                            acceptedTypeGroups: [group],
+                          );
+                          if (file != null) {
+                            ref
+                                .read(gameExePathProvider.notifier)
+                                .set(file.path);
+                          }
+                        },
+                        child: Text(l10n.settingsGameExePick),
+                      ),
                     ),
                   ],
                 ),

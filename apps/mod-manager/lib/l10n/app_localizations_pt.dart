@@ -12,6 +12,96 @@ class AppLocalizationsPt extends AppLocalizations {
   String get statusUnknown => 'Desconhecido';
 
   @override
+  String statusDetailsTitle(String status) {
+    return 'Implementação: $status';
+  }
+
+  @override
+  String statusDetailsOpen(String status) {
+    return 'Mostrar detalhes da implementação: $status';
+  }
+
+  @override
+  String get statusDetailsNoRoot =>
+      'Escolha uma instalação do jogo nas Definições para consultar o estado da implementação.';
+
+  @override
+  String get statusDetailsNoDeployment =>
+      'Não existe uma implementação do gestor instalada para este jogo.';
+
+  @override
+  String get statusDetailsInSyncDescription =>
+      'Os mods implementados correspondem à configuração atual.';
+
+  @override
+  String get statusDetailsDeployedLoadout =>
+      'Ordem de carregamento implementada';
+
+  @override
+  String get statusDetailsChangesDescription =>
+      'A implementação atual difere do que Aplicar irá instalar.';
+
+  @override
+  String get statusDetailsCurrentlyDeployed => 'Atualmente implementado';
+
+  @override
+  String get statusDetailsAfterApply => 'Depois de Aplicar';
+
+  @override
+  String get statusDetailsGameUpdatedDescription =>
+      'Os ficheiros do jogo mudaram após a última implementação. Volte a aplicar a configuração para restaurar os ficheiros do gestor.';
+
+  @override
+  String get statusDetailsDriftedFiles => 'Ficheiros alterados';
+
+  @override
+  String get statusDetailsStudioDescription =>
+      'O Mod Studio controla atualmente esta instalação do jogo. Assuma o controlo antes de aplicar uma configuração do gestor.';
+
+  @override
+  String statusDetailsStudioMod(String name) {
+    return 'Mod do Studio: $name';
+  }
+
+  @override
+  String get statusDetailsStudioNameUnknown =>
+      'O Studio não indicou o nome do mod.';
+
+  @override
+  String get statusDetailsRecoveryDescription =>
+      'Uma implementação foi interrompida. Recupere-a antes de aplicar ou remover mods do gestor.';
+
+  @override
+  String get statusDetailsUnknownDescription =>
+      'Não foi possível verificar o estado da implementação. Atualize-o antes de aplicar mods.';
+
+  @override
+  String get statusDetailsUnavailable =>
+      'O núcleo instalado não forneceu estes detalhes.';
+
+  @override
+  String get statusDetailsEmptyLoadout =>
+      'Não existem mods nesta configuração.';
+
+  @override
+  String get statusDetailsLastError => 'Último erro';
+
+  @override
+  String get statusDetailsLastApply => 'Última aplicação';
+
+  @override
+  String get statusDetailsAppliedMods => 'Mods aplicados';
+
+  @override
+  String get statusDetailsWarnings => 'Avisos';
+
+  @override
+  String get statusDetailsReapply => 'Aplicar novamente';
+
+  @override
+  String get statusDetailsOpenSettings => 'Abrir Definições';
+
+  @override
   String get recoveryAction => 'Recuperar';
 
   @override
@@ -263,6 +353,94 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get statusUnknown => 'Desconhecido';
+
+  @override
+  String statusDetailsTitle(String status) {
+    return 'Implantação: $status';
+  }
+
+  @override
+  String statusDetailsOpen(String status) {
+    return 'Mostrar detalhes da implantação: $status';
+  }
+
+  @override
+  String get statusDetailsNoRoot =>
+      'Escolha uma instalação do jogo nas Configurações para consultar o estado da implantação.';
+
+  @override
+  String get statusDetailsNoDeployment =>
+      'Não há uma implantação do gerenciador instalada para este jogo.';
+
+  @override
+  String get statusDetailsInSyncDescription =>
+      'Os mods implantados correspondem à configuração atual.';
+
+  @override
+  String get statusDetailsDeployedLoadout => 'Ordem de carregamento implantada';
+
+  @override
+  String get statusDetailsChangesDescription =>
+      'A implantação atual difere do que Aplicar instalará.';
+
+  @override
+  String get statusDetailsCurrentlyDeployed => 'Implantado atualmente';
+
+  @override
+  String get statusDetailsAfterApply => 'Depois de Aplicar';
+
+  @override
+  String get statusDetailsGameUpdatedDescription =>
+      'Os arquivos do jogo mudaram após a última implantação. Aplique a configuração novamente para restaurar os arquivos do gerenciador.';
+
+  @override
+  String get statusDetailsDriftedFiles => 'Arquivos alterados';
+
+  @override
+  String get statusDetailsStudioDescription =>
+      'O Mod Studio controla atualmente esta instalação do jogo. Assuma o controle antes de aplicar uma configuração do gerenciador.';
+
+  @override
+  String statusDetailsStudioMod(String name) {
+    return 'Mod do Studio: $name';
+  }
+
+  @override
+  String get statusDetailsStudioNameUnknown =>
+      'O Studio não informou o nome do mod.';
+
+  @override
+  String get statusDetailsRecoveryDescription =>
+      'Uma implantação foi interrompida. Recupere-a antes de aplicar ou remover mods do gerenciador.';
+
+  @override
+  String get statusDetailsUnknownDescription =>
+      'Não foi possível verificar o estado da implantação. Atualize antes de aplicar mods.';
+
+  @override
+  String get statusDetailsUnavailable =>
+      'O núcleo instalado não forneceu esses detalhes.';
+
+  @override
+  String get statusDetailsEmptyLoadout => 'Não há mods nesta configuração.';
+
+  @override
+  String get statusDetailsLastError => 'Último erro';
+
+  @override
+  String get statusDetailsLastApply => 'Última aplicação';
+
+  @override
+  String get statusDetailsAppliedMods => 'Mods aplicados';
+
+  @override
+  String get statusDetailsWarnings => 'Avisos';
+
+  @override
+  String get statusDetailsReapply => 'Aplicar novamente';
+
+  @override
+  String get statusDetailsOpenSettings => 'Abrir Configurações';
 
   @override
   String get recoveryAction => 'Recuperar';

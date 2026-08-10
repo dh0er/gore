@@ -12,6 +12,96 @@ class AppLocalizationsIt extends AppLocalizations {
   String get statusUnknown => 'Sconosciuto';
 
   @override
+  String statusDetailsTitle(String status) {
+    return 'Distribuzione: $status';
+  }
+
+  @override
+  String statusDetailsOpen(String status) {
+    return 'Mostra dettagli distribuzione: $status';
+  }
+
+  @override
+  String get statusDetailsNoRoot =>
+      'Scegli un’installazione del gioco nelle Impostazioni per controllarne lo stato di distribuzione.';
+
+  @override
+  String get statusDetailsNoDeployment =>
+      'Nessuna distribuzione del gestore è installata per questo gioco.';
+
+  @override
+  String get statusDetailsInSyncDescription =>
+      'I mod distribuiti corrispondono alla configurazione attuale.';
+
+  @override
+  String get statusDetailsDeployedLoadout =>
+      'Ordine di caricamento distribuito';
+
+  @override
+  String get statusDetailsChangesDescription =>
+      'La distribuzione attuale è diversa da ciò che installerà Applica.';
+
+  @override
+  String get statusDetailsCurrentlyDeployed => 'Attualmente distribuito';
+
+  @override
+  String get statusDetailsAfterApply => 'Dopo Applica';
+
+  @override
+  String get statusDetailsGameUpdatedDescription =>
+      'I file di gioco sono cambiati dopo l’ultima distribuzione. Riapplica la configurazione per ripristinare i file del gestore.';
+
+  @override
+  String get statusDetailsDriftedFiles => 'File modificati';
+
+  @override
+  String get statusDetailsStudioDescription =>
+      'Mod Studio controlla attualmente questa installazione del gioco. Subentra prima di applicare una configurazione del gestore.';
+
+  @override
+  String statusDetailsStudioMod(String name) {
+    return 'Mod di Studio: $name';
+  }
+
+  @override
+  String get statusDetailsStudioNameUnknown =>
+      'Studio non ha indicato il nome del mod.';
+
+  @override
+  String get statusDetailsRecoveryDescription =>
+      'Una distribuzione è stata interrotta. Ripristinala prima di applicare o rimuovere mod del gestore.';
+
+  @override
+  String get statusDetailsUnknownDescription =>
+      'Impossibile verificare lo stato della distribuzione. Aggiornalo prima di applicare mod.';
+
+  @override
+  String get statusDetailsUnavailable =>
+      'Il core installato non ha fornito questi dettagli.';
+
+  @override
+  String get statusDetailsEmptyLoadout =>
+      'Nessun mod in questa configurazione.';
+
+  @override
+  String get statusDetailsLastError => 'Ultimo errore';
+
+  @override
+  String get statusDetailsLastApply => 'Ultima applicazione';
+
+  @override
+  String get statusDetailsAppliedMods => 'Mod applicati';
+
+  @override
+  String get statusDetailsWarnings => 'Avvisi';
+
+  @override
+  String get statusDetailsReapply => 'Riapplica';
+
+  @override
+  String get statusDetailsOpenSettings => 'Apri Impostazioni';
+
+  @override
   String get recoveryAction => 'Ripristina';
 
   @override

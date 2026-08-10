@@ -12,6 +12,93 @@ class AppLocalizationsRu extends AppLocalizations {
   String get statusUnknown => 'Неизвестно';
 
   @override
+  String statusDetailsTitle(String status) {
+    return 'Развёртывание: $status';
+  }
+
+  @override
+  String statusDetailsOpen(String status) {
+    return 'Показать сведения о развёртывании: $status';
+  }
+
+  @override
+  String get statusDetailsNoRoot =>
+      'Выберите установку игры в настройках, чтобы проверить состояние развёртывания.';
+
+  @override
+  String get statusDetailsNoDeployment =>
+      'Для этой игры нет развёртывания менеджера.';
+
+  @override
+  String get statusDetailsInSyncDescription =>
+      'Развёрнутые моды соответствуют текущему набору.';
+
+  @override
+  String get statusDetailsDeployedLoadout => 'Развёрнутый порядок загрузки';
+
+  @override
+  String get statusDetailsChangesDescription =>
+      'Текущее развёртывание отличается от того, что установит команда «Применить».';
+
+  @override
+  String get statusDetailsCurrentlyDeployed => 'Сейчас развёрнуто';
+
+  @override
+  String get statusDetailsAfterApply => 'После применения';
+
+  @override
+  String get statusDetailsGameUpdatedDescription =>
+      'После последнего развёртывания файлы игры изменились. Примените набор повторно, чтобы восстановить файлы менеджера.';
+
+  @override
+  String get statusDetailsDriftedFiles => 'Изменённые файлы';
+
+  @override
+  String get statusDetailsStudioDescription =>
+      'Сейчас этой установкой игры управляет Mod Studio. Перехватите управление перед применением набора менеджера.';
+
+  @override
+  String statusDetailsStudioMod(String name) {
+    return 'Мод Studio: $name';
+  }
+
+  @override
+  String get statusDetailsStudioNameUnknown => 'Studio не сообщило имя мода.';
+
+  @override
+  String get statusDetailsRecoveryDescription =>
+      'Развёртывание было прервано. Восстановите его перед применением или удалением модов менеджера.';
+
+  @override
+  String get statusDetailsUnknownDescription =>
+      'Не удалось проверить состояние развёртывания. Обновите его перед применением модов.';
+
+  @override
+  String get statusDetailsUnavailable =>
+      'Установленное ядро не предоставило эти сведения.';
+
+  @override
+  String get statusDetailsEmptyLoadout => 'В этом наборе нет модов.';
+
+  @override
+  String get statusDetailsLastError => 'Последняя ошибка';
+
+  @override
+  String get statusDetailsLastApply => 'Последнее применение';
+
+  @override
+  String get statusDetailsAppliedMods => 'Применённые моды';
+
+  @override
+  String get statusDetailsWarnings => 'Предупреждения';
+
+  @override
+  String get statusDetailsReapply => 'Применить повторно';
+
+  @override
+  String get statusDetailsOpenSettings => 'Открыть настройки';
+
+  @override
   String get recoveryAction => 'Восстановить';
 
   @override

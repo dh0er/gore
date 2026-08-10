@@ -12,6 +12,89 @@ class AppLocalizationsJa extends AppLocalizations {
   String get statusUnknown => '不明';
 
   @override
+  String statusDetailsTitle(String status) {
+    return 'デプロイ: $status';
+  }
+
+  @override
+  String statusDetailsOpen(String status) {
+    return 'デプロイの詳細を表示: $status';
+  }
+
+  @override
+  String get statusDetailsNoRoot => 'デプロイ状態を確認するには、設定でゲームのインストール先を選択してください。';
+
+  @override
+  String get statusDetailsNoDeployment => 'このゲームにはマネージャーのデプロイがありません。';
+
+  @override
+  String get statusDetailsInSyncDescription => 'デプロイ済み Mod は現在のロードアウトと一致しています。';
+
+  @override
+  String get statusDetailsDeployedLoadout => 'デプロイ済みのロード順';
+
+  @override
+  String get statusDetailsChangesDescription =>
+      '現在のデプロイは、適用後にインストールされる内容と異なります。';
+
+  @override
+  String get statusDetailsCurrentlyDeployed => '現在のデプロイ';
+
+  @override
+  String get statusDetailsAfterApply => '適用後';
+
+  @override
+  String get statusDetailsGameUpdatedDescription =>
+      '前回のデプロイ後にゲームファイルが変更されました。ロードアウトを再適用してマネージャー所有のファイルを復元してください。';
+
+  @override
+  String get statusDetailsDriftedFiles => '変更されたファイル';
+
+  @override
+  String get statusDetailsStudioDescription =>
+      '現在 Mod Studio がこのゲームを管理しています。マネージャーのロードアウトを適用する前に引き継いでください。';
+
+  @override
+  String statusDetailsStudioMod(String name) {
+    return 'Studio Mod: $name';
+  }
+
+  @override
+  String get statusDetailsStudioNameUnknown => 'Studio から Mod 名が報告されませんでした。';
+
+  @override
+  String get statusDetailsRecoveryDescription =>
+      'デプロイが中断されました。マネージャーの Mod を適用または削除する前に復旧してください。';
+
+  @override
+  String get statusDetailsUnknownDescription =>
+      'デプロイ状態を確認できませんでした。Mod を適用する前に更新してください。';
+
+  @override
+  String get statusDetailsUnavailable => 'インストール済みのコアから詳細が提供されませんでした。';
+
+  @override
+  String get statusDetailsEmptyLoadout => 'このロードアウトに Mod はありません。';
+
+  @override
+  String get statusDetailsLastError => '最後のエラー';
+
+  @override
+  String get statusDetailsLastApply => '前回の適用';
+
+  @override
+  String get statusDetailsAppliedMods => '適用した Mod';
+
+  @override
+  String get statusDetailsWarnings => '警告';
+
+  @override
+  String get statusDetailsReapply => '再適用';
+
+  @override
+  String get statusDetailsOpenSettings => '設定を開く';
+
+  @override
   String get recoveryAction => '復旧';
 
   @override

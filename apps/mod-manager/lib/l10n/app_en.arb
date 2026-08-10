@@ -4,6 +4,51 @@
   "@statusUnknown": {
     "description": "Deployment status is unavailable or uses an unsupported future state."
   },
+  "statusDetailsTitle": "Deployment: {status}",
+  "@statusDetailsTitle": {
+    "placeholders": {
+      "status": {
+        "type": "String"
+      }
+    }
+  },
+  "statusDetailsOpen": "Show deployment details: {status}",
+  "@statusDetailsOpen": {
+    "placeholders": {
+      "status": {
+        "type": "String"
+      }
+    }
+  },
+  "statusDetailsNoRoot": "Choose a game installation in Settings to inspect its deployment status.",
+  "statusDetailsNoDeployment": "No Manager deployment is installed for this game.",
+  "statusDetailsInSyncDescription": "The deployed mods match the current loadout.",
+  "statusDetailsDeployedLoadout": "Deployed load order",
+  "statusDetailsChangesDescription": "The current deployment differs from what Apply will install.",
+  "statusDetailsCurrentlyDeployed": "Currently deployed",
+  "statusDetailsAfterApply": "After Apply",
+  "statusDetailsGameUpdatedDescription": "Game files changed after the last deployment. Reapply the loadout to restore the Manager-owned files.",
+  "statusDetailsDriftedFiles": "Changed files",
+  "statusDetailsStudioDescription": "Mod Studio currently owns this game installation. Take over before applying a Manager loadout.",
+  "statusDetailsStudioMod": "Studio mod: {name}",
+  "@statusDetailsStudioMod": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "statusDetailsStudioNameUnknown": "Studio did not report a mod name.",
+  "statusDetailsRecoveryDescription": "A deployment was interrupted. Recover it before applying or removing Manager mods.",
+  "statusDetailsUnknownDescription": "Deployment status could not be verified. Refresh before applying mods.",
+  "statusDetailsUnavailable": "The installed core did not provide these details.",
+  "statusDetailsEmptyLoadout": "No mods in this loadout.",
+  "statusDetailsLastError": "Last error",
+  "statusDetailsLastApply": "Last Apply",
+  "statusDetailsAppliedMods": "Applied mods",
+  "statusDetailsWarnings": "Warnings",
+  "statusDetailsReapply": "Reapply",
+  "statusDetailsOpenSettings": "Open Settings",
   "recoveryAction": "Recover",
   "recoveryRequiredConfirm": "Recover the interrupted deployment and remove any partially deployed files?",
   "statusRecoveryRequired": "Recovery required",
