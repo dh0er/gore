@@ -1,5 +1,6 @@
 {
   "@@locale": "ja",
+  "statusUnknown": "不明",
   "recoveryAction": "復旧",
   "recoveryRequiredConfirm": "中断されたデプロイを復旧し、部分的にデプロイされたファイルを削除しますか？",
   "statusRecoveryRequired": "復旧が必要",

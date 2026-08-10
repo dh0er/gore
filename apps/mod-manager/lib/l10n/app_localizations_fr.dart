@@ -9,6 +9,9 @@ class AppLocalizationsFr extends AppLocalizations {
   AppLocalizationsFr([String locale = 'fr']) : super(locale);
 
   @override
+  String get statusUnknown => 'Inconnu';
+
+  @override
   String get recoveryAction => 'Récupérer';
 
   @override

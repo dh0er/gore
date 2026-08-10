@@ -1,5 +1,6 @@
 {
   "@@locale": "it",
+  "statusUnknown": "Sconosciuto",
   "recoveryAction": "Ripristina",
   "recoveryRequiredConfirm": "Ripristinare la distribuzione interrotta e rimuovere i file distribuiti parzialmente?",
   "statusRecoveryRequired": "Ripristino necessario",

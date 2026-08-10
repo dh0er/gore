@@ -1,5 +1,6 @@
 {
   "@@locale": "fr",
+  "statusUnknown": "Inconnu",
   "recoveryAction": "Récupérer",
   "recoveryRequiredConfirm": "Récupérer le déploiement interrompu et supprimer les fichiers partiellement déployés ?",
   "statusRecoveryRequired": "Récupération requise",

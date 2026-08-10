@@ -1,5 +1,6 @@
 {
   "@@locale": "zh",
+  "statusUnknown": "未知",
   "recoveryAction": "恢复",
   "recoveryRequiredConfirm": "恢复中断的部署并移除已部分部署的文件吗？",
   "statusRecoveryRequired": "需要恢复",

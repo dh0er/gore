@@ -9,6 +9,9 @@ class AppLocalizationsJa extends AppLocalizations {
   AppLocalizationsJa([String locale = 'ja']) : super(locale);
 
   @override
+  String get statusUnknown => '不明';
+
+  @override
   String get recoveryAction => '復旧';
 
   @override

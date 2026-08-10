@@ -9,6 +9,9 @@ class AppLocalizationsDe extends AppLocalizations {
   AppLocalizationsDe([String locale = 'de']) : super(locale);
 
   @override
+  String get statusUnknown => 'Unbekannt';
+
+  @override
   String get recoveryAction => 'Wiederherstellen';
 
   @override
