@@ -1439,8 +1439,8 @@ mod tests {
 
     fn property(name: &str, type_name: &str, value: PropertyValue) -> Property {
         Property {
-            name: name.to_string(),
-            type_name: type_name.to_string(),
+            name: name.into(),
+            type_name: type_name.into(),
             descriptor: Descriptor::default(),
             array_index: 0,
             tag_flags: 0,

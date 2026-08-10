@@ -778,7 +778,7 @@ fn find_character_map_path<'a>(
         path: &mut Vec<String>,
     ) -> Option<&'a [(PropertyValue, PropertyValue)]> {
         for p in props {
-            path.push(p.name.clone());
+            path.push(p.name.to_string());
             if let PropertyValue::Map { entries, .. } = &p.value {
                 if map_value_struct_type(p) == Some(struct_type) {
                     return Some(entries);
@@ -884,14 +884,14 @@ fn collect_attribute_rows(
         }
         PropertyValue::Struct(StructValue::Properties(inner)) => {
             for p in inner {
-                path.push(p.name.clone());
+                path.push(p.name.to_string());
                 collect_attribute_rows(&p.value, path, out);
                 path.pop();
             }
         }
         PropertyValue::Struct(StructValue::Instanced(Some(i))) => {
             for p in &i.properties {
-                path.push(p.name.clone());
+                path.push(p.name.to_string());
                 collect_attribute_rows(&p.value, path, out);
                 path.pop();
             }
@@ -907,7 +907,7 @@ fn collect_attribute_rows(
             for (idx, o) in objs.iter().enumerate() {
                 path.push(format!("[{idx}]"));
                 for p in &o.properties {
-                    path.push(p.name.clone());
+                    path.push(p.name.to_string());
                     collect_attribute_rows(&p.value, path, out);
                     path.pop();
                 }
@@ -1116,7 +1116,7 @@ pub fn npc_inventory_path(root: &RootObject, global_id: &str) -> Option<Vec<Stri
     let container = entry_props(value)?.first()?;
     // The entry is addressed by its map key; then descend to the container prop.
     path.push(map_key_segment(global_id));
-    path.push(container.name.clone());
+    path.push(container.name.to_string());
     Some(path)
 }
 

@@ -27,12 +27,181 @@
 
 use crate::{CoreError, Reader};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 
 pub const TAG_FLAG_NATIVE_SERIALIZE: u8 = 0x08;
 pub const TAG_FLAG_BOOL_TRUE: u8 = 0x10;
 
 const MAX_DEPTH: usize = 96;
+
+/// An interned property or type name.
+///
+/// A real save's payload parses into ~1.4 million properties, and the names on them
+/// are drawn from a few thousand distinct strings — `"IntProperty"` alone appears
+/// hundreds of thousands of times. Allocating one `String` per occurrence made the
+/// allocator the parser's dominant cost, so names are shared instead: equal text is
+/// stored once per thread and handed out as a cheap pointer clone.
+///
+/// It compares and reads like a `&str` (`Deref`, `PartialEq<&str>`, `Display`), so
+/// call sites treat it as the string it is.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PropStr(Arc<str>);
+
+/// A small non-cryptographic hasher for the name table.
+///
+/// The table is looked up several million times per parse and holds nothing but
+/// short, internal, non-attacker-chosen strings, so the default SipHash costs more
+/// than the allocation interning is there to avoid. This is the usual
+/// multiply-and-rotate word hash.
+#[derive(Default, Clone, Copy)]
+struct NameHasher(u64);
+
+impl std::hash::Hasher for NameHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        const SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
+        let mut hash = self.0;
+        let mut chunks = bytes.chunks_exact(8);
+        for chunk in &mut chunks {
+            let word = u64::from_le_bytes(chunk.try_into().expect("chunks_exact(8)"));
+            hash = (hash.rotate_left(5) ^ word).wrapping_mul(SEED);
+        }
+        let mut tail = 0u64;
+        for (index, byte) in chunks.remainder().iter().enumerate() {
+            tail |= u64::from(*byte) << (index * 8);
+        }
+        self.0 = (hash.rotate_left(5) ^ tail).wrapping_mul(SEED);
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+struct NameHasherBuilder;
+
+impl std::hash::BuildHasher for NameHasherBuilder {
+    type Hasher = NameHasher;
+    fn build_hasher(&self) -> NameHasher {
+        NameHasher::default()
+    }
+}
+
+thread_local! {
+    /// Names seen on this thread. Bounded so a save full of unique strings cannot
+    /// grow it without limit; past the cap new names simply are not shared.
+    static INTERNED_NAMES: std::cell::RefCell<HashSet<Arc<str>, NameHasherBuilder>> =
+        std::cell::RefCell::new(HashSet::with_hasher(NameHasherBuilder));
+}
+
+const MAX_INTERNED_NAMES: usize = 1 << 16;
+
+impl PropStr {
+    /// Intern `text`, reusing the copy this thread already holds when there is one.
+    pub fn new(text: &str) -> Self {
+        INTERNED_NAMES.with(|names| {
+            let mut names = names.borrow_mut();
+            if let Some(shared) = names.get(text) {
+                return PropStr(shared.clone());
+            }
+            let shared: Arc<str> = Arc::from(text);
+            if names.len() < MAX_INTERNED_NAMES {
+                names.insert(shared.clone());
+            }
+            PropStr(shared)
+        })
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for PropStr {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for PropStr {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::borrow::Borrow<str> for PropStr {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for PropStr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<&str> for PropStr {
+    fn from(value: &str) -> Self {
+        PropStr::new(value)
+    }
+}
+
+impl From<String> for PropStr {
+    fn from(value: String) -> Self {
+        PropStr::new(&value)
+    }
+}
+
+impl From<&PropStr> for String {
+    fn from(value: &PropStr) -> Self {
+        value.0.to_string()
+    }
+}
+
+impl PartialEq<str> for PropStr {
+    fn eq(&self, other: &str) -> bool {
+        &*self.0 == other
+    }
+}
+
+impl PartialEq<&str> for PropStr {
+    fn eq(&self, other: &&str) -> bool {
+        &*self.0 == *other
+    }
+}
+
+impl PartialEq<String> for PropStr {
+    fn eq(&self, other: &String) -> bool {
+        &*self.0 == other.as_str()
+    }
+}
+
+impl PartialEq<PropStr> for str {
+    fn eq(&self, other: &PropStr) -> bool {
+        self == &*other.0
+    }
+}
+
+impl PartialEq<PropStr> for &str {
+    fn eq(&self, other: &PropStr) -> bool {
+        *self == &*other.0
+    }
+}
+
+impl PartialEq<PropStr> for String {
+    fn eq(&self, other: &PropStr) -> bool {
+        self.as_str() == &*other.0
+    }
+}
+
+impl serde::Serialize for PropStr {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RootObject {
@@ -46,8 +215,8 @@ pub struct RootObject {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Property {
-    pub name: String,
-    pub type_name: String,
+    pub name: PropStr,
+    pub type_name: PropStr,
     pub descriptor: Descriptor,
     pub array_index: u32,
     pub tag_flags: u8,
@@ -70,9 +239,9 @@ impl Property {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Descriptor {
     /// StructProperty: (struct_type, package)
-    pub struct_type: Option<(String, String)>,
+    pub struct_type: Option<(PropStr, PropStr)>,
     /// EnumProperty: (enum_type, package, underlying_type)
-    pub enum_type: Option<(String, String, String)>,
+    pub enum_type: Option<(PropStr, PropStr, PropStr)>,
     /// Array/Set inner type, Map key/value types (with nested descriptors).
     pub inner: Option<Box<InnerDescriptor>>,
     pub map: Option<Box<(InnerDescriptor, InnerDescriptor)>>,
@@ -80,9 +249,9 @@ pub struct Descriptor {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct InnerDescriptor {
-    pub type_name: String,
-    pub struct_type: Option<(String, String)>,
-    pub enum_type: Option<(String, String, String)>,
+    pub type_name: PropStr,
+    pub struct_type: Option<(PropStr, PropStr)>,
+    pub enum_type: Option<(PropStr, PropStr, PropStr)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -165,7 +334,7 @@ pub enum StructValue {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct InstancedStruct {
-    pub actual_type: String,
+    pub actual_type: PropStr,
     /// Absolute offset of the u32 `data_size` field preceding the body.
     /// Length-changing edits inside this struct must adjust it.
     pub data_size_offset: usize,
@@ -527,7 +696,7 @@ fn walk_search(
             display.push_str(" › ");
         }
         display.push_str(&p.name);
-        path.push(p.name.clone());
+        path.push(p.name.to_string());
         let addressable =
             ancestors_addressable && name_counts.get(p.name.as_str()).copied() == Some(1);
 
@@ -537,7 +706,7 @@ fn walk_search(
                 ctx.record(PropertyHit {
                     path: path.clone(),
                     display: display.clone(),
-                    type_name: p.type_name.clone(),
+                    type_name: p.type_name.to_string(),
                     value_display,
                     editable: addressable && scalar_editable(&p.value),
                 });
@@ -878,7 +1047,7 @@ fn walk_browse_properties(
             display.push_str(" › ");
         }
         display.push_str(&property.name);
-        path.push(property.name.clone());
+        path.push(property.name.to_string());
         let addressable =
             ancestors_addressable && name_counts.get(property.name.as_str()).copied() == Some(1);
         let kind = property_kind(&property.value);
@@ -903,7 +1072,7 @@ fn walk_browse_properties(
                 ordinal,
                 path: path.clone(),
                 display: display.clone(),
-                type_name: property.type_name.clone(),
+                type_name: property.type_name.to_string(),
                 struct_type: struct_type.map(str::to_string),
                 kind: kind.to_string(),
                 value_display,
@@ -1256,7 +1425,7 @@ pub fn find_path_in_properties<'a>(
         path: &mut Vec<String>,
     ) -> Option<&'a Property> {
         for p in props {
-            path.push(p.name.clone());
+            path.push(p.name.to_string());
             if p.name == name {
                 return Some(p);
             }
@@ -1637,7 +1806,7 @@ pub fn container_layout(payload: &[u8], property: &Property) -> Result<Container
     }
     Ok(ContainerLayout {
         kind,
-        inner_type: inner.type_name.clone(),
+        inner_type: inner.type_name.to_string(),
         count_offset,
         count,
         element_ranges,
@@ -2349,19 +2518,19 @@ pub(crate) fn read_property_list(r: &mut Reader, depth: usize) -> Result<Vec<Pro
     }
     let mut out = Vec::new();
     loop {
-        let name = r.fstring()?;
+        let name = r.prop_str()?;
         if name == "None" {
             return Ok(out);
         }
-        let type_name = r.fstring()?;
+        let type_name = r.prop_str()?;
         out.push(read_property(r, name, type_name, depth)?);
     }
 }
 
 fn read_property(
     r: &mut Reader,
-    name: String,
-    type_name: String,
+    name: PropStr,
+    type_name: PropStr,
     depth: usize,
 ) -> Result<Property, CoreError> {
     let descriptor = read_descriptor(r, &type_name)?;
@@ -2433,21 +2602,21 @@ fn read_descriptor(r: &mut Reader, type_name: &str) -> Result<Descriptor, CoreEr
     Ok(descriptor)
 }
 
-fn read_struct_descriptor(r: &mut Reader) -> Result<(String, String), CoreError> {
+fn read_struct_descriptor(r: &mut Reader) -> Result<(PropStr, PropStr), CoreError> {
     let _count = r.u32()?;
-    let struct_type = r.fstring()?;
+    let struct_type = r.prop_str()?;
     let _package_count = r.u32()?;
-    let package = r.fstring()?;
+    let package = r.prop_str()?;
     Ok((struct_type, package))
 }
 
-fn read_enum_descriptor(r: &mut Reader) -> Result<(String, String, String), CoreError> {
+fn read_enum_descriptor(r: &mut Reader) -> Result<(PropStr, PropStr, PropStr), CoreError> {
     let _count = r.u32()?;
-    let enum_type = r.fstring()?;
+    let enum_type = r.prop_str()?;
     let _package_count = r.u32()?;
-    let package = r.fstring()?;
+    let package = r.prop_str()?;
     let _underlying_count = r.u32()?;
-    let underlying = r.fstring()?;
+    let underlying = r.prop_str()?;
     Ok((enum_type, package, underlying))
 }
 
@@ -2457,7 +2626,7 @@ fn read_inner_descriptor(r: &mut Reader) -> Result<InnerDescriptor, CoreError> {
 }
 
 fn read_inner_descriptor_body(r: &mut Reader) -> Result<InnerDescriptor, CoreError> {
-    let type_name = r.fstring()?;
+    let type_name = r.prop_str()?;
     let mut inner = InnerDescriptor {
         type_name: type_name.clone(),
         struct_type: None,
@@ -2684,7 +2853,7 @@ fn read_struct_value(
             Ok(StructValue::GameplayTagContainer(tags))
         }
         "InstancedStruct" => {
-            let actual_type = r.fstring()?;
+            let actual_type = r.prop_str()?;
             let data_size_offset = r.abs_pos();
             let data_size = r.u32()? as usize;
             let body_base = r.abs_pos();
@@ -3745,8 +3914,8 @@ mod tests {
     fn exhaustive_browser_marks_unaddressable_and_duplicate_map_keys_read_only() {
         fn leaf(name: &str, value: i32) -> PropertyValue {
             PropertyValue::Struct(StructValue::Properties(vec![Property {
-                name: name.to_string(),
-                type_name: "IntProperty".to_string(),
+                name: name.into(),
+                type_name: "IntProperty".into(),
                 descriptor: Descriptor::default(),
                 array_index: 0,
                 tag_flags: 0,
@@ -3759,8 +3928,8 @@ mod tests {
             class: "/Script/Test.Save".to_string(),
             flag: 0,
             properties: vec![Property {
-                name: "Values".to_string(),
-                type_name: "MapProperty".to_string(),
+                name: "Values".into(),
+                type_name: "MapProperty".into(),
                 descriptor: Descriptor::default(),
                 array_index: 0,
                 tag_flags: 0,

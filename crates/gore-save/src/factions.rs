@@ -207,7 +207,7 @@ fn find_generic_instanced<'a>(
         target_key: &str,
     ) -> Option<(Vec<String>, &'a [Property])> {
         for p in props {
-            path.push(p.name.clone());
+            path.push(p.name.to_string());
             if p.name == "m_GenericData" {
                 if let PropertyValue::Map { entries, .. } = &p.value {
                     for (k, v) in entries {

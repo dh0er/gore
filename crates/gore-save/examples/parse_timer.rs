@@ -39,33 +39,104 @@ fn main() {
     }
     println!("payload: {} bytes", payload.len());
 
+    println!(
+        "size_of: Property {} B, PropertyValue {} B, Descriptor {} B",
+        std::mem::size_of::<gore_save::properties::Property>(),
+        std::mem::size_of::<gore_save::properties::PropertyValue>(),
+        std::mem::size_of::<gore_save::properties::Descriptor>(),
+    );
+
+    let mut tally = Tally::default();
     for run in 0..3 {
         let start = Instant::now();
         let root = gore_save::properties::parse_private_root(&payload).expect("parse");
         let elapsed = start.elapsed();
-        let count = count_properties(&root.properties);
+        if run == 0 {
+            count_properties(&root.properties, &mut tally);
+        }
         println!(
-            "run {run}: {elapsed:?}  ({:.0} MB/s, {count} properties, {:.0} ns/property)",
+            "run {run}: {elapsed:?}  ({:.0} MB/s, {:.0} ns/property)",
             payload.len() as f64 / 1e6 / elapsed.as_secs_f64(),
-            elapsed.as_nanos() as f64 / count as f64
+            elapsed.as_nanos() as f64 / tally.properties.max(1) as f64
         );
+    }
+    let bytes = tally.properties * std::mem::size_of::<gore_save::properties::Property>();
+    println!(
+        "{} properties, {} strings, {} vectors, {} opaque bytes",
+        tally.properties, tally.strings, tally.vectors, tally.opaque_bytes
+    );
+    println!(
+        "~{:.0} MB of Property nodes, ~{} heap allocations",
+        bytes as f64 / 1e6,
+        tally.strings + tally.vectors
+    );
+}
+
+#[derive(Default, Debug)]
+struct Tally {
+    properties: usize,
+    strings: usize,
+    vectors: usize,
+    opaque_bytes: usize,
+}
+
+fn count_properties(properties: &[gore_save::properties::Property], tally: &mut Tally) {
+    use gore_save::properties::Descriptor;
+    tally.properties += properties.len();
+    tally.vectors += 1;
+    for property in properties {
+        // name + type_name
+        tally.strings += 2;
+        let Descriptor {
+            struct_type,
+            enum_type,
+            inner,
+            map,
+        } = &property.descriptor;
+        tally.strings += struct_type.iter().count() * 2 + enum_type.iter().count() * 3;
+        tally.strings += inner.iter().count() + map.iter().count() * 2;
+        count_value(&property.value, tally);
     }
 }
 
-fn count_properties(properties: &[gore_save::properties::Property]) -> usize {
-    use gore_save::properties::PropertyValue as V;
-    let mut total = properties.len();
-    for property in properties {
-        total += match &property.value {
-            V::Struct(gore_save::properties::StructValue::Properties(inner)) => {
-                count_properties(inner)
+fn count_value(value: &gore_save::properties::PropertyValue, tally: &mut Tally) {
+    use gore_save::properties::{PropertyValue as V, StructValue as S};
+    match value {
+        V::Str(_) | V::Name(_) | V::Object(_) | V::Enum(_) => tally.strings += 1,
+        V::SoftObject(_) => tally.strings += 3,
+        V::Opaque(bytes) => {
+            tally.vectors += 1;
+            tally.opaque_bytes += bytes.len();
+        }
+        V::Array { elements } | V::Set { elements, .. } => {
+            tally.vectors += 1;
+            for element in elements {
+                count_value(element, tally);
             }
-            V::ObjectInstances(instances) => instances
-                .iter()
-                .map(|instance| count_properties(&instance.properties))
-                .sum(),
-            _ => 0,
-        };
+        }
+        V::Map { entries, .. } => {
+            tally.vectors += 1;
+            for (key, entry) in entries {
+                count_value(key, tally);
+                count_value(entry, tally);
+            }
+        }
+        V::ObjectInstances(instances) => {
+            tally.vectors += 1;
+            for instance in instances {
+                tally.strings += 1;
+                count_properties(&instance.properties, tally);
+            }
+        }
+        V::Struct(S::Properties(inner)) => count_properties(inner, tally),
+        V::Struct(S::GameplayTagContainer(tags)) => {
+            tally.vectors += 1;
+            tally.strings += tags.len();
+        }
+        V::Struct(S::Instanced(Some(instanced))) => {
+            tally.strings += 1;
+            count_properties(&instanced.properties, tally);
+        }
+        _ => {}
     }
-    total
 }

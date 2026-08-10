@@ -319,13 +319,35 @@ impl<'a> Reader<'a> {
 
     pub(crate) fn fstring(&mut self) -> Result<String, CoreError> {
         let n = self.i32()?;
-        if n == 0 {
-            return Ok(String::new());
-        }
         if n > 0 {
             let raw = self.read(n as usize)?;
             let body = raw.strip_suffix(&[0]).unwrap_or(raw);
             return Ok(String::from_utf8_lossy(body).to_string());
+        }
+        self.fstring_after_length(n)
+    }
+
+    /// An FString read straight into the shared name table, with no owned `String`
+    /// in between. Property and type names repeat hundreds of thousands of times in
+    /// one payload, so this is the parser's hottest allocation by a wide margin.
+    pub(crate) fn prop_str(&mut self) -> Result<properties::PropStr, CoreError> {
+        let n = self.i32()?;
+        if n > 0 {
+            let raw = self.read(n as usize)?;
+            let body = raw.strip_suffix(&[0]).unwrap_or(raw);
+            return Ok(match std::str::from_utf8(body) {
+                Ok(text) => properties::PropStr::new(text),
+                Err(_) => properties::PropStr::new(&String::from_utf8_lossy(body)),
+            });
+        }
+        Ok(properties::PropStr::new(&self.fstring_after_length(n)?))
+    }
+
+    /// The empty and UTF-16 arms of [`Reader::fstring`], after its length has been
+    /// read. Rare next to the ASCII path both callers above take first.
+    fn fstring_after_length(&mut self, n: i32) -> Result<String, CoreError> {
+        if n == 0 {
+            return Ok(String::new());
         }
         // `-n` overflows (panic in debug, wrap in release) when n == i32::MIN
         // (0x80000000). Reject it via checked negation instead of aborting
@@ -7553,7 +7575,7 @@ fn summarize_memory_event_properties(
             .as_ref()
             .map(|(name, _)| name.as_str());
         let type_name = struct_type.map_or_else(
-            || property.type_name.clone(),
+            || property.type_name.to_string(),
             |name| format!("{} · {name}", property.type_name),
         );
         fields.push(json!({
@@ -11969,7 +11991,7 @@ fn misaligned_slot_containers(root: &properties::RootObject) -> Vec<(Vec<String>
         out: &mut Vec<(Vec<String>, usize)>,
     ) {
         for property in properties_ {
-            path.push(property.name.clone());
+            path.push(property.name.to_string());
             if property.name == "m_Slots" {
                 if let properties::PropertyValue::Array { elements } = &property.value {
                     let count = misaligned(elements);
