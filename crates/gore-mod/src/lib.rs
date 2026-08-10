@@ -3039,6 +3039,10 @@ pub struct GamePaths {
     pub ue4ss_mods: PathBuf,
     pub fmod_desktop: PathBuf,
     pub voice_over: PathBuf,
+    /// The folder `lcache` was searched in. `lcache` is `None` both for a folder holding no
+    /// `.lcache` and for one that could not be listed at all, and a caller that wants to tell
+    /// those apart has to look at the folder itself — without rebuilding the `G1R` folding above.
+    pub cache_dir: PathBuf,
     pub lcache: Option<PathBuf>,
     pub script_cache: PathBuf,
 }
@@ -3105,9 +3109,10 @@ pub fn resolve_game_paths(root: &Path) -> GamePaths {
     } else {
         root.join("G1R")
     };
+    let cache_dir = g1r.join("Story").join("Cache");
     let lcache = {
-        let cache = g1r.join("Story").join("Cache");
-        std::fs::read_dir(&cache).ok().and_then(|rd| {
+        let cache = &cache_dir;
+        std::fs::read_dir(cache).ok().and_then(|rd| {
             let mut matches: Vec<PathBuf> = rd
                 .filter_map(|e| e.ok())
                 .map(|e| e.path())
@@ -3139,6 +3144,7 @@ pub fn resolve_game_paths(root: &Path) -> GamePaths {
             .join("Mods"),
         fmod_desktop: g1r.join("Content").join("FMOD").join("Desktop"),
         voice_over: g1r.join("Story").join("VoiceOver"),
+        cache_dir,
         lcache,
         script_cache: g1r.join("Script").join("PrecompiledScript_Shipping.Cache"),
     }
@@ -3171,6 +3177,16 @@ pub struct FileCleanupClaim {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct DeployRecord {
+    /// Localization edits this deploy could not write, each naming the id and language. Carried
+    /// back to the caller so it can be shown, never written to the on-disk record: it describes
+    /// one run, not the deployment's state, and the record is read back by undeploy and status.
+    #[serde(skip)]
+    pub loc_skipped: Vec<String>,
+    /// Localization edits this deploy wrote that the game will not display, because the id also
+    /// carries a newer generation of the same language. Written, not skipped — the distinction
+    /// decides whether a reader should fix their spec or undo their deployment.
+    #[serde(skip)]
+    pub loc_shadowed: Vec<String>,
     pub mod_name: String,
     /// deployed UE4SS mod dir (absolute), if any
     pub ue4ss_mod_dir: Option<String>,
@@ -3793,6 +3809,18 @@ fn record_path(root: &Path) -> PathBuf {
     record_root(root).join(RECORD_NAME)
 }
 
+/// Where this install's deploy record lives, for a read-only diagnosis that has to name the file
+/// it is reporting on (`gore doctor`).
+///
+/// Exposed rather than reconstructed by the caller: the record's name and the normalization of the
+/// root are the two things a second spelling would get wrong, and a diagnosis that looked for the
+/// record somewhere other than where deploy writes it would report "nothing is deployed" about a
+/// live deployment. Reading the record itself stays private — [`mgr::status::status`] is the
+/// supported way to ask what state it describes.
+pub fn deploy_record_path(root: &Path) -> PathBuf {
+    record_path(root)
+}
+
 fn install_compile_state_detail(state: &gore_as::compile::InstallCompileStateProbe) -> String {
     use gore_as::compile::InstallCompileStateDisposition;
 
@@ -3965,6 +3993,17 @@ pub(crate) struct DeployPlan {
     /// Retained component-wise no-follow binding of the fixed VoiceOver directory. This survives
     /// prepare so commit can reject an identity replacement before any game mutation.
     voice_over_guard: Option<VoiceOverPathGuard>,
+    /// Localization edits that could not be written: the id carries no slot for that language.
+    /// Reported after a successful deploy rather than refused, so one unusable edit in a large
+    /// bundle does not block the rest.
+    pub(crate) loc_skipped: Vec<String>,
+    /// Localization edits that WERE written and will not be seen, because the id also carries a
+    /// newer generation of the same language and the game reads that one.
+    ///
+    /// Kept apart from [`Self::loc_skipped`] deliberately. Counting them together reported a
+    /// landed edit as one that "did not apply", which invites somebody to undo a deployment that
+    /// worked — and one edit can raise both, so even the count was wrong.
+    pub(crate) loc_shadowed: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -4474,6 +4513,52 @@ fn prepare_target_identities(plan: &mut DeployPlan, prior: Option<&DeployRecord>
     Ok(())
 }
 
+/// Split a language tag into its stem and generation rank: `german` -> (german, 0), `german_new`
+/// -> (german, 1), `english_newer` -> (english, 2).
+///
+/// Derived from the suffix rather than a fixed list of names, so a cache that grows another
+/// generation is covered without a code change. Only the ORDER is assumed — nothing in the file
+/// states that `_newer` outranks `_new`; that came from watching the game display the newer one.
+/// The stems it produces from the shipped header are exactly two ladders, german and english, and
+/// nothing else.
+pub(crate) fn generation(language: &str) -> (&str, u8) {
+    match language
+        .strip_suffix("_newer")
+        .map(|stem| (stem, 2))
+        .or_else(|| language.strip_suffix("_new").map(|stem| (stem, 1)))
+    {
+        Some(pair) => pair,
+        None => (language, 0),
+    }
+}
+
+/// The language the game shows INSTEAD of the one just written, if any.
+///
+/// An id carrying both `german` and `german_new` displays the newer one — observed in game, both
+/// directions — so an edit to the older generation applies, is written, and changes nothing on
+/// screen. Nothing else in a deploy reports it, because nothing else went wrong.
+///
+/// `also_written` suppresses it when the same run writes the winning generation too, which is what
+/// the guide recommends and must not be nagged about.
+///
+/// Shared with the manager's own localization composer: it applies the same bundles by a different
+/// route, and a check living in only one of the two is a check the other route's users do not have.
+pub(crate) fn shadowing_generation<'a>(
+    carried: &'a [String],
+    written_folded: &str,
+    also_written: impl Fn(&str) -> bool,
+) -> Option<&'a String> {
+    let (stem, rank) = generation(written_folded);
+    carried
+        .iter()
+        .filter(|carried_lang| {
+            let (other_stem, other_rank) = generation(carried_lang);
+            other_stem == stem && other_rank > rank
+        })
+        .max_by_key(|carried_lang| generation(carried_lang).1)
+        .filter(|winner| !also_written(winner))
+}
+
 /// Deploy a built bundle dir into the game at `game_root`. Two phases so a previous working
 /// deployment is never lost to a failed new one:
 /// 1. **prepare** — decode/inject/encode every change in memory; on any error the game is
@@ -4526,7 +4611,14 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
         mod_name: manifest.mod_meta.name.clone(),
         ..Default::default()
     };
-    commit_plan(&gp, game_root, plan, record, prev)
+    // Carried across the commit because the plan is consumed there, and only reattached on
+    // success: a deploy that failed has nothing to report about edits it never applied.
+    let loc_skipped = plan.loc_skipped.clone();
+    let loc_shadowed = plan.loc_shadowed.clone();
+    let mut committed = commit_plan(&gp, game_root, plan, record, prev)?;
+    committed.loc_skipped = loc_skipped;
+    committed.loc_shadowed = loc_shadowed;
+    Ok(committed)
 }
 
 /// Commit a prepared [`DeployPlan`]: stage backups, atomically persist a recovery record BEFORE
@@ -5552,12 +5644,51 @@ fn prepare(
                     .collect();
                 for (id, langs) in edits.values() {
                     if lc.has_key(id) {
+                        // Owned so the shadow check can read the id's slots while set_value below
+                        // holds the cache mutably.
+                        let carried: Vec<String> = lc
+                            .languages_for(id)
+                            .into_iter()
+                            .map(str::to_ascii_lowercase)
+                            .collect();
                         for (folded_set, (set, text)) in langs {
                             // Best-effort: a language absent from THIS install's record (e.g. a
                             // shared mod built against a different game version) is skipped rather
-                            // than aborting the entire deploy.
-                            if declared.contains_key(folded_set) {
-                                let _ = lc.set_value(id, set, text);
+                            // than aborting the entire deploy — but skipped is not the same as
+                            // fine. Dropping it silently let the summary claim no edit was
+                            // unwritable while this one had never been applied.
+                            if !declared.contains_key(folded_set) {
+                                plan.loc_skipped.push(format!(
+                                    "'{id}': this install's cache declares no '{set}' language"
+                                ));
+                                continue;
+                            }
+                            // The write decides which of the two findings this edit can raise, so
+                            // it happens first. `set_value` still fails when the language is
+                            // declared by the cache but this particular id has no slot for it — the
+                            // cache is sparse. That is a different miss from shadowing, and the
+                            // standalone `gore loc import` reports it by name, so swallowing it
+                            // here left the two paths disagreeing about the same edit.
+                            if let Err(error) = lc.set_value(id, set, text) {
+                                plan.loc_skipped.push(format!("'{id}' has no '{set}' text: {error}"));
+                                continue;
+                            }
+                            // Only now: the edit is in the file, so the remaining question is
+                            // whether anyone will see it. Asking before the write reported an edit
+                            // that never landed under a note saying it had been written — and an id
+                            // carrying `german_new` without `german` raised both findings for one
+                            // edit, which is exactly the case a reader must not be confused about.
+                            //
+                            // Suppressed when this same bundle also writes the winning generation
+                            // for this id, which is the practice the guide recommends and must not
+                            // be nagged about.
+                            if let Some(winner) =
+                                shadowing_generation(&carried, folded_set, |w| langs.contains_key(w))
+                            {
+                                plan.loc_shadowed.push(format!(
+                                    "'{id}' also carries '{winner}', which the game displays \
+                                     instead of '{set}'"
+                                ));
                             }
                         }
                     } else {
@@ -5566,11 +5697,19 @@ fn prepare(
                         // order follows the lcache header. Unknown install languages remain the
                         // same best-effort skip as above.
                         let mut valid = BTreeMap::new();
-                        for (folded_set, (_, text)) in langs {
-                            if let Some(canonical) = declared.get(folded_set) {
+                        for (folded_set, (set, text)) in langs {
+                            match declared.get(folded_set) {
                                 // Case aliases target one logical language. BTreeMap traversal is
                                 // deterministic, and the later alias wins like other patch merges.
-                                valid.insert(canonical.clone(), text.clone());
+                                Some(canonical) => {
+                                    valid.insert(canonical.clone(), text.clone());
+                                }
+                                // Same silent drop as the existing-id branch had, and the same
+                                // reason to report it: the deploy succeeds and this translation is
+                                // not in it.
+                                None => plan.loc_skipped.push(format!(
+                                    "'{id}': this install's cache declares no '{set}' language"
+                                )),
                             }
                         }
                         if !valid.is_empty() {
@@ -7434,7 +7573,10 @@ fn record_path_matches_class(relative: &Path, class: RecordPathClass) -> bool {
         }
         RecordPathClass::BackupFile => {
             let relative = relative.to_string_lossy();
-            relative.ends_with(".gore-bak")
+            // Folded here too, so one record describes the same file on Windows however it was
+            // cased when it was written. The slice below is unaffected: the suffix is the same
+            // length whatever its case.
+            relative.to_ascii_lowercase().ends_with(".gore-bak")
                 && record_path_matches_class(
                     Path::new(&relative[..relative.len() - ".gore-bak".len()]),
                     RecordPathClass::LiveFile,
@@ -7557,12 +7699,37 @@ fn loose_target_allowed(relative: &Path) -> bool {
         return false;
     }
     let last = parts.last().expect("length was checked above");
-    if last.ends_with(".gore-bak") {
+    // Case folded, because Windows folds it. A loose target named `X.GORE-BAK` is the very file
+    // the backup step writes as `X.gore-bak`, so a case-sensitive compare let a bundle address a
+    // backup as if it were a live file — the one thing this guard exists to refuse.
+    if last.to_ascii_lowercase().ends_with(".gore-bak") {
         return false;
     }
     // Every component was checked with `is_safe_filename` above, so the file-name predicate the
     // fixed shapes take is already satisfied.
     !fixed_live_file(&parts, true)
+}
+
+/// The `*.gore-bak` paths the active deployment owns, or `None` when nothing is deployed.
+///
+/// Exists so a caller can tell a backup that belongs to the deployment from one that does not,
+/// without being handed the record to interpret. `gore doctor` is the caller: a `.gore-bak` beside
+/// a game file is normal while a deployment holds it, and a leftover from an unrelated in-place
+/// edit is exactly what it is looking for. Knowing only THAT a record exists made every backup on
+/// the install look like part of it.
+pub fn deployed_backup_paths(game_root: &Path) -> Result<Option<Vec<PathBuf>>> {
+    let game_root = abs_root(game_root);
+    let Some(stored) = read_record(&game_root)? else {
+        return Ok(None);
+    };
+    Ok(Some(
+        stored
+            .record
+            .backups
+            .into_iter()
+            .map(|(_, backup, _)| PathBuf::from(backup))
+            .collect(),
+    ))
 }
 
 fn read_record(game_root: &Path) -> Result<Option<StoredDeployRecord>> {
@@ -9627,6 +9794,13 @@ mod tests {
 
     /// Minimal real encrypted lcache used to exercise the studio LocPatch prepare path.
     fn test_lcache_with_languages(languages: &[&str]) -> Vec<u8> {
+        test_lcache_with_pairs(languages, &[("german", "Käse")])
+    }
+
+    /// The same cache with the single id's language slots spelled out, so a test can build the
+    /// sparse shape the real cache has — an id carrying two generations of one language, or
+    /// carrying fewer languages than the header declares.
+    fn test_lcache_with_pairs(languages: &[&str], pairs: &[(&str, &str)]) -> Vec<u8> {
         let mut plain = Vec::new();
         plain.push(0);
         plain.extend_from_slice(&(b"LCACHE".len() as i32).to_le_bytes());
@@ -9637,9 +9811,11 @@ mod tests {
         }
         plain.extend_from_slice(&1i32.to_le_bytes());
         plain.extend_from_slice(&test_lcache_fstring("itfo_cheese"));
-        plain.extend_from_slice(&1i32.to_le_bytes());
-        plain.extend_from_slice(&test_lcache_fstring("german"));
-        plain.extend_from_slice(&test_lcache_fstring("Käse"));
+        plain.extend_from_slice(&(pairs.len() as i32).to_le_bytes());
+        for (language, value) in pairs {
+            plain.extend_from_slice(&test_lcache_fstring(language));
+            plain.extend_from_slice(&test_lcache_fstring(value));
+        }
         plain.extend_from_slice(&test_lcache_fstring(""));
         plain.extend_from_slice(&0i32.to_le_bytes());
         let pad = (16 - plain.len() % 16) % 16;
@@ -9813,6 +9989,154 @@ mod tests {
         assert!(!exported["goremod_new_dialog"].contains_key("english"));
         assert_eq!(exported["goremod_new_dialog"].len(), 1);
         assert_eq!(exported["itfo_cheese"]["german"], "Käse");
+    }
+
+    /// The cache is sparse: declaring a language does not mean every id carries it. An edit that
+    /// names a declared language the id has no slot for cannot land, and used to be dropped
+    /// without a word — while the standalone `gore loc import` reported the same miss by name.
+    /// That silence is what made a mis-targeted translation look like a broken tool.
+    #[test]
+    fn studio_loc_patch_reports_an_edit_the_target_id_has_no_slot_for() {
+        let mut edits: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        edits
+            .entry("itfo_cheese".into())
+            .or_default()
+            .insert("english".into(), "Cheese".into());
+
+        // english IS declared here, so this is not the unknown-language skip above; itfo_cheese
+        // still carries german alone.
+        let plan = prepare_test_loc_patch_with_cache(
+            &edits,
+            test_lcache_with_languages(&["german", "english"]),
+        )
+        .unwrap();
+
+        assert_eq!(plan.writes.len(), 1, "the deploy still proceeds");
+        assert_eq!(
+            plan.loc_skipped.len(),
+            1,
+            "the unwritable edit must be reported: {:?}",
+            plan.loc_skipped
+        );
+        assert!(
+            plan.loc_skipped[0].contains("itfo_cheese")
+                && plan.loc_skipped[0].contains("english"),
+            "the warning names the id and the language: {:?}",
+            plan.loc_skipped
+        );
+
+        let decoded = gore_loc::loc::Lcache::decode(&plan.writes[0].1).unwrap();
+        let exported = decoded.export(false);
+        assert_eq!(exported["itfo_cheese"]["german"], "Käse");
+        assert!(!exported["itfo_cheese"].contains_key("english"));
+    }
+
+    /// Writing the older generation of a language the id also carries a newer one for lands in
+    /// the file and is never displayed. This is the 2,147-id case in the shipped German cache and
+    /// the one the guide's own example used to teach.
+    #[test]
+    fn studio_loc_patch_warns_when_the_edited_generation_is_shadowed() {
+        let cache = test_lcache_with_pairs(
+            &["german", "german_new"],
+            &[("german", "Käse"), ("german_new", "Bergkäse")],
+        );
+        let mut edits: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        edits
+            .entry("itfo_cheese".into())
+            .or_default()
+            .insert("german".into(), "Emmentaler".into());
+
+        let plan = prepare_test_loc_patch_with_cache(&edits, cache).unwrap();
+        assert_eq!(
+            plan.loc_shadowed.len(),
+            1,
+            "a shadowed edit must be reported: {:?}",
+            plan.loc_shadowed
+        );
+        assert!(
+            plan.loc_shadowed[0].contains("german_new")
+                && plan.loc_shadowed[0].contains("itfo_cheese"),
+            "the warning names the id and the generation that wins: {:?}",
+            plan.loc_shadowed
+        );
+        // The edit still lands: it was a legitimate write, just not a visible one.
+        let decoded = gore_loc::loc::Lcache::decode(&plan.writes[0].1).unwrap();
+        assert_eq!(decoded.export(false)["itfo_cheese"]["german"], "Emmentaler");
+    }
+
+    /// Writing both generations is what the guide recommends, so it must not be nagged about —
+    /// otherwise the warning fires on every correct edit and gets tuned out.
+    #[test]
+    fn studio_loc_patch_stays_silent_when_the_winning_generation_is_written_too() {
+        let cache = test_lcache_with_pairs(
+            &["german", "german_new"],
+            &[("german", "Käse"), ("german_new", "Bergkäse")],
+        );
+        let mut edits: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        edits.entry("itfo_cheese".into()).or_default().extend([
+            ("german".into(), "Emmentaler".into()),
+            ("german_new".into(), "Emmentaler".into()),
+        ]);
+
+        let plan = prepare_test_loc_patch_with_cache(&edits, cache).unwrap();
+        assert!(
+            plan.loc_shadowed.is_empty(),
+            "writing both generations is correct and must not warn: {:?}",
+            plan.loc_shadowed
+        );
+    }
+
+    /// An edit that never landed must not appear under the note that says edits were written.
+    ///
+    /// The shadow check used to run before the write, so an id carrying `german_new` and no
+    /// `german` raised BOTH findings for one edit: skipped, because there was no slot, and shadowed,
+    /// as though it had been written and merely hidden. The two readings call for opposite
+    /// responses — change the spec, or leave a working deployment alone — so reporting one edit as
+    /// both is worse than reporting neither.
+    #[test]
+    fn studio_loc_patch_does_not_call_an_unwritable_edit_shadowed() {
+        let cache = test_lcache_with_pairs(
+            &["german", "german_new"],
+            // The id carries only the newer generation, which is the shape 31,590 shipped ids have.
+            &[("german_new", "Bergkäse")],
+        );
+        let mut edits: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        edits
+            .entry("itfo_cheese".into())
+            .or_default()
+            .insert("german".into(), "Emmentaler".into());
+
+        let plan = prepare_test_loc_patch_with_cache(&edits, cache).unwrap();
+        assert_eq!(
+            plan.loc_skipped.len(),
+            1,
+            "the edit had no slot to land in: {:?}",
+            plan.loc_skipped
+        );
+        assert!(
+            plan.loc_shadowed.is_empty(),
+            "nothing was written, so nothing can be shadowed: {:?}",
+            plan.loc_shadowed
+        );
+    }
+
+    /// The counterpart, so the warning cannot become noise on every correct edit.
+    #[test]
+    fn studio_loc_patch_stays_silent_when_every_edit_lands() {
+        let mut edits: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        edits
+            .entry("itfo_cheese".into())
+            .or_default()
+            .insert("german".into(), "Bergkäse".into());
+
+        let plan = prepare_test_loc_patch(&edits).unwrap();
+        assert!(
+            plan.loc_skipped.is_empty() && plan.loc_shadowed.is_empty(),
+            "an edit that lands must not warn: {:?}",
+            plan.loc_skipped
+        );
+        let decoded = gore_loc::loc::Lcache::decode(&plan.writes[0].1).unwrap();
+        assert_eq!(decoded.export(false)["itfo_cheese"]["german"], "Bergkäse");
     }
 
     #[test]

@@ -2952,8 +2952,21 @@ fn ensure_plain_directory_tree(path: &Path, label: &str) -> Result<()> {
 
 /// The game's IoStore override folder: containers dropped here are mounted on top
 /// of the base game (additive override; later-mounting wins).
-fn mods_dir(game_dir: &Path) -> PathBuf {
-    game_dir.join("G1R/Content/Paks/~mods")
+///
+/// Public because `gore doctor` reports what is mounted from it: the folder's name begins with a
+/// `~` precisely so it sorts last, and a diagnosis that spelled the path itself could look in a
+/// directory this crate does not deploy to and report an empty one as proof that nothing is
+/// installed.
+pub fn mods_dir(game_dir: &Path) -> PathBuf {
+    // Joined a component at a time rather than as one `"G1R/Content/Paks/~mods"` literal. Both
+    // produce the same path -- `PathBuf` compares by component, and Windows accepts either
+    // separator -- but only this one renders with the platform's separator throughout, and this
+    // path is now printed to people by `gore doctor`.
+    game_dir
+        .join("G1R")
+        .join("Content")
+        .join("Paks")
+        .join("~mods")
 }
 
 /// On-disk record of a deployed container, written next to the triplet as
@@ -2963,6 +2976,75 @@ fn mods_dir(game_dir: &Path) -> PathBuf {
 struct DeployRecord {
     name: String,
     files: Vec<PathBuf>,
+}
+
+/// The files a deploy record claims it copied in, or why it cannot be used.
+///
+/// Exists so a caller can ask whether a record is one `undeploy` could act on without
+/// reimplementing its schema — `gore doctor` checked `files` by hand and twice accepted a record
+/// this function rejects, once for a member that was not a path and once for a missing `name`.
+/// Deserialized into the very type undeploy reads, so the two cannot disagree about what a record
+/// is.
+pub fn deploy_record_files(path: &Path) -> std::result::Result<Vec<PathBuf>, String> {
+    let bytes = std::fs::read(path).map_err(|error| format!("could not be read ({error})"))?;
+    let record: DeployRecord = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("is not a usable deploy record ({error})"))?;
+
+    // A whole triplet or nothing. [`deploy`] takes `&[PathBuf; 3]` — the count is the signature,
+    // not a convention — and [`undeploy`] deletes exactly what the record lists, so a record
+    // holding a subset undeploys to a folder still carrying the container files it left out. A
+    // non-empty check accepted that.
+    //
+    // The three extensions are the same contract, spelled in that function's own doc, and the
+    // `.utoc` and `.ucas` must share a stem: that is what makes them a pair rather than two files,
+    // and the reader says so by deriving one from the other with `with_extension("ucas")`. A record
+    // listing `A.utoc`, `B.ucas`, `C.pak` satisfies the extensions and is not a container — and
+    // undeploying it deletes one half of each real pair and leaves the others.
+    //
+    // The `.pak` stem is not required to match. Nothing in the format pairs it with the other two;
+    // the one caller in this repo happens to build all three from a single name, but that is its
+    // choice and not this format's rule.
+    if record.files.len() != 3 {
+        return Err(format!(
+            "lists {} file(s); a deployed container is a triplet of three",
+            record.files.len()
+        ));
+    }
+    let mut extensions: Vec<String> = record
+        .files
+        .iter()
+        .map(|file| {
+            file.extension()
+                .map(|extension| extension.to_string_lossy().to_lowercase())
+                .unwrap_or_default()
+        })
+        .collect();
+    extensions.sort();
+    if extensions != ["pak", "ucas", "utoc"] {
+        return Err(format!(
+            "lists {extensions:?}; a deployed container is a .utoc, a .ucas and a .pak"
+        ));
+    }
+
+    let stem_of = |wanted: &str| {
+        record
+            .files
+            .iter()
+            .find(|file| {
+                file.extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case(wanted))
+            })
+            .and_then(|file| file.file_stem())
+            .map(|stem| stem.to_string_lossy().to_lowercase())
+    };
+    if stem_of("utoc") != stem_of("ucas") {
+        return Err(
+            "lists a .utoc and a .ucas that are not the same container: the reader opens a .utoc \
+             with the .ucas of the same name"
+                .to_string(),
+        );
+    }
+    Ok(record.files)
 }
 
 /// Copy a Zen triplet (`[utoc, ucas, pak]`) into the game's `~mods` override folder

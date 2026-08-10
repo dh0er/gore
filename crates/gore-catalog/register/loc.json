@@ -1,0 +1,271 @@
+{
+  "format": 1,
+  "domain": "loc",
+  "entries": [
+    {
+      "id": "ui_main_newgame",
+      "effect": "Main menu — the button that starts a new game (German: NEUES SPIEL).",
+      "note": "Carries `german` only, and writing `german` is what took effect. The most corroborated id in this register, because four separate bundles wrote it over one day: the 18-id localization run, the three-component combo bundle, and twice through the mod manager, where two mods claimed the same id and the button read whichever text `gore mgr analyze` had named the winner — in both order directions, with nothing rebuilt in between.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "scheint alles zu passen",
+          "by": "maintainer"
+        },
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "passt alles",
+          "by": "maintainer"
+        },
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "konflikt-b-gewinnt",
+          "by": "maintainer"
+        },
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "a gewinnt",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "ui_main_load",
+      "effect": "Main menu — the load-game button (LADEN). Not the pause menu, which reads its load entry from a different id.",
+      "note": "Carries `german` only. The pause-menu half is the useful part and it was free: in a later run the same bundle changed `ui_main_settings` and `ui_main_quit` on the pause menu as well, while that screen's SPIEL LADEN stayed vanilla. So neighbouring `ui_main_` ids do not share a scope, and the prefix does not tell you which do.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "scheint alles zu passen",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "ui_main_settings",
+      "effect": "The settings button — on the main menu (EINSTELLUNGEN) and on the pause menu, both from this one id.",
+      "note": "Carries `german` only. Two screens, one id: nothing in the name `ui_main_settings` says the pause menu reads it too, and `ui_main_load` sitting right beside it does not. Change this and you change both, whether or not you meant to. Found by accident — the observer sent a pause-menu screenshot while checking something else.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "scheint alles zu passen",
+          "by": "maintainer"
+        },
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "Reported by screenshot rather than in words: the observer's pause-menu screenshot showed GORE TEST 04 in place of the settings entry, while FORTSETZEN, SPIEL SPEICHERN, SPIEL LADEN and HAUPTMENÜ were unchanged.",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "ui_main_quit",
+      "effect": "The quit button — on the main menu (VERLASSEN) and on the pause menu, both from this one id.",
+      "note": "Carries `german` only. Same two-screen scope as `ui_main_settings`, and the same warning: the `ui_main_` prefix is not a promise that an id belongs to the main menu alone.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "scheint alles zu passen",
+          "by": "maintainer"
+        },
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "Reported by screenshot rather than in words: the observer's pause-menu screenshot showed GORE TEST 05 in place of the quit entry, while FORTSETZEN, SPIEL SPEICHERN, SPIEL LADEN and HAUPTMENÜ were unchanged.",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "ui_main_credits",
+      "effect": "Main menu — the credits button (CREDITS).",
+      "note": "Carries `german` only. Seen on the main menu; the pause menu was not checked for it.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "scheint alles zu passen",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "ui_main_play",
+      "effect": null,
+      "note": "Written as GORE TEST 02 in the same 18-id bundle whose other menu ids all changed on screen, so the edit reached the game. What was refuted is that any button on the main menu reads it: the two buttons left unchanged read FORTFAHREN and ÄNDERUNGSLOG, so those come from other ids. The name is the trap — `ui_main_play` looks like the obvious id for FORTFAHREN and is not. Nobody has looked for this id on any other screen, so this is not \"the id is dead\".",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "refuted",
+          "witness": "Reported by screenshot rather than in words: on the observer's main-menu screenshot five buttons carried GORE TEST numbers and GORE TEST 02 was on none of them; the two remaining buttons read FORTFAHREN and ÄNDERUNGSLOG.",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "ui_loadsave_loadlastgame",
+      "effect": null,
+      "note": "Written as GORE TEST 07 in the same bundle and refuted the same way: no main-menu button showed it, and the two unchanged buttons read FORTFAHREN and ÄNDERUNGSLOG. Checked on the main menu only — the load/save screen itself was never opened with this bundle deployed.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "refuted",
+          "witness": "Reported by screenshot rather than in words: on the observer's main-menu screenshot five buttons carried GORE TEST numbers and GORE TEST 07 was on none of them; the two remaining buttons read FORTFAHREN and ÄNDERUNGSLOG.",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "ui_difficulty_easy",
+      "effect": "Difficulty selection, the screen that follows New Game — the easiest setting (NOVIZE).",
+      "note": "Carries `german` only.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "scheint alles zu passen",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "ui_difficulty_standard",
+      "effect": "Difficulty selection — the standard setting (GOTHIC).",
+      "note": "Carries `german` only. This is the difficulty every price figure in the `item` register was measured on.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "scheint alles zu passen",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "ui_difficulty_hard",
+      "effect": "Difficulty selection — the hardest setting (SCHWER).",
+      "note": "Carries `german` only.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "scheint alles zu passen",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "itfo_apple",
+      "effect": "The apple's display name, as shown when it is picked up and in the inventory.",
+      "note": "Item name ids carry `german` only — no id under the `itfo`/`itmi`/`itmw`/`itwr`/`itar` prefixes has a `german_new` key at all — so `german` is what to write. This name is the display side of the class `ItFo_Apple` in the `item` register; the two are separate namespaces and editing one does not touch the other.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "alles überprüft: dialoge stimmen, itemnamen stimmen",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "itfo_loaf",
+      "effect": "The bread's display name, as shown when it is picked up and in the inventory.",
+      "note": "Carries `german` only, like every other item name. Checked in the same pickup as `itfo_apple`; the two other item names in that bundle, `itmw_1h_sword_old_01` and `itfo_plants_herb_02`, were never brought on screen and are therefore not in this register.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "alles überprüft: dialoge stimmen, itemnamen stimmen",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "oc_stt_diego",
+      "effect": "Diego's display name — the speaker name shown above his dialog lines.",
+      "note": "Carries `german` only. An NPC display name, not a dialog line: it changes who the subtitle says is speaking, not what is said. The line itself is a separate id (`info_diego_gamestart_11_00` for his first one).",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "scheint alles zu passen",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "info_diego_gamestart_11_00",
+      "effect": "Subtitle of Diego's first spoken line in a new game (vanilla: \"Ich bin Diego.\").",
+      "note": "This id has no `german_new` key, so `german` is what the game reads — the half of the language rule that is easy to get backwards after reading the journal case below. The matching recording is the voice member `german_new/OldCamp/Diego/INFO_DIEGO_GAMESTART_11_00.ogg`; subtitle and audio are independent edits and one without the other is a line that reads one way and sounds another.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "diego untertitel hat auch gepasst. war nur zu langsam zum screenshotten",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "ch1_bringlist_entry_0",
+      "effect": "Journal — the first Diego errand (fetching Ian's list).",
+      "note": "The id that settled which German key the game reads. It carries both, and a different marker was written into each: the journal showed the `german_new` one. So where both keys exist `german_new` wins, and an edit to `german` reports \"Applied 1 edit(s)\", rewrites the cache, and changes nothing on screen. The guide's example at the time wrote `german` only, which is how the defect was found. Checked on this one id, in German, once.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "scheint alles zu passen",
+          "by": "maintainer"
+        }
+      ]
+    }
+  ]
+}

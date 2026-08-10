@@ -6,6 +6,7 @@
 
 pub mod location;
 pub mod pipeline;
+pub mod register;
 
 use serde::{Deserialize, Serialize};
 

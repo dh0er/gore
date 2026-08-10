@@ -1460,9 +1460,35 @@ fn mod_deploy(payload: Value) -> Value {
         std::path::Path::new(bundle_dir),
         std::path::Path::new(game_root),
     ) {
-        Ok(rec) => json!({"ok": true, "record": serde_json::to_value(rec).unwrap_or(Value::Null)}),
+        Ok(rec) => deploy_response(rec),
         Err(e) => err("DEPLOY_FAILED", e.to_string()),
     }
+}
+
+/// A successful deploy as this route reports it.
+///
+/// The two localization lists travel BESIDE the record, not inside it. They describe one run and
+/// the record is read back by undeploy and status, which is why `DeployRecord` skips them when it
+/// serializes — and why serializing the record was dropping them here as well: a caller through
+/// this route was told the deployment had succeeded, with nothing to say that part of its
+/// localization patch had never been written.
+///
+/// Two fields, because they call for opposite responses. A skipped edit was never written and the
+/// spec has to change; a shadowed edit WAS written and is simply not the one the game reads, so
+/// calling it "did not apply" invites undoing a deployment that worked. The CLI prints them as two
+/// things for the same reason.
+///
+/// Always present, empty or not. A client that cannot tell "no warnings" from "this build does not
+/// report them" is back where it started.
+fn deploy_response(mut rec: gore_mod::DeployRecord) -> Value {
+    let loc_skipped = std::mem::take(&mut rec.loc_skipped);
+    let loc_shadowed = std::mem::take(&mut rec.loc_shadowed);
+    json!({
+        "ok": true,
+        "record": serde_json::to_value(rec).unwrap_or(Value::Null),
+        "loc_skipped": loc_skipped,
+        "loc_shadowed": loc_shadowed,
+    })
 }
 
 /// `{game_root}` → undeploy the active mod.
@@ -2297,6 +2323,43 @@ mod tests {
         let dir = root.join(name);
         gore_mod::write_bundle(&dir, &bundle).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_deploy_reports_the_localization_edits_it_could_not_write() {
+        // `DeployRecord` skips both lists when it serializes, on purpose: they describe one run and
+        // the record is read back by undeploy and status. Handing the serialized record straight
+        // to the caller therefore dropped them, and a client on this route saw a successful
+        // deployment with no sign that part of its localization patch had never been written.
+        // The manager route reports its warnings; this one silently did not.
+        let mut rec = gore_mod::DeployRecord {
+            mod_name: "Test".into(),
+            ..Default::default()
+        };
+        rec.loc_skipped
+            .push("'itfo_cheese': this install's cache declares no 'english' language".into());
+        rec.loc_shadowed
+            .push("'itfo_cheese': 'german' was written and 'german_new' is what the game reads".into());
+
+        let v = super::deploy_response(rec);
+        assert_eq!(v["ok"], true, "resp: {v}");
+        assert_eq!(v["record"]["mod_name"], "Test", "the record still travels: {v}");
+        assert!(
+            v["record"].get("loc_skipped").is_none(),
+            "and still without the run-specific lists in it: {v}"
+        );
+        // Two fields, not one total: a skipped edit was never written and the spec has to change,
+        // a shadowed edit landed and is merely not the one displayed. One edit can raise both.
+        assert_eq!(v["loc_skipped"].as_array().unwrap().len(), 1, "{v}");
+        assert!(v["loc_skipped"][0].as_str().unwrap().contains("itfo_cheese"), "{v}");
+        assert_eq!(v["loc_shadowed"].as_array().unwrap().len(), 1, "{v}");
+        assert!(v["loc_shadowed"][0].as_str().unwrap().contains("german_new"), "{v}");
+
+        // Present and empty on a clean deploy, so "no warnings" is distinguishable from a build
+        // that does not report them.
+        let clean = super::deploy_response(gore_mod::DeployRecord::default());
+        assert_eq!(clean["loc_skipped"].as_array().unwrap().len(), 0, "{clean}");
+        assert_eq!(clean["loc_shadowed"].as_array().unwrap().len(), 0, "{clean}");
     }
 
     #[test]

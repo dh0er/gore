@@ -13,7 +13,7 @@ Write a `spec.json`:
 {
   "meta": { "name": "MyMod", "version": "1.0.0", "author": "you" },
   "overrides": [ { "class": "ItFo_Apple", "field": "m_Value", "value_int": 500 } ],
-  "loc_edits": { "some_text_id": { "german": "…" } },
+  "loc_edits": { "ch1_bringlist_entry_3": { "german": "…", "german_new": "…" } },
   "audio":   [ { "bank": "SFX.bank", "sample": "Foo", "wav_path": "foo.wav" } ],
   "voice":   [ { "archive": "german_new.zip", "op": "replace", "archive_path": "NPC/Hero/DIA_Foo.ogg", "ogg_path": "DIA_Foo.ogg" } ],
   "texture": [ { "asset": "/Game/UI/.../T_Foo", "image_path": "foo.png" } ],
@@ -37,6 +37,32 @@ else and names the rule, so an absolute path fails while you are still building
 instead of surviving to a deploy that was always going to reject it.
 `voice.archive` has the same shape for `G1R\Story\VoiceOver` — see
 [below](#voice-packaging-details).
+
+**`loc_edits` keys are language keys, and German has two of them.** The cache
+carries `german` (the original 1998 text) and `german_new` (the remake's
+rewrite), plus three English generations; where an id has both German keys the
+game displays `german_new` — observed once, on BuildID 24539464. That is why
+the example above writes both. An edit whose key a given id does not carry is
+**still not written, and `gore mod deploy` now names it**: the bundle deploys,
+the `.lcache` is rewritten, the `*.gore-bak` backup is taken, the line in game is
+unchanged, and the command prints the id and language it could not write. Unlike
+`audio.bank`, `build` cannot refuse it up front, because whether a key fits an id
+is a property of the install's cache rather than of the spec — so the report at
+deploy time is where you find out. Check the id in a `gore loc export` and see
+[which language key to write](text-and-dialogs.md#which-language-key-to-write).
+
+**`overrides` class and field names are checked only if you ask.** Pass
+`--model model.json` and `build` rejects unknown classes, unknown fields and
+type mismatches before writing anything — the same check `gore gen --model`
+runs, through the same code. Without it the names go unchecked and the build
+says so on stderr. Nothing in the release zip is a model; building one is
+covered in [Catalogs & models](catalogs-and-models.md). An unchecked typo costs
+you a play session: the bundle builds, deploys, and its Lua polls once a second
+for 120 attempts before writing one "gave up" line to `UE4SS.log`.
+
+```powershell
+gore mod build --spec spec.json -o build --model model.json
+```
 
 Every section is optional; `delay_ms` may be set alongside `overrides` to defer
 the CDO patch. Each section maps to the domain guide of the same name:
@@ -90,6 +116,51 @@ What deploy does per domain:
 | `dialog_topics` | guarded runtime topic registration |
 
 `gore mod undeploy` restores every backup and removes every additive container.
+
+### What is proven, and by what
+
+The offline half is routine and re-checked on every test run against a temporary
+game root: a deploy writes the files it names, and an undeploy restores the
+backups and deletes the containers it owns. Whether that survives contact with
+the game was checked once, by hand, on 2026-08-07 — Gothic 1 Remake at Steam
+BuildID 24539464, `gore` built from commit `90940340`, with each mod's effect
+picked so it could not be misread, and a person looking or listening.
+
+One bundle carrying `overrides`, `loc_edits` and a `texture` deployed as a unit
+and took effect in a single launch. The main-menu logo was magenta, the edited
+menu string was on screen, and the override's line was in `UE4SS.log`. That is
+three unrelated deploy mechanisms landing together — an additive Zen triplet in
+`~mods\`, an in-place `.lcache` rewrite with its `*.gore-bak` beside it, and a
+generated UE4SS Lua mod folder — from one spec and one `gore mod deploy`.
+
+Undeploy came back **byte-exact** for the in-place mechanisms, which is more
+than "the backup was restored". Over the day's runs the `.lcache` returned to
+exactly 37,093,440 bytes and the 915 MB `german_new.zip` to exactly
+915,670,575 — the sizes they had before any of it started.
+
+Undeploy also left nothing behind *between* runs, and that is the most useful
+single thing the session established. Seven bundles were deployed and undeployed
+in sequence on that install, several of them overriding the same class. The
+seventh one's line in `UE4SS.log` read:
+
+```
+[GoreVerifyCombo] ItFo_Apple.m_Value 4 -> 12345
+```
+
+The `4` is the value read off the CDO before the write: the vanilla one, not the
+`99999` or the `1000` that earlier bundles in the same sequence had set. Nothing
+carried over.
+Every other observation from that day rests on it: in a sequence of deploys and
+undeploys where residue survived, no result would mean anything, because each
+run would be reading what the previous ones left rather than the mod under test.
+Each run also carried a control whose effect was already established, so a run
+that showed nothing could be told apart from a tool that did nothing.
+
+Read it for exactly what it is. One person, one install, one build, one sitting,
+a screen and a log file: more evidence than existed before, and not a test
+suite. Nothing re-checks it, and nothing in this toolkit ever observes the
+screen — a deploy that reports success still says only that the bytes are in
+place.
 
 ## Loose files
 
@@ -166,9 +237,13 @@ and its restore.
 
 The deterministic pak filenames, filesystem changes, and deploy receipts are
 offline ownership evidence only. They do **not** prove Unreal's mount priority,
-that the game reads the intended entry, or any runtime/gameplay result. They
-also grant no authority for a real installation, game launch, save access, or
-save mutation; each of those needs its own qualified safety gate.
+that the game reads the intended entry, or any runtime/gameplay result. The
+2026-08-07 session did not close that gap either. It launched the game with a
+triplet of its own in `~mods\` and looked at the result, but it never put two
+mods' containers on the same path, so which of those the engine picks is still
+unobserved. The receipts also grant no authority for a real installation, game
+launch, save access, or save mutation; each of those needs its own qualified
+safety gate.
 
 ## Dialog topics
 
@@ -216,6 +291,14 @@ live archive is changed.
 and conflict detection, use [`gore mgr`](mod-manager.md) or the
 [Mod Manager](../../apps/mod-manager/README.md) app, which consume the same
 bundles.
+
+That side was exercised on the same install, on the same day: two bundles
+editing one localization id, `gore mgr analyze` naming the winner, and the game
+showing the mod it named — then the reverse after a reorder. The details are in
+[the manager's evidence boundary](mod-manager.md#evidence-boundary). It goes
+exactly one conflict kind deep: a soft localization clash between two bundles.
+Texture-versus-texture container precedence, script splices and three-way
+conflicts were never checked against a running game.
 
 ## Other helpers
 

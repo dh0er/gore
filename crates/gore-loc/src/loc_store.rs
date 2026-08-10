@@ -48,6 +48,22 @@ pub struct LocMeta {
     pub languages: Vec<String>,
     /// Unix seconds when the extraction ran.
     pub extracted_at: u64,
+    /// SHA-256 of the source `.lcache` bytes this catalog was built from.
+    ///
+    /// `extracted_at` cannot answer "is this catalog built from the bytes that are installed now":
+    /// it is stamped after the read, the decode and the catalog write, so a `gore loc import` that
+    /// lands inside that window leaves the cache with an mtime EARLIER than the extraction and a
+    /// catalog built from the previous bytes.
+    ///
+    /// A timestamp cannot answer it either, whatever unit it is stored in. Nanoseconds do not make
+    /// a filesystem's clock finer, and on one with a two-second tick — FAT32, and the removable
+    /// media game files live on — a same-length `gore loc import` inside one tick leaves the mtime
+    /// identical. Content is the only identity that holds, and the bytes are already in memory
+    /// when the catalog is built.
+    ///
+    /// `None` on catalogs written before this field existed; readers fall back to `extracted_at`.
+    #[serde(default)]
+    pub source_sha256: Option<String>,
     /// Absolute path of the written catalog.
     pub catalog_path: String,
 }
@@ -69,6 +85,31 @@ pub fn status() -> Option<LocMeta> {
     serde_json::from_slice(&bytes).ok()
 }
 
+/// Lowercase hex SHA-256, the shape every other digest in this toolkit is written in.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest as _, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Whether the path still holds the bytes this run read, asked by reading it again.
+///
+/// This used to compare the modification time from before and after the read. A timestamp cannot
+/// answer it: FAT32 keeps whole seconds, and `gore loc import` publishes with a rename, so a cache
+/// replaced inside one tick reports the very same mtime. Everything downstream — the catalog, the
+/// digest, the doctor's freshness check — would then describe bytes the install no longer has,
+/// and say so with confidence.
+///
+/// It costs one more pass over the file (37 MB in the shipped install) next to decrypting it and
+/// writing a 28 MB catalog. What it cannot do is prove the file will still hold them a moment
+/// later; it proves the read was not overtaken while this run was working, which is the case that
+/// happens.
+fn still_holds(path: &Path, digest: &str) -> Result<bool, std::io::Error> {
+    Ok(sha256_hex(&fs::read(path)?) == digest)
+}
+
 /// True when the shared catalog file is present.
 pub fn catalog_present() -> bool {
     paths::loc_catalog_path().is_file()
@@ -83,8 +124,27 @@ pub fn extract(hint: Option<&Path>) -> Result<LocMeta, LocStoreError> {
         source,
     })?;
     let source_bytes = enc.len() as u64;
+    // The digest of exactly what was read, so nothing about the file's own metadata has to be
+    // trusted later.
+    let digest = sha256_hex(&enc);
     let lc = Lcache::decode(&enc)?;
     let catalog = lc.export(false);
+
+    // An early exit, not the guarantee: the decode and the export are where the time goes, and a
+    // cache already replaced by now is one whose 28 MB catalog is not worth writing. What decides
+    // whether anything is published is the same question asked again after that write.
+    let unchanged = still_holds(&lcache, &digest).map_err(|source| LocStoreError::Read {
+        path: lcache.display().to_string(),
+        source,
+    })?;
+    if !unchanged {
+        return Err(LocStoreError::Read {
+            path: lcache.display().to_string(),
+            source: std::io::Error::other(
+                "the .lcache changed while it was being read — run 'gore loc extract' again",
+            ),
+        });
+    }
 
     let dir = paths::shared_data_dir();
     fs::create_dir_all(&dir).map_err(|source| LocStoreError::Write {
@@ -102,15 +162,16 @@ pub fn extract(hint: Option<&Path>) -> Result<LocMeta, LocStoreError> {
         }
     })?;
 
+    let meta_path = paths::loc_meta_path();
     let meta = LocMeta {
         source_path: lcache.display().to_string(),
         source_bytes,
         id_count: catalog.len(),
         languages: lc.languages(),
         extracted_at: now_unix(),
+        source_sha256: Some(digest.clone()),
         catalog_path: catalog_path.display().to_string(),
     };
-    let meta_path = paths::loc_meta_path();
     if let Err(source) = write_atomic(&meta_path, &serde_json::to_vec_pretty(&meta)?) {
         // The fresh catalog is already in place; a leftover meta would describe
         // the *previous* extraction (stale source/counts/timestamp). Drop it so
@@ -119,6 +180,32 @@ pub fn extract(hint: Option<&Path>) -> Result<LocMeta, LocStoreError> {
         return Err(LocStoreError::Write {
             path: meta_path.display().to_string(),
             source,
+        });
+    }
+
+    // Asked once more, after everything is on disk, because writing 28 MB takes long enough for a
+    // `gore loc import` to land inside it.
+    //
+    // The sidecar is written either way, and an earlier version of this deleted it here, which
+    // was backwards. `source_sha256` describes the CATALOG — the bytes it was built from — and
+    // that stays true whatever the install does afterwards. It is also the only thing that lets
+    // anyone notice: `gore doctor` re-reads the installed cache, compares it against this digest,
+    // and reports the catalog as stale. Removing the sidecar threw away the very record that
+    // makes the staleness visible and left a catalog the doctor calls "usable as it is".
+    //
+    // What this run must not do is report success, and it does not.
+    let unchanged = still_holds(&lcache, &digest).map_err(|source| LocStoreError::Read {
+        path: lcache.display().to_string(),
+        source,
+    })?;
+    if !unchanged {
+        return Err(LocStoreError::Read {
+            path: lcache.display().to_string(),
+            source: std::io::Error::other(
+                "the .lcache changed while the catalog was being written — what is on disk was \
+                 built from the previous bytes, and 'gore doctor' will report it as stale until \
+                 'gore loc extract' is run again",
+            ),
         });
     }
     Ok(meta)
@@ -138,4 +225,37 @@ fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{sha256_hex, still_holds};
+
+    #[test]
+    fn a_same_length_rewrite_is_caught_where_a_timestamp_could_not_see_it() {
+        // This check used to be "did the modification time change while we read". FAT32 keeps
+        // whole seconds and `gore loc import` publishes with a rename, so a cache replaced inside
+        // one tick reports the very same mtime — and the catalog, the recorded digest and the
+        // doctor's freshness check would all have described bytes the install no longer has.
+        //
+        // Nothing here touches a timestamp, deliberately: that is the signal being replaced.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("AlkimiaLocalization_00000000.lcache");
+        std::fs::write(&cache, vec![0u8; 2048]).unwrap();
+        let digest = sha256_hex(&std::fs::read(&cache).unwrap());
+
+        assert!(still_holds(&cache, &digest).unwrap(), "unread and unchanged");
+
+        std::fs::write(&cache, vec![1u8; 2048]).unwrap();
+        assert_eq!(
+            std::fs::metadata(&cache).unwrap().len(),
+            2048,
+            "the fixture is only interesting while the length still matches"
+        );
+        assert!(!still_holds(&cache, &digest).unwrap(), "different bytes, same length");
+
+        // A file that cannot be read at all is not an answer of "unchanged".
+        std::fs::remove_file(&cache).unwrap();
+        assert!(still_holds(&cache, &digest).is_err());
+    }
 }

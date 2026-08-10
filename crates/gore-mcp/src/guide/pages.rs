@@ -35,6 +35,7 @@ pages! {
     Guide / "README"               => "guide/README.md",
     Guide / "getting-started"      => "guide/getting-started.md",
     Guide / "cli-reference"        => "guide/cli-reference.md",
+    Guide / "find"                 => "guide/find.md",
     Guide / "mcp"                  => "guide/mcp.md",
     // Modding domains
     Guide / "items"                => "guide/items.md",

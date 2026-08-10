@@ -15,6 +15,7 @@ mod archive;
 mod error;
 mod limits;
 mod ogg;
+mod source_format;
 
 pub use archive::{
     validate_archive_entry_path, validate_output_root_ancestors, ArchiveEdit, ArchiveEntry,
@@ -25,3 +26,4 @@ pub use limits::Limits;
 pub use ogg::{
     validate_ogg, validate_ogg_with_timing, OggCodec, OggInfo, OggTiming, OggValidation,
 };
+pub use source_format::SourceFormat;

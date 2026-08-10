@@ -4,6 +4,85 @@ The game's sounds and music live in encrypted FMOD `.bank` files at
 `$GAME\G1R\Content\FMOD\Desktop\*.bank`. `gore audio` reads and replaces
 samples in pure Rust — no FMOD installation or third-party tool is needed.
 
+Every other subcommand wants a `--bank` path. `gore audio banks` is where you
+get one.
+
+## The banks an install has
+
+```powershell
+gore audio banks          # every .bank file, one row each
+gore audio banks --json   # the same answer as one JSON document
+```
+
+It takes no path. It resolves the configured install — the same `--game`
+fallback every other command uses — and describes
+`G1R\Content\FMOD\Desktop`. That is the same directory a bundle resolves a bare
+bank name against, so a bank listed here and a bank a bundle names cannot turn
+out to be two different files.
+
+Run against BuildID 24539464 it prints ten rows:
+
+```
+FMOD banks: 10 in D:\…\Gothic 1 Remake\G1R\Content\FMOD\Desktop (4 carry samples, 7443 samples in total)
+SAMPLES  CODEC     BANK (pass this whole path as --bank)
+     49  Vorbis    D:\…\Desktop\CINEMATICS.bank
+      —  —         D:\…\Desktop\Master.bank  [no sample data: nothing here to list, extract or replace]
+      —  —         D:\…\Desktop\Master.strings.bank  [no sample data: nothing here to list, extract or replace]
+    174  Vorbis    D:\…\Desktop\Music.bank
+      —  —         D:\…\Desktop\Music_NotDemo.bank  [no sample data: nothing here to list, extract or replace]
+      —  —         D:\…\Desktop\Music_NyrasPrologue.bank  [no sample data: nothing here to list, extract or replace]
+   7218  Vorbis    D:\…\Desktop\SFX.bank
+      —  —         D:\…\Desktop\SFX_NotDemo.bank  [no sample data: nothing here to list, extract or replace]
+      —  —         D:\…\Desktop\SFX_NyrasPrologue.bank  [no sample data: nothing here to list, extract or replace]
+      2  Vorbis    D:\…\Desktop\VO.bank
+```
+
+The third column is the whole path on purpose: it is the string the next call's
+`--bank` wants, and assembling it by hand from a directory printed once at the
+top is the step this command exists to remove. (The paths are shortened here to
+fit the page; the command prints each one in full.)
+
+Six of the ten rows carry no samples and are printed anyway. A listing that
+showed four files while claiming to describe the directory would send you back
+to searching the filesystem, which is where you started; what those six are is
+under [Banks with no samples](#banks-with-no-samples).
+
+The listing is never truncated — the directory holds ten files, so a bound
+could only hide something — and it is cheap, because it decrypts each bank's
+60-byte FSB5 header rather than the bank. The FSB5 cipher is position-indexed,
+so a block's header decrypts on its own without the 247 MB behind it. Measured
+once on one machine from an unoptimized build: 0.21 s to describe all ten banks
+(about 520 MB of file), against 2.49 s for a single `audio list --max 0` of
+`SFX.bank`, which decrypts it in full.
+
+A bank that has been replaced into carries a second FSB5 sub-bank, and the row
+says so. The install above was pristine, so this row is the shape the code emits
+— pinned by a test that injects into a fixture bank and reads the listing back —
+rather than something that run produced:
+
+```
+   7218  Vorbis    D:\…\Desktop\SFX.bank  [injected — `gore audio restore` puts the shipped bank back]
+```
+
+The marker is read out of the bank's own wrapper rather than from a record this
+toolkit keeps, so it stays true across a reinstall of the tools. It does not say
+*which* samples were replaced — `audio list` marks those individually.
+
+`--json` mirrors `list --json`. The path is under `bank`, the same key `list`
+uses, so it can be handed straight back as the next call's `--bank`; each entry
+also carries `name`, `carries_samples`, `sample_count`, `codec`, `sub_banks` and
+`injected`, under a document-level `directory`, `bank_count`,
+`with_samples_count` and `sample_count`. A file that cannot be read at all is
+still a row, carrying an `error` instead of a count: one damaged bank must not
+cost you the other nine. Passing the wrong `--key` puts every sample-carrying
+bank in exactly that state, and the error names the key as the thing to suspect.
+
+Something named like a bank that is not a file — a directory called
+`Music.bank`, say — is not a bank the game can load, so it is not a row and not
+in `bank_count`. It is listed under `occupied_names` and in the table's last
+line, because a listing that simply left it out would send you back to searching
+the folder you just asked about.
+
 ## Inspect a bank
 
 ```powershell
@@ -48,6 +127,8 @@ ask "how many match?".
 "nothing found" when the truth is "wrong case". It folds case exactly the way
 `gore voice list --filter` does.
 
+### Banks with no samples
+
 Not every bank carries samples. `Master.bank` holds only the mixer and its
 buses, `Master.strings.bank` only the string table, and `Music_NotDemo.bank`,
 `Music_NyrasPrologue.bank`, `SFX_NotDemo.bank` and `SFX_NyrasPrologue.bank` are
@@ -56,17 +137,27 @@ rather than calling it damaged — they are intact, there is simply nothing in
 them to extract or replace. It still says it as a failure: the command writes
 `error: decoding bank: bank carries no sample data …` to stderr and exits 1,
 and the `gore_audio` MCP tool flags the result as an error. A script that walks
-all ten banks has to expect that; the samples themselves are in `SFX.bank`,
-`Music.bank`, `VO.bank` and `CINEMATICS.bank`.
+all ten banks has to expect that — or ask
+[`gore audio banks`](#the-banks-an-install-has) instead, which is the one
+command that describes these six as rows rather than as failures. The samples
+themselves are in `SFX.bank`, `Music.bank`, `VO.bank` and `CINEMATICS.bank`.
 
 ## Extract
 
 ```powershell
-gore audio extract --bank "$GAME\...\SFX.bank" -o wavs               # all samples
-gore audio extract --bank "$GAME\...\SFX.bank" -o wavs --sample Foo  # just one
+gore audio extract --bank "$GAME\...\SFX.bank" -o wavs                      # all samples
+gore audio extract --bank "$GAME\...\SFX.bank" -o wavs --sample Foo         # just one
+gore audio extract --bank "$GAME\...\SFX.bank" -o wavs --filter MenuButton  # a whole set
 ```
 
-`--sample` takes a single sample name, or `all` (the default).
+`--sample` takes a single sample name, or `all` (the default). `--filter` takes
+the same case-insensitive substring `list` does, which is how you pull a whole
+variant set out in one call rather than one `--sample` at a time.
+
+Extracting into a directory that already holds WAVs is fine — auditioning
+candidates is what this command is for. What it will not do is replace a file
+already there: the names come from the bank, so a collision means the earlier
+extract's output, or something you edited. It names the file and stops.
 
 Extraction decodes Vorbis, so a sample in another codec is skipped rather than
 written. Skips are reported to stderr once per *reason*, with a count and the
@@ -92,6 +183,26 @@ sliders, spin boxes and the settings rows. Replace one of those, click through
 the main menu, and you hear the original — not because the replacement failed
 but because that surface never plays it.
 
+One check in game bears that out and widens it. On BuildID 24539464 the four
+`SFX_UI_Action_MenuButton_Click` samples were replaced with distinguishable tones
+and a person listened: the tones played on the menu buttons, and also when
+backing out of a submenu with Escape. The name is narrower than the behaviour, so
+expect a replacement here throughout menu navigation rather than on clicks alone.
+In the same run `SFX_UI_Action_Button_Hover_01` landed where its name suggests —
+its tone played on hover, and nothing else the listener did played it.
+
+Music has the same gap between name and binding, and it took two runs to close.
+`Music.bank` holds both `title` and `title_MASTER`; the first run replaced them
+together and the main menu played a siren, which proved the event draws on at
+least one of the two without saying which. A second run replaced `title` alone
+and the menu played its normal theme. So the title event draws on
+**`title_MASTER`**, and not on `title`.
+
+Note what that does and does not say. `title_MASTER` was never replaced on its
+own, so this is elimination across two witnessed observations rather than a
+direct test, and it does not rule out the event drawing on further samples
+besides.
+
 ## Variant sets
 
 Most sounds are one take of several. 7,191 of `SFX.bank`'s 7,218 sample names
@@ -108,8 +219,21 @@ it if the change has to be audible every time:
 gore audio list --bank "$SFX" --filter SFX_UI_Action_Button_Click
 ```
 
+Nothing in the listing marks a group as one. The four
+`SFX_UI_Action_MenuButton_Click` takes print at `#1912`, `#1942`, `#3507` and
+`#6477` — four rows thousands apart, each looking as unrelated to the others as
+to anything else on the page. The shared prefix is all that ties them together,
+which is why filtering on the prefix is how you find the rest of a set. Filter on
+the exact prefix you mean: `--filter` is a substring test, so the command above
+does not list the menu takes at all — `SFX_UI_Action_Button_Click` is not a
+substring of `SFX_UI_Action_MenuButton_Click_01`.
+
 Which member a trigger picks is decided by the event's playlist inside the bank,
-which `gore audio` does not read.
+which `gore audio` does not read. For that one set it behaved randomly: on
+BuildID 24539464, with a different tone in each of the four, a listener clicking
+through the main menu reported them arriving in no pattern. Replacing only `_01`,
+which is the obvious move, would have produced the intended sound on roughly one
+click in four — easy to mistake for a tool that does not work.
 
 ## Replace
 
@@ -168,9 +292,16 @@ and it does not prove anyone will hear it.
 For the layer below that, the record is this: an injected bank loads in the
 game's own FMOD runtime and the event plays the injected audio. That was measured
 once, off-line, by rendering an event through FMOD's non-realtime writer from a
-pristine bank and from an injected one and comparing the results — not by anyone
-listening in game. Nothing in this toolkit ever observes the screen or the
-speakers, and no test in the suite checks either.
+pristine bank and from an injected one and comparing the results.
+
+It has since also been heard. On BuildID 24539464, five replaced `SFX.bank`
+samples and the main menu's title music came out of the running game and were
+identified by a person listening — one build, one install, one listener, one
+sitting. That single session is what the menu findings above rest on, and it is
+worth reading for exactly what it is: it shows the path works end to end on that
+build, not that any particular replacement of yours will be audible, and it is
+not a check the toolkit can run for you. Nothing here ever observes the screen or
+the speakers, and no test in the suite checks either.
 
 ## Share a patch without shipping game audio
 
@@ -189,21 +320,24 @@ default, or to `-o`.
 
 Every subcommand that reads bank content accepts `--key` to override the bank
 encryption key. It defaults to the Gothic 1 Remake key, so you normally never
-pass it.
+pass it. A wrong one is visible rather than silent: every field `banks` reports
+comes out of the encrypted header, so it checks the decrypted `FSB5` magic
+before printing a number and names the key when that check fails.
 
 ## Flag summary
 
 | Flag | Commands | Meaning |
 |---|---|---|
-| `--bank <PATH>` | all | The `.bank` file to read or modify. |
-| `--json` | `list` | One JSON document instead of the human-readable table. |
-| `--filter <TEXT>` | `list` | Keep only sample names containing this substring, case-insensitive. |
+| `--bank <PATH>` | all but `banks` | The `.bank` file to read or modify. `banks` is where you get the path. |
+| `--game <PATH>` | `banks` | Game install root (the folder containing `G1R/`). Defaults to the configured game path, then Steam auto-detect. |
+| `--json` | `list`, `banks` | One JSON document instead of the human-readable table. |
+| `--filter <TEXT>` | `list`, `extract` | Keep only sample names containing this substring, case-insensitive. |
 | `--max <N>` | `list` | Max samples to print (default 100). The result says how many matched. `--max 0` lists nothing and reports only the counts. |
 | `-o, --out <PATH>` | `extract`, `replace`, `export-patch`, `apply-patch` | Output dir (`extract`), output bank (`replace`, `apply-patch`), or output zip (`export-patch`). |
 | `--sample <NAME>` | `extract` | One sample name, or `all` (default). |
 | `--map <PATH>` | `replace`, `export-patch` | `{ "SampleName": "new.wav" }` JSON; WAV paths relative to it. |
 | `--patch <PATH>` | `apply-patch` | Patch zip produced by `export-patch`. |
-| `--key <KEY>` | `list`, `extract`, `replace`, `apply-patch` | Override the bank encryption key. |
+| `--key <KEY>` | `banks`, `list`, `extract`, `replace`, `apply-patch` | Override the bank encryption key. |
 
 ## Related
 

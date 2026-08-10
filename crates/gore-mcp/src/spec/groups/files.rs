@@ -147,6 +147,22 @@ const AUDIO_KEY: ArgSpec = ArgSpec::new(
 )
 .with_default("the built-in Gothic 1 Remake studio key");
 
+/// `banks` is the one `audio` command that takes no `--bank`, because it is where a `--bank` comes
+/// from: it resolves the configured install and describes its FMOD directory. Exposing `game` here
+/// matters for the same reason it does on `texture` — an agent handed a path by the caller must be
+/// able to describe that install rather than the configured one.
+const AUDIO_BANKS_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "game",
+        Long("game"),
+        Path,
+        "Game root (the folder containing G1R/)",
+        false,
+    )
+    .with_default("the configured game path, then Steam auto-detect"),
+    AUDIO_KEY,
+];
+
 /// `list` is bounded by `--max` in the CLI itself, which is what keeps `SFX.bank`'s 7,218 samples
 /// from being clipped mid-line into a result whose back half is simply absent. The bound is only
 /// useful if an agent can move it, so both narrowing flags are exposed here.
@@ -176,6 +192,13 @@ const AUDIO_EXTRACT_ARGS: &[ArgSpec] = &[
     ArgSpec::new("out", Long("out"), Path, "Output directory for .wav files", true),
     ArgSpec::new("sample", Long("sample"), Str, "A single sample name, or \"all\"", false)
         .with_default("all"),
+    ArgSpec::new(
+        "filter",
+        Long("filter"),
+        Str,
+        "Extract every sample whose name contains this substring (case-insensitive)",
+        false,
+    ),
     AUDIO_KEY,
 ];
 
@@ -227,6 +250,15 @@ const AUDIO_APPLY_PATCH_ARGS: &[ArgSpec] = &[
 
 const AUDIO_COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(
+        "banks",
+        "List the .bank files the configured install carries, with each one's sample count",
+        AUDIO_BANKS_ARGS,
+        Safety::read(),
+        T_NORMAL,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("audio"),
+    CommandSpec::new(
         "list",
         "List a bank's samples (name, codec, sample rate, channels, duration)",
         AUDIO_LIST_ARGS,
@@ -239,13 +271,17 @@ const AUDIO_COMMANDS: &[CommandSpec] = &[
         "extract",
         "Extract samples to WAV (.wav) for listening/editing",
         AUDIO_EXTRACT_ARGS,
-        // Writes `<out>/<index>_<sample>.wav` per sample with `fs::write`, so a rerun or an edited
-        // WAV in that directory is truncated. The names come from the bank's own sample list, which
-        // this layer cannot read. That used to gate the command outright, and the cost showed up in
-        // a real session: extracting one sample into a scratch directory that did not exist yet
-        // raised the same confirmation as writing into the game. An empty or absent `out` holds
-        // nothing to overwrite, whatever the bank calls its samples, so only an occupied one asks.
-        Safety::write().clobbers_dir(&["out"]),
+        // Writes `<out>/<index>_<sample>.wav` per sample, under names taken from the bank's own
+        // sample list, which this layer cannot read. It used to ask whenever `out` was non-empty,
+        // and that is the workflow: auditioning candidates one at a time filled the directory, so
+        // the second extract raised a confirmation because the first had succeeded. The CLI now
+        // refuses the individual file it would replace and names it, which protects the same thing
+        // without standing in front of the ordinary case. The two halves ship together — dropping
+        // this facet against an older CLI would leave neither layer checking.
+        //
+        // `writes_into` rather than nothing: the occupancy question is the CLI's now, but `out` must
+        // still be classified, or an output aimed inside the installation stops being seen as one.
+        Safety::write().writes_into(&["out"]),
         T_NORMAL,
     )
     .guide("audio"),
@@ -396,7 +432,14 @@ const VOICE_ADD_ARGS: &[ArgSpec] = &[
         "Full path for the new entry inside the archive",
         true,
     ),
-    ArgSpec::new("ogg", Long("ogg"), Path, "Ogg/Vorbis or Ogg/Opus file to add", true),
+    ArgSpec::new(
+        "ogg",
+        Long("ogg"),
+        Path,
+        "Ogg file to add — Vorbis or Opus. A WAV needs converting first: ffmpeg -i line.wav -c:a \
+         libvorbis -ar 48000 -ac 1 -q:a 5 line.ogg",
+        true,
+    ),
     VOICE_OUT_ZIP,
 ];
 
@@ -404,7 +447,14 @@ const VOICE_REPLACE_ARGS: &[ArgSpec] = &[
     VOICE_ARCHIVE,
     VOICE_BASENAME,
     VOICE_SELECTOR_PATH,
-    ArgSpec::new("ogg", Long("ogg"), Path, "Ogg/Vorbis or Ogg/Opus replacement file", true),
+    ArgSpec::new(
+        "ogg",
+        Long("ogg"),
+        Path,
+        "Ogg replacement file — Vorbis or Opus. A WAV needs converting first: ffmpeg -i \
+         line.wav -c:a libvorbis -ar 48000 -ac 1 -q:a 5 line.ogg",
+        true,
+    ),
     VOICE_OUT_ZIP,
 ];
 
@@ -501,7 +551,7 @@ mod tests {
     #[test]
     fn the_group_sizes_match_the_cli() {
         assert_eq!(LOC.commands.len(), 4);
-        assert_eq!(AUDIO.commands.len(), 6);
+        assert_eq!(AUDIO.commands.len(), 7);
         assert_eq!(VOICE.commands.len(), 6);
     }
 

@@ -277,6 +277,16 @@ pub struct Safety {
     /// write is still overwritten. What this answers is whether an agent may aim a name-choosing
     /// writer at a directory it can see is occupied.
     pub clobbers_dir: &'static [&'static str],
+    /// Arguments naming a destination this command writes into, registered for install-path
+    /// classification and for nothing else.
+    ///
+    /// [`Safety::truncates`] and [`Safety::clobbers_dir`] each answer two questions at once: is
+    /// this an output, and is something already in the way. A command whose CLI does its own
+    /// per-file collision check needs the first answer and not the second — and dropping the facet
+    /// to be rid of the occupancy question also drops the output out of
+    /// `installs_into_game_tree`, which is how `audio extract` briefly became able to fill the game
+    /// installation with WAVs without asking anybody.
+    pub writes_into: &'static [&'static str],
 }
 
 impl Safety {
@@ -290,6 +300,7 @@ impl Safety {
             derives: &[],
             installs_via: &[],
             clobbers_dir: &[],
+            writes_into: &[],
         }
     }
 
@@ -342,6 +353,13 @@ impl Safety {
     /// [`Safety::clobbers_dir`].
     pub const fn clobbers_dir(mut self, args: &'static [&'static str]) -> Self {
         self.clobbers_dir = args;
+        self
+    }
+
+    /// Register `args` as outputs for install-path classification without asking about occupancy.
+    /// For commands that check collisions themselves, per file, in the CLI.
+    pub const fn writes_into(mut self, args: &'static [&'static str]) -> Self {
+        self.writes_into = args;
         self
     }
 
@@ -625,6 +643,8 @@ pub const T_COMPILE: u64 = 2700;
 /// install, then the deeper script tooling.
 pub const GROUPS: &[GroupSpec] = &[
     groups::core::CONFIG,
+    groups::core::DOCTOR,
+    groups::core::FIND,
     groups::core::CATALOG,
     groups::core::LOCATION,
     groups::core::PROJECT,
@@ -642,7 +662,7 @@ pub const GROUPS: &[GroupSpec] = &[
 ///
 /// A literal, not a computed value: it is a claim about the CLI, and the integration test compares
 /// it against what clap actually exposes. Changing it should be a deliberate act.
-pub const EXPECTED_LEAF_COUNT: usize = 82;
+pub const EXPECTED_LEAF_COUNT: usize = 85;
 
 pub fn group(tool: &str) -> Option<&'static GroupSpec> {
     GROUPS.iter().find(|group| group.tool == tool)
@@ -661,7 +681,38 @@ mod tests {
     #[test]
     fn the_table_covers_every_leaf_of_the_cli() {
         assert_eq!(leaf_count(), EXPECTED_LEAF_COUNT);
-        assert_eq!(GROUPS.len(), 12);
+        assert_eq!(GROUPS.len(), 14);
+    }
+
+    #[test]
+    fn no_description_carries_a_swallowed_line_continuation() {
+        // Every text here is written across source lines and joined with a trailing `\`. Drop the
+        // backslash and there is no error, no newline and no complaint — just the next line's
+        // indentation sitting in the middle of a sentence an agent is handed. Two of these were in
+        // the table, and the only way anybody saw them was reading the rendered output.
+        let padded = |text: &str| text.contains("   ");
+        for group in GROUPS {
+            assert!(!padded(group.summary), "{}: {:?}", group.tool, group.summary);
+            for command in group.commands {
+                assert!(
+                    !padded(command.summary),
+                    "{}/{}: {:?}",
+                    group.tool,
+                    command.sub,
+                    command.summary
+                );
+                for arg in command.args {
+                    assert!(
+                        !padded(arg.help),
+                        "{}/{} {}: {:?}",
+                        group.tool,
+                        command.sub,
+                        arg.name,
+                        arg.help
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -997,6 +1048,7 @@ mod tests {
                     command.safety.truncates.contains(&name)
                         || command.safety.installs_via.contains(&name)
                         || command.safety.clobbers_dir.contains(&name)
+                        || command.safety.writes_into.contains(&name)
                         || command.safety.derives.iter().any(|(arg, _)| *arg == name)
                         // A command gated outright needs no per-argument check. Asked of the
                         // gate rather than of `Class`, because a GameLaunch command requires write
@@ -1010,10 +1062,10 @@ mod tests {
                 }
             }
         }
-        // `asset extract` is the one exemption. Its CLI resolves the destination through
-        // `prepare_absent_output_directory`, which refuses anything inside the live game tree
-        // outright — so the command is already the guard, and adding it here would only replace a
-        // precise CLI error with a permission refusal.
+        // `asset extract` is the one exemption: the CLI is already the guard. It resolves the
+        // destination through `prepare_absent_output_directory`, which refuses anything inside the
+        // live game tree outright, so listing it here would replace a precise CLI error with a
+        // permission refusal.
         unchecked.retain(|name| name != "gore_asset extract");
         assert!(
             unchecked.is_empty(),
@@ -1136,8 +1188,10 @@ mod tests {
         choosing.sort_unstable();
 
         let mut expected: Vec<(&str, &str, &[&'static str])> = vec![
-            // One WAV per sample, named from the bank.
-            ("gore_audio", "extract", &["out"]),
+            // `gore_audio extract` used to be here. It writes one WAV per sample under names taken
+            // from the bank, but auditioning candidates into one directory is the workflow, so the
+            // whole-directory rule fired on the second extract of a normal session. The CLI refuses
+            // the individual file it would replace instead.
             // One `.lua` per class, named from the model file.
             ("gore_catalog", "stubs", &["out"]),
             // One `.as` per module, laid out by the cache's own ScriptRelativeFilename.

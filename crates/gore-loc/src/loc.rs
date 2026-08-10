@@ -369,6 +369,24 @@ impl Lcache {
         self.find_key(key).is_some()
     }
 
+    /// The language tags `key` actually carries, in stored order.
+    ///
+    /// The header declares every language the file knows, but the records are sparse: an id holds
+    /// only the slots it has, which is why [`Self::set_value`] can fail on a language the header
+    /// lists. Returns an empty vector when the key does not exist. Matching follows
+    /// [`Self::set_value`]: exact first, then ASCII-case-insensitive.
+    pub fn languages_for(&self, key: &str) -> Vec<&str> {
+        match self.find_key(key) {
+            Some(idx) => self.groups[idx]
+                .main
+                .pairs
+                .iter()
+                .map(|p| p.lang.text.as_str())
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
     /// Flatten to `{ text_id: { language: value } }`, dropping empty values
     /// (and, when `keep_empty` is false, ids with no values at all).
     pub fn export(&self, keep_empty: bool) -> BTreeMap<String, BTreeMap<String, String>> {

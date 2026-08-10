@@ -18,6 +18,23 @@
 The Flutter GUIs reuse the exact same Rust crates as the CLI through a
 `dart:ffi` bridge — the CLI is always the most complete surface.
 
+## Status
+
+| Area | What you can do | Status | The catch |
+|---|---|---|---|
+| [Item & stat values](docs/guide/items.md) | Change what items are worth, what weapons do, what NPCs have | Full | Needs UE4SS, which GORE does not install |
+| [Text & dialogs](docs/guide/text-and-dialogs.md) | Replace any text in the game, in any of its 19 languages | Full | An id can carry several language versions and the game shows the newest |
+| [Audio](docs/guide/audio.md) | Replace music and sound effects | Full | Finding which sound plays where is guesswork |
+| [Voice-over](docs/guide/voice.md) | Replace spoken lines | Partly | You can add audio for a brand-new line, but nobody has heard one play yet |
+| [Textures](docs/guide/textures.md) | Replace textures | Full | A few, like the mouse cursors, are stored somewhere this cannot reach |
+| [DataAssets](docs/guide/dataassets.md) | Edit cooked game data | Partly | Only assets the engine describes natively; Blueprint ones are refused |
+| [Scripts](docs/guide/scripts.md) | Read the game's script code, change it, add your own | Partly | Reverse-engineered and lossy — recompiled code is not always identical |
+| [Mods & load order](docs/guide/bundles.md) | Ship all of the above as one mod, run many together, and install mods that GORE did not build — plain zips, pak files, UE4SS mod folders | Full | Nobody else's mod has been through it: the one end-to-end test used a file GORE made itself |
+
+GORE will not edit your saves — that is the
+[Save Editor](apps/save-editor/README.md) — and everything above was seen by one
+person, on one install.
+
 ## Quick start
 
 Get `gore.exe` from a `gore-cli-v*`
@@ -33,6 +50,17 @@ Point it at your game once:
 $GAME = 'D:\SteamLibrary\steamapps\common\Gothic 1 Remake'
 gore config set game-path $GAME     # or: gore config detect
 ```
+
+Check what you have before you rely on it:
+
+```powershell
+gore doctor
+```
+
+It answers whether that path really is the game, whether UE4SS is there, what is
+deployed, and what an interrupted run left behind. Every line that is not `ok`
+carries a `fix:` line. Worth running now: the mod below is a UE4SS mod, and
+without UE4SS it installs cleanly and then does nothing at all.
 
 Then make apples worth 500 gold. Save this as `overrides.toml`:
 

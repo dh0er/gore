@@ -40,8 +40,38 @@ pub struct Invocation {
     pub consent: Option<Consent>,
 }
 
+/// Why a name could not be taken out of the JSON file an argument names.
+///
+/// These four used to be one `None`, and the gate read all four as "something might be in the
+/// way" — so a spec with a misspelled field came back as a refusal about permission, for a command
+/// that could not have run either way. Only the last is still a question rather than a defect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceProblem {
+    /// The file could not be opened or read.
+    Unopenable(String),
+    /// The file is not JSON.
+    NotJson(String),
+    /// The pointer resolves to nothing, or to something that is not a string.
+    NoName,
+    /// A name was read, but it is not one path component. `gore-mod` refuses exactly this before
+    /// it writes anything (`is_safe_mod_name`), so no such call can run.
+    NotOneComponent,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BuildError {
+    UnusableSource {
+        sub: &'static str,
+        /// The argument naming the file.
+        arg: &'static str,
+        /// The JSON pointer that was supposed to yield a name.
+        pointer: &'static str,
+        /// The path as it was given.
+        path: String,
+        problem: SourceProblem,
+        /// The guide page for this command, when it has one.
+        guide: Option<&'static str>,
+    },
     UnknownSubcommand { tool: &'static str, given: String, available: Vec<&'static str> },
     ArgsNotAnObject { got: &'static str },
     UnknownArgument { sub: &'static str, given: String, known: Vec<&'static str> },
@@ -61,6 +91,48 @@ pub enum BuildError {
 impl fmt::Display for BuildError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            BuildError::UnusableSource { sub, arg, pointer, path, problem, guide } => {
+                write!(
+                    f,
+                    "`{sub}` reads the name of the directory it writes from `{pointer}` in the \
+                     file `{arg}` names, and `{path}` "
+                )?;
+                match problem {
+                    SourceProblem::Unopenable(error) => write!(
+                        f,
+                        "could not be opened: {error}. Check the path in `{arg}` and send the \
+                         same call again."
+                    )?,
+                    SourceProblem::NotJson(error) => write!(
+                        f,
+                        "is not valid JSON: {error}. Fix the JSON and send the same call again."
+                    )?,
+                    SourceProblem::NoName => write!(
+                        f,
+                        "has no string there. Put a string at `{pointer}` and send the same call \
+                         again."
+                    )?,
+                    SourceProblem::NotOneComponent => write!(
+                        f,
+                        "is not usable as a folder name. `{sub}` refuses a separator, `..`, a \
+                         drive letter, a control character, one of `<>\"|?*`, a trailing dot or \
+                         space, and the DOS device names (`CON`, `LPT1`, …) before it writes \
+                         anything. Put a plain folder name at `{pointer}` and send the same call \
+                         again."
+                    )?,
+                }
+                write!(
+                    f,
+                    " Nothing ran, and no confirmation was asked for: the problem is in that \
+                     file, not in what this server is allowed to do."
+                )?;
+                match guide {
+                    Some(page) => {
+                        write!(f, " The shape this file has to have is in `gore://guide/{page}`.")
+                    }
+                    None => Ok(()),
+                }
+            }
             BuildError::UnknownSubcommand { tool, given, available } => write!(
                 f,
                 "{tool} has no subcommand `{given}`. Available: {}.",
@@ -154,6 +226,7 @@ pub fn build(
 
     reject_unknown_arguments(command, &args)?;
     check_argument_sets(command, &args)?;
+    check_derived_sources(command, &args)?;
     // Dropped rather than never computed, so that turning a flag on cannot change which arm the
     // gate would have matched — only whether anyone is asked about it. The command line it shows is
     // filled in below, once there is one.
@@ -494,7 +567,10 @@ fn output_paths(
         .chain(command.safety.truncates.iter().copied())
         // A directory filled with names of the command's own choosing is still a directory being
         // written into, and aiming one at the installation installs whatever lands there.
-        .chain(command.safety.clobbers_dir.iter().copied());
+        .chain(command.safety.clobbers_dir.iter().copied())
+        // Same reasoning, for the commands that police their own collisions and therefore carry no
+        // occupancy facet to be classified by.
+        .chain(command.safety.writes_into.iter().copied());
 
     let mut paths: Vec<(&'static str, std::path::PathBuf)> = named
         .filter_map(|name| {
@@ -664,8 +740,11 @@ fn derived_target(
         Derived::ChildNamedInJson { arg, pointer } => {
             let source = args.get(arg).and_then(Value::as_str).unwrap_or(arg).to_string();
             match name_in_json(&source, pointer) {
-                Some(name) => DerivedTarget::At(base.join(name)),
-                None => DerivedTarget::Unknown { source },
+                Ok(name) => DerivedTarget::At(base.join(name)),
+                // Still fails closed. By the time the gate runs, `check_derived_sources` has
+                // already rejected the unreadable cases, so what reaches here is a name that read
+                // fine but is not one path component — the write lands somewhere this cannot check.
+                Err(_) => DerivedTarget::Unknown { source },
             }
         }
         Derived::Extension(extension) => DerivedTarget::At(base.with_extension(extension)),
@@ -679,15 +758,145 @@ fn derived_target(
 /// A name carrying a separator, a drive letter or `..` would make the derived path point somewhere
 /// other than inside the directory the caller named — so the honest answer there is "unknown",
 /// which fails closed, rather than a path the check would then look for in the wrong place.
-fn name_in_json(path: &str, pointer: &str) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let document: Value = serde_json::from_str(&text).ok()?;
-    let name = document.pointer(pointer)?.as_str()?;
-    let mut components = std::path::Path::new(name).components();
-    match (components.next(), components.next()) {
-        (Some(std::path::Component::Normal(only)), None) if only == name => Some(name.to_string()),
-        _ => None,
+fn name_in_json(path: &str, pointer: &str) -> Result<String, SourceProblem> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| SourceProblem::Unopenable(error.to_string()))?;
+    let document: Value =
+        serde_json::from_str(&text).map_err(|error| SourceProblem::NotJson(error.to_string()))?;
+    let name = document
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .ok_or(SourceProblem::NoName)?;
+    // Spelled out rather than asked of `std::path`, which parses per host: on Linux
+    // `C:\elsewhere` is one "normal" component, so this check passed a name `gore-mod` rejects
+    // outright and the gate went on to ask about a path nothing could ever write.
+    if !is_safe_mod_name(name) {
+        return Err(SourceProblem::NotOneComponent);
     }
+    Ok(name.to_string())
+}
+
+/// The child's rule for a bundle directory name, restated.
+///
+/// `gore_mod::is_safe_mod_name` is `!contains('/') && !contains('\\')` plus
+/// `gore_vo::validate_archive_entry_path` for one component, and this crate cannot call either:
+/// it depends on `serde` alone and reaches the toolkit by spawning it. Restating the rule is the
+/// cost of that, so it is restated in full rather than in part.
+///
+/// An earlier version kept only the escape-relevant half — separators, `..`, drive letters — on
+/// the grounds that a rule copied imperfectly could refuse a call the child accepts. The half left
+/// out is reachable: Win32 strips a trailing dot, so `MyMod.` derives the existing `MyMod`
+/// directory, the occupancy gate finds it, and a client that answers its own dialogs turns a spec
+/// defect into a refusal about permission. The tests below pin both directions, which is what makes
+/// restating it safe.
+///
+/// Not mirrored: the child's byte-length limit. A name long enough to trip it is pathological, and
+/// omitting a bound can only let a call through to the child's own error — never refuse a good one.
+fn is_safe_mod_name(name: &str) -> bool {
+    if name.is_empty() || name == "." || name == ".." {
+        return false;
+    }
+    if name.contains(['/', '\\', ':', '\0'])
+        || name.chars().any(char::is_control)
+        || name.chars().any(|c| matches!(c, '<' | '>' | '"' | '|' | '?' | '*'))
+    {
+        return false;
+    }
+    // Win32 ignores these at the end of a component, so the name would not be the directory it
+    // spells.
+    if name.ends_with([' ', '.']) {
+        return false;
+    }
+    !is_windows_reserved(name)
+}
+
+/// DOS device names, which Win32 resolves regardless of directory. The stem before the first `.` is
+/// what counts (`CON .txt`, `LPT1...ogg`), matching `gore_vo`'s own reading.
+fn is_windows_reserved(name: &str) -> bool {
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or(name)
+        .trim_end_matches([' ', '.']);
+    let folded = stem.to_ascii_uppercase();
+    if matches!(
+        folded.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$" | "CONIN$" | "CONOUT$"
+    ) {
+        return true;
+    }
+    folded
+        .strip_prefix("COM")
+        .or_else(|| folded.strip_prefix("LPT"))
+        .is_some_and(|suffix| {
+            matches!(
+                suffix,
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "\u{b9}" | "\u{b2}" | "\u{b3}"
+            )
+        })
+}
+
+/// Reject a call whose derived output cannot be worked out because the file it is named in is
+/// missing, is not JSON, or does not carry the name.
+///
+/// Ordered before `consent_for` deliberately. The gate's occupancy check reads that same file, and
+/// used to treat every way it could disappoint as "something might be in the way" — so a spec with
+/// a misspelled field raised a confirmation, and a client that answers its own dialogs turned that
+/// into a refusal about permission. None of these calls could have run: the child reads the same
+/// file and fails on it before writing anything, so there is nothing there for a person to allow.
+///
+/// That includes a name which reads fine but is not one path component. This used to be left to the
+/// gate on the grounds that the child runs it — it does not. `build_bundle_relative_to` rejects an
+/// unsafe name before `write_bundle` touches the filesystem, so a `..` or a separator derived a path
+/// that could well be occupied, raised a confirmation about it, and hid the real validation error
+/// behind an answer about permission.
+fn check_derived_sources(
+    command: &CommandSpec,
+    args: &Map<String, Value>,
+) -> Result<(), BuildError> {
+    for (name, how) in command.safety.derives {
+        let Derived::ChildNamedInJson { arg, pointer } = how else {
+            continue;
+        };
+        // Absent and wrong-typed are not the same case, and folding them together is how a
+        // `{"spec": 42}` reached the consent gate: the source check skipped it, the gate could not
+        // read a file at a path that is not a string, and asked to overwrite the destination it
+        // had guessed. A client that answers its own dialogs then reported a permission refusal
+        // for a call clap would have rejected outright.
+        //
+        // Absent still continues — `MissingRequired` reports that one, and reading a file for a
+        // call the CLI will refuse anyway helps nobody.
+        let wrong_type = |name: &'static str, value: &Value| BuildError::WrongType {
+            sub: command.sub,
+            name,
+            expected: "a string".to_string(),
+            got: type_name(value),
+        };
+        match args.get(*name) {
+            None => continue,
+            Some(Value::String(_)) => {}
+            Some(other) => return Err(wrong_type(name, other)),
+        }
+        let path = match args.get(*arg) {
+            None => continue,
+            Some(Value::String(path)) => path,
+            Some(other) => return Err(wrong_type(arg, other)),
+        };
+        match name_in_json(path, pointer) {
+            Ok(_) => {}
+            Err(problem) => {
+                return Err(BuildError::UnusableSource {
+                    sub: command.sub,
+                    arg,
+                    pointer,
+                    path: path.to_string(),
+                    problem,
+                    guide: command.guide,
+                })
+            }
+        }
+    }
+    Ok(())
 }
 
 fn scalar(command: &CommandSpec, spec: &ArgSpec, value: &Value) -> Result<String, BuildError> {
@@ -771,6 +980,17 @@ fn list(command: &CommandSpec, spec: &ArgSpec, value: &Value) -> Result<Vec<Stri
             got: type_name(value),
         });
     };
+
+    // Present and empty is not present. `{"query": []}` satisfied the required-argument check and
+    // then rendered no tokens at all, so `gore find --json --` was spawned and clap's complaint
+    // came back in place of a validation error naming the argument.
+    if spec.required && elements.is_empty() {
+        return Err(BuildError::MissingRequired {
+            sub: command.sub,
+            name: spec.name,
+            kind: "a list with at least one value".into(),
+        });
+    }
 
     elements
         .iter()
@@ -1085,12 +1305,12 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let occupied = dir.path().join("sfx");
         std::fs::create_dir_all(&occupied).expect("mkdir");
-        std::fs::write(occupied.join("0_Kept.wav"), b"edited").expect("write");
+        std::fs::write(occupied.join("ItFo_Apple.lua"), b"edited").expect("write");
 
         let raised = question(
-            "gore_audio",
-            "extract",
-            json!({ "bank": "SFX.bank", "out": occupied.to_string_lossy() }),
+            "gore_catalog",
+            "stubs",
+            json!({ "model": "model.json", "out": occupied.to_string_lossy() }),
             &options(),
         )
         .expect("extracting over files already in the directory is asked about");
@@ -1125,9 +1345,9 @@ mod tests {
         for out in [&missing, &empty] {
             assert!(
                 question(
-                    "gore_audio",
-                    "extract",
-                    json!({ "bank": "SFX.bank", "out": out.to_string_lossy() }),
+                    "gore_catalog",
+                    "stubs",
+                    json!({ "model": "model.json", "out": out.to_string_lossy() }),
                     &options(),
                 )
                 .is_none(),
@@ -1142,9 +1362,9 @@ mod tests {
         std::fs::create_dir_all(&inside).expect("mkdir");
         assert!(
             question(
-                "gore_audio",
-                "extract",
-                json!({ "bank": "SFX.bank", "out": inside.to_string_lossy() }),
+                "gore_catalog",
+                "stubs",
+                json!({ "model": "model.json", "out": inside.to_string_lossy() }),
                 &options(),
             )
             .is_some(),
@@ -1192,45 +1412,194 @@ mod tests {
     }
 
     #[test]
-    fn a_bundle_name_that_cannot_be_read_is_treated_as_occupied() {
-        // Fail closed, in every direction the file can disappoint. "Could not check" must never
-        // read as "nothing there" — that is the one mistake this facet could introduce, and it
-        // would land on exactly the calls whose spec is malformed.
+    fn a_bundle_name_that_is_not_one_component_is_a_spec_defect_not_a_consent_question() {
+        // This test used to assert the opposite, on the premise that the spec is fine and
+        // `gore mod build` would run it. It does not: `build_bundle_relative_to` rejects an unsafe
+        // name (`is_safe_mod_name`) before `write_bundle` touches the filesystem. So the derived
+        // path — which for `../escape` is a real directory that may well be occupied — raised a
+        // confirmation nobody could meaningfully answer, and a client that answers its own dialogs
+        // turned the validation error into a refusal about permission.
         let dir = tempfile::tempdir().expect("tempdir");
         let out = dir.path().join("build");
         let spec = dir.path().join("spec.json");
 
-        let unreadable: [&[u8]; 5] = [
-            b"{ not json",
-            br#"{"meta":{}}"#,
-            br#"{"meta":{"name":42}}"#,
-            // A name that is not one path component would put the deletion somewhere else entirely.
+        let elsewhere: [&[u8]; 9] = [
             br#"{"meta":{"name":"../escape"}}"#,
             br#"{"meta":{"name":"nested/mod"}}"#,
+            br#"{"meta":{"name":"C:\\elsewhere"}}"#,
+            // A bare backslash, which only Windows parses as a separator: asking `std::path` made
+            // this check answer differently depending on the host it ran on, while the rule it is
+            // mirroring — the child's — is the same everywhere.
+            br#"{"meta":{"name":"nested\\mod"}}"#,
+            br#"{"meta":{"name":"bell\u0007name"}}"#,
+            // Win32 strips a trailing dot, so this derives the EXISTING `MyMod` directory. That is
+            // the reachable case that kept turning a spec defect into a refusal about permission,
+            // and the reason the rule is now mirrored in full rather than in part.
+            br#"{"meta":{"name":"MyMod."}}"#,
+            br#"{"meta":{"name":"MyMod "}}"#,
+            br#"{"meta":{"name":"CON"}}"#,
+            br#"{"meta":{"name":"bad?"}}"#,
         ];
-        for body in unreadable {
+        for body in elsewhere {
             std::fs::write(&spec, body).expect("write");
-            let raised = question(
+            let call = json!({ "spec": spec.to_string_lossy(), "out": out.to_string_lossy() });
+            // No command line at all, so there is no `Consent` to answer either way — which is the
+            // whole point: the gate is never reached for a call the child would refuse.
+            let rendered = build_with("gore_mod", "build", call, &options())
+                .expect_err("a name the child refuses must not build a command line")
+                .to_string();
+            assert!(
+                rendered.contains("is not usable as a folder name"),
+                "{body:?} must be diagnosed as a defect in the file: {rendered}"
+            );
+            assert!(
+                rendered.contains("not in what this server is allowed to do"),
+                "the message must say this is not a permission problem: {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_required_list_with_nothing_in_it_is_a_missing_argument() {
+        // `{"query": []}` satisfied the required-argument check and rendered no tokens, so
+        // `gore find --json --` was spawned and clap's complaint came back in place of a
+        // validation error naming the argument.
+        let rendered = build_with("gore_find", "find", json!({ "query": [] }), &options())
+            .expect_err("an empty required list must not build a command line")
+            .to_string();
+        assert!(rendered.contains("`query`"), "{rendered}");
+        assert!(rendered.contains("at least one value"), "{rendered}");
+
+        // One value is enough, and an optional list may still be empty.
+        assert!(build_with("gore_find", "find", json!({ "query": ["apple"] }), &options()).is_ok());
+    }
+
+    #[test]
+    fn a_wrong_typed_source_is_a_type_error_and_never_a_consent_question() {
+        // `{"spec": 42}` used to skip the source check, so the gate could not read a file at a
+        // path that is not a string, guessed a destination and asked to overwrite it. A client
+        // answering its own dialogs then reported a permission refusal for a call clap would have
+        // rejected on sight.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("build");
+
+        for (args, name) in [
+            (json!({ "spec": 42, "out": out.to_string_lossy() }), "spec"),
+            (json!({ "spec": dir.path().join("spec.json").to_string_lossy(), "out": [] }), "out"),
+        ] {
+            let rendered = build_with("gore_mod", "build", args, &options())
+                .expect_err("a wrong-typed argument must not build a command line")
+                .to_string();
+            assert!(rendered.contains(&format!("argument `{name}`")), "{rendered}");
+            assert!(rendered.contains("must be a string"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn an_ordinary_folder_name_is_not_refused_by_the_stricter_rule() {
+        // The other direction, and the reason the rule was only half-mirrored at first: refusing a
+        // name the child accepts turns a working call into an error about nothing. `console` is not
+        // `CON`, `COM` without a digit is not a device, and a dot inside a name is ordinary.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("build");
+        let spec = dir.path().join("spec.json");
+
+        for name in ["MyMod", "My_Mod-2", "Mod.v2", "console", "COM", "CONFIG", "aux2"] {
+            std::fs::write(
+                &spec,
+                format!(r#"{{"meta":{{"name":"{name}","version":"1.0.0"}}}}"#),
+            )
+            .expect("write");
+            let built = build_with(
+                "gore_mod",
+                "build",
+                json!({ "spec": spec.to_string_lossy(), "out": out.to_string_lossy() }),
+                &options(),
+            );
+            assert!(built.is_ok(), "{name:?} is a legal folder name: {built:?}");
+        }
+    }
+
+    #[test]
+    fn a_spec_that_cannot_be_read_is_a_validation_failure_not_a_consent_question() {
+        // These four used to raise a confirmation. A client that answers its own dialogs turned
+        // that into "refused: the confirmation came back no", so a misspelled field read as a
+        // permission problem — and the caller went looking in the wrong place. None of these
+        // calls could have run: the child reads the same file and fails on it before writing.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = dir.path().join("build");
+        let spec = dir.path().join("spec.json");
+
+        let unusable: [(&[u8], &str); 3] = [
+            (b"{ not json", "is not valid JSON"),
+            (br#"{"meta":{}}"#, "has no string there"),
+            (br#"{"meta":{"name":42}}"#, "has no string there"),
+        ];
+        for (body, expected) in unusable {
+            std::fs::write(&spec, body).expect("write");
+            let error = build_with(
                 "gore_mod",
                 "build",
                 json!({ "spec": spec.to_string_lossy(), "out": out.to_string_lossy() }),
                 &options(),
             )
-            .unwrap_or_else(|| panic!("{:?} must not pass as an empty destination", body));
-            assert!(raised.reason.contains("could not be read"), "{}", raised.reason);
+            .expect_err("a spec this broken must not build a command line");
+            let rendered = error.to_string();
+            assert!(
+                rendered.contains(expected),
+                "{body:?} must be diagnosed as a defect in the file: {rendered}"
+            );
+            assert!(
+                rendered.contains("not in what this server is allowed to do"),
+                "the message must say this is not a permission problem: {rendered}"
+            );
+            assert!(
+                rendered.contains("gore://guide/bundles"),
+                "the message must point at the shape the file needs: {rendered}"
+            );
         }
 
         // Including the file simply not being there.
         std::fs::remove_file(&spec).expect("remove");
+        let rendered = build_with(
+            "gore_mod",
+            "build",
+            json!({ "spec": spec.to_string_lossy(), "out": out.to_string_lossy() }),
+            &options(),
+        )
+        .expect_err("a missing spec must not build a command line")
+        .to_string();
         assert!(
-            question(
-                "gore_mod",
-                "build",
-                json!({ "spec": spec.to_string_lossy(), "out": out.to_string_lossy() }),
-                &options(),
-            )
-            .is_some(),
-            "a spec that cannot be opened tells the gate nothing about what it would delete"
+            rendered.contains("could not be opened"),
+            "a missing spec names itself as missing: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_self_policing_writer_still_has_its_output_classified() {
+        // `audio extract` checks collisions per file in the CLI, so it carries no occupancy facet.
+        // It briefly carried none at all — and `output_paths` is built from the facets, so dropping
+        // the last one took `out` out of the install-tree check with it: an agent could have filled
+        // the game installation with thousands of WAVs without anybody being asked. `writes_into`
+        // exists to answer "is this an output" without also answering "is something in the way".
+        let dir = tempfile::tempdir().expect("tempdir");
+        let outside = dir.path().join("wavs");
+        let call = |out: String| json!({ "bank": "SFX.bank", "out": out });
+
+        assert!(
+            question("gore_audio", "extract", call(outside.to_string_lossy().into_owned()), &options())
+                .is_none(),
+            "a scratch directory is still nobody's business"
+        );
+
+        assert!(
+            asks_about_a_write(question(
+                "gore_audio",
+                "extract",
+                call("D:/Games/G1R/G1R/Content/FMOD/Desktop/wavs".into()),
+                &options()
+            )),
+            "an output aimed inside the installation is an installation change, however new it is"
         );
     }
 

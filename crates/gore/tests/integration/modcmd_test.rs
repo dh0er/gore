@@ -252,3 +252,115 @@ fn a_missing_asset_names_the_spec_and_the_path_that_was_actually_opened() {
         "the failure must name the section and index: {stderr}"
     );
 }
+
+/// Write a spec whose overrides name one class the model knows and one it does not, plus a
+/// minimal `ReflectionModel` to check them against. Returns the authoring dir and the model path.
+fn spec_dir_with_overrides(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let dir = root.join("authoring");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("spec.json"),
+        br#"{
+  "meta": { "name": "MyMod", "version": "1.0.0", "author": "tester" },
+  "overrides": [
+    { "class": "ItFo_Apple", "field": "m_Value", "value_int": 500 },
+    { "class": "ItFo_Aple",  "field": "m_Value", "value_int": 500 }
+  ]
+}
+"#,
+    )
+    .unwrap();
+    let model = dir.join("model.json");
+    std::fs::write(
+        &model,
+        br#"{
+  "classes": [
+    { "name": "ItFo_Apple", "parent": null,
+      "properties": [ { "name": "m_Value", "prop_type": "int", "offset": null } ] }
+  ],
+  "enums": []
+}
+"#,
+    )
+    .unwrap();
+    (dir, model)
+}
+
+/// Without `--model` nothing is checked, and the build must SAY so. A typo that silently produces
+/// a mod which never resolves in game is the failure this note exists to pre-empt: the only other
+/// report of it is a "gave up" line in UE4SS.log, two minutes into a play session.
+#[test]
+fn build_without_a_model_says_the_override_names_went_unchecked() {
+    let tmp = TempDir::new().unwrap();
+    let (spec_dir, _model) = spec_dir_with_overrides(tmp.path());
+
+    let output = gore(tmp.path())
+        .arg("mod")
+        .arg("build")
+        .arg("--spec")
+        .arg(spec_dir.join("spec.json"))
+        .arg("-o")
+        .arg(tmp.path().join("out"))
+        .assert()
+        .success()
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8_lossy(&output);
+
+    assert!(
+        stderr.contains("no --model") && stderr.contains("were checked"),
+        "an unvalidated build must say the names went unchecked: {stderr}"
+    );
+    assert!(
+        stderr.contains(" 2 "),
+        "the note must say how many overrides went unchecked: {stderr}"
+    );
+    assert!(
+        tmp.path().join("out").join("MyMod").is_dir(),
+        "the bundle is still built — the note is a note, not a refusal"
+    );
+}
+
+/// With `--model` the bundle path validates exactly as `gore gen --model` does. This is the
+/// asymmetry the check closes: the bundle path is the one the guide recommends, and it used to be
+/// the unchecked one.
+#[test]
+fn build_with_a_model_rejects_an_unknown_class_and_writes_nothing() {
+    let tmp = TempDir::new().unwrap();
+    let (spec_dir, model) = spec_dir_with_overrides(tmp.path());
+    let out = tmp.path().join("out");
+
+    let output = gore(tmp.path())
+        .arg("mod")
+        .arg("build")
+        .arg("--spec")
+        .arg(spec_dir.join("spec.json"))
+        .arg("-o")
+        .arg(&out)
+        .arg("--model")
+        .arg(&model)
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let stderr = String::from_utf8_lossy(&output);
+
+    assert!(
+        stderr.contains("ItFo_Aple"),
+        "the failure must name the class that does not match: {stderr}"
+    );
+    assert!(
+        !stderr.contains("'ItFo_Apple' not found"),
+        "the class the model does carry must not be reported: {stderr}"
+    );
+    assert!(
+        stderr.contains("1 of 2 override(s)"),
+        "the failure must say how many of how many failed: {stderr}"
+    );
+    assert!(
+        !out.join("MyMod").exists(),
+        "validation runs before the build, so a rejected spec never reaches write_bundle"
+    );
+}

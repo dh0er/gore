@@ -1,0 +1,127 @@
+{
+  "format": 1,
+  "domain": "audio",
+  "entries": [
+    {
+      "id": "SFX_UI_Action_MenuButton_Click_01",
+      "effect": "Menu confirm and navigate — a main-menu button click, and also backing out of a submenu with Escape.",
+      "note": "SFX.bank. One of four takes (_01 to _04) the game picks at random; this one carried a single 440 Hz pulse in the run that gave each take its own pulse count, and the observer heard all four counts arriving with no pattern. So replacing only _01 — the obvious move — produces the intended sound on roughly one click in four, which is easy to mistake for a tool that does not work. The name is narrower than the behaviour: the same sound plays on Escape navigation back into a parent menu, so treat this set as the generic menu confirm sound rather than as a button click. Nobody would have derived that from the name.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "komplett random zwischen 1-4 pieps. [...] der piep kommt auch wenn ich z.b. per Esc in ein parent menü zurückgeh",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "SFX_UI_Action_MenuButton_Click_02",
+      "effect": "Menu confirm and navigate — a main-menu button click, and also backing out of a submenu with Escape.",
+      "note": "SFX.bank. Carried two 660 Hz pulses in the run that gave each of the four takes its own pulse count; the observer heard all four counts, in no pattern. Replace the whole set if the change has to be audible every time. Like its siblings it also plays on Escape navigation back into a parent menu, which the name does not suggest.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "komplett random zwischen 1-4 pieps. [...] der piep kommt auch wenn ich z.b. per Esc in ein parent menü zurückgeh",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "SFX_UI_Action_MenuButton_Click_03",
+      "effect": "Menu confirm and navigate — a main-menu button click, and also backing out of a submenu with Escape.",
+      "note": "SFX.bank. Carried three 880 Hz pulses in the run that gave each of the four takes its own pulse count; the observer heard all four counts, in no pattern. Replace the whole set if the change has to be audible every time. Like its siblings it also plays on Escape navigation back into a parent menu, which the name does not suggest.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "komplett random zwischen 1-4 pieps. [...] der piep kommt auch wenn ich z.b. per Esc in ein parent menü zurückgeh",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "SFX_UI_Action_MenuButton_Click_04",
+      "effect": "Menu confirm and navigate — a main-menu button click, and also backing out of a submenu with Escape.",
+      "note": "SFX.bank. Carried four 1320 Hz pulses in the run that gave each of the four takes its own pulse count; the observer heard all four counts, in no pattern. Replace the whole set if the change has to be audible every time. Like its siblings it also plays on Escape navigation back into a parent menu, which the name does not suggest.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "komplett random zwischen 1-4 pieps. [...] der piep kommt auch wenn ich z.b. per Esc in ein parent menü zurückgeh",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "SFX_UI_Action_Button_Hover_01",
+      "effect": "Hovering a menu entry — the pointer resting on a button, without clicking.",
+      "note": "SFX.bank. Exactly what the name says, which is worth recording because the sample beside it is not. Pinned by giving it a 220 Hz tone, far below the four click takes, and hearing it on hover and on nothing else the listener did. An earlier run in the same sitting put the same 1000 Hz beep on all five UI samples: that proved SFX.bank replacement is audible but could not attribute it, and the beep on hover then meant nothing on its own. The lesson is in the design, not the result — one distinguishable marker per target, or you learn only that it works.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "confirmed",
+          "witness": "1. tiefer ton beim hovern",
+          "by": "maintainer"
+        }
+      ]
+    },
+    {
+      "id": "title",
+      "effect": null,
+      "note": "Replaced ALONE in Music.bank, with `title_MASTER` left untouched, and the main menu played its normal orchestral theme. So the title event does not draw on this sample. An earlier run had replaced both at once and produced the siren, which is what made the pair separable at all.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "unconfirmed",
+          "witness": "sirene läuft",
+          "by": "maintainer"
+        },
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "by": "user",
+          "outcome": "refuted",
+          "witness": "musik normal"
+        }
+      ]
+    },
+    {
+      "id": "title_MASTER",
+      "effect": "Main menu title music",
+      "note": "Identified by elimination rather than by a direct test: this sample was never replaced on its own. Two witnessed observations pin it. Replacing `title` and `title_MASTER` together produced a siren on the main menu, so the event draws on at least one of them; replacing `title` alone changed nothing, so it is not that one. The precise claim is therefore that the title event draws on `title_MASTER` and not on `title` — it does not rule out that it draws on further samples as well.",
+      "observations": [
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "outcome": "unconfirmed",
+          "witness": "sirene läuft",
+          "by": "maintainer"
+        },
+        {
+          "date": "2026-08-07",
+          "build": "24539464",
+          "gore": "90940340",
+          "by": "user",
+          "outcome": "confirmed",
+          "witness": "musik normal"
+        }
+      ]
+    }
+  ]
+}

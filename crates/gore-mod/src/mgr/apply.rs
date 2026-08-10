@@ -1018,11 +1018,33 @@ fn apply_loadout_with_limits(
                 }
 
                 if lc.has_key(id) {
+                    // Read before the writes below borrow the cache mutably, and for the same
+                    // reason the deploy path reads it: the answer is about the id's slots as they
+                    // stand, not as this apply leaves them.
+                    let carried: Vec<String> = lc
+                        .languages_for(id)
+                        .into_iter()
+                        .map(str::to_ascii_lowercase)
+                        .collect();
                     for (set, text) in &valid {
                         // Best-effort: a language absent from THIS install's existing record is a
                         // warning, not a hard failure (a mod built against a different version).
                         if let Err(e) = lc.set_value(id, set, text) {
                             warnings.push(format!("loc {id}|{set}: {e}"));
+                            continue;
+                        }
+                        // The edit landed; whether anyone will see it is the other question. This
+                        // route applies the same bundles as `gore mod deploy`, which reports this,
+                        // and a managed apply was silently leaving an edit the game never shows.
+                        if let Some(winner) =
+                            crate::shadowing_generation(&carried, &set.to_ascii_lowercase(), |w| {
+                                pending.values.contains_key(w)
+                            })
+                        {
+                            warnings.push(format!(
+                                "loc {id}|{set}: the id also carries '{winner}', which the game \
+                                 displays instead"
+                            ));
                         }
                     }
                 } else {
@@ -1392,6 +1414,33 @@ mod tests {
             plain.extend_from_slice(&fstr(""));
             plain.extend_from_slice(&0i32.to_le_bytes());
         }
+        let pad = (16 - (plain.len() % 16)) % 16;
+        plain.resize(plain.len() + pad, 0);
+        aes_ecb_encrypt(&plain)
+    }
+
+    /// A `.lcache` whose header declares `langs` and whose one record carries `pairs`.
+    ///
+    /// `build_lcache` above declares `german` alone, which cannot express the case the shadow
+    /// warning is about: an id carrying both a generation and a newer one.
+    fn build_lcache_with_langs(langs: &[&str], key: &str, pairs: &[(&str, &str)]) -> Vec<u8> {
+        let mut plain = Vec::new();
+        plain.push(0u8); // prefix
+        plain.extend_from_slice(&(b"LCACHE".len() as i32).to_le_bytes());
+        plain.extend_from_slice(b"LCACHE");
+        plain.extend_from_slice(&(langs.len() as i32).to_le_bytes());
+        for language in langs {
+            plain.extend_from_slice(&fstr(language));
+        }
+        plain.extend_from_slice(&1i32.to_le_bytes()); // group_count
+        plain.extend_from_slice(&fstr(key));
+        plain.extend_from_slice(&(pairs.len() as i32).to_le_bytes());
+        for (language, value) in pairs {
+            plain.extend_from_slice(&fstr(language));
+            plain.extend_from_slice(&fstr(value));
+        }
+        plain.extend_from_slice(&fstr("")); // meta record
+        plain.extend_from_slice(&0i32.to_le_bytes());
         let pad = (16 - (plain.len() % 16)) % 16;
         plain.resize(plain.len() + pad, 0);
         aes_ecb_encrypt(&plain)
@@ -2533,6 +2582,60 @@ mod tests {
     /// Loc patches may introduce a brand-new id. All declared languages are added together;
     /// unsupported languages remain best-effort warnings, and an existing id with such a
     /// language remains untouched.
+    #[test]
+    fn apply_warns_when_the_edited_generation_is_shadowed() {
+        // `gore mod deploy` reports this; the manager applies the same bundles by another route and
+        // did not, so a managed apply wrote an edit the game never shows and said nothing about it.
+        let g = FakeGame::new();
+        fs::write(
+            g.lcache(),
+            build_lcache_with_langs(
+                &["german", "german_new"],
+                "itfo_cheese",
+                &[("german", "Käse"), ("german_new", "Bergkäse")],
+            ),
+        )
+        .unwrap();
+
+        let mut edits: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        edits
+            .entry("itfo_cheese".into())
+            .or_default()
+            .insert("german".into(), "Emmentaler".into());
+        let id = g.add_mod(
+            "mod-shadowed-loc",
+            "Shadowed Loc",
+            vec![ComponentInfo::LocPatch {
+                rel: "loc/edits.json".into(),
+                targets: vec![],
+            }],
+            |dir| {
+                fs::create_dir_all(dir.join("loc")).unwrap();
+                fs::write(
+                    dir.join("loc/edits.json"),
+                    serde_json::to_vec(&edits).unwrap(),
+                )
+                .unwrap();
+            },
+        );
+
+        let report = apply_loadout(&g.root, &g.lib, &loadout(&[(&id, true)])).unwrap();
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.contains("itfo_cheese") && w.contains("german_new")),
+            "warnings: {:?}",
+            report.warnings
+        );
+
+        // And the edit still lands: it was a legitimate write, just not a visible one.
+        assert_eq!(
+            read_loc(&fs::read(g.lcache()).unwrap(), "itfo_cheese"),
+            "Emmentaler"
+        );
+    }
+
     #[test]
     fn apply_loc_patch_adds_missing_id_and_skips_unsupported_languages() {
         let g = FakeGame::new();

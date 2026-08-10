@@ -13,8 +13,8 @@
 //! comment so that a reviewer can diff this file against `crates/gore/src/main.rs` by eye.
 
 use crate::spec::{
-    ArgForm::{Long, Positional},
-    ArgKind::{Enum, Int, Path, Str},
+    ArgForm::{Long, Positional, PositionalRepeated},
+    ArgKind::{Enum, Int, Path, Str, StrList},
     ArgSpec, CommandSpec, Derived, GroupShape, GroupSpec, JsonSupport, Safety, T_FAST, T_NORMAL,
 };
 
@@ -91,6 +91,104 @@ pub const CONFIG: GroupSpec = GroupSpec {
               which almost every other command falls back to.",
     shape: GroupShape::Nested,
     commands: CONFIG_COMMANDS,
+};
+
+// ---------------------------------------------------------------------------------------------
+// gore_doctor
+// ---------------------------------------------------------------------------------------------
+
+const DOCTOR_ARGS: &[ArgSpec] = &[ArgSpec::new(
+    "game",
+    Long("game"),
+    Path,
+    "Game install root (the folder containing G1R/). Falls back to the configured game path, then \
+     Steam auto-detect",
+    false,
+)];
+
+const DOCTOR_COMMANDS: &[CommandSpec] = &[CommandSpec::new(
+    "doctor",
+    "Diagnose the setup: what is installed, what is deployed, and what is wrong with it",
+    DOCTOR_ARGS,
+    Safety::read(),
+    // Reads and hashes whatever the deploy record claims, exactly as `mgr status` does, so it
+    // inherits that command's budget rather than the fast one its other checks would suggest.
+    T_NORMAL,
+)
+.json(JsonSupport::Stdout)
+.guide("getting-started")];
+
+/// A tool of its own rather than a leaf of `gore_config`, which is nested under `gore config` and
+/// would put this at `gore config doctor`. It also earns the place: this is the command to reach
+/// for when a mod was built and deployed and the game shows nothing, and an agent that has to find
+/// it inside another tool's subcommand list will not.
+pub const DOCTOR: GroupSpec = GroupSpec {
+    tool: "gore_doctor",
+    title: "gore doctor",
+    cli: "",
+    summary: "One read-only pass over the setup: where the game is and where that came from, \
+              whether UE4SS is installed (item and stat overrides silently do nothing without \
+              it), which UE4SS mods are enabled, what is deployed, what is left over from an \
+              interrupted run, and whether the shared text catalog still matches the install.",
+    shape: GroupShape::Flat,
+    commands: DOCTOR_COMMANDS,
+};
+
+// ---------------------------------------------------------------------------------------------
+// gore_find
+// ---------------------------------------------------------------------------------------------
+
+const FIND_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "query",
+        PositionalRepeated { order: 0 },
+        StrList,
+        "Words to search for; several words all have to match, so no quoting is needed",
+        true,
+    ),
+    ArgSpec::new(
+        "domain",
+        Long("domain"),
+        Str,
+        "Keep only one id namespace (e.g. item, npc, knowledge, texture, loc)",
+        false,
+    ),
+    ArgSpec::new(
+        "max",
+        Long("max"),
+        Int { min: Some(0), max: None },
+        "Max hits to print. The result says how many matched when it stops here",
+        false,
+    )
+    .with_default("50"),
+];
+
+const FIND_COMMANDS: &[CommandSpec] = &[CommandSpec::new(
+    "find",
+    "Search the bundled catalogs and the effect register: class names, ids, and what they do",
+    FIND_ARGS,
+    Safety::read(),
+    T_FAST,
+)
+.json(JsonSupport::Stdout)
+.guide("find")];
+
+/// A tool of its own, for the reason `gore_doctor` is: it is flat at the CLI, and it is the one
+/// command a model reaches for *before* it knows which family owns the thing it was asked about.
+/// Buried inside `gore_catalog` — a group about regenerating data once per game build — it would
+/// not be found by anybody who needed it.
+pub const FIND: GroupSpec = GroupSpec {
+    tool: "gore_find",
+    title: "gore find",
+    cli: "",
+    summary: "One lookup over both offline layers: the bundled item/NPC/knowledge catalogs, which \
+              say what exists, and the effect register, which says what an id was observed to do \
+              in game. Matches ids, categories, class paths and register text always, and display \
+              names when the shared text catalog has been extracted — every result states which \
+              of those two it was, because a name search that skipped its index answers \"no such \
+              item\" about an item that is there.",
+    shape: GroupShape::Flat,
+    commands: FIND_COMMANDS,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -483,6 +581,7 @@ mod tests {
     #[test]
     fn the_group_sizes_match_the_cli() {
         assert_eq!(CONFIG.commands.len(), 6);
+        assert_eq!(FIND.commands.len(), 1);
         assert_eq!(CATALOG.commands.len(), 8);
         assert_eq!(LOCATION.commands.len(), 2);
         assert_eq!(PROJECT.commands.len(), 4);
@@ -521,7 +620,7 @@ mod tests {
         // `stubs` is deliberately not here any more. It writes one `.lua` per class under names it
         // takes from the model file, which is just as unpreflightable — but the directory those
         // files land in is not, so it is gated on an occupied `out` instead of on every call.
-        let mutating: Vec<&str> = [CONFIG, CATALOG, LOCATION, PROJECT]
+        let mutating: Vec<&str> = [CONFIG, FIND, CATALOG, LOCATION, PROJECT]
             .iter()
             .flat_map(|group| group.commands.iter())
             .filter(|command| command.safety.worst_case().needs_write_permission())

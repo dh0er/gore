@@ -456,3 +456,103 @@ fn every_sample_of_a_pcm16_bank_extracts_rather_than_being_skipped() {
     let written = std::fs::read_dir(&extracted).unwrap().count();
     assert_eq!(written, 12, "a count in the summary is not a file on disk");
 }
+
+#[test]
+fn a_collision_anywhere_in_the_selection_writes_nothing_at_all() {
+    // The collision refusal used to live inside the write loop, so a clash on a later sample left
+    // the earlier ones on disk — and the obvious retry then failed on one of those instead of on
+    // the file the caller actually had to deal with. Names come from the bank, not the arguments,
+    // so the caller cannot compute them in advance; settling every destination before the first
+    // write is the only way this command can fail without leaving a mess.
+    let temp = TempDir::new().unwrap();
+    let bank = temp.path().join("SFX.bank");
+    let extracted = temp.path().join("wavs");
+    numbered_bank(&bank, "SFX_UI_Click_", 12);
+
+    // Occupy a destination that is NOT the first one written, which is the case the old code got
+    // wrong. The index prefix is the sample's own, so this is the name sample 7 would claim.
+    std::fs::create_dir_all(&extracted).unwrap();
+    let occupied = extracted.join("7_SFX_UI_Click_07.wav");
+    std::fs::write(&occupied, b"mine, edited, not to be replaced").unwrap();
+
+    let output = Command::cargo_bin("gore")
+        .unwrap()
+        .args([
+            "audio",
+            "extract",
+            "--bank",
+            bank.to_str().unwrap(),
+            "--out",
+            extracted.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "a collision must fail the command: {output:?}");
+
+    let stderr = String::from_utf8(output.stderr.clone()).unwrap();
+    assert!(
+        stderr.contains("7_SFX_UI_Click_07.wav"),
+        "the refusal names the file in the way: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("Nothing was written"),
+        "the refusal says the run left no output: {stderr:?}"
+    );
+
+    assert_eq!(
+        std::fs::read(&occupied).unwrap(),
+        b"mine, edited, not to be replaced",
+        "the file that caused the refusal is untouched"
+    );
+    let present: Vec<String> = std::fs::read_dir(&extracted)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        present,
+        vec!["7_SFX_UI_Click_07.wav".to_string()],
+        "no partial output beside it: {present:?}"
+    );
+}
+
+#[test]
+fn a_successful_extraction_leaves_no_staging_files_behind() {
+    // Extraction stages each WAV beside its destination and renames them in together, so that a
+    // collision can be raised after it is known which samples actually produced audio — a sample
+    // whose codec `extract_wav` skips writes nothing, and planning its destination up front used to
+    // refuse the run over a leftover that was never going to be replaced.
+    //
+    // The skip case itself has no fixture: every bank these tests can build extracts cleanly, which
+    // `every_sample_of_a_pcm16_bank_extracts_rather_than_being_skipped` already notes. What is
+    // checkable here is the invariant the fix rests on — the staging files exist only during the
+    // run, and a completed run leaves exactly the WAVs and nothing else.
+    let temp = TempDir::new().unwrap();
+    let bank = temp.path().join("SFX.bank");
+    let extracted = temp.path().join("wavs");
+    numbered_bank(&bank, "SFX_UI_Click_", 12);
+
+    let output = Command::cargo_bin("gore")
+        .unwrap()
+        .args([
+            "audio",
+            "extract",
+            "--bank",
+            bank.to_str().unwrap(),
+            "--out",
+            extracted.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+
+    let mut names: Vec<String> = std::fs::read_dir(&extracted)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names.len(), 12, "one file per sample: {names:?}");
+    assert!(
+        names.iter().all(|name| name.ends_with(".wav")),
+        "no staging file survived the run: {names:?}"
+    );
+}
