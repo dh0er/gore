@@ -210,10 +210,12 @@ where
     let root = inspect_game_root(game_root);
     let install = inspect_install(root.directory.as_ref());
     let loadout = inspect_loadout(library_dir, loadout_path);
+    let loadout_healthy = loadout.check.state == PreflightStateV1::Ok;
     let (deployment, deployment_recovery_seen) = inspect_deployment(
         root.root.as_deref(),
         library_dir,
         loadout.loadout.as_ref(),
+        loadout_healthy,
         status,
     );
     let install_mutation = inspect_install_mutation(
@@ -853,6 +855,7 @@ fn inspect_deployment<S>(
     game_root: Option<&Path>,
     library_dir: &Path,
     loadout: Option<&Loadout>,
+    loadout_healthy: bool,
     status: S,
 ) -> (PreflightCheckV1, bool)
 where
@@ -874,7 +877,6 @@ where
     // compares loadouts. Preserve those recovery/studio/drift findings even when the loadout is
     // unreadable, but never project an InSync/ChangesPending conclusion from the fallback target.
     let fallback_loadout = Loadout::default();
-    let loadout_readable = loadout.is_some();
     let status = status(game_root, library_dir, loadout.unwrap_or(&fallback_loadout));
     let deployment_recovery_seen = matches!(&status, Ok(ManagerStatus::RecoveryRequired));
     let check = match status {
@@ -901,14 +903,14 @@ where
         )
         .with_items([format!("active mod: {mod_name}")]),
         Ok(ManagerStatus::InSync { .. } | ManagerStatus::ChangesPending { .. })
-            if !loadout_readable =>
+            if !loadout_healthy =>
         {
             PreflightCheckV1::new(
                 PreflightCheckIdV1::Deployment,
                 PreflightStateV1::Unknown,
                 "deployment_not_inspected",
-                "repair_preflight_inputs",
-                "deployment loadout comparison needs a valid loadout",
+                "resolve_loadout_check",
+                "resolve the preceding Loadout finding before comparing deployment state",
             )
         }
         Ok(ManagerStatus::InSync { loadout }) => PreflightCheckV1::new(
@@ -1632,6 +1634,33 @@ mod tests {
     }
 
     #[test]
+    fn unhealthy_enabled_metadata_never_recommends_apply() {
+        let install = install_fixture();
+        let library = install.path().join("library");
+        fs::create_dir(&library).unwrap();
+        let loadout = install.path().join("loadout.json");
+        write_enabled_loadout(&loadout, &["missing"]);
+
+        let report = run_with(
+            install.path(),
+            &library,
+            &loadout,
+            |_, _, target| {
+                Ok(ManagerStatus::ChangesPending {
+                    deployed: Vec::new(),
+                    target: target.entries.clone(),
+                })
+            },
+            |_| safe_probe(),
+            |_| Ok(false),
+        );
+        assert_eq!(report.checks[2].code, "enabled_mods_unreadable");
+        assert_eq!(report.checks[3].state, PreflightStateV1::Unknown);
+        assert_eq!(report.checks[3].code, "deployment_not_inspected");
+        assert_eq!(report.checks[3].action, "resolve_loadout_check");
+    }
+
+    #[test]
     fn every_manager_status_maps_to_stable_bounded_deployment_vocabulary() {
         let entry = |id: &str| LoadoutEntry {
             id: id.to_owned(),
@@ -1693,6 +1722,7 @@ mod tests {
                 Some(Path::new("C:/display-only-game")),
                 Path::new("C:/display-only-library"),
                 Some(&Loadout::default()),
+                true,
                 move |_, _, _| Ok(status),
             );
             assert_eq!(check.state, state, "code: {code}");
