@@ -858,7 +858,7 @@ fn inspect_deployment<S>(
 where
     S: FnOnce(&Path, &Path, &Loadout) -> crate::Result<ManagerStatus>,
 {
-    let (Some(game_root), Some(loadout)) = (game_root, loadout) else {
+    let Some(game_root) = game_root else {
         return (
             PreflightCheckV1::new(
                 PreflightCheckIdV1::Deployment,
@@ -870,7 +870,12 @@ where
             false,
         );
     };
-    let status = status(game_root, library_dir, loadout);
+    // Status resolves the deploy-record states that do not depend on the target loadout before it
+    // compares loadouts. Preserve those recovery/studio/drift findings even when the loadout is
+    // unreadable, but never project an InSync/ChangesPending conclusion from the fallback target.
+    let fallback_loadout = Loadout::default();
+    let loadout_readable = loadout.is_some();
+    let status = status(game_root, library_dir, loadout.unwrap_or(&fallback_loadout));
     let deployment_recovery_seen = matches!(&status, Ok(ManagerStatus::RecoveryRequired));
     let check = match status {
         Ok(ManagerStatus::NothingDeployed) => PreflightCheckV1::new(
@@ -895,6 +900,17 @@ where
             "a Mod Studio deployment is active and Manager must not replace it",
         )
         .with_items([format!("active mod: {mod_name}")]),
+        Ok(ManagerStatus::InSync { .. } | ManagerStatus::ChangesPending { .. })
+            if !loadout_readable =>
+        {
+            PreflightCheckV1::new(
+                PreflightCheckIdV1::Deployment,
+                PreflightStateV1::Unknown,
+                "deployment_not_inspected",
+                "repair_preflight_inputs",
+                "deployment loadout comparison needs a valid loadout",
+            )
+        }
         Ok(ManagerStatus::InSync { loadout }) => PreflightCheckV1::new(
             PreflightCheckIdV1::Deployment,
             PreflightStateV1::Ok,
@@ -1535,6 +1551,84 @@ mod tests {
         );
         assert_eq!(state.checks[3].state, PreflightStateV1::Unknown);
         assert_eq!(state.checks[3].code, "deployment_inspection_failed");
+    }
+
+    #[test]
+    fn unreadable_loadout_preserves_loadout_independent_deployment_findings() {
+        let install = install_fixture();
+        let library = install.path().join("library");
+        let loadout = install.path().join("loadout.json");
+        fs::write(&loadout, b"{").unwrap();
+
+        let recovery = run_with(
+            install.path(),
+            &library,
+            &loadout,
+            |_, _, target| {
+                assert!(target.entries.is_empty());
+                Ok(ManagerStatus::RecoveryRequired)
+            },
+            |_| safe_probe(),
+            |_| Ok(false),
+        );
+        assert_eq!(recovery.checks[2].code, "loadout_unreadable");
+        assert_eq!(recovery.checks[3].code, "deployment_recovery_required");
+        assert_eq!(recovery.checks[4].code, "install_recovery_required");
+
+        let independent = [
+            (
+                ManagerStatus::NothingDeployed,
+                "deployment_none",
+                PreflightStateV1::Ok,
+            ),
+            (
+                ManagerStatus::StudioDeployActive {
+                    mod_name: "studio".to_owned(),
+                },
+                "studio_deployment_active",
+                PreflightStateV1::Problem,
+            ),
+            (
+                ManagerStatus::GameUpdated {
+                    drifted: vec!["changed.bin".to_owned()],
+                },
+                "deployment_game_updated",
+                PreflightStateV1::Problem,
+            ),
+        ];
+        for (status, code, state) in independent {
+            let report = run_with(
+                install.path(),
+                &library,
+                &loadout,
+                move |_, _, _| Ok(status),
+                |_| safe_probe(),
+                |_| Ok(false),
+            );
+            assert_eq!(report.checks[3].code, code);
+            assert_eq!(report.checks[3].state, state);
+        }
+
+        for status in [
+            ManagerStatus::InSync {
+                loadout: Vec::new(),
+            },
+            ManagerStatus::ChangesPending {
+                deployed: Vec::new(),
+                target: Vec::new(),
+            },
+        ] {
+            let report = run_with(
+                install.path(),
+                &library,
+                &loadout,
+                move |_, _, _| Ok(status),
+                |_| safe_probe(),
+                |_| Ok(false),
+            );
+            assert_eq!(report.checks[3].state, PreflightStateV1::Unknown);
+            assert_eq!(report.checks[3].code, "deployment_not_inspected");
+        }
     }
 
     #[test]
