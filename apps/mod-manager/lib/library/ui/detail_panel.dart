@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../l10n/app_localizations.dart';
+import '../../status/domain/status_notifier.dart';
 import '../domain/conflicts_provider.dart';
 import '../domain/library_notifier.dart';
 import '../domain/models.dart';
@@ -15,7 +16,123 @@ const _kTargetCap = 50;
 /// its components (each with the footprint targets it claims, capped), and the
 /// conflicts it participates in with the winning mod highlighted.
 class DetailPanel extends ConsumerWidget {
-  const DetailPanel({super.key});
+  const DetailPanel({
+    super.key,
+    this.queueImportFocusAfterRemove,
+    this.queueRefreshFocusAfterRemove,
+  });
+
+  final ValueChanged<String>? queueImportFocusAfterRemove;
+  final ValueChanged<String>? queueRefreshFocusAfterRemove;
+
+  void _announceRemove(BuildContext context, String message) {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(key: const ValueKey('remove-mod-feedback'), message),
+      ),
+    );
+  }
+
+  Future<void> _confirmRemove(
+    BuildContext context,
+    WidgetRef ref,
+    ModEntryMetaView mod,
+  ) async {
+    final l10n = AppLocalizations.of(context);
+    final displayName = mod.name.isEmpty ? mod.id : mod.name;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        scrollable: true,
+        title: Text(l10n.removeModAction),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(l10n.removeModConfirm(displayName)),
+            const SizedBox(height: 12),
+            Text(l10n.removeModDeploymentHint),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(l10n.commonCancel),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(l10n.removeModAction),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    // The button is disabled while a library call is running. Check once more
+    // after the dialog closes so a mutation that started while the dialog was
+    // open cannot overlap this destructive call.
+    final before = ref.read(libraryProvider);
+    if (before.busy ||
+        !before.authoritative ||
+        ref.read(statusProvider).busy ||
+        ref.read(conflictsProvider).isLoading ||
+        before.modById(mod.id) == null) {
+      return;
+    }
+
+    final wasSelectedAtStart = ref.read(selectedModProvider) == mod.id;
+    await ref.read(libraryProvider.notifier).remove(mod.id);
+    if (!context.mounted) return;
+
+    // The authoritative reload decides whether the entry still exists. A
+    // native error may coexist with a removed entry after partial success, so
+    // clear stale selection but announce that outcome as a warning, not success.
+    final after = ref.read(libraryProvider);
+    bool focusStillBelongsToRemovedMod() {
+      final selected = ref.read(selectedModProvider);
+      return wasSelectedAtStart && (selected == null || selected == mod.id);
+    }
+
+    if (after.modById(mod.id) == null) {
+      if (!after.authoritative) {
+        if (focusStillBelongsToRemovedMod()) {
+          queueRefreshFocusAfterRemove?.call(mod.id);
+        }
+        if (after.error case final error?) {
+          _announceRemove(
+            context,
+            l10n.removeModOutcomeUnknown(displayName, error),
+          );
+        }
+        return;
+      }
+      if (ref.read(selectedModProvider) == mod.id) {
+        ref.read(selectedModProvider.notifier).state = null;
+      }
+      if (after.error case final error?) {
+        if (focusStillBelongsToRemovedMod()) {
+          queueRefreshFocusAfterRemove?.call(mod.id);
+        }
+        _announceRemove(
+          context,
+          l10n.removeModPartialFailure(displayName, error),
+        );
+      } else {
+        if (focusStillBelongsToRemovedMod()) {
+          queueImportFocusAfterRemove?.call(mod.id);
+        }
+        _announceRemove(context, l10n.removeModSuccess(displayName));
+      }
+    } else if (after.error case final error?) {
+      _announceRemove(context, l10n.removeModFailed(displayName, error));
+    }
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -40,11 +157,14 @@ class DetailPanel extends ConsumerWidget {
     }
 
     final conflicts = ref.watch(conflictsProvider);
+    final status = ref.watch(statusProvider);
+    final removeBlocked =
+        library.busy ||
+        !library.authoritative ||
+        status.busy ||
+        conflicts.isLoading;
     final order = [for (final e in library.loadout.entries) e.id];
-    final myConflicts = conflictsForMod(
-      conflicts.value ?? const [],
-      mod.id,
-    );
+    final myConflicts = conflictsForMod(conflicts.value ?? const [], mod.id);
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -83,6 +203,22 @@ class DetailPanel extends ConsumerWidget {
               nameFor: (id) => library.modById(id)?.name ?? id,
             ),
         ],
+        const Divider(height: 24),
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: OutlinedButton.icon(
+            key: const ValueKey('remove-mod-action'),
+            onPressed: removeBlocked
+                ? null
+                : () => _confirmRemove(context, ref, mod),
+            icon: const Icon(Icons.delete_outline),
+            label: Text(l10n.removeModAction),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: theme.colorScheme.error,
+              side: BorderSide(color: theme.colorScheme.error),
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -110,9 +246,7 @@ class _MetaRow extends StatelessWidget {
               ),
             ),
           ),
-          Expanded(
-            child: Text(value, style: theme.textTheme.bodySmall),
-          ),
+          Expanded(child: Text(value, style: theme.textTheme.bodySmall)),
         ],
       ),
     );
@@ -256,7 +390,9 @@ class _ModChainChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
       decoration: BoxDecoration(
-        color: winner ? scheme.tertiaryContainer : scheme.surfaceContainerHighest,
+        color: winner
+            ? scheme.tertiaryContainer
+            : scheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text.rich(

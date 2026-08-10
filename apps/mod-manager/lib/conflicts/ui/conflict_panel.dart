@@ -20,6 +20,18 @@ class ConflictPanel extends ConsumerWidget {
     final library = ref.watch(libraryProvider);
     final conflictsAsync = ref.watch(conflictsProvider);
 
+    if (!library.authoritative) {
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: Text(
+          l10n.conflictsUnverified,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.error,
+          ),
+        ),
+      );
+    }
+
     return conflictsAsync.when(
       loading: () => const Padding(
         padding: EdgeInsets.all(16),

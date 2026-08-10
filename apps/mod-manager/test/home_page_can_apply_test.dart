@@ -6,6 +6,7 @@ import 'package:gore_manager/library/domain/models.dart';
 /// A LibraryState whose loadout carries the given (id, enabled) entries.
 LibraryState _library(List<(String id, bool enabled)> entries) {
   return LibraryState(
+    authoritative: true,
     mods: [
       for (final e in entries)
         ModEntryMetaView(id: e.$1, kind: 'goremod', name: e.$1),
@@ -65,6 +66,43 @@ void main() {
       );
     });
 
+    test('unknown or errored library state -> DISABLED', () {
+      expect(
+        canApply(
+          _status('changes_pending'),
+          oneEnabled.copyWith(authoritative: false),
+          true,
+          false,
+          false,
+        ),
+        isFalse,
+      );
+      expect(
+        canApply(
+          _status('changes_pending'),
+          oneEnabled.copyWith(error: 'partial mutation'),
+          true,
+          false,
+          false,
+        ),
+        isFalse,
+      );
+    });
+
+    test('status error -> DISABLED despite changes_pending status', () {
+      expect(
+        canApply(
+          _status('changes_pending'),
+          oneEnabled,
+          true,
+          false,
+          false,
+          statusError: 'status refresh failed',
+        ),
+        isFalse,
+      );
+    });
+
     test('game_updated -> ENABLED', () {
       expect(
         canApply(_status('game_updated'), oneEnabled, true, false, false),
@@ -75,20 +113,19 @@ void main() {
     test('studio_deploy_active -> DISABLED (take-over path, not Apply)', () {
       expect(
         canApply(
-            _status('studio_deploy_active'), oneEnabled, true, false, false),
+          _status('studio_deploy_active'),
+          oneEnabled,
+          true,
+          false,
+          false,
+        ),
         isFalse,
       );
     });
 
     test('recovery_required -> DISABLED until recovery undeploy', () {
       expect(
-        canApply(
-          _status('recovery_required'),
-          oneEnabled,
-          true,
-          false,
-          false,
-        ),
+        canApply(_status('recovery_required'), oneEnabled, true, false, false),
         isFalse,
       );
     });

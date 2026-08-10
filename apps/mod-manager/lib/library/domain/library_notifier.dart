@@ -16,6 +16,7 @@ class LibraryState {
     this.loadout = const LoadoutView(),
     this.busy = false,
     this.error,
+    this.authoritative = false,
   });
 
   final List<ModEntryMetaView> mods;
@@ -28,11 +29,16 @@ class LibraryState {
   /// starts.
   final String? error;
 
+  /// True only after the native library and persisted loadout were read and
+  /// reconciled successfully. Mutations and Apply stay fail-closed otherwise.
+  final bool authoritative;
+
   LibraryState copyWith({
     List<ModEntryMetaView>? mods,
     LoadoutView? loadout,
     bool? busy,
     String? error,
+    bool? authoritative,
     bool clearError = false,
   }) {
     return LibraryState(
@@ -40,6 +46,7 @@ class LibraryState {
       loadout: loadout ?? this.loadout,
       busy: busy ?? this.busy,
       error: clearError ? null : error ?? this.error,
+      authoritative: authoritative ?? this.authoritative,
     );
   }
 
@@ -55,9 +62,9 @@ class LibraryState {
 /// Owns the library + loadout and mediates every mutation through [MgrFfi].
 ///
 /// All mutating methods set [LibraryState.busy] for their duration, clear any
-/// prior error on entry, and refresh from the source of truth
-/// (`mgr_library_list`) afterwards. An [MgrFfiException] is caught and its
-/// message parked in [LibraryState.error]; the state is otherwise left intact.
+/// prior error on entry, and reload from the source of truth afterwards even
+/// when the native operation reports an error. A failed reload clears stale
+/// data and marks the state non-authoritative until [refresh] succeeds.
 class LibraryNotifier extends StateNotifier<LibraryState> {
   LibraryNotifier(this._mgr) : super(const LibraryState());
 
@@ -69,29 +76,27 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
   ///  * library ids missing from the loadout are appended at the end,
   ///    disabled, preserving the stored order for the rest.
   Future<void> refresh() async {
-    await _run(_refreshInline);
+    await _runRefresh();
   }
 
   /// Import a mod from [path] into the library, then refresh.
   Future<void> import(String path) async {
-    await _run(() async {
+    await _runMutation(() async {
       await _mgr.import(path);
-      await _refreshInline();
     });
   }
 
   /// Remove the mod [id] from the library, then refresh.
   Future<void> remove(String id) async {
-    await _run(() async {
+    await _runMutation(() async {
       await _mgr.remove(id);
-      await _refreshInline();
     });
   }
 
   /// Flip the enabled flag of the loadout entry for [id], persist the whole
   /// loadout, then refresh. No-op (still refreshes) if [id] isn't present.
   Future<void> toggle(String id) async {
-    await _run(() async {
+    await _runMutation(() async {
       final entries = [
         for (final e in state.loadout.entries)
           if (e.id == id)
@@ -102,7 +107,6 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
       await _mgr.setLoadout(
         LoadoutView(format: state.loadout.format, entries: entries),
       );
-      await _refreshInline();
     });
   }
 
@@ -110,7 +114,7 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
   /// refresh. Indices follow [ReorderableListView] semantics (the item is
   /// removed first, so a downward move lands one slot earlier).
   Future<void> reorder(int oldIndex, int newIndex) async {
-    await _run(() async {
+    await _runMutation(() async {
       final entries = [...state.loadout.entries];
       if (oldIndex < 0 || oldIndex >= entries.length) return;
       var target = newIndex;
@@ -122,12 +126,11 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
       await _mgr.setLoadout(
         LoadoutView(format: state.loadout.format, entries: entries),
       );
-      await _refreshInline();
     });
   }
 
   /// Refresh without its own busy/error framing — for use inside another
-  /// [_run] block so the whole operation is one busy span.
+  /// mutation/refresh lane so the whole operation is one busy span.
   ///
   /// Reconciling only fixes the *in-memory* loadout; the on-disk loadout that
   /// `mgr_apply`/`mgr_status` read is untouched. So when reconciliation
@@ -142,27 +145,73 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     if (!_sameEntries(loadout.entries, reconciled.entries)) {
       await _mgr.setLoadout(reconciled);
     }
-    state = state.copyWith(mods: mods, loadout: reconciled);
+    state = state.copyWith(
+      mods: mods,
+      loadout: reconciled,
+      authoritative: true,
+    );
   }
 
-  /// Run [body] with the busy flag set and errors funneled into the state.
-  Future<void> _run(Future<void> Function() body) async {
+  /// Explicit read lane. It remains available while state is unknown because
+  /// a successful refresh is what restores authority.
+  Future<void> _runRefresh() async {
+    if (state.busy) return;
     state = state.copyWith(busy: true, clearError: true);
     try {
-      await body();
-    } on MgrFfiException catch (e) {
-      state = state.copyWith(error: e.message);
+      await _refreshInline();
+    } catch (error) {
+      _markUnknown();
+      state = state.copyWith(error: _errorMessage(error));
     } finally {
       state = state.copyWith(busy: false);
     }
   }
 
+  /// Single-flight mutation lane. Every operation is followed by an
+  /// authoritative reload even when the operation throws: native commands can
+  /// mutate the library/loadout and only then report a follow-up failure.
+  Future<void> _runMutation(Future<void> Function() operation) async {
+    if (state.busy || !state.authoritative) return;
+    state = state.copyWith(busy: true, clearError: true);
+
+    Object? operationError;
+    try {
+      await operation();
+    } catch (error) {
+      operationError = error;
+    }
+
+    Object? reloadError;
+    try {
+      await _refreshInline();
+    } catch (error) {
+      reloadError = error;
+      _markUnknown();
+    }
+
+    final visibleError = operationError ?? reloadError;
+    if (visibleError != null) {
+      state = state.copyWith(error: _errorMessage(visibleError));
+    }
+    state = state.copyWith(busy: false);
+  }
+
+  void _markUnknown() {
+    state = state.copyWith(
+      mods: const [],
+      loadout: const LoadoutView(),
+      authoritative: false,
+    );
+  }
+
+  static String _errorMessage(Object error) => switch (error) {
+    MgrFfiException() => error.message,
+    _ => error.toString(),
+  };
+
   /// True when two loadout entry lists carry the same ids, enabled flags, and
   /// order — the delta gate for persisting a reconciled loadout.
-  static bool _sameEntries(
-    List<LoadoutEntryView> a,
-    List<LoadoutEntryView> b,
-  ) {
+  static bool _sameEntries(List<LoadoutEntryView> a, List<LoadoutEntryView> b) {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
       if (a[i].id != b[i].id || a[i].enabled != b[i].enabled) return false;
@@ -194,7 +243,8 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
 }
 
 /// The library + loadout, kicked off with an initial refresh.
-final libraryProvider =
-    StateNotifierProvider<LibraryNotifier, LibraryState>((ref) {
+final libraryProvider = StateNotifierProvider<LibraryNotifier, LibraryState>((
+  ref,
+) {
   return LibraryNotifier(ref.watch(mgrFfiProvider))..refresh();
 });

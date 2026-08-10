@@ -26,19 +26,77 @@ class HomePage extends ConsumerStatefulWidget {
 }
 
 class _HomePageState extends ConsumerState<HomePage> {
-  @override
-  void initState() {
-    super.initState();
-    // Refresh deployment status once the first frame (and thus providers) are
-    // ready. gameRoot may be null; the notifier records that as an error.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshStatus());
-  }
+  final FocusNode _importFocusNode = FocusNode(
+    debugLabel: 'mod-manager-import-after-remove',
+  );
+  final FocusNode _libraryRefreshFocusNode = FocusNode(
+    debugLabel: 'mod-manager-refresh-unknown-library',
+  );
+  ({FocusNode node, String? removedModId})? _pendingFocus;
+  int _pendingFocusGeneration = 0;
 
   String? get _gameRoot => gameRootFromExe(ref.read(gameExePathProvider));
 
-  void _refreshStatus() {
-    if (!mounted) return;
-    ref.read(statusProvider.notifier).refresh(_gameRoot);
+  bool get _focusBlocked =>
+      ref.read(libraryProvider).busy ||
+      ref.read(statusProvider).busy ||
+      ref.read(conflictsProvider).isLoading;
+
+  void _queueFocusWhenIdle(FocusNode node, {String? removedModId}) {
+    final selected = ref.read(selectedModProvider);
+    if (removedModId != null && selected != null && selected != removedModId) {
+      return;
+    }
+    _pendingFocus = (node: node, removedModId: removedModId);
+    _pendingFocusGeneration++;
+    _flushPendingFocusWhenIdle();
+  }
+
+  void _flushPendingFocusWhenIdle() {
+    final pending = _pendingFocus;
+    if (pending == null) return;
+    final selected = ref.read(selectedModProvider);
+    if (pending.removedModId != null &&
+        selected != null &&
+        selected != pending.removedModId) {
+      _pendingFocus = null;
+      _pendingFocusGeneration++;
+      return;
+    }
+    if (_focusBlocked) return;
+
+    final generation = _pendingFocusGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || generation != _pendingFocusGeneration) return;
+      final latest = _pendingFocus;
+      if (latest == null || _focusBlocked) return;
+      final latestSelection = ref.read(selectedModProvider);
+      if (latest.removedModId != null &&
+          latestSelection != null &&
+          latestSelection != latest.removedModId) {
+        _pendingFocus = null;
+        _pendingFocusGeneration++;
+        return;
+      }
+      _pendingFocus = null;
+      _pendingFocusGeneration++;
+      latest.node.requestFocus();
+    });
+  }
+
+  void _queueImportFocusAfterRemove(String removedModId) =>
+      _queueFocusWhenIdle(_importFocusNode, removedModId: removedModId);
+
+  void _queueRefreshFocusAfterRemove(String removedModId) =>
+      _queueFocusWhenIdle(_libraryRefreshFocusNode, removedModId: removedModId);
+
+  void _queueRefreshFocus() => _queueFocusWhenIdle(_libraryRefreshFocusNode);
+
+  @override
+  void dispose() {
+    _importFocusNode.dispose();
+    _libraryRefreshFocusNode.dispose();
+    super.dispose();
   }
 
   @override
@@ -48,8 +106,8 @@ class _HomePageState extends ConsumerState<HomePage> {
     // set, so without this the deployment chip + Apply gating stay stale until
     // the user hits the overflow Refresh. Re-derive the root from the *new*
     // path and refresh status on every change. ref.listen only fires on an
-    // actual value change, so this can't double-fire with the initState
-    // refresh.
+    // actual value change, so startup remains owned by the settled-library
+    // listener below and path changes get exactly one refresh here.
     ref.listen<String?>(gameExePathProvider, (previous, next) {
       if (!mounted) return;
       ref.read(statusProvider.notifier).refresh(gameRootFromExe(next));
@@ -61,12 +119,36 @@ class _HomePageState extends ConsumerState<HomePage> {
     // stale ("In sync", Apply disabled) until the manual Refresh. Re-check status
     // once the library settles (not busy) whenever the loadout entries changed.
     ref.listen<LibraryState>(libraryProvider, (previous, next) {
-      if (!mounted || next.busy) return;
-      final changed = previous == null ||
+      if (!mounted) return;
+      if (next.authoritative) {
+        final selected = ref.read(selectedModProvider);
+        if (selected != null && next.modById(selected) == null) {
+          ref.read(selectedModProvider.notifier).state = null;
+        }
+      }
+      if (next.busy) return;
+      final changed =
+          previous == null ||
           previous.busy ||
           !_sameLoadoutEntries(previous.loadout, next.loadout);
       if (changed) {
         ref.read(statusProvider.notifier).refresh(_gameRoot);
+      }
+      _flushPendingFocusWhenIdle();
+    });
+    ref.listen<StatusState>(statusProvider, (previous, next) {
+      _flushPendingFocusWhenIdle();
+    });
+    ref.listen(conflictsProvider, (previous, next) {
+      _flushPendingFocusWhenIdle();
+    });
+    ref.listen<String?>(selectedModProvider, (previous, next) {
+      final pending = _pendingFocus;
+      if (pending?.removedModId != null &&
+          next != null &&
+          next != pending!.removedModId) {
+        _pendingFocus = null;
+        _pendingFocusGeneration++;
       }
     });
 
@@ -97,9 +179,9 @@ class _HomePageState extends ConsumerState<HomePage> {
           IconButton(
             icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
             tooltip: isDark ? l10n.lightMode : l10n.darkMode,
-            onPressed: () => ref.read(themeModeProvider.notifier).setThemeMode(
-                  isDark ? ThemeMode.light : ThemeMode.dark,
-                ),
+            onPressed: () => ref
+                .read(themeModeProvider.notifier)
+                .setThemeMode(isDark ? ThemeMode.light : ThemeMode.dark),
           ),
           IconButton(
             icon: const Icon(Icons.info_outline),
@@ -145,7 +227,11 @@ class _HomePageState extends ConsumerState<HomePage> {
               child: TabBarView(
                 children: [
                   _ModsTab(
-                    onAfterMutation: _refreshStatus,
+                    importFocusNode: _importFocusNode,
+                    libraryRefreshFocusNode: _libraryRefreshFocusNode,
+                    queueImportFocusAfterRemove: _queueImportFocusAfterRemove,
+                    queueRefreshFocusAfterRemove: _queueRefreshFocusAfterRemove,
+                    queueRefreshFocus: _queueRefreshFocus,
                   ),
                   const SettingsTab(),
                 ],
@@ -160,20 +246,34 @@ class _HomePageState extends ConsumerState<HomePage> {
 
 /// The Mods tab: action bar + (mod list | detail) + collapsible conflict panel.
 class _ModsTab extends ConsumerWidget {
-  const _ModsTab({required this.onAfterMutation});
+  const _ModsTab({
+    required this.importFocusNode,
+    required this.libraryRefreshFocusNode,
+    required this.queueImportFocusAfterRemove,
+    required this.queueRefreshFocusAfterRemove,
+    required this.queueRefreshFocus,
+  });
 
-  /// Called after any action that changes deployed/target state so the status
-  /// chip can refresh.
-  final VoidCallback onAfterMutation;
+  final FocusNode importFocusNode;
+  final FocusNode libraryRefreshFocusNode;
+  final ValueChanged<String> queueImportFocusAfterRemove;
+  final ValueChanged<String> queueRefreshFocusAfterRemove;
+  final VoidCallback queueRefreshFocus;
 
   String? _gameRoot(WidgetRef ref) =>
       gameRootFromExe(ref.read(gameExePathProvider));
 
   Future<void> _importFolder(WidgetRef ref) async {
     final path = await getDirectoryPath();
-    if (path == null) return;
+    final library = ref.read(libraryProvider);
+    if (path == null ||
+        library.busy ||
+        !library.authoritative ||
+        ref.read(statusProvider).busy ||
+        ref.read(conflictsProvider).isLoading) {
+      return;
+    }
     await ref.read(libraryProvider.notifier).import(path);
-    onAfterMutation();
   }
 
   Future<void> _importFile(WidgetRef ref, AppLocalizations l10n) async {
@@ -182,9 +282,15 @@ class _ModsTab extends ConsumerWidget {
       extensions: const ['zip', 'pak', 'utoc', 'lcache', 'bank', 'Cache'],
     );
     final file = await openFile(acceptedTypeGroups: [group]);
-    if (file == null) return;
+    final library = ref.read(libraryProvider);
+    if (file == null ||
+        library.busy ||
+        !library.authoritative ||
+        ref.read(statusProvider).busy ||
+        ref.read(conflictsProvider).isLoading) {
+      return;
+    }
     await ref.read(libraryProvider.notifier).import(file.path);
-    onAfterMutation();
   }
 
   Future<void> _apply(BuildContext context, WidgetRef ref) async {
@@ -194,6 +300,15 @@ class _ModsTab extends ConsumerWidget {
     // Applying resets deployed==target; the library isn't touched, but a
     // re-analyze is cheap and the status was already refreshed by apply().
     ref.invalidate(conflictsProvider);
+  }
+
+  Future<void> _refreshAll(WidgetRef ref) async {
+    if (ref.read(libraryProvider).busy ||
+        ref.read(statusProvider).busy ||
+        ref.read(conflictsProvider).isLoading) {
+      return;
+    }
+    await ref.read(libraryProvider.notifier).refresh();
   }
 
   Future<void> _undeployAll(BuildContext context, WidgetRef ref) async {
@@ -279,6 +394,8 @@ class _ModsTab extends ConsumerWidget {
     final library = ref.watch(libraryProvider);
     final conflicts = ref.watch(conflictsProvider);
     final conflictCount = conflicts.value?.length ?? 0;
+    final operationsBusy = library.busy || status.busy || conflicts.isLoading;
+    final libraryMutationsBlocked = operationsBusy || !library.authoritative;
 
     // Apply is enabled when the enabled loadout differs from what's deployed —
     // including the first-ever deploy (nothing_deployed + >=1 enabled mod).
@@ -288,6 +405,7 @@ class _ModsTab extends ConsumerWidget {
       gameRoot != null,
       status.busy,
       status.studioActive,
+      statusError: status.error,
     );
 
     return Column(
@@ -301,21 +419,29 @@ class _ModsTab extends ConsumerWidget {
               // offer both directories and files).
               MenuAnchor(
                 builder: (ctx, controller, _) => OutlinedButton.icon(
-                  onPressed: () => controller.isOpen
-                      ? controller.close()
-                      : controller.open(),
+                  key: const ValueKey('import-mod-action'),
+                  focusNode: importFocusNode,
+                  onPressed: libraryMutationsBlocked
+                      ? null
+                      : () => controller.isOpen
+                            ? controller.close()
+                            : controller.open(),
                   icon: const Icon(Icons.add),
                   label: Text(l10n.actionImport),
                 ),
                 menuChildren: [
                   MenuItemButton(
                     leadingIcon: const Icon(Icons.folder_open),
-                    onPressed: () => _importFolder(ref),
+                    onPressed: libraryMutationsBlocked
+                        ? null
+                        : () => _importFolder(ref),
                     child: Text(l10n.importFolder),
                   ),
                   MenuItemButton(
                     leadingIcon: const Icon(Icons.insert_drive_file_outlined),
-                    onPressed: () => _importFile(ref, l10n),
+                    onPressed: libraryMutationsBlocked
+                        ? null
+                        : () => _importFile(ref, l10n),
                     child: Text(l10n.importFile),
                   ),
                 ],
@@ -324,8 +450,7 @@ class _ModsTab extends ConsumerWidget {
               Tooltip(
                 message: l10n.applyTooltip,
                 child: FilledButton.icon(
-                  onPressed:
-                      applyEnabled ? () => _apply(context, ref) : null,
+                  onPressed: applyEnabled ? () => _apply(context, ref) : null,
                   icon: const Icon(Icons.play_arrow),
                   label: Text(l10n.actionApply),
                 ),
@@ -333,8 +458,12 @@ class _ModsTab extends ConsumerWidget {
               const SizedBox(width: 12),
               _StatusChip(
                 state: status,
-                onStudioTap: () => _promptTakeOver(context, ref),
-                onRecoveryTap: () => _recoverDeployment(context, ref),
+                onStudioTap: operationsBusy || gameRoot == null
+                    ? null
+                    : () => _promptTakeOver(context, ref),
+                onRecoveryTap: operationsBusy || gameRoot == null
+                    ? null
+                    : () => _recoverDeployment(context, ref),
               ),
               if (status.busy || conflicts.isLoading) ...[
                 const SizedBox(width: 12),
@@ -346,11 +475,11 @@ class _ModsTab extends ConsumerWidget {
               ],
               const Spacer(),
               PopupMenuButton<_OverflowAction>(
+                key: const ValueKey('manager-overflow-action'),
+                enabled: !operationsBusy,
                 onSelected: (action) => switch (action) {
-                  _OverflowAction.refresh =>
-                    ref.read(statusProvider.notifier).refresh(gameRoot),
-                  _OverflowAction.undeployAll =>
-                    _undeployAll(context, ref),
+                  _OverflowAction.refresh => _refreshAll(ref),
+                  _OverflowAction.undeployAll => _undeployAll(context, ref),
                 },
                 itemBuilder: (ctx) => [
                   PopupMenuItem(
@@ -359,6 +488,7 @@ class _ModsTab extends ConsumerWidget {
                   ),
                   PopupMenuItem(
                     value: _OverflowAction.undeployAll,
+                    enabled: gameRoot != null,
                     child: Text(l10n.undeployAllAction),
                   ),
                 ],
@@ -368,7 +498,12 @@ class _ModsTab extends ConsumerWidget {
         ),
 
         // Game-path hint / apply-report / errors banner.
-        _InfoBanner(gameRoot: gameRoot, status: status),
+        _InfoBanner(
+          gameRoot: gameRoot,
+          status: status,
+          libraryRefreshFocusNode: libraryRefreshFocusNode,
+          queueRefreshFocus: queueRefreshFocus,
+        ),
 
         const Divider(height: 1),
 
@@ -379,7 +514,13 @@ class _ModsTab extends ConsumerWidget {
             children: [
               const Expanded(child: ModList()),
               const VerticalDivider(width: 1),
-              const SizedBox(width: 380, child: DetailPanel()),
+              SizedBox(
+                width: 380,
+                child: DetailPanel(
+                  queueImportFocusAfterRemove: queueImportFocusAfterRemove,
+                  queueRefreshFocusAfterRemove: queueRefreshFocusAfterRemove,
+                ),
+              ),
             ],
           ),
         ),
@@ -388,11 +529,13 @@ class _ModsTab extends ConsumerWidget {
         Material(
           color: theme.colorScheme.surfaceContainerLowest,
           child: ExpansionTile(
-            title: Text(l10n.conflictsTitle(conflictCount)),
+            title: Text(
+              library.authoritative
+                  ? l10n.conflictsTitle(conflictCount)
+                  : l10n.conflictsUnverified,
+            ),
             leading: const Icon(Icons.merge_type),
-            children: const [
-              SizedBox(height: 240, child: ConflictPanel()),
-            ],
+            children: const [SizedBox(height: 240, child: ConflictPanel())],
           ),
         ),
       ],
@@ -405,8 +548,9 @@ class _ModsTab extends ConsumerWidget {
 /// Apply is offered whenever the target (the enabled subset of the current
 /// loadout) differs from what is deployed — which includes the very first
 /// deploy. Concretely:
-///  * always disabled without a game path or while an FFI call is in flight —
-///    including a library mutation (toggle/reorder persists the loadout via
+///  * always disabled without a game path, with unknown/errored library state,
+///    or while an FFI call is in flight — including a library mutation
+///    (toggle/reorder persists the loadout via
 ///    `mgr_set_loadout` asynchronously; applying before that settles would let
 ///    `mgr_apply` read a stale on-disk loadout), so [LibraryState.busy] gates
 ///    Apply too;
@@ -428,14 +572,24 @@ bool canApply(
   LibraryState library,
   bool gameRootSet,
   bool busy,
-  bool studioActive,
-) {
-  if (!gameRootSet || busy || library.busy || studioActive) return false;
+  bool studioActive, {
+  String? statusError,
+}) {
+  if (!gameRootSet ||
+      busy ||
+      library.busy ||
+      !library.authoritative ||
+      library.error != null ||
+      statusError != null ||
+      studioActive) {
+    return false;
+  }
   return switch (status) {
     ManagerStatusChangesPending() => true,
     ManagerStatusGameUpdated() => true,
-    ManagerStatusNothingDeployed() =>
-      library.loadout.entries.any((e) => e.enabled),
+    ManagerStatusNothingDeployed() => library.loadout.entries.any(
+      (e) => e.enabled,
+    ),
     ManagerStatusRecoveryRequired() => false,
     _ => false,
   };
@@ -467,8 +621,8 @@ class _StatusChip extends StatelessWidget {
   });
 
   final StatusState state;
-  final VoidCallback onStudioTap;
-  final VoidCallback onRecoveryTap;
+  final VoidCallback? onStudioTap;
+  final VoidCallback? onRecoveryTap;
 
   @override
   Widget build(BuildContext context) {
@@ -483,53 +637,53 @@ class _StatusChip extends StatelessWidget {
 
     final (String label, Color bg, Color fg, IconData icon) = switch (status) {
       ManagerStatusInSync() => (
-          l10n.statusInSync,
-          scheme.secondaryContainer,
-          scheme.onSecondaryContainer,
-          Icons.check_circle_outline,
-        ),
+        l10n.statusInSync,
+        scheme.secondaryContainer,
+        scheme.onSecondaryContainer,
+        Icons.check_circle_outline,
+      ),
       ManagerStatusChangesPending() => (
-          l10n.statusChangesPending,
-          scheme.tertiaryContainer,
-          scheme.onTertiaryContainer,
-          Icons.pending_outlined,
-        ),
+        l10n.statusChangesPending,
+        scheme.tertiaryContainer,
+        scheme.onTertiaryContainer,
+        Icons.pending_outlined,
+      ),
       ManagerStatusGameUpdated() => (
-          l10n.statusGameUpdated,
-          scheme.errorContainer,
-          scheme.onErrorContainer,
-          Icons.system_update_alt,
-        ),
+        l10n.statusGameUpdated,
+        scheme.errorContainer,
+        scheme.onErrorContainer,
+        Icons.system_update_alt,
+      ),
       ManagerStatusRecoveryRequired() => (
-          l10n.statusRecoveryRequired,
-          scheme.errorContainer,
-          scheme.onErrorContainer,
-          Icons.warning_amber_rounded,
-        ),
+        l10n.statusRecoveryRequired,
+        scheme.errorContainer,
+        scheme.onErrorContainer,
+        Icons.warning_amber_rounded,
+      ),
       ManagerStatusStudioDeployActive() => (
-          l10n.statusStudioDeploy,
-          scheme.errorContainer,
-          scheme.onErrorContainer,
-          Icons.lock_outline,
-        ),
+        l10n.statusStudioDeploy,
+        scheme.errorContainer,
+        scheme.onErrorContainer,
+        Icons.lock_outline,
+      ),
       ManagerStatusNothingDeployed() => (
-          l10n.statusNothingDeployed,
-          scheme.surfaceContainerHighest,
-          scheme.onSurfaceVariant,
-          Icons.circle_outlined,
-        ),
+        l10n.statusNothingDeployed,
+        scheme.surfaceContainerHighest,
+        scheme.onSurfaceVariant,
+        Icons.circle_outlined,
+      ),
       _ when isStudio => (
-          l10n.statusStudioDeploy,
-          scheme.errorContainer,
-          scheme.onErrorContainer,
-          Icons.lock_outline,
-        ),
+        l10n.statusStudioDeploy,
+        scheme.errorContainer,
+        scheme.onErrorContainer,
+        Icons.lock_outline,
+      ),
       _ => (
-          l10n.statusNothingDeployed,
-          scheme.surfaceContainerHighest,
-          scheme.onSurfaceVariant,
-          Icons.circle_outlined,
-        ),
+        l10n.statusNothingDeployed,
+        scheme.surfaceContainerHighest,
+        scheme.onSurfaceVariant,
+        Icons.circle_outlined,
+      ),
     };
 
     final chip = Container(
@@ -572,62 +726,107 @@ class _StatusChip extends StatelessWidget {
 /// Contextual banner beneath the action bar: prompts to set the game path,
 /// echoes the last apply report + warnings, or surfaces an error.
 class _InfoBanner extends ConsumerWidget {
-  const _InfoBanner({required this.gameRoot, required this.status});
+  const _InfoBanner({
+    required this.gameRoot,
+    required this.status,
+    required this.libraryRefreshFocusNode,
+    required this.queueRefreshFocus,
+  });
 
   final String? gameRoot;
   final StatusState status;
+  final FocusNode libraryRefreshFocusNode;
+  final VoidCallback queueRefreshFocus;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
     final library = ref.watch(libraryProvider);
+    final conflicts = ref.watch(conflictsProvider);
+    final refreshBlocked = library.busy || status.busy || conflicts.isLoading;
 
     final children = <Widget>[];
 
     if (gameRoot == null) {
-      children.add(_line(
-        theme,
-        Icons.info_outline,
-        l10n.errorSetGamePath,
-        theme.colorScheme.onSurfaceVariant,
-      ));
+      children.add(
+        _line(
+          theme,
+          Icons.info_outline,
+          l10n.errorSetGamePath,
+          theme.colorScheme.onSurfaceVariant,
+        ),
+      );
     }
 
     // Errors: a "no game path" sentinel maps to the friendly hint (already
     // shown above), other errors surface verbatim.
     if (status.error != null && status.error != StatusNotifier.noGamePath) {
-      children.add(_line(
-        theme,
-        Icons.error_outline,
-        status.error!,
-        theme.colorScheme.error,
-      ));
+      children.add(
+        _line(
+          theme,
+          Icons.error_outline,
+          status.error!,
+          theme.colorScheme.error,
+        ),
+      );
     }
     if (library.error != null) {
-      children.add(_line(
-        theme,
-        Icons.error_outline,
-        library.error!,
-        theme.colorScheme.error,
-      ));
+      children.add(
+        _line(
+          theme,
+          Icons.error_outline,
+          library.error!,
+          theme.colorScheme.error,
+          action: TextButton.icon(
+            key: const ValueKey('library-refresh-action'),
+            focusNode: libraryRefreshFocusNode,
+            onPressed: refreshBlocked
+                ? null
+                : () async {
+                    if (ref.read(libraryProvider).busy ||
+                        ref.read(statusProvider).busy ||
+                        ref.read(conflictsProvider).isLoading) {
+                      return;
+                    }
+                    await ref.read(libraryProvider.notifier).refresh();
+                    if (!context.mounted) return;
+                    final refreshed = ref.read(libraryProvider);
+                    if (refreshed.error != null) {
+                      queueRefreshFocus();
+                    }
+                  },
+            icon: const Icon(Icons.refresh),
+            label: Text(l10n.refreshAction),
+          ),
+        ),
+      );
+    }
+    if (!library.authoritative && library.error != null) {
+      children.add(
+        _line(
+          theme,
+          Icons.warning_amber_rounded,
+          l10n.libraryStateUnknown,
+          theme.colorScheme.error,
+        ),
+      );
     }
 
     final report = status.lastReport;
     if (report != null) {
-      children.add(_line(
-        theme,
-        Icons.check_circle_outline,
-        l10n.applyReportApplied(report.applied.length),
-        theme.colorScheme.onSurfaceVariant,
-      ));
-      for (final w in report.warnings) {
-        children.add(_line(
+      children.add(
+        _line(
           theme,
-          Icons.warning_amber_rounded,
-          w,
-          Colors.amber.shade800,
-        ));
+          Icons.check_circle_outline,
+          l10n.applyReportApplied(report.applied.length),
+          theme.colorScheme.onSurfaceVariant,
+        ),
+      );
+      for (final w in report.warnings) {
+        children.add(
+          _line(theme, Icons.warning_amber_rounded, w, Colors.amber.shade800),
+        );
       }
     }
 
@@ -635,7 +834,7 @@ class _InfoBanner extends ConsumerWidget {
     return Container(
       width: double.infinity,
       color: theme.colorScheme.surfaceContainerLowest,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: children,
@@ -643,7 +842,13 @@ class _InfoBanner extends ConsumerWidget {
     );
   }
 
-  Widget _line(ThemeData theme, IconData icon, String text, Color color) {
+  Widget _line(
+    ThemeData theme,
+    IconData icon,
+    String text,
+    Color color, {
+    Widget? action,
+  }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
@@ -657,6 +862,7 @@ class _InfoBanner extends ConsumerWidget {
               style: theme.textTheme.bodySmall?.copyWith(color: color),
             ),
           ),
+          if (action != null) ...[const SizedBox(width: 8), action],
         ],
       ),
     );

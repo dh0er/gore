@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 
 import '../../l10n/app_localizations.dart';
+import '../../status/domain/status_notifier.dart';
 import '../domain/conflicts_provider.dart';
 import '../domain/library_notifier.dart';
 import '../domain/models.dart';
@@ -24,13 +25,18 @@ class ModList extends ConsumerWidget {
     final library = ref.watch(libraryProvider);
     final selected = ref.watch(selectedModProvider);
     final conflicts = ref.watch(conflictsProvider);
+    final status = ref.watch(statusProvider);
+    final mutationsBlocked =
+        library.busy ||
+        !library.authoritative ||
+        status.busy ||
+        conflicts.isLoading;
 
     // Join loadout order -> library mods; skip any entry whose mod is missing
     // (reconciliation should prevent this, but stay defensive).
     final rows = <({LoadoutEntryView entry, ModEntryMetaView mod})>[
       for (final entry in library.loadout.entries)
-        if (library.modById(entry.id) case final mod?)
-          (entry: entry, mod: mod),
+        if (library.modById(entry.id) case final mod?) (entry: entry, mod: mod),
     ];
 
     if (rows.isEmpty) {
@@ -46,6 +52,38 @@ class ModList extends ConsumerWidget {
     }
 
     final conflictList = conflicts.value ?? const <ConflictView>[];
+    Widget itemBuilder(BuildContext context, int index) {
+      final row = rows[index];
+      final mod = row.mod;
+      final summary = ConflictSummary.forMod(conflictList, mod.id);
+      return _ModTile(
+        key: ValueKey(mod.id),
+        index: index,
+        mod: mod,
+        enabled: row.entry.enabled,
+        mutationsBlocked: mutationsBlocked,
+        selected: mod.id == selected,
+        summary: summary,
+        onTap: () => ref.read(selectedModProvider.notifier).state = mod.id,
+        onToggle: () {
+          final current = ref.read(libraryProvider);
+          if (current.busy ||
+              !current.authoritative ||
+              ref.read(statusProvider).busy ||
+              ref.read(conflictsProvider).isLoading) {
+            return;
+          }
+          ref.read(libraryProvider.notifier).toggle(mod.id);
+        },
+      );
+    }
+
+    // SliverReorderableList adds semantic move actions independently of the
+    // drag listener. Render a plain list while mutations are blocked so screen
+    // readers are not offered actions that cannot run.
+    if (mutationsBlocked) {
+      return ListView.builder(itemCount: rows.length, itemBuilder: itemBuilder);
+    }
 
     return ReorderableListView.builder(
       buildDefaultDragHandles: false,
@@ -55,25 +93,17 @@ class ModList extends ConsumerWidget {
       // convention (it subtracts 1 for downward moves itself), so translate
       // back to that convention here.
       onReorderItem: (oldIndex, newIndex) {
+        final current = ref.read(libraryProvider);
+        if (current.busy ||
+            !current.authoritative ||
+            ref.read(statusProvider).busy ||
+            ref.read(conflictsProvider).isLoading) {
+          return;
+        }
         final classic = newIndex >= oldIndex ? newIndex + 1 : newIndex;
         ref.read(libraryProvider.notifier).reorder(oldIndex, classic);
       },
-      itemBuilder: (context, index) {
-        final row = rows[index];
-        final mod = row.mod;
-        final summary = ConflictSummary.forMod(conflictList, mod.id);
-        return _ModTile(
-          key: ValueKey(mod.id),
-          index: index,
-          mod: mod,
-          enabled: row.entry.enabled,
-          selected: mod.id == selected,
-          summary: summary,
-          onTap: () =>
-              ref.read(selectedModProvider.notifier).state = mod.id,
-          onToggle: () => ref.read(libraryProvider.notifier).toggle(mod.id),
-        );
-      },
+      itemBuilder: itemBuilder,
     );
   }
 }
@@ -84,6 +114,7 @@ class _ModTile extends StatelessWidget {
     required this.index,
     required this.mod,
     required this.enabled,
+    required this.mutationsBlocked,
     required this.selected,
     required this.summary,
     required this.onTap,
@@ -93,6 +124,7 @@ class _ModTile extends StatelessWidget {
   final int index;
   final ModEntryMetaView mod;
   final bool enabled;
+  final bool mutationsBlocked;
   final bool selected;
   final ConflictSummary summary;
   final VoidCallback onTap;
@@ -120,7 +152,7 @@ class _ModTile extends StatelessWidget {
             children: [
               Checkbox(
                 value: enabled,
-                onChanged: (_) => onToggle(),
+                onChanged: mutationsBlocked ? null : (_) => onToggle(),
               ),
               Expanded(
                 child: Column(
@@ -133,9 +165,7 @@ class _ModTile extends StatelessWidget {
                           child: Text(
                             mod.name.isEmpty ? mod.id : mod.name,
                             style: theme.textTheme.titleSmall?.copyWith(
-                              color: enabled
-                                  ? null
-                                  : scheme.onSurfaceVariant,
+                              color: enabled ? null : scheme.onSurfaceVariant,
                             ),
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -183,6 +213,7 @@ class _ModTile extends StatelessWidget {
               ConflictBadge(summary: summary),
               ReorderableDragStartListener(
                 index: index,
+                enabled: !mutationsBlocked,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 4),
                   child: Icon(
@@ -214,8 +245,8 @@ class ConflictBadge extends StatelessWidget {
     final (Color color, int count) = summary.hard > 0
         ? (scheme.error, summary.hard)
         : summary.soft > 0
-            ? (Colors.amber.shade700, summary.soft)
-            : (scheme.onSurfaceVariant, summary.info);
+        ? (Colors.amber.shade700, summary.soft)
+        : (scheme.onSurfaceVariant, summary.info);
     return Tooltip(
       message: 'H${summary.hard} S${summary.soft} I${summary.info}',
       child: Container(

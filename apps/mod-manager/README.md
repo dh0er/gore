@@ -19,7 +19,9 @@ and loadout files. Auto-updates on launch (WinSparkle).
   `gore-mod.json`), foreign mod zips/folders, loose `_P.pak` files, IoStore
   triplets (`.utoc`/`.ucas`/`.pak`), UE4SS Lua mod folders, and raw game-file
   replacements.
-- **Enable/disable** mods and **drag to reorder** the load order (later wins).
+- **Enable/disable**, **remove**, and **drag to reorder** mods in the load order
+  (later wins). Removing a library entry updates the target loadout; if that
+  mod is already deployed, choose **Apply** afterwards to update the game.
 - **Detect conflicts** across mods — localization, audio, texture/asset, item
   overrides (CDO), scripts, and raw-file replacements — and show which mod wins.
 - **Apply** declaratively: full-recompute the modded state from a pristine base

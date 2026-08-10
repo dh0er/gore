@@ -38,6 +38,7 @@
   },
   "conflictWinner": "winner",
   "noConflicts": "No conflicts.",
+  "conflictsUnverified": "Conflicts are unverified until the library state is refreshed.",
   "componentsTitle": "Components",
   "targetsMore": "+{count} more",
   "@targetsMore": {
@@ -47,6 +48,49 @@
       }
     }
   },
+  "removeModDeploymentHint": "Removing it from the library does not change an existing deployment immediately. If the mod is already deployed, choose Apply afterwards to update the game installation.",
+  "removeModSuccess": "Removed “{name}” from the library.",
+  "@removeModSuccess": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "removeModFailed": "Could not remove “{name}”: {error}",
+  "@removeModFailed": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "removeModPartialFailure": "Removed “{name}”, but follow-up processing reported an error. The library state was reloaded: {error}",
+  "@removeModPartialFailure": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "removeModOutcomeUnknown": "Could not verify whether “{name}” was removed: {error} — Refresh to check the library state.",
+  "@removeModOutcomeUnknown": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      },
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "libraryStateUnknown": "The library state could not be verified. Choose Refresh before changing or applying mods.",
   "removeModAction": "Remove",
   "removeModConfirm": "Remove “{name}” from the library?",
   "@removeModConfirm": {

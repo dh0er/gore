@@ -104,12 +104,42 @@ class AppLocalizationsZh extends AppLocalizations {
   String get noConflicts => '无冲突。';
 
   @override
+  String get conflictsUnverified => '在刷新库状态之前，冲突尚未验证。';
+
+  @override
   String get componentsTitle => '组件';
 
   @override
   String targetsMore(int count) {
     return '还有 $count 项';
   }
+
+  @override
+  String get removeModDeploymentHint =>
+      '从库中移除不会立即更改现有部署。如果该模组已部署，请随后选择“应用”以更新游戏安装。';
+
+  @override
+  String removeModSuccess(String name) {
+    return '已从库中移除“$name”。';
+  }
+
+  @override
+  String removeModFailed(String name, String error) {
+    return '无法移除“$name”：$error';
+  }
+
+  @override
+  String removeModPartialFailure(String name, String error) {
+    return '已移除“$name”，但后续处理报告了错误。库状态已重新加载：$error';
+  }
+
+  @override
+  String removeModOutcomeUnknown(String name, String error) {
+    return '无法验证是否已移除“$name”：$error；请刷新以检查库状态。';
+  }
+
+  @override
+  String get libraryStateUnknown => '无法验证库状态。请在更改或应用模组前选择“刷新”。';
 
   @override
   String get removeModAction => '移除';
@@ -317,12 +347,42 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get noConflicts => '无冲突。';
 
   @override
+  String get conflictsUnverified => '在刷新库状态之前，冲突尚未验证。';
+
+  @override
   String get componentsTitle => '组件';
 
   @override
   String targetsMore(int count) {
     return '还有 $count 项';
   }
+
+  @override
+  String get removeModDeploymentHint =>
+      '从库中移除不会立即更改现有部署。如果该模组已部署，请随后选择“应用”以更新游戏安装。';
+
+  @override
+  String removeModSuccess(String name) {
+    return '已从库中移除“$name”。';
+  }
+
+  @override
+  String removeModFailed(String name, String error) {
+    return '无法移除“$name”：$error';
+  }
+
+  @override
+  String removeModPartialFailure(String name, String error) {
+    return '已移除“$name”，但后续处理报告了错误。库状态已重新加载：$error';
+  }
+
+  @override
+  String removeModOutcomeUnknown(String name, String error) {
+    return '无法验证是否已移除“$name”：$error；请刷新以检查库状态。';
+  }
+
+  @override
+  String get libraryStateUnknown => '无法验证库状态。请在更改或应用模组前选择“刷新”。';
 
   @override
   String get removeModAction => '移除';

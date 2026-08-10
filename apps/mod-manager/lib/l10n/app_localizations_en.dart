@@ -107,12 +107,44 @@ class AppLocalizationsEn extends AppLocalizations {
   String get noConflicts => 'No conflicts.';
 
   @override
+  String get conflictsUnverified =>
+      'Conflicts are unverified until the library state is refreshed.';
+
+  @override
   String get componentsTitle => 'Components';
 
   @override
   String targetsMore(int count) {
     return '+$count more';
   }
+
+  @override
+  String get removeModDeploymentHint =>
+      'Removing it from the library does not change an existing deployment immediately. If the mod is already deployed, choose Apply afterwards to update the game installation.';
+
+  @override
+  String removeModSuccess(String name) {
+    return 'Removed “$name” from the library.';
+  }
+
+  @override
+  String removeModFailed(String name, String error) {
+    return 'Could not remove “$name”: $error';
+  }
+
+  @override
+  String removeModPartialFailure(String name, String error) {
+    return 'Removed “$name”, but follow-up processing reported an error. The library state was reloaded: $error';
+  }
+
+  @override
+  String removeModOutcomeUnknown(String name, String error) {
+    return 'Could not verify whether “$name” was removed: $error — Refresh to check the library state.';
+  }
+
+  @override
+  String get libraryStateUnknown =>
+      'The library state could not be verified. Choose Refresh before changing or applying mods.';
 
   @override
   String get removeModAction => 'Remove';

@@ -105,12 +105,43 @@ class AppLocalizationsJa extends AppLocalizations {
   String get noConflicts => '競合はありません。';
 
   @override
+  String get conflictsUnverified => 'ライブラリの状態を更新するまで、競合は未確認です。';
+
+  @override
   String get componentsTitle => 'コンポーネント';
 
   @override
   String targetsMore(int count) {
     return '他 $count 件';
   }
+
+  @override
+  String get removeModDeploymentHint =>
+      'ライブラリから削除しても、既存のデプロイはすぐには変更されません。この Mod がデプロイ済みの場合は、その後に［適用］を選択してゲームのインストールを更新してください。';
+
+  @override
+  String removeModSuccess(String name) {
+    return '「$name」をライブラリから削除しました。';
+  }
+
+  @override
+  String removeModFailed(String name, String error) {
+    return '「$name」を削除できませんでした: $error';
+  }
+
+  @override
+  String removeModPartialFailure(String name, String error) {
+    return '「$name」は削除されましたが、後続処理でエラーが報告されました。ライブラリの状態は再読み込みされました: $error';
+  }
+
+  @override
+  String removeModOutcomeUnknown(String name, String error) {
+    return '「$name」が削除されたか確認できませんでした: $error。ライブラリの状態を確認するには更新してください。';
+  }
+
+  @override
+  String get libraryStateUnknown =>
+      'ライブラリの状態を確認できませんでした。Mod を変更または適用する前に［更新］を選択してください。';
 
   @override
   String get removeModAction => '削除';

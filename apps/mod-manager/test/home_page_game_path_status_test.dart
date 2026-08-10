@@ -40,7 +40,11 @@ SharedConfig _freshSharedConfig({String? gamePath}) {
   return config;
 }
 
-Widget _app(FakeGoreCoreFfiService fake, UiSettingsStore store, SharedConfig config) {
+Widget _app(
+  FakeGoreCoreFfiService fake,
+  UiSettingsStore store,
+  SharedConfig config,
+) {
   return ProviderScope(
     overrides: [
       coreServiceProvider.overrideWithValue(fake),
@@ -121,7 +125,10 @@ class _StatefulFake implements GoreCoreFfiService {
 }
 
 Widget _appService(
-    GoreCoreFfiService svc, UiSettingsStore store, SharedConfig config) {
+  GoreCoreFfiService svc,
+  UiSettingsStore store,
+  SharedConfig config,
+) {
   return ProviderScope(
     overrides: [
       coreServiceProvider.overrideWithValue(svc),
@@ -164,14 +171,19 @@ void main() {
     await container.read(libraryProvider.notifier).toggle('m1');
     await tester.pumpAndSettle();
 
-    // The loadout changed, so status was re-queried.
+    // The settled-library listener is the one owner of this refresh. No caller
+    // should issue a second concurrent status read after the same mutation.
     final after = fake.calls.where((c) => c.command == 'mgr_status').length;
-    expect(after, greaterThan(before),
-        reason: 'a loadout edit must refresh status');
+    expect(
+      after,
+      before + 1,
+      reason: 'a loadout edit must refresh status exactly once',
+    );
   });
 
-  testWidgets('changing the game exe path refreshes status for the new root',
-      (tester) async {
+  testWidgets('changing the game exe path refreshes status for the new root', (
+    tester,
+  ) async {
     final fake = FakeGoreCoreFfiService(
       responses: {
         'mgr_library_list': {
@@ -187,14 +199,12 @@ void main() {
       },
     );
     await tester.pumpWidget(
-        _app(fake, _EmptySettingsStore(), _freshSharedConfig()));
+      _app(fake, _EmptySettingsStore(), _freshSharedConfig()),
+    );
     await tester.pumpAndSettle();
 
     // Startup ran mgr_status with a null root -> the sentinel, no FFI call.
-    expect(
-      fake.calls.where((c) => c.command == 'mgr_status'),
-      isEmpty,
-    );
+    expect(fake.calls.where((c) => c.command == 'mgr_status'), isEmpty);
 
     // A path whose game root resolves purely by path shape (no real install).
     const exe = 'C:/games/gothic/G1R/Binaries/Win64/G1R-Win64-Shipping.exe';
@@ -208,8 +218,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // The path change triggered a status refresh with the new game root.
-    final statusCall =
-        fake.calls.firstWhere((c) => c.command == 'mgr_status');
+    final statusCall = fake.calls.firstWhere((c) => c.command == 'mgr_status');
     expect(statusCall.payload['game_root'], expectedRoot);
   });
 }
