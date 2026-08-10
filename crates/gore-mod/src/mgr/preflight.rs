@@ -744,6 +744,12 @@ fn inspect_enabled_meta(
     library
         .entry(id)
         .and_then(|library_entry| library_entry.read_meta())
+        .and_then(|meta| {
+            for component in &meta.components {
+                super::apply::validate_component_descriptor_for_default_apply(component)?;
+            }
+            Ok(meta)
+        })
         .map_err(classify_mod_error)
 }
 
@@ -1752,6 +1758,37 @@ mod tests {
         );
         assert_eq!(report.checks[2].code, "enabled_mods_unreadable");
         assert_eq!(report.checks[3].state, PreflightStateV1::Unknown);
+        assert_eq!(report.checks[3].code, "deployment_not_inspected");
+        assert_eq!(report.checks[3].action, "resolve_loadout_check");
+
+        write_library_meta(
+            &library,
+            "unsafe",
+            vec![ComponentInfo::LoosePak {
+                rel: "../outside.pak".to_owned(),
+                targets: Vec::new(),
+            }],
+        );
+        write_enabled_loadout(&loadout, &["unsafe"]);
+        let report = run_with(
+            install.path(),
+            &library,
+            &loadout,
+            |_, _, target| {
+                Ok(ManagerStatus::ChangesPending {
+                    deployed: Vec::new(),
+                    target: target.entries.clone(),
+                })
+            },
+            |_| safe_probe(),
+            |_| Ok(false),
+        );
+        assert_eq!(report.checks[2].code, "enabled_mods_unreadable");
+        assert_eq!(report.checks[2].action, "repair_library");
+        assert!(report.checks[2]
+            .items
+            .iter()
+            .any(|item| item.contains("unsafe loose pak path")));
         assert_eq!(report.checks[3].code, "deployment_not_inspected");
         assert_eq!(report.checks[3].action, "resolve_loadout_check");
     }
