@@ -22,7 +22,10 @@ final conflictsProvider = FutureProvider<List<ConflictView>>((ref) {
   // Both `loadout` and `mods` only change on a settled refresh (after the
   // persist lands / the library reload completes), not on the busy flip, so
   // this preserves the "don't recompute mid-mutation" property.
-  ref.watch(libraryProvider.select((s) => _conflictsKey(s)));
+  final libraryKey = ref.watch(
+    libraryProvider.select((s) => (s.authoritative, _conflictsKey(s))),
+  );
+  if (!libraryKey.$1) return const [];
   return ref.watch(mgrFfiProvider).analyze();
 });
 
@@ -44,10 +47,7 @@ String _conflictsKey(LibraryState s) {
 }
 
 /// Every conflict that involves [modId].
-List<ConflictView> conflictsForMod(
-  List<ConflictView> conflicts,
-  String modId,
-) {
+List<ConflictView> conflictsForMod(List<ConflictView> conflicts, String modId) {
   return [
     for (final c in conflicts)
       if (c.modIds.contains(modId)) c,
@@ -98,10 +98,7 @@ class ConflictSummary {
 
   /// Count the conflicts touching [modId], bucketed by severity. Unknown
   /// severities are ignored.
-  factory ConflictSummary.forMod(
-    List<ConflictView> conflicts,
-    String modId,
-  ) {
+  factory ConflictSummary.forMod(List<ConflictView> conflicts, String modId) {
     var hard = 0;
     var soft = 0;
     var info = 0;

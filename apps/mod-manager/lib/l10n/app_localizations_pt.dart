@@ -107,12 +107,44 @@ class AppLocalizationsPt extends AppLocalizations {
   String get noConflicts => 'Sem conflitos.';
 
   @override
+  String get conflictsUnverified =>
+      'Os conflitos não estão verificados até o estado da biblioteca ser atualizado.';
+
+  @override
   String get componentsTitle => 'Componentes';
 
   @override
   String targetsMore(int count) {
     return '+$count mais';
   }
+
+  @override
+  String get removeModDeploymentHint =>
+      'Remover da biblioteca não altera imediatamente uma implantação existente. Se o mod já estiver implantado, selecione Aplicar depois para atualizar a instalação do jogo.';
+
+  @override
+  String removeModSuccess(String name) {
+    return '«$name» foi removido da biblioteca.';
+  }
+
+  @override
+  String removeModFailed(String name, String error) {
+    return 'Não foi possível remover «$name»: $error';
+  }
+
+  @override
+  String removeModPartialFailure(String name, String error) {
+    return '«$name» foi removido, mas o processamento posterior comunicou um erro. O estado da biblioteca foi recarregado: $error';
+  }
+
+  @override
+  String removeModOutcomeUnknown(String name, String error) {
+    return 'Não foi possível verificar se «$name» foi removido: $error — Atualize para verificar o estado da biblioteca.';
+  }
+
+  @override
+  String get libraryStateUnknown =>
+      'Não foi possível verificar o estado da biblioteca. Selecione Atualizar antes de alterar ou aplicar mods.';
 
   @override
   String get removeModAction => 'Remover';
@@ -325,12 +357,44 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String get noConflicts => 'Sem conflitos.';
 
   @override
+  String get conflictsUnverified =>
+      'Os conflitos não estão verificados até que o estado da biblioteca seja atualizado.';
+
+  @override
   String get componentsTitle => 'Componentes';
 
   @override
   String targetsMore(int count) {
     return '+$count mais';
   }
+
+  @override
+  String get removeModDeploymentHint =>
+      'Remover da biblioteca não altera imediatamente uma implantação existente. Se o mod já estiver implantado, selecione Aplicar depois para atualizar a instalação do jogo.';
+
+  @override
+  String removeModSuccess(String name) {
+    return '“$name” foi removido da biblioteca.';
+  }
+
+  @override
+  String removeModFailed(String name, String error) {
+    return 'Não foi possível remover “$name”: $error';
+  }
+
+  @override
+  String removeModPartialFailure(String name, String error) {
+    return '“$name” foi removido, mas o processamento posterior informou um erro. O estado da biblioteca foi recarregado: $error';
+  }
+
+  @override
+  String removeModOutcomeUnknown(String name, String error) {
+    return 'Não foi possível verificar se “$name” foi removido: $error — Atualize para verificar o estado da biblioteca.';
+  }
+
+  @override
+  String get libraryStateUnknown =>
+      'Não foi possível verificar o estado da biblioteca. Selecione Atualizar antes de alterar ou aplicar mods.';
 
   @override
   String get removeModAction => 'Remover';

@@ -107,12 +107,44 @@ class AppLocalizationsRu extends AppLocalizations {
   String get noConflicts => 'Нет конфликтов.';
 
   @override
+  String get conflictsUnverified =>
+      'Конфликты не проверены, пока состояние библиотеки не обновлено.';
+
+  @override
   String get componentsTitle => 'Компоненты';
 
   @override
   String targetsMore(int count) {
     return '+ещё $count';
   }
+
+  @override
+  String get removeModDeploymentHint =>
+      'Удаление из библиотеки не изменит существующее развёртывание сразу. Если мод уже развёрнут, затем нажмите «Применить», чтобы обновить установленную игру.';
+
+  @override
+  String removeModSuccess(String name) {
+    return 'Мод «$name» удалён из библиотеки.';
+  }
+
+  @override
+  String removeModFailed(String name, String error) {
+    return 'Не удалось удалить мод «$name»: $error';
+  }
+
+  @override
+  String removeModPartialFailure(String name, String error) {
+    return 'Мод «$name» удалён, но последующая обработка сообщила об ошибке. Состояние библиотеки было перечитано: $error';
+  }
+
+  @override
+  String removeModOutcomeUnknown(String name, String error) {
+    return 'Не удалось проверить, был ли удалён мод «$name»: $error — Обновите состояние библиотеки для проверки.';
+  }
+
+  @override
+  String get libraryStateUnknown =>
+      'Не удалось проверить состояние библиотеки. Нажмите «Обновить» перед изменением или применением модов.';
 
   @override
   String get removeModAction => 'Удалить';

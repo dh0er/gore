@@ -107,12 +107,44 @@ class AppLocalizationsPl extends AppLocalizations {
   String get noConflicts => 'Brak konfliktów.';
 
   @override
+  String get conflictsUnverified =>
+      'Konflikty pozostają niezweryfikowane do czasu odświeżenia stanu biblioteki.';
+
+  @override
   String get componentsTitle => 'Składniki';
 
   @override
   String targetsMore(int count) {
     return '+$count więcej';
   }
+
+  @override
+  String get removeModDeploymentHint =>
+      'Usunięcie z biblioteki nie zmieni od razu istniejącego wdrożenia. Jeśli mod jest już wdrożony, wybierz potem Zastosuj, aby zaktualizować instalację gry.';
+
+  @override
+  String removeModSuccess(String name) {
+    return 'Usunięto „$name” z biblioteki.';
+  }
+
+  @override
+  String removeModFailed(String name, String error) {
+    return 'Nie udało się usunąć „$name”: $error';
+  }
+
+  @override
+  String removeModPartialFailure(String name, String error) {
+    return 'Usunięto „$name”, ale dalsze przetwarzanie zgłosiło błąd. Stan biblioteki został ponownie wczytany: $error';
+  }
+
+  @override
+  String removeModOutcomeUnknown(String name, String error) {
+    return 'Nie udało się sprawdzić, czy usunięto „$name”: $error — Odśwież, aby sprawdzić stan biblioteki.';
+  }
+
+  @override
+  String get libraryStateUnknown =>
+      'Nie udało się zweryfikować stanu biblioteki. Wybierz Odśwież przed zmianą lub zastosowaniem modów.';
 
   @override
   String get removeModAction => 'Usuń';

@@ -302,6 +302,12 @@ abstract class AppLocalizations {
   /// **'No conflicts.'**
   String get noConflicts;
 
+  /// No description provided for @conflictsUnverified.
+  ///
+  /// In en, this message translates to:
+  /// **'Conflicts are unverified until the library state is refreshed.'**
+  String get conflictsUnverified;
+
   /// No description provided for @componentsTitle.
   ///
   /// In en, this message translates to:
@@ -313,6 +319,42 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'+{count} more'**
   String targetsMore(int count);
+
+  /// No description provided for @removeModDeploymentHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Removing it from the library does not change an existing deployment immediately. If the mod is already deployed, choose Apply afterwards to update the game installation.'**
+  String get removeModDeploymentHint;
+
+  /// No description provided for @removeModSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'Removed “{name}” from the library.'**
+  String removeModSuccess(String name);
+
+  /// No description provided for @removeModFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not remove “{name}”: {error}'**
+  String removeModFailed(String name, String error);
+
+  /// No description provided for @removeModPartialFailure.
+  ///
+  /// In en, this message translates to:
+  /// **'Removed “{name}”, but follow-up processing reported an error. The library state was reloaded: {error}'**
+  String removeModPartialFailure(String name, String error);
+
+  /// No description provided for @removeModOutcomeUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not verify whether “{name}” was removed: {error} — Refresh to check the library state.'**
+  String removeModOutcomeUnknown(String name, String error);
+
+  /// No description provided for @libraryStateUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'The library state could not be verified. Choose Refresh before changing or applying mods.'**
+  String get libraryStateUnknown;
 
   /// No description provided for @removeModAction.
   ///
