@@ -2709,6 +2709,34 @@ mod tests {
     }
 
     #[test]
+    fn an_sndh_outside_its_list_is_out_of_reach_for_both_routes() {
+        // The prefix read stops where the LIST says it does. While the parser scanned to the end
+        // of whatever buffer it was handed, an SNDH lying past the declared LIST still counted for
+        // the in-memory route and could not for the on-disk one: `bank_summary` and `audio list`
+        // accepted bytes `audio banks` called "no SNDH". Bounding the scan by the LIST is what
+        // makes the prefix sufficient rather than merely usually long enough.
+        let dir = tempfile::tempdir().unwrap();
+        let mut bank = two_sample_bank();
+        let (list_off, list_size) = find_top_list(&bank).unwrap();
+        assert!(list_size > 32, "the fixture needs a LIST worth shortening");
+
+        // Cut the declared LIST short so its SNDH falls outside it. Nothing else moves: the bytes
+        // are exactly where they were, only the extent claims less.
+        bank[list_off + 4..list_off + 8].copy_from_slice(&16u32.to_le_bytes());
+
+        // Driven with a tiny first read, because the default 64 KiB probe swallows a fixture this
+        // size whole: the prefix would be the entire file and there would be no divergence left
+        // to detect. A small probe makes the prefix exactly what the LIST declares, which is what
+        // a real bank larger than the probe does on its own.
+        let path = write_bank(dir.path(), "short-list.bank", &bank);
+        assert_eq!(
+            bank_summary_probing(&path, GOTHIC_STUDIO_KEY, 0x40, METADATA_MAX_BYTES),
+            bank_summary(&bank, GOTHIC_STUDIO_KEY),
+            "the two routes disagree about a bank whose SNDH is outside its LIST"
+        );
+    }
+
+    #[test]
     fn a_bank_of_zero_sized_chunks_does_not_walk_itself_to_a_standstill() {
         // Bounding the READ was not bounding the work. A chunk that declares zero bytes advances
         // the walk by its 8-byte header alone, so a damaged 260 MB bank whose top-level chunks all
