@@ -957,14 +957,27 @@ where
             )
             .with_items(items)
         }
-        Ok(ManagerStatus::GameUpdated { drifted }) => PreflightCheckV1::new(
-            PreflightCheckIdV1::Deployment,
-            PreflightStateV1::Problem,
-            "deployment_game_updated",
-            "reapply_after_update",
-            "files owned by the active Manager deployment changed outside GORE",
-        )
-        .with_items(drifted.into_iter().map(|path| format!("drifted: {path}"))),
+        Ok(ManagerStatus::GameUpdated { drifted }) => {
+            let (action, detail) = if loadout_healthy {
+                (
+                    "reapply_after_update",
+                    "files owned by the active Manager deployment changed outside GORE",
+                )
+            } else {
+                (
+                    "resolve_loadout_check",
+                    "owned deployment files changed; resolve the Loadout finding before reapplying",
+                )
+            };
+            PreflightCheckV1::new(
+                PreflightCheckIdV1::Deployment,
+                PreflightStateV1::Problem,
+                "deployment_game_updated",
+                action,
+                detail,
+            )
+            .with_items(drifted.into_iter().map(|path| format!("drifted: {path}")))
+        }
         Err(error) => PreflightCheckV1::new(
             PreflightCheckIdV1::Deployment,
             PreflightStateV1::Unknown,
@@ -1582,6 +1595,7 @@ mod tests {
                 ManagerStatus::NothingDeployed,
                 "deployment_none",
                 PreflightStateV1::Ok,
+                "none",
             ),
             (
                 ManagerStatus::StudioDeployActive {
@@ -1589,6 +1603,7 @@ mod tests {
                 },
                 "studio_deployment_active",
                 PreflightStateV1::Problem,
+                "remove_studio_deployment",
             ),
             (
                 ManagerStatus::GameUpdated {
@@ -1596,9 +1611,10 @@ mod tests {
                 },
                 "deployment_game_updated",
                 PreflightStateV1::Problem,
+                "resolve_loadout_check",
             ),
         ];
-        for (status, code, state) in independent {
+        for (status, code, state, action) in independent {
             let report = run_with(
                 install.path(),
                 &library,
@@ -1609,6 +1625,7 @@ mod tests {
             );
             assert_eq!(report.checks[3].code, code);
             assert_eq!(report.checks[3].state, state);
+            assert_eq!(report.checks[3].action, action);
         }
 
         for status in [
