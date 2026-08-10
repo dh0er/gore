@@ -741,16 +741,52 @@ fn inspect_enabled_meta(
         }
         Ok(_) => {}
     }
-    library
-        .entry(id)
-        .and_then(|library_entry| library_entry.read_meta())
-        .and_then(|meta| {
-            for component in &meta.components {
-                super::apply::validate_component_descriptor_for_default_apply(component)?;
+    let result = (|| {
+        let library_entry = library.entry(id)?;
+        let meta = library_entry.read_meta()?;
+        for component in &meta.components {
+            super::apply::validate_component_descriptor_for_default_apply(component)?;
+            validate_component_payload_presence(&library_entry, component)?;
+        }
+        Ok(meta)
+    })();
+    result.map_err(classify_mod_error)
+}
+
+fn validate_component_payload_presence(
+    entry: &super::model::LibraryEntry,
+    component: &ComponentInfo,
+) -> crate::Result<()> {
+    let file = |rel: &str, label: &str| entry.validate_required_payload_file(Path::new(rel), label);
+    let directory =
+        |rel: &str, label: &str| entry.validate_required_payload_directory(Path::new(rel), label);
+    match component {
+        ComponentInfo::Ue4ssLua { rel, .. } => directory(rel, "ue4ss component"),
+        ComponentInfo::LocPatch { rel, .. } => file(rel, "localization manifest"),
+        ComponentInfo::AudioPatch { rel, .. } => {
+            file(&format!("{rel}/manifest.json"), "audio manifest")
+        }
+        ComponentInfo::TexturePatch { rel, .. } => directory(rel, "texture component"),
+        ComponentInfo::AngelScriptPatch { rel, .. } => {
+            file(&format!("{rel}/manifest.json"), "script manifest")
+        }
+        ComponentInfo::FilePatch { rel, .. } => {
+            file(&format!("{rel}/manifest.json"), "loose file manifest")
+        }
+        ComponentInfo::PakFilePatch { rel, .. } => directory(rel, "pak file component"),
+        ComponentInfo::VoiceArchivePatch { rel, .. } => directory(rel, "voice component"),
+        ComponentInfo::Triplet { rel_base, .. } => {
+            for ext in ["utoc", "ucas"] {
+                file(&format!("{rel_base}.{ext}"), "triplet component")?;
             }
-            Ok(meta)
-        })
-        .map_err(classify_mod_error)
+            entry.validate_optional_payload_file(
+                Path::new(&format!("{rel_base}.pak")),
+                "optional triplet pak",
+            )
+        }
+        ComponentInfo::LoosePak { rel, .. } => file(rel, "loose pak"),
+        ComponentInfo::RawFile { rel, .. } => file(rel, "raw file"),
+    }
 }
 
 fn loadout_failure(failure: EvidenceFailure) -> LoadoutInspection {
@@ -1545,11 +1581,12 @@ mod tests {
             "lua",
             vec![ComponentInfo::Ue4ssLua {
                 name: "lua".to_owned(),
-                rel: "main.lua".to_owned(),
+                rel: "ue4ss".to_owned(),
                 targets: Vec::new(),
                 opaque: false,
             }],
         );
+        fs::create_dir(library.join("lua/ue4ss")).unwrap();
         write_library_meta(&library, "plain", Vec::new());
         let loadout = root.path().join("loadout.json");
         write_enabled_loadout(&loadout, &["plain"]);
@@ -1572,6 +1609,44 @@ mod tests {
         let partial = inspect_loadout(&library, &loadout);
         assert_eq!(partial.check.state, PreflightStateV1::Problem);
         assert!(matches!(partial.ue4ss, Ue4ssRequirement::Required));
+    }
+
+    #[test]
+    fn required_payloads_are_opened_without_making_the_triplet_pak_mandatory() {
+        let root = tempfile::tempdir().unwrap();
+        let library = root.path().join("library");
+        fs::create_dir(&library).unwrap();
+        write_library_meta(
+            &library,
+            "payloads",
+            vec![
+                ComponentInfo::LoosePak {
+                    rel: "payload.pak".to_owned(),
+                    targets: Vec::new(),
+                },
+                ComponentInfo::Triplet {
+                    rel_base: "io/mod".to_owned(),
+                    targets: Vec::new(),
+                },
+            ],
+        );
+        let entry = library.join("payloads");
+        fs::write(entry.join("payload.pak"), b"pak").unwrap();
+        fs::create_dir(entry.join("io")).unwrap();
+        fs::write(entry.join("io/mod.utoc"), b"utoc").unwrap();
+        fs::write(entry.join("io/mod.ucas"), b"ucas").unwrap();
+        let loadout = root.path().join("loadout.json");
+        write_enabled_loadout(&loadout, &["payloads"]);
+
+        assert_eq!(
+            inspect_loadout(&library, &loadout).check.code,
+            "loadout_valid"
+        );
+        fs::remove_file(entry.join("io/mod.ucas")).unwrap();
+        assert_eq!(
+            inspect_loadout(&library, &loadout).check.code,
+            "enabled_mods_unreadable"
+        );
     }
 
     #[test]
@@ -1790,6 +1865,35 @@ mod tests {
             .iter()
             .any(|item| item.contains("unsafe loose pak path")));
         assert_eq!(report.checks[3].code, "deployment_not_inspected");
+        assert_eq!(report.checks[3].action, "resolve_loadout_check");
+
+        write_library_meta(
+            &library,
+            "missing-payload",
+            vec![ComponentInfo::LoosePak {
+                rel: "payload.pak".to_owned(),
+                targets: Vec::new(),
+            }],
+        );
+        write_enabled_loadout(&loadout, &["missing-payload"]);
+        let report = run_with(
+            install.path(),
+            &library,
+            &loadout,
+            |_, _, target| {
+                Ok(ManagerStatus::ChangesPending {
+                    deployed: Vec::new(),
+                    target: target.entries.clone(),
+                })
+            },
+            |_| safe_probe(),
+            |_| Ok(false),
+        );
+        assert_eq!(report.checks[2].code, "enabled_mods_unreadable");
+        assert!(report.checks[2]
+            .items
+            .iter()
+            .any(|item| item.contains("required loose pak is missing")));
         assert_eq!(report.checks[3].action, "resolve_loadout_check");
     }
 

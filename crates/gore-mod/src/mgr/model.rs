@@ -1543,6 +1543,69 @@ impl LibraryEntry {
         unreachable!("non-empty optional component list returns its final file")
     }
 
+    pub(crate) fn validate_required_payload_file(
+        &self,
+        rel: &Path,
+        label: &str,
+    ) -> crate::Result<()> {
+        match self.open_required_payload_node(rel, label)? {
+            SecureNode::File(_) => Ok(()),
+            SecureNode::Directory(directory) => Err(crate::ModError::Other(format!(
+                "{label} must be a regular file: {}",
+                directory.path().display()
+            ))),
+        }
+    }
+
+    pub(crate) fn validate_optional_payload_file(
+        &self,
+        rel: &Path,
+        label: &str,
+    ) -> crate::Result<()> {
+        self.open_optional_payload_file(rel, label).map(|_| ())
+    }
+
+    pub(crate) fn validate_required_payload_directory(
+        &self,
+        rel: &Path,
+        label: &str,
+    ) -> crate::Result<()> {
+        match self.open_required_payload_node(rel, label)? {
+            SecureNode::Directory(_) => Ok(()),
+            SecureNode::File(file) => Err(crate::ModError::Other(format!(
+                "{label} must be a directory: {}",
+                file.path().display()
+            ))),
+        }
+    }
+
+    fn open_required_payload_node(&self, rel: &Path, label: &str) -> crate::Result<SecureNode> {
+        let rel_text = rel.to_string_lossy();
+        if !crate::is_safe_rel_path(&rel_text) {
+            return Err(crate::ModError::Other(format!(
+                "unsafe {label} path in library entry {:?}: {rel_text:?}",
+                self.id
+            )));
+        }
+        let path = self.path().join(rel);
+        match std::fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(crate::ModError::Other(format!(
+                    "required {label} is missing from library entry {:?}: {rel:?}",
+                    self.id
+                )))
+            }
+            Err(error) => {
+                return Err(crate::io(&format!(
+                    "inspecting required {label} in library entry {:?}",
+                    self.id
+                ))(error))
+            }
+            Ok(_) => {}
+        }
+        self.open_payload_node(rel, label)
+    }
+
     fn open_payload_directory(&self, rel: &Path, label: &str) -> crate::Result<SecureDirectory> {
         match self.open_payload_node(rel, label)? {
             SecureNode::Directory(directory) => Ok(directory),
