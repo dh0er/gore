@@ -14117,6 +14117,11 @@ mod tests {
     use std::sync::Mutex;
     use tempfile::tempdir;
 
+    /// Serializes the tests that drive the process-wide parsed-root cache. It holds
+    /// exactly ONE entry, so two of them running at once evict each other's and the
+    /// loser sees a re-parse where it asserted a hit.
+    static REAL_SAVE_CACHE_TESTS: Mutex<()> = Mutex::new(());
+
     /// The parsed-root cache must hand back the SAME allocation for repeated
     /// reads of an unchanged save — proof that clicking around the editor
     /// (open a character, then its inventory, …) no longer re-decodes/re-parses
@@ -14128,6 +14133,9 @@ mod tests {
             eprintln!("GORE_SAVE not set; skipping");
             return;
         };
+        let _serialized = REAL_SAVE_CACHE_TESTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let path = Path::new(&path);
         let backend = codec_backend::KrakenBackend::default();
         let a = decode_private_root_cached(path, &backend).expect("first parse");
@@ -14194,6 +14202,9 @@ mod tests {
             eprintln!("GORE_SAVE not set; skipping");
             return;
         };
+        let _serialized = REAL_SAVE_CACHE_TESTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let path = Path::new(&path);
         let backend = codec_backend::KrakenBackend::default();
         // Start cold.
@@ -14204,20 +14215,30 @@ mod tests {
             "payload": { "path": path.to_string_lossy(), "includePrivate": true }
         })
         .to_string();
-        let resp: serde_json::Value = serde_json::from_str(&execute_json(&req)).unwrap();
-        assert_eq!(resp["ok"], json!(true), "inspect failed: {resp}");
-        // The first private read after inspect must be a cache HIT. A re-parse of
-        // the whole payload takes seconds (in this debug/test profile); a hit is
-        // sub-millisecond. The generous threshold makes this a robust proof that
-        // inspect seeded the cache rather than a flaky micro-benchmark.
-        let t = SystemTime::now();
-        let a = decode_private_root_cached(path, &backend).unwrap();
-        let elapsed = t.elapsed().unwrap();
+        // Check the cache entry itself rather than how long the next read takes. The
+        // cache holds exactly ONE entry and the rest of the suite runs in parallel,
+        // seeding it with its own temp saves, so a timing threshold cannot tell
+        // "inspect did not seed" apart from "a foreign test evicted it a moment
+        // later". Retry the seed so an eviction costs a repeat, not a red build.
+        let mut seeded = false;
+        for _ in 0..8 {
+            invalidate_decoded_payload_cache(path);
+            let resp: serde_json::Value = serde_json::from_str(&execute_json(&req)).unwrap();
+            assert_eq!(resp["ok"], json!(true), "inspect failed: {resp}");
+            let guard = PARSED_ROOT_CACHE
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if guard.as_ref().is_some_and(|entry| entry.path == path) {
+                seeded = true;
+                break;
+            }
+        }
         assert!(
-            elapsed < std::time::Duration::from_millis(200),
-            "first read after inspect took {elapsed:?} — inspect did not seed the \
-             parsed-root cache (a re-parse takes seconds)"
+            seeded,
+            "inspect_save never left its parse in the parsed-root cache, so the first \
+             private read after a load re-parses the whole payload"
         );
+        let a = decode_private_root_cached(path, &backend).unwrap();
         // And it is the SAME cached allocation on a repeat read.
         let b = decode_private_root_cached(path, &backend).unwrap();
         assert!(
