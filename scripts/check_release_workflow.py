@@ -11,9 +11,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import posixpath
 import re
 import sys
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -83,6 +84,12 @@ class ProductContract:
     feed_command: str | None = None
 
 
+@dataclass(frozen=True)
+class AppcastKeyContract:
+    runner_rc: str
+    public_key: str
+
+
 def _app_version_command(app_dir: str, tag_prefix: str) -> str:
     return "\n".join(
         (
@@ -144,6 +151,22 @@ def _release_notes_command(changelog: str, output_dir: str) -> str:
     )
 
 
+APPCAST_KEYS: dict[str, AppcastKeyContract] = {
+    "gore-save-editor": AppcastKeyContract(
+        runner_rc="apps/save-editor/windows/runner/Runner.rc",
+        public_key="apps/save-editor/dsa_pub.pem",
+    ),
+    "gore-mod-studio": AppcastKeyContract(
+        runner_rc="apps/mod-studio/windows/runner/Runner.rc",
+        public_key="apps/mod-studio/dsa_pub.pem",
+    ),
+    "gore-mod-manager": AppcastKeyContract(
+        runner_rc="apps/mod-manager/windows/runner/Runner.rc",
+        public_key="apps/mod-manager/dsa_pub.pem",
+    ),
+}
+
+
 PRODUCTS: dict[str, ProductContract] = {
     "gore-save-editor": ProductContract(
         tag_prefix="gore-save-editor-v",
@@ -173,6 +196,7 @@ PRODUCTS: dict[str, ProductContract] = {
             "--version ${{ steps.version.outputs.version }} "
             "--installer dist/gore-save-editor/"
             "gore-save-editor-${{ steps.version.outputs.version }}-setup.exe "
+            f"--public-key {APPCAST_KEYS['gore-save-editor'].public_key} "
             "--notes dist/gore-save-editor/RELEASE_NOTES.md "
             "--release-tag gore-save-editor-v${{ steps.version.outputs.version }} "
             "--output dist/gore-save-editor/appcast-windows.xml"
@@ -217,6 +241,7 @@ PRODUCTS: dict[str, ProductContract] = {
             "--version ${{ steps.version.outputs.version }} "
             "--installer dist/gore-mod-studio/"
             "gore-mod-studio-${{ steps.version.outputs.version }}-setup.exe "
+            f"--public-key {APPCAST_KEYS['gore-mod-studio'].public_key} "
             "--notes dist/gore-mod-studio/RELEASE_NOTES.md "
             "--release-tag gore-mod-studio-v${{ steps.version.outputs.version }} "
             "--output dist/gore-mod-studio/appcast-windows.xml"
@@ -265,6 +290,7 @@ PRODUCTS: dict[str, ProductContract] = {
             "--version ${{ steps.version.outputs.version }} "
             "--installer dist/gore-mod-manager/"
             "gore-mod-manager-${{ steps.version.outputs.version }}-setup.exe "
+            f"--public-key {APPCAST_KEYS['gore-mod-manager'].public_key} "
             "--notes dist/gore-mod-manager/RELEASE_NOTES.md "
             "--release-tag gore-mod-manager-v${{ steps.version.outputs.version }} "
             "--output dist/gore-mod-manager/appcast-windows.xml"
@@ -1209,15 +1235,47 @@ def validate_workflows(ci_text: str, release_text: str) -> list[str]:
         return [str(error)]
 
 
+def validate_appcast_key_resources(
+    runner_resources: Mapping[str, str],
+) -> list[str]:
+    """Bind each signed appcast key to the exact key embedded by Runner.rc."""
+    problems: list[str] = []
+    for product, contract in APPCAST_KEYS.items():
+        runner_text = runner_resources.get(product)
+        if runner_text is None:
+            problems.append(f"{contract.runner_rc}: missing Runner.rc contract input")
+            continue
+        resource_lines = [
+            " ".join(line.split())
+            for line in runner_text.splitlines()
+            if re.match(r"^\s*DSAPub(?:\s|$)", line)
+        ]
+        relative_key = posixpath.relpath(
+            contract.public_key, posixpath.dirname(contract.runner_rc)
+        )
+        expected = f'DSAPub DSAPEM "{relative_key}"'
+        if resource_lines != [expected]:
+            problems.append(
+                f"{contract.runner_rc}: {product} WinSparkle DSA resource must "
+                f"bind exactly to {contract.public_key} as {expected!r}"
+            )
+    return problems
+
+
 def main() -> int:
     try:
         ci_text = CI_PATH.read_text(encoding="utf-8")
         release_text = RELEASE_PATH.read_text(encoding="utf-8")
+        runner_resources = {
+            product: (ROOT / contract.runner_rc).read_text(encoding="utf-8")
+            for product, contract in APPCAST_KEYS.items()
+        }
     except OSError as error:
         print(f"release workflow check could not read its inputs: {error}", file=sys.stderr)
         return 1
 
     problems = validate_workflows(ci_text, release_text)
+    problems.extend(validate_appcast_key_resources(runner_resources))
     if problems:
         for problem in problems:
             print(problem, file=sys.stderr)

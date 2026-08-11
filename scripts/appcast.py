@@ -9,6 +9,7 @@ of the matching per-project release tag (e.g. gore-save-editor-v1.2.3).
 Usage:
     python scripts/appcast.py --title gore-save-editor --version 0.1.1 \
         --installer dist/gore-save-editor-0.1.1-setup.exe \
+        --public-key apps/save-editor/dsa_pub.pem \
         --notes dist/RELEASE_NOTES.md \
         --release-tag gore-save-editor-v0.1.1 \
         --output dist/appcast-windows.xml
@@ -17,14 +18,15 @@ Environment:
     WINSPARKLE_DSA_PRIV_KEY_B64   base64-encoded DSA private key PEM.
                                   Required: WinSparkle rejects unsigned
                                   updates once a public key is embedded.
-                                  gore-save and gore-mod share one keypair,
-                                  so the same secret signs both feeds.
+                                  All three apps currently share one keypair,
+                                  so the same secret signs every feed.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import os
 import subprocess
 import sys
@@ -53,19 +55,64 @@ def sign_dsa(installer: Path) -> str:
     with tempfile.TemporaryDirectory() as tmp:
         key_path = Path(tmp) / "dsa_priv.pem"
         key_path.write_text(key_pem, encoding="utf-8")
-        digest = subprocess.run(
-            ["openssl", "dgst", "-sha1", "-binary"],
-            input=installer.read_bytes(),
-            capture_output=True,
-            check=True,
-        )
+        digest = _sha1_digest(installer.read_bytes())
         result = subprocess.run(
             ["openssl", "dgst", "-sha1", "-sign", str(key_path)],
-            input=digest.stdout,
+            input=digest,
             capture_output=True,
             check=True,
         )
     return base64.b64encode(result.stdout).decode()
+
+
+def _sha1_digest(payload: bytes) -> bytes:
+    return subprocess.run(
+        ["openssl", "dgst", "-sha1", "-binary"],
+        input=payload,
+        capture_output=True,
+        check=True,
+    ).stdout
+
+
+def verify_dsa(installer: Path, signature: str, public_key: Path) -> None:
+    """Fail unless *signature* is accepted by the key embedded in the app.
+
+    This mirrors WinSparkle's two-stage verification: the DSA signature covers
+    SHA1(SHA1(installer)). A stale or wrong CI secret must stop the release
+    before an appcast that every installed client rejects can be uploaded.
+    """
+    if not public_key.is_file():
+        sys.exit(f"WinSparkle public key not found: {public_key}")
+    try:
+        signature_bytes = base64.b64decode(signature, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise SystemExit(f"invalid base64 DSA signature: {error}") from error
+    if not signature_bytes:
+        sys.exit("empty DSA signature")
+
+    digest = _sha1_digest(installer.read_bytes())
+    with tempfile.TemporaryDirectory() as tmp:
+        signature_path = Path(tmp) / "installer.dsa"
+        signature_path.write_bytes(signature_bytes)
+        verified = subprocess.run(
+            [
+                "openssl",
+                "dgst",
+                "-sha1",
+                "-verify",
+                str(public_key),
+                "-signature",
+                str(signature_path),
+            ],
+            input=digest,
+            capture_output=True,
+            check=False,
+        )
+    if verified.returncode != 0:
+        sys.exit(
+            "DSA signature does not match the WinSparkle public key "
+            f"embedded by this release: {public_key}"
+        )
 
 
 def notes_to_html(notes_path: Path | None) -> str:
@@ -125,6 +172,12 @@ def main() -> int:
                         help="channel title (the product name)")
     parser.add_argument("--version", required=True)
     parser.add_argument("--installer", required=True, type=Path)
+    parser.add_argument(
+        "--public-key",
+        required=True,
+        type=Path,
+        help="WinSparkle DSA public key embedded in this app",
+    )
     parser.add_argument("--notes", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--release-tag", required=True,
@@ -136,6 +189,7 @@ def main() -> int:
         sys.exit(f"installer not found: {args.installer}")
 
     signature = sign_dsa(args.installer)
+    verify_dsa(args.installer, signature, args.public_key)
     xml = build_appcast(
         title=args.title,
         version=args.version,
