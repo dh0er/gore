@@ -12721,10 +12721,13 @@ fn reset_slot_payload_if_stateful(
 /// slot keeps its position, its `m_Id` and its `m_InventoryType`, and the array
 /// keeps its length, so no other slot moves.
 ///
-/// Each step re-parses: clearing the payload and the definition both change
-/// lengths, which invalidates the offsets recorded before them.
+/// `root` must be a parse of `payload` as it stands. Only clearing the payload state
+/// and the definition change lengths; zeroing the count does not, so it goes first
+/// and the whole slot is blanked from a single parse — one more only when the slot
+/// still carried state to reset.
 fn blank_inventory_slot(
     payload: &mut Vec<u8>,
+    root: &properties::RootObject,
     slots_path: &[String],
     index: usize,
 ) -> Result<(), CoreError> {
@@ -12735,25 +12738,24 @@ fn blank_inventory_slot(
         path
     };
 
-    {
-        let root = properties::parse_private_root(payload)?;
-        reset_slot_payload_if_stateful(payload, &root, slots_path, index)?;
-    }
+    let reset_moved_bytes = reset_slot_payload_if_stateful(payload, root, slots_path, index)?;
+    let reparsed = if reset_moved_bytes {
+        Some(properties::parse_private_root(payload)?)
+    } else {
+        None
+    };
+    let root = reparsed.as_ref().unwrap_or(root);
 
-    {
-        let root = properties::parse_private_root(payload)?;
-        let segs = properties::parse_path(&slot_path(&["m_SlotData", "m_ItemDefinition"]))?;
-        let chain = properties::resolve_chain(&root.properties, &segs)?;
-        let target = chain.target.clone();
-        let enclosing = chain.enclosing_size_fields.clone();
-        drop(root);
-        properties::patch_string(payload, &target, &enclosing, "")?;
-    }
+    // Fixed-size first, so it does not need its own view of the payload.
+    let count_segs = properties::parse_path(&slot_path(&["m_SlotData", "m_ItemCount"]))?;
+    let count_target = properties::resolve(&root.properties, &count_segs)?;
+    properties::patch_scalar(payload, count_target, properties::ScalarValue::Int(0))?;
 
-    let root = properties::parse_private_root(payload)?;
-    let segs = properties::parse_path(&slot_path(&["m_SlotData", "m_ItemCount"]))?;
-    let target = properties::resolve(&root.properties, &segs)?;
-    properties::patch_scalar(payload, target, properties::ScalarValue::Int(0))
+    let segs = properties::parse_path(&slot_path(&["m_SlotData", "m_ItemDefinition"]))?;
+    let chain = properties::resolve_chain(&root.properties, &segs)?;
+    let target = chain.target.clone();
+    let enclosing = chain.enclosing_size_fields.clone();
+    properties::patch_string(payload, &target, &enclosing, "")
 }
 
 fn apply_private_inventory_remove_item_to_payload(
@@ -12829,12 +12831,16 @@ fn apply_private_inventory_remove_item_to_payload(
         path
     };
     let mut patched = payload.clone();
-    blank_inventory_slot(&mut patched, &slots_path, index)?;
+    blank_inventory_slot(&mut patched, &root, &slots_path, index)?;
 
-    // 4. Re-align the container's ids with their positions. Blanking keeps them
-    //    aligned on its own; this repairs a container an earlier build left
-    //    misaligned (see normalize_slot_ids).
-    normalize_slot_ids(&mut patched, &slots_path)?;
+    // 4. Re-align the container's ids with their positions. Blanking never touches
+    //    an id, so whether any are out of step is already visible in the parse
+    //    above; the re-align only has to run for a container an earlier build left
+    //    misaligned (see normalize_slot_ids), and the proof below re-checks the
+    //    invariant on the bytes that land either way.
+    if !slot_ids_are_index_aligned(slots) {
+        normalize_slot_ids(&mut patched, &slots_path)?;
+    }
 
     // 5. Final proof: strict re-parse, and the targeted slot must be blank in
     //    the MainContainer specifically. The same item path may legitimately
