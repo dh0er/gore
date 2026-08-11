@@ -191,6 +191,76 @@ fn validate_payload_rel(rel: &str, label: &str, limits: ApplyLimits) -> crate::R
     Ok(())
 }
 
+/// Validate the sidecar-only component fields that the default apply path rejects before
+/// publication. Apply invokes this before reading that component's payload; preflight uses the
+/// same boundary so syntactically valid but undeployable enabled metadata never advertises Apply.
+pub(super) fn validate_component_descriptor_for_default_apply(
+    component: &ComponentInfo,
+) -> crate::Result<()> {
+    validate_component_descriptor(component, DEFAULT_APPLY_LIMITS)
+}
+
+fn validate_component_descriptor(
+    component: &ComponentInfo,
+    limits: ApplyLimits,
+) -> crate::Result<()> {
+    match component {
+        ComponentInfo::Ue4ssLua { name, rel, .. } => {
+            if !crate::is_safe_mod_name(name) {
+                return Err(ModError::Other(format!(
+                    "unsafe ue4ss component: name={name:?} rel={rel:?}"
+                )));
+            }
+            validate_payload_rel(rel, "ue4ss component", limits)
+        }
+        ComponentInfo::LocPatch { rel, .. } => {
+            validate_payload_rel(rel, "localization patch", limits)
+        }
+        ComponentInfo::AudioPatch { rel, .. } => {
+            validate_payload_rel(rel, "audio patch", limits)?;
+            validate_payload_rel(&format!("{rel}/manifest.json"), "audio manifest", limits)
+        }
+        ComponentInfo::TexturePatch { rel, .. } => {
+            validate_payload_rel(rel, "texture component", limits)
+        }
+        ComponentInfo::AngelScriptPatch { rel, .. } => {
+            validate_payload_rel(rel, "script patch", limits)?;
+            validate_payload_rel(&format!("{rel}/manifest.json"), "script manifest", limits)
+        }
+        ComponentInfo::FilePatch { rel, .. } => {
+            validate_payload_rel(rel, "loose file component", limits)?;
+            validate_payload_rel(
+                &format!("{rel}/manifest.json"),
+                "loose file manifest",
+                limits,
+            )
+        }
+        ComponentInfo::PakFilePatch { rel, .. } => {
+            validate_payload_rel(rel, "pak file component", limits)
+        }
+        ComponentInfo::VoiceArchivePatch { rel, .. } => {
+            validate_payload_rel(rel, "voice patch", limits)
+        }
+        ComponentInfo::Triplet { rel_base, .. } => {
+            validate_payload_rel(rel_base, "triplet", limits)?;
+            for ext in ["utoc", "ucas", "pak"] {
+                validate_payload_rel(&format!("{rel_base}.{ext}"), "triplet", limits)?;
+            }
+            Ok(())
+        }
+        ComponentInfo::LoosePak { rel, .. } => validate_payload_rel(rel, "loose pak", limits),
+        ComponentInfo::RawFile { rel, target_file } => {
+            validate_payload_rel(rel, "raw file", limits)?;
+            if let RawTarget::Bank { name } = target_file {
+                if name.len() > limits.max_payload_path_bytes || !crate::is_safe_filename(name) {
+                    return Err(ModError::Other(format!("unsafe bank name: {name:?}")));
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
 fn read_manifest_payload(
     payload: &PendingPayload,
     label: &str,
@@ -560,6 +630,7 @@ fn apply_loadout_with_limits(
     let mut shadow = crate::PakShadowIndex::new(&gp.root);
     for l in &loaded {
         for comp in &l.meta.components {
+            validate_component_descriptor(comp, limits)?;
             match comp {
                 ComponentInfo::Ue4ssLua { name, rel, .. } => {
                     if !crate::is_safe_mod_name(name) {

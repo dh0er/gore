@@ -98,6 +98,36 @@ pub(crate) enum SecureNode {
     Directory(SecureDirectory),
 }
 
+#[derive(Debug)]
+pub(crate) enum MetaReadFailure {
+    AggregateBudgetExhausted {
+        required: u64,
+        remaining: u64,
+        path: PathBuf,
+    },
+    Other(crate::ModError),
+}
+
+impl MetaReadFailure {
+    fn into_mod_error(self) -> crate::ModError {
+        match self {
+            Self::AggregateBudgetExhausted {
+                remaining, path, ..
+            } => crate::ModError::Other(format!(
+                "library sidecar exceeds the {remaining} byte limit: {}",
+                path.display()
+            )),
+            Self::Other(error) => error,
+        }
+    }
+}
+
+impl From<crate::ModError> for MetaReadFailure {
+    fn from(error: crate::ModError) -> Self {
+        Self::Other(error)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TreeSnapshotLimits {
     pub(crate) max_entries: usize,
@@ -324,6 +354,25 @@ impl SecureDirectory {
     ) -> crate::Result<SecureNode> {
         validate_plain_component(name, label)?;
         let opened = open_child_node(&self.anchor, name, label)?;
+        self.secure_child_from_opened(opened, label)
+    }
+
+    fn open_optional_child(
+        &self,
+        name: &std::ffi::OsStr,
+        label: &str,
+    ) -> crate::Result<Option<SecureNode>> {
+        validate_plain_component(name, label)?;
+        open_optional_child_node(&self.anchor, name, label)?
+            .map(|opened| self.secure_child_from_opened(opened, label))
+            .transpose()
+    }
+
+    fn secure_child_from_opened(
+        &self,
+        opened: OpenedNode,
+        label: &str,
+    ) -> crate::Result<SecureNode> {
         if opened.metadata.is_dir() {
             let mut parents = self.parents.clone();
             parents.push(self.anchor.clone());
@@ -360,13 +409,10 @@ impl SecureDirectory {
         name: &std::ffi::OsStr,
         label: &str,
     ) -> crate::Result<Option<SecureDirectory>> {
-        validate_plain_component(name, label)?;
-        if !self.contains_child(name, label)? {
-            return Ok(None);
-        }
-        match self.open_child(name, label)? {
-            SecureNode::Directory(directory) => Ok(Some(directory)),
-            SecureNode::File(file) => Err(crate::ModError::Other(format!(
+        match self.open_optional_child(name, label)? {
+            None => Ok(None),
+            Some(SecureNode::Directory(directory)) => Ok(Some(directory)),
+            Some(SecureNode::File(file)) => Err(crate::ModError::Other(format!(
                 "{label} must be a real directory: {}",
                 file.path().display()
             ))),
@@ -954,18 +1000,13 @@ fn inject_tree_entry_race(hook: impl FnOnce(&Path) + 'static) {
 }
 
 #[cfg(windows)]
-fn open_absolute_node(path: &Path, label: &str) -> crate::Result<OpenedNode> {
-    use std::os::windows::ffi::OsStringExt as _;
+fn open_windows_node_handle(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::windows::fs::OpenOptionsExt as _;
-    use std::os::windows::io::AsRawHandle as _;
     use windows_sys::Win32::Storage::FileSystem::{
-        FileAttributeTagInfo, FileIdInfo, GetFileInformationByHandleEx, GetFinalPathNameByHandleW,
-        FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS,
-        FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FILE_NAME_NORMALIZED, FILE_SHARE_READ,
-        VOLUME_NAME_DOS,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
     };
 
-    let file = std::fs::OpenOptions::new()
+    std::fs::OpenOptions::new()
         .read(true)
         // Excluding FILE_SHARE_DELETE prevents a validated object from being renamed/replaced
         // while this handle (or a retained parent anchor) participates in traversal.
@@ -976,10 +1017,31 @@ fn open_absolute_node(path: &Path, label: &str) -> crate::Result<OpenedNode> {
         .share_mode(FILE_SHARE_READ)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
         .open(path)
-        .map_err(crate::io(&format!(
-            "opening {label} without following reparse points {}",
-            path.display()
-        )))?;
+}
+
+#[cfg(windows)]
+fn open_absolute_node(path: &Path, label: &str) -> crate::Result<OpenedNode> {
+    let file = open_windows_node_handle(path).map_err(crate::io(&format!(
+        "opening {label} without following reparse points {}",
+        path.display()
+    )))?;
+    finish_opened_windows_node(path, label, file)
+}
+
+#[cfg(windows)]
+fn finish_opened_windows_node(
+    path: &Path,
+    label: &str,
+    file: std::fs::File,
+) -> crate::Result<OpenedNode> {
+    use std::os::windows::ffi::OsStringExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileAttributeTagInfo, FileIdInfo, GetFileInformationByHandleEx, GetFinalPathNameByHandleW,
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_ID_INFO, FILE_NAME_NORMALIZED,
+        VOLUME_NAME_DOS,
+    };
+
     let handle = file.as_raw_handle();
     let mut attributes = FILE_ATTRIBUTE_TAG_INFO::default();
     let attribute_ok = unsafe {
@@ -1061,9 +1123,33 @@ fn open_child_node(
     name: &std::ffi::OsStr,
     label: &str,
 ) -> crate::Result<OpenedNode> {
+    open_optional_child_node(parent, name, label)?.ok_or_else(|| {
+        crate::ModError::Other(format!(
+            "required {label} child is missing from validated parent {}: {name:?}",
+            parent.final_path.display()
+        ))
+    })
+}
+
+#[cfg(windows)]
+fn open_optional_child_node(
+    parent: &DirectoryAnchor,
+    name: &std::ffi::OsStr,
+    label: &str,
+) -> crate::Result<Option<OpenedNode>> {
     let child = parent.final_path.join(name);
     run_open_child_race_hook(&child);
-    let opened = open_absolute_node(&child, label)?;
+    let file = match open_windows_node_handle(&child) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(crate::io(&format!(
+                "opening {label} without following reparse points {}",
+                child.display()
+            ))(error))
+        }
+    };
+    let opened = finish_opened_windows_node(&child, label, file)?;
     if !handle_path_is_direct_child(&parent.final_path, &opened.final_path) {
         return Err(crate::ModError::Other(format!(
             "opened {label} escaped its validated parent: {} -> {}",
@@ -1071,7 +1157,7 @@ fn open_child_node(
             opened.final_path.display()
         )));
     }
-    Ok(opened)
+    Ok(Some(opened))
 }
 
 #[cfg(windows)]
@@ -1109,7 +1195,7 @@ fn open_absolute_node(path: &Path, label: &str) -> crate::Result<OpenedNode> {
 
     let file = std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
         .open(path)
         .map_err(crate::io(&format!(
             "opening {label} with O_NOFOLLOW {}",
@@ -1140,6 +1226,20 @@ fn open_child_node(
     name: &std::ffi::OsStr,
     label: &str,
 ) -> crate::Result<OpenedNode> {
+    open_optional_child_node(parent, name, label)?.ok_or_else(|| {
+        crate::ModError::Other(format!(
+            "required {label} child is missing from validated parent {}: {name:?}",
+            parent.final_path.display()
+        ))
+    })
+}
+
+#[cfg(unix)]
+fn open_optional_child_node(
+    parent: &DirectoryAnchor,
+    name: &std::ffi::OsStr,
+    label: &str,
+) -> crate::Result<Option<OpenedNode>> {
     use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
     use std::os::unix::fs::MetadataExt as _;
     use std::os::unix::io::{AsRawFd as _, FromRawFd as _};
@@ -1152,20 +1252,30 @@ fn open_child_node(
         libc::openat(
             parent.file.as_raw_fd(),
             c_name.as_ptr(),
-            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
         )
     };
     if fd < 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::NotFound {
+            return Ok(None);
+        }
+        if error.raw_os_error() == Some(libc::ELOOP) {
+            return Err(crate::ModError::Other(format!(
+                "{label} is a symbolic link: {}",
+                parent.final_path.join(name).display()
+            )));
+        }
         return Err(crate::io(&format!(
             "opening {label} relative to validated parent {}",
             parent.final_path.display()
-        ))(std::io::Error::last_os_error()));
+        ))(error));
     }
     let file = unsafe { std::fs::File::from_raw_fd(fd) };
     let metadata = file
         .metadata()
         .map_err(crate::io(&format!("reading opened {label} metadata")))?;
-    Ok(OpenedNode {
+    Ok(Some(OpenedNode {
         file,
         final_path: parent
             .final_path
@@ -1175,7 +1285,7 @@ fn open_child_node(
             inode: metadata.ino(),
         },
         metadata,
-    })
+    }))
 }
 
 #[cfg(unix)]
@@ -1260,8 +1370,44 @@ impl LibraryEntry {
     /// claimed id to identify this directory. On Windows the filesystem decides identity, so a
     /// harmless casing difference is accepted while a different sibling remains a mismatch.
     pub(crate) fn read_meta(&self) -> crate::Result<ModEntryMeta> {
-        let bytes = self.read_payload_bounded(
-            Path::new(META_FILE),
+        let mut budget = LIBRARY_META_MAX_BYTES;
+        self.read_meta_bounded(&mut budget)
+    }
+
+    /// Read metadata within a caller's remaining aggregate budget, charging the authoritative
+    /// opened-handle length before any allocation, read, or parsing work begins.
+    pub(crate) fn read_meta_bounded(&self, remaining: &mut u64) -> crate::Result<ModEntryMeta> {
+        self.read_meta_bounded_classified(remaining)
+            .map_err(MetaReadFailure::into_mod_error)
+    }
+
+    /// The preflight needs to distinguish its aggregate inspection ceiling from an individually
+    /// unsupported sidecar. Both decisions use the authoritative opened handle length.
+    pub(crate) fn read_meta_bounded_classified(
+        &self,
+        remaining: &mut u64,
+    ) -> Result<ModEntryMeta, MetaReadFailure> {
+        let mut file = self.open_payload_file(Path::new(META_FILE), "library sidecar")?;
+        let path = file.path().to_path_buf();
+        let expected = file.len();
+        if expected > LIBRARY_META_MAX_BYTES {
+            return Err(MetaReadFailure::Other(crate::ModError::Other(format!(
+                "library sidecar exceeds the {LIBRARY_META_MAX_BYTES} byte limit: {}",
+                path.display()
+            ))));
+        }
+        if expected > *remaining {
+            return Err(MetaReadFailure::AggregateBudgetExhausted {
+                required: expected,
+                remaining: *remaining,
+                path,
+            });
+        }
+        *remaining -= expected;
+        let bytes = self.read_open_payload_bounded(
+            path,
+            &mut file,
+            expected,
             "library sidecar",
             LIBRARY_META_MAX_BYTES,
         )?;
@@ -1277,7 +1423,7 @@ impl LibraryEntry {
     }
 
     /// Read one already-validated library payload through an opened file handle and a hard byte
-    /// ceiling.  The metadata snapshot, `limit + 1` read, and final handle/path metadata checks
+    /// ceiling.  The metadata snapshot, `expected + 1` read, and final handle/path metadata checks
     /// make truncation or growth during the read a hard error instead of accepting a partial or
     /// unexpectedly large allocation.
     pub(crate) fn read_payload_bounded(
@@ -1286,7 +1432,7 @@ impl LibraryEntry {
         label: &str,
         limit: u64,
     ) -> crate::Result<Vec<u8>> {
-        self.read_payload_bounded_with(rel, label, limit, || {})
+        self.read_payload_bounded_with(rel, label, limit, |_| {})
     }
 
     fn read_payload_bounded_with<F>(
@@ -1297,11 +1443,22 @@ impl LibraryEntry {
         after_metadata: F,
     ) -> crate::Result<Vec<u8>>
     where
-        F: FnOnce(),
+        F: FnOnce(u64),
     {
         let (path, mut file, expected) = self.open_payload_bounded(rel, label, limit)?;
-        after_metadata();
+        after_metadata(expected);
 
+        self.read_open_payload_bounded(path, &mut file, expected, label, limit)
+    }
+
+    fn read_open_payload_bounded(
+        &self,
+        path: PathBuf,
+        file: &mut SecureFile,
+        expected: u64,
+        label: &str,
+        limit: u64,
+    ) -> crate::Result<Vec<u8>> {
         let capacity = usize::try_from(expected).map_err(|_| {
             crate::ModError::Other(format!(
                 "{label} is too large for this process address space: {}",
@@ -1317,7 +1474,7 @@ impl LibraryEntry {
         })?;
         file.file
             .by_ref()
-            .take(limit.saturating_add(1))
+            .take(expected.saturating_add(1))
             .read_to_end(&mut bytes)
             .map_err(crate::io(&format!("reading {label} {}", path.display())))?;
         let observed = u64::try_from(bytes.len()).map_err(|_| {
@@ -1329,7 +1486,7 @@ impl LibraryEntry {
                 path.display()
             )));
         }
-        self.verify_open_payload_unchanged(&file, label, expected, observed)?;
+        self.verify_open_payload_unchanged(file, label, expected, observed)?;
         Ok(bytes)
     }
 
@@ -1516,10 +1673,10 @@ impl LibraryEntry {
                     "unsafe {label} path component in {rel_text:?}"
                 )));
             };
-            if !directory.contains_child(name, label)? {
+            let Some(node) = directory.open_optional_child(name, label)? else {
                 return Ok(None);
-            }
-            match directory.open_child(name, label)? {
+            };
+            match node {
                 SecureNode::File(file) if index + 1 == components.len() => {
                     return Ok(Some(file));
                 }
@@ -1541,6 +1698,46 @@ impl LibraryEntry {
             }
         }
         unreachable!("non-empty optional component list returns its final file")
+    }
+
+    pub(crate) fn validate_required_payload_file(
+        &self,
+        rel: &Path,
+        label: &str,
+    ) -> crate::Result<()> {
+        match self.open_required_payload_node(rel, label)? {
+            SecureNode::File(_) => Ok(()),
+            SecureNode::Directory(directory) => Err(crate::ModError::Other(format!(
+                "{label} must be a regular file: {}",
+                directory.path().display()
+            ))),
+        }
+    }
+
+    pub(crate) fn validate_optional_payload_file(
+        &self,
+        rel: &Path,
+        label: &str,
+    ) -> crate::Result<()> {
+        self.open_optional_payload_file(rel, label).map(|_| ())
+    }
+
+    pub(crate) fn validate_required_payload_directory(
+        &self,
+        rel: &Path,
+        label: &str,
+    ) -> crate::Result<()> {
+        match self.open_required_payload_node(rel, label)? {
+            SecureNode::Directory(_) => Ok(()),
+            SecureNode::File(file) => Err(crate::ModError::Other(format!(
+                "{label} must be a directory: {}",
+                file.path().display()
+            ))),
+        }
+    }
+
+    fn open_required_payload_node(&self, rel: &Path, label: &str) -> crate::Result<SecureNode> {
+        self.open_payload_node(rel, label)
     }
 
     fn open_payload_directory(&self, rel: &Path, label: &str) -> crate::Result<SecureDirectory> {
@@ -2132,7 +2329,7 @@ mod tests {
         let payload = entry_path.join("payload.bin");
         let mut writer_was_denied = None;
         let result =
-            entry.read_payload_bounded_with(Path::new("payload.bin"), "test payload", 16, || {
+            entry.read_payload_bounded_with(Path::new("payload.bin"), "test payload", 16, |_| {
                 match std::fs::OpenOptions::new().append(true).open(&payload) {
                     Ok(mut writer) => {
                         writer.write_all(b"6").unwrap();
@@ -2171,7 +2368,7 @@ mod tests {
             Path::new("payload.bin"),
             "same-size payload",
             16,
-            || match std::fs::OpenOptions::new().write(true).open(&payload) {
+            |_| match std::fs::OpenOptions::new().write(true).open(&payload) {
                 Ok(mut writer) => {
                     writer.write_all(b"abcde").unwrap();
                     writer.sync_all().unwrap();
@@ -2189,6 +2386,141 @@ mod tests {
             let error = result.unwrap_err().to_string();
             assert!(error.contains("content revision"), "{error}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn required_payload_validation_stays_bound_to_a_renamed_entry() {
+        let temp = tempfile::tempdir().unwrap();
+        let library_path = temp.path().join("library");
+        let entry_path = library_path.join("entry-a");
+        std::fs::create_dir_all(&entry_path).unwrap();
+        std::fs::write(entry_path.join("payload.bin"), b"payload").unwrap();
+        let library = LibraryRoot::open(&library_path).unwrap();
+        let entry = library.entry("entry-a").unwrap();
+
+        let moved = library_path.join("entry-moved");
+        std::fs::rename(&entry_path, &moved).unwrap();
+        std::fs::create_dir(&entry_path).unwrap();
+
+        entry
+            .validate_required_payload_file(Path::new("payload.bin"), "test payload")
+            .unwrap();
+        assert!(!entry_path.join("payload.bin").exists());
+        assert!(moved.join("payload.bin").is_file());
+    }
+
+    #[test]
+    fn required_payload_validation_classifies_missing_and_intermediate_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let library_path = temp.path().join("library");
+        let entry_path = library_path.join("entry-a");
+        std::fs::create_dir_all(&entry_path).unwrap();
+        std::fs::write(entry_path.join("blocking"), b"file").unwrap();
+        let library = LibraryRoot::open(&library_path).unwrap();
+        let entry = library.entry("entry-a").unwrap();
+
+        let missing = entry
+            .validate_required_payload_file(Path::new("missing.bin"), "test payload")
+            .unwrap_err();
+        assert!(matches!(missing, crate::ModError::Other(_)));
+        assert!(missing.to_string().contains("child is missing"));
+
+        let blocked = entry
+            .validate_required_payload_file(Path::new("blocking/payload.bin"), "test payload")
+            .unwrap_err();
+        assert!(matches!(blocked, crate::ModError::Other(_)));
+        assert!(blocked.to_string().contains("crosses a regular file"));
+    }
+
+    #[test]
+    fn optional_payload_open_observes_a_file_created_at_the_open_boundary() {
+        let temp = tempfile::tempdir().unwrap();
+        let library_path = temp.path().join("library");
+        let entry_path = library_path.join("entry-a");
+        std::fs::create_dir_all(&entry_path).unwrap();
+        let entry = LibraryRoot::open(&library_path)
+            .unwrap()
+            .entry("entry-a")
+            .unwrap();
+
+        inject_open_child_race(|opened_path| {
+            assert_eq!(
+                opened_path.file_name(),
+                Some(std::ffi::OsStr::new("optional.bin"))
+            );
+            std::fs::write(opened_path, b"created at open").unwrap();
+        });
+
+        assert!(entry
+            .open_optional_payload_file(Path::new("optional.bin"), "optional payload")
+            .unwrap()
+            .is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn required_payload_validation_rejects_a_fifo_without_blocking() {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let temp = tempfile::tempdir().unwrap();
+        let library_path = temp.path().join("library");
+        let entry_path = library_path.join("entry-a");
+        std::fs::create_dir_all(&entry_path).unwrap();
+        let fifo = entry_path.join("payload.pipe");
+        let fifo_name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = LibraryRoot::open(&library_path)
+                .and_then(|library| library.entry("entry-a"))
+                .and_then(|entry| {
+                    entry.validate_required_payload_file(Path::new("payload.pipe"), "test payload")
+                })
+                .map_err(|error| error.to_string());
+            let _ = sender.send(result);
+        });
+
+        let result = receiver
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("opening a FIFO must complete promptly")
+            .unwrap_err();
+        assert!(
+            result.contains("neither a regular file nor directory"),
+            "{result}"
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[cfg_attr(
+        windows,
+        ignore = "requires Windows symbolic-link privilege; run explicitly on a privileged worker"
+    )]
+    #[test]
+    fn required_payload_validation_rejects_a_final_link_as_corruption() {
+        let temp = tempfile::tempdir().unwrap();
+        let library_path = temp.path().join("library");
+        let entry_path = library_path.join("entry-a");
+        std::fs::create_dir_all(&entry_path).unwrap();
+        let outside = temp.path().join("outside.bin");
+        std::fs::write(&outside, b"outside").unwrap();
+        assert!(
+            make_file_link(&outside, &entry_path.join("payload.bin")),
+            "test requires symbolic-link creation support"
+        );
+        let library = LibraryRoot::open(&library_path).unwrap();
+        let entry = library.entry("entry-a").unwrap();
+
+        let error = entry
+            .validate_required_payload_file(Path::new("payload.bin"), "test payload")
+            .unwrap_err();
+        assert!(matches!(error, crate::ModError::Other(_)));
+        assert!(
+            error.to_string().contains("symbolic link")
+                || error.to_string().contains("reparse point"),
+            "{error}"
+        );
     }
 
     #[cfg(any(unix, windows))]

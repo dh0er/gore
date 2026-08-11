@@ -57,6 +57,9 @@ pub enum ModError {
     Fmod(String),
     #[error("voice archive: {0}")]
     Voice(String),
+    /// A read-only aggregate inspection ceiling, not evidence that one input is unsupported.
+    #[error("inspection bound: {0}")]
+    InspectionBound(String),
     #[error("{0}")]
     Other(String),
 }
@@ -3309,6 +3312,29 @@ fn update_content_hash(hash: &mut u64, bytes: &[u8]) {
 /// Hash a file with a fixed-size buffer. Voice archives can be many GiB, so drift checks must not
 /// materialize the live ZIP merely to compare it with the hash persisted in the deploy record.
 fn content_hash_file(path: &Path) -> std::io::Result<String> {
+    let mut remaining = u64::MAX;
+    content_hash_file_bounded(path, &mut remaining)
+}
+
+#[derive(Debug)]
+struct InspectionBoundIo(String);
+
+impl std::fmt::Display for InspectionBoundIo {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for InspectionBoundIo {}
+
+fn inspection_bound_from_io(error: &std::io::Error) -> Option<String> {
+    error
+        .get_ref()?
+        .downcast_ref::<InspectionBoundIo>()
+        .map(|bound| bound.0.clone())
+}
+
+fn content_hash_file_bounded(path: &Path, remaining: &mut u64) -> std::io::Result<String> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata_is_link(&metadata) || !metadata.is_file() {
         return Err(std::io::Error::new(
@@ -3316,24 +3342,42 @@ fn content_hash_file(path: &Path) -> std::io::Result<String> {
             format!("not a regular non-link file: {}", path.display()),
         ));
     }
-    let mut file = std::io::BufReader::new(std::fs::File::open(path)?);
+    let mut file = std::fs::File::open(path)?;
+    let opened = file.metadata()?;
+    if opened.len() > *remaining {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            InspectionBoundIo(format!(
+                "file exceeds the remaining {remaining}-byte hashing budget: {}",
+                path.display()
+            )),
+        ));
+    }
+    *remaining -= opened.len();
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     // Keep the streaming buffer off the caller's stack. Windows console binaries reserve only
     // 1 MiB by default, so an equally-sized local array can overflow before the first read.
     let mut buffer = vec![0u8; 1024 * 1024];
     let mut read_total = 0u64;
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
+    {
+        let mut limited = std::io::Read::by_ref(&mut file).take(opened.len().saturating_add(1));
+        loop {
+            let read = limited.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            update_content_hash(&mut hash, &buffer[..read]);
+            read_total = read_total.checked_add(read as u64).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "file length overflow")
+            })?;
         }
-        update_content_hash(&mut hash, &buffer[..read]);
-        read_total = read_total.checked_add(read as u64).ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "file length overflow")
-        })?;
     }
     // If a Steam update races the hash, do not accept a digest of a partial/mixed generation.
-    if read_total != metadata.len() || std::fs::metadata(path)?.len() != metadata.len() {
+    if read_total != opened.len()
+        || file.metadata()?.len() != opened.len()
+        || metadata.len() != opened.len()
+        || std::fs::metadata(path)?.len() != opened.len()
+    {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("file changed while hashing: {}", path.display()),
@@ -3343,6 +3387,11 @@ fn content_hash_file(path: &Path) -> std::io::Result<String> {
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
+    let mut remaining = u64::MAX;
+    sha256_file_bounded(path, &mut remaining)
+}
+
+pub(crate) fn sha256_file_bounded(path: &Path, remaining: &mut u64) -> Result<String> {
     let metadata = std::fs::symlink_metadata(path).map_err(io(&format!(
         "reading SHA-256 source metadata {}",
         path.display()
@@ -3358,21 +3407,31 @@ fn sha256_file(path: &Path) -> Result<String> {
     let opened = file
         .metadata()
         .map_err(io("reading opened SHA-256 source metadata"))?;
+    if opened.len() > *remaining {
+        return Err(ModError::InspectionBound(format!(
+            "SHA-256 source exceeds the remaining {remaining}-byte hashing budget: {}",
+            path.display()
+        )));
+    }
+    *remaining -= opened.len();
     let mut hasher = Sha256::new();
     // This helper is used during deploy preflight on the CLI's 1 MiB Windows main stack.
     let mut buffer = vec![0u8; 1024 * 1024];
     let mut total = 0u64;
-    loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(io("hashing SHA-256 source"))?;
-        if read == 0 {
-            break;
+    {
+        let mut limited = std::io::Read::by_ref(&mut file).take(opened.len().saturating_add(1));
+        loop {
+            let read = limited
+                .read(&mut buffer)
+                .map_err(io("hashing SHA-256 source"))?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+            total = total
+                .checked_add(read as u64)
+                .ok_or_else(|| ModError::Other("SHA-256 source length overflow".into()))?;
         }
-        hasher.update(&buffer[..read]);
-        total = total
-            .checked_add(read as u64)
-            .ok_or_else(|| ModError::Other("SHA-256 source length overflow".into()))?;
     }
     let after = file
         .metadata()
@@ -3391,6 +3450,15 @@ pub(crate) fn file_matches_recorded_hash(path: &Path, expected: &str) -> bool {
 }
 
 fn file_matches_recorded_hash_result(path: &Path, expected: &str) -> Result<bool> {
+    let mut remaining = u64::MAX;
+    file_matches_recorded_hash_bounded(path, expected, &mut remaining)
+}
+
+pub(crate) fn file_matches_recorded_hash_bounded(
+    path: &Path,
+    expected: &str,
+    remaining: &mut u64,
+) -> Result<bool> {
     if let Some(hex) = expected.strip_prefix("sha256:") {
         if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(ModError::Other(format!(
@@ -3398,7 +3466,7 @@ fn file_matches_recorded_hash_result(path: &Path, expected: &str) -> Result<bool
                 path.display()
             )));
         }
-        sha256_file(path).map(|current| current == expected)
+        sha256_file_bounded(path, remaining).map(|current| current == expected)
     } else {
         if expected.len() != 16 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(ModError::Other(format!(
@@ -3406,9 +3474,15 @@ fn file_matches_recorded_hash_result(path: &Path, expected: &str) -> Result<bool
                 path.display()
             )));
         }
-        content_hash_file(path)
-            .map(|current| current == expected)
-            .map_err(io(&format!("hashing deployed file {}", path.display())))
+        match content_hash_file_bounded(path, remaining) {
+            Ok(current) => Ok(current == expected),
+            Err(error) => match inspection_bound_from_io(&error) {
+                Some(message) => Err(ModError::InspectionBound(message)),
+                None => Err(io(&format!("hashing deployed file {}", path.display()))(
+                    error,
+                )),
+            },
+        }
     }
 }
 
@@ -3416,7 +3490,27 @@ fn tree_fingerprint(root: &Path) -> Result<String> {
     tree_fingerprint_with_prefix(root, None)
 }
 
+pub(crate) fn tree_fingerprint_bounded(
+    root: &Path,
+    remaining_bytes: &mut u64,
+    remaining_entries: &mut u64,
+) -> Result<String> {
+    tree_fingerprint_with_prefix_bounded(
+        root,
+        None,
+        Some((remaining_bytes, remaining_entries)),
+    )
+}
+
 fn tree_fingerprint_with_prefix(root: &Path, prefix: Option<&str>) -> Result<String> {
+    tree_fingerprint_with_prefix_bounded(root, prefix, None)
+}
+
+fn tree_fingerprint_with_prefix_bounded(
+    root: &Path,
+    prefix: Option<&str>,
+    mut budget: Option<(&mut u64, &mut u64)>,
+) -> Result<String> {
     let root_metadata = std::fs::symlink_metadata(root).map_err(io(&format!(
         "reading UE4SS tree metadata {}",
         root.display()
@@ -3454,6 +3548,19 @@ fn tree_fingerprint_with_prefix(root: &Path, prefix: Option<&str>) -> Result<Str
         )))?;
         for entry in read_dir {
             let entry = entry.map_err(io("reading UE4SS identity entry"))?;
+            if entries.len() as u64 >= MAX_UE4SS_TREE_ENTRIES {
+                return Err(ModError::Other(format!(
+                    "UE4SS identity tree exceeds the {MAX_UE4SS_TREE_ENTRIES}-entry limit"
+                )));
+            }
+            if let Some((_, remaining_entries)) = budget.as_mut() {
+                if **remaining_entries == 0 {
+                    return Err(ModError::InspectionBound(
+                        "deployment inspection exhausted its tree-entry budget".into(),
+                    ));
+                }
+                **remaining_entries -= 1;
+            }
             let path = entry.path();
             let metadata = std::fs::symlink_metadata(&path)
                 .map_err(io("reading UE4SS identity entry metadata"))?;
@@ -3485,11 +3592,6 @@ fn tree_fingerprint_with_prefix(root: &Path, prefix: Option<&str>) -> Result<Str
                     path.display()
                 )));
             }
-            if entries.len() as u64 >= MAX_UE4SS_TREE_ENTRIES {
-                return Err(ModError::Other(format!(
-                    "UE4SS identity tree exceeds the {MAX_UE4SS_TREE_ENTRIES}-entry limit"
-                )));
-            }
             if metadata.is_dir() {
                 pending.push(path.clone());
                 entries.push(Entry {
@@ -3512,6 +3614,16 @@ fn tree_fingerprint_with_prefix(root: &Path, prefix: Option<&str>) -> Result<Str
                     return Err(ModError::Other(format!(
                         "UE4SS identity tree exceeds the {MAX_UE4SS_TREE_BYTES}-byte total limit"
                     )));
+                }
+                if let Some((remaining_bytes, _)) = budget.as_mut() {
+                    if metadata.len() > **remaining_bytes {
+                        return Err(ModError::InspectionBound(format!(
+                            "UE4SS identity file exceeds the remaining {}-byte deployment inspection budget: {}",
+                            **remaining_bytes,
+                            path.display()
+                        )));
+                    }
+                    **remaining_bytes -= metadata.len();
                 }
                 entries.push(Entry {
                     relative,
@@ -3537,7 +3649,8 @@ fn tree_fingerprint_with_prefix(root: &Path, prefix: Option<&str>) -> Result<Str
         hasher.update(entry.relative.as_bytes());
         hasher.update(entry.len.to_le_bytes());
         if !entry.is_dir {
-            let expected = sha256_file(&entry.path)?;
+            let mut file_budget = entry.len;
+            let expected = sha256_file_bounded(&entry.path, &mut file_budget)?;
             hasher.update(expected.as_bytes());
         }
     }
@@ -4685,6 +4798,9 @@ fn commit_plan_guarded(
     let game_root = abs_root;
     let prior = prev.as_ref().map(|stored| &stored.record);
     let prev_record_bytes = prev.as_ref().map(|stored| stored.raw.as_slice());
+    if let Some(prior) = prior {
+        validate_record_identities(prior)?;
+    }
 
     // Reject a plan that would write the SAME destination twice (across in-place writes, UE4SS
     // dirs, texture triplets, and manager paks). Two components/mods targeting one path would race in
@@ -4964,6 +5080,7 @@ fn commit_plan_guarded(
 
 fn write_record_file(game_root: &Path, record: &DeployRecord) -> Result<()> {
     validate_record(game_root, record)?;
+    validate_record_identities(record)?;
     let bytes = serde_json::to_vec_pretty(record)?;
     if bytes.len() as u64 > MAX_DEPLOY_RECORD_BYTES {
         return Err(ModError::Other(format!(
@@ -7139,6 +7256,94 @@ fn path_exists_no_follow(path: &Path) -> bool {
 /// Whether `list` already contains a path referring to the same file as `p` (`same_path_s`).
 fn contains_same_path(list: &[String], p: &str) -> bool {
     list.iter().any(|x| same_path_s(x, p))
+}
+
+fn valid_sha256_identity(identity: &str) -> bool {
+    identity.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+fn valid_file_identity(identity: &str) -> bool {
+    valid_sha256_identity(identity)
+        || (identity.len() == 16
+            && identity
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+}
+
+/// Require the exact lowercase identities GORE writes. This remains separate from structural
+/// record parsing so legacy public status can keep its read-only classification, while preflight
+/// and every attempted record publication fail closed before trusting noncanonical ownership.
+pub(crate) fn validate_record_identities(record: &DeployRecord) -> Result<()> {
+    for (path, identity) in &record.deployed_hashes {
+        if !valid_file_identity(identity) {
+            return Err(ModError::Other(format!(
+                "deploy record contains an invalid deployed file identity for {path}"
+            )));
+        }
+    }
+    for (path, identities) in &record.recovery_file_hashes {
+        if identities.is_empty()
+            || identities
+                .iter()
+                .any(|identity| !valid_file_identity(identity))
+        {
+            return Err(ModError::Other(format!(
+                "deploy record contains an invalid alternate file identity for {path}"
+            )));
+        }
+    }
+    for (path, identity) in &record.backup_hashes {
+        if !valid_sha256_identity(identity) {
+            return Err(ModError::Other(format!(
+                "deploy record contains an invalid backup SHA-256 identity for {path}"
+            )));
+        }
+    }
+    for (path, identity) in &record.ue4ss_tree_fingerprints {
+        if !valid_sha256_identity(identity) {
+            return Err(ModError::Other(format!(
+                "deploy record contains an invalid UE4SS tree identity for {path}"
+            )));
+        }
+    }
+    for (path, identities) in &record.recovery_tree_fingerprints {
+        if identities.is_empty()
+            || identities
+                .iter()
+                .any(|identity| !valid_sha256_identity(identity))
+        {
+            return Err(ModError::Other(format!(
+                "deploy record contains an invalid alternate UE4SS tree identity for {path}"
+            )));
+        }
+    }
+    for (source, claim) in &record.file_cleanup_claims {
+        if claim.expected_hashes.is_empty()
+            || claim
+                .expected_hashes
+                .iter()
+                .any(|identity| !valid_file_identity(identity))
+        {
+            return Err(ModError::Other(format!(
+                "deploy record contains an invalid cleanup file identity for {source}"
+            )));
+        }
+        if claim
+            .restore_hash
+            .as_deref()
+            .is_some_and(|identity| !valid_sha256_identity(identity))
+        {
+            return Err(ModError::Other(format!(
+                "deploy record contains an invalid cleanup restore identity for {source}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -12891,6 +13096,90 @@ mod tests {
     }
 
     #[test]
+    fn undeploy_rejects_noncanonical_ownership_before_recovery_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let live = game.join("G1R/Story/VoiceOver/target.zip");
+        let backup = bak_path(&live);
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"modded").unwrap();
+        std::fs::write(&backup, b"pristine").unwrap();
+        let canonical = sha256_file(&backup).unwrap();
+        let noncanonical = format!(
+            "sha256:{}",
+            canonical
+                .strip_prefix("sha256:")
+                .unwrap()
+                .to_ascii_uppercase()
+        );
+        assert_ne!(noncanonical, canonical);
+        let record = DeployRecord {
+            backups: vec![(
+                live.display().to_string(),
+                backup.display().to_string(),
+                true,
+            )],
+            deployed_hashes: BTreeMap::from([(
+                live.display().to_string(),
+                content_hash(b"modded"),
+            )]),
+            backup_hashes: BTreeMap::from([(backup.display().to_string(), noncanonical)]),
+            ..Default::default()
+        };
+        let path = record_path(&game);
+        let record_bytes = serde_json::to_vec(&record).unwrap();
+        std::fs::write(&path, &record_bytes).unwrap();
+
+        let error = undeploy(&game).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("invalid backup SHA-256 identity"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&live).unwrap(), b"modded");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"pristine");
+        assert_eq!(std::fs::read(&path).unwrap(), record_bytes);
+    }
+
+    #[test]
+    fn record_identity_validation_covers_cleanup_claims() {
+        let canonical_sha = format!("sha256:{}", "a".repeat(64));
+        let noncanonical_sha = format!("sha256:{}", "A".repeat(64));
+        let noncanonical_legacy = "A".repeat(16);
+        let cases = [
+            DeployRecord {
+                file_cleanup_claims: BTreeMap::from([(
+                    "source".into(),
+                    FileCleanupClaim {
+                        holder: "holder".into(),
+                        expected_hashes: vec![noncanonical_legacy],
+                        restore_from: None,
+                        restore_hash: None,
+                    },
+                )]),
+                ..Default::default()
+            },
+            DeployRecord {
+                file_cleanup_claims: BTreeMap::from([(
+                    "source".into(),
+                    FileCleanupClaim {
+                        holder: "holder".into(),
+                        expected_hashes: vec![canonical_sha],
+                        restore_from: Some("backup".into()),
+                        restore_hash: Some(noncanonical_sha),
+                    },
+                )]),
+                ..Default::default()
+            },
+        ];
+
+        for record in cases {
+            assert!(validate_record_identities(&record).is_err());
+        }
+    }
+
+    #[test]
     fn undeploy_backup_delete_failure_is_returned_and_durably_retracked() {
         let dir = tempfile::tempdir().unwrap();
         let game = dir.path().join("game");
@@ -13803,6 +14092,74 @@ mod tests {
         );
         assert_eq!(std::fs::read(&dst).unwrap(), b"manual");
         assert!(!record_path(&game).exists());
+    }
+
+    #[test]
+    fn commit_rejects_noncanonical_prior_before_staging() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let prior_live = game.join("G1R/Story/VoiceOver/prior.zip");
+        let prior_backup = bak_path(&prior_live);
+        let target = game.join("G1R/Story/VoiceOver/target.zip");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&prior_live, b"prior-modded").unwrap();
+        std::fs::write(&prior_backup, b"prior-pristine").unwrap();
+        std::fs::write(&target, b"target-pristine").unwrap();
+        let canonical = sha256_file(&prior_backup).unwrap();
+        let noncanonical = format!(
+            "sha256:{}",
+            canonical
+                .strip_prefix("sha256:")
+                .unwrap()
+                .to_ascii_uppercase()
+        );
+        let prior_record = DeployRecord {
+            mod_name: "prior".into(),
+            owner: "manager".into(),
+            backups: vec![(
+                prior_live.display().to_string(),
+                prior_backup.display().to_string(),
+                true,
+            )],
+            deployed_hashes: BTreeMap::from([(
+                prior_live.display().to_string(),
+                content_hash(b"prior-modded"),
+            )]),
+            backup_hashes: BTreeMap::from([(prior_backup.display().to_string(), noncanonical)]),
+            ..Default::default()
+        };
+        let record_path = record_path(&game);
+        let record_bytes = serde_json::to_vec(&prior_record).unwrap();
+        std::fs::write(&record_path, &record_bytes).unwrap();
+        let prior = read_record(&game).unwrap().unwrap();
+
+        let error = commit_plan(
+            &resolve_game_paths(&game),
+            &game,
+            DeployPlan {
+                writes: vec![(target.clone(), b"new-deployment".to_vec())],
+                ..Default::default()
+            },
+            DeployRecord {
+                mod_name: "next".into(),
+                owner: "manager".into(),
+                ..Default::default()
+            },
+            Some(prior),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("invalid backup SHA-256 identity"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&prior_live).unwrap(), b"prior-modded");
+        assert_eq!(std::fs::read(&prior_backup).unwrap(), b"prior-pristine");
+        assert_eq!(std::fs::read(&target).unwrap(), b"target-pristine");
+        assert!(!bak_path(&target).exists());
+        assert_eq!(std::fs::read(&record_path).unwrap(), record_bytes);
     }
 
     #[test]

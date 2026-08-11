@@ -12,6 +12,7 @@ pub mod import;
 pub mod loadout;
 pub mod model;
 pub mod paths;
+pub mod preflight;
 pub mod status;
 
 pub use loadout::{Loadout, LoadoutEntry};
