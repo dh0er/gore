@@ -9010,6 +9010,26 @@ fn apply_private_edits(
             }
         }
     }
+    // The same applies to two STRUCTURED edits that resolve the same target: each
+    // replaces whatever is there, so the second discards the first's work while the
+    // write reports both. They are not addressed by a path, so the rule above never
+    // sees them — compare the targets themselves.
+    let targets: Vec<Option<(&str, String)>> =
+        edit_specs.iter().map(structured_edit_target).collect();
+    for (first_at, first) in targets.iter().enumerate() {
+        let Some(first) = first else { continue };
+        for (second_at, second) in targets.iter().enumerate().skip(first_at + 1) {
+            if second.as_ref() != Some(first) {
+                continue;
+            }
+            return Err(CoreError::UnsupportedEdit(format!(
+                "{} (edit {first_at}) and {} (edit {second_at}) rewrite the same {}, \
+                 so one of the two would silently be discarded whichever order they \
+                 run in; save them separately",
+                edits[first_at].path, edits[second_at].path, first.0
+            )));
+        }
+    }
     // Every `apply_*` re-parses the payload it is handed, so a batch can never carry a
     // stale BYTE OFFSET from one edit into the next. What a batch CAN invalidate is a
     // caller-supplied ORDINAL: an array index or slot id the caller read off an
@@ -9158,6 +9178,46 @@ fn path_reaches_inventory_slot(path: &[properties::PathSeg]) -> bool {
         Some(None) => true,
         Some(Some(properties::PathSeg::Index(_))) => true,
         _ => false,
+    }
+}
+
+/// What a structured edit rewrites as a whole, for the operations that resolve
+/// their target from a key and then replace what they find there. Two edits
+/// naming the same one cannot share a write in either order.
+///
+/// Only the declarative operations belong here, not the ones that ADD to what is
+/// there: two `addItem` calls for one actor fill two different slots and two
+/// skill edits for one actor touch two different skills, which is exactly what a
+/// batch is for. The description is what the user reads in the refusal.
+fn structured_edit_target(edit: &PrivateEdit) -> Option<(&'static str, String)> {
+    fn key(parts: [&str; 2]) -> String {
+        parts
+            .iter()
+            .map(|part| part.trim().to_ascii_lowercase())
+            .collect::<Vec<_>>()
+            .join("\u{1f}")
+    }
+    match edit {
+        PrivateEdit::NpcRelationship(relationship) => Some((
+            "relationship of that NPC",
+            key([relationship.id.as_str(), ""]),
+        )),
+        PrivateEdit::SkillSet(skill) => Some((
+            "skill of that character",
+            key([skill.actor.as_str(), skill.base.as_str()]),
+        )),
+        PrivateEdit::KnowledgeSetEntry(entry) => Some((
+            "knowledge entry of that character",
+            key([entry.character.as_str(), entry.entry.as_str()]),
+        )),
+        PrivateEdit::GlossarySetSegment(glossary) => Some((
+            "glossary segment",
+            key([
+                glossary.document_asset.as_str(),
+                glossary.segment_asset.as_str(),
+            ]),
+        )),
+        _ => None,
     }
 }
 
@@ -22944,6 +23004,95 @@ mod tests {
         let error = apply_private_glossary_set_segment_to_payload(&mut payload, &edit).unwrap_err();
         assert!(matches!(error, CoreError::Validation(_)));
         assert_eq!(payload, before);
+    }
+
+    #[test]
+    fn two_structured_edits_for_one_target_are_refused_but_peers_still_batch() {
+        let relationship = |id: &str, value: &str| PrivateEdit::NpcRelationship(
+            PrivateNpcRelationshipEdit {
+                id: id.to_string(),
+                relationship: npc::PersonalRelationship::parse(value).unwrap(),
+            },
+        );
+        let skill = |actor: &str, base: &str, tier: &str| {
+            PrivateEdit::SkillSet(skills::SkillSetEdit {
+                actor: actor.to_string(),
+                base: base.to_string(),
+                tier: tier.to_string(),
+            })
+        };
+
+        // Each of the two replaces that NPC's relationship, so one of them would
+        // vanish without a word. The id is matched as the appliers match it.
+        assert_eq!(
+            structured_edit_target(&relationship("Diego", "friend")),
+            structured_edit_target(&relationship(" diego ", "enemy")),
+        );
+
+        // Two skills of one character are two different targets — that is what a
+        // batch is for — and so are one skill of two characters.
+        assert_ne!(
+            structured_edit_target(&skill("Hero", "Skill_OneHanded", "Tier2")),
+            structured_edit_target(&skill("Hero", "Skill_Bow", "Tier2")),
+        );
+        assert_ne!(
+            structured_edit_target(&skill("Hero", "Skill_Bow", "Tier2")),
+            structured_edit_target(&skill("Diego", "Skill_Bow", "Tier2")),
+        );
+        assert_eq!(
+            structured_edit_target(&skill("Hero", "Skill_Bow", "Tier1")),
+            structured_edit_target(&skill("Hero", "Skill_Bow", "Tier3")),
+        );
+
+        // Adding two items to one inventory is not a target collision at all.
+        let add = |path: &str| {
+            PrivateEdit::InventoryAddItem(PrivateInventoryAddItemEdit {
+                path: path.to_string(),
+                count: 1,
+                actor_id: None,
+            })
+        };
+        assert!(structured_edit_target(&add("/Script/Angelscript.ItFo_Cheese")).is_none());
+
+        // And end to end: the same segment twice is refused by name, two
+        // different segments of one document still share the write.
+        let (_dir, path, backend) = progression_fixture(
+            "G1R-glossary-pair.sav",
+            glossary_progression_payload(),
+        );
+        let data = fs::read(path).unwrap();
+        let segment = |segment: &str, unlocked: bool| Edit {
+            path: "private.glossary.setSegment".to_string(),
+            value: json!({
+                "documentClass": "/Script/Angelscript.Document_Glossary_Meatbug",
+                "segmentClass": segment,
+                "unlocked": unlocked,
+            }),
+        };
+        let entry2 = segment(
+            "/Script/Angelscript.DocumentSegment_Glossary_Meatbug_Entry2",
+            true,
+        );
+        let entry2_again = segment(
+            "/Script/Angelscript.DocumentSegment_Glossary_Meatbug_Entry2",
+            false,
+        );
+        let unlock = segment(
+            "/Script/Angelscript.DocumentSegment_Glossary_Meatbug_Unlock",
+            false,
+        );
+
+        let error = apply_private_edits(&data, &[&entry2, &entry2_again], Some(&backend))
+            .unwrap_err();
+        let CoreError::UnsupportedEdit(message) = &error else {
+            panic!("expected the pair to be refused, got {error:?}");
+        };
+        assert!(
+            message.contains("glossary segment"),
+            "the refusal has to say what the two share, got {message:?}"
+        );
+        apply_private_edits(&data, &[&entry2, &unlock], Some(&backend))
+            .expect("two different segments of one document still share a write");
     }
 
     #[test]
