@@ -80,6 +80,7 @@ struct DeploymentInspection {
     remaining_hash_entries: u64,
     remaining_tree_entries: u64,
     file_matches: HashMap<(String, String), bool>,
+    legacy_hashes: HashMap<String, String>,
     tree_fingerprints: HashMap<String, String>,
     sha256: HashMap<String, String>,
 }
@@ -95,6 +96,7 @@ impl DeploymentInspection {
             remaining_hash_entries,
             remaining_tree_entries,
             file_matches: HashMap::new(),
+            legacy_hashes: HashMap::new(),
             tree_fingerprints: HashMap::new(),
             sha256: HashMap::new(),
         }
@@ -195,27 +197,27 @@ fn file_matches_for_status(
     failure_policy: InspectionFailurePolicy,
     inspection: &mut DeploymentInspection,
 ) -> crate::Result<bool> {
-    let cache_key = (path.display().to_string(), expected.to_owned());
+    let cache_key = (crate::record_path_key(path), expected.to_owned());
     if let Some(cached) = inspection.file_matches.get(&cache_key) {
         return Ok(*cached);
     }
+    let sha256_prefixed = expected.starts_with("sha256:");
     let sha256_expected = expected.strip_prefix("sha256:").is_some_and(|hex| {
         hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
     });
+    let legacy_expected = expected.len() == 16
+        && expected
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit());
     let matches = if failure_policy == InspectionFailurePolicy::TreatAsDrift {
         if sha256_expected {
             sha256_for_status(path, failure_policy, inspection)?
                 .as_deref()
                 == Some(expected)
-        } else if inspection.charge_file_hash().is_err() {
+        } else if sha256_prefixed || !legacy_expected {
             false
         } else {
-            crate::file_matches_recorded_hash_bounded(
-                path,
-                expected,
-                &mut inspection.remaining_hash_bytes,
-            )
-            .unwrap_or(false)
+            legacy_hash_for_status(path, failure_policy, inspection)?.as_deref() == Some(expected)
         }
     } else {
         let Some(metadata) = metadata_for_status(path)? else {
@@ -228,13 +230,18 @@ fn file_matches_for_status(
             sha256_for_status(path, failure_policy, inspection)?
                 .as_deref()
                 == Some(expected)
+        } else if sha256_prefixed {
+            return Err(crate::ModError::Other(format!(
+                "invalid recorded SHA-256 identity for {}",
+                path.display()
+            )));
+        } else if !legacy_expected {
+            return Err(crate::ModError::Other(format!(
+                "invalid recorded legacy content hash for {}",
+                path.display()
+            )));
         } else {
-            inspection.charge_file_hash()?;
-            crate::file_matches_recorded_hash_bounded(
-                path,
-                expected,
-                &mut inspection.remaining_hash_bytes,
-            )?
+            legacy_hash_for_status(path, failure_policy, inspection)?.as_deref() == Some(expected)
         }
     };
     inspection.file_matches.insert(cache_key, matches);
@@ -261,7 +268,7 @@ fn tree_matches_for_status(
             )));
         }
     }
-    let cache_key = path.display().to_string();
+    let cache_key = crate::record_path_key(path);
     if let Some(cached) = inspection.tree_fingerprints.get(&cache_key) {
         return Ok(cached == expected);
     }
@@ -291,7 +298,7 @@ fn sha256_for_status(
     failure_policy: InspectionFailurePolicy,
     inspection: &mut DeploymentInspection,
 ) -> crate::Result<Option<String>> {
-    let cache_key = path.display().to_string();
+    let cache_key = crate::record_path_key(path);
     if let Some(cached) = inspection.sha256.get(&cache_key) {
         return Ok(Some(cached.clone()));
     }
@@ -308,6 +315,41 @@ fn sha256_for_status(
         (InspectionFailurePolicy::Preserve, Err(error)) => return Err(error),
     };
     inspection.sha256.insert(cache_key, hashed.clone());
+    Ok(Some(hashed))
+}
+
+fn legacy_hash_for_status(
+    path: &Path,
+    failure_policy: InspectionFailurePolicy,
+    inspection: &mut DeploymentInspection,
+) -> crate::Result<Option<String>> {
+    let cache_key = crate::record_path_key(path);
+    if let Some(cached) = inspection.legacy_hashes.get(&cache_key) {
+        return Ok(Some(cached.clone()));
+    }
+    if let Err(error) = inspection.charge_file_hash() {
+        return match failure_policy {
+            InspectionFailurePolicy::TreatAsDrift => Ok(None),
+            InspectionFailurePolicy::Preserve => Err(error),
+        };
+    }
+    let hashed = crate::content_hash_file_bounded(path, &mut inspection.remaining_hash_bytes);
+    let hashed = match (failure_policy, hashed) {
+        (_, Ok(hashed)) => hashed,
+        (InspectionFailurePolicy::TreatAsDrift, Err(_)) => return Ok(None),
+        (InspectionFailurePolicy::Preserve, Err(error)) => {
+            return match crate::inspection_bound_from_io(&error) {
+                Some(message) => Err(crate::ModError::InspectionBound(message)),
+                None => Err(crate::io(&format!(
+                    "hashing deployed file {}",
+                    path.display()
+                ))(error)),
+            }
+        }
+    };
+    inspection
+        .legacy_hashes
+        .insert(cache_key, hashed.clone());
     Ok(Some(hashed))
 }
 
@@ -1680,6 +1722,98 @@ mod tests {
         .unwrap_err();
         assert!(matches!(&error, crate::ModError::InspectionBound(_)));
         assert!(error.to_string().contains("tree-entry budget"), "{error}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn deployment_hash_caches_fold_windows_record_path_aliases() {
+        fn toggle_verbatim(path: &Path) -> std::path::PathBuf {
+            let text = path.to_string_lossy();
+            if let Some(plain) = text.strip_prefix(r"\\?\") {
+                plain.into()
+            } else {
+                format!(r"\\?\{text}").into()
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("alpha.bin");
+        std::fs::write(&file, b"alpha").unwrap();
+        let case_alias = file.with_file_name("ALPHA.BIN");
+        let verbatim_alias = toggle_verbatim(&case_alias);
+        assert!(verbatim_alias.is_file());
+        assert_eq!(
+            crate::record_path_key(&file),
+            crate::record_path_key(&verbatim_alias)
+        );
+
+        let legacy_hash = crate::content_hash(b"alpha");
+        let wrong_legacy_hash = crate::content_hash(b"other");
+        let mut legacy = DeploymentInspection::new(5, 1, 0);
+        assert!(file_matches_for_status(
+            &file,
+            &legacy_hash,
+            InspectionFailurePolicy::Preserve,
+            &mut legacy,
+        )
+        .unwrap());
+        assert!(file_matches_for_status(
+            &verbatim_alias,
+            &legacy_hash,
+            InspectionFailurePolicy::Preserve,
+            &mut legacy,
+        )
+        .unwrap());
+        assert!(!file_matches_for_status(
+            &case_alias,
+            &wrong_legacy_hash,
+            InspectionFailurePolicy::Preserve,
+            &mut legacy,
+        )
+        .unwrap());
+        assert_eq!(legacy.remaining_hash_bytes, 0);
+        assert_eq!(legacy.remaining_hash_entries, 0);
+        assert_eq!(legacy.file_matches.len(), 2);
+        assert_eq!(legacy.legacy_hashes.len(), 1);
+
+        let mut sha256 = DeploymentInspection::new(5, 1, 0);
+        assert_eq!(
+            sha256_for_status(&file, InspectionFailurePolicy::Preserve, &mut sha256).unwrap(),
+            sha256_for_status(
+                &verbatim_alias,
+                InspectionFailurePolicy::Preserve,
+                &mut sha256,
+            )
+            .unwrap()
+        );
+        assert_eq!(sha256.remaining_hash_bytes, 0);
+        assert_eq!(sha256.remaining_hash_entries, 0);
+        assert_eq!(sha256.sha256.len(), 1);
+
+        let tree = tmp.path().join("tree");
+        std::fs::create_dir(&tree).unwrap();
+        std::fs::write(tree.join("payload"), b"tree").unwrap();
+        let tree_alias = toggle_verbatim(&tree.with_file_name("TREE"));
+        assert!(tree_alias.is_dir());
+        let tree_hash = crate::tree_fingerprint(&tree).unwrap();
+        let mut trees = DeploymentInspection::new(4, 0, 1);
+        assert!(tree_matches_for_status(
+            &tree,
+            &tree_hash,
+            InspectionFailurePolicy::Preserve,
+            &mut trees,
+        )
+        .unwrap());
+        assert!(tree_matches_for_status(
+            &tree_alias,
+            &tree_hash,
+            InspectionFailurePolicy::Preserve,
+            &mut trees,
+        )
+        .unwrap());
+        assert_eq!(trees.remaining_hash_bytes, 0);
+        assert_eq!(trees.remaining_tree_entries, 0);
+        assert_eq!(trees.tree_fingerprints.len(), 1);
     }
 
     #[cfg(any(unix, windows))]
