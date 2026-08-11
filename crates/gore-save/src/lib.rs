@@ -9072,6 +9072,20 @@ fn segment_after_name<'a>(
     Some(path.get(at + 1))
 }
 
+/// Whether `path` descends into `map`'s entry for `key` — or into the map as a
+/// whole, which collides with every entry in it.
+fn path_enters_map_entry(path: &[properties::PathSeg], map: &str, key: &str) -> bool {
+    match segment_after_name(path, map) {
+        None => false,
+        Some(None) => true,
+        Some(Some(properties::PathSeg::MapKey(found))) => {
+            found.trim().eq_ignore_ascii_case(key.trim())
+        }
+        // Addressed some other way; too unclear to call safe.
+        Some(Some(_)) => true,
+    }
+}
+
 fn path_has_name(path: &[properties::PathSeg], name: &str) -> bool {
     path.iter()
         .any(|segment| matches!(segment, properties::PathSeg::Name(found) if found == name))
@@ -9107,15 +9121,7 @@ fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) ->
     match edit {
         // Patches or appends a modifier under this NPC's relationship entry.
         PrivateEdit::NpcRelationship(relationship) => {
-            match segment_after_name(path, "RelationshipByGlobalId") {
-                None => false,
-                // An edit of the whole map collides with every structured write.
-                Some(None) => true,
-                Some(Some(properties::PathSeg::MapKey(key))) => {
-                    key.trim().eq_ignore_ascii_case(relationship.id.trim())
-                }
-                Some(Some(_)) => true,
-            }
+            path_enters_map_entry(path, "RelationshipByGlobalId", &relationship.id)
         }
         // Learning or unlearning rewrites this actor's effect elements.
         PrivateEdit::SkillSet(skill) => {
@@ -9131,9 +9137,14 @@ fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) ->
                 || path_has_name(path, "LooseTagsByGlobalId")
                 || path_has_name(path, "m_SavedInventories")
         }
-        // Inserts an entry into the knowledge map.
-        PrivateEdit::KnowledgeAddCharacter(_) | PrivateEdit::KnowledgeSetEntry(_) => {
-            path_has_name(path, "CharacterKnowledgeByUniqueName")
+        // Insert or update ONE character's knowledge entry. Another character's
+        // entry is a different map value, and every applier re-resolves its target
+        // by key, so the two do not collide.
+        PrivateEdit::KnowledgeAddCharacter(name) => {
+            path_enters_map_entry(path, "CharacterKnowledgeByUniqueName", name)
+        }
+        PrivateEdit::KnowledgeSetEntry(edit) => {
+            path_enters_map_entry(path, "CharacterKnowledgeByUniqueName", &edit.character)
         }
         // Claims a whole slot: the add fills a blank one and resets its payload, the
         // removal blanks one.
@@ -20683,6 +20694,49 @@ mod tests {
             properties::PropertyValue::Int(3),
             "the last edit in the batch must win"
         );
+    }
+
+    #[test]
+    fn a_keyed_structured_write_only_conflicts_with_its_own_entry() {
+        // Two characters are two map values, and every applier re-resolves its
+        // target by key, so a write to one cannot disturb the other. Same for a
+        // relationship: only that NPC's entry is rewritten.
+        let entry_path = |map: &str, key: &str| {
+            properties::parse_path(&[
+                map.to_string(),
+                format!("{{{key}}}"),
+                "Entries".to_string(),
+            ])
+            .unwrap()
+        };
+
+        let add = PrivateEdit::KnowledgeAddCharacter("OC_TEST_New".to_string());
+        assert!(structured_edit_rewrites(
+            &add,
+            &entry_path("CharacterKnowledgeByUniqueName", "OC_TEST_New")
+        ));
+        assert!(!structured_edit_rewrites(
+            &add,
+            &entry_path("CharacterKnowledgeByUniqueName", "OC_STT_Diego")
+        ));
+        // Addressing the map itself collides with every entry in it.
+        assert!(structured_edit_rewrites(
+            &add,
+            &properties::parse_path(&["CharacterKnowledgeByUniqueName".to_string()]).unwrap()
+        ));
+
+        let relationship = PrivateEdit::NpcRelationship(PrivateNpcRelationshipEdit {
+            id: "OC_GRD_Orry_254".to_string(),
+            relationship: npc::PersonalRelationship::Friend,
+        });
+        assert!(structured_edit_rewrites(
+            &relationship,
+            &entry_path("RelationshipByGlobalId", "OC_GRD_Orry_254")
+        ));
+        assert!(!structured_edit_rewrites(
+            &relationship,
+            &entry_path("RelationshipByGlobalId", "OC_GRD_Someone_Else")
+        ));
     }
 
     #[test]
