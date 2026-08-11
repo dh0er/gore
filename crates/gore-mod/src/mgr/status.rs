@@ -108,6 +108,15 @@ fn tree_matches_for_status(
     if crate::metadata_is_link(&metadata) || !metadata.is_dir() {
         return Ok(false);
     }
+    let valid_identity = expected
+        .strip_prefix("sha256:")
+        .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    if !valid_identity {
+        return Err(crate::ModError::Other(format!(
+            "invalid recorded UE4SS tree SHA-256 identity for {}",
+            path.display()
+        )));
+    }
     crate::tree_fingerprint(path).map(|current| current == expected)
 }
 
@@ -1023,6 +1032,43 @@ mod tests {
 
         assert_eq!(
             status(&game, &lib, &loadout(&[("mod-a", true)])).unwrap(),
+            ManagerStatus::GameUpdated {
+                drifted: vec![tree.display().to_string()]
+            }
+        );
+    }
+
+    #[test]
+    fn preflight_status_preserves_invalid_ue4ss_tree_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game = tmp.path().join("game");
+        let lib = tmp.path().join("lib");
+        let tree = game.join("G1R/Binaries/Win64/ue4ss/Mods/Owned");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tree.join("deployed.txt"), b"deployed").unwrap();
+        let record = DeployRecord {
+            mod_name: "manager".into(),
+            owner: "manager".into(),
+            ue4ss_mod_dirs: vec![tree.display().to_string()],
+            ue4ss_tree_fingerprints: BTreeMap::from([(
+                tree.display().to_string(),
+                "malformed".into(),
+            )]),
+            ..Default::default()
+        };
+        write_record(&game, &record);
+
+        assert_eq!(
+            status(&game, &lib, &Loadout::default()).unwrap(),
+            ManagerStatus::GameUpdated {
+                drifted: vec![tree.display().to_string()]
+            }
+        );
+        assert!(status_for_preflight(&game, &lib, &Loadout::default()).is_err());
+
+        std::fs::remove_dir_all(&tree).unwrap();
+        assert_eq!(
+            status_for_preflight(&game, &lib, &Loadout::default()).unwrap(),
             ManagerStatus::GameUpdated {
                 drifted: vec![tree.display().to_string()]
             }
