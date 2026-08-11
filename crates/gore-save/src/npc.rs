@@ -1263,13 +1263,12 @@ fn is_corpse_key_for(key: &str, id: &str) -> bool {
 /// path to the `m_SavedInventories` MapProperty; [`resolve_chain`] re-resolves it
 /// for the enclosing size fields. The payload is re-parsed before each splice so
 /// offsets and indices stay fresh.
-fn remove_corpse_inventory(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreError> {
-    let root = parse_private_root(payload)?;
-    let Some((path, map_prop)) = find_property_by_name(&root, SAVED_INVENTORIES_MAP) else {
-        return Ok(()); // no corpse map => nothing to remove
+fn plan_corpse_removal(root: &RootObject, id: &str) -> Result<Option<ReviveEdit>, CoreError> {
+    let Some((path, map_prop)) = find_property_by_name(root, SAVED_INVENTORIES_MAP) else {
+        return Ok(None); // no corpse map => nothing to remove
     };
     let PropertyValue::Map { entries, .. } = &map_prop.value else {
-        return Ok(());
+        return Ok(None);
     };
     let entry_indices: Vec<usize> = entries
         .iter()
@@ -1282,19 +1281,16 @@ fn remove_corpse_inventory(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreEr
         .map(|(index, _)| index)
         .collect();
     if entry_indices.is_empty() {
-        return Ok(()); // no corpse for this NPC (e.g. an alive NPC) => done
+        return Ok(None); // no corpse for this NPC (e.g. an alive NPC) => done
     }
 
     let segs = parse_path(&path)?;
     let chain = resolve_chain(&root.properties, &segs)?;
-    let target = chain.target.clone();
-    let enclosing = chain.enclosing_size_fields.clone();
-    patch_container(
-        payload,
-        &target,
-        &enclosing,
-        &ContainerEdit::MapRemoveMany(entry_indices),
-    )
+    Ok(Some(ReviveEdit::RemoveMapEntries {
+        target: chain.target.clone(),
+        enclosing: chain.enclosing_size_fields,
+        indices: entry_indices,
+    }))
 }
 
 /// Strip the death loose tags ([`DEAD_LOOSE_TAGS`]: `State.Dead`,
@@ -1309,29 +1305,32 @@ fn remove_corpse_inventory(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreEr
 /// [`patch_map_value_tag_container`] (not [`patch_tag_container`], which would clobber
 /// the key). The payload is re-parsed before each removal so offsets stay fresh.
 /// No-op (Ok) if the map / entry is absent or carries none of the tags.
-fn remove_dead_loose_tags(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreError> {
-    let root = parse_private_root(payload)?;
-    let Some((path, map_prop)) = find_property_by_name(&root, LOOSE_TAGS_MAP) else {
-        return Ok(()); // no loose-tags map => nothing to strip
+fn plan_dead_loose_tag_removal(
+    root: &RootObject,
+    id: &str,
+) -> Result<Option<ReviveEdit>, CoreError> {
+    let Some((path, map_prop)) = find_property_by_name(root, LOOSE_TAGS_MAP) else {
+        return Ok(None); // no loose-tags map => nothing to strip
     };
     let PropertyValue::Map { entries, .. } = &map_prop.value else {
-        return Ok(());
+        return Ok(None);
     };
     let Some(entry_index) = entries
         .iter()
         .position(|(k, _v)| map_key_to_string(k).as_deref() == Some(id))
     else {
-        return Ok(()); // no entry for this NPC => nothing to strip
+        return Ok(None); // no entry for this NPC => nothing to strip
     };
     // Enclosing size fields for the MAP property (ancestors); the map's own size
     // field is handled inside patch_map_value_tag_container, which strips every
     // listed tag from this one view of the container.
     let segs = parse_path(&path)?;
     let chain = resolve_chain(&root.properties, &segs)?;
-    let target = chain.target.clone();
-    let enclosing = chain.enclosing_size_fields.clone();
-    patch_map_value_tag_container(payload, &target, &enclosing, entry_index, DEAD_LOOSE_TAGS)?;
-    Ok(())
+    Ok(Some(ReviveEdit::RemoveTags {
+        target: chain.target.clone(),
+        enclosing: chain.enclosing_size_fields,
+        entry_index,
+    }))
 }
 
 /// Restore NPC `id`'s `Health` to its `MaxHealth` `BaseValue` (both `BaseValue` and
@@ -1341,8 +1340,7 @@ fn remove_dead_loose_tags(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreErr
 ///
 /// Errors if the NPC has no `Health` attribute or no `MaxHealth` `BaseValue` to
 /// revive to.
-fn restore_hp_to_max(payload: &mut [u8], id: &str) -> Result<(), CoreError> {
-    let root = parse_private_root(payload)?;
+fn plan_hp_restore(root: &RootObject, id: &str) -> Result<Vec<ReviveEdit>, CoreError> {
     let (base_path, current_path, max_hp, needs_patch) = {
         let rows = npc_attributes(&root, id)?;
         let health = rows
@@ -1370,16 +1368,23 @@ fn restore_hp_to_max(payload: &mut [u8], id: &str) -> Result<(), CoreError> {
     };
 
     if !needs_patch {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let base_segs = parse_path(&base_path)?;
     let base_target = resolve_chain(&root.properties, &base_segs)?.target.clone();
     let cur_segs = parse_path(&current_path)?;
     let cur_target = resolve_chain(&root.properties, &cur_segs)?.target.clone();
-    patch_scalar(payload, &base_target, ScalarValue::Float(max_hp))?;
-    patch_scalar(payload, &cur_target, ScalarValue::Float(max_hp))?;
-    Ok(())
+    Ok(vec![
+        ReviveEdit::SetFloat {
+            target: base_target,
+            value: max_hp,
+        },
+        ReviveEdit::SetFloat {
+            target: cur_target,
+            value: max_hp,
+        },
+    ])
 }
 
 fn relationship_name_property(name: &str, value: &str) -> Vec<u8> {
@@ -1685,49 +1690,133 @@ pub fn apply_relationship(
 ///
 /// Each structural step reparses before continuing, so shifted offsets and
 /// indices are never reused. An already-alive NPC with full HP is a clean no-op.
+/// One planned change to the payload, resolved from a single parse.
+///
+/// Reviving touches four unrelated places in the save, and each used to re-parse
+/// because the one before it had spliced. It does not have to: a splice only moves
+/// bytes AFTER itself, so a change whose target sits earlier is untouched by one
+/// already applied. Planning every change against one parse and then applying them
+/// back to front therefore needs exactly one parse — and `patch_container` reads
+/// each enclosing size field from the current bytes, so the size cascade stays
+/// correct as the payload shrinks underneath it.
+enum ReviveEdit {
+    RemoveArrayElements {
+        target: Property,
+        enclosing: Vec<usize>,
+        indices: Vec<usize>,
+    },
+    RemoveMapEntries {
+        target: Property,
+        enclosing: Vec<usize>,
+        indices: Vec<usize>,
+    },
+    RemoveTags {
+        target: Property,
+        enclosing: Vec<usize>,
+        entry_index: usize,
+    },
+    SetFloat {
+        target: Property,
+        value: f32,
+    },
+}
+
+impl ReviveEdit {
+    /// The byte range this change reads and writes within.
+    fn range(&self) -> core::ops::Range<usize> {
+        let target = match self {
+            ReviveEdit::RemoveArrayElements { target, .. }
+            | ReviveEdit::RemoveMapEntries { target, .. }
+            | ReviveEdit::RemoveTags { target, .. }
+            | ReviveEdit::SetFloat { target, .. } => target,
+        };
+        target.value_offset..target.value_offset + target.value_size.max(1)
+    }
+
+    fn apply(self, payload: &mut Vec<u8>) -> Result<(), CoreError> {
+        match self {
+            ReviveEdit::RemoveArrayElements {
+                target,
+                enclosing,
+                indices,
+            } => patch_container(
+                payload,
+                &target,
+                &enclosing,
+                &ContainerEdit::ArrayRemoveMany(indices),
+            ),
+            ReviveEdit::RemoveMapEntries {
+                target,
+                enclosing,
+                indices,
+            } => patch_container(
+                payload,
+                &target,
+                &enclosing,
+                &ContainerEdit::MapRemoveMany(indices),
+            ),
+            ReviveEdit::RemoveTags {
+                target,
+                enclosing,
+                entry_index,
+            } => patch_map_value_tag_container(
+                payload,
+                &target,
+                &enclosing,
+                entry_index,
+                DEAD_LOOSE_TAGS,
+            )
+            .map(|_| ()),
+            ReviveEdit::SetFloat { target, value } => {
+                patch_scalar(payload, &target, ScalarValue::Float(value))
+            }
+        }
+    }
+}
+
 pub fn apply_revive(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreError> {
-    // ── Phase 1: strip every kill/defeat memory event across ALL owners ──────
-    // One parse serves every removal. Each owner's matching events are dropped in a
-    // single splice pass, and the owners themselves are processed back to front in
-    // the payload, so no splice can move an array still to be patched — the reason
-    // this no longer needs a re-parse per event. (patch_container reads each
-    // enclosing size field from the current bytes, so the cascade stays right as
-    // the payload shrinks underneath it.)
     let root = parse_private_root(payload)?;
-    let mut owners = Vec::new();
+
+    // Everything reviving has to change, planned against this one parse: the
+    // kill/defeat memory events across every owner, the authoritative death tags,
+    // the lootable-corpse entries, and the health restore.
+    let mut edits = Vec::new();
     for (owner_id, indices) in kill_memories_to_remove(&root, id) {
         let path = memorized_events_array_path(&root, &owner_id).ok_or_else(|| {
             CoreError::Parse(format!(
                 "memory owner {owner_id:?} has no MemorizedEvents array to revive"
             ))
         })?;
-        let segs = parse_path(&path)?;
-        let chain = resolve_chain(&root.properties, &segs)?;
-        owners.push((
-            chain.target.clone(),
-            chain.enclosing_size_fields.clone(),
+        let chain = resolve_chain(&root.properties, &parse_path(&path)?)?;
+        edits.push(ReviveEdit::RemoveArrayElements {
+            target: chain.target.clone(),
+            enclosing: chain.enclosing_size_fields,
             indices,
-        ));
+        });
     }
-    owners.sort_by_key(|(target, _, _)| std::cmp::Reverse(target.value_offset));
-    for (target, enclosing, indices) in owners {
-        patch_container(
-            payload,
-            &target,
-            &enclosing,
-            &ContainerEdit::ArrayRemoveMany(indices),
-        )?;
-    }
+    edits.extend(plan_dead_loose_tag_removal(&root, id)?);
+    edits.extend(plan_corpse_removal(&root, id)?);
+    edits.extend(plan_hp_restore(&root, id)?);
     drop(root);
 
-    // ── Phase 2: strip the authoritative death loose tags (the native gate) ──
-    remove_dead_loose_tags(payload, id)?;
-
-    // ── Phase 3: remove the lootable-corpse entry (its own re-parse/splice) ──
-    remove_corpse_inventory(payload, id)?;
-
-    // ── Phase 4: restore HP to max (no-op if already full) ───────────────────
-    restore_hp_to_max(payload, id)
+    // Back to front, so no change moves a target still to be applied. The ranges
+    // must not overlap for that to hold; they never do (the four live in different
+    // maps), but a save that made them overlap would be corrupted silently, so it
+    // is checked rather than assumed.
+    edits.sort_by_key(|edit| core::cmp::Reverse(edit.range().start));
+    for pair in edits.windows(2) {
+        let (later, earlier) = (pair[0].range(), pair[1].range());
+        if earlier.end > later.start {
+            return Err(CoreError::Parse(format!(
+                "revive would edit overlapping byte ranges ({:?} and {:?}); refusing",
+                earlier, later
+            )));
+        }
+    }
+    for edit in edits {
+        edit.apply(payload)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
