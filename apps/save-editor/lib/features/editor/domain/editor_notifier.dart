@@ -3707,8 +3707,21 @@ String? _structuredEditTarget(Map<String, Object?> edit) {
 /// One part of a target key, folded the way the core folds it — and the way the
 /// pending registry has to key these operations so two entries cannot collapse
 /// into one target only once the core sees them.
-String foldEditTargetPart(Object? part) =>
-    part is String ? part.trim().toLowerCase() : '';
+///
+/// The core folds ASCII case only (`to_ascii_lowercase`), so this does too:
+/// Dart's own `toLowerCase` also folds Ä to ä, which would put two targets the
+/// core keeps apart under one key and let the second edit quietly replace the
+/// first.
+String foldEditTargetPart(Object? part) {
+  if (part is! String) return '';
+  final trimmed = part.trim();
+  final folded = StringBuffer();
+  for (final unit in trimmed.codeUnits) {
+    const a = 0x41, z = 0x5a, toLower = 0x20;
+    folded.writeCharCode(unit >= a && unit <= z ? unit + toLower : unit);
+  }
+  return folded.toString();
+}
 
 /// The asset name of a `/Package.Asset` class reference, folded. The core keys a
 /// glossary segment by the asset names and refuses a pair whose packages differ.

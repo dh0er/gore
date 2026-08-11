@@ -2853,6 +2853,23 @@ void main() {
         isFalse,
       );
 
+      // The core folds ASCII case only, so two names that differ outside ASCII
+      // stay two targets here as well.
+      expect(
+        structuredEditsShareATarget(
+          skill('HÄro', 'Ranged_Bow', 'Trained'),
+          skill('häro', 'Ranged_Bow', 'Untrained'),
+        ),
+        isFalse,
+      );
+      expect(
+        structuredEditsShareATarget(
+          skill('Häro', 'Ranged_Bow', 'Trained'),
+          skill('häro', 'Ranged_Bow', 'Untrained'),
+        ),
+        isTrue,
+      );
+
       // A glossary segment is keyed by the two asset names, as the core keys it.
       Map<String, Object?> segment(String document, String seg) => {
         'path': 'private.glossary.setSegment',
