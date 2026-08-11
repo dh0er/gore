@@ -3309,6 +3309,11 @@ fn update_content_hash(hash: &mut u64, bytes: &[u8]) {
 /// Hash a file with a fixed-size buffer. Voice archives can be many GiB, so drift checks must not
 /// materialize the live ZIP merely to compare it with the hash persisted in the deploy record.
 fn content_hash_file(path: &Path) -> std::io::Result<String> {
+    let mut remaining = u64::MAX;
+    content_hash_file_bounded(path, &mut remaining)
+}
+
+fn content_hash_file_bounded(path: &Path, remaining: &mut u64) -> std::io::Result<String> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata_is_link(&metadata) || !metadata.is_file() {
         return Err(std::io::Error::new(
@@ -3316,24 +3321,42 @@ fn content_hash_file(path: &Path) -> std::io::Result<String> {
             format!("not a regular non-link file: {}", path.display()),
         ));
     }
-    let mut file = std::io::BufReader::new(std::fs::File::open(path)?);
+    let mut file = std::fs::File::open(path)?;
+    let opened = file.metadata()?;
+    if opened.len() > *remaining {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "file exceeds the remaining {remaining}-byte hashing budget: {}",
+                path.display()
+            ),
+        ));
+    }
+    *remaining -= opened.len();
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     // Keep the streaming buffer off the caller's stack. Windows console binaries reserve only
     // 1 MiB by default, so an equally-sized local array can overflow before the first read.
     let mut buffer = vec![0u8; 1024 * 1024];
     let mut read_total = 0u64;
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
+    {
+        let mut limited = std::io::Read::by_ref(&mut file).take(opened.len().saturating_add(1));
+        loop {
+            let read = limited.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            update_content_hash(&mut hash, &buffer[..read]);
+            read_total = read_total.checked_add(read as u64).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "file length overflow")
+            })?;
         }
-        update_content_hash(&mut hash, &buffer[..read]);
-        read_total = read_total.checked_add(read as u64).ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "file length overflow")
-        })?;
     }
     // If a Steam update races the hash, do not accept a digest of a partial/mixed generation.
-    if read_total != metadata.len() || std::fs::metadata(path)?.len() != metadata.len() {
+    if read_total != opened.len()
+        || file.metadata()?.len() != opened.len()
+        || metadata.len() != opened.len()
+        || std::fs::metadata(path)?.len() != opened.len()
+    {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("file changed while hashing: {}", path.display()),
@@ -3343,6 +3366,11 @@ fn content_hash_file(path: &Path) -> std::io::Result<String> {
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
+    let mut remaining = u64::MAX;
+    sha256_file_bounded(path, &mut remaining)
+}
+
+pub(crate) fn sha256_file_bounded(path: &Path, remaining: &mut u64) -> Result<String> {
     let metadata = std::fs::symlink_metadata(path).map_err(io(&format!(
         "reading SHA-256 source metadata {}",
         path.display()
@@ -3358,21 +3386,31 @@ fn sha256_file(path: &Path) -> Result<String> {
     let opened = file
         .metadata()
         .map_err(io("reading opened SHA-256 source metadata"))?;
+    if opened.len() > *remaining {
+        return Err(ModError::Other(format!(
+            "SHA-256 source exceeds the remaining {remaining}-byte hashing budget: {}",
+            path.display()
+        )));
+    }
+    *remaining -= opened.len();
     let mut hasher = Sha256::new();
     // This helper is used during deploy preflight on the CLI's 1 MiB Windows main stack.
     let mut buffer = vec![0u8; 1024 * 1024];
     let mut total = 0u64;
-    loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(io("hashing SHA-256 source"))?;
-        if read == 0 {
-            break;
+    {
+        let mut limited = std::io::Read::by_ref(&mut file).take(opened.len().saturating_add(1));
+        loop {
+            let read = limited
+                .read(&mut buffer)
+                .map_err(io("hashing SHA-256 source"))?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+            total = total
+                .checked_add(read as u64)
+                .ok_or_else(|| ModError::Other("SHA-256 source length overflow".into()))?;
         }
-        hasher.update(&buffer[..read]);
-        total = total
-            .checked_add(read as u64)
-            .ok_or_else(|| ModError::Other("SHA-256 source length overflow".into()))?;
     }
     let after = file
         .metadata()
@@ -3391,6 +3429,15 @@ pub(crate) fn file_matches_recorded_hash(path: &Path, expected: &str) -> bool {
 }
 
 fn file_matches_recorded_hash_result(path: &Path, expected: &str) -> Result<bool> {
+    let mut remaining = u64::MAX;
+    file_matches_recorded_hash_bounded(path, expected, &mut remaining)
+}
+
+pub(crate) fn file_matches_recorded_hash_bounded(
+    path: &Path,
+    expected: &str,
+    remaining: &mut u64,
+) -> Result<bool> {
     if let Some(hex) = expected.strip_prefix("sha256:") {
         if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(ModError::Other(format!(
@@ -3398,7 +3445,7 @@ fn file_matches_recorded_hash_result(path: &Path, expected: &str) -> Result<bool
                 path.display()
             )));
         }
-        sha256_file(path).map(|current| current == expected)
+        sha256_file_bounded(path, remaining).map(|current| current == expected)
     } else {
         if expected.len() != 16 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(ModError::Other(format!(
@@ -3406,7 +3453,7 @@ fn file_matches_recorded_hash_result(path: &Path, expected: &str) -> Result<bool
                 path.display()
             )));
         }
-        content_hash_file(path)
+        content_hash_file_bounded(path, remaining)
             .map(|current| current == expected)
             .map_err(io(&format!("hashing deployed file {}", path.display())))
     }
@@ -3416,7 +3463,27 @@ fn tree_fingerprint(root: &Path) -> Result<String> {
     tree_fingerprint_with_prefix(root, None)
 }
 
+pub(crate) fn tree_fingerprint_bounded(
+    root: &Path,
+    remaining_bytes: &mut u64,
+    remaining_entries: &mut u64,
+) -> Result<String> {
+    tree_fingerprint_with_prefix_bounded(
+        root,
+        None,
+        Some((remaining_bytes, remaining_entries)),
+    )
+}
+
 fn tree_fingerprint_with_prefix(root: &Path, prefix: Option<&str>) -> Result<String> {
+    tree_fingerprint_with_prefix_bounded(root, prefix, None)
+}
+
+fn tree_fingerprint_with_prefix_bounded(
+    root: &Path,
+    prefix: Option<&str>,
+    mut budget: Option<(&mut u64, &mut u64)>,
+) -> Result<String> {
     let root_metadata = std::fs::symlink_metadata(root).map_err(io(&format!(
         "reading UE4SS tree metadata {}",
         root.display()
@@ -3454,6 +3521,14 @@ fn tree_fingerprint_with_prefix(root: &Path, prefix: Option<&str>) -> Result<Str
         )))?;
         for entry in read_dir {
             let entry = entry.map_err(io("reading UE4SS identity entry"))?;
+            if let Some((_, remaining_entries)) = budget.as_mut() {
+                if **remaining_entries == 0 {
+                    return Err(ModError::Other(
+                        "deployment inspection exhausted its tree-entry budget".into(),
+                    ));
+                }
+                **remaining_entries -= 1;
+            }
             let path = entry.path();
             let metadata = std::fs::symlink_metadata(&path)
                 .map_err(io("reading UE4SS identity entry metadata"))?;
@@ -3505,6 +3580,16 @@ fn tree_fingerprint_with_prefix(root: &Path, prefix: Option<&str>) -> Result<Str
                         path.display()
                     )));
                 }
+                if let Some((remaining_bytes, _)) = budget.as_mut() {
+                    if metadata.len() > **remaining_bytes {
+                        return Err(ModError::Other(format!(
+                            "UE4SS identity file exceeds the remaining {}-byte deployment inspection budget: {}",
+                            **remaining_bytes,
+                            path.display()
+                        )));
+                    }
+                    **remaining_bytes -= metadata.len();
+                }
                 total_bytes = total_bytes
                     .checked_add(metadata.len())
                     .ok_or_else(|| ModError::Other("UE4SS identity byte total overflow".into()))?;
@@ -3537,7 +3622,8 @@ fn tree_fingerprint_with_prefix(root: &Path, prefix: Option<&str>) -> Result<Str
         hasher.update(entry.relative.as_bytes());
         hasher.update(entry.len.to_le_bytes());
         if !entry.is_dir {
-            let expected = sha256_file(&entry.path)?;
+            let mut file_budget = entry.len;
+            let expected = sha256_file_bounded(&entry.path, &mut file_budget)?;
             hasher.update(expected.as_bytes());
         }
     }

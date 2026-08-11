@@ -19,7 +19,7 @@
 //! Pure read-only: it reads the record, verifies the recorded live files and pristine backups, and
 //! reads each enabled mod's library sidecar to fingerprint it; it never writes.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use serde::Serialize;
@@ -28,6 +28,12 @@ use super::loadout::{Loadout, LoadoutEntry};
 use super::model::LibraryRoot;
 
 const MAX_STATUS_META_BYTES: u64 = 16 * 1024 * 1024;
+// One synchronous status snapshot shares these ceilings across every recorded live file, backup,
+// and UE4SS tree. Successful exact-path reads are cached below, so duplicate record entries are
+// evidence aliases rather than repeated I/O.
+const MAX_STATUS_HASH_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const MAX_STATUS_HASH_ENTRIES: u64 = 65_536;
+const MAX_STATUS_TREE_ENTRIES: u64 = 250_000;
 
 /// The manager's deployment state relative to a target loadout. `#[serde(tag = "state")]` so the
 /// UI can switch on a single discriminant field.
@@ -57,6 +63,42 @@ pub enum ManagerStatus {
 enum InspectionFailurePolicy {
     TreatAsDrift,
     Preserve,
+}
+
+struct DeploymentInspection {
+    remaining_hash_bytes: u64,
+    remaining_hash_entries: u64,
+    remaining_tree_entries: u64,
+    file_matches: HashMap<(String, String), bool>,
+    tree_fingerprints: HashMap<String, String>,
+    sha256: HashMap<String, String>,
+}
+
+impl DeploymentInspection {
+    fn new(
+        remaining_hash_bytes: u64,
+        remaining_hash_entries: u64,
+        remaining_tree_entries: u64,
+    ) -> Self {
+        Self {
+            remaining_hash_bytes,
+            remaining_hash_entries,
+            remaining_tree_entries,
+            file_matches: HashMap::new(),
+            tree_fingerprints: HashMap::new(),
+            sha256: HashMap::new(),
+        }
+    }
+
+    fn charge_file_hash(&mut self) -> crate::Result<()> {
+        if self.remaining_hash_entries == 0 {
+            return Err(crate::ModError::Other(
+                "deployment inspection exhausted its file-hash budget".into(),
+            ));
+        }
+        self.remaining_hash_entries -= 1;
+        Ok(())
+    }
 }
 
 fn valid_sha256_identity(identity: &str) -> bool {
@@ -141,40 +183,122 @@ fn file_matches_for_status(
     path: &Path,
     expected: &str,
     failure_policy: InspectionFailurePolicy,
+    inspection: &mut DeploymentInspection,
 ) -> crate::Result<bool> {
-    if failure_policy == InspectionFailurePolicy::TreatAsDrift {
-        return Ok(crate::file_matches_recorded_hash(path, expected));
+    let cache_key = (path.display().to_string(), expected.to_owned());
+    if let Some(cached) = inspection.file_matches.get(&cache_key) {
+        return Ok(*cached);
     }
-    let Some(metadata) = metadata_for_status(path)? else {
-        return Ok(false);
+    let sha256_expected = expected.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+    });
+    let matches = if failure_policy == InspectionFailurePolicy::TreatAsDrift {
+        if sha256_expected {
+            sha256_for_status(path, failure_policy, inspection)?
+                .as_deref()
+                == Some(expected)
+        } else if inspection.charge_file_hash().is_err() {
+            false
+        } else {
+            crate::file_matches_recorded_hash_bounded(
+                path,
+                expected,
+                &mut inspection.remaining_hash_bytes,
+            )
+            .unwrap_or(false)
+        }
+    } else {
+        let Some(metadata) = metadata_for_status(path)? else {
+            inspection.file_matches.insert(cache_key, false);
+            return Ok(false);
+        };
+        if crate::metadata_is_link(&metadata) || !metadata.is_file() {
+            false
+        } else if sha256_expected {
+            sha256_for_status(path, failure_policy, inspection)?
+                .as_deref()
+                == Some(expected)
+        } else {
+            inspection.charge_file_hash()?;
+            crate::file_matches_recorded_hash_bounded(
+                path,
+                expected,
+                &mut inspection.remaining_hash_bytes,
+            )?
+        }
     };
-    if crate::metadata_is_link(&metadata) || !metadata.is_file() {
-        return Ok(false);
-    }
-    crate::file_matches_recorded_hash_result(path, expected)
+    inspection.file_matches.insert(cache_key, matches);
+    Ok(matches)
 }
 
 fn tree_matches_for_status(
     path: &Path,
     expected: &str,
     failure_policy: InspectionFailurePolicy,
+    inspection: &mut DeploymentInspection,
 ) -> crate::Result<bool> {
-    if failure_policy == InspectionFailurePolicy::TreatAsDrift {
-        return Ok(crate::tree_matches_recorded_fingerprint(path, expected));
+    if failure_policy == InspectionFailurePolicy::Preserve {
+        let Some(metadata) = metadata_for_status(path)? else {
+            return Ok(false);
+        };
+        if crate::metadata_is_link(&metadata) || !metadata.is_dir() {
+            return Ok(false);
+        }
+        if !valid_sha256_identity(expected) {
+            return Err(crate::ModError::Other(format!(
+                "invalid recorded UE4SS tree SHA-256 identity for {}",
+                path.display()
+            )));
+        }
     }
-    let Some(metadata) = metadata_for_status(path)? else {
-        return Ok(false);
+    let cache_key = path.display().to_string();
+    if let Some(cached) = inspection.tree_fingerprints.get(&cache_key) {
+        return Ok(cached == expected);
+    }
+    let current = if failure_policy == InspectionFailurePolicy::TreatAsDrift {
+        let Ok(current) = crate::tree_fingerprint_bounded(
+            path,
+            &mut inspection.remaining_hash_bytes,
+            &mut inspection.remaining_tree_entries,
+        ) else {
+            return Ok(false);
+        };
+        current
+    } else {
+        crate::tree_fingerprint_bounded(
+            path,
+            &mut inspection.remaining_hash_bytes,
+            &mut inspection.remaining_tree_entries,
+        )?
     };
-    if crate::metadata_is_link(&metadata) || !metadata.is_dir() {
-        return Ok(false);
+    let matches = current == expected;
+    inspection.tree_fingerprints.insert(cache_key, current);
+    Ok(matches)
+}
+
+fn sha256_for_status(
+    path: &Path,
+    failure_policy: InspectionFailurePolicy,
+    inspection: &mut DeploymentInspection,
+) -> crate::Result<Option<String>> {
+    let cache_key = path.display().to_string();
+    if let Some(cached) = inspection.sha256.get(&cache_key) {
+        return Ok(Some(cached.clone()));
     }
-    if !valid_sha256_identity(expected) {
-        return Err(crate::ModError::Other(format!(
-            "invalid recorded UE4SS tree SHA-256 identity for {}",
-            path.display()
-        )));
+    if let Err(error) = inspection.charge_file_hash() {
+        return match failure_policy {
+            InspectionFailurePolicy::TreatAsDrift => Ok(None),
+            InspectionFailurePolicy::Preserve => Err(error),
+        };
     }
-    crate::tree_fingerprint(path).map(|current| current == expected)
+    let hashed = crate::sha256_file_bounded(path, &mut inspection.remaining_hash_bytes);
+    let hashed = match (failure_policy, hashed) {
+        (_, Ok(hashed)) => hashed,
+        (InspectionFailurePolicy::TreatAsDrift, Err(_)) => return Ok(None),
+        (InspectionFailurePolicy::Preserve, Err(error)) => return Err(error),
+    };
+    inspection.sha256.insert(cache_key, hashed.clone());
+    Ok(Some(hashed))
 }
 
 /// Report the manager's state at `game_root` relative to `target` (see [`ManagerStatus`]).
@@ -246,16 +370,31 @@ fn status_with_failure_policy(
     // Drift beats loadout comparison: if the game changed a file we wrote, the deployment is stale
     // no matter what the loadout says. A missing recorded file counts as drifted (it was our
     // modded file and is now gone/replaced).
+    let mut inspection = DeploymentInspection::new(
+        MAX_STATUS_HASH_BYTES,
+        MAX_STATUS_HASH_ENTRIES,
+        MAX_STATUS_TREE_ENTRIES,
+    );
     let mut drifted = Vec::new();
     for (live, expected) in &record.deployed_hashes {
-        if !file_matches_for_status(Path::new(live.as_str()), expected, failure_policy)? {
+        if !file_matches_for_status(
+            Path::new(live.as_str()),
+            expected,
+            failure_policy,
+            &mut inspection,
+        )? {
             drifted.push(live.clone());
         }
     }
     for (live, backup, _) in &record.backups {
         let expected = crate::deployed_hash_for_path(live, &record.deployed_hashes);
         let live_matches = match expected {
-            Some(hash) => file_matches_for_status(Path::new(live.as_str()), hash, failure_policy)?,
+            Some(hash) => file_matches_for_status(
+                Path::new(live.as_str()),
+                hash,
+                failure_policy,
+                &mut inspection,
+            )?,
             None => false,
         };
         if !live_matches {
@@ -273,7 +412,12 @@ fn status_with_failure_policy(
         let backup_matches = match crate::backup_hash_for_path(backup_path, &record.backup_hashes) {
             Some(hash) => {
                 hash.starts_with("sha256:")
-                    && file_matches_for_status(backup_path, hash, failure_policy)?
+                    && file_matches_for_status(
+                        backup_path,
+                        hash,
+                        failure_policy,
+                        &mut inspection,
+                    )?
             }
             None if failure_policy == InspectionFailurePolicy::Preserve => {
                 let live_path = Path::new(live.as_str());
@@ -288,16 +432,23 @@ fn status_with_failure_policy(
                 if !live_is_file || !backup_is_file {
                     false
                 } else {
-                    crate::sha256_file(live_path)? == crate::sha256_file(backup_path)?
+                    let live_hash =
+                        sha256_for_status(live_path, failure_policy, &mut inspection)?;
+                    let backup_hash =
+                        sha256_for_status(backup_path, failure_policy, &mut inspection)?;
+                    live_hash.is_some() && live_hash == backup_hash
                 }
             }
-            None => match (
-                crate::sha256_file(Path::new(live.as_str())),
-                crate::sha256_file(backup_path),
-            ) {
-                (Ok(live_hash), Ok(backup_hash)) => live_hash == backup_hash,
-                _ => false,
-            },
+            None => {
+                let live_hash = sha256_for_status(
+                    Path::new(live.as_str()),
+                    failure_policy,
+                    &mut inspection,
+                )?;
+                let backup_hash =
+                    sha256_for_status(backup_path, failure_policy, &mut inspection)?;
+                live_hash.is_some() && live_hash == backup_hash
+            }
         };
         if !backup_matches {
             drifted.push(backup.clone());
@@ -315,7 +466,12 @@ fn status_with_failure_policy(
         let expected = crate::deployed_hash_for_path(path, &record.deployed_hashes);
         let matches = match expected {
             Some(hash) if hash.starts_with("sha256:") => {
-                file_matches_for_status(Path::new(path.as_str()), hash, failure_policy)?
+                file_matches_for_status(
+                    Path::new(path.as_str()),
+                    hash,
+                    failure_policy,
+                    &mut inspection,
+                )?
             }
             _ => false,
         };
@@ -334,7 +490,12 @@ fn status_with_failure_policy(
         );
         let matches = match expected {
             Some(fingerprint) => {
-                tree_matches_for_status(Path::new(path.as_str()), fingerprint, failure_policy)?
+                tree_matches_for_status(
+                    Path::new(path.as_str()),
+                    fingerprint,
+                    failure_policy,
+                    &mut inspection,
+                )?
             }
             None => false,
         };
@@ -1397,6 +1558,82 @@ mod tests {
             &mut exact_budget,
         ));
         assert_eq!(exact_budget, 0);
+    }
+
+    #[test]
+    fn deployment_hashing_is_cached_and_aggregate_bounded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let alpha = tmp.path().join("alpha.bin");
+        let beta = tmp.path().join("beta.bin");
+        std::fs::write(&alpha, b"alpha").unwrap();
+        std::fs::write(&beta, b"beta").unwrap();
+        let alpha_hash = crate::sha256_file(&alpha).unwrap();
+        let beta_hash = crate::sha256_file(&beta).unwrap();
+        let mut files = DeploymentInspection::new(5, 2, 0);
+
+        for _ in 0..2 {
+            assert!(file_matches_for_status(
+                &alpha,
+                &alpha_hash,
+                InspectionFailurePolicy::Preserve,
+                &mut files,
+            )
+            .unwrap());
+        }
+        assert_eq!(files.remaining_hash_bytes, 0);
+        let error = file_matches_for_status(
+            &beta,
+            &beta_hash,
+            InspectionFailurePolicy::Preserve,
+            &mut files,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("hashing budget"), "{error}");
+
+        let mut file_entries = DeploymentInspection::new(100, 1, 0);
+        assert!(file_matches_for_status(
+            &alpha,
+            &alpha_hash,
+            InspectionFailurePolicy::Preserve,
+            &mut file_entries,
+        )
+        .unwrap());
+        let error = file_matches_for_status(
+            &beta,
+            &beta_hash,
+            InspectionFailurePolicy::Preserve,
+            &mut file_entries,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("file-hash budget"), "{error}");
+
+        let tree = tmp.path().join("tree");
+        let other_tree = tmp.path().join("other-tree");
+        std::fs::create_dir(&tree).unwrap();
+        std::fs::create_dir(&other_tree).unwrap();
+        std::fs::write(tree.join("payload"), b"tree").unwrap();
+        std::fs::write(other_tree.join("payload"), b"tree").unwrap();
+        let tree_hash = crate::tree_fingerprint(&tree).unwrap();
+        let mut trees = DeploymentInspection::new(4, 0, 1);
+        for _ in 0..2 {
+            assert!(tree_matches_for_status(
+                &tree,
+                &tree_hash,
+                InspectionFailurePolicy::Preserve,
+                &mut trees,
+            )
+            .unwrap());
+        }
+        assert_eq!(trees.remaining_hash_bytes, 0);
+        assert_eq!(trees.remaining_tree_entries, 0);
+        let error = tree_matches_for_status(
+            &other_tree,
+            &tree_hash,
+            InspectionFailurePolicy::Preserve,
+            &mut trees,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("tree-entry budget"), "{error}");
     }
 
     #[cfg(any(unix, windows))]
