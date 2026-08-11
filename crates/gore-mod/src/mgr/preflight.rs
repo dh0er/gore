@@ -188,7 +188,7 @@ where
         game_root,
         library_dir,
         loadout_path,
-        super::status::status,
+        super::status::status_for_preflight,
         |root| {
             gore_as::compile::probe_install_compile_state_with_stated_game_process(
                 root,
@@ -1793,6 +1793,35 @@ mod tests {
             |_| safe_probe(),
             |_| Ok(false),
         );
+        assert_eq!(state.checks[3].state, PreflightStateV1::Unknown);
+        assert_eq!(state.checks[3].code, "deployment_inspection_failed");
+    }
+
+    #[test]
+    fn stated_process_adapter_preserves_deployment_inspection_failures() {
+        let install = install_fixture();
+        let library = install.path().join("library");
+        let loadout = install.path().join("loadout.json");
+        fs::write(&loadout, serde_json::to_vec(&Loadout::default()).unwrap()).unwrap();
+        let live = install.path().join("G1R/Story/VoiceOver/owned.zip");
+        fs::create_dir_all(&live).unwrap();
+        let record = crate::DeployRecord {
+            mod_name: "manager".into(),
+            owner: "manager".into(),
+            deployed_hashes: std::collections::BTreeMap::from([(
+                live.display().to_string(),
+                crate::content_hash(b"deployed"),
+            )]),
+            ..Default::default()
+        };
+        fs::write(
+            crate::record_path(install.path()),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+
+        let state =
+            preflight_v1_with_stated_game_process(install.path(), &library, &loadout, || Ok(false));
         assert_eq!(state.checks[3].state, PreflightStateV1::Unknown);
         assert_eq!(state.checks[3].code, "deployment_inspection_failed");
     }
