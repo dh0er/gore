@@ -77,6 +77,7 @@ class ProductContract:
     upload_name: str
     upload_paths: str
     make_latest: str
+    prerelease: str | None
     publish_files: str
     publish_body: str
     artifact_verify_command: str | None = None
@@ -185,6 +186,7 @@ PRODUCTS: dict[str, ProductContract] = {
             "dist/gore-save-editor/appcast-windows.xml"
         ),
         make_latest='"true"',
+        prerelease=None,
         publish_files=(
             "dist/gore-save-editor/*.zip\n"
             "dist/gore-save-editor/*.exe\n"
@@ -230,6 +232,7 @@ PRODUCTS: dict[str, ProductContract] = {
             "dist/gore-mod-studio/appcast-windows.xml"
         ),
         make_latest='"false"',
+        prerelease=None,
         publish_files=(
             "dist/gore-mod-studio/*.zip\n"
             "dist/gore-mod-studio/gore-mod-studio-"
@@ -275,6 +278,7 @@ PRODUCTS: dict[str, ProductContract] = {
             "dist/gore-mod-manager/appcast-windows.xml"
         ),
         make_latest='"false"',
+        prerelease='"true"',
         publish_files=(
             "dist/gore-mod-manager/*.zip\n"
             "dist/gore-mod-manager/gore-mod-manager-"
@@ -318,6 +322,7 @@ PRODUCTS: dict[str, ProductContract] = {
         upload_name="gore-cli-windows-x64",
         upload_paths="dist/gore-cli/*.zip",
         make_latest='"false"',
+        prerelease=None,
         publish_files="dist/gore-cli/*.zip",
         publish_body="dist/gore-cli/RELEASE_NOTES.md",
     ),
@@ -1024,17 +1029,26 @@ def _validate_product_steps(
             problems.append(f"{context}: release action changed")
         if with_field is not None:
             with_fields = _mapping(with_field, f"{context} publish.with")
+            expected_fields = {"make_latest", "files", "body_path"}
+            if contract.prerelease is not None:
+                expected_fields.add("prerelease")
             _expect_keys(
                 with_fields,
-                {"make_latest", "files", "body_path"},
+                expected_fields,
                 f"{context} publish.with",
                 problems,
             )
             latest = with_fields.get("make_latest")
+            prerelease = with_fields.get("prerelease")
             files = with_fields.get("files")
             body = with_fields.get("body_path")
             if latest is None or _scalar(latest, context) != contract.make_latest:
                 problems.append(f"{context}: make_latest changed")
+            if contract.prerelease is not None and (
+                prerelease is None
+                or _scalar(prerelease, context) != contract.prerelease
+            ):
+                problems.append(f"{context}: prerelease flag changed")
             if files is None or _scalar(files, context) != contract.publish_files:
                 problems.append(f"{context}: published release files changed")
             if body is None or _scalar(body, context) != contract.publish_body:

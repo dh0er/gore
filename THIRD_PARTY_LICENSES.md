@@ -15,7 +15,7 @@ sections are part of `about.hbs`, so `cargo-about` regeneration preserves them.
 ## Overview
 
 - **Apache License 2.0** — 221 crate(s)
-- **MIT License** — 79 crate(s)
+- **MIT License** — 80 crate(s)
 - **BSD 3-Clause "New" or "Revised" License** — 5 crate(s)
 - **BSD 2-Clause "Simplified" License** — 4 crate(s)
 - **University of Illinois/NCSA Open Source License** — 1 crate(s)
@@ -7092,6 +7092,7 @@ Used by:
 - [gore-catalog 0.0.0](https://crates.io/crates/gore-catalog)
 - [gore-ffi 0.0.0](https://crates.io/crates/gore-ffi)
 - [gore-fmod 0.0.0](https://crates.io/crates/gore-fmod)
+- [gore-generation 0.0.0](https://crates.io/crates/gore-generation)
 - [gore-loc 0.0.0](https://crates.io/crates/gore-loc)
 - [gore-mcp 0.0.0](https://crates.io/crates/gore-mcp)
 - [gore-mod 0.0.0](https://crates.io/crates/gore-mod)
@@ -7757,6 +7758,78 @@ Microsoft states that licensed Visual Studio users may redistribute these
 unmodified files subject to the applicable Visual Studio license terms. See
 [Redistributing Visual C++ files](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files?view=msvc-170).
 These files are not covered by GORE's MIT License.
+
+### WinSparkle 0.8.1 updater
+
+The installed GORE Mod Manager Windows package includes WinSparkle 0.8.1 via
+the `auto_updater_windows` dependency. The portable package omits the updater
+binaries, but carries this notice with the other third-party attributions.
+
+The following WinSparkle license and attribution text is reproduced from
+`packages/auto_updater_windows/windows/WinSparkle-0.8.1/COPYING` in the pinned
+dependency package. The contents are split into two blocks so the OpenSSL
+attribution remains explicit.
+
+#### WinSparkle license
+
+```
+Copyright (c) 2009-2023 Vaclav Slavik
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+#### OpenSSL attribution from WinSparkle COPYING
+
+```
+This product includes software developed by the OpenSSL Project
+for use in the OpenSSL Toolkit (http://www.openssl.org/).
+```
+
+#### Expat license
+
+The following text is reproduced from
+`packages/auto_updater_windows/windows/WinSparkle-0.8.1/COPYING.expat` in the
+pinned dependency package.
+
+```
+Copyright (c) 1998-2000 Thai Open Source Software Center Ltd and Clark Cooper
+Copyright (c) 2001-2017 Expat maintainers
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be included
+in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
 
 ### BSD 2-Clause - embedded diagnostics helper
 

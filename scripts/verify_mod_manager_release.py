@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -88,6 +89,61 @@ EXPECTED_INSTALLER_FILES = (
     'Source: "..\\..\\..\\THIRD_PARTY_LICENSES.md"; DestDir: "{app}"; Flags: ignoreversion',
 )
 
+THIRD_PARTY_NOTICE_FILES = ("about.hbs", "THIRD_PARTY_LICENSES.md")
+WINSPARKLE_NOTICE_START = "### WinSparkle 0.8.1 updater"
+WINSPARKLE_NOTICE_END = "### BSD 2-Clause - embedded diagnostics helper"
+# These hashes come from the exact local dependency package at the pinned
+# resolved ref below. Its original files are COPYING (SHA-256
+# d236b139330d1456b8f392f8d10453e86c9a9375ec939566b234b9363a56535e) and
+# COPYING.expat (SHA-256
+# 7e043c766b1772d1ccc47751c7334db4feb1f2f9a7fd5055df60a6fde420a2f5);
+# rendered blocks use LF and no edge blanks.
+WINSPARKLE_NOTICE_SHA256 = (
+    "d5221ccb51b03d603fcd7d92b4b284fdf1e4609956b65600eb59048312a6be5d"
+)
+WINSPARKLE_UPSTREAM_BLOCK_SHA256 = {
+    "WinSparkle license": (
+        "06f49858020bdc0ac014b0591dd9e8b4ff6e3d547576777b0a5e73f27a4e9c97"
+    ),
+    "OpenSSL attribution from WinSparkle COPYING": (
+        "0be450ce884e718e17497338a2f39f7efa3096cc513d7c7683c77efe8cf2f516"
+    ),
+    "Expat license": (
+        "4c76c8c281d86ab08dadc05f47b15b827ef18fd3035090f167ffab81cccd7069"
+    ),
+}
+AUTO_UPDATER_WINDOWS_LOCK_STANZA = "\n".join(
+    (
+        "  auto_updater_windows:",
+        '    dependency: "direct overridden"',
+        "    description:",
+        '      path: "packages/auto_updater_windows"',
+        "      ref: swiftpm-support",
+        '      resolved-ref: "56dc406f6e0f6ccf01d70d2fbc88f7ca1c3ebf9a"',
+        '      url: "https://github.com/dh0er/auto_updater.git"',
+        "    source: git",
+        '    version: "1.0.1"',
+    )
+)
+THIRD_PARTY_NOTICE_MARKERS = {
+    "WinSparkle 0.8.1 heading": "### WinSparkle 0.8.1 updater",
+    "WinSparkle COPYING source": (
+        "`packages/auto_updater_windows/windows/WinSparkle-0.8.1/COPYING`"
+    ),
+    "WinSparkle copyright": "Copyright (c) 2009-2023 Vaclav Slavik",
+    "WinSparkle OpenSSL attribution": (
+        "This product includes software developed by the OpenSSL Project\n"
+        "for use in the OpenSSL Toolkit (http://www.openssl.org/)."
+    ),
+    "WinSparkle COPYING.expat source": (
+        "`packages/auto_updater_windows/windows/WinSparkle-0.8.1/COPYING.expat`"
+    ),
+    "WinSparkle Expat copyright": (
+        "Copyright (c) 1998-2000 Thai Open Source Software Center Ltd and Clark Cooper\n"
+        "Copyright (c) 2001-2017 Expat maintainers"
+    ),
+}
+
 _WINDOWS_FORBIDDEN_CHARS = set('<>:"\\|?*')
 _WINDOWS_RESERVED = re.compile(r"^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$", re.I)
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
@@ -95,6 +151,98 @@ _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 
 class ContractError(ValueError):
     pass
+
+
+def _normalise_newlines(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _winsparkle_notice_section(text: str) -> str | None:
+    text = _normalise_newlines(text)
+    if text.count(WINSPARKLE_NOTICE_START) != 1:
+        return None
+    start = text.index(WINSPARKLE_NOTICE_START)
+    end = text.find(WINSPARKLE_NOTICE_END, start)
+    if end < 0:
+        return None
+    return text[start:end].rstrip("\n")
+
+
+def _markdown_code_block(section: str, heading: str) -> str | None:
+    match = re.search(
+        rf"(?ms)^#### {re.escape(heading)}\n.*?^```\n(.*?)\n^```$", section
+    )
+    return None if match is None else match.group(1)
+
+
+def _auto_updater_windows_lock_contract(root: Path) -> list[str]:
+    relative = "apps/mod-manager/pubspec.lock"
+    path = root / relative
+    if path.is_symlink() or not path.is_file():
+        return [f"release notices: missing or non-regular file: {relative}"]
+    try:
+        text = _normalise_newlines(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError) as error:
+        return [f"release notices: cannot read {relative}: {error}"]
+    stanzas = re.findall(
+        r"(?ms)^  auto_updater_windows:\n.*?(?=^  [A-Za-z0-9_-]+:\n|\Z)", text
+    )
+    if len(stanzas) != 1 or stanzas[0].rstrip("\n") != AUTO_UPDATER_WINDOWS_LOCK_STANZA:
+        return [
+            "release notices: auto_updater_windows dependency pin changed; "
+            "reverify WinSparkle notices against the new resolved source"
+        ]
+    return []
+
+
+def _third_party_notice_contract(root: Path) -> list[str]:
+    problems: list[str] = []
+    sections: dict[str, str] = {}
+    for relative in THIRD_PARTY_NOTICE_FILES:
+        path = root / relative
+        if path.is_symlink() or not path.is_file():
+            problems.append(f"release notices: missing or non-regular file: {relative}")
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            problems.append(f"release notices: cannot read {relative}: {error}")
+            continue
+        for label, marker in THIRD_PARTY_NOTICE_MARKERS.items():
+            if marker not in text:
+                problems.append(f"release notices: {relative} is missing {label}")
+        section = _winsparkle_notice_section(text)
+        if section is None:
+            problems.append(
+                f"release notices: {relative} has no unique bounded WinSparkle section"
+            )
+            continue
+        sections[relative] = section
+        digest = hashlib.sha256(section.encode("utf-8")).hexdigest()
+        if digest != WINSPARKLE_NOTICE_SHA256:
+            problems.append(
+                f"release notices: {relative} exact WinSparkle 0.8.1 notice "
+                "section changed"
+            )
+        for heading, expected_digest in WINSPARKLE_UPSTREAM_BLOCK_SHA256.items():
+            block = _markdown_code_block(section, heading)
+            block_digest = (
+                None
+                if block is None
+                else hashlib.sha256(block.encode("utf-8")).hexdigest()
+            )
+            if block_digest != expected_digest:
+                problems.append(
+                    f"release notices: {relative} exact upstream {heading} "
+                    "block changed"
+                )
+    if len(sections) == len(THIRD_PARTY_NOTICE_FILES) and len(set(sections.values())) != 1:
+        problems.append(
+            "release notices: about.hbs and THIRD_PARTY_LICENSES.md WinSparkle "
+            "sections differ"
+        )
+    problems.extend(_auto_updater_windows_lock_contract(root))
+    return problems
 
 
 def _windows_path(name: str, *, directory: bool) -> str:
@@ -564,6 +712,7 @@ def verify_release(
 ) -> list[str]:
     if VERSION_RE.fullmatch(version) is None:
         return [f"version must be plain X.Y.Z, got {version!r}"]
+    notice_problems = _third_party_notice_contract(root)
     dist = root / "dist" / "gore-mod-manager"
     portable_name = f"gore-mod-manager-{version}-windows-x64.zip"
     installer_name = f"gore-mod-manager-{version}-setup.exe"
@@ -571,8 +720,10 @@ def verify_release(
     installer = dist / installer_name
 
     problems: list[str] = []
+    problems.extend(notice_problems)
     if not dist.is_dir():
-        return [f"release output directory missing: {dist}"]
+        problems.append(f"release output directory missing: {dist}")
+        return problems
     package_entries = [
         (path.name, path.is_dir())
         for path in dist.iterdir()

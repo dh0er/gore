@@ -399,6 +399,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           make_latest: "false"
+          prerelease: "true"
           files: |
             dist/gore-mod-manager/*.zip
             dist/gore-mod-manager/gore-mod-manager-${{ steps.version.outputs.version }}-setup.exe
