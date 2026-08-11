@@ -22,6 +22,8 @@ use super::status::ManagerStatus;
 const FORMAT: u32 = 1;
 const MAX_LOADOUT_BYTES: u64 = 1024 * 1024;
 const MAX_LOADOUT_META_BYTES: u64 = 16 * 1024 * 1024;
+// One unit covers either one component descriptor or one no-follow payload path component.
+const MAX_LOADOUT_COMPONENT_PROBES: u64 = 100_000;
 const MAX_CHECK_ITEMS: usize = 16;
 const MAX_DETAIL_BYTES: usize = 2 * 1024;
 const MAX_ITEM_BYTES: usize = 1024;
@@ -130,11 +132,20 @@ enum Ue4ssRequirement {
     Required,
     NotRequired,
     Unknown,
+    VerifyDuringApply,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoadoutReadiness {
+    Verified,
+    ApplyAuthoritative,
+    Blocked,
 }
 
 struct LoadoutInspection {
     check: PreflightCheckV1,
     loadout: Option<Loadout>,
+    readiness: LoadoutReadiness,
     ue4ss: Ue4ssRequirement,
     requires_script_cache: bool,
 }
@@ -226,12 +237,11 @@ where
     let root = inspect_game_root(game_root);
     let loadout = inspect_loadout(library_dir, loadout_path);
     let install = inspect_install(root.directory.as_ref(), loadout.requires_script_cache);
-    let loadout_healthy = loadout.check.state == PreflightStateV1::Ok;
     let (mut deployment, deployment_recovery) = inspect_deployment(
         root.root.as_deref(),
         library_dir,
         loadout.loadout.as_ref(),
-        loadout_healthy,
+        loadout.readiness,
         status,
     );
     let install_mutation = inspect_install_mutation(
@@ -298,6 +308,7 @@ fn defer_deployment_action(
             ue4ss.state,
             PreflightStateV1::Problem | PreflightStateV1::Unknown
         )
+        && ue4ss.action != "verify_during_apply"
     {
         Some((ue4ss, "UE4SS"))
     } else {
@@ -596,6 +607,20 @@ fn inspect_loadout_with_meta_budget(
     loadout_path: &Path,
     meta_budget: u64,
 ) -> LoadoutInspection {
+    inspect_loadout_with_budgets(
+        library_dir,
+        loadout_path,
+        meta_budget,
+        MAX_LOADOUT_COMPONENT_PROBES,
+    )
+}
+
+fn inspect_loadout_with_budgets(
+    library_dir: &Path,
+    loadout_path: &Path,
+    meta_budget: u64,
+    component_probe_budget: u64,
+) -> LoadoutInspection {
     let loadout = match read_loadout_bounded(loadout_path) {
         Ok(loadout) => loadout,
         Err(failure) => return loadout_failure(failure),
@@ -615,6 +640,7 @@ fn inspect_loadout_with_meta_budget(
                 "the loadout is valid and has no enabled mods",
             ),
             loadout: Some(loadout),
+            readiness: LoadoutReadiness::Verified,
             ue4ss: Ue4ssRequirement::NotRequired,
             requires_script_cache: false,
         };
@@ -623,6 +649,7 @@ fn inspect_loadout_with_meta_budget(
     let library = match inspect_library_root(library_dir) {
         Ok(library) => library,
         Err(failure) => {
+            let bounded = matches!(&failure, EvidenceFailure::Bounded(_));
             let (state, code, action, detail) = match &failure {
                 EvidenceFailure::Problem(_) => (
                     PreflightStateV1::Problem,
@@ -653,7 +680,16 @@ fn inspect_loadout_with_meta_budget(
                 )
                 .with_items([failure.message()]),
                 loadout: Some(loadout),
-                ue4ss: Ue4ssRequirement::Unknown,
+                readiness: if bounded {
+                    LoadoutReadiness::ApplyAuthoritative
+                } else {
+                    LoadoutReadiness::Blocked
+                },
+                ue4ss: if bounded {
+                    Ue4ssRequirement::VerifyDuringApply
+                } else {
+                    Ue4ssRequirement::Unknown
+                },
                 requires_script_cache: false,
             };
         }
@@ -664,12 +700,19 @@ fn inspect_loadout_with_meta_budget(
     let mut requires_ue4ss = false;
     let mut requires_script_cache = false;
     let mut remaining_meta_bytes = meta_budget;
+    let mut remaining_component_probes = component_probe_budget;
     let mut inspected_ids = HashSet::new();
     for entry in &enabled {
         if !inspected_ids.insert(entry.id.as_str()) {
             continue;
         }
-        match inspect_enabled_meta(&library, library_dir, &entry.id, &mut remaining_meta_bytes) {
+        match inspect_enabled_meta(
+            &library,
+            library_dir,
+            &entry.id,
+            &mut remaining_meta_bytes,
+            &mut remaining_component_probes,
+        ) {
             Ok(meta) => {
                 requires_ue4ss |= meta
                     .components
@@ -706,6 +749,7 @@ fn inspect_loadout_with_meta_budget(
             )
             .with_items(unknowns),
             loadout: Some(loadout),
+            readiness: LoadoutReadiness::Blocked,
             ue4ss: if requires_ue4ss {
                 Ue4ssRequirement::Required
             } else {
@@ -726,6 +770,7 @@ fn inspect_loadout_with_meta_budget(
             )
             .with_items(problems),
             loadout: Some(loadout),
+            readiness: LoadoutReadiness::Blocked,
             ue4ss: if requires_ue4ss {
                 Ue4ssRequirement::Required
             } else {
@@ -739,16 +784,17 @@ fn inspect_loadout_with_meta_budget(
             check: PreflightCheckV1::new(
                 PreflightCheckIdV1::Loadout,
                 PreflightStateV1::Unknown,
-                "enabled_mod_metadata_budget_exhausted",
+                "enabled_mod_inspection_limit",
                 "verify_during_apply",
-                "enabled mod metadata exceeded the bounded read-only inspection budget; Apply performs authoritative per-mod validation",
+                "enabled mod metadata or top-level entry-point probes exceeded the bounded read-only inspection budget; Apply performs authoritative per-mod validation",
             )
             .with_items(bounded),
             loadout: Some(loadout),
+            readiness: LoadoutReadiness::ApplyAuthoritative,
             ue4ss: if requires_ue4ss {
                 Ue4ssRequirement::Required
             } else {
-                Ue4ssRequirement::Unknown
+                Ue4ssRequirement::VerifyDuringApply
             },
             requires_script_cache,
         };
@@ -768,6 +814,7 @@ fn inspect_loadout_with_meta_budget(
             "unverified until Apply: nested manifests, referenced payloads, decoding, cross-mod composition, and current install state",
         )]),
         loadout: Some(loadout),
+        readiness: LoadoutReadiness::Verified,
         ue4ss: if requires_ue4ss {
             Ue4ssRequirement::Required
         } else {
@@ -782,6 +829,7 @@ fn inspect_enabled_meta(
     library_dir: &Path,
     id: &str,
     remaining_meta_bytes: &mut u64,
+    remaining_component_probes: &mut u64,
 ) -> Result<super::model::ModEntryMeta, EvidenceFailure> {
     let entry_path = library_dir.join(id);
     match std::fs::symlink_metadata(&entry_path) {
@@ -843,12 +891,55 @@ fn inspect_enabled_meta(
         Err(MetaReadFailure::Other(error)) => return Err(classify_mod_error(error)),
     };
     for component in &meta.components {
+        charge_component_probes(remaining_component_probes, 1, "component descriptor")?;
         super::apply::validate_component_descriptor_for_default_apply(component)
             .map_err(classify_mod_error)?;
+        // Charge every path component up front so a partial budget never starts an unbounded
+        // secure traversal. The descriptor check above already bounds each path to Apply's limit.
+        charge_component_probes(
+            remaining_component_probes,
+            component_payload_probe_cost(component),
+            "component payload path",
+        )?;
         validate_component_payload_presence(&library_entry, component)
             .map_err(classify_mod_error)?;
     }
     Ok(meta)
+}
+
+fn charge_component_probes(
+    remaining: &mut u64,
+    required: u64,
+    label: &str,
+) -> Result<(), EvidenceFailure> {
+    if required > *remaining {
+        return Err(EvidenceFailure::Bounded(format!(
+            "aggregate component/probe inspection budget exhausted: {required} units required with {} remaining before {label}",
+            *remaining
+        )));
+    }
+    *remaining -= required;
+    Ok(())
+}
+
+fn component_payload_probe_cost(component: &ComponentInfo) -> u64 {
+    let path_cost = |rel: &str| Path::new(rel).components().count() as u64;
+    match component {
+        ComponentInfo::Ue4ssLua { rel, .. }
+        | ComponentInfo::LocPatch { rel, .. }
+        | ComponentInfo::TexturePatch { rel, .. }
+        | ComponentInfo::PakFilePatch { rel, .. }
+        | ComponentInfo::VoiceArchivePatch { rel, .. }
+        | ComponentInfo::LoosePak { rel, .. }
+        | ComponentInfo::RawFile { rel, .. } => path_cost(rel),
+        ComponentInfo::AudioPatch { rel, .. }
+        | ComponentInfo::AngelScriptPatch { rel, .. }
+        | ComponentInfo::FilePatch { rel, .. } => path_cost(&format!("{rel}/manifest.json")),
+        ComponentInfo::Triplet { rel_base, .. } => ["utoc", "ucas", "pak"]
+            .into_iter()
+            .map(|ext| path_cost(&format!("{rel_base}.{ext}")))
+            .sum(),
+    }
 }
 
 fn validate_component_payload_presence(
@@ -912,6 +1003,7 @@ fn loadout_failure(failure: EvidenceFailure) -> LoadoutInspection {
         check: PreflightCheckV1::new(PreflightCheckIdV1::Loadout, state, code, action, detail)
             .with_items([failure.message()]),
         loadout: None,
+        readiness: LoadoutReadiness::Blocked,
         ue4ss: Ue4ssRequirement::Unknown,
         requires_script_cache: false,
     }
@@ -1061,7 +1153,7 @@ fn inspect_deployment<S>(
     game_root: Option<&Path>,
     library_dir: &Path,
     loadout: Option<&Loadout>,
-    loadout_healthy: bool,
+    loadout_readiness: LoadoutReadiness,
     status: S,
 ) -> (PreflightCheckV1, DeploymentRecoveryEvidence)
 where
@@ -1116,7 +1208,7 @@ where
         )
         .with_items([format!("active mod: {mod_name}")]),
         Ok(ManagerStatus::InSync { .. } | ManagerStatus::ChangesPending { .. })
-            if !loadout_healthy =>
+            if loadout_readiness == LoadoutReadiness::Blocked =>
         {
             PreflightCheckV1::new(
                 PreflightCheckIdV1::Deployment,
@@ -1124,6 +1216,17 @@ where
                 "deployment_not_inspected",
                 "resolve_loadout_check",
                 "resolve the preceding Loadout finding before comparing deployment state",
+            )
+        }
+        Ok(ManagerStatus::InSync { .. })
+            if loadout_readiness == LoadoutReadiness::ApplyAuthoritative =>
+        {
+            PreflightCheckV1::new(
+                PreflightCheckIdV1::Deployment,
+                PreflightStateV1::Unknown,
+                "deployment_loadout_inspection_limit",
+                "review_apply",
+                "deployment fingerprints match, but bounded loadout inspection did not validate every enabled mod; Apply performs authoritative validation before mutation",
             )
         }
         Ok(ManagerStatus::InSync { loadout }) => PreflightCheckV1::new(
@@ -1171,7 +1274,7 @@ where
             .with_items(items)
         }
         Ok(ManagerStatus::GameUpdated { drifted }) => {
-            let (action, detail) = if loadout_healthy {
+            let (action, detail) = if loadout_readiness != LoadoutReadiness::Blocked {
                 (
                     "review_reapply",
                     "files owned by the active Manager deployment changed outside GORE; Reapply performs authoritative validation before mutation",
@@ -1414,6 +1517,15 @@ fn inspect_ue4ss(
                 "ue4ss_requirement_unknown",
                 "resolve_loadout_check",
                 "resolve the preceding Loadout finding before deciding whether UE4SS is required",
+            )
+        }
+        Ue4ssRequirement::VerifyDuringApply => {
+            return PreflightCheckV1::new(
+                PreflightCheckIdV1::Ue4ss,
+                PreflightStateV1::Unknown,
+                "ue4ss_requirement_inspection_limit",
+                "verify_during_apply",
+                "bounded loadout inspection could not establish whether UE4SS is required; Apply re-reads the complete enabled metadata before planning the deployment",
             )
         }
         Ue4ssRequirement::Required => {}
@@ -1755,16 +1867,29 @@ mod tests {
         let over_budget =
             inspect_loadout_with_meta_budget(&library, &loadout, alpha_len + beta_len - 1);
         assert_eq!(over_budget.check.state, PreflightStateV1::Unknown);
-        assert_eq!(
-            over_budget.check.code,
-            "enabled_mod_metadata_budget_exhausted"
-        );
+        assert_eq!(over_budget.check.code, "enabled_mod_inspection_limit");
         assert_eq!(over_budget.check.action, "verify_during_apply");
+        assert_eq!(over_budget.readiness, LoadoutReadiness::ApplyAuthoritative);
         assert!(over_budget
             .check
             .items
             .iter()
             .any(|item| item.contains("aggregate metadata inspection budget exhausted")));
+        let target = over_budget.loadout.as_ref().unwrap();
+        let (deployment, _) = inspect_deployment(
+            Some(Path::new("C:/display-only-game")),
+            &library,
+            Some(target),
+            over_budget.readiness,
+            |_, _, _| {
+                Ok(ManagerStatus::ChangesPending {
+                    deployed: Vec::new(),
+                    target: target.entries.clone(),
+                })
+            },
+        );
+        assert_eq!(deployment.code, "deployment_changes_pending");
+        assert_eq!(deployment.action, "review_apply");
 
         assert_eq!(
             inspect_loadout_with_meta_budget(&library, &loadout, alpha_len + beta_len)
@@ -1801,6 +1926,129 @@ mod tests {
             .items
             .iter()
             .any(|item| item.starts_with("alpha:") && item.contains("corrupt library sidecar")));
+    }
+
+    #[test]
+    fn component_probe_budget_stops_before_traversal_and_keeps_apply_reachable() {
+        let root = tempfile::tempdir().unwrap();
+        let library = root.path().join("library");
+        fs::create_dir(&library).unwrap();
+        for id in ["alpha", "beta"] {
+            write_library_meta(
+                &library,
+                id,
+                vec![ComponentInfo::LoosePak {
+                    rel: "payload.pak".to_owned(),
+                    targets: Vec::new(),
+                }],
+            );
+        }
+        fs::write(library.join("alpha/payload.pak"), b"pak").unwrap();
+        let loadout_path = root.path().join("loadout.json");
+
+        write_enabled_loadout(&loadout_path, &["alpha", "alpha"]);
+        let duplicate =
+            inspect_loadout_with_budgets(&library, &loadout_path, MAX_LOADOUT_META_BYTES, 2);
+        assert_eq!(duplicate.check.code, "loadout_metadata_ready");
+
+        write_enabled_loadout(&loadout_path, &["alpha", "beta"]);
+        let bounded =
+            inspect_loadout_with_budgets(&library, &loadout_path, MAX_LOADOUT_META_BYTES, 3);
+        assert_eq!(bounded.check.state, PreflightStateV1::Unknown);
+        assert_eq!(bounded.check.code, "enabled_mod_inspection_limit");
+        assert_eq!(bounded.check.action, "verify_during_apply");
+        assert_eq!(bounded.readiness, LoadoutReadiness::ApplyAuthoritative);
+        assert!(matches!(bounded.ue4ss, Ue4ssRequirement::VerifyDuringApply));
+        assert!(bounded
+            .check
+            .items
+            .iter()
+            .any(|item| item.contains("component/probe inspection budget exhausted")));
+
+        // The fourth unit permits beta's payload traversal, so the deliberately missing payload
+        // is then an actual library problem rather than an inspection-limit result.
+        let missing =
+            inspect_loadout_with_budgets(&library, &loadout_path, MAX_LOADOUT_META_BYTES, 4);
+        assert_eq!(missing.check.state, PreflightStateV1::Problem);
+        assert_eq!(missing.readiness, LoadoutReadiness::Blocked);
+        assert!(missing
+            .check
+            .items
+            .iter()
+            .any(|item| item.contains("required loose pak child is missing")));
+
+        let target = bounded.loadout.as_ref().unwrap();
+        let cases = [
+            (
+                ManagerStatus::InSync {
+                    loadout: target.entries.clone(),
+                },
+                PreflightStateV1::Unknown,
+                "deployment_loadout_inspection_limit",
+                "review_apply",
+            ),
+            (
+                ManagerStatus::ChangesPending {
+                    deployed: Vec::new(),
+                    target: target.entries.clone(),
+                },
+                PreflightStateV1::Problem,
+                "deployment_changes_pending",
+                "review_apply",
+            ),
+            (
+                ManagerStatus::GameUpdated {
+                    drifted: vec!["changed.bin".to_owned()],
+                },
+                PreflightStateV1::Problem,
+                "deployment_game_updated",
+                "review_reapply",
+            ),
+        ];
+        for (status, state, code, action) in cases {
+            let (deployment, _) = inspect_deployment(
+                Some(Path::new("C:/display-only-game")),
+                &library,
+                Some(target),
+                bounded.readiness,
+                move |_, _, _| Ok(status),
+            );
+            assert_eq!(deployment.state, state, "code: {code}");
+            assert_eq!(deployment.code, code);
+            assert_eq!(deployment.action, action);
+        }
+
+        let ue4ss = inspect_ue4ss(None, bounded.ue4ss);
+        assert_eq!(ue4ss.code, "ue4ss_requirement_inspection_limit");
+        assert_eq!(ue4ss.action, "verify_during_apply");
+        let ok_install = PreflightCheckV1::new(
+            PreflightCheckIdV1::Install,
+            PreflightStateV1::Ok,
+            "install_recognized",
+            "none",
+            "ok",
+        );
+        let clear_mutation = PreflightCheckV1::new(
+            PreflightCheckIdV1::InstallMutation,
+            PreflightStateV1::Ok,
+            "install_mutation_clear",
+            "none",
+            "clear",
+        );
+        let (mut deployment, _) = inspect_deployment(
+            Some(Path::new("C:/display-only-game")),
+            &library,
+            Some(target),
+            bounded.readiness,
+            |_, _, _| {
+                Ok(ManagerStatus::ChangesPending {
+                    deployed: Vec::new(),
+                    target: target.entries.clone(),
+                })
+            },
+        );
+        defer_deployment_action(&mut deployment, &ok_install, &clear_mutation, false, &ue4ss);
+        assert_eq!(deployment.action, "review_apply");
     }
 
     fn write_library_meta(library: &Path, id: &str, components: Vec<ComponentInfo>) {
@@ -2414,7 +2662,7 @@ mod tests {
                 Some(Path::new("C:/display-only-game")),
                 Path::new("C:/display-only-library"),
                 Some(&Loadout::default()),
-                true,
+                LoadoutReadiness::Verified,
                 move |_, _, _| Ok(status),
             );
             assert_eq!(check.state, state, "code: {code}");
