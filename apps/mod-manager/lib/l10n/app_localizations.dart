@@ -116,6 +116,72 @@ abstract class AppLocalizations {
     Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hans'),
   ];
 
+  /// No description provided for @coreBlockedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Mod Manager unavailable'**
+  String get coreBlockedTitle;
+
+  /// No description provided for @coreDllMissingMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'The required gore_ffi.dll was not found.'**
+  String get coreDllMissingMessage;
+
+  /// No description provided for @coreDllLoadFailedMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'The native GORE Core library could not be loaded.'**
+  String get coreDllLoadFailedMessage;
+
+  /// No description provided for @coreVerificationFailedMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'The native GORE Core library could not be verified.'**
+  String get coreVerificationFailedMessage;
+
+  /// No description provided for @coreManagerTooOldMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'This GORE Core version is newer than the Mod Manager. Update the Mod Manager.'**
+  String get coreManagerTooOldMessage;
+
+  /// No description provided for @coreNativeTooOldMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'This GORE Core version is older than the Mod Manager. Update or repair the complete Mod Manager installation.'**
+  String get coreNativeTooOldMessage;
+
+  /// No description provided for @coreCommandsMissingMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'The GORE Core library does not provide all commands required by this Mod Manager.'**
+  String get coreCommandsMissingMessage;
+
+  /// No description provided for @coreBlockedRepairHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Update or repair the complete Mod Manager package, then restart the app.'**
+  String get coreBlockedRepairHint;
+
+  /// No description provided for @coreTechnicalDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'Technical details'**
+  String get coreTechnicalDetails;
+
+  /// No description provided for @coreCopyTechnicalDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy technical details'**
+  String get coreCopyTechnicalDetails;
+
+  /// No description provided for @coreTechnicalDetailsCopied.
+  ///
+  /// In en, this message translates to:
+  /// **'Technical details copied'**
+  String get coreTechnicalDetailsCopied;
+
   /// Deployment status is unavailable or uses an unsupported future state.
   ///
   /// In en, this message translates to:

@@ -9,6 +9,42 @@ class AppLocalizationsZh extends AppLocalizations {
   AppLocalizationsZh([String locale = 'zh']) : super(locale);
 
   @override
+  String get coreBlockedTitle => 'Mod Manager 不可用';
+
+  @override
+  String get coreDllMissingMessage => '未找到所需的 gore_ffi.dll 文件。';
+
+  @override
+  String get coreDllLoadFailedMessage => '无法加载 GORE Core 原生库。';
+
+  @override
+  String get coreVerificationFailedMessage => '无法验证 GORE Core 原生库。';
+
+  @override
+  String get coreManagerTooOldMessage =>
+      '此 GORE Core 版本比 Mod Manager 更新。请更新 Mod Manager。';
+
+  @override
+  String get coreNativeTooOldMessage =>
+      '此 GORE Core 版本比 Mod Manager 更旧。请更新或修复完整的 Mod Manager 安装。';
+
+  @override
+  String get coreCommandsMissingMessage =>
+      'GORE Core 库未提供此 Mod Manager 所需的全部命令。';
+
+  @override
+  String get coreBlockedRepairHint => '请更新或修复完整的 Mod Manager 软件包，然后重新启动应用。';
+
+  @override
+  String get coreTechnicalDetails => '技术详细信息';
+
+  @override
+  String get coreCopyTechnicalDetails => '复制技术详细信息';
+
+  @override
+  String get coreTechnicalDetailsCopied => '已复制技术详细信息';
+
+  @override
   String get statusUnknown => '未知';
 
   @override
@@ -333,6 +369,42 @@ class AppLocalizationsZh extends AppLocalizations {
 /// The translations for Chinese, using the Han script (`zh_Hans`).
 class AppLocalizationsZhHans extends AppLocalizationsZh {
   AppLocalizationsZhHans() : super('zh_Hans');
+
+  @override
+  String get coreBlockedTitle => 'Mod Manager 不可用';
+
+  @override
+  String get coreDllMissingMessage => '未找到所需的 gore_ffi.dll 文件。';
+
+  @override
+  String get coreDllLoadFailedMessage => '无法加载 GORE Core 原生库。';
+
+  @override
+  String get coreVerificationFailedMessage => '无法验证 GORE Core 原生库。';
+
+  @override
+  String get coreManagerTooOldMessage =>
+      '此 GORE Core 版本比 Mod Manager 更新。请更新 Mod Manager。';
+
+  @override
+  String get coreNativeTooOldMessage =>
+      '此 GORE Core 版本比 Mod Manager 更旧。请更新或修复完整的 Mod Manager 安装。';
+
+  @override
+  String get coreCommandsMissingMessage =>
+      'GORE Core 库未提供此 Mod Manager 所需的全部命令。';
+
+  @override
+  String get coreBlockedRepairHint => '请更新或修复完整的 Mod Manager 软件包，然后重新启动应用。';
+
+  @override
+  String get coreTechnicalDetails => '技术详细信息';
+
+  @override
+  String get coreCopyTechnicalDetails => '复制技术详细信息';
+
+  @override
+  String get coreTechnicalDetailsCopied => '已复制技术详细信息';
 
   @override
   String get statusUnknown => '未知';

@@ -9,6 +9,46 @@ class AppLocalizationsRu extends AppLocalizations {
   AppLocalizationsRu([String locale = 'ru']) : super(locale);
 
   @override
+  String get coreBlockedTitle => 'Mod Manager недоступен';
+
+  @override
+  String get coreDllMissingMessage =>
+      'Не найден необходимый файл gore_ffi.dll.';
+
+  @override
+  String get coreDllLoadFailedMessage =>
+      'Не удалось загрузить нативную библиотеку GORE Core.';
+
+  @override
+  String get coreVerificationFailedMessage =>
+      'Не удалось проверить нативную библиотеку GORE Core.';
+
+  @override
+  String get coreManagerTooOldMessage =>
+      'Эта версия GORE Core новее, чем Mod Manager. Обновите Mod Manager.';
+
+  @override
+  String get coreNativeTooOldMessage =>
+      'Эта версия GORE Core старее, чем Mod Manager. Обновите или восстановите полную установку Mod Manager.';
+
+  @override
+  String get coreCommandsMissingMessage =>
+      'Библиотека GORE Core не предоставляет все команды, необходимые этому Mod Manager.';
+
+  @override
+  String get coreBlockedRepairHint =>
+      'Обновите или восстановите полный пакет Mod Manager, затем перезапустите приложение.';
+
+  @override
+  String get coreTechnicalDetails => 'Технические сведения';
+
+  @override
+  String get coreCopyTechnicalDetails => 'Копировать технические сведения';
+
+  @override
+  String get coreTechnicalDetailsCopied => 'Технические сведения скопированы';
+
+  @override
   String get statusUnknown => 'Неизвестно';
 
   @override

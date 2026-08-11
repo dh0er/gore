@@ -9,6 +9,46 @@ class AppLocalizationsPt extends AppLocalizations {
   AppLocalizationsPt([String locale = 'pt']) : super(locale);
 
   @override
+  String get coreBlockedTitle => 'Mod Manager indisponível';
+
+  @override
+  String get coreDllMissingMessage =>
+      'Não foi encontrado o ficheiro gore_ffi.dll necessário.';
+
+  @override
+  String get coreDllLoadFailedMessage =>
+      'Não foi possível carregar a biblioteca nativa do GORE Core.';
+
+  @override
+  String get coreVerificationFailedMessage =>
+      'Não foi possível verificar a biblioteca nativa do GORE Core.';
+
+  @override
+  String get coreManagerTooOldMessage =>
+      'Esta versão do GORE Core é mais recente do que o Mod Manager. Atualize o Mod Manager.';
+
+  @override
+  String get coreNativeTooOldMessage =>
+      'Esta versão do GORE Core é mais antiga do que o Mod Manager. Atualize ou repare a instalação completa do Mod Manager.';
+
+  @override
+  String get coreCommandsMissingMessage =>
+      'A biblioteca do GORE Core não fornece todos os comandos exigidos por este Mod Manager.';
+
+  @override
+  String get coreBlockedRepairHint =>
+      'Atualize ou repare o pacote completo do Mod Manager e reinicie a aplicação.';
+
+  @override
+  String get coreTechnicalDetails => 'Detalhes técnicos';
+
+  @override
+  String get coreCopyTechnicalDetails => 'Copiar detalhes técnicos';
+
+  @override
+  String get coreTechnicalDetailsCopied => 'Detalhes técnicos copiados';
+
+  @override
   String get statusUnknown => 'Desconhecido';
 
   @override
@@ -350,6 +390,46 @@ class AppLocalizationsPt extends AppLocalizations {
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
 class AppLocalizationsPtBr extends AppLocalizationsPt {
   AppLocalizationsPtBr() : super('pt_BR');
+
+  @override
+  String get coreBlockedTitle => 'Mod Manager indisponível';
+
+  @override
+  String get coreDllMissingMessage =>
+      'Não foi encontrado o arquivo gore_ffi.dll necessário.';
+
+  @override
+  String get coreDllLoadFailedMessage =>
+      'Não foi possível carregar a biblioteca nativa do GORE Core.';
+
+  @override
+  String get coreVerificationFailedMessage =>
+      'Não foi possível verificar a biblioteca nativa do GORE Core.';
+
+  @override
+  String get coreManagerTooOldMessage =>
+      'Esta versão do GORE Core é mais recente que o Mod Manager. Atualize o Mod Manager.';
+
+  @override
+  String get coreNativeTooOldMessage =>
+      'Esta versão do GORE Core é mais antiga que o Mod Manager. Atualize ou repare a instalação completa do Mod Manager.';
+
+  @override
+  String get coreCommandsMissingMessage =>
+      'A biblioteca do GORE Core não fornece todos os comandos exigidos por este Mod Manager.';
+
+  @override
+  String get coreBlockedRepairHint =>
+      'Atualize ou repare o pacote completo do Mod Manager e reinicie o aplicativo.';
+
+  @override
+  String get coreTechnicalDetails => 'Detalhes técnicos';
+
+  @override
+  String get coreCopyTechnicalDetails => 'Copiar detalhes técnicos';
+
+  @override
+  String get coreTechnicalDetailsCopied => 'Detalhes técnicos copiados';
 
   @override
   String get statusUnknown => 'Desconhecido';
