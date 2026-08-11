@@ -721,7 +721,13 @@ fn inspect_loadout_with_budgets(
                 requires_script_cache |= meta
                     .components
                     .iter()
-                    .any(|component| matches!(component, ComponentInfo::AngelScriptPatch { .. }));
+                    .any(|component| {
+                        matches!(
+                            component,
+                            ComponentInfo::AngelScriptPatch { targets, .. }
+                                if !targets.is_empty()
+                        )
+                    });
             }
             Err(error) => match error {
                 EvidenceFailure::Problem(message) => {
@@ -2227,7 +2233,7 @@ mod tests {
         write_enabled_loadout(&loadout, &["deferred"]);
 
         let inspected = inspect_loadout(&library, &loadout);
-        assert!(inspected.requires_script_cache);
+        assert!(!inspected.requires_script_cache);
         let check = inspected.check;
         assert_eq!(check.state, PreflightStateV1::Ok);
         assert_eq!(check.code, "loadout_metadata_ready");
@@ -2240,7 +2246,7 @@ mod tests {
     }
 
     #[test]
-    fn script_patch_defers_apply_until_the_install_cache_exists() {
+    fn script_cache_is_required_only_for_declared_script_edits() {
         let install = install_fixture();
         let library = install.path().join("library");
         fs::create_dir(&library).unwrap();
@@ -2272,6 +2278,24 @@ mod tests {
                 |_| Ok(false),
             )
         };
+        let empty = inspect();
+        assert_eq!(empty.checks[1].code, "install_recognized");
+        assert_eq!(empty.checks[3].action, "review_apply");
+
+        write_library_meta(
+            &library,
+            "script",
+            vec![ComponentInfo::AngelScriptPatch {
+                rel: "scripts".to_owned(),
+                targets: vec!["TestModule".to_owned()],
+            }],
+        );
+        fs::write(
+            library.join("script/scripts/manifest.json"),
+            br#"[{"op":"add","module":"TestModule","mini":"TestModule.mini"}]"#,
+        )
+        .unwrap();
+
         let missing = inspect();
         assert_eq!(missing.checks[1].code, "install_incomplete");
         assert_eq!(missing.checks[1].action, "verify_game_files");
