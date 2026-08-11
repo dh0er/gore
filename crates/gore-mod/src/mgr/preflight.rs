@@ -1923,13 +1923,14 @@ mod tests {
         let loadout = install.path().join("loadout.json");
         fs::write(&loadout, serde_json::to_vec(&Loadout::default()).unwrap()).unwrap();
         let live = install.path().join("G1R/Story/VoiceOver/owned.zip");
-        fs::create_dir_all(&live).unwrap();
+        fs::create_dir_all(live.parent().unwrap()).unwrap();
+        fs::write(&live, b"deployed").unwrap();
         let record = crate::DeployRecord {
             mod_name: "manager".into(),
             owner: "manager".into(),
             deployed_hashes: std::collections::BTreeMap::from([(
                 live.display().to_string(),
-                crate::content_hash(b"deployed"),
+                "malformed".to_owned(),
             )]),
             ..Default::default()
         };

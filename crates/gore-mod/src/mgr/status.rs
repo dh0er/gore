@@ -56,6 +56,17 @@ enum InspectionFailurePolicy {
     Preserve,
 }
 
+fn metadata_for_status(path: &Path) -> crate::Result<Option<std::fs::Metadata>> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(crate::ModError::Io(format!(
+            "reading deployment path metadata {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
 fn path_exists_for_status(
     path: &Path,
     failure_policy: InspectionFailurePolicy,
@@ -63,14 +74,7 @@ fn path_exists_for_status(
     if failure_policy == InspectionFailurePolicy::TreatAsDrift {
         return Ok(crate::path_exists_no_follow(path));
     }
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(crate::ModError::Io(format!(
-            "reading deployment path metadata {}: {error}",
-            path.display()
-        ))),
-    }
+    Ok(metadata_for_status(path)?.is_some())
 }
 
 fn file_matches_for_status(
@@ -81,7 +85,10 @@ fn file_matches_for_status(
     if failure_policy == InspectionFailurePolicy::TreatAsDrift {
         return Ok(crate::file_matches_recorded_hash(path, expected));
     }
-    if !path_exists_for_status(path, failure_policy)? {
+    let Some(metadata) = metadata_for_status(path)? else {
+        return Ok(false);
+    };
+    if crate::metadata_is_link(&metadata) || !metadata.is_file() {
         return Ok(false);
     }
     crate::file_matches_recorded_hash_result(path, expected)
@@ -95,7 +102,10 @@ fn tree_matches_for_status(
     if failure_policy == InspectionFailurePolicy::TreatAsDrift {
         return Ok(crate::tree_matches_recorded_fingerprint(path, expected));
     }
-    if !path_exists_for_status(path, failure_policy)? {
+    let Some(metadata) = metadata_for_status(path)? else {
+        return Ok(false);
+    };
+    if crate::metadata_is_link(&metadata) || !metadata.is_dir() {
         return Ok(false);
     }
     crate::tree_fingerprint(path).map(|current| current == expected)
@@ -198,9 +208,15 @@ fn status_with_failure_policy(
             }
             None if failure_policy == InspectionFailurePolicy::Preserve => {
                 let live_path = Path::new(live.as_str());
-                if !path_exists_for_status(live_path, failure_policy)?
-                    || !path_exists_for_status(backup_path, failure_policy)?
-                {
+                let live_metadata = metadata_for_status(live_path)?;
+                let backup_metadata = metadata_for_status(backup_path)?;
+                let live_is_file = live_metadata.as_ref().is_some_and(|metadata| {
+                    !crate::metadata_is_link(metadata) && metadata.is_file()
+                });
+                let backup_is_file = backup_metadata.as_ref().is_some_and(|metadata| {
+                    !crate::metadata_is_link(metadata) && metadata.is_file()
+                });
+                if !live_is_file || !backup_is_file {
                     false
                 } else {
                     crate::sha256_file(live_path)? == crate::sha256_file(backup_path)?
@@ -614,14 +630,12 @@ mod tests {
         let game = tmp.path().join("game");
         let lib = tmp.path().join("lib");
         let live = game.join("G1R/Story/VoiceOver/owned.zip");
-        std::fs::create_dir_all(&live).unwrap();
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"deployed").unwrap();
         let record = DeployRecord {
             mod_name: "manager".into(),
             owner: "manager".into(),
-            deployed_hashes: BTreeMap::from([(
-                live.display().to_string(),
-                crate::content_hash(b"deployed"),
-            )]),
+            deployed_hashes: BTreeMap::from([(live.display().to_string(), "malformed".into())]),
             ..Default::default()
         };
         write_record(&game, &record);
@@ -634,7 +648,15 @@ mod tests {
         );
         assert!(status_for_preflight(&game, &lib, &Loadout::default()).is_err());
 
-        std::fs::remove_dir(&live).unwrap();
+        std::fs::remove_file(&live).unwrap();
+        assert_eq!(
+            status_for_preflight(&game, &lib, &Loadout::default()).unwrap(),
+            ManagerStatus::GameUpdated {
+                drifted: vec![live.display().to_string()]
+            }
+        );
+
+        std::fs::create_dir(&live).unwrap();
         assert_eq!(
             status_for_preflight(&game, &lib, &Loadout::default()).unwrap(),
             ManagerStatus::GameUpdated {
