@@ -96,6 +96,8 @@ void main() {
     expect(AppLocalizations.supportedLocales, hasLength(12));
     final english = await AppLocalizations.delegate.load(const Locale('en'));
     expect(english.conflictWinner, 'intended winner');
+    final chinese = await AppLocalizations.delegate.load(const Locale('zh'));
+    expect(chinese.conflictWinner, '预期生效');
     for (final locale in AppLocalizations.supportedLocales) {
       final l10n = await AppLocalizations.delegate.load(locale);
       expect(
