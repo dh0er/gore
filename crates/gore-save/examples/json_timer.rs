@@ -12,7 +12,11 @@ fn main() {
     for i in 0..repeats {
         let start = std::time::Instant::now();
         last = gore_save::execute_json(&input);
-        eprintln!("run {i}: {:?}", start.elapsed());
+        eprintln!(
+            "run {i}: {:?}  parses={}",
+            start.elapsed(),
+            gore_save::properties::PARSE_COUNT.with(|c| { let n = c.get(); c.set(0); n })
+        );
     }
     println!("{last}");
 }

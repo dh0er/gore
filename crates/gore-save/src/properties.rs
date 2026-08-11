@@ -2436,8 +2436,20 @@ pub fn count_properties(props: &[Property]) -> PropertyCounts {
     acc
 }
 
+thread_local! {
+    /// How many whole-payload parses this thread has done.
+    ///
+    /// A parse costs about half a second on a real save and allocates a tree of a
+    /// few hundred megabytes, so how often an edit re-parses is the number that
+    /// decides how long a write takes — and unlike wall-clock time it is exactly
+    /// reproducible. `crates/gore-save/examples/json_timer.rs` reports it beside the
+    /// elapsed time. Counting costs one thread-local increment per parse.
+    pub static PARSE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Parse a full decompressed private payload (strict: every byte accounted for).
 pub fn parse_private_root(payload: &[u8]) -> Result<RootObject, CoreError> {
+    PARSE_COUNT.with(|c| c.set(c.get() + 1));
     parse_private_root_at(payload, 0)
 }
 
