@@ -9,6 +9,47 @@ class AppLocalizationsJa extends AppLocalizations {
   AppLocalizationsJa([String locale = 'ja']) : super(locale);
 
   @override
+  String get coreBlockedTitle => 'Mod Manager を利用できません';
+
+  @override
+  String get coreDllMissingMessage => '必要な gore_ffi.dll が見つかりません。';
+
+  @override
+  String get coreDllLoadFailedMessage => 'GORE Core のネイティブライブラリを読み込めませんでした。';
+
+  @override
+  String get coreVerificationFailedMessage =>
+      'GORE Core のネイティブライブラリを検証できませんでした。';
+
+  @override
+  String get coreManagerTooOldMessage =>
+      'この GORE Core は Mod Manager より新しいバージョンです。Mod Manager を更新してください。';
+
+  @override
+  String get coreNativeTooOldMessage =>
+      'この GORE Core は Mod Manager より古いバージョンです。Mod Manager のインストール全体を更新または修復してください。';
+
+  @override
+  String get coreCommandsMissingMessage =>
+      'この GORE Core ライブラリには、Mod Manager に必要なコマンドがすべて含まれていません。';
+
+  @override
+  String get coreBlockedRepairHint =>
+      'Mod Manager のパッケージ全体を更新または修復してから、アプリを再起動してください。';
+
+  @override
+  String get coreTechnicalDetails => '技術情報';
+
+  @override
+  String get coreCopyTechnicalDetails => '技術情報をコピー';
+
+  @override
+  String get coreTechnicalDetailsCopied => '技術情報をコピーしました';
+
+  @override
+  String get coreTechnicalDetailsCopyFailed => '技術情報をコピーできませんでした。もう一度お試しください。';
+
+  @override
   String get statusUnknown => '不明';
 
   @override

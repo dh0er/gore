@@ -9,6 +9,50 @@ class AppLocalizationsEn extends AppLocalizations {
   AppLocalizationsEn([String locale = 'en']) : super(locale);
 
   @override
+  String get coreBlockedTitle => 'Mod Manager unavailable';
+
+  @override
+  String get coreDllMissingMessage =>
+      'The required gore_ffi.dll was not found.';
+
+  @override
+  String get coreDllLoadFailedMessage =>
+      'The native GORE Core library could not be loaded.';
+
+  @override
+  String get coreVerificationFailedMessage =>
+      'The native GORE Core library could not be verified.';
+
+  @override
+  String get coreManagerTooOldMessage =>
+      'This GORE Core version is newer than the Mod Manager. Update the Mod Manager.';
+
+  @override
+  String get coreNativeTooOldMessage =>
+      'This GORE Core version is older than the Mod Manager. Update or repair the complete Mod Manager installation.';
+
+  @override
+  String get coreCommandsMissingMessage =>
+      'The GORE Core library does not provide all commands required by this Mod Manager.';
+
+  @override
+  String get coreBlockedRepairHint =>
+      'Update or repair the complete Mod Manager package, then restart the app.';
+
+  @override
+  String get coreTechnicalDetails => 'Technical details';
+
+  @override
+  String get coreCopyTechnicalDetails => 'Copy technical details';
+
+  @override
+  String get coreTechnicalDetailsCopied => 'Technical details copied';
+
+  @override
+  String get coreTechnicalDetailsCopyFailed =>
+      'Technical details could not be copied. Try again.';
+
+  @override
   String get statusUnknown => 'Unknown';
 
   @override

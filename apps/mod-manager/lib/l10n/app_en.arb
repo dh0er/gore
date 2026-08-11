@@ -1,5 +1,17 @@
 {
   "@@locale": "en",
+  "coreBlockedTitle": "Mod Manager unavailable",
+  "coreDllMissingMessage": "The required gore_ffi.dll was not found.",
+  "coreDllLoadFailedMessage": "The native GORE Core library could not be loaded.",
+  "coreVerificationFailedMessage": "The native GORE Core library could not be verified.",
+  "coreManagerTooOldMessage": "This GORE Core version is newer than the Mod Manager. Update the Mod Manager.",
+  "coreNativeTooOldMessage": "This GORE Core version is older than the Mod Manager. Update or repair the complete Mod Manager installation.",
+  "coreCommandsMissingMessage": "The GORE Core library does not provide all commands required by this Mod Manager.",
+  "coreBlockedRepairHint": "Update or repair the complete Mod Manager package, then restart the app.",
+  "coreTechnicalDetails": "Technical details",
+  "coreCopyTechnicalDetails": "Copy technical details",
+  "coreTechnicalDetailsCopied": "Technical details copied",
+  "coreTechnicalDetailsCopyFailed": "Technical details could not be copied. Try again.",
   "statusUnknown": "Unknown",
   "@statusUnknown": {
     "description": "Deployment status is unavailable or uses an unsupported future state."
