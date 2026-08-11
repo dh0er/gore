@@ -56,15 +56,16 @@ Map<String, Object?> _libraryList() => {
   },
 };
 
-FakeGoreCoreFfiService _core() => FakeGoreCoreFfiService(
-  responses: {
-    'mgr_library_list': _libraryList(),
-    'mgr_analyze': {'ok': true, 'conflicts': <Object?>[]},
-  },
-);
+FakeGoreCoreFfiService _core({List<Object?> conflicts = const <Object?>[]}) =>
+    FakeGoreCoreFfiService(
+      responses: {
+        'mgr_library_list': _libraryList(),
+        'mgr_analyze': {'ok': true, 'conflicts': conflicts},
+      },
+    );
 
-Widget _app(Widget child) => ProviderScope(
-  overrides: [coreServiceProvider.overrideWithValue(_core())],
+Widget _app(Widget child, {FakeGoreCoreFfiService? core}) => ProviderScope(
+  overrides: [coreServiceProvider.overrideWithValue(core ?? _core())],
   child: MaterialApp(
     localizationsDelegates: const [
       AppLocalizations.delegate,
@@ -185,4 +186,40 @@ void main() {
       semantics.dispose();
     },
   );
+
+  testWidgets('compact findings show a conflict row before the coverage note', (
+    tester,
+  ) async {
+    _compact200Percent(tester);
+    final core = _core(
+      conflicts: [
+        {
+          'kind': 'ue4ss_unknown',
+          'target': '<unknown>',
+          'mods': ['External.Mixed', 'External.Other'],
+          'severity': 'info',
+        },
+      ],
+    );
+    await tester.pumpWidget(
+      _app(const SizedBox(height: 72, child: ConflictPanel()), core: core),
+    );
+    await tester.pumpAndSettle();
+
+    final panelRect = tester.getRect(find.byType(ConflictPanel));
+    final rowRect = tester.getRect(find.byType(ConflictRow));
+    expect(rowRect.top, lessThan(panelRect.bottom));
+    expect(rowRect.bottom, greaterThan(panelRect.top));
+    final knowledgeNote = find.byKey(const ValueKey('conflict-knowledge-note'));
+    await tester.scrollUntilVisible(
+      knowledgeNote,
+      60,
+      scrollable: find.descendant(
+        of: find.byType(ConflictPanel),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    expect(knowledgeNote, findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

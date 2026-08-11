@@ -77,11 +77,6 @@ class ConflictPanel extends ConsumerWidget {
         return ListView(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           children: [
-            _ConflictKnowledgeNote(
-              incompleteCoverage: incompleteCoverage,
-              l10n: l10n,
-            ),
-            const SizedBox(height: 4),
             for (final entry in groups.entries) ...[
               Padding(
                 padding: const EdgeInsets.only(top: 8, bottom: 2),
@@ -99,6 +94,11 @@ class ConflictPanel extends ConsumerWidget {
                   nameFor: (id) => library.modById(id)?.name ?? id,
                 ),
             ],
+            const SizedBox(height: 8),
+            _ConflictKnowledgeNote(
+              incompleteCoverage: incompleteCoverage,
+              l10n: l10n,
+            ),
           ],
         );
       },
