@@ -786,7 +786,7 @@ fn inspect_loadout_with_budgets(
                 PreflightStateV1::Unknown,
                 "enabled_mod_inspection_limit",
                 "verify_during_apply",
-                "enabled mod metadata or top-level entry-point probes exceeded the bounded read-only inspection budget; Apply performs authoritative per-mod validation",
+                "enabled mod metadata or top-level entry-point probes exceeded the bounded read-only inspection budget; the next Apply operation performs authoritative per-mod validation",
             )
             .with_items(bounded),
             loadout: Some(loadout),
@@ -1218,17 +1218,6 @@ where
                 "resolve the preceding Loadout finding before comparing deployment state",
             )
         }
-        Ok(ManagerStatus::InSync { .. })
-            if loadout_readiness == LoadoutReadiness::ApplyAuthoritative =>
-        {
-            PreflightCheckV1::new(
-                PreflightCheckIdV1::Deployment,
-                PreflightStateV1::Unknown,
-                "deployment_loadout_inspection_limit",
-                "review_apply",
-                "deployment fingerprints match, but bounded loadout inspection did not validate every enabled mod; Apply performs authoritative validation before mutation",
-            )
-        }
         Ok(ManagerStatus::InSync { loadout }) => PreflightCheckV1::new(
             PreflightCheckIdV1::Deployment,
             PreflightStateV1::Ok,
@@ -1525,7 +1514,7 @@ fn inspect_ue4ss(
                 PreflightStateV1::Unknown,
                 "ue4ss_requirement_inspection_limit",
                 "verify_during_apply",
-                "bounded loadout inspection could not establish whether UE4SS is required; Apply re-reads the complete enabled metadata before planning the deployment",
+                "bounded loadout inspection could not establish whether UE4SS is required; the next Apply operation re-reads the complete enabled metadata before planning the deployment",
             )
         }
         Ue4ssRequirement::Required => {}
@@ -1983,9 +1972,9 @@ mod tests {
                 ManagerStatus::InSync {
                     loadout: target.entries.clone(),
                 },
-                PreflightStateV1::Unknown,
-                "deployment_loadout_inspection_limit",
-                "review_apply",
+                PreflightStateV1::Ok,
+                "deployment_in_sync",
+                "none",
             ),
             (
                 ManagerStatus::ChangesPending {
