@@ -31,9 +31,12 @@ const MAX_STATUS_META_BYTES: u64 = 16 * 1024 * 1024;
 // One synchronous status snapshot shares these ceilings across every recorded live file, backup,
 // and UE4SS tree. Successful exact-path reads are cached below, so duplicate record entries are
 // evidence aliases rather than repeated I/O.
-const MAX_STATUS_HASH_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-const MAX_STATUS_HASH_ENTRIES: u64 = 65_536;
-const MAX_STATUS_TREE_ENTRIES: u64 = 250_000;
+// Preflight admits a supported 16-GiB voice archive plus its equally-sized pristine backup with
+// room for the rest of the deployment. Public `status` retains its pre-existing no-total-ceiling
+// semantics while still benefiting from duplicate-read caching and growth-bounded individual I/O.
+const MAX_PREFLIGHT_STATUS_HASH_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+const MAX_PREFLIGHT_STATUS_HASH_ENTRIES: u64 = 250_000;
+const MAX_PREFLIGHT_STATUS_TREE_ENTRIES: u64 = 250_000;
 
 /// The manager's deployment state relative to a target loadout. `#[serde(tag = "state")]` so the
 /// UI can switch on a single discriminant field.
@@ -370,11 +373,16 @@ fn status_with_failure_policy(
     // Drift beats loadout comparison: if the game changed a file we wrote, the deployment is stale
     // no matter what the loadout says. A missing recorded file counts as drifted (it was our
     // modded file and is now gone/replaced).
-    let mut inspection = DeploymentInspection::new(
-        MAX_STATUS_HASH_BYTES,
-        MAX_STATUS_HASH_ENTRIES,
-        MAX_STATUS_TREE_ENTRIES,
-    );
+    let mut inspection = match failure_policy {
+        InspectionFailurePolicy::TreatAsDrift => {
+            DeploymentInspection::new(u64::MAX, u64::MAX, u64::MAX)
+        }
+        InspectionFailurePolicy::Preserve => DeploymentInspection::new(
+            MAX_PREFLIGHT_STATUS_HASH_BYTES,
+            MAX_PREFLIGHT_STATUS_HASH_ENTRIES,
+            MAX_PREFLIGHT_STATUS_TREE_ENTRIES,
+        ),
+    };
     let mut drifted = Vec::new();
     for (live, expected) in &record.deployed_hashes {
         if !file_matches_for_status(
@@ -1562,6 +1570,10 @@ mod tests {
 
     #[test]
     fn deployment_hashing_is_cached_and_aggregate_bounded() {
+        assert!(
+            MAX_PREFLIGHT_STATUS_HASH_BYTES
+                >= gore_vo::Limits::default().max_archive_bytes * 2
+        );
         let tmp = tempfile::tempdir().unwrap();
         let alpha = tmp.path().join("alpha.bin");
         let beta = tmp.path().join("beta.bin");
