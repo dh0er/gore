@@ -87,7 +87,7 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
     def test_ci_must_keep_the_contract_checks_as_its_last_step(self) -> None:
         changed = replace_once(
             self.ci,
-            '          python -m unittest discover -s scripts -p "test_check_release_workflow.py" -v\n',
+            '          python -m unittest discover -s scripts -p "test_*.py" -v\n',
             "",
         )
         self.assert_invalid(ci=changed, mentions="command list changed")

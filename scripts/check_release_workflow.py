@@ -687,7 +687,7 @@ def _validate_ci(root: dict[str, Field], problems: list[str]) -> None:
         "python scripts/check_docs_links.py\n"
         "python scripts/check_plugin.py\n"
         "python scripts/check_release_workflow.py\n"
-        'python -m unittest discover -s scripts -p "test_check_release_workflow.py" -v'
+        'python -m unittest discover -s scripts -p "test_*.py" -v'
     )
     _expect_simple_step(
         steps[7],

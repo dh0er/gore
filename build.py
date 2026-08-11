@@ -51,13 +51,18 @@ Code signing (Azure Trusted / Artifact Signing):
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
+import hashlib
 import os
 import posixpath
 import re
 import shutil
+import struct
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+import zipfile
 
 ROOT = Path(__file__).parent
 
@@ -137,6 +142,15 @@ PROJECTS: dict[str, dict] = {
         "exe": "gore_manager.exe",  # CMake BINARY_NAME
         "core_crate": "gore-ffi",  # shares the mod-studio FFI crate
         "core_dll": "gore_ffi",  # dll gore_ffi.dll (cargo underscores it)
+        # The runner, plugins, and native core use MSVC's dynamic release CRT.
+        # Keep this Manager-only until the other products receive their own
+        # release qualification. Packaging resolves these files from the exact
+        # Visual Studio instance that Flutter/CMake selected.
+        "app_local_msvc_runtime": (
+            "msvcp140.dll",
+            "vcruntime140.dll",
+            "vcruntime140_1.dll",
+        ),
         "releasable": True,
     },
     "gore-cli": {  # the unified CLI
@@ -376,9 +390,15 @@ def sign_paths(paths: list[Path], dry: bool) -> None:
         meta.unlink(missing_ok=True)
 
 
-def sign_dir(directory: Path, dry: bool) -> None:
-    """Sign every PE file directly under `directory` (recursively)."""
-    sign_paths(sorted(directory.rglob("*")), dry)
+def sign_dir(
+    directory: Path, dry: bool, exclude_names: tuple[str, ...] = ()
+) -> None:
+    """Sign every owned PE under `directory`, except named redistributables."""
+    excluded = {name.casefold() for name in exclude_names}
+    sign_paths(
+        sorted(path for path in directory.rglob("*") if path.name.casefold() not in excluded),
+        dry,
+    )
 
 
 def pdir(project: str) -> Path:
@@ -569,6 +589,333 @@ def target_dir(release: bool) -> Path:
     return ROOT / "target" / ("release" if release else "debug")
 
 
+_PE_MACHINE_AMD64 = 0x8664
+_MSVC_RUNTIME_NAME_RE = re.compile(
+    r"^(?:msvcp|msvcr|vcruntime|concrt|vcomp)[a-z0-9_]*\.dll$", re.IGNORECASE
+)
+
+
+@dataclass(frozen=True)
+class _AppLocalRuntimeFile:
+    name: str
+    source: Path
+    sha256: str
+
+
+@dataclass(frozen=True)
+class _AppLocalRuntimePlan:
+    files: tuple[_AppLocalRuntimeFile, ...]
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(item.name for item in self.files)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _pe_machine(path: Path) -> int:
+    """Read a PE machine id without loading or executing the binary."""
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as stream:
+            if size < 0x40 or stream.read(2) != b"MZ":
+                raise ValueError("missing DOS header")
+            stream.seek(0x3C)
+            pe_offset = struct.unpack("<I", stream.read(4))[0]
+            if pe_offset > size - 6:
+                raise ValueError("PE header is outside the file")
+            stream.seek(pe_offset)
+            if stream.read(4) != b"PE\0\0":
+                raise ValueError("missing PE signature")
+            return struct.unpack("<H", stream.read(2))[0]
+    except (OSError, struct.error, ValueError) as error:
+        raise SystemExit(f"invalid PE runtime file {path}: {error}") from error
+
+
+def _cmake_cache_value(project: str, key: str) -> str:
+    cache = pdir(project) / "build" / "windows" / "x64" / "CMakeCache.txt"
+    try:
+        lines = cache.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise SystemExit(f"cannot read Flutter CMake cache {cache}: {error}") from error
+    prefix = f"{key}:"
+    values = [line.split("=", 1)[1] for line in lines if line.startswith(prefix) and "=" in line]
+    if len(values) != 1 or not values[0].strip():
+        raise SystemExit(f"Flutter CMake cache must contain one {key}: {cache}")
+    return values[0].strip()
+
+
+def _msvc_runtime_sources(
+    project: str, runtime_names: tuple[str, ...]
+) -> tuple[Path, tuple[_AppLocalRuntimeFile, ...]]:
+    platform = _cmake_cache_value(project, "CMAKE_GENERATOR_PLATFORM")
+    if platform.casefold() != "x64":
+        raise SystemExit(f"{project} release runtime requires x64 CMake output, got {platform!r}")
+
+    linker = Path(_cmake_cache_value(project, "CMAKE_LINKER"))
+    if linker.name.casefold() != "link.exe" or not linker.is_file():
+        raise SystemExit(f"CMake linker does not identify an installed MSVC toolchain: {linker}")
+    dumpbin = linker.with_name("dumpbin.exe")
+    if not dumpbin.is_file():
+        raise SystemExit(f"dumpbin.exe missing beside the selected CMake linker: {dumpbin}")
+
+    vc_root: Path | None = None
+    for parent in linker.parents:
+        if parent.name.casefold() != "vc":
+            continue
+        try:
+            linker.relative_to(parent / "Tools" / "MSVC")
+        except ValueError:
+            continue
+        vc_root = parent
+        break
+    if vc_root is None:
+        raise SystemExit(f"CMake linker is not under VC/Tools/MSVC: {linker}")
+
+    version_file = (
+        vc_root / "Auxiliary" / "Build" / "Microsoft.VCRedistVersion.default.txt"
+    )
+    try:
+        redist_version = version_file.read_text(encoding="utf-8-sig").strip()
+    except OSError as error:
+        raise SystemExit(f"cannot read matching MSVC redist version {version_file}: {error}") from error
+    if re.fullmatch(r"[0-9]+(?:\.[0-9]+){2,3}", redist_version) is None:
+        raise SystemExit(f"invalid MSVC redist version in {version_file}: {redist_version!r}")
+
+    crt_dir = (
+        vc_root
+        / "Redist"
+        / "MSVC"
+        / redist_version
+        / "x64"
+        / "Microsoft.VC143.CRT"
+    )
+    try:
+        resolved_crt_dir = crt_dir.resolve(strict=True)
+    except OSError as error:
+        raise SystemExit(f"matching x64 VC143 redist directory missing: {crt_dir}") from error
+
+    files: list[_AppLocalRuntimeFile] = []
+    for name in runtime_names:
+        source = crt_dir / name
+        if source.is_symlink() or not source.is_file():
+            raise SystemExit(f"required app-local MSVC runtime missing or not a regular file: {source}")
+        try:
+            resolved_source = source.resolve(strict=True)
+        except OSError as error:
+            raise SystemExit(f"cannot resolve app-local MSVC runtime {source}: {error}") from error
+        if resolved_source.parent != resolved_crt_dir:
+            raise SystemExit(f"app-local MSVC runtime escapes its Redist directory: {source}")
+        machine = _pe_machine(resolved_source)
+        if machine != _PE_MACHINE_AMD64:
+            raise SystemExit(
+                f"app-local MSVC runtime must be x64 PE (0x8664), got 0x{machine:04x}: {source}"
+            )
+        files.append(
+            _AppLocalRuntimeFile(
+                name=name,
+                source=resolved_source,
+                sha256=_sha256(resolved_source),
+            )
+        )
+    return dumpbin, tuple(files)
+
+
+def _dumpbin_msvc_imports(dumpbin: Path, paths: list[Path]) -> set[str]:
+    imports: set[str] = set()
+    for path in paths:
+        try:
+            completed = subprocess.run(
+                [str(dumpbin), "/nologo", "/dependents", str(path)],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                check=False,
+            )
+        except OSError as error:
+            raise SystemExit(f"cannot inspect PE dependencies for {path}: {error}") from error
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout).strip()
+            raise SystemExit(f"dumpbin failed for {path}: {detail or completed.returncode}")
+        for line in (completed.stdout + "\n" + completed.stderr).splitlines():
+            candidate = line.strip()
+            if _MSVC_RUNTIME_NAME_RE.fullmatch(candidate):
+                imports.add(candidate.casefold())
+    return imports
+
+
+def _prepare_app_local_runtime(
+    project: str, bundle_dir: Path
+) -> _AppLocalRuntimePlan | None:
+    configured = PROJECTS[project].get("app_local_msvc_runtime")
+    if configured is None:
+        return None
+    runtime_names = tuple(str(name).casefold() for name in configured)
+    expected = set(runtime_names)
+    if len(expected) != len(runtime_names) or any(
+        _MSVC_RUNTIME_NAME_RE.fullmatch(name) is None for name in runtime_names
+    ):
+        raise SystemExit(f"invalid app-local MSVC runtime contract for {project}")
+    if not bundle_dir.is_dir():
+        raise SystemExit(f"Windows release bundle missing: {bundle_dir}")
+
+    dumpbin, files = _msvc_runtime_sources(project, runtime_names)
+    pe_paths: list[Path] = []
+    for path in sorted(bundle_dir.rglob("*")):
+        name = path.name.casefold()
+        if _MSVC_RUNTIME_NAME_RE.fullmatch(name):
+            if name not in expected or path.parent != bundle_dir:
+                raise SystemExit(f"unexpected app-local MSVC runtime in bundle: {path}")
+            if path.is_symlink() or not path.is_file():
+                raise SystemExit(f"existing app-local MSVC runtime is not a regular file: {path}")
+            continue
+        if path.is_file() and path.suffix.casefold() in (".exe", ".dll"):
+            pe_paths.append(path)
+
+    imports = _dumpbin_msvc_imports(dumpbin, pe_paths + [item.source for item in files])
+    if imports != expected:
+        missing = sorted(expected - imports)
+        unexpected = sorted(imports - expected)
+        raise SystemExit(
+            "app-local MSVC runtime closure changed; "
+            f"missing imports={missing}, unexpected imports={unexpected}"
+        )
+    return _AppLocalRuntimePlan(files=files)
+
+
+def _verify_staged_runtime(bundle_dir: Path, plan: _AppLocalRuntimePlan) -> None:
+    expected = {item.name.casefold(): item for item in plan.files}
+    seen: dict[str, Path] = {}
+    for path in bundle_dir.rglob("*"):
+        name = path.name.casefold()
+        if _MSVC_RUNTIME_NAME_RE.fullmatch(name) is None:
+            continue
+        if name not in expected or path.parent != bundle_dir or name in seen:
+            raise SystemExit(f"unexpected app-local MSVC runtime in finalized bundle: {path}")
+        if path.is_symlink() or not path.is_file():
+            raise SystemExit(f"finalized app-local MSVC runtime is not a regular file: {path}")
+        if _pe_machine(path) != _PE_MACHINE_AMD64:
+            raise SystemExit(f"finalized app-local MSVC runtime is not x64: {path}")
+        if _sha256(path) != expected[name].sha256:
+            raise SystemExit(f"finalized app-local MSVC runtime was modified: {path}")
+        seen[name] = path
+    missing = sorted(set(expected) - set(seen))
+    if missing:
+        raise SystemExit(f"finalized bundle is missing app-local MSVC runtime: {missing}")
+
+
+def _stage_runtime_atomically(bundle_dir: Path, plan: _AppLocalRuntimePlan) -> None:
+    with tempfile.TemporaryDirectory(
+        prefix=".gore-runtime-", dir=bundle_dir.parent
+    ) as scratch_name:
+        scratch = Path(scratch_name)
+        prepared = scratch / "prepared"
+        backups = scratch / "backups"
+        prepared.mkdir()
+        backups.mkdir()
+
+        # Copy and verify every source outside the packaged tree before replacing
+        # any existing bundle file.
+        for item in plan.files:
+            temp_path = prepared / item.name
+            shutil.copy2(item.source, temp_path)
+            if _pe_machine(temp_path) != _PE_MACHINE_AMD64 or _sha256(temp_path) != item.sha256:
+                raise SystemExit(f"copied app-local MSVC runtime did not verify: {item.source}")
+
+        moved_backups: list[tuple[Path, Path]] = []
+        installed: list[Path] = []
+        try:
+            for item in plan.files:
+                target = bundle_dir / item.name
+                if target.exists():
+                    backup = backups / item.name
+                    os.replace(target, backup)
+                    moved_backups.append((target, backup))
+            for item in plan.files:
+                target = bundle_dir / item.name
+                os.replace(prepared / item.name, target)
+                installed.append(target)
+            _verify_staged_runtime(bundle_dir, plan)
+        except BaseException as error:
+            rollback_errors: list[str] = []
+            for target in installed:
+                try:
+                    target.unlink(missing_ok=True)
+                except OSError as rollback_error:
+                    rollback_errors.append(f"remove {target}: {rollback_error}")
+            for target, backup in moved_backups:
+                if not backup.exists():
+                    continue
+                try:
+                    os.replace(backup, target)
+                except OSError as rollback_error:
+                    rollback_errors.append(f"restore {target}: {rollback_error}")
+            if rollback_errors:
+                raise RuntimeError(
+                    "app-local MSVC runtime rollback failed: " + "; ".join(rollback_errors)
+                ) from error
+            raise
+        print(f"bundled app-local MSVC runtime -> {bundle_dir}")
+
+
+def _sign_and_stage_app_local_runtime(
+    project: str, bundle_dir: Path, dry: bool
+) -> _AppLocalRuntimePlan | None:
+    runtime_names = tuple(PROJECTS[project].get("app_local_msvc_runtime", ()))
+    if not runtime_names:
+        sign_dir(bundle_dir, dry=dry)
+        return None
+    if dry:
+        sign_dir(bundle_dir, dry=True, exclude_names=runtime_names)
+        print(f"[dry-run] would stage app-local MSVC runtime into {bundle_dir}")
+        return None
+
+    # Validate the entire app + CRT import closure before signing anything.
+    plan = _prepare_app_local_runtime(project, bundle_dir)
+    if plan is None:
+        raise SystemExit(f"missing app-local MSVC runtime plan for {project}")
+    # Microsoft ships these Redist DLLs already signed. Preserve their exact
+    # bytes by signing GORE-owned PEs first, then atomically replacing the DLLs.
+    sign_dir(bundle_dir, dry=False, exclude_names=plan.names)
+    _stage_runtime_atomically(bundle_dir, plan)
+    return plan
+
+
+def _verify_runtime_zip(archive: Path, plan: _AppLocalRuntimePlan) -> None:
+    expected = {item.name.casefold(): item for item in plan.files}
+    seen: set[str] = set()
+    try:
+        with zipfile.ZipFile(archive) as package:
+            for info in package.infolist():
+                basename = Path(info.filename).name.casefold()
+                if _MSVC_RUNTIME_NAME_RE.fullmatch(basename) is None:
+                    continue
+                if (
+                    basename not in expected
+                    or info.filename.replace("\\", "/") != basename
+                    or basename in seen
+                ):
+                    raise SystemExit(f"unexpected app-local MSVC runtime in zip: {info.filename}")
+                digest = hashlib.sha256()
+                with package.open(info) as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                if digest.hexdigest() != expected[basename].sha256:
+                    raise SystemExit(f"modified app-local MSVC runtime in zip: {info.filename}")
+                seen.add(basename)
+    except (OSError, zipfile.BadZipFile) as error:
+        raise SystemExit(f"cannot verify packaged app-local MSVC runtime {archive}: {error}") from error
+    missing = sorted(set(expected) - seen)
+    if missing:
+        raise SystemExit(f"portable zip is missing app-local MSVC runtime: {missing}")
+
+
 def stage_companions(project: str, dry: bool) -> None:
     """Build sibling CLI binaries and drop them into the Flutter Release dir.
 
@@ -708,32 +1055,53 @@ def dist_project(project: str, dry: bool) -> Path | None:
         staging = dist / "_stage"
         if staging.exists():
             shutil.rmtree(staging)
-        shutil.copytree(rel, staging)
-        if license_file.exists():
-            shutil.copy2(license_file, staging / "LICENSE")
-        third_party = ROOT / "THIRD_PARTY_LICENSES.md"
-        if third_party.exists():
-            shutil.copy2(third_party, staging / "THIRD_PARTY_LICENSES.md")
-        # The auto-updater DLLs are false-positive virus magnets that NexusMods
-        # quarantines. The portable build never calls the updater (it is gated
-        # to Inno-installed copies); the runner delay-loads the plugin and stubs
-        # out its registration when absent (see windows/runner/updater_delayload
-        # .cpp), so both DLLs can be dropped without a load-time crash. Installer
-        # builds still bundle them straight from `rel`.
-        for dll_name in ("auto_updater_windows_plugin.dll", "WinSparkle.dll"):
-            dll = staging / dll_name
-            if dll.exists():
-                dll.unlink()
-                print(f"dropped {dll_name} from portable zip")
-        # Sign the staged PE files before zipping so the portable archive ships
-        # signed binaries (this is the build NexusMods scans on upload).
-        sign_dir(staging, dry=dry)
-        if base.with_suffix(".zip").exists():
-            base.with_suffix(".zip").unlink()
-        archive = shutil.make_archive(str(base), "zip", root_dir=staging)
-        shutil.rmtree(staging)
-        print(f"\npackaged: {archive}")
-        return Path(archive)
+        try:
+            shutil.copytree(rel, staging)
+            if license_file.exists():
+                shutil.copy2(license_file, staging / "LICENSE")
+            third_party = ROOT / "THIRD_PARTY_LICENSES.md"
+            if third_party.exists():
+                shutil.copy2(third_party, staging / "THIRD_PARTY_LICENSES.md")
+            # The auto-updater DLLs are false-positive virus magnets that NexusMods
+            # quarantines. The portable build never calls the updater (it is gated
+            # to Inno-installed copies); the runner delay-loads the plugin and stubs
+            # out its registration when absent (see windows/runner/updater_delayload
+            # .cpp), so both DLLs can be dropped without a load-time crash. Installer
+            # builds still bundle them straight from `rel`.
+            for dll_name in ("auto_updater_windows_plugin.dll", "WinSparkle.dll"):
+                dll = staging / dll_name
+                if dll.exists():
+                    dll.unlink()
+                    print(f"dropped {dll_name} from portable zip")
+            # Sign the staged PE files before zipping so the portable archive ships
+            # signed binaries (this is the build NexusMods scans on upload).
+            runtime_plan = _sign_and_stage_app_local_runtime(project, staging, dry=dry)
+            final_archive = base.parent / f"{base.name}.zip"
+            if runtime_plan is None:
+                if final_archive.exists():
+                    final_archive.unlink()
+                archive = Path(shutil.make_archive(str(base), "zip", root_dir=staging))
+            else:
+                # Keep any previous release artifact intact until the candidate
+                # archive has passed the Manager runtime contract.
+                with tempfile.TemporaryDirectory(
+                    prefix=".gore-package-", dir=dist
+                ) as scratch_name:
+                    candidate = Path(
+                        shutil.make_archive(
+                            str(Path(scratch_name) / base.name),
+                            "zip",
+                            root_dir=staging,
+                        )
+                    )
+                    _verify_runtime_zip(candidate, runtime_plan)
+                    os.replace(candidate, final_archive)
+                archive = final_archive
+            print(f"\npackaged: {archive}")
+            return archive
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
 
     # rust-bin: zip the exe + LICENSE
     exe = target_dir(True) / f"{cfg['bin']}.exe"
@@ -798,7 +1166,7 @@ def installer_project(project: str, dry: bool) -> Path | None:
     iss = pdir(project) / cfg["installer"]
     # dist_project signed the staging copy for the zip; the installer packages
     # from the Release dir, so sign those PE files too before Inno bundles them.
-    sign_dir(rel, dry=dry)
+    _sign_and_stage_app_local_runtime(project, rel, dry=dry)
     run(
         f"installer {project}",
         [
