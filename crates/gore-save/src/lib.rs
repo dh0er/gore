@@ -12240,18 +12240,19 @@ fn apply_private_inventory_add_item_to_payload_reusing(
         )?;
     }
 
-    // 4. Retarget the duplicate: definition path first (length-changing, so
-    //    re-resolve from a fresh parse), then the fixed-size count and id.
+    // 4. Retarget the slot. The count and the id are fixed-size writes, so they go
+    //    first and cost no parse of their own; the item definition changes a length
+    //    and so comes last. Only a borrowed template needs its m_InventoryType fixed
+    //    too, and that second length-changing patch is the one case that pays for
+    //    another parse.
     let slot_segment = format!("[{new_index}]");
-    let definition_segs = child_segments(&{
+    let slot_child_segs = |leaf: &[&str]| -> Result<Vec<properties::PathSeg>, CoreError> {
         let mut suffix = slots_suffix.clone();
-        suffix.extend([
-            slot_segment.clone(),
-            "m_SlotData".to_string(),
-            "m_ItemDefinition".to_string(),
-        ]);
-        suffix
-    })?;
+        suffix.push(slot_segment.clone());
+        suffix.extend(leaf.iter().map(|segment| (*segment).to_string()));
+        child_segments(&suffix)
+    };
+    let definition_segs = slot_child_segs(&["m_SlotData", "m_ItemDefinition"])?;
     {
         let reparsed = if patched_matches_root {
             None
@@ -12262,8 +12263,43 @@ fn apply_private_inventory_add_item_to_payload_reusing(
                 ))
             })?)
         };
-        let duplicated = reparsed.as_ref().unwrap_or(root);
-        let definition_chain = properties::resolve_chain(&duplicated.properties, &definition_segs)
+        let current = reparsed.as_ref().unwrap_or(root);
+
+        let count_segs = slot_child_segs(&["m_SlotData", "m_ItemCount"])?;
+        let id_segs = slot_child_segs(&["m_Id"])?;
+        let count_target = properties::resolve(&current.properties, &count_segs)?;
+        let id_target = properties::resolve(&current.properties, &id_segs)?;
+        properties::patch_scalar(
+            &mut patched,
+            count_target,
+            properties::ScalarValue::Int(edit.count),
+        )?;
+        properties::patch_scalar(
+            &mut patched,
+            id_target,
+            properties::ScalarValue::Int(new_id),
+        )?;
+
+        // Whether the ids need re-aligning is decidable from this same parse: the
+        // two writes above are fixed-size, so every other slot still holds the id it
+        // shows here, and the edited one was just set to its own index. Deciding it
+        // now saves the whole-payload parse the re-align would otherwise open with,
+        // and the proof below re-checks the invariant on the bytes that land.
+        let slots_now = properties::resolve(&current.properties, &slots_segs)?;
+        let properties::PropertyValue::Array {
+            elements: slots_now,
+        } = &slots_now.value
+        else {
+            return Err(CoreError::Parse(
+                "MainContainer m_Slots is not a plain slot array after the edit".to_string(),
+            ));
+        };
+        ids_already_aligned = slots_now.iter().enumerate().all(|(index, slot)| {
+            index == new_index
+                || i32::try_from(index).is_ok_and(|expected| slot_id(slot) == Some(expected))
+        });
+
+        let definition_chain = properties::resolve_chain(&current.properties, &definition_segs)
             .map_err(|err| {
                 CoreError::Parse(format!(
                     "duplicated inventory slot is missing m_SlotData.m_ItemDefinition: {err}"
@@ -12277,19 +12313,15 @@ fn apply_private_inventory_add_item_to_payload_reusing(
         )?;
     }
     if needs_type_patch {
-        // A borrowed template carries the donor container's m_InventoryType;
-        // fix it to MainContainer (length-changing, so re-resolve and patch on
-        // its own before the fixed-size scalar writes below).
+        // A borrowed template carries the donor container's m_InventoryType; fix it
+        // to MainContainer. Length-changing, and it follows the definition patch, so
+        // it re-resolves from a fresh parse.
         let reparsed = properties::parse_private_root(&patched).map_err(|err| {
             CoreError::Parse(format!(
                 "inventory item definition patch produced an inconsistent payload: {err}"
             ))
         })?;
-        let type_segs = child_segments(&{
-            let mut suffix = slots_suffix.clone();
-            suffix.extend([slot_segment.clone(), "m_InventoryType".to_string()]);
-            suffix
-        })?;
+        let type_segs = slot_child_segs(&["m_InventoryType"])?;
         let type_chain =
             properties::resolve_chain(&reparsed.properties, &type_segs).map_err(|err| {
                 CoreError::Parse(format!(
@@ -12302,58 +12334,6 @@ fn apply_private_inventory_add_item_to_payload_reusing(
             &type_chain.enclosing_size_fields,
             MAIN_CONTAINER_ENUM_LABEL,
         )?;
-    }
-    {
-        let retargeted = properties::parse_private_root(&patched).map_err(|err| {
-            CoreError::Parse(format!(
-                "inventory item definition patch produced an inconsistent payload: {err}"
-            ))
-        })?;
-        let count_segs = child_segments(&{
-            let mut suffix = slots_suffix.clone();
-            suffix.extend([
-                slot_segment.clone(),
-                "m_SlotData".to_string(),
-                "m_ItemCount".to_string(),
-            ]);
-            suffix
-        })?;
-        let id_segs = child_segments(&{
-            let mut suffix = slots_suffix.clone();
-            suffix.extend([slot_segment.clone(), "m_Id".to_string()]);
-            suffix
-        })?;
-        let count_target = properties::resolve(&retargeted.properties, &count_segs)?;
-        let id_target = properties::resolve(&retargeted.properties, &id_segs)?;
-        // Fixed-size scalar patches: no offsets shift between the two writes.
-        properties::patch_scalar(
-            &mut patched,
-            count_target,
-            properties::ScalarValue::Int(edit.count),
-        )?;
-        properties::patch_scalar(
-            &mut patched,
-            id_target,
-            properties::ScalarValue::Int(new_id),
-        )?;
-        // Whether the ids need re-aligning is decidable from THIS parse: the two
-        // writes above are fixed-size, so every other slot still holds the id it
-        // shows here, and the edited one was just set to its own index. Deciding it
-        // now saves the whole-payload parse the re-align would otherwise open with,
-        // and the proof below re-checks the invariant on the bytes that land.
-        let slots_after = properties::resolve(&retargeted.properties, &slots_segs)?;
-        let properties::PropertyValue::Array {
-            elements: slots_after,
-        } = &slots_after.value
-        else {
-            return Err(CoreError::Parse(
-                "MainContainer m_Slots is not a plain slot array after the edit".to_string(),
-            ));
-        };
-        ids_already_aligned = slots_after.iter().enumerate().all(|(index, slot)| {
-            index == new_index
-                || i32::try_from(index).is_ok_and(|expected| slot_id(slot) == Some(expected))
-        });
     }
 
     // 5. Re-align the edited container's slot ids with their indices. The append
