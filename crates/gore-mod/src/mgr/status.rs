@@ -56,6 +56,61 @@ enum InspectionFailurePolicy {
     Preserve,
 }
 
+fn valid_sha256_identity(identity: &str) -> bool {
+    identity.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+fn valid_file_identity(identity: &str) -> bool {
+    valid_sha256_identity(identity)
+        || (identity.len() == 16
+            && identity
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+}
+
+fn validate_recovery_identities(record: &crate::DeployRecord) -> crate::Result<()> {
+    for (path, identity) in &record.deployed_hashes {
+        if !valid_file_identity(identity) {
+            return Err(crate::ModError::Other(format!(
+                "recovery record contains an invalid deployed file identity for {path}"
+            )));
+        }
+    }
+    for (path, identities) in &record.recovery_file_hashes {
+        if identities
+            .iter()
+            .any(|identity| !valid_file_identity(identity))
+        {
+            return Err(crate::ModError::Other(format!(
+                "recovery record contains an invalid alternate file identity for {path}"
+            )));
+        }
+    }
+    for (path, identity) in &record.ue4ss_tree_fingerprints {
+        if !valid_sha256_identity(identity) {
+            return Err(crate::ModError::Other(format!(
+                "recovery record contains an invalid UE4SS tree identity for {path}"
+            )));
+        }
+    }
+    for (path, identities) in &record.recovery_tree_fingerprints {
+        if identities
+            .iter()
+            .any(|identity| !valid_sha256_identity(identity))
+        {
+            return Err(crate::ModError::Other(format!(
+                "recovery record contains an invalid alternate UE4SS tree identity for {path}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn metadata_for_status(path: &Path) -> crate::Result<Option<std::fs::Metadata>> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) => Ok(Some(metadata)),
@@ -108,10 +163,7 @@ fn tree_matches_for_status(
     if crate::metadata_is_link(&metadata) || !metadata.is_dir() {
         return Ok(false);
     }
-    let valid_identity = expected
-        .strip_prefix("sha256:")
-        .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()));
-    if !valid_identity {
+    if !valid_sha256_identity(expected) {
         return Err(crate::ModError::Other(format!(
             "invalid recorded UE4SS tree SHA-256 identity for {}",
             path.display()
@@ -168,10 +220,13 @@ fn status_with_failure_policy(
     };
     let record = stored.record;
 
-    if record.phase == crate::DeployPhase::RecoveryRequired
+    let recovery_required = record.phase == crate::DeployPhase::RecoveryRequired
         || !record.file_cleanup_claims.is_empty()
-        || !record.ue4ss_cleanup_claims.is_empty()
-    {
+        || !record.ue4ss_cleanup_claims.is_empty();
+    if recovery_required && failure_policy == InspectionFailurePolicy::Preserve {
+        validate_recovery_identities(&record)?;
+    }
+    if recovery_required {
         return Ok(ManagerStatus::RecoveryRequired);
     }
 
@@ -490,6 +545,56 @@ mod tests {
             status(&game, &lib, &Loadout::default()).unwrap(),
             ManagerStatus::RecoveryRequired
         );
+    }
+
+    #[test]
+    fn preflight_rejects_malformed_recovery_identities() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game = tmp.path().join("game");
+        let lib = tmp.path().join("lib");
+        let live = game.join("G1R/Story/VoiceOver/owned.zip");
+        let tree = game.join("G1R/Binaries/Win64/ue4ss/Mods/Owned");
+        let cases = [
+            DeployRecord {
+                deployed_hashes: BTreeMap::from([(live.display().to_string(), "malformed".into())]),
+                ..Default::default()
+            },
+            DeployRecord {
+                recovery_file_hashes: BTreeMap::from([(
+                    live.display().to_string(),
+                    vec!["malformed".into()],
+                )]),
+                ..Default::default()
+            },
+            DeployRecord {
+                ue4ss_mod_dirs: vec![tree.display().to_string()],
+                ue4ss_tree_fingerprints: BTreeMap::from([(
+                    tree.display().to_string(),
+                    "malformed".into(),
+                )]),
+                ..Default::default()
+            },
+            DeployRecord {
+                ue4ss_mod_dirs: vec![tree.display().to_string()],
+                recovery_tree_fingerprints: BTreeMap::from([(
+                    tree.display().to_string(),
+                    vec!["malformed".into()],
+                )]),
+                ..Default::default()
+            },
+        ];
+
+        for mut record in cases {
+            record.mod_name = "manager".into();
+            record.owner = "manager".into();
+            record.phase = DeployPhase::RecoveryRequired;
+            write_record(&game, &record);
+            assert_eq!(
+                status(&game, &lib, &Loadout::default()).unwrap(),
+                ManagerStatus::RecoveryRequired
+            );
+            assert!(status_for_preflight(&game, &lib, &Loadout::default()).is_err());
+        }
     }
 
     /// A studio (owner == "") record → StudioDeployActive, carrying the mod name.
