@@ -82,9 +82,10 @@ fn validate_recovery_identities(record: &crate::DeployRecord) -> crate::Result<(
         }
     }
     for (path, identities) in &record.recovery_file_hashes {
-        if identities
-            .iter()
-            .any(|identity| !valid_file_identity(identity))
+        if identities.is_empty()
+            || identities
+                .iter()
+                .any(|identity| !valid_file_identity(identity))
         {
             return Err(crate::ModError::Other(format!(
                 "recovery record contains an invalid alternate file identity for {path}"
@@ -99,9 +100,10 @@ fn validate_recovery_identities(record: &crate::DeployRecord) -> crate::Result<(
         }
     }
     for (path, identities) in &record.recovery_tree_fingerprints {
-        if identities
-            .iter()
-            .any(|identity| !valid_sha256_identity(identity))
+        if identities.is_empty()
+            || identities
+                .iter()
+                .any(|identity| !valid_sha256_identity(identity))
         {
             return Err(crate::ModError::Other(format!(
                 "recovery record contains an invalid alternate UE4SS tree identity for {path}"
@@ -567,6 +569,10 @@ mod tests {
                 ..Default::default()
             },
             DeployRecord {
+                recovery_file_hashes: BTreeMap::from([(live.display().to_string(), Vec::new())]),
+                ..Default::default()
+            },
+            DeployRecord {
                 ue4ss_mod_dirs: vec![tree.display().to_string()],
                 ue4ss_tree_fingerprints: BTreeMap::from([(
                     tree.display().to_string(),
@@ -579,6 +585,14 @@ mod tests {
                 recovery_tree_fingerprints: BTreeMap::from([(
                     tree.display().to_string(),
                     vec!["malformed".into()],
+                )]),
+                ..Default::default()
+            },
+            DeployRecord {
+                ue4ss_mod_dirs: vec![tree.display().to_string()],
+                recovery_tree_fingerprints: BTreeMap::from([(
+                    tree.display().to_string(),
+                    Vec::new(),
                 )]),
                 ..Default::default()
             },
