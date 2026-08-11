@@ -1198,6 +1198,26 @@ where
             blocks_deployment_recovery: true,
         };
     }
+    let active_lock = probe.artifacts.iter().any(|artifact| {
+        matches!(
+            artifact.kind,
+            InstallCompileArtifactKind::InstallMutationLock
+                | InstallCompileArtifactKind::CompileLock
+        )
+    });
+    if active_lock {
+        return InstallMutationInspection {
+            check: PreflightCheckV1::new(
+                PreflightCheckIdV1::InstallMutation,
+                PreflightStateV1::Problem,
+                "install_mutation_lock_present",
+                "wait_for_install_mutation",
+                "an install-mutation or compile lock may belong to an active operation; wait for it to finish, then retry, and inspect a persistent lock before recovery",
+            )
+            .with_items(items),
+            blocks_deployment_recovery: true,
+        };
+    }
     let probe_recovery = probe.disposition
         == InstallCompileStateDisposition::RecoveryArtifactsPresent
         || !probe.artifacts.is_empty();
@@ -2227,7 +2247,7 @@ mod tests {
             .iter()
             .any(|item| item == "deployment status: recovery required"));
 
-        let independent_recovery = InstallCompileStateProbe {
+        let active_lock = InstallCompileStateProbe {
             disposition: InstallCompileStateDisposition::RecoveryArtifactsPresent,
             safe_to_compile: false,
             game_process: InstallCompileGameProcessDisposition::NotRunning,
@@ -2243,10 +2263,34 @@ mod tests {
             &install.path().join("library"),
             &install.path().join("loadout.json"),
             |_, _, _| Ok(ManagerStatus::RecoveryRequired),
-            |_| independent_recovery.clone(),
+            |_| active_lock.clone(),
+            |_| Ok(false),
+        );
+        assert_eq!(state.checks[3].action, "wait_for_install_mutation");
+        assert_eq!(state.checks[4].code, "install_mutation_lock_present");
+        assert_eq!(state.checks[4].action, "wait_for_install_mutation");
+
+        let recovery_artifact = InstallCompileStateProbe {
+            disposition: InstallCompileStateDisposition::RecoveryArtifactsPresent,
+            safe_to_compile: false,
+            game_process: InstallCompileGameProcessDisposition::NotRunning,
+            artifacts: vec![InstallCompileArtifact {
+                kind: InstallCompileArtifactKind::RecoveryJournal,
+                path: "C:/game/.gore-as-recovery.json".to_owned(),
+                path_truncated: false,
+            }],
+            issues: Vec::new(),
+        };
+        let state = run_with(
+            install.path(),
+            &install.path().join("library"),
+            &install.path().join("loadout.json"),
+            |_, _, _| Ok(ManagerStatus::RecoveryRequired),
+            |_| recovery_artifact.clone(),
             |_| Ok(false),
         );
         assert_eq!(state.checks[3].action, "recover_install");
+        assert_eq!(state.checks[4].code, "install_recovery_required");
         assert_eq!(state.checks[4].action, "recover_install");
 
         let failed = InstallCompileStateProbe {
