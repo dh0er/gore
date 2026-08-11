@@ -3680,13 +3680,11 @@ String? _structuredEditTarget(Map<String, Object?> edit) {
     case 'private.npc.setRelationship':
       return key([foldEditTargetPart(fields['id'])]);
     case 'private.skills.set':
-      // The core takes the actor when it is a non-empty string and the hero
-      // otherwise — before any folding, so a blank of spaces is an actor to it
-      // and must stay one here.
-      final rawActor = fields['actor'];
-      final actor = rawActor is String && rawActor.isNotEmpty ? rawActor : 'Hero';
+      // Read through the same helper the other rules use, so an actor left
+      // empty resolves to the hero everywhere or nowhere. It reads the raw
+      // text, before any folding, so a blank of spaces stays an actor.
       return key([
-        foldEditTargetPart(actor),
+        foldEditTargetPart(_skillEditActor(edit)),
         foldEditTargetPart(fields['base']),
       ]);
     case 'private.knowledge.setEntry':
@@ -3831,7 +3829,11 @@ String? _skillEditActor(Map<String, Object?> edit) {
   if (edit['path'] != 'private.skills.set') return null;
   final value = edit['value'];
   if (value is! Map) return null;
-  return (value['actor'] as String?) ?? 'Hero';
+  // The core takes the actor when it is a non-empty string and the hero
+  // otherwise, so an empty one is the hero here too — a rule this shares with
+  // the target key, and the two must not disagree.
+  final actor = value['actor'];
+  return actor is String && actor.isNotEmpty ? actor : 'Hero';
 }
 
 /// The actor whose ActiveEffects a raw `private.typed.setValue` on an

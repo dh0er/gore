@@ -2792,6 +2792,32 @@ void main() {
       );
     });
 
+    test('a skill edit sent with an empty actor is the hero everywhere', () {
+      final emptyActor = {
+        'path': 'private.skills.set',
+        'value': {'actor': '', 'base': 'Ranged_Bow', 'tier': 'Trained'},
+      };
+      final heroDef = typedEdit([
+        'ActiveEffectsByGlobalId',
+        '{Hero}',
+        'ActiveEffects',
+        '[2]',
+        'EffectSpec',
+        'Def',
+      ]);
+
+      // Both rules read the actor the same way, so the packer splits this pair
+      // exactly where the core refuses it.
+      expect(editsRewriteSameTarget(emptyActor, heroDef), isTrue);
+      expect(
+        structuredEditsShareATarget(emptyActor, {
+          'path': 'private.skills.set',
+          'value': {'actor': 'Hero', 'base': 'Ranged_Bow', 'tier': 'Untrained'},
+        }),
+        isTrue,
+      );
+    });
+
     test('two structured edits for one target land in separate writes', () {
       Map<String, Object?> skill(String actor, String base, String tier) => {
         'path': 'private.skills.set',
