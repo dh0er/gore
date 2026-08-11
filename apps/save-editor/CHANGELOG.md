@@ -17,10 +17,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- Saving is much faster. A save with eight changed values took eleven seconds
-  and now takes one. Changes that used to be written one after another are
-  written together, so a mixed save runs in a single pass instead of one per
-  change.
+- Saving is much faster: a save with eight changed values took eleven seconds
+  and now takes one.
 
 ### Fixed
 
