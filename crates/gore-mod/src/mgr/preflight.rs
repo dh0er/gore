@@ -978,6 +978,7 @@ fn inspect_library_root(path: &Path) -> Result<LibraryRoot, EvidenceFailure> {
 fn classify_mod_error(error: crate::ModError) -> EvidenceFailure {
     match error {
         crate::ModError::Io(message) => EvidenceFailure::Unknown(format!("io: {message}")),
+        crate::ModError::InspectionBound(message) => EvidenceFailure::Bounded(message),
         other => EvidenceFailure::Problem(other.to_string()),
     }
 }
@@ -1085,6 +1086,9 @@ where
     let status = status(game_root, library_dir, loadout.unwrap_or(&fallback_loadout));
     let deployment_recovery = match &status {
         Ok(ManagerStatus::RecoveryRequired) => DeploymentRecoveryEvidence::Seen,
+        // Status reaches aggregate content ceilings only after parsing the record and returning
+        // early for recovery. This is an unknown sync/drift answer, not failed recovery evidence.
+        Err(crate::ModError::InspectionBound(_)) => DeploymentRecoveryEvidence::NotSeen,
         Err(_) => DeploymentRecoveryEvidence::InspectionFailed,
         _ => DeploymentRecoveryEvidence::NotSeen,
     };
@@ -1187,6 +1191,14 @@ where
             )
             .with_items(drifted.into_iter().map(|path| format!("drifted: {path}")))
         }
+        Err(crate::ModError::InspectionBound(message)) => PreflightCheckV1::new(
+            PreflightCheckIdV1::Deployment,
+            PreflightStateV1::Unknown,
+            "deployment_inspection_limit",
+            "run_full_status",
+            "deployment content exceeded the bounded read-only snapshot; full status can establish the exact state, while Reset remains separately gated by its own root, process, lock, and recovery checks",
+        )
+        .with_items([message]),
         Err(error) => PreflightCheckV1::new(
             PreflightCheckIdV1::Deployment,
             PreflightStateV1::Unknown,
@@ -2033,6 +2045,12 @@ mod tests {
             classify_mod_error(crate::ModError::Other("corrupt sidecar".to_owned())),
             EvidenceFailure::Problem(_)
         ));
+        assert!(matches!(
+            classify_mod_error(crate::ModError::InspectionBound(
+                "aggregate ceiling".to_owned()
+            )),
+            EvidenceFailure::Bounded(_)
+        ));
     }
 
     #[test]
@@ -2086,6 +2104,30 @@ mod tests {
         );
         assert_eq!(state.checks[3].state, PreflightStateV1::Unknown);
         assert_eq!(state.checks[3].code, "deployment_inspection_failed");
+
+        let bounded = run_with(
+            install.path(),
+            &install.path().join("library"),
+            &install.path().join("loadout.json"),
+            |_, _, _| {
+                Err(crate::ModError::InspectionBound(
+                    "aggregate hash ceiling".to_owned(),
+                ))
+            },
+            |_| safe_probe(),
+            |_| Ok(false),
+        );
+        assert_eq!(bounded.checks[3].state, PreflightStateV1::Unknown);
+        assert_eq!(bounded.checks[3].code, "deployment_inspection_limit");
+        assert_eq!(bounded.checks[3].action, "run_full_status");
+        assert!(bounded.checks[3]
+            .detail
+            .contains("Reset remains separately gated"));
+        assert_eq!(bounded.checks[4].state, PreflightStateV1::Ok);
+        assert!(!bounded.checks[4]
+            .items
+            .iter()
+            .any(|item| item.contains("deployment status: inspection failed")));
 
         let recovery = run_with(
             install.path(),

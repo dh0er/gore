@@ -57,6 +57,9 @@ pub enum ModError {
     Fmod(String),
     #[error("voice archive: {0}")]
     Voice(String),
+    /// A read-only aggregate inspection ceiling, not evidence that one input is unsupported.
+    #[error("inspection bound: {0}")]
+    InspectionBound(String),
     #[error("{0}")]
     Other(String),
 }
@@ -3313,6 +3316,24 @@ fn content_hash_file(path: &Path) -> std::io::Result<String> {
     content_hash_file_bounded(path, &mut remaining)
 }
 
+#[derive(Debug)]
+struct InspectionBoundIo(String);
+
+impl std::fmt::Display for InspectionBoundIo {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for InspectionBoundIo {}
+
+fn inspection_bound_from_io(error: &std::io::Error) -> Option<String> {
+    error
+        .get_ref()?
+        .downcast_ref::<InspectionBoundIo>()
+        .map(|bound| bound.0.clone())
+}
+
 fn content_hash_file_bounded(path: &Path, remaining: &mut u64) -> std::io::Result<String> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata_is_link(&metadata) || !metadata.is_file() {
@@ -3326,10 +3347,10 @@ fn content_hash_file_bounded(path: &Path, remaining: &mut u64) -> std::io::Resul
     if opened.len() > *remaining {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!(
+            InspectionBoundIo(format!(
                 "file exceeds the remaining {remaining}-byte hashing budget: {}",
                 path.display()
-            ),
+            )),
         ));
     }
     *remaining -= opened.len();
@@ -3387,7 +3408,7 @@ pub(crate) fn sha256_file_bounded(path: &Path, remaining: &mut u64) -> Result<St
         .metadata()
         .map_err(io("reading opened SHA-256 source metadata"))?;
     if opened.len() > *remaining {
-        return Err(ModError::Other(format!(
+        return Err(ModError::InspectionBound(format!(
             "SHA-256 source exceeds the remaining {remaining}-byte hashing budget: {}",
             path.display()
         )));
@@ -3453,9 +3474,15 @@ pub(crate) fn file_matches_recorded_hash_bounded(
                 path.display()
             )));
         }
-        content_hash_file_bounded(path, remaining)
-            .map(|current| current == expected)
-            .map_err(io(&format!("hashing deployed file {}", path.display())))
+        match content_hash_file_bounded(path, remaining) {
+            Ok(current) => Ok(current == expected),
+            Err(error) => match inspection_bound_from_io(&error) {
+                Some(message) => Err(ModError::InspectionBound(message)),
+                None => Err(io(&format!("hashing deployed file {}", path.display()))(
+                    error,
+                )),
+            },
+        }
     }
 }
 
@@ -3521,9 +3548,14 @@ fn tree_fingerprint_with_prefix_bounded(
         )))?;
         for entry in read_dir {
             let entry = entry.map_err(io("reading UE4SS identity entry"))?;
+            if entries.len() as u64 >= MAX_UE4SS_TREE_ENTRIES {
+                return Err(ModError::Other(format!(
+                    "UE4SS identity tree exceeds the {MAX_UE4SS_TREE_ENTRIES}-entry limit"
+                )));
+            }
             if let Some((_, remaining_entries)) = budget.as_mut() {
                 if **remaining_entries == 0 {
-                    return Err(ModError::Other(
+                    return Err(ModError::InspectionBound(
                         "deployment inspection exhausted its tree-entry budget".into(),
                     ));
                 }
@@ -3560,11 +3592,6 @@ fn tree_fingerprint_with_prefix_bounded(
                     path.display()
                 )));
             }
-            if entries.len() as u64 >= MAX_UE4SS_TREE_ENTRIES {
-                return Err(ModError::Other(format!(
-                    "UE4SS identity tree exceeds the {MAX_UE4SS_TREE_ENTRIES}-entry limit"
-                )));
-            }
             if metadata.is_dir() {
                 pending.push(path.clone());
                 entries.push(Entry {
@@ -3580,16 +3607,6 @@ fn tree_fingerprint_with_prefix_bounded(
                         path.display()
                     )));
                 }
-                if let Some((remaining_bytes, _)) = budget.as_mut() {
-                    if metadata.len() > **remaining_bytes {
-                        return Err(ModError::Other(format!(
-                            "UE4SS identity file exceeds the remaining {}-byte deployment inspection budget: {}",
-                            **remaining_bytes,
-                            path.display()
-                        )));
-                    }
-                    **remaining_bytes -= metadata.len();
-                }
                 total_bytes = total_bytes
                     .checked_add(metadata.len())
                     .ok_or_else(|| ModError::Other("UE4SS identity byte total overflow".into()))?;
@@ -3597,6 +3614,16 @@ fn tree_fingerprint_with_prefix_bounded(
                     return Err(ModError::Other(format!(
                         "UE4SS identity tree exceeds the {MAX_UE4SS_TREE_BYTES}-byte total limit"
                     )));
+                }
+                if let Some((remaining_bytes, _)) = budget.as_mut() {
+                    if metadata.len() > **remaining_bytes {
+                        return Err(ModError::InspectionBound(format!(
+                            "UE4SS identity file exceeds the remaining {}-byte deployment inspection budget: {}",
+                            **remaining_bytes,
+                            path.display()
+                        )));
+                    }
+                    **remaining_bytes -= metadata.len();
                 }
                 entries.push(Entry {
                     relative,

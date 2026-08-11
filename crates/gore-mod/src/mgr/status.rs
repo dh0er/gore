@@ -102,7 +102,7 @@ impl DeploymentInspection {
 
     fn charge_file_hash(&mut self) -> crate::Result<()> {
         if self.remaining_hash_entries == 0 {
-            return Err(crate::ModError::Other(
+            return Err(crate::ModError::InspectionBound(
                 "deployment inspection exhausted its file-hash budget".into(),
             ));
         }
@@ -1619,6 +1619,19 @@ mod tests {
             &mut files,
         )
         .unwrap_err();
+        assert!(matches!(&error, crate::ModError::InspectionBound(_)));
+        assert!(error.to_string().contains("hashing budget"), "{error}");
+
+        let alpha_legacy_hash = crate::content_hash(b"alpha");
+        let mut legacy = DeploymentInspection::new(4, 1, 0);
+        let error = file_matches_for_status(
+            &alpha,
+            &alpha_legacy_hash,
+            InspectionFailurePolicy::Preserve,
+            &mut legacy,
+        )
+        .unwrap_err();
+        assert!(matches!(&error, crate::ModError::InspectionBound(_)));
         assert!(error.to_string().contains("hashing budget"), "{error}");
 
         let mut file_entries = DeploymentInspection::new(100, 1, 0);
@@ -1636,6 +1649,7 @@ mod tests {
             &mut file_entries,
         )
         .unwrap_err();
+        assert!(matches!(&error, crate::ModError::InspectionBound(_)));
         assert!(error.to_string().contains("file-hash budget"), "{error}");
 
         let tree = tmp.path().join("tree");
@@ -1664,6 +1678,7 @@ mod tests {
             &mut trees,
         )
         .unwrap_err();
+        assert!(matches!(&error, crate::ModError::InspectionBound(_)));
         assert!(error.to_string().contains("tree-entry budget"), "{error}");
     }
 
