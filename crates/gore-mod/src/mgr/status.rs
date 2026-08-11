@@ -27,7 +27,7 @@ use serde::Serialize;
 use super::loadout::{Loadout, LoadoutEntry};
 use super::model::LibraryRoot;
 
-const MAX_STATUS_META_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_PREFLIGHT_STATUS_META_BYTES: u64 = 16 * 1024 * 1024;
 // One synchronous status snapshot shares these ceilings across every recorded live file, backup,
 // and UE4SS tree. Successful exact-path reads are cached below, so duplicate record entries are
 // evidence aliases rather than repeated I/O.
@@ -66,6 +66,13 @@ pub enum ManagerStatus {
 enum InspectionFailurePolicy {
     TreatAsDrift,
     Preserve,
+}
+
+fn metadata_budget_for_status(failure_policy: InspectionFailurePolicy) -> u64 {
+    match failure_policy {
+        InspectionFailurePolicy::TreatAsDrift => u64::MAX,
+        InspectionFailurePolicy::Preserve => MAX_PREFLIGHT_STATUS_META_BYTES,
+    }
 }
 
 struct DeploymentInspection {
@@ -560,7 +567,7 @@ fn status_with_failure_policy(
             });
         }
     };
-    let mut remaining_meta_bytes = MAX_STATUS_META_BYTES;
+    let mut remaining_meta_bytes = metadata_budget_for_status(failure_policy);
     if !library_fingerprints_match(
         &library,
         &target_enabled,
@@ -1566,6 +1573,18 @@ mod tests {
             &mut exact_budget,
         ));
         assert_eq!(exact_budget, 0);
+    }
+
+    #[test]
+    fn metadata_budget_preserves_public_status_and_bounds_preflight() {
+        assert_eq!(
+            metadata_budget_for_status(InspectionFailurePolicy::TreatAsDrift),
+            u64::MAX
+        );
+        assert_eq!(
+            metadata_budget_for_status(InspectionFailurePolicy::Preserve),
+            MAX_PREFLIGHT_STATUS_META_BYTES
+        );
     }
 
     #[test]
