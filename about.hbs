@@ -35,6 +35,19 @@ Used by:
 
 {{/each}}
 
+### Microsoft Visual C++ Redistributable runtime
+
+The GORE Mod Manager Windows portable and installer packages include unmodified
+x64 copies of `MSVCP140.dll`, `VCRUNTIME140.dll`, and `VCRUNTIME140_1.dll` from
+the `VC\Redist` directory of the Visual Studio toolchain that built the app.
+
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+Microsoft states that licensed Visual Studio users may redistribute these
+unmodified files subject to the applicable Visual Studio license terms. See
+[Redistributing Visual C++ files](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files?view=msvc-170).
+These files are not covered by GORE's MIT License.
+
 ### BSD 2-Clause - embedded diagnostics helper
 
 Used by the embedded `gore-as-diagnostics-hook.dll`:

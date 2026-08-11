@@ -72,4 +72,4 @@ jobs:
           python scripts/check_docs_links.py
           python scripts/check_plugin.py
           python scripts/check_release_workflow.py
-          python -m unittest discover -s scripts -p "test_check_release_workflow.py" -v
+          python -m unittest discover -s scripts -p "test_*.py" -v
