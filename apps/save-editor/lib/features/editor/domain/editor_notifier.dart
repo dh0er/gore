@@ -26,6 +26,21 @@ import 'package:state_notifier/state_notifier.dart';
 
 const _unchanged = Object();
 
+/// The page sizes the editor's panels ask the core for.
+///
+/// These live here rather than in each panel because the core caches one
+/// response per exact request, and [EditorNotifier.prefetchTabData] warms those
+/// caches by issuing the panels' own queries ahead of time. A panel that quietly
+/// chose its own size would be warmed with an answer it never asks for.
+abstract final class EditorPageSize {
+  /// One screen of rows: knowledge entries, memory events, the property browser.
+  static const detail = 50;
+
+  /// Fetched whole and then filtered/paged in the client: quests, tutorials,
+  /// story state.
+  static const fullList = 1000;
+}
+
 AppLocalizations _defaultEnglishLocalizations() => AppLocalizationsEn();
 
 /// Sorts saves by in-game playtime (highest first). Slots with null playtime
@@ -607,6 +622,110 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// through this queue guarantees one core command finishes before the next
   /// starts.
   Future<void> _coreQueue = Future<void>.value();
+
+  /// The inspection the background prefetch last ran for, so re-entering the
+  /// editor for an unchanged save does not queue the same warm-up twice.
+  SaveInspection? _prefetchedFor;
+
+  /// The in-flight prefetch, exposed so a test can await the warm-up instead of
+  /// racing it. Production fires and forgets.
+  @visibleForTesting
+  Future<void>? prefetchInFlight;
+
+  /// Warm the core's caches for every tab of the freshly inspected save.
+  ///
+  /// The core answers a repeated read from a cache keyed by the save's content,
+  /// so running the panels' own queries here turns the first visit to a tab from
+  /// a fresh multi-hundred-millisecond traversal into a cache hit. Nothing here
+  /// touches [EditorState.isLoading] or reports an error: the user is looking at
+  /// the Overview tab while it runs, and a warm-up that fails simply leaves the
+  /// panel to load the normal way.
+  ///
+  /// The queries must match what the panels ask for, argument for argument —
+  /// the cache holds one response per exact request, so a warm-up with a
+  /// different page size would prime an answer nobody asks for. That is why the
+  /// page sizes live in [EditorPageSize] rather than in each panel.
+  void prefetchTabData() {
+    // The page listens for state changes to trigger this, and a change can still
+    // be delivered while the provider is being torn down (a hot restart, the
+    // window closing). Reading `state` then throws.
+    if (!mounted) return;
+    final inspection = state.inspection;
+    final path = state.selectedPath;
+    if (inspection == null || path == null) return;
+    if (identical(_prefetchedFor, inspection)) return;
+    _prefetchedFor = inspection;
+    prefetchInFlight = _prefetchTabData(path, inspection.path, _loadSeq);
+  }
+
+  /// [inspectionPath] is the path as the INSPECTION spells it, which is what the
+  /// story panel pins its pages to; passing the selection's spelling instead
+  /// would warm a request the panel never makes.
+  Future<void> _prefetchTabData(
+    String path,
+    String? inspectionPath,
+    int seq,
+  ) async {
+    // A newer load (or a write) has taken over: its own prefetch will run, and
+    // continuing here would only make the user's request wait behind ours. A
+    // disposed notifier stops it too — the editor is gone, and touching `state`
+    // after teardown throws.
+    bool superseded() =>
+        !mounted ||
+        seq != _loadSeq ||
+        state.selectedPath != path ||
+        state.isLoading;
+
+    Future<void> step(Future<Object?> Function() load) async {
+      if (superseded()) return;
+      try {
+        await load();
+      } catch (_) {
+        // A warm-up failure is not the user's problem; the panel will retry.
+      }
+    }
+
+    // Ordered by how soon the user can reach the data: the Overview tab is
+    // already on screen, Characters is one click away, then World, then the
+    // property browser.
+    await step(loadGameTime);
+    // Also settles the hero GlobalId that the player's Events sub-tab needs.
+    await step(loadAllCharacters);
+    await step(loadHeroAttributes);
+    await step(loadSkills);
+    await step(loadAllNpcActors);
+    await step(
+      () => loadKnowledgeEntries(
+        const Actor.player().uniqueName,
+        limit: EditorPageSize.detail,
+      ),
+    );
+    // The player's Events pane keys on the hero id the character index above
+    // settles. Without one there is nothing to warm — and nothing the pane will
+    // ask for either.
+    final heroId = superseded() ? null : state.heroGlobalId;
+    if (heroId != null) {
+      await step(() => loadMemoryEvents(heroId, limit: EditorPageSize.detail));
+    }
+    await step(() => loadProgressionQuests(limit: EditorPageSize.fullList));
+    await step(loadGlossary);
+    await step(loadProgressionTutorials);
+    await step(
+      () => loadStoryState(
+        includeUnset: true,
+        limit: EditorPageSize.fullList,
+        path: inspectionPath,
+      ),
+    );
+    await step(loadFactions);
+    await step(
+      () => searchTypedProperties(
+        '',
+        limit: EditorPageSize.detail,
+        includeNodes: true,
+      ),
+    );
+  }
 
   bool get coreAvailable => _core.isAvailable;
   String get coreDescription => _core.description;

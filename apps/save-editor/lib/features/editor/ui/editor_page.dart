@@ -45,6 +45,9 @@ class _EditorPageState extends ConsumerState<EditorPage>
     // manual Settings button stays available regardless.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_maybePromptLocalizationExtract());
+      // Covers a page that mounts with a save already inspected (a remount, a
+      // hot reload): the listener in build only sees LATER changes.
+      if (mounted) ref.read(editorProvider.notifier).prefetchTabData();
     });
   }
 
@@ -110,6 +113,12 @@ class _EditorPageState extends ConsumerState<EditorPage>
   Widget build(BuildContext context) {
     final state = ref.watch(editorProvider);
     final notifier = ref.read(editorProvider.notifier);
+    // A save has finished loading and its tabs are now reachable: warm the
+    // core's caches for them in the background so the first click on a tab
+    // shows data instead of a spinner. Listened to rather than called inline,
+    // because the warm-up writes editor state (the hero id the character index
+    // settles) and that must not happen during a build.
+    ref.listen(editorProvider, (previous, next) => notifier.prefetchTabData());
     final uiScale = ref.watch(uiScaleProvider);
     final zoomPct = (uiScale * 100).round();
     final scheme = Theme.of(context).colorScheme;
@@ -2008,7 +2017,7 @@ class _AllDataPanelState extends State<_AllDataPanel> {
   TypedSearchResult? _result;
   bool _searching = false;
   int _requestSeq = 0;
-  int _pageSize = 50;
+  int _pageSize = EditorPageSize.detail;
   String _activeQuery = '';
   String _source = 'private';
   String _kind = 'all';

@@ -160,8 +160,15 @@ void main() {
         ),
         findsWidgets,
       );
+      // No EVENTS query specifically: other progression sections legitimately
+      // load in the background (the tab prefetch), but events cannot be asked
+      // for without an id.
       expect(
-        core.requests.where((r) => r.command == 'query_progression'),
+        core.requests.where(
+          (r) =>
+              r.command == 'query_progression' &&
+              r.payload['section'] == 'events',
+        ),
         isEmpty,
       );
 
@@ -228,8 +235,14 @@ void main() {
         ),
         findsNothing,
       );
+      // As above: only the events section is forbidden, and only because there
+      // is no id to ask with.
       expect(
-        core.requests.where((r) => r.command == 'query_progression'),
+        core.requests.where(
+          (r) =>
+              r.command == 'query_progression' &&
+              r.payload['section'] == 'events',
+        ),
         isEmpty,
       );
     },
