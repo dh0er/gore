@@ -10613,7 +10613,7 @@ fn decompress_private_payload_with_limit(
 /// provably structural. A `PayloadRoot` belongs to exactly ONE buffer — appliers that
 /// patch a scratch copy must give that copy its own.
 #[derive(Default)]
-struct PayloadRoot {
+pub(crate) struct PayloadRoot {
     root: Option<properties::RootObject>,
     /// A byte was written since `root` was parsed, so its decoded values are stale
     /// even though its offsets still hold.
@@ -10624,7 +10624,7 @@ impl PayloadRoot {
     /// The tree's structure only: offsets, sizes, names, keys and counts agree with
     /// `payload`, but its decoded values may predate an in-place write. Callers must
     /// read nothing else.
-    fn structural(&mut self, payload: &[u8]) -> Result<&properties::RootObject, CoreError> {
+    pub(crate) fn structural(&mut self, payload: &[u8]) -> Result<&properties::RootObject, CoreError> {
         if let Some(root) = &self.root {
             debug_assert!(
                 spine_still_describes(root, payload),
@@ -10638,7 +10638,7 @@ impl PayloadRoot {
     }
 
     /// The whole tree, decoded values included, agreeing with `payload`.
-    fn fresh(&mut self, payload: &[u8]) -> Result<&properties::RootObject, CoreError> {
+    pub(crate) fn fresh(&mut self, payload: &[u8]) -> Result<&properties::RootObject, CoreError> {
         if self.values_stale {
             self.root = None;
         }
@@ -10646,21 +10646,21 @@ impl PayloadRoot {
     }
 
     /// Record a patch that wrote over existing bytes without moving any.
-    fn note_in_place_write(&mut self) {
+    pub(crate) fn note_in_place_write(&mut self) {
         self.values_stale = true;
     }
 
     /// Drop the parse. Required after anything that can move a byte — every
     /// `patch_string` / `patch_value_bytes` / `patch_container` / splice, and every
     /// wholesale `*payload = patched`, whatever the observed length delta.
-    fn invalidate(&mut self) {
+    pub(crate) fn invalidate(&mut self) {
         self.root = None;
         self.values_stale = false;
     }
 
     /// Take over a tree that was parsed FROM the bytes being installed, so an
     /// applier's closing proof-parse doubles as the next edit's resolve parse.
-    fn adopt(&mut self, root: properties::RootObject) {
+    pub(crate) fn adopt(&mut self, root: properties::RootObject) {
         self.root = Some(root);
         self.values_stale = false;
     }
@@ -10704,11 +10704,13 @@ fn apply_private_edit_to_payload(
         PrivateEdit::TypedSetValue(edit) => {
             apply_private_typed_set_value_edit_to_payload_reusing(payload, edit, cache)
         }
-        // Re-parses for its own reads, but hands its closing proof parse to the next
-        // edit — the case that matters when several items are added in one write.
+        // Re-parse for their own reads, but hand their closing proof parse to the
+        // next edit — the case that matters when several items or skills go into one
+        // write.
         PrivateEdit::InventoryAddItem(edit) => {
             apply_private_inventory_add_item_to_payload_reusing(payload, edit, cache)
         }
+        PrivateEdit::SkillSet(edit) => skills::apply_skill_set(payload, edit, cache),
         // Everything else parses for itself and may move bytes, so the batch's parse
         // is dropped rather than handed to a later edit that would resolve against a
         // layout this one changed. A new variant lands here and inherits that.
@@ -10755,7 +10757,9 @@ fn apply_private_edit_to_payload_uncached(
         PrivateEdit::TypedContainer(edit) => {
             apply_private_typed_container_edit_to_payload(payload, edit)
         }
-        PrivateEdit::SkillSet(edit) => skills::apply_skill_set(payload, edit),
+        PrivateEdit::SkillSet(edit) => {
+            skills::apply_skill_set(payload, edit, &mut PayloadRoot::default())
+        }
         PrivateEdit::NpcRevive(edit) => npc::apply_revive(payload, &edit.id),
         PrivateEdit::NpcRelationship(edit) => {
             npc::apply_relationship(payload, &edit.id, edit.relationship)
