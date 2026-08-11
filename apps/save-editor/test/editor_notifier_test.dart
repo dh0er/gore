@@ -2578,6 +2578,72 @@ void main() {
       expect(editsRewriteSameTarget(typed, revive), isTrue);
     });
 
+    test('a glossary segment claims the quest CurrentState it rewrites', () {
+      Map<String, Object?> glossary(List<String>? questStatePath) => {
+        'path': 'private.glossary.setSegment',
+        'value': {
+          'documentClass': '/Script/Angelscript.Document_Glossary_Creatures',
+          'segmentClass': '/Script/Angelscript.DocumentSegment_Scavenger',
+          'unlocked': true,
+          'questStatePath': ?questStatePath,
+        },
+      };
+      const questPath = [
+        'm_QuestStates',
+        '{Quest_Creatures}',
+        'SubQuests',
+        '[4]',
+        'CurrentState',
+      ];
+
+      // The core rewrites that CurrentState itself, so the two cannot share a
+      // write — the packer has to split them, in either order.
+      expect(
+        editsRewriteSameTarget(glossary(questPath), typedEdit(questPath)),
+        isTrue,
+      );
+      expect(
+        editsRewriteSameTarget(typedEdit(questPath), glossary(questPath)),
+        isTrue,
+      );
+
+      // An index the core reads as the same number is the same segment to it,
+      // however the editor spelled it.
+      expect(
+        editsRewriteSameTarget(
+          glossary(questPath),
+          typedEdit([
+            'm_QuestStates',
+            '{Quest_Creatures}',
+            'SubQuests',
+            '[04]',
+            'CurrentState',
+          ]),
+        ),
+        isTrue,
+      );
+
+      // Another quest's state, and a segment operation that names no quest at
+      // all, stay packable.
+      expect(
+        editsRewriteSameTarget(
+          glossary(questPath),
+          typedEdit([
+            'm_QuestStates',
+            '{Quest_Creatures}',
+            'SubQuests',
+            '[5]',
+            'CurrentState',
+          ]),
+        ),
+        isFalse,
+      );
+      expect(
+        editsRewriteSameTarget(glossary(null), typedEdit(questPath)),
+        isFalse,
+      );
+    });
+
     test('addressing a whole map collides with every entry in it', () {
       final setEntry = {
         'path': 'private.knowledge.setEntry',

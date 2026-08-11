@@ -3604,6 +3604,36 @@ bool _sameEditorPath(List<Object?> left, List<Object?> right) {
   return true;
 }
 
+/// Whether two raw segment lists address the same path in the sense the core
+/// gives them: `parse_path` reads `{k}` as a map key and `[n]` as an index, so
+/// `[03]` and `[3]` are one and the same segment to it even though the two
+/// strings differ. Used where a mirror has to agree with the core exactly;
+/// [_sameEditorPath] compares the segments as the editor wrote them.
+bool _sameCorePath(List<Object?> left, List<Object?> right) {
+  if (left.length != right.length) return false;
+  for (var i = 0; i < left.length; i++) {
+    if (!_sameCoreSegment(left[i], right[i])) return false;
+  }
+  return true;
+}
+
+bool _sameCoreSegment(Object? left, Object? right) {
+  if (left == right) return true;
+  final index = _indexSegment(left);
+  return index != null && index == _indexSegment(right);
+}
+
+/// The number of an `[n]` index segment, or null when [segment] is not one.
+int? _indexSegment(Object? segment) {
+  if (segment is! String) return null;
+  if (segment.length < 3 ||
+      !segment.startsWith('[') ||
+      !segment.endsWith(']')) {
+    return null;
+  }
+  return int.tryParse(segment.substring(1, segment.length - 1));
+}
+
 bool _editorPathIsPrefix(List<Object?> prefix, List<Object?> path) {
   if (prefix.length > path.length) return false;
   for (var i = 0; i < prefix.length; i++) {
@@ -3838,10 +3868,15 @@ bool structuredEditRewrites(
       return actor != null &&
           _pathHasName(typedPath, 'ActiveEffects') &&
           _pathHasKey(typedPath, actor);
-    // Adds or removes an unlock event in the hero's memory.
+    // Adds or removes an unlock event in the hero's memory — and, when the
+    // caller supplied one, rewrites that quest's CurrentState as well.
     case 'private.glossary.setSegment':
-      return _pathHasName(typedPath, 'MemorizedEvents') &&
-          _pathHasKey(typedPath, 'Hero');
+      if (_pathHasName(typedPath, 'MemorizedEvents') &&
+          _pathHasKey(typedPath, 'Hero')) {
+        return true;
+      }
+      final questPath = fields['questStatePath'] ?? fields['statePath'];
+      return questPath is List && _sameCorePath(questPath, typedPath);
     // Strips memory events, death tags and the corpse entry.
     case 'private.npc.revive':
       return _pathHasName(typedPath, 'MemorizedEvents') ||
