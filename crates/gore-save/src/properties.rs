@@ -1938,6 +1938,11 @@ pub enum ContainerEdit {
     SetRemove(String),
     /// Remove an ArrayProperty element by index.
     ArrayRemove(usize),
+    /// Remove several ArrayProperty elements in one splice pass. The indices are
+    /// resolved against ONE layout, so a caller stripping many elements neither
+    /// re-parses between them nor has to reason about how each removal shifts the
+    /// next. Duplicates are ignored; order does not matter.
+    ArrayRemoveMany(Vec<usize>),
     /// Duplicate an ArrayProperty element in place (copy inserted right after
     /// the source element).
     ArrayDuplicate(usize),
@@ -1950,6 +1955,9 @@ pub enum ContainerEdit {
     /// The bytes must be schema-valid for this map's key/value descriptors; the
     /// caller validates via the re-parse it performs afterwards.
     MapInsert { entry_bytes: Vec<u8> },
+    /// Remove several MapProperty entries in one splice pass, like
+    /// [`ContainerEdit::ArrayRemoveMany`].
+    MapRemoveMany(Vec<usize>),
     /// Remove the (key+value) entry at `entry_index` from a MapProperty (the
     /// entry's whole byte range is spliced out, the count decremented). The index
     /// is into [`map_layout`]'s `entry_ranges` (entry order == on-disk order).
@@ -1995,7 +2003,9 @@ pub fn patch_container(
     // rejects MapProperty, so resolve the Array/Set layout lazily and skip it
     // for the map path. The shared size-chain fixup below runs for both.
     let layout = match edit {
-        ContainerEdit::MapInsert { .. } | ContainerEdit::MapRemove { .. } => None,
+        ContainerEdit::MapInsert { .. }
+        | ContainerEdit::MapRemove { .. }
+        | ContainerEdit::MapRemoveMany(_) => None,
         _ => Some(container_layout(payload, target)?),
     };
     let require_kind = |wanted: ContainerKind, op: &str| {
@@ -2010,10 +2020,12 @@ pub fn patch_container(
             )))
         }
     };
-    // Each edit is one splice: either remove a byte range or insert bytes at a
-    // position. `count_delta` is +1 or -1.
-    let (remove_range, insert_at, insert_bytes, count_delta): (
-        Option<core::ops::Range<usize>>,
+    // Each edit is one splice pass: either remove byte ranges or insert bytes at a
+    // position. Removals are a LIST so an edit can drop several elements resolved
+    // from one layout; they are spliced back to front below, which leaves every
+    // range before the one being removed exactly where it was.
+    let (remove_ranges, insert_at, insert_bytes, count_delta): (
+        Vec<core::ops::Range<usize>>,
         usize,
         Vec<u8>,
         i64,
@@ -2036,7 +2048,7 @@ pub fn patch_container(
                 )));
             }
             let end = target.value_offset + target.value_size;
-            (None, end, encode_fstring_value(value), 1)
+            (Vec::new(), end, encode_fstring_value(value), 1)
         }
         ContainerEdit::SetRemove(value) => {
             require_kind(ContainerKind::Set, "setRemove")?;
@@ -2047,7 +2059,7 @@ pub fn patch_container(
             let index = set_element_position(elements, value, fold_case)
                 .ok_or_else(|| CoreError::Parse(format!("set does not contain {value:?}")))?;
             let range = layout.element_ranges[index].clone();
-            (Some(range.clone()), range.start, Vec::new(), -1)
+            (vec![range.clone()], range.start, Vec::new(), -1)
         }
         ContainerEdit::ArrayRemove(index) => {
             require_kind(ContainerKind::Array, "arrayRemove")?;
@@ -2058,7 +2070,7 @@ pub fn patch_container(
                     layout.count
                 ))
             })?;
-            (Some(range.clone()), range.start, Vec::new(), -1)
+            (vec![range.clone()], range.start, Vec::new(), -1)
         }
         ContainerEdit::ArrayDuplicate(index) => {
             require_kind(ContainerKind::Array, "arrayDuplicate")?;
@@ -2070,14 +2082,35 @@ pub fn patch_container(
                 ))
             })?;
             let bytes = payload[range.clone()].to_vec();
-            (None, range.end, bytes, 1)
+            (Vec::new(), range.end, bytes, 1)
         }
         ContainerEdit::ArrayInsertBytes(bytes) => {
             require_kind(ContainerKind::Array, "arrayInsertBytes")?;
             // Append after the last element; for an empty array this is the end
             // of the value (right after the count u32).
             let end = target.value_offset + target.value_size;
-            (None, end, bytes.clone(), 1)
+            (Vec::new(), end, bytes.clone(), 1)
+        }
+        ContainerEdit::ArrayRemoveMany(indices) => {
+            require_kind(ContainerKind::Array, "arrayRemoveMany")?;
+            let layout = layout.as_ref().expect("array edit resolves a layout");
+            let ranges = distinct_element_ranges(indices, &layout.element_ranges, layout.count)?;
+            let start = ranges.first().map_or(target.value_offset, |range| range.start);
+            let removed = ranges.len() as i64;
+            (ranges, start, Vec::new(), -removed)
+        }
+        ContainerEdit::MapRemoveMany(indices) => {
+            if target.type_name != "MapProperty" {
+                return Err(CoreError::InvalidRequest(format!(
+                    "mapRemoveMany requires a MapProperty target, got {}",
+                    target.type_name
+                )));
+            }
+            let map = map_layout(payload, target)?;
+            let ranges = distinct_element_ranges(indices, &map.entry_ranges, map.count)?;
+            let start = ranges.first().map_or(target.value_offset, |range| range.start);
+            let removed = ranges.len() as i64;
+            (ranges, start, Vec::new(), -removed)
         }
         ContainerEdit::MapInsert { entry_bytes } => {
             if target.type_name != "MapProperty" {
@@ -2087,7 +2120,7 @@ pub fn patch_container(
                 )));
             }
             let insert_at = target.value_offset + target.value_size; // end of map body
-            (None, insert_at, entry_bytes.clone(), 1)
+            (Vec::new(), insert_at, entry_bytes.clone(), 1)
         }
         ContainerEdit::MapRemove { entry_index } => {
             if target.type_name != "MapProperty" {
@@ -2103,7 +2136,7 @@ pub fn patch_container(
                     map.count
                 ))
             })?;
-            (Some(range.clone()), range.start, Vec::new(), -1)
+            (vec![range.clone()], range.start, Vec::new(), -1)
         }
     };
     // The entry/element count lives at `count_offset`; its current value comes
@@ -2111,7 +2144,9 @@ pub fn patch_container(
     // Both are computed before any mutation (offsets stay valid until the
     // splice), preserving the "failed patch leaves payload untouched" rule.
     let (count, count_offset) = match edit {
-        ContainerEdit::MapInsert { .. } | ContainerEdit::MapRemove { .. } => {
+        ContainerEdit::MapInsert { .. }
+        | ContainerEdit::MapRemove { .. }
+        | ContainerEdit::MapRemoveMany(_) => {
             let map = map_layout(payload, target)?;
             (map.count, map.count_offset)
         }
@@ -2120,7 +2155,7 @@ pub fn patch_container(
             (layout.count, layout.count_offset)
         }
     };
-    let removed = remove_range.as_ref().map_or(0, |r| r.len());
+    let removed: usize = remove_ranges.iter().map(|range| range.len()).sum();
     let delta = insert_bytes.len() as i64 - removed as i64;
     let new_count = u32::try_from(count as i64 + count_delta)
         .map_err(|_| CoreError::Parse("container count underflow".to_string()))?;
@@ -2157,16 +2192,40 @@ pub fn patch_container(
     for (offset, value) in writes {
         payload[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
-    match remove_range {
-        Some(range) => {
+    if remove_ranges.is_empty() {
+        payload.splice(insert_at..insert_at, insert_bytes);
+    } else {
+        // Back to front: removing a later range cannot move an earlier one.
+        for range in remove_ranges.into_iter().rev() {
             payload.splice(range, core::iter::empty());
-        }
-        None => {
-            payload.splice(insert_at..insert_at, insert_bytes);
         }
     }
     Ok(())
 }
+
+/// The byte ranges of `indices` within `ranges`, de-duplicated and sorted ascending
+/// so a caller can splice them back to front.
+fn distinct_element_ranges(
+    indices: &[usize],
+    ranges: &[core::ops::Range<usize>],
+    count: usize,
+) -> Result<Vec<core::ops::Range<usize>>, CoreError> {
+    let mut wanted = indices.to_vec();
+    wanted.sort_unstable();
+    wanted.dedup();
+    wanted
+        .into_iter()
+        .map(|index| {
+            ranges.get(index).cloned().ok_or_else(|| {
+                CoreError::InvalidRequest(format!(
+                    "container index {index} out of bounds ({count} elements)"
+                ))
+            })
+        })
+        .collect()
+}
+
+
 
 /// Add or remove one tag in a native `GameplayTagContainer` value, applied by
 /// [`patch_tag_container`].
@@ -2288,8 +2347,8 @@ pub fn patch_map_value_tag_container(
     map_property: &Property,
     enclosing_size_fields: &[usize],
     entry_index: usize,
-    tag: &str,
-) -> Result<bool, CoreError> {
+    tags: &[&str],
+) -> Result<usize, CoreError> {
     if map_property.type_name != "MapProperty" {
         return Err(CoreError::InvalidRequest(format!(
             "patch_map_value_tag_container requires a MapProperty target, got {}",
@@ -2351,12 +2410,19 @@ pub fn patch_map_value_tag_container(
         }
         (count, ranges)
     };
-    let Some((_t, range)) = tag_ranges.into_iter().find(|(t, _)| t == tag) else {
-        return Ok(false); // tag not present => nothing to remove
-    };
-
-    let delta = -(range.len() as i64);
-    let new_count = u32::try_from(count as i64 - 1)
+    // Every requested tag that is present, in container order, so they can be
+    // spliced back to front from this one view of the container.
+    let ranges: Vec<core::ops::Range<usize>> = tag_ranges
+        .into_iter()
+        .filter(|(name, _)| tags.contains(&name.as_str()))
+        .map(|(_, range)| range)
+        .collect();
+    if ranges.is_empty() {
+        return Ok(0); // none of them present => nothing to remove
+    }
+    let first_start = ranges[0].start;
+    let delta = -(ranges.iter().map(|range| range.len()).sum::<usize>() as i64);
+    let new_count = u32::try_from(count as i64 - ranges.len() as i64)
         .map_err(|_| CoreError::Parse("tag container count underflow".to_string()))?;
 
     // Compute every size-field rewrite up front; mutate only once all are valid.
@@ -2368,7 +2434,7 @@ pub fn patch_map_value_tag_container(
             .map_err(|_| CoreError::Parse("map size would leave the u32 range".to_string()))?,
     ));
     for &offset in enclosing_size_fields {
-        if offset + 4 > range.start {
+        if offset + 4 > first_start {
             return Err(CoreError::Parse(format!(
                 "enclosing size field at 0x{offset:x} does not precede the patch target"
             )));
@@ -2381,13 +2447,17 @@ pub fn patch_map_value_tag_container(
         })?;
         writes.push((offset, updated));
     }
-    // The count field precedes the spliced range, so writing it first is safe.
+    // The count field precedes every spliced range, so writing it first is safe.
     writes.push((count_offset, new_count));
     for (offset, value) in writes {
         payload[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
-    payload.splice(range, core::iter::empty());
-    Ok(true)
+    let removed = ranges.len();
+    // Back to front: removing a later tag cannot move an earlier one.
+    for range in ranges.into_iter().rev() {
+        payload.splice(range, core::iter::empty());
+    }
+    Ok(removed)
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -3440,10 +3510,10 @@ mod tests {
             &target,
             &chain.enclosing_size_fields,
             1, // Npc-B
-            "State.Dead",
+            &["State.Dead"],
         )
         .unwrap();
-        assert!(removed);
+        assert_eq!(removed, 1);
 
         assert_eq!(reparse_loose_tags(&payload, "Npc-A"), vec!["State.Aggro"]);
         assert_eq!(
@@ -3468,10 +3538,10 @@ mod tests {
             &target,
             &chain.enclosing_size_fields,
             0,
-            "State.Dead",
+            &["State.Dead"],
         )
         .unwrap();
-        assert!(!removed, "tag absent => no removal");
+        assert_eq!(removed, 0, "tag absent => no removal");
         assert_eq!(payload, before, "no-op leaves payload byte-identical");
     }
 

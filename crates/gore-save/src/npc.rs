@@ -1187,30 +1187,36 @@ fn memory_owners(root: &RootObject) -> Vec<(String, &PropertyValue)> {
 ///
 /// Re-scanning from scratch each call (rather than caching indices across the
 /// splicing removal loop) is what keeps the loop correct as removals shift indices.
-fn next_kill_memory_to_remove(root: &RootObject, id: &str) -> Option<(String, usize)> {
+fn kill_memories_to_remove(root: &RootObject, id: &str) -> Vec<(String, Vec<usize>)> {
+    let mut out = Vec::new();
     for (owner_id, memory) in memory_owners(root) {
         let Some(PropertyValue::Array { elements }) = struct_member(memory, "MemorizedEvents")
         else {
             continue;
         };
         let is_own = owner_id == id;
-        let found = elements.iter().position(|element| {
-            if is_own {
-                // Own defeat/kill residue only — an event about a DIFFERENT
-                // character (this NPC killed/executed someone else) is real
-                // memory and must be preserved across revive.
-                event_has_any_tag(element, REVIVE_EVENT_TAGS)
-                    && affected_character_id(element).map_or(true, |a| a == id)
-            } else {
-                event_has_any_tag(element, KILL_EVENT_TAGS)
-                    && affected_character_id(element) == Some(id)
-            }
-        });
-        if let Some(index) = found {
-            return Some((owner_id, index));
+        let found: Vec<usize> = elements
+            .iter()
+            .enumerate()
+            .filter(|(_, element)| {
+                if is_own {
+                    // Own defeat/kill residue only — an event about a DIFFERENT
+                    // character (this NPC killed/executed someone else) is real
+                    // memory and must be preserved across revive.
+                    event_has_any_tag(element, REVIVE_EVENT_TAGS)
+                        && affected_character_id(element).map_or(true, |a| a == id)
+                } else {
+                    event_has_any_tag(element, KILL_EVENT_TAGS)
+                        && affected_character_id(element) == Some(id)
+                }
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if !found.is_empty() {
+            out.push((owner_id, found));
         }
     }
-    None
+    out
 }
 
 /// The typed path (from the private root) to NPC `id`'s `MemorizedEvents` array:
@@ -1258,33 +1264,37 @@ fn is_corpse_key_for(key: &str, id: &str) -> bool {
 /// for the enclosing size fields. The payload is re-parsed before each splice so
 /// offsets and indices stay fresh.
 fn remove_corpse_inventory(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreError> {
-    loop {
-        let root = parse_private_root(payload)?;
-        let Some((path, map_prop)) = find_property_by_name(&root, SAVED_INVENTORIES_MAP) else {
-            return Ok(()); // no corpse map => nothing to remove
-        };
-        let PropertyValue::Map { entries, .. } = &map_prop.value else {
-            return Ok(());
-        };
-        let Some(entry_index) = entries.iter().position(|(k, _v)| {
+    let root = parse_private_root(payload)?;
+    let Some((path, map_prop)) = find_property_by_name(&root, SAVED_INVENTORIES_MAP) else {
+        return Ok(()); // no corpse map => nothing to remove
+    };
+    let PropertyValue::Map { entries, .. } = &map_prop.value else {
+        return Ok(());
+    };
+    let entry_indices: Vec<usize> = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, (k, _v))| {
             map_key_to_string(k)
                 .as_deref()
                 .is_some_and(|k| is_corpse_key_for(k, id))
-        }) else {
-            return Ok(()); // no corpse for this NPC (e.g. an alive NPC) => done
-        };
-
-        let segs = parse_path(&path)?;
-        let chain = resolve_chain(&root.properties, &segs)?;
-        let target = chain.target.clone();
-        let enclosing = chain.enclosing_size_fields.clone();
-        patch_container(
-            payload,
-            &target,
-            &enclosing,
-            &ContainerEdit::MapRemove { entry_index },
-        )?;
+        })
+        .map(|(index, _)| index)
+        .collect();
+    if entry_indices.is_empty() {
+        return Ok(()); // no corpse for this NPC (e.g. an alive NPC) => done
     }
+
+    let segs = parse_path(&path)?;
+    let chain = resolve_chain(&root.properties, &segs)?;
+    let target = chain.target.clone();
+    let enclosing = chain.enclosing_size_fields.clone();
+    patch_container(
+        payload,
+        &target,
+        &enclosing,
+        &ContainerEdit::MapRemoveMany(entry_indices),
+    )
 }
 
 /// Strip the death loose tags ([`DEAD_LOOSE_TAGS`]: `State.Dead`,
@@ -1300,36 +1310,27 @@ fn remove_corpse_inventory(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreEr
 /// the key). The payload is re-parsed before each removal so offsets stay fresh.
 /// No-op (Ok) if the map / entry is absent or carries none of the tags.
 fn remove_dead_loose_tags(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreError> {
-    for tag in DEAD_LOOSE_TAGS {
-        loop {
-            let root = parse_private_root(payload)?;
-            let Some((path, map_prop)) = find_property_by_name(&root, LOOSE_TAGS_MAP) else {
-                return Ok(()); // no loose-tags map => nothing to strip
-            };
-            let PropertyValue::Map { entries, .. } = &map_prop.value else {
-                return Ok(());
-            };
-            let Some(entry_index) = entries
-                .iter()
-                .position(|(k, _v)| map_key_to_string(k).as_deref() == Some(id))
-            else {
-                break; // no entry for this NPC => move to next tag (will also break)
-            };
-            // Enclosing size fields for the MAP property (ancestors); the map's own
-            // size field is handled inside patch_map_value_tag_container.
-            let segs = parse_path(&path)?;
-            let chain = resolve_chain(&root.properties, &segs)?;
-            let target = chain.target.clone();
-            let enclosing = chain.enclosing_size_fields.clone();
-            let removed =
-                patch_map_value_tag_container(payload, &target, &enclosing, entry_index, tag)?;
-            if !removed {
-                break; // this tag is gone => next tag
-            }
-            // Re-parse and re-scan in case the same tag appears more than once
-            // (defensive; a container normally holds each tag at most once).
-        }
-    }
+    let root = parse_private_root(payload)?;
+    let Some((path, map_prop)) = find_property_by_name(&root, LOOSE_TAGS_MAP) else {
+        return Ok(()); // no loose-tags map => nothing to strip
+    };
+    let PropertyValue::Map { entries, .. } = &map_prop.value else {
+        return Ok(());
+    };
+    let Some(entry_index) = entries
+        .iter()
+        .position(|(k, _v)| map_key_to_string(k).as_deref() == Some(id))
+    else {
+        return Ok(()); // no entry for this NPC => nothing to strip
+    };
+    // Enclosing size fields for the MAP property (ancestors); the map's own size
+    // field is handled inside patch_map_value_tag_container, which strips every
+    // listed tag from this one view of the container.
+    let segs = parse_path(&path)?;
+    let chain = resolve_chain(&root.properties, &segs)?;
+    let target = chain.target.clone();
+    let enclosing = chain.enclosing_size_fields.clone();
+    patch_map_value_tag_container(payload, &target, &enclosing, entry_index, DEAD_LOOSE_TAGS)?;
     Ok(())
 }
 
@@ -1341,8 +1342,8 @@ fn remove_dead_loose_tags(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreErr
 /// Errors if the NPC has no `Health` attribute or no `MaxHealth` `BaseValue` to
 /// revive to.
 fn restore_hp_to_max(payload: &mut [u8], id: &str) -> Result<(), CoreError> {
+    let root = parse_private_root(payload)?;
     let (base_path, current_path, max_hp, needs_patch) = {
-        let root = parse_private_root(payload)?;
         let rows = npc_attributes(&root, id)?;
         let health = rows
             .iter()
@@ -1372,7 +1373,6 @@ fn restore_hp_to_max(payload: &mut [u8], id: &str) -> Result<(), CoreError> {
         return Ok(());
     }
 
-    let root = parse_private_root(payload)?;
     let base_segs = parse_path(&base_path)?;
     let base_target = resolve_chain(&root.properties, &base_segs)?.target.clone();
     let cur_segs = parse_path(&current_path)?;
@@ -1681,14 +1681,15 @@ pub fn apply_relationship(
 /// indices are never reused. An already-alive NPC with full HP is a clean no-op.
 pub fn apply_revive(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreError> {
     // ── Phase 1: strip every kill/defeat memory event across ALL owners ──────
-    // Re-parse/re-scan/splice loop: each removal shifts later indices and offsets,
-    // so we locate the next matching event afresh every iteration. The scan returns
-    // the owner it found so we splice the correct owner's MemorizedEvents array.
-    loop {
-        let root = parse_private_root(payload)?;
-        let Some((owner_id, index)) = next_kill_memory_to_remove(&root, id) else {
-            break;
-        };
+    // One parse serves every removal. Each owner's matching events are dropped in a
+    // single splice pass, and the owners themselves are processed back to front in
+    // the payload, so no splice can move an array still to be patched — the reason
+    // this no longer needs a re-parse per event. (patch_container reads each
+    // enclosing size field from the current bytes, so the cascade stays right as
+    // the payload shrinks underneath it.)
+    let root = parse_private_root(payload)?;
+    let mut owners = Vec::new();
+    for (owner_id, indices) in kill_memories_to_remove(&root, id) {
         let path = memorized_events_array_path(&root, &owner_id).ok_or_else(|| {
             CoreError::Parse(format!(
                 "memory owner {owner_id:?} has no MemorizedEvents array to revive"
@@ -1696,15 +1697,22 @@ pub fn apply_revive(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreError> {
         })?;
         let segs = parse_path(&path)?;
         let chain = resolve_chain(&root.properties, &segs)?;
-        let target = chain.target.clone();
-        let enclosing = chain.enclosing_size_fields.clone();
+        owners.push((
+            chain.target.clone(),
+            chain.enclosing_size_fields.clone(),
+            indices,
+        ));
+    }
+    owners.sort_by_key(|(target, _, _)| std::cmp::Reverse(target.value_offset));
+    for (target, enclosing, indices) in owners {
         patch_container(
             payload,
             &target,
             &enclosing,
-            &ContainerEdit::ArrayRemove(index),
+            &ContainerEdit::ArrayRemoveMany(indices),
         )?;
     }
+    drop(root);
 
     // ── Phase 2: strip the authoritative death loose tags (the native gate) ──
     remove_dead_loose_tags(payload, id)?;
