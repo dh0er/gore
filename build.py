@@ -548,6 +548,51 @@ def resolve_git_sha() -> str:
     return probe.stdout.strip() or "dev" if probe.returncode == 0 else "dev"
 
 
+def _git(args: list[str]) -> str | None:
+    """Run a git command in the repository root; None if git or the repo is absent."""
+    try:
+        probe = subprocess.run(
+            ["git", *args], cwd=ROOT, capture_output=True, text=True, check=False
+        )
+    except OSError:
+        return None
+    return probe.stdout if probe.returncode == 0 else None
+
+
+def discard_line_ending_only_churn(project: str) -> None:
+    """Restore tracked files a build rewrote with different line endings only.
+
+    `flutter build` regenerates the tracked l10n sources, and on Windows writes them
+    with CRLF where the repository stores LF. `git diff` reports nothing, because
+    `.gitattributes` marks them `text eol=lf` and Git normalises the difference
+    away — but `git status` still calls them modified and never stops, so a build
+    left behind a worktree that looked dirty and aborted any tooling that insists on
+    a clean branch.
+
+    A file is restored only when Git's own filtered hash of the working copy already
+    equals what the index holds, which means the two differ in nothing but line
+    endings. A genuinely regenerated file — a real translation change — hashes
+    differently and is left exactly where it is, for the developer to review and
+    commit.
+    """
+    project_dir = pdir(project).relative_to(ROOT).as_posix()
+    status = _git(["status", "--porcelain=v1", "-z", "--", project_dir])
+    if not status:
+        return
+    for entry in status.split("\0"):
+        # Worktree-modified, unstaged: "_M<path>". Anything staged or untracked is
+        # the developer's business, not ours.
+        if not entry.startswith(" M "):
+            continue
+        path = entry[3:]
+        indexed = _git(["rev-parse", f":{path}"])
+        working = _git(["hash-object", "--path", path, "--", path])
+        if indexed is None or working is None:
+            continue
+        if indexed.strip() == working.strip():
+            _git(["checkout", "--", path])
+
+
 # --------------------------------------------------------------------------- #
 # Build recipes                                                               #
 # --------------------------------------------------------------------------- #
@@ -638,6 +683,10 @@ def build_project(project: str, release: bool, dry: bool) -> None:
 
     if dry:
         return
+    # The build rewrote the generated l10n sources; put back the ones that differ in
+    # line endings alone, so a build does not leave a worktree that reads as dirty
+    # (see discard_line_ending_only_churn).
+    discard_line_ending_only_churn(project)
     rel = flutter_build_dir(project, release)
     if not rel.exists():
         raise SystemExit(f"missing flutter output: {rel}")
