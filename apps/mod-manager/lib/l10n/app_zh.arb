@@ -11,6 +11,7 @@
   "coreTechnicalDetails": "技术详细信息",
   "coreCopyTechnicalDetails": "复制技术详细信息",
   "coreTechnicalDetailsCopied": "已复制技术详细信息",
+  "coreTechnicalDetailsCopyFailed": "无法复制技术详细信息。请重试。",
   "statusUnknown": "未知",
   "statusDetailsTitle": "部署：{status}",
   "statusDetailsOpen": "显示部署详情：{status}",

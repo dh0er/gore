@@ -45,6 +45,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get coreTechnicalDetailsCopied => '已复制技术详细信息';
 
   @override
+  String get coreTechnicalDetailsCopyFailed => '无法复制技术详细信息。请重试。';
+
+  @override
   String get statusUnknown => '未知';
 
   @override
@@ -405,6 +408,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get coreTechnicalDetailsCopied => '已复制技术详细信息';
+
+  @override
+  String get coreTechnicalDetailsCopyFailed => '无法复制技术详细信息。请重试。';
 
   @override
   String get statusUnknown => '未知';

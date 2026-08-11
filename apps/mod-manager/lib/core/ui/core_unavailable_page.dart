@@ -24,6 +24,7 @@ class _CoreUnavailablePageState extends State<CoreUnavailablePage> {
   );
   String? _managerVersion;
   bool _copied = false;
+  bool _copyFailed = false;
 
   @override
   void initState() {
@@ -49,9 +50,19 @@ class _CoreUnavailablePageState extends State<CoreUnavailablePage> {
   }
 
   Future<void> _copyDetails() async {
-    await Clipboard.setData(ClipboardData(text: _technicalReport));
+    var copied = false;
+    try {
+      await Clipboard.setData(ClipboardData(text: _technicalReport));
+      copied = true;
+    } catch (_) {
+      // Keep the blocker usable when another process temporarily owns the
+      // Windows clipboard; the live error below invites a retry.
+    }
     if (!mounted) return;
-    setState(() => _copied = true);
+    setState(() {
+      _copied = copied;
+      _copyFailed = !copied;
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _copyFocusNode.requestFocus();
@@ -77,6 +88,7 @@ class _CoreUnavailablePageState extends State<CoreUnavailablePage> {
       message,
       l10n.coreBlockedRepairHint,
       if (_copied) l10n.coreTechnicalDetailsCopied,
+      if (_copyFailed) l10n.coreTechnicalDetailsCopyFailed,
     ].join(' ');
 
     return Scaffold(
@@ -161,6 +173,18 @@ class _CoreUnavailablePageState extends State<CoreUnavailablePage> {
                                     color: Theme.of(
                                       context,
                                     ).colorScheme.primary,
+                                  ),
+                                ),
+                              ],
+                              if (_copyFailed) ...[
+                                const SizedBox(height: 8),
+                                Text(
+                                  l10n.coreTechnicalDetailsCopyFailed,
+                                  key: const ValueKey(
+                                    'core-technical-details-copy-failed',
+                                  ),
+                                  style: TextStyle(
+                                    color: Theme.of(context).colorScheme.error,
                                   ),
                                 ),
                               ],

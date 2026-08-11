@@ -11,6 +11,7 @@
   "coreTechnicalDetails": "技術情報",
   "coreCopyTechnicalDetails": "技術情報をコピー",
   "coreTechnicalDetailsCopied": "技術情報をコピーしました",
+  "coreTechnicalDetailsCopyFailed": "技術情報をコピーできませんでした。もう一度お試しください。",
   "statusUnknown": "不明",
   "statusDetailsTitle": "デプロイ: {status}",
   "statusDetailsOpen": "デプロイの詳細を表示: {status}",

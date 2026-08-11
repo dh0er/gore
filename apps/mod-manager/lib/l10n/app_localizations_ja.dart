@@ -47,6 +47,9 @@ class AppLocalizationsJa extends AppLocalizations {
   String get coreTechnicalDetailsCopied => '技術情報をコピーしました';
 
   @override
+  String get coreTechnicalDetailsCopyFailed => '技術情報をコピーできませんでした。もう一度お試しください。';
+
+  @override
   String get statusUnknown => '不明';
 
   @override

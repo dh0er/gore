@@ -11,6 +11,7 @@
   "coreTechnicalDetails": "Технические сведения",
   "coreCopyTechnicalDetails": "Копировать технические сведения",
   "coreTechnicalDetailsCopied": "Технические сведения скопированы",
+  "coreTechnicalDetailsCopyFailed": "Не удалось скопировать технические сведения. Повторите попытку.",
   "statusUnknown": "Неизвестно",
   "statusDetailsTitle": "Развёртывание: {status}",
   "statusDetailsOpen": "Показать сведения о развёртывании: {status}",

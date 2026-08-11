@@ -11,6 +11,7 @@
   "coreTechnicalDetails": "Technische Details",
   "coreCopyTechnicalDetails": "Technische Details kopieren",
   "coreTechnicalDetailsCopied": "Technische Details kopiert",
+  "coreTechnicalDetailsCopyFailed": "Die technischen Details konnten nicht kopiert werden. Versuche es erneut.",
   "statusUnknown": "Unbekannt",
   "statusDetailsTitle": "Bereitstellung: {status}",
   "statusDetailsOpen": "Bereitstellungsdetails anzeigen: {status}",

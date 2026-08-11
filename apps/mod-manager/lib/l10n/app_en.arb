@@ -11,6 +11,7 @@
   "coreTechnicalDetails": "Technical details",
   "coreCopyTechnicalDetails": "Copy technical details",
   "coreTechnicalDetailsCopied": "Technical details copied",
+  "coreTechnicalDetailsCopyFailed": "Technical details could not be copied. Try again.",
   "statusUnknown": "Unknown",
   "@statusUnknown": {
     "description": "Deployment status is unavailable or uses an unsupported future state."

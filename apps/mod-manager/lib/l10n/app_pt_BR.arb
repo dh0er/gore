@@ -11,6 +11,7 @@
   "coreTechnicalDetails": "Detalhes técnicos",
   "coreCopyTechnicalDetails": "Copiar detalhes técnicos",
   "coreTechnicalDetailsCopied": "Detalhes técnicos copiados",
+  "coreTechnicalDetailsCopyFailed": "Não foi possível copiar os detalhes técnicos. Tente novamente.",
   "statusUnknown": "Desconhecido",
   "statusDetailsTitle": "Implantação: {status}",
   "statusDetailsOpen": "Mostrar detalhes da implantação: {status}",

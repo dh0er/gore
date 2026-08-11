@@ -182,6 +182,12 @@ abstract class AppLocalizations {
   /// **'Technical details copied'**
   String get coreTechnicalDetailsCopied;
 
+  /// No description provided for @coreTechnicalDetailsCopyFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Technical details could not be copied. Try again.'**
+  String get coreTechnicalDetailsCopyFailed;
+
   /// Deployment status is unavailable or uses an unsupported future state.
   ///
   /// In en, this message translates to:

@@ -49,6 +49,10 @@ class AppLocalizationsDe extends AppLocalizations {
   String get coreTechnicalDetailsCopied => 'Technische Details kopiert';
 
   @override
+  String get coreTechnicalDetailsCopyFailed =>
+      'Die technischen Details konnten nicht kopiert werden. Versuche es erneut.';
+
+  @override
   String get statusUnknown => 'Unbekannt';
 
   @override

@@ -11,6 +11,7 @@
   "coreTechnicalDetails": "Dettagli tecnici",
   "coreCopyTechnicalDetails": "Copia dettagli tecnici",
   "coreTechnicalDetailsCopied": "Dettagli tecnici copiati",
+  "coreTechnicalDetailsCopyFailed": "Impossibile copiare i dettagli tecnici. Riprova.",
   "statusUnknown": "Sconosciuto",
   "statusDetailsTitle": "Distribuzione: {status}",
   "statusDetailsOpen": "Mostra dettagli distribuzione: {status}",

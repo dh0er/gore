@@ -49,6 +49,10 @@ class AppLocalizationsRu extends AppLocalizations {
   String get coreTechnicalDetailsCopied => 'Технические сведения скопированы';
 
   @override
+  String get coreTechnicalDetailsCopyFailed =>
+      'Не удалось скопировать технические сведения. Повторите попытку.';
+
+  @override
   String get statusUnknown => 'Неизвестно';
 
   @override

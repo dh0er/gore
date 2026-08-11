@@ -11,6 +11,7 @@
   "coreTechnicalDetails": "Szczegóły techniczne",
   "coreCopyTechnicalDetails": "Kopiuj szczegóły techniczne",
   "coreTechnicalDetailsCopied": "Skopiowano szczegóły techniczne",
+  "coreTechnicalDetailsCopyFailed": "Nie udało się skopiować szczegółów technicznych. Spróbuj ponownie.",
   "statusUnknown": "Nieznany",
   "statusDetailsTitle": "Wdrożenie: {status}",
   "statusDetailsOpen": "Pokaż szczegóły wdrożenia: {status}",

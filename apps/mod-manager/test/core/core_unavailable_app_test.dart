@@ -246,6 +246,70 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('clipboard failure is accessible and retryable', (tester) async {
+    var fail = true;
+    String? clipboardText;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method != 'Clipboard.setData') return null;
+        if (fail) {
+          throw PlatformException(code: 'clipboard-busy');
+        }
+        clipboardText = (call.arguments as Map)['text'] as String?;
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    final failure = CoreBootstrapFailure(
+      reason: CoreBootstrapFailureReason.dllMissing,
+    );
+
+    await tester.pumpWidget(_app(_BlockedRecordingCore(failure)));
+    await tester.pumpAndSettle();
+
+    final copyFinder = find.byKey(const ValueKey('core-copy-details-action'));
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('core-technical-details-copy-failed')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('core-technical-details-copied')),
+      findsNothing,
+    );
+    expect(
+      tester.widget<FilledButton>(copyFinder).focusNode?.hasPrimaryFocus,
+      isTrue,
+    );
+
+    fail = false;
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(clipboardText, failure.technicalReport(managerVersion: '1.2.3'));
+    expect(
+      find.byKey(const ValueKey('core-technical-details-copy-failed')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('core-technical-details-copied')),
+      findsOneWidget,
+    );
+    expect(
+      tester.widget<FilledButton>(copyFinder).focusNode?.hasPrimaryFocus,
+      isTrue,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('all twelve supported locales render the blocker contract', (
     tester,
   ) async {
@@ -271,6 +335,7 @@ void main() {
           l10n.coreTechnicalDetails,
           l10n.coreCopyTechnicalDetails,
           l10n.coreTechnicalDetailsCopied,
+          l10n.coreTechnicalDetailsCopyFailed,
         ].every((value) => value.trim().isNotEmpty),
         isTrue,
         reason: 'incomplete blocker localization for $locale',

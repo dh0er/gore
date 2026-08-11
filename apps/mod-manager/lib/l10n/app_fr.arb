@@ -11,6 +11,7 @@
   "coreTechnicalDetails": "Détails techniques",
   "coreCopyTechnicalDetails": "Copier les détails techniques",
   "coreTechnicalDetailsCopied": "Détails techniques copiés",
+  "coreTechnicalDetailsCopyFailed": "Impossible de copier les détails techniques. Réessayez.",
   "statusUnknown": "Inconnu",
   "statusDetailsTitle": "Déploiement : {status}",
   "statusDetailsOpen": "Afficher les détails du déploiement : {status}",
