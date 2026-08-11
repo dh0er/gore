@@ -1398,6 +1398,62 @@ void main() {
     },
   );
 
+  test(
+    'saveAllPending refuses a container edit to a glossary quest CurrentState '
+    'path spelled another way',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:	mp\saves');
+      await notifier.inspect(r'C:	mp\saves\G1R-001.sav');
+
+      // The index the editor wrote as [4]; the core reads both spellings as the
+      // same segment, so the pair has to be refused here rather than split into
+      // two writes where the later one silently wins.
+      notifier.setPendingGlossarySegment(
+        const GlossarySegmentEdit(
+          documentClass: '/Script/Angelscript.Document_Glossary_Wolf',
+          segmentClass:
+              '/Script/Angelscript.DocumentSegment_Glossary_Wolf_Unlock',
+          unlocked: true,
+          questStatePath: [
+            'QuestDataByClass',
+            '{/Script/Angelscript.Quest_CreaturesGlossary_Wolf_WolfUnlock}',
+            'SubQuests',
+            '[4]',
+            'CurrentState',
+          ],
+        ),
+      );
+      notifier.setPendingEdit(
+        'typed:wolf-current-state',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.arrayRemove',
+              'value': {
+                'path': [
+                  'QuestDataByClass',
+                  '{/Script/Angelscript.Quest_CreaturesGlossary_Wolf_WolfUnlock}',
+                  'SubQuests',
+                  '[04]',
+                  'CurrentState',
+                ],
+                'index': 0,
+              },
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('same quest CurrentState'));
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+      expect(notifier.state.pendingEdits, hasLength(2));
+    },
+  );
+
   test('saveAllPending refuses a typed value edit inside Hero MemorizedEvents '
       'alongside a glossary segment change', () async {
     final core = _RecordingCoreService();

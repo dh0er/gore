@@ -1098,18 +1098,40 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // A glossary segment operation with a questStatePath updates that
     // CurrentState itself. Refuse a raw typed write to the exact same path;
     // sequencing the two would silently make whichever sub-write runs last win.
-    for (final keyed in allEdits) {
-      final edit = keyed.edit;
-      if (edit['path'] != 'private.glossary.setSegment') continue;
-      final value = edit['value'];
-      if (value is! Map) continue;
-      final rawQuestPath = value['questStatePath'];
-      if (rawQuestPath is! List) continue;
-      final questPath = List<Object?>.from(rawQuestPath);
-      if (!typedPaths.any((path) => _sameEditorPath(path, questPath))) continue;
-      final path = questPath.join(' › ');
-      state = state.copyWith(error: _l10n.editorGlossaryQuestConflict(path));
-      return false;
+    //
+    // This has to catch every pair the core's own rule claims, or the packer
+    // splits the pair into two writes and lets the later one win in silence.
+    // So: any raw typed operation, not only a value write; the quest path under
+    // either of the two names the core reads it from; and the paths compared the
+    // way the core compares them, where an index segment is a number and [04]
+    // and [4] are one and the same.
+    if (hasGlossarySegmentEdit) {
+      final rawTypedPaths = <List<Object?>>[];
+      for (final keyed in allEdits) {
+        final editPath = keyed.edit['path'];
+        if (editPath is! String || !editPath.startsWith('private.typed.')) {
+          continue;
+        }
+        final value = keyed.edit['value'];
+        if (value is! Map) continue;
+        final rawPath = value['path'];
+        if (rawPath is List) rawTypedPaths.add(List<Object?>.from(rawPath));
+      }
+      for (final keyed in allEdits) {
+        final edit = keyed.edit;
+        if (edit['path'] != 'private.glossary.setSegment') continue;
+        final value = edit['value'];
+        if (value is! Map) continue;
+        final rawQuestPath = value['questStatePath'] ?? value['statePath'];
+        if (rawQuestPath is! List) continue;
+        final questPath = List<Object?>.from(rawQuestPath);
+        if (!rawTypedPaths.any((path) => _sameCorePath(path, questPath))) {
+          continue;
+        }
+        final path = questPath.join(' › ');
+        state = state.copyWith(error: _l10n.editorGlossaryQuestConflict(path));
+        return false;
+      }
     }
 
     // A structured relationship edit patches or appends an object below this
