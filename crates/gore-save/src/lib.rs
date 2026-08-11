@@ -9125,6 +9125,24 @@ fn slot_edit_targets_actor(path: &[properties::PathSeg], actor_id: Option<&str>)
     }
 }
 
+/// Whether `path` addresses the `CurrentState` of a quest entry — the leaf a
+/// glossary segment operation rewrites beside the hero's memory.
+///
+/// Which entry that is can only be read out of the save: the caller may leave
+/// `questStatePath` out entirely and let `resolve_glossary_quest_state_path`
+/// derive the leaf from the document and segment. This rule runs before anything
+/// is parsed, so it claims the shape of such a leaf rather than the one entry.
+/// Claiming too much costs a separate write; claiming too little would let one of
+/// the two writes disappear in silence.
+fn path_is_a_quest_current_state(path: &[properties::PathSeg]) -> bool {
+    let [.., quest, leaf] = path else {
+        return false;
+    };
+    matches!(leaf, properties::PathSeg::Name(name) if name == "CurrentState")
+        && matches!(quest, properties::PathSeg::MapKey(_))
+        && path_has_name(path, "QuestDataByClass")
+}
+
 /// Whether `path` writes a slot's `m_Id` — the field a slot is selected by, so a
 /// write to it renumbers slots exactly as a repair does.
 fn path_writes_a_slot_id(path: &[properties::PathSeg]) -> bool {
@@ -9163,14 +9181,11 @@ fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) ->
         PrivateEdit::SkillSet(skill) => {
             path_has_name(path, "ActiveEffects") && path_has_key(path, &skill.actor)
         }
-        // Adds or removes an unlock event in the hero's memory — and, when the
-        // caller supplied one, rewrites that quest's CurrentState as well.
-        PrivateEdit::GlossarySetSegment(glossary) => {
+        // Adds or removes an unlock event in the hero's memory, and rewrites the
+        // CurrentState of the quest leaf that stands for the same segment.
+        PrivateEdit::GlossarySetSegment(_) => {
             (path_has_name(path, "MemorizedEvents") && path_has_key(path, skills::HERO))
-                || glossary
-                    .quest_state_path
-                    .as_ref()
-                    .is_some_and(|quest| quest.as_slice() == path)
+                || path_is_a_quest_current_state(path)
         }
         // Strips memory events, death tags and the corpse entry.
         PrivateEdit::NpcRevive(_) => {
@@ -20882,9 +20897,11 @@ mod tests {
             quest_state_path: Some(quest_state.clone()),
         });
         assert!(structured_edit_rewrites(&with_quest, &quest_state));
-        assert!(!structured_edit_rewrites(&with_quest, &elsewhere));
 
-        // Without one, the quest state is not its business.
+        // Leaving the path out does not make the quest state someone else's
+        // business: the write then derives the very same leaf from the document
+        // and segment and rewrites it. Which leaf that is cannot be known here,
+        // before anything is parsed, so any quest's CurrentState is claimed.
         let without_quest = PrivateEdit::GlossarySetSegment(PrivateGlossarySetSegmentEdit {
             package: "/Script/Angelscript".to_string(),
             document_asset: "Document_Glossary_Meatbug".to_string(),
@@ -20892,7 +20909,25 @@ mod tests {
             unlocked: true,
             quest_state_path: None,
         });
-        assert!(!structured_edit_rewrites(&without_quest, &quest_state));
+        assert!(structured_edit_rewrites(&without_quest, &quest_state));
+        assert!(structured_edit_rewrites(&without_quest, &elsewhere));
+
+        // Another field of the same quest entry, and a CurrentState that is not a
+        // quest's, stay packable.
+        let sibling = properties::parse_path(&[
+            "QuestDataByClass".to_string(),
+            "{/Script/Angelscript.Quest_OldCamp_SLEEPER}".to_string(),
+            "m_Comment".to_string(),
+        ])
+        .unwrap();
+        let elsewhere_entirely = properties::parse_path(&[
+            "m_GenericData".to_string(),
+            "{Dialogue}".to_string(),
+            "CurrentState".to_string(),
+        ])
+        .unwrap();
+        assert!(!structured_edit_rewrites(&with_quest, &sibling));
+        assert!(!structured_edit_rewrites(&with_quest, &elsewhere_entirely));
 
         // The hero's memory events stay guarded either way.
         let hero_memory = properties::parse_path(&[
@@ -22912,12 +22947,14 @@ mod tests {
     }
 
     #[test]
-    fn glossary_set_segment_must_be_the_only_edit_in_a_write() {
+    fn glossary_set_segment_refuses_a_peer_write_to_the_quest_state_it_sets() {
         let (_dir, path, backend) = progression_fixture(
             "G1R-glossary-standalone.sav",
             glossary_progression_payload(),
         );
         let data = fs::read(path).unwrap();
+        // No questStatePath: the write derives the matching leaf from the
+        // document and segment and sets it, exactly as if one had been supplied.
         let glossary = Edit {
             path: "private.glossary.setSegment".to_string(),
             value: json!({
@@ -22937,9 +22974,23 @@ mod tests {
                 "value": "EQuestState::Available"
             }),
         };
-        // The peer resolves its quest by MAP KEY, which the glossary splice cannot
-        // move, so the two share one write.
-        let edited = apply_private_edits(&data, &[&glossary, &peer], Some(&backend)).unwrap();
+
+        // Sharing a write would set that CurrentState twice and report both edits
+        // as applied while one of them is discarded, whichever order they run in.
+        for pair in [[&glossary, &peer], [&peer, &glossary]] {
+            let error = apply_private_edits(&data, &pair, Some(&backend)).unwrap_err();
+            let CoreError::UnsupportedEdit(message) = &error else {
+                panic!("expected the pair to be refused, got {error:?}");
+            };
+            assert!(
+                message.contains("private.typed.setValue")
+                    && message.contains("private.glossary.setSegment"),
+                "the refusal has to name both edits, got {message:?}"
+            );
+        }
+
+        // Alone it goes through, and sets that leaf itself.
+        let edited = apply_private_edits(&data, &[&glossary], Some(&backend)).unwrap();
         let payload = decoded_private_payload_for_tests(&edited, &backend);
         assert!(
             find_subslice(&payload, b"DocumentSegment_Glossary_Meatbug_Entry2").is_some(),
@@ -22950,7 +23001,8 @@ mod tests {
             &root.properties,
             &properties::parse_path(&[
                 "QuestDataByClass".to_string(),
-                "{/Script/Angelscript.Quest_OldCamp_SLEEPER}".to_string(),
+                "{/Script/Angelscript.Quest_CreaturesGlossary_MeatbugGlossary_MeatbugEntry2}"
+                    .to_string(),
                 "CurrentState".to_string(),
             ])
             .unwrap(),
@@ -22958,7 +23010,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             state.value,
-            properties::PropertyValue::Enum("EQuestState::Available".to_string())
+            properties::PropertyValue::Enum("EQuestState::Succeeded".to_string())
         );
     }
 

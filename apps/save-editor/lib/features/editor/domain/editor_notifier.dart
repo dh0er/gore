@@ -3626,6 +3626,20 @@ bool _sameEditorPath(List<Object?> left, List<Object?> right) {
   return true;
 }
 
+/// Whether [path] addresses the `CurrentState` of a quest entry — the leaf a
+/// glossary segment operation rewrites beside the hero's memory.
+///
+/// Mirrors `path_is_a_quest_current_state` in crates/gore-save/src/lib.rs,
+/// including why it claims the shape rather than one entry: the operation can be
+/// sent without a quest path at all and the core then derives the leaf from the
+/// save, which nothing here can do.
+bool _pathIsAQuestCurrentState(List<Object?> path) {
+  if (path.length < 2) return false;
+  if (path.last != 'CurrentState') return false;
+  if (_mapKeySegment(path[path.length - 2]) == null) return false;
+  return _pathHasName(path, 'QuestDataByClass');
+}
+
 /// Whether two raw segment lists address the same path in the sense the core
 /// gives them: `parse_path` reads `{k}` as a map key and `[n]` as an index, so
 /// `[03]` and `[3]` are one and the same segment to it even though the two
@@ -3890,15 +3904,12 @@ bool structuredEditRewrites(
       return actor != null &&
           _pathHasName(typedPath, 'ActiveEffects') &&
           _pathHasKey(typedPath, actor);
-    // Adds or removes an unlock event in the hero's memory — and, when the
-    // caller supplied one, rewrites that quest's CurrentState as well.
+    // Adds or removes an unlock event in the hero's memory, and rewrites the
+    // CurrentState of the quest leaf that stands for the same segment.
     case 'private.glossary.setSegment':
-      if (_pathHasName(typedPath, 'MemorizedEvents') &&
-          _pathHasKey(typedPath, 'Hero')) {
-        return true;
-      }
-      final questPath = fields['questStatePath'] ?? fields['statePath'];
-      return questPath is List && _sameCorePath(questPath, typedPath);
+      return (_pathHasName(typedPath, 'MemorizedEvents') &&
+              _pathHasKey(typedPath, 'Hero')) ||
+          _pathIsAQuestCurrentState(typedPath);
     // Strips memory events, death tags and the corpse entry.
     case 'private.npc.revive':
       return _pathHasName(typedPath, 'MemorizedEvents') ||

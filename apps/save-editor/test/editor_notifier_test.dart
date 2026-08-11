@@ -2638,64 +2638,67 @@ void main() {
       Map<String, Object?> glossary(List<String>? questStatePath) => {
         'path': 'private.glossary.setSegment',
         'value': {
-          'documentClass': '/Script/Angelscript.Document_Glossary_Creatures',
-          'segmentClass': '/Script/Angelscript.DocumentSegment_Scavenger',
+          'documentClass': '/Script/Angelscript.Document_Glossary_Meatbug',
+          'segmentClass':
+              '/Script/Angelscript.DocumentSegment_Glossary_Meatbug_Entry2',
           'unlocked': true,
           'questStatePath': ?questStatePath,
         },
       };
-      const questPath = [
-        'm_QuestStates',
-        '{Quest_Creatures}',
-        'SubQuests',
-        '[4]',
+      const questState = [
+        'QuestDataByClass',
+        '{/Script/Angelscript.Quest_OldCamp_SLEEPER}',
         'CurrentState',
       ];
 
       // The core rewrites that CurrentState itself, so the two cannot share a
-      // write — the packer has to split them, in either order.
+      // write — in either order.
       expect(
-        editsRewriteSameTarget(glossary(questPath), typedEdit(questPath)),
+        editsRewriteSameTarget(glossary(questState), typedEdit(questState)),
         isTrue,
       );
       expect(
-        editsRewriteSameTarget(typedEdit(questPath), glossary(questPath)),
+        editsRewriteSameTarget(typedEdit(questState), glossary(questState)),
         isTrue,
       );
 
-      // An index the core reads as the same number is the same segment to it,
-      // however the editor spelled it.
+      // Sending no quest path does not make it someone else's business: the core
+      // then derives the same leaf from the document and segment. Which leaf that
+      // is cannot be known here, so any quest's CurrentState is claimed.
+      expect(
+        editsRewriteSameTarget(glossary(null), typedEdit(questState)),
+        isTrue,
+      );
       expect(
         editsRewriteSameTarget(
-          glossary(questPath),
+          glossary(null),
           typedEdit([
-            'm_QuestStates',
-            '{Quest_Creatures}',
-            'SubQuests',
-            '[04]',
+            'QuestDataByClass',
+            '{/Script/Angelscript.Quest_Something_Else}',
             'CurrentState',
           ]),
         ),
         isTrue,
       );
 
-      // Another quest's state, and a segment operation that names no quest at
-      // all, stay packable.
+      // Another field of the same entry, and a CurrentState that is not a
+      // quest's, stay packable.
       expect(
         editsRewriteSameTarget(
-          glossary(questPath),
+          glossary(questState),
           typedEdit([
-            'm_QuestStates',
-            '{Quest_Creatures}',
-            'SubQuests',
-            '[5]',
-            'CurrentState',
+            'QuestDataByClass',
+            '{/Script/Angelscript.Quest_OldCamp_SLEEPER}',
+            'm_Comment',
           ]),
         ),
         isFalse,
       );
       expect(
-        editsRewriteSameTarget(glossary(null), typedEdit(questPath)),
+        editsRewriteSameTarget(
+          glossary(questState),
+          typedEdit(['m_GenericData', '{Dialogue}', 'CurrentState']),
+        ),
         isFalse,
       );
     });
