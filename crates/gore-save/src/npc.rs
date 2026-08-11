@@ -1500,14 +1500,14 @@ pub fn apply_relationship(
     // retains Weight 1000 after SaveGame load. Reparse after every splice
     // because Friend/Neutral/Enemy have different byte lengths.
     let mut missing_entry = false;
-    // The check above parsed the payload nobody has written to yet, so the first
-    // pass reuses it; every later pass follows a splice and needs its own.
-    let mut unwritten = Some(checked);
-    loop {
-        let root = match unwritten.take() {
-            Some(root) => root,
-            None => parse_private_root(payload)?,
-        };
+    // One pass over the modifiers: the scan below collects EVERY mismatch and
+    // settles whether a strong override already exists, so the parse taken for the
+    // existence check above serves the whole edit. The writes then run back to
+    // front — the append copies the existing bytes verbatim and adds at the end, so
+    // it cannot move a mismatch, and the mismatches themselves are patched
+    // descending — which is what makes one parse enough.
+    'entry: {
+        let root = &checked;
         let Some((map_path, map_property)) = find_property_by_name(&root, RELATIONSHIP_MAP) else {
             return Err(CoreError::Parse(format!(
                 "{RELATIONSHIP_MAP} map not found in save"
@@ -1521,7 +1521,7 @@ pub fn apply_relationship(
             .find(|(key, _)| map_key_to_string(key).as_deref() == Some(id))
         else {
             missing_entry = true;
-            break;
+            break 'entry;
         };
         let Some(entry_properties) = entry_props(entry_value) else {
             return Err(CoreError::Parse(format!(
@@ -1535,7 +1535,7 @@ pub fn apply_relationship(
                 "{RELATIONSHIP_MAP}[{id:?}] has no {ACTIVE_RELATIONSHIP_MODIFIERS} array"
             )));
         };
-        let mut next_mismatch = None;
+        let mut mismatches: Vec<usize> = Vec::new();
         let mut found_strong_override = false;
         match &array_property.value {
             PropertyValue::ObjectInstances(modifiers) => {
@@ -1556,8 +1556,7 @@ pub fn apply_relationship(
                         found_strong_override = true;
                     }
                     if current != relationship.enum_label() {
-                        next_mismatch = Some(index);
-                        break;
+                        mismatches.push(index);
                     }
                 }
             }
@@ -1569,26 +1568,32 @@ pub fn apply_relationship(
             }
         }
 
-        if let Some(index) = next_mismatch {
-            let mut path = map_path;
+        // Resolve every mismatch against this parse before anything is written.
+        let mut mismatch_targets = Vec::new();
+        for index in &mismatches {
+            let mut path = map_path.clone();
             path.push(format!("{{{id}}}"));
             path.push(ACTIVE_RELATIONSHIP_MODIFIERS.to_string());
             path.push(format!("[{index}]"));
             path.push("Relationship".to_string());
             let chain = resolve_chain(&root.properties, &parse_path(&path)?)?;
-            let target = chain.target.clone();
-            let enclosing = chain.enclosing_size_fields.clone();
-            patch_string(payload, &target, &enclosing, relationship.enum_label())?;
-            continue;
+            mismatch_targets.push((chain.target.clone(), chain.enclosing_size_fields));
         }
 
         if found_strong_override {
-            break;
+            // Nothing to append: patch the mismatches back to front and stop.
+            for (target, enclosing) in mismatch_targets.into_iter().rev() {
+                patch_string(payload, &target, &enclosing, relationship.enum_label())?;
+            }
+            break 'entry;
         }
 
         // The map entry exists but has only unrelated modifiers or a weak
         // legacy `_Story_Permanent` override. Append the strong, indefinite
-        // `_Story` representation while preserving every existing object.
+        // `_Story` representation while preserving every existing object. The
+        // append goes first: it rewrites the array body starting from the same
+        // offset with the existing bytes unchanged, so the mismatch targets below
+        // still sit where this parse said they do.
         let mut path = map_path;
         path.push(format!("{{{id}}}"));
         path.push(ACTIVE_RELATIONSHIP_MODIFIERS.to_string());
@@ -1632,13 +1637,19 @@ pub fn apply_relationship(
             }
             _ => unreachable!("array encoding validated above"),
         }
-        // Reparse and verify the newly appended object before finishing.
+
+        // Back to front, so the append above and each patch leave the targets still
+        // to come exactly where this parse found them.
+        for (target, enclosing) in mismatch_targets.into_iter().rev() {
+            patch_string(payload, &target, &enclosing, relationship.enum_label())?;
+        }
     }
 
     if missing_entry {
-        // No entry existed: append a fully-formed inline map key/value pair.
-        let root = parse_private_root(payload)?;
-        let (map_path, map_property) = find_property_by_name(&root, RELATIONSHIP_MAP)
+        // No entry existed: append a fully-formed inline map key/value pair. Nothing
+        // has been written at this point, so the existence check's parse still holds.
+        let root = &checked;
+        let (map_path, map_property) = find_property_by_name(root, RELATIONSHIP_MAP)
             .ok_or_else(|| CoreError::Parse(format!("{RELATIONSHIP_MAP} map not found in save")))?;
         let PropertyValue::Map { entries, .. } = &map_property.value else {
             return Err(CoreError::Parse(format!("{RELATIONSHIP_MAP} is not a map")));
@@ -1678,18 +1689,6 @@ pub fn apply_relationship(
     Ok(())
 }
 
-/// REVIVE NPC `id` in a decoded private payload, in place — restore a KILLED NPC
-/// to its alive state by undoing all persisted death state.
-///
-/// 1. Scan every `LongTermMemoryByGlobalId` owner and remove only defeat/kill
-///    events that refer to this NPC.
-/// 2. Strip the authoritative `State.Dead`, kill-bounty, and execution-bounty
-///    loose tags while preserving unrelated tags.
-/// 3. Remove the NPC's lootable corpse entry from `m_SavedInventories`.
-/// 4. Restore Health to MaxHealth.
-///
-/// Each structural step reparses before continuing, so shifted offsets and
-/// indices are never reused. An already-alive NPC with full HP is a clean no-op.
 /// One planned change to the payload, resolved from a single parse.
 ///
 /// Reviving touches four unrelated places in the save, and each used to re-parse
@@ -1774,6 +1773,19 @@ impl ReviveEdit {
     }
 }
 
+/// REVIVE NPC `id` in a decoded private payload, in place — restore a KILLED NPC
+/// to its alive state by undoing all persisted death state.
+///
+/// 1. Scan every `LongTermMemoryByGlobalId` owner and remove only defeat/kill
+///    events that refer to this NPC.
+/// 2. Strip the authoritative `State.Dead`, kill-bounty, and execution-bounty
+///    loose tags while preserving unrelated tags.
+/// 3. Remove the NPC's lootable corpse entry from `m_SavedInventories`.
+/// 4. Restore Health to MaxHealth.
+///
+/// Everything is planned against ONE parse and applied back to front, so no step
+/// reuses an offset a later one moved. An already-alive NPC with full HP is a clean
+/// no-op.
 pub fn apply_revive(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreError> {
     let root = parse_private_root(payload)?;
 
