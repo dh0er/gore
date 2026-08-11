@@ -165,7 +165,7 @@ pub fn preflight_v1(
         game_root,
         library_dir,
         loadout_path,
-        super::status::status,
+        super::status::status_for_preflight,
         gore_as::compile::probe_install_compile_state,
         crate::deploy_recovery_required,
     )

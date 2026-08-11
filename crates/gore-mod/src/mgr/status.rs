@@ -50,6 +50,57 @@ pub enum ManagerStatus {
     GameUpdated { drifted: Vec<String> },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InspectionFailurePolicy {
+    TreatAsDrift,
+    Preserve,
+}
+
+fn path_exists_for_status(
+    path: &Path,
+    failure_policy: InspectionFailurePolicy,
+) -> crate::Result<bool> {
+    if failure_policy == InspectionFailurePolicy::TreatAsDrift {
+        return Ok(crate::path_exists_no_follow(path));
+    }
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(crate::ModError::Io(format!(
+            "reading deployment path metadata {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
+fn file_matches_for_status(
+    path: &Path,
+    expected: &str,
+    failure_policy: InspectionFailurePolicy,
+) -> crate::Result<bool> {
+    if failure_policy == InspectionFailurePolicy::TreatAsDrift {
+        return Ok(crate::file_matches_recorded_hash(path, expected));
+    }
+    if !path_exists_for_status(path, failure_policy)? {
+        return Ok(false);
+    }
+    crate::file_matches_recorded_hash_result(path, expected)
+}
+
+fn tree_matches_for_status(
+    path: &Path,
+    expected: &str,
+    failure_policy: InspectionFailurePolicy,
+) -> crate::Result<bool> {
+    if failure_policy == InspectionFailurePolicy::TreatAsDrift {
+        return Ok(crate::tree_matches_recorded_fingerprint(path, expected));
+    }
+    if !path_exists_for_status(path, failure_policy)? {
+        return Ok(false);
+    }
+    crate::tree_fingerprint(path).map(|current| current == expected)
+}
+
 /// Report the manager's state at `game_root` relative to `target` (see [`ManagerStatus`]).
 /// `library_dir` is the mod library root, needed to fingerprint each enabled mod's current
 /// on-disk content and compare it to what the deploy record snapshotted — so a same-id UPDATE
@@ -59,6 +110,35 @@ pub fn status(
     game_root: &Path,
     library_dir: &Path,
     target: &Loadout,
+) -> crate::Result<ManagerStatus> {
+    status_with_failure_policy(
+        game_root,
+        library_dir,
+        target,
+        InspectionFailurePolicy::TreatAsDrift,
+    )
+}
+
+/// Preflight must distinguish confirmed drift (including a missing owned path) from evidence it
+/// could not inspect. The public status command retains its conservative drift contract.
+pub(super) fn status_for_preflight(
+    game_root: &Path,
+    library_dir: &Path,
+    target: &Loadout,
+) -> crate::Result<ManagerStatus> {
+    status_with_failure_policy(
+        game_root,
+        library_dir,
+        target,
+        InspectionFailurePolicy::Preserve,
+    )
+}
+
+fn status_with_failure_policy(
+    game_root: &Path,
+    library_dir: &Path,
+    target: &Loadout,
+    failure_policy: InspectionFailurePolicy,
 ) -> crate::Result<ManagerStatus> {
     // Match deploy/undeploy's record location logic so status reads the SAME record they wrote,
     // regardless of whether the caller passed the install dir or its `G1R` child, or a relative
@@ -87,19 +167,19 @@ pub fn status(
     // Drift beats loadout comparison: if the game changed a file we wrote, the deployment is stale
     // no matter what the loadout says. A missing recorded file counts as drifted (it was our
     // modded file and is now gone/replaced).
-    let mut drifted: Vec<String> = record
-        .deployed_hashes
-        .iter()
-        .filter(|(live, expected)| {
-            !crate::file_matches_recorded_hash(Path::new(live.as_str()), expected)
-        })
-        .map(|(live, _)| live.clone())
-        .collect();
+    let mut drifted = Vec::new();
+    for (live, expected) in &record.deployed_hashes {
+        if !file_matches_for_status(Path::new(live.as_str()), expected, failure_policy)? {
+            drifted.push(live.clone());
+        }
+    }
     for (live, backup, _) in &record.backups {
         let expected = crate::deployed_hash_for_path(live, &record.deployed_hashes);
-        if expected
-            .is_none_or(|hash| !crate::file_matches_recorded_hash(Path::new(live.as_str()), hash))
-        {
+        let live_matches = match expected {
+            Some(hash) => file_matches_for_status(Path::new(live.as_str()), hash, failure_policy)?,
+            None => false,
+        };
+        if !live_matches {
             drifted.push(live.clone());
         }
 
@@ -113,7 +193,18 @@ pub fn status(
         let backup_path = Path::new(backup.as_str());
         let backup_matches = match crate::backup_hash_for_path(backup_path, &record.backup_hashes) {
             Some(hash) => {
-                hash.starts_with("sha256:") && crate::file_matches_recorded_hash(backup_path, hash)
+                hash.starts_with("sha256:")
+                    && file_matches_for_status(backup_path, hash, failure_policy)?
+            }
+            None if failure_policy == InspectionFailurePolicy::Preserve => {
+                let live_path = Path::new(live.as_str());
+                if !path_exists_for_status(live_path, failure_policy)?
+                    || !path_exists_for_status(backup_path, failure_policy)?
+                {
+                    false
+                } else {
+                    crate::sha256_file(live_path)? == crate::sha256_file(backup_path)?
+                }
             }
             None => match (
                 crate::sha256_file(Path::new(live.as_str())),
@@ -137,10 +228,13 @@ pub fn status(
         .chain(record.texture_triplets.iter())
     {
         let expected = crate::deployed_hash_for_path(path, &record.deployed_hashes);
-        if expected.is_none_or(|hash| {
-            !hash.starts_with("sha256:")
-                || !crate::file_matches_recorded_hash(Path::new(path.as_str()), hash)
-        }) {
+        let matches = match expected {
+            Some(hash) if hash.starts_with("sha256:") => {
+                file_matches_for_status(Path::new(path.as_str()), hash, failure_policy)?
+            }
+            _ => false,
+        };
+        if !matches {
             drifted.push(path.clone());
         }
     }
@@ -153,9 +247,13 @@ pub fn status(
             Path::new(path.as_str()),
             &record.ue4ss_tree_fingerprints,
         );
-        if expected.is_none_or(|fingerprint| {
-            !crate::tree_matches_recorded_fingerprint(Path::new(path.as_str()), fingerprint)
-        }) {
+        let matches = match expected {
+            Some(fingerprint) => {
+                tree_matches_for_status(Path::new(path.as_str()), fingerprint, failure_policy)?
+            }
+            None => false,
+        };
+        if !matches {
             drifted.push(path.clone());
         }
     }
@@ -165,7 +263,7 @@ pub fn status(
             .iter()
             .chain(record.ue4ss_mod_dirs.iter())
             .any(|active| crate::same_path(Path::new(path), active));
-        if !mirrors_active && crate::path_exists_no_follow(Path::new(path)) {
+        if !mirrors_active && path_exists_for_status(Path::new(path), failure_policy)? {
             drifted.push(path.clone());
         }
     }
@@ -507,6 +605,41 @@ mod tests {
         assert_eq!(
             status(&game, &lib, &target).unwrap(),
             ManagerStatus::GameUpdated { drifted: expected }
+        );
+    }
+
+    #[test]
+    fn preflight_status_preserves_ownership_inspection_failures() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game = tmp.path().join("game");
+        let lib = tmp.path().join("lib");
+        let live = game.join("G1R/Story/VoiceOver/owned.zip");
+        std::fs::create_dir_all(&live).unwrap();
+        let record = DeployRecord {
+            mod_name: "manager".into(),
+            owner: "manager".into(),
+            deployed_hashes: BTreeMap::from([(
+                live.display().to_string(),
+                crate::content_hash(b"deployed"),
+            )]),
+            ..Default::default()
+        };
+        write_record(&game, &record);
+
+        assert_eq!(
+            status(&game, &lib, &Loadout::default()).unwrap(),
+            ManagerStatus::GameUpdated {
+                drifted: vec![live.display().to_string()]
+            }
+        );
+        assert!(status_for_preflight(&game, &lib, &Loadout::default()).is_err());
+
+        std::fs::remove_dir(&live).unwrap();
+        assert_eq!(
+            status_for_preflight(&game, &lib, &Loadout::default()).unwrap(),
+            ManagerStatus::GameUpdated {
+                drifted: vec![live.display().to_string()]
+            }
         );
     }
 
