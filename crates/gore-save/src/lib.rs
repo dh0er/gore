@@ -8991,6 +8991,25 @@ fn apply_private_edits(
                 .to_string(),
         ));
     }
+    // Ordering cannot rescue a batch whose edits address the SAME thing: a structured
+    // operation rewrites its target wholesale, so one of the two silently loses while
+    // the write reports both as applied. Reject those pairs whichever way round they
+    // come (see `structured_edit_rewrites`).
+    for (structured_at, structured) in edit_specs.iter().enumerate() {
+        for (typed_at, typed) in edit_specs.iter().enumerate() {
+            let Some(path) = raw_typed_path(typed) else {
+                continue;
+            };
+            if structured_edit_rewrites(structured, path) {
+                return Err(CoreError::UnsupportedEdit(format!(
+                    "{} (edit {typed_at}) edits something {} (edit {structured_at}) \
+                     rewrites as a whole, so one of the two would silently be \
+                     discarded whichever order they run in; save them separately",
+                    edits[typed_at].path, edits[structured_at].path
+                )));
+            }
+        }
+    }
     // Every `apply_*` re-parses the payload it is handed, so a batch can never carry a
     // stale BYTE OFFSET from one edit into the next. What a batch CAN invalidate is a
     // caller-supplied ORDINAL: an array index or slot id the caller read off an
@@ -9031,6 +9050,103 @@ fn apply_private_edits(
         &compressed_stream,
         parts.trailer,
     ))
+}
+
+/// The path a raw `private.typed.*` edit addresses, if this is one.
+fn raw_typed_path(edit: &PrivateEdit) -> Option<&[properties::PathSeg]> {
+    match edit {
+        PrivateEdit::TypedSetValue(edit) => Some(&edit.path),
+        PrivateEdit::TypedContainer(edit) => Some(&edit.path),
+        _ => None,
+    }
+}
+
+/// The segment following the first `Name(name)` in `path`, if any.
+fn segment_after_name<'a>(
+    path: &'a [properties::PathSeg],
+    name: &str,
+) -> Option<Option<&'a properties::PathSeg>> {
+    let at = path.iter().position(
+        |segment| matches!(segment, properties::PathSeg::Name(found) if found == name),
+    )?;
+    Some(path.get(at + 1))
+}
+
+fn path_has_name(path: &[properties::PathSeg], name: &str) -> bool {
+    path.iter()
+        .any(|segment| matches!(segment, properties::PathSeg::Name(found) if found == name))
+}
+
+fn path_has_key(path: &[properties::PathSeg], key: &str) -> bool {
+    path.iter()
+        .any(|segment| matches!(segment, properties::PathSeg::MapKey(found) if found == key))
+}
+
+/// Whether `path` reaches a slot of an inventory container — the array itself, or an
+/// element of it.
+fn path_reaches_inventory_slot(path: &[properties::PathSeg]) -> bool {
+    match segment_after_name(path, "m_Slots") {
+        // Addressing the whole slot array.
+        Some(None) => true,
+        Some(Some(properties::PathSeg::Index(_))) => true,
+        _ => false,
+    }
+}
+
+/// Whether a raw typed edit at `path` addresses something the structured `edit`
+/// rewrites as a whole.
+///
+/// Ordering cannot make such a pair safe, which is why this is checked separately
+/// from the ordinal rule below: a structured operation resolves its own target and
+/// rewrites or recreates it wholesale, so whichever of the two runs second discards
+/// the other's work — silently, with the write reporting both as applied. The editor
+/// refuses these combinations before it ever calls in; a caller coming straight
+/// through `execute_json` does not go through the editor, so the core refuses them
+/// too.
+fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) -> bool {
+    match edit {
+        // Patches or appends a modifier under this NPC's relationship entry.
+        PrivateEdit::NpcRelationship(relationship) => {
+            match segment_after_name(path, "RelationshipByGlobalId") {
+                None => false,
+                // An edit of the whole map collides with every structured write.
+                Some(None) => true,
+                Some(Some(properties::PathSeg::MapKey(key))) => {
+                    key.trim().eq_ignore_ascii_case(relationship.id.trim())
+                }
+                Some(Some(_)) => true,
+            }
+        }
+        // Learning or unlearning rewrites this actor's effect elements.
+        PrivateEdit::SkillSet(skill) => {
+            path_has_name(path, "ActiveEffects") && path_has_key(path, &skill.actor)
+        }
+        // Adds or removes an unlock event in the hero's memory.
+        PrivateEdit::GlossarySetSegment(_) => {
+            path_has_name(path, "MemorizedEvents") && path_has_key(path, skills::HERO)
+        }
+        // Strips memory events, death tags and the corpse entry.
+        PrivateEdit::NpcRevive(_) => {
+            path_has_name(path, "MemorizedEvents")
+                || path_has_name(path, "LooseTagsByGlobalId")
+                || path_has_name(path, "m_SavedInventories")
+        }
+        // Inserts an entry into the knowledge map.
+        PrivateEdit::KnowledgeAddCharacter(_) | PrivateEdit::KnowledgeSetEntry(_) => {
+            path_has_name(path, "CharacterKnowledgeByUniqueName")
+        }
+        // Claims a whole slot: the add fills a blank one and resets its payload, the
+        // removal blanks one.
+        PrivateEdit::InventoryAddItem(_) | PrivateEdit::InventoryRemoveItem(_) => {
+            path_reaches_inventory_slot(path)
+        }
+        // Narrower: it only rewrites ids.
+        PrivateEdit::InventoryRepairSlots => matches!(
+            path.last(),
+            Some(properties::PathSeg::Name(name)) if name == "m_Id"
+        ) && path_reaches_inventory_slot(&path[..path.len().saturating_sub(1)]),
+        _ => false,
+    }
 }
 
 /// True for an edit that can change the ELEMENT COUNT of a container (array length,
@@ -20570,7 +20686,7 @@ mod tests {
     }
 
     #[test]
-    fn write_save_rejects_an_index_addressed_peer_after_a_length_change() {
+    fn write_save_rejects_a_raw_slot_edit_beside_an_inventory_add() {
         // An inventory add/remove must stand alone: a peer edit in the same
         // write resolves against the pre-splice layout and would be corrupted.
         let dir = tempdir().unwrap();
@@ -20588,8 +20704,9 @@ mod tests {
             seed_uncompressed: private_payload,
         };
 
-        // The add appends a slot, so the queued edit's `[1]` — an index the caller
-        // read off the PRE-write inspection — would resolve against a different array.
+        // The add claims a whole slot and resets its payload, so a raw edit into a
+        // slot cannot share the write with it in either order: whichever runs second
+        // discards the other's work while both are reported as applied.
         let mut count_path = inv_slots_prefix(1);
         count_path.extend([
             "[1]".to_string(),
@@ -20615,9 +20732,33 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, CoreError::UnsupportedEdit(_)), "got: {err}");
         assert!(
-            err.to_string()
-                .contains("addresses an element by index or slot id"),
+            err.to_string().contains("rewrites as a whole"),
             "unexpected error: {err}"
+        );
+
+        // The same pair is refused with the raw edit FIRST: ordering cannot make a
+        // same-target conflict safe, which is what the positional ordinal rule alone
+        // would have missed.
+        let reversed = write_save_with_codec_backend(
+            &path,
+            &[
+                json!({
+                    "path": "private.typed.setValue",
+                    "value": { "path": count_path, "value": 9 }
+                }),
+                json!({
+                    "path": "private.inventory.addItem",
+                    "value": { "path": "/Script/Angelscript.ItFo_Cheese", "count": 1 }
+                }),
+            ],
+            false,
+            None,
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(
+            reversed.to_string().contains("rewrites as a whole"),
+            "unexpected error: {reversed}"
         );
     }
 
