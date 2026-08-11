@@ -1425,6 +1425,18 @@ class EditorNotifier extends StateNotifier<EditorState> {
               k.edit['path'] != repairSlotsPath,
         )
         .toList();
+    // Only one edit in this batch can move anything: a raw write to a slot's
+    // m_Id, which renumbers the ids and positions that a count or an indexed
+    // edit is addressed BY. Splitting the two would not make them safe — the
+    // second write would still resolve an id the first had already moved — but
+    // their order among the fixed edits is free, so let everything that moves
+    // nothing go first, where it still resolves against the layout the user was
+    // looking at. That is also the order the core accepts, so the pair keeps
+    // sharing one write.
+    final fixedMoversLast = [
+      ...fixedBatch.where((k) => !_mayInvalidateOrdinals(k.edit)),
+      ...fixedBatch.where((k) => _mayInvalidateOrdinals(k.edit)),
+    ];
 
     // The edits in the exact order they must reach the core, which applies a batch
     // sequentially against one payload and re-resolves every edit's target as it
@@ -1440,7 +1452,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     //  - story goes last: it always needs its own write, and putting it at the end
     //    keeps it from taking the backup away from the syncPersistentDataList one.
     final ordered = <_KeyedEdit>[
-      ...fixedBatch,
+      ...fixedMoversLast,
       ...orderedSplicing.where((k) => k.edit['path'] != storyStateApplyPath),
       ...skillEdits,
       ...repairEdits,
@@ -1448,13 +1460,19 @@ class EditorNotifier extends StateNotifier<EditorState> {
     ];
 
     // Pack that sequence into as few write_saves as the core will accept. It
-    // refuses two combinations — an edit addressed by an index or slot id placed
-    // after an edit that can change how many elements a container holds, and a
-    // raw typed edit sharing a write with a structured operation that rewrites
-    // what it addresses (order-independent) — so a new sub-write starts exactly
-    // when the next edit would hit either rule, plus one each for the two
-    // operations that must stand alone. In practice a whole editing session
-    // lands in a single write instead of one per splicing edit.
+    // refuses three combinations — an edit addressed by an index or slot id
+    // placed after an edit that can change how many elements a container holds,
+    // a raw typed edit sharing a write with a structured operation that rewrites
+    // what it addresses, and two structured operations that rewrite one target
+    // (the last two order-independent) — so a new sub-write starts exactly when
+    // the next edit would hit any of them, plus one each for the two operations
+    // that must stand alone. In practice a whole editing session lands in a
+    // single write instead of one per splicing edit.
+    //
+    // A split is not a way to make a pair safe, only a way to keep the core from
+    // refusing the whole write: the checks further up refuse the combinations
+    // where running the two in sequence would resolve the second against a
+    // layout the first moved.
     final worklist = <_SubWrite>[];
     var current = <Map<String, Object?>>[];
     var currentMayInvalidateOrdinals = false;
@@ -1483,7 +1501,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // the same-target rule (order-independent, so it is checked against every
       // edit already in this batch, both ways round).
       if ((currentMayInvalidateOrdinals && _carriesCallerOrdinal(keyed.edit)) ||
-          current.any((edit) => editsRewriteSameTarget(edit, keyed.edit))) {
+          current.any(
+            (edit) =>
+                editsRewriteSameTarget(edit, keyed.edit) ||
+                structuredEditsShareATarget(edit, keyed.edit),
+          )) {
         flush();
       }
       current.add(keyed.edit);
@@ -2894,10 +2916,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return GlossaryPage.fromJson(data);
   }
 
-  static String _glossaryPendingKey(
-    String documentClass,
-    String segmentClass,
-  ) => 'glossary.segment:$documentClass::$segmentClass';
+  static String _glossaryPendingKey(String documentClass, String segmentClass) =>
+      'glossary.segment:${foldEditTargetPart(documentClass)}'
+      '::${foldEditTargetPart(segmentClass)}';
 
   /// Queue one atomic glossary segment toggle. Each segment deliberately owns
   /// its own pending key because the core may splice the Hero memory array;
@@ -3411,7 +3432,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
     );
   }
 
-  static String _npcRelationshipPendingKey(String id) => 'npc.relationship:$id';
+  /// Folded like the core folds the id it keys the operation by, so two entries
+  /// for one NPC cannot sit in the registry side by side and then collide.
+  static String _npcRelationshipPendingKey(String id) =>
+      'npc.relationship:${foldEditTargetPart(id)}';
 
   /// Register an explicit permanent NPC-to-Hero relationship override under
   /// its own structural pending key. The game otherwise derives this value at
@@ -3624,6 +3648,71 @@ bool _sameEditorPath(List<Object?> left, List<Object?> right) {
     if (left[i] != right[i]) return false;
   }
   return true;
+}
+
+/// What a structured edit rewrites as a whole, for the operations that resolve
+/// their target from a key and then replace whatever they find there. Two edits
+/// naming the same one cannot share a write.
+///
+/// Mirrors `structured_edit_target` in crates/gore-save/src/lib.rs, down to how
+/// it folds each part of the key and how it reads an asset name out of a class
+/// reference. The pending registry keys these operations by the same folded
+/// target, so a pair should not get this far; if one does, two writes lose less
+/// than a refusal that takes every unrelated edit in the batch down with it.
+/// Whether [left] and [right] are two structured operations rewriting one
+/// target — the pair the core refuses, so the packer splits it.
+@visibleForTesting
+bool structuredEditsShareATarget(
+  Map<String, Object?> left,
+  Map<String, Object?> right,
+) {
+  final target = _structuredEditTarget(left);
+  return target != null && _structuredEditTarget(right) == target;
+}
+
+String? _structuredEditTarget(Map<String, Object?> edit) {
+  final op = edit['path'];
+  if (op is! String) return null;
+  final value = edit['value'];
+  final fields = value is Map ? value : const <Object?, Object?>{};
+  String key(List<String> parts) => [op, ...parts].join('');
+  switch (op) {
+    case 'private.npc.setRelationship':
+      return key([foldEditTargetPart(fields['id'])]);
+    case 'private.skills.set':
+      // An absent actor is the hero, as the core reads it.
+      final actor = fields['actor'] is String ? fields['actor'] : 'Hero';
+      return key([
+        foldEditTargetPart(actor),
+        foldEditTargetPart(fields['base']),
+      ]);
+    case 'private.knowledge.setEntry':
+      return key([
+        foldEditTargetPart(fields['character']),
+        foldEditTargetPart(fields['entry']),
+      ]);
+    case 'private.glossary.setSegment':
+      return key([
+        _foldAssetName(fields['documentClass']),
+        _foldAssetName(fields['segmentClass']),
+      ]);
+    default:
+      return null;
+  }
+}
+
+/// One part of a target key, folded the way the core folds it — and the way the
+/// pending registry has to key these operations so two entries cannot collapse
+/// into one target only once the core sees them.
+String foldEditTargetPart(Object? part) =>
+    part is String ? part.trim().toLowerCase() : '';
+
+/// The asset name of a `/Package.Asset` class reference, folded. The core keys a
+/// glossary segment by the asset names and refuses a pair whose packages differ.
+String _foldAssetName(Object? part) {
+  final text = part is String ? part : '';
+  final dot = text.lastIndexOf('.');
+  return foldEditTargetPart(dot < 0 ? text : text.substring(dot + 1));
 }
 
 /// Whether [path] addresses the `CurrentState` of a quest entry — the leaf a

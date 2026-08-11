@@ -1403,8 +1403,8 @@ void main() {
     'path spelled another way',
     () async {
       final core = _RecordingCoreService();
-      final notifier = EditorNotifier(core, saveDir: r'C:	mp\saves');
-      await notifier.inspect(r'C:	mp\saves\G1R-001.sav');
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
       // The index the editor wrote as [4]; the core reads both spellings as the
       // same segment, so the pair has to be refused here rather than split into
@@ -2698,6 +2698,168 @@ void main() {
         editsRewriteSameTarget(
           glossary(questState),
           typedEdit(['m_GenericData', '{Dialogue}', 'CurrentState']),
+        ),
+        isFalse,
+      );
+    });
+
+    test('the packer really splits such a pair into two writes', () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:	mp\saves');
+      await notifier.inspect(r'C:	mp\saves\G1R-001.sav');
+
+      Map<String, Object?> entry(String character, String name, bool present) => {
+        'path': 'private.knowledge.setEntry',
+        'value': {'character': character, 'entry': name, 'present': present},
+      };
+      // Two registry entries the core folds into one target. It refuses the
+      // pair, so both have to reach it in writes of their own.
+      notifier.setPendingEdit(
+        'knowledge:a',
+        PendingSaveEdit(edits: [entry('Diego', 'Info_Ore ', false)]),
+      );
+      notifier.setPendingEdit(
+        'knowledge:b',
+        PendingSaveEdit(edits: [entry('diego', 'Info_Ore', true)]),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isTrue);
+      final writes = core.requests
+          .where((request) => request.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(2));
+      for (final write in writes) {
+        expect((write.payload['edits'] as List), hasLength(1));
+      }
+    });
+
+    test('an id-addressed edit is written before the write that renumbers ids', () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:	mp\saves');
+      await notifier.inspect(r'C:	mp\saves\G1R-001.sav');
+
+      // A raw write to a slot's m_Id renumbers what the count edit is addressed
+      // by. Two writes would not help — the second would resolve the id this one
+      // moved — so they share one write with the addressed edit first, which is
+      // the order the core accepts.
+      notifier.setPendingEdit(
+        'a-slot-id',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': [
+                  'm_Inventory',
+                  'm_Containers',
+                  '[0]',
+                  'm_Slots',
+                  '[3]',
+                  'm_Id',
+                ],
+                'value': 9,
+              },
+            },
+          ],
+        ),
+      );
+      notifier.setPendingEdit(
+        'z-count',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.setItemCount',
+              'value': {'path': '/Script/Angelscript.ItMi_Orenugget', 'count': 5},
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isTrue);
+      final writes = core.requests
+          .where((request) => request.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(1));
+      final edits = (writes.single.payload['edits'] as List)
+          .cast<Map<String, Object?>>();
+      expect(
+        edits.map((edit) => edit['path']),
+        ['private.inventory.setItemCount', 'private.typed.setValue'],
+      );
+    });
+
+    test('two structured edits for one target land in separate writes', () {
+      Map<String, Object?> skill(String actor, String base, String tier) => {
+        'path': 'private.skills.set',
+        'value': {'actor': actor, 'base': base, 'tier': tier},
+      };
+
+      // The core refuses this pair outright, so the packer has to split it or
+      // the whole Save fails and takes every unrelated edit with it. The parts
+      // of the target are folded as the core folds them.
+      expect(
+        structuredEditsShareATarget(
+          skill('Hero', 'Ranged_Bow', 'Trained'),
+          skill(' hero ', 'ranged_bow', 'Untrained'),
+        ),
+        isTrue,
+      );
+
+      // Two skills of one character, and one skill of two characters, are two
+      // targets — batching those is the point.
+      expect(
+        structuredEditsShareATarget(
+          skill('Hero', 'Ranged_Bow', 'Trained'),
+          skill('Hero', 'Ranged_Crossbow', 'Trained'),
+        ),
+        isFalse,
+      );
+      expect(
+        structuredEditsShareATarget(
+          skill('Hero', 'Ranged_Bow', 'Trained'),
+          skill('Diego', 'Ranged_Bow', 'Trained'),
+        ),
+        isFalse,
+      );
+
+      // A glossary segment is keyed by the two asset names, as the core keys it.
+      Map<String, Object?> segment(String document, String seg) => {
+        'path': 'private.glossary.setSegment',
+        'value': {
+          'documentClass': document,
+          'segmentClass': seg,
+          'unlocked': true,
+        },
+      };
+      expect(
+        structuredEditsShareATarget(
+          segment(
+            '/Script/Angelscript.Document_Glossary_Meatbug',
+            '/Script/Angelscript.DocumentSegment_Meatbug_Entry2',
+          ),
+          segment(
+            '/Script/Angelscript.Document_Glossary_Meatbug',
+            '/Script/Angelscript.DocumentSegment_Meatbug_Unlock',
+          ),
+        ),
+        isFalse,
+      );
+
+      // An operation that adds to what is there has no such target at all.
+      expect(
+        structuredEditsShareATarget(
+          {
+            'path': 'private.inventory.addItem',
+            'value': {'path': '/Script/Angelscript.ItFo_Cheese', 'count': 1},
+          },
+          {
+            'path': 'private.inventory.addItem',
+            'value': {'path': '/Script/Angelscript.ItFo_Cheese', 'count': 1},
+          },
         ),
         isFalse,
       );
