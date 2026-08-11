@@ -416,6 +416,33 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
                 )
                 self.assert_invalid(release=changed)
 
+    def test_only_manager_versioned_releases_are_prereleases(self) -> None:
+        missing = mutate_job(
+            self.release,
+            "gore-mod-manager",
+            '          prerelease: "true"\n',
+            "",
+        )
+        self.assert_invalid(release=missing, mentions="prerelease flag changed")
+
+        false = mutate_job(
+            self.release,
+            "gore-mod-manager",
+            'prerelease: "true"',
+            'prerelease: "false"',
+        )
+        self.assert_invalid(release=false, mentions="prerelease flag changed")
+
+        for product in ("gore-save-editor", "gore-mod-studio", "gore-cli"):
+            with self.subTest(product=product):
+                changed = mutate_job(
+                    self.release,
+                    product,
+                    '          make_latest: ',
+                    '          prerelease: "true"\n          make_latest: ',
+                )
+                self.assert_invalid(release=changed, mentions="field set changed")
+
     def test_all_appcast_generation_and_feed_commands_are_pinned(self) -> None:
         for product, contract in PRODUCTS.items():
             if contract.appcast_command is None or contract.feed_command is None:

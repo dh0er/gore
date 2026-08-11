@@ -70,8 +70,14 @@ class _ReleaseFixture:
             path.write_bytes(name.encode())
 
         (self.root / "LICENSE").write_text("MIT\n", encoding="utf-8")
-        (self.root / "THIRD_PARTY_LICENSES.md").write_text(
-            "Third party\n", encoding="utf-8"
+        source_notices = (ROOT / "about.hbs").read_text(encoding="utf-8")
+        notices = verifier._winsparkle_notice_section(source_notices)
+        assert notices is not None
+        notices += f"\n\n{verifier.WINSPARKLE_NOTICE_END}\n"
+        (self.root / "about.hbs").write_text(notices, encoding="utf-8")
+        (self.root / "THIRD_PARTY_LICENSES.md").write_text(notices, encoding="utf-8")
+        (self.root / "apps" / "mod-manager" / "pubspec.lock").write_text(
+            verifier.AUTO_UPDATER_WINDOWS_LOCK_STANZA + "\n", encoding="utf-8"
         )
         self.setup = self.root / "apps" / "mod-manager" / "installer" / "setup.iss"
         self.setup.parent.mkdir(parents=True)
@@ -215,6 +221,80 @@ class ModManagerReleaseContractTest(unittest.TestCase):
                     self.assert_problem(problems, expected)
                 finally:
                     fixture.close()
+
+    def test_notice_source_and_generated_file_require_winsparkle_markers(self) -> None:
+        for relative in verifier.THIRD_PARTY_NOTICE_FILES:
+            for label, marker in verifier.THIRD_PARTY_NOTICE_MARKERS.items():
+                with self.subTest(file=relative, marker=label):
+                    fixture = self.fixture()
+                    path = fixture.root / relative
+                    text = path.read_text(encoding="utf-8")
+                    path.write_text(text.replace(marker, "", 1), encoding="utf-8")
+                    problems = verifier.verify_release(
+                        fixture.root, VERSION, version_info_reader=fixture.metadata
+                    )
+                    self.assert_problem(problems, f"{relative} is missing {label}")
+
+    def test_exact_notice_sections_reject_non_marker_license_clause_drift(self) -> None:
+        clauses = (
+            (
+                "WinSparkle license",
+                "of the Software, and to permit persons to whom the Software is furnished to do",
+            ),
+            (
+                "WinSparkle license",
+                "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE",
+            ),
+            (
+                "Expat license",
+                "without limitation the rights to use, copy, modify, merge, publish,",
+            ),
+        )
+        for _, clause in clauses:
+            self.assertFalse(
+                any(clause in marker for marker in verifier.THIRD_PARTY_NOTICE_MARKERS.values())
+            )
+        for relative in verifier.THIRD_PARTY_NOTICE_FILES:
+            for heading, clause in clauses:
+                with self.subTest(file=relative, clause=clause):
+                    fixture = self.fixture()
+                    path = fixture.root / relative
+                    text = path.read_text(encoding="utf-8")
+                    self.assertIn(clause, text)
+                    path.write_text(text.replace(clause, "", 1), encoding="utf-8")
+                    problems = verifier.verify_release(
+                        fixture.root, VERSION, version_info_reader=fixture.metadata
+                    )
+                    self.assert_problem(
+                        problems,
+                        f"{relative} exact WinSparkle 0.8.1 notice section changed",
+                    )
+                    self.assert_problem(
+                        problems, f"{relative} exact upstream {heading} block changed"
+                    )
+
+    def test_winsparkle_notices_are_bound_to_pinned_dependency_source(self) -> None:
+        mutations = (
+            (
+                "56dc406f6e0f6ccf01d70d2fbc88f7ca1c3ebf9a",
+                "0000000000000000000000000000000000000000",
+            ),
+            ('version: "1.0.1"', 'version: "1.0.2"'),
+            ("packages/auto_updater_windows", "packages/changed_updater_windows"),
+        )
+        for old, new in mutations:
+            with self.subTest(changed=old):
+                fixture = self.fixture()
+                lock = fixture.root / "apps" / "mod-manager" / "pubspec.lock"
+                text = lock.read_text(encoding="utf-8")
+                self.assertIn(old, text)
+                lock.write_text(text.replace(old, new, 1), encoding="utf-8")
+                problems = verifier.verify_release(
+                    fixture.root, VERSION, version_info_reader=fixture.metadata
+                )
+                self.assert_problem(
+                    problems, "auto_updater_windows dependency pin changed"
+                )
 
     def test_windows_path_collisions_and_traversal_fail(self) -> None:
         cases = (
