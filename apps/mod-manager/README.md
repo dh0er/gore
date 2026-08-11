@@ -22,8 +22,11 @@ and loadout files. Auto-updates on launch (WinSparkle).
 - **Enable/disable**, **remove**, and **drag to reorder** mods in the load order
   (later wins). Removing a library entry updates the target loadout; if that
   mod is already deployed, choose **Apply** afterwards to update the game.
-- **Detect conflicts** across mods — localization, audio, texture/asset, item
-  overrides (CDO), scripts, and raw-file replacements — and show which mod wins.
+- **Detect recognized conflicts** across mods — localization, audio,
+  texture/asset, item overrides (CDO), scripts, and raw-file replacements — and
+  show intended winners. Each component is marked Exact, Partial, Advisory, or
+  Opaque so incomplete target knowledge stays visible; these grades do not
+  claim the game's runtime priority is proven.
 - **Apply** declaratively: full-recompute the modded state from a pristine base
   and deploy the whole enabled set (backups first), or **undeploy all** to
   restore.

@@ -19,6 +19,9 @@ class ConflictPanel extends ConsumerWidget {
     final theme = Theme.of(context);
     final library = ref.watch(libraryProvider);
     final conflictsAsync = ref.watch(conflictsProvider);
+    final incompleteCoverage = ref.watch(
+      enabledFootprintKnowledgeIncompleteProvider,
+    );
 
     if (!library.authoritative) {
       return Padding(
@@ -48,14 +51,21 @@ class ConflictPanel extends ConsumerWidget {
       ),
       data: (conflicts) {
         if (conflicts.isEmpty) {
-          return Padding(
+          return ListView(
             padding: const EdgeInsets.all(16),
-            child: Text(
-              l10n.noConflicts,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+            children: [
+              Text(
+                l10n.noConflicts,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
-            ),
+              const SizedBox(height: 12),
+              _ConflictKnowledgeNote(
+                incompleteCoverage: incompleteCoverage,
+                l10n: l10n,
+              ),
+            ],
           );
         }
         final order = [for (final e in library.loadout.entries) e.id];
@@ -84,9 +94,86 @@ class ConflictPanel extends ConsumerWidget {
                   nameFor: (id) => library.modById(id)?.name ?? id,
                 ),
             ],
+            const SizedBox(height: 8),
+            _ConflictKnowledgeNote(
+              incompleteCoverage: incompleteCoverage,
+              l10n: l10n,
+            ),
           ],
         );
       },
+    );
+  }
+}
+
+class _ConflictKnowledgeNote extends StatelessWidget {
+  const _ConflictKnowledgeNote({
+    required this.incompleteCoverage,
+    required this.l10n,
+  });
+
+  final bool incompleteCoverage;
+  final AppLocalizations l10n;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final lines = [
+      if (incompleteCoverage) l10n.conflictCoverageIncomplete,
+      l10n.loadOrderDirection,
+      l10n.footprintCoverageScope,
+    ];
+    final foreground = incompleteCoverage
+        ? scheme.onTertiaryContainer
+        : scheme.onSurfaceVariant;
+    return Semantics(
+      key: const ValueKey('conflict-knowledge-note'),
+      container: true,
+      label: lines.join(' '),
+      child: ExcludeSemantics(
+        child: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: incompleteCoverage
+                ? scheme.tertiaryContainer
+                : scheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                incompleteCoverage
+                    ? Icons.warning_amber_rounded
+                    : Icons.info_outline,
+                size: 16,
+                color: foreground,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (var i = 0; i < lines.length; i++) ...[
+                      if (i > 0) const SizedBox(height: 2),
+                      Text(
+                        lines[i],
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: foreground,
+                          fontWeight: incompleteCoverage && i == 0
+                              ? FontWeight.w600
+                              : null,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

@@ -68,7 +68,23 @@ gore mgr analyze
 
 Reports conflicts among the **enabled** mods across localization, audio,
 texture/asset, item overrides (CDO), scripts, and raw-file replacements, and
-which mod wins each one.
+which mod the analyzed loadout evidence marks as the intended winner for each
+recognized target.
+
+The Manager app qualifies that result per component with derived footprint
+coverage. **Exact** means the component metadata gives conflict analysis a
+complete target list. **Partial** means the listed targets are known but the
+component can affect more. **Advisory** targets are useful hints rather than an
+exhaustive inventory, and **Opaque** means the targets are unknown. These grades
+describe target knowledge only; even Exact does not prove the game's runtime
+priority. If any enabled component is not Exact, a zero-result analysis is
+therefore shown as "no recognized conflicts" with an incomplete-knowledge
+warning, never as proof that the loadout is conflict-free.
+
+The same view spells out the intended order: low priority is listed first and
+later mods have higher intended priority. That order predicts winners only
+where the analyzer has the corresponding evidence; it does not turn container
+filename order into a runtime guarantee.
 
 Localization is reported **per language**: the target is `<id>|<language>`, so
 two mods editing one id collide once for every language key they both write, and

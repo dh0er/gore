@@ -31,6 +31,35 @@ final conflictsProvider = FutureProvider<List<ConflictView>>((ref) {
   return ref.watch(mgrFfiProvider).analyze();
 });
 
+/// Whether enabled components make a conflict result incomplete by contract.
+/// This display qualifier is not an Apply gate or runtime-priority claim.
+final enabledFootprintKnowledgeIncompleteProvider = Provider<bool>((ref) {
+  return hasIncompleteEnabledFootprintKnowledge(ref.watch(libraryProvider));
+});
+
+/// Join exact, case-sensitive loadout ids to library metadata. Disabled mods do
+/// not qualify the current analysis, while a missing enabled id fails closed.
+bool hasIncompleteEnabledFootprintKnowledge(LibraryState state) {
+  if (!state.authoritative) return false; // The caller shows "unverified".
+  final modsById = <String, ModEntryMetaView>{};
+  for (final mod in state.mods) {
+    // Preserve LibraryState.modById's defensive first-match behavior.
+    modsById.putIfAbsent(mod.id, () => mod);
+  }
+  for (final entry in state.loadout.entries) {
+    if (!entry.enabled) continue;
+    final mod = modsById[entry.id];
+    if (mod == null) return true;
+    if (mod.components.isEmpty ||
+        mod.components.any(
+          (component) => component.coverage != FootprintCoverage.exact,
+        )) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /// A stable, value-comparable key that changes when the loadout entries change
 /// OR when any mod's deployable content (kind, coverage, opacity, targets, or
 /// raw-file destination) changes — including a same-id re-import.

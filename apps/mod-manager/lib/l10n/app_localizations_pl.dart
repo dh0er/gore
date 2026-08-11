@@ -231,14 +231,54 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String conflictsTitle(int count) {
-    return 'Konflikty ($count)';
+    return 'Wyniki ($count)';
   }
 
   @override
-  String get conflictWinner => 'zwycięzca';
+  String get conflictWinner => 'zamierzony zwycięzca';
 
   @override
-  String get noConflicts => 'Brak konfliktów.';
+  String get noConflicts => 'Brak rozpoznanych konfliktów.';
+
+  @override
+  String get conflictCoverageIncomplete =>
+      'Wiedza o konfliktach włączonych modów jest niepełna; mogą istnieć dodatkowe konflikty.';
+
+  @override
+  String get loadOrderDirection =>
+      'Kolejność ładowania: najpierw niższy priorytet; późniejsze mody mają wyższy zamierzony priorytet.';
+
+  @override
+  String get footprintCoverageScope =>
+      'Pokrycie opisuje tylko rozpoznane cele konfliktów; nie dowodzi priorytetu w czasie działania.';
+
+  @override
+  String get footprintCoverageExact =>
+      'Dokładne — lista celów konfliktów komponentu jest kompletna.';
+
+  @override
+  String get footprintCoveragePartial =>
+      'Częściowe — wymienione cele są znane, ale komponent może wpływać na kolejne.';
+
+  @override
+  String get footprintCoverageAdvisory =>
+      'Orientacyjne — wymienione cele są wskazówkami, a nie wyczerpującym dowodem.';
+
+  @override
+  String get footprintCoverageOpaque =>
+      'Nieprzejrzyste — cele konfliktów komponentu są nieznane.';
+
+  @override
+  String get footprintCoverageExactLabel => 'Dokładne';
+
+  @override
+  String get footprintCoveragePartialLabel => 'Częściowe';
+
+  @override
+  String get footprintCoverageAdvisoryLabel => 'Orientacyjne';
+
+  @override
+  String get footprintCoverageOpaqueLabel => 'Nieprzejrzyste';
 
   @override
   String get conflictsUnverified =>

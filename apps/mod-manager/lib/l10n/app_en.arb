@@ -89,7 +89,7 @@
   "takeOverBody": "mod-studio has deployed a mod to the game. Take over so the manager can apply this loadout?",
   "takeOverAction": "Take over",
   "refreshAction": "Refresh",
-  "conflictsTitle": "Conflicts ({count})",
+  "conflictsTitle": "Findings ({count})",
   "@conflictsTitle": {
     "placeholders": {
       "count": {
@@ -97,8 +97,22 @@
       }
     }
   },
-  "conflictWinner": "winner",
-  "noConflicts": "No conflicts.",
+  "conflictWinner": "intended winner",
+  "@conflictWinner": {
+    "description": "Labels the mod expected to win by intended Manager load order, not a proven runtime outcome."
+  },
+  "noConflicts": "No recognized conflicts.",
+  "conflictCoverageIncomplete": "Conflict knowledge is incomplete for enabled mods; additional conflicts may exist.",
+  "loadOrderDirection": "Load order: lower priority first; later mods have higher intended priority.",
+  "footprintCoverageScope": "Coverage describes recognized conflict targets only; it does not prove runtime priority.",
+  "footprintCoverageExact": "Exact — the component's conflict-target list is complete.",
+  "footprintCoveragePartial": "Partial — listed conflict targets are known, but the component can affect more.",
+  "footprintCoverageAdvisory": "Advisory — listed targets are hints, not exhaustive proof.",
+  "footprintCoverageOpaque": "Opaque — the component's conflict targets are unknown.",
+  "footprintCoverageExactLabel": "Exact",
+  "footprintCoveragePartialLabel": "Partial",
+  "footprintCoverageAdvisoryLabel": "Advisory",
+  "footprintCoverageOpaqueLabel": "Opaque",
   "conflictsUnverified": "Conflicts are unverified until the library state is refreshed.",
   "componentsTitle": "Components",
   "targetsMore": "+{count} more",
