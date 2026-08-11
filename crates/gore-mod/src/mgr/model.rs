@@ -1340,10 +1340,19 @@ impl LibraryEntry {
     /// claimed id to identify this directory. On Windows the filesystem decides identity, so a
     /// harmless casing difference is accepted while a different sibling remains a mismatch.
     pub(crate) fn read_meta(&self) -> crate::Result<ModEntryMeta> {
-        let bytes = self.read_payload_bounded(
+        let mut budget = LIBRARY_META_MAX_BYTES;
+        self.read_meta_bounded(&mut budget)
+    }
+
+    /// Read metadata within a caller's remaining aggregate budget, charging the authoritative
+    /// opened-handle length before any allocation, read, or parsing work begins.
+    pub(crate) fn read_meta_bounded(&self, remaining: &mut u64) -> crate::Result<ModEntryMeta> {
+        let limit = (*remaining).min(LIBRARY_META_MAX_BYTES);
+        let bytes = self.read_payload_bounded_with(
             Path::new(META_FILE),
             "library sidecar",
-            LIBRARY_META_MAX_BYTES,
+            limit,
+            |expected| *remaining -= expected,
         )?;
         let meta: ModEntryMeta = serde_json::from_slice(&bytes).map_err(|error| {
             crate::ModError::Other(format!(
@@ -1357,7 +1366,7 @@ impl LibraryEntry {
     }
 
     /// Read one already-validated library payload through an opened file handle and a hard byte
-    /// ceiling.  The metadata snapshot, `limit + 1` read, and final handle/path metadata checks
+    /// ceiling.  The metadata snapshot, `expected + 1` read, and final handle/path metadata checks
     /// make truncation or growth during the read a hard error instead of accepting a partial or
     /// unexpectedly large allocation.
     pub(crate) fn read_payload_bounded(
@@ -1366,7 +1375,7 @@ impl LibraryEntry {
         label: &str,
         limit: u64,
     ) -> crate::Result<Vec<u8>> {
-        self.read_payload_bounded_with(rel, label, limit, || {})
+        self.read_payload_bounded_with(rel, label, limit, |_| {})
     }
 
     fn read_payload_bounded_with<F>(
@@ -1377,10 +1386,10 @@ impl LibraryEntry {
         after_metadata: F,
     ) -> crate::Result<Vec<u8>>
     where
-        F: FnOnce(),
+        F: FnOnce(u64),
     {
         let (path, mut file, expected) = self.open_payload_bounded(rel, label, limit)?;
-        after_metadata();
+        after_metadata(expected);
 
         let capacity = usize::try_from(expected).map_err(|_| {
             crate::ModError::Other(format!(
@@ -1397,7 +1406,7 @@ impl LibraryEntry {
         })?;
         file.file
             .by_ref()
-            .take(limit.saturating_add(1))
+            .take(expected.saturating_add(1))
             .read_to_end(&mut bytes)
             .map_err(crate::io(&format!("reading {label} {}", path.display())))?;
         let observed = u64::try_from(bytes.len()).map_err(|_| {
@@ -2252,7 +2261,7 @@ mod tests {
         let payload = entry_path.join("payload.bin");
         let mut writer_was_denied = None;
         let result =
-            entry.read_payload_bounded_with(Path::new("payload.bin"), "test payload", 16, || {
+            entry.read_payload_bounded_with(Path::new("payload.bin"), "test payload", 16, |_| {
                 match std::fs::OpenOptions::new().append(true).open(&payload) {
                     Ok(mut writer) => {
                         writer.write_all(b"6").unwrap();
@@ -2291,7 +2300,7 @@ mod tests {
             Path::new("payload.bin"),
             "same-size payload",
             16,
-            || match std::fs::OpenOptions::new().write(true).open(&payload) {
+            |_| match std::fs::OpenOptions::new().write(true).open(&payload) {
                 Ok(mut writer) => {
                     writer.write_all(b"abcde").unwrap();
                     writer.sync_all().unwrap();

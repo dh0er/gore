@@ -5,6 +5,7 @@
 //! Paths in the result are bounded display strings only; callers must send the selected game root
 //! back to the mutating command, which performs its own authoritative preflight.
 
+use std::collections::HashSet;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
@@ -20,6 +21,7 @@ use super::status::ManagerStatus;
 
 const FORMAT: u32 = 1;
 const MAX_LOADOUT_BYTES: u64 = 1024 * 1024;
+const MAX_LOADOUT_META_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_CHECK_ITEMS: usize = 16;
 const MAX_DETAIL_BYTES: usize = 2 * 1024;
 const MAX_ITEM_BYTES: usize = 1024;
@@ -585,6 +587,14 @@ fn inspect_relative(
 }
 
 fn inspect_loadout(library_dir: &Path, loadout_path: &Path) -> LoadoutInspection {
+    inspect_loadout_with_meta_budget(library_dir, loadout_path, MAX_LOADOUT_META_BYTES)
+}
+
+fn inspect_loadout_with_meta_budget(
+    library_dir: &Path,
+    loadout_path: &Path,
+    meta_budget: u64,
+) -> LoadoutInspection {
     let loadout = match read_loadout_bounded(loadout_path) {
         Ok(loadout) => loadout,
         Err(failure) => return loadout_failure(failure),
@@ -645,8 +655,13 @@ fn inspect_loadout(library_dir: &Path, loadout_path: &Path) -> LoadoutInspection
     let mut unknowns = Vec::new();
     let mut requires_ue4ss = false;
     let mut requires_script_cache = false;
+    let mut remaining_meta_bytes = meta_budget;
+    let mut inspected_ids = HashSet::new();
     for entry in &enabled {
-        match inspect_enabled_meta(&library, library_dir, &entry.id) {
+        if !inspected_ids.insert(entry.id.as_str()) {
+            continue;
+        }
+        match inspect_enabled_meta(&library, library_dir, &entry.id, &mut remaining_meta_bytes) {
             Ok(meta) => {
                 requires_ue4ss |= meta
                     .components
@@ -713,8 +728,8 @@ fn inspect_loadout(library_dir: &Path, loadout_path: &Path) -> LoadoutInspection
             "loadout_metadata_ready",
             "none",
             format!(
-                "the loadout and {} enabled mod metadata entries passed bounded metadata and top-level entry-point inspection",
-                enabled.len()
+                "the loadout and {} unique enabled mod metadata entries passed bounded metadata and top-level entry-point inspection",
+                inspected_ids.len()
             ),
         )
         .with_items([String::from(
@@ -734,6 +749,7 @@ fn inspect_enabled_meta(
     library: &LibraryRoot,
     library_dir: &Path,
     id: &str,
+    remaining_meta_bytes: &mut u64,
 ) -> Result<super::model::ModEntryMeta, EvidenceFailure> {
     let entry_path = library_dir.join(id);
     match std::fs::symlink_metadata(&entry_path) {
@@ -781,7 +797,7 @@ fn inspect_enabled_meta(
     }
     let result = (|| {
         let library_entry = library.entry(id)?;
-        let meta = library_entry.read_meta()?;
+        let meta = library_entry.read_meta_bounded(remaining_meta_bytes)?;
         for component in &meta.components {
             super::apply::validate_component_descriptor_for_default_apply(component)?;
             validate_component_payload_presence(&library_entry, component)?;
@@ -1650,6 +1666,60 @@ mod tests {
         let empty = inspect_loadout(&root.path().join("missing-library"), &loadout);
         assert_eq!(empty.check.code, "loadout_empty");
         assert!(matches!(empty.ue4ss, Ue4ssRequirement::NotRequired));
+    }
+
+    #[test]
+    fn loadout_metadata_has_an_aggregate_budget_and_deduplicates_ids() {
+        let root = tempfile::tempdir().unwrap();
+        let library = root.path().join("library");
+        fs::create_dir(&library).unwrap();
+        write_library_meta(&library, "alpha", Vec::new());
+        write_library_meta(&library, "beta", Vec::new());
+        let sidecar_len = |id: &str| {
+            fs::metadata(library.join(id).join(super::super::model::META_FILE))
+                .unwrap()
+                .len()
+        };
+        let alpha_len = sidecar_len("alpha");
+        let beta_len = sidecar_len("beta");
+        let loadout = root.path().join("loadout.json");
+
+        write_enabled_loadout(&loadout, &["alpha", "alpha"]);
+        let duplicate = inspect_loadout_with_meta_budget(&library, &loadout, alpha_len);
+        assert_eq!(duplicate.check.code, "loadout_metadata_ready");
+        assert!(duplicate.check.detail.contains("1 unique"));
+
+        write_enabled_loadout(&loadout, &["alpha", "beta"]);
+        let over_budget =
+            inspect_loadout_with_meta_budget(&library, &loadout, alpha_len + beta_len - 1);
+        assert_eq!(over_budget.check.state, PreflightStateV1::Problem);
+        assert_eq!(over_budget.check.code, "enabled_mods_unreadable");
+        assert!(over_budget
+            .check
+            .items
+            .iter()
+            .any(|item| item.contains("byte limit")));
+
+        assert_eq!(
+            inspect_loadout_with_meta_budget(&library, &loadout, alpha_len + beta_len)
+                .check
+                .code,
+            "loadout_metadata_ready"
+        );
+
+        fs::write(
+            library
+                .join("alpha")
+                .join(super::super::model::META_FILE),
+            b"{",
+        )
+        .unwrap();
+        let corrupt = inspect_loadout_with_meta_budget(&library, &loadout, 1);
+        assert!(corrupt
+            .check
+            .items
+            .iter()
+            .any(|item| item.starts_with("beta:") && item.contains("0 byte limit")));
     }
 
     fn write_library_meta(library: &Path, id: &str, components: Vec<ComponentInfo>) {
