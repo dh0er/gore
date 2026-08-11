@@ -12189,6 +12189,10 @@ fn apply_private_inventory_add_item_to_payload_reusing(
     })?;
     let mut patched = payload.clone();
     let mut needs_type_patch = false;
+    // `patched` starts out byte-for-byte the buffer `root` describes. Filling a free
+    // slot only writes to it when that slot still carried the previous item's state,
+    // so track whether anything moved and skip the re-parse below when nothing did.
+    let mut patched_matches_root = true;
     if let Some(free_index) = free_index {
         // A slot is picked as free on its empty definition alone, and an older
         // build could leave one blank while its payload still held the removed
@@ -12199,8 +12203,10 @@ fn apply_private_inventory_add_item_to_payload_reusing(
             path.extend_from_slice(&slots_suffix);
             path
         };
-        reset_slot_payload_if_stateful(&mut patched, &slots_path, free_index)?;
+        patched_matches_root =
+            !reset_slot_payload_if_stateful(&mut patched, root, &slots_path, free_index)?;
     } else {
+        patched_matches_root = false;
         let template_bytes = if let Some(source) = slots.iter().rposition(|slot| is_clean(slot)) {
             let layout = properties::container_layout(payload, chain.target)?;
             let range = layout.element_ranges.get(source).cloned().ok_or_else(|| {
@@ -12246,11 +12252,16 @@ fn apply_private_inventory_add_item_to_payload_reusing(
         suffix
     })?;
     {
-        let duplicated = properties::parse_private_root(&patched).map_err(|err| {
-            CoreError::Parse(format!(
-                "inventory slot duplication produced an inconsistent payload: {err}"
-            ))
-        })?;
+        let reparsed = if patched_matches_root {
+            None
+        } else {
+            Some(properties::parse_private_root(&patched).map_err(|err| {
+                CoreError::Parse(format!(
+                    "inventory slot duplication produced an inconsistent payload: {err}"
+                ))
+            })?)
+        };
+        let duplicated = reparsed.as_ref().unwrap_or(root);
         let definition_chain = properties::resolve_chain(&duplicated.properties, &definition_segs)
             .map_err(|err| {
                 CoreError::Parse(format!(
@@ -12654,20 +12665,23 @@ fn clean_payload_value_bytes(
 /// The payload shape varies by item, so rather than reset field by field, swap
 /// in the whole serialized payload of a state-free slot — the same struct type,
 /// and exactly the clean shape the game leaves behind.
+/// `root` must be a parse of `payload` as it stands. Returns whether the payload was
+/// actually written to — a caller holding its own parse can keep using it when this
+/// says no, since a slot with a state-free payload is left byte-for-byte alone.
 fn reset_slot_payload_if_stateful(
     payload: &mut Vec<u8>,
+    root: &properties::RootObject,
     slots_path: &[String],
     index: usize,
-) -> Result<(), CoreError> {
+) -> Result<bool, CoreError> {
     let mut path = slots_path.to_vec();
     path.push(format!("[{index}]"));
     path.push("m_Payload".to_string());
     let payload_segs = properties::parse_path(&path)?;
-    let root = properties::parse_private_root(payload)?;
     if !properties::resolve(&root.properties, &payload_segs).is_ok_and(property_carries_state) {
-        return Ok(());
+        return Ok(false);
     }
-    let clean = clean_payload_value_bytes(payload, &root, slots_path).ok_or_else(|| {
+    let clean = clean_payload_value_bytes(payload, root, slots_path).ok_or_else(|| {
         CoreError::UnsupportedEdit(
             "no inventory slot has a state-free payload to reset this slot with;              the edit would leave the old item's state behind"
                 .to_string(),
@@ -12676,8 +12690,8 @@ fn reset_slot_payload_if_stateful(
     let chain = properties::resolve_chain(&root.properties, &payload_segs)?;
     let target = chain.target.clone();
     let enclosing = chain.enclosing_size_fields.clone();
-    drop(root);
-    properties::patch_value_bytes(payload, &target, &enclosing, &clean)
+    properties::patch_value_bytes(payload, &target, &enclosing, &clean)?;
+    Ok(true)
 }
 
 /// Blank one inventory slot in place: drop the item-specific payload state,
@@ -12700,7 +12714,10 @@ fn blank_inventory_slot(
         path
     };
 
-    reset_slot_payload_if_stateful(payload, slots_path, index)?;
+    {
+        let root = properties::parse_private_root(payload)?;
+        reset_slot_payload_if_stateful(payload, &root, slots_path, index)?;
+    }
 
     {
         let root = properties::parse_private_root(payload)?;
