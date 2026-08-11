@@ -4798,6 +4798,9 @@ fn commit_plan_guarded(
     let game_root = abs_root;
     let prior = prev.as_ref().map(|stored| &stored.record);
     let prev_record_bytes = prev.as_ref().map(|stored| stored.raw.as_slice());
+    if let Some(prior) = prior {
+        validate_record_identities(prior)?;
+    }
 
     // Reject a plan that would write the SAME destination twice (across in-place writes, UE4SS
     // dirs, texture triplets, and manager paks). Two components/mods targeting one path would race in
@@ -14089,6 +14092,77 @@ mod tests {
         );
         assert_eq!(std::fs::read(&dst).unwrap(), b"manual");
         assert!(!record_path(&game).exists());
+    }
+
+    #[test]
+    fn commit_rejects_noncanonical_prior_before_staging() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let prior_live = game.join("G1R/Story/VoiceOver/prior.zip");
+        let prior_backup = bak_path(&prior_live);
+        let target = game.join("G1R/Story/VoiceOver/target.zip");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&prior_live, b"prior-modded").unwrap();
+        std::fs::write(&prior_backup, b"prior-pristine").unwrap();
+        std::fs::write(&target, b"target-pristine").unwrap();
+        let canonical = sha256_file(&prior_backup).unwrap();
+        let noncanonical = format!(
+            "sha256:{}",
+            canonical
+                .strip_prefix("sha256:")
+                .unwrap()
+                .to_ascii_uppercase()
+        );
+        let prior_record = DeployRecord {
+            mod_name: "prior".into(),
+            owner: "manager".into(),
+            backups: vec![(
+                prior_live.display().to_string(),
+                prior_backup.display().to_string(),
+                true,
+            )],
+            deployed_hashes: BTreeMap::from([(
+                prior_live.display().to_string(),
+                content_hash(b"prior-modded"),
+            )]),
+            backup_hashes: BTreeMap::from([(
+                prior_backup.display().to_string(),
+                noncanonical,
+            )]),
+            ..Default::default()
+        };
+        let record_path = record_path(&game);
+        let record_bytes = serde_json::to_vec(&prior_record).unwrap();
+        std::fs::write(&record_path, &record_bytes).unwrap();
+        let prior = read_record(&game).unwrap().unwrap();
+
+        let error = commit_plan(
+            &resolve_game_paths(&game),
+            &game,
+            DeployPlan {
+                writes: vec![(target.clone(), b"new-deployment".to_vec())],
+                ..Default::default()
+            },
+            DeployRecord {
+                mod_name: "next".into(),
+                owner: "manager".into(),
+                ..Default::default()
+            },
+            Some(prior),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("invalid backup SHA-256 identity"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&prior_live).unwrap(), b"prior-modded");
+        assert_eq!(std::fs::read(&prior_backup).unwrap(), b"prior-pristine");
+        assert_eq!(std::fs::read(&target).unwrap(), b"target-pristine");
+        assert!(!bak_path(&target).exists());
+        assert_eq!(std::fs::read(&record_path).unwrap(), record_bytes);
     }
 
     #[test]
