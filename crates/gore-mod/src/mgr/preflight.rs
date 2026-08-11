@@ -266,7 +266,7 @@ fn defer_deployment_action(
     install_mutation_blocks_recovery: bool,
     ue4ss: &PreflightCheckV1,
 ) {
-    let applies_loadout = matches!(deployment.action, "apply_loadout" | "reapply_after_update");
+    let applies_loadout = matches!(deployment.action, "review_apply" | "review_reapply");
     let mutates_install = applies_loadout
         || matches!(
             deployment.action,
@@ -643,7 +643,7 @@ fn inspect_loadout(library_dir: &Path, loadout_path: &Path) -> LoadoutInspection
                 PreflightStateV1::Unknown,
                 "enabled_mod_inspection_failed",
                 "inspect_permissions",
-                "one or more enabled metadata entries could not be safely inspected",
+                "one or more enabled mods have metadata or required top-level entry points that could not be safely inspected",
             )
             .with_items(unknowns),
             loadout: Some(loadout),
@@ -661,7 +661,7 @@ fn inspect_loadout(library_dir: &Path, loadout_path: &Path) -> LoadoutInspection
                 PreflightStateV1::Problem,
                 "enabled_mods_unreadable",
                 "repair_library",
-                "one or more enabled mods do not have readable validated metadata",
+                "one or more enabled mods have invalid metadata or missing or obstructed required top-level entry points",
             )
             .with_items(problems),
             loadout: Some(loadout),
@@ -676,13 +676,16 @@ fn inspect_loadout(library_dir: &Path, loadout_path: &Path) -> LoadoutInspection
         check: PreflightCheckV1::new(
             PreflightCheckIdV1::Loadout,
             PreflightStateV1::Ok,
-            "loadout_valid",
+            "loadout_metadata_ready",
             "none",
             format!(
-                "the loadout and {} enabled mod metadata entries are valid",
+                "the loadout and {} enabled mod metadata entries passed bounded metadata and top-level entry-point inspection",
                 enabled.len()
             ),
-        ),
+        )
+        .with_items([String::from(
+            "unverified until Apply: nested manifests, referenced payloads, decoding, cross-mod composition, and current install state",
+        )]),
         loadout: Some(loadout),
         ue4ss: if requires_ue4ss {
             Ue4ssRequirement::Required
@@ -1052,16 +1055,16 @@ where
                 PreflightCheckIdV1::Deployment,
                 PreflightStateV1::Problem,
                 "deployment_changes_pending",
-                "apply_loadout",
-                "the selected loadout differs from the active Manager deployment",
+                "review_apply",
+                "the selected loadout differs from the active Manager deployment; Apply performs authoritative validation before mutation",
             )
             .with_items(items)
         }
         Ok(ManagerStatus::GameUpdated { drifted }) => {
             let (action, detail) = if loadout_healthy {
                 (
-                    "reapply_after_update",
-                    "files owned by the active Manager deployment changed outside GORE",
+                    "review_reapply",
+                    "files owned by the active Manager deployment changed outside GORE; Reapply performs authoritative validation before mutation",
                 )
             } else {
                 (
@@ -1640,13 +1643,59 @@ mod tests {
 
         assert_eq!(
             inspect_loadout(&library, &loadout).check.code,
-            "loadout_valid"
+            "loadout_metadata_ready"
         );
         fs::remove_file(entry.join("io/mod.ucas")).unwrap();
         assert_eq!(
             inspect_loadout(&library, &loadout).check.code,
             "enabled_mods_unreadable"
         );
+    }
+
+    #[test]
+    fn nested_payload_validation_is_explicitly_deferred_to_apply() {
+        let root = tempfile::tempdir().unwrap();
+        let library = root.path().join("library");
+        fs::create_dir(&library).unwrap();
+        write_library_meta(
+            &library,
+            "deferred",
+            vec![
+                ComponentInfo::AudioPatch {
+                    rel: "audio".to_owned(),
+                    targets: Vec::new(),
+                },
+                ComponentInfo::AngelScriptPatch {
+                    rel: "scripts".to_owned(),
+                    targets: Vec::new(),
+                },
+                ComponentInfo::FilePatch {
+                    rel: "files".to_owned(),
+                    targets: Vec::new(),
+                },
+            ],
+        );
+        let entry = library.join("deferred");
+        for (directory, manifest) in [
+            ("audio", br#"{"source":"missing.wav"}"#.as_slice()),
+            ("scripts", b"not-json".as_slice()),
+            ("files", br#"{"source":"missing.bin"}"#.as_slice()),
+        ] {
+            fs::create_dir(entry.join(directory)).unwrap();
+            fs::write(entry.join(directory).join("manifest.json"), manifest).unwrap();
+        }
+        let loadout = root.path().join("loadout.json");
+        write_enabled_loadout(&loadout, &["deferred"]);
+
+        let check = inspect_loadout(&library, &loadout).check;
+        assert_eq!(check.state, PreflightStateV1::Ok);
+        assert_eq!(check.code, "loadout_metadata_ready");
+        assert_eq!(check.action, "none");
+        assert_ne!(check.code, "loadout_valid");
+        assert!(check
+            .items
+            .iter()
+            .any(|item| item.contains("unverified until Apply")));
     }
 
     #[test]
@@ -1891,9 +1940,12 @@ mod tests {
         );
         assert_eq!(report.checks[2].code, "enabled_mods_unreadable");
         assert!(report.checks[2]
+            .detail
+            .contains("required top-level entry points"));
+        assert!(report.checks[2]
             .items
             .iter()
-            .any(|item| item.contains("required loose pak is missing")));
+            .any(|item| item.contains("required loose pak child is missing")));
         assert_eq!(report.checks[3].action, "resolve_loadout_check");
     }
 
@@ -1943,7 +1995,7 @@ mod tests {
                 },
                 PreflightStateV1::Problem,
                 "deployment_changes_pending",
-                "apply_loadout",
+                "review_apply",
             ),
             (
                 ManagerStatus::GameUpdated {
@@ -1951,7 +2003,7 @@ mod tests {
                 },
                 PreflightStateV1::Problem,
                 "deployment_game_updated",
-                "reapply_after_update",
+                "review_reapply",
             ),
         ];
         for (status, state, code, action) in cases {
@@ -2027,7 +2079,7 @@ mod tests {
                 PreflightCheckIdV1::Deployment,
                 PreflightStateV1::Problem,
                 "deployment_changes_pending",
-                "apply_loadout",
+                "review_apply",
                 "pending",
             )
         };
@@ -2080,7 +2132,7 @@ mod tests {
 
         let mut healthy = deployment();
         defer_deployment_action(&mut healthy, &ok_install, &clear_mutation, false, &no_ue4ss);
-        assert_eq!(healthy.action, "apply_loadout");
+        assert_eq!(healthy.action, "review_apply");
     }
 
     #[test]
