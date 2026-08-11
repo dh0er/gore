@@ -3774,6 +3774,15 @@ bool _pathReachesInventorySlot(List<Object?> path) {
   return _isIndexSegment(path[at + 1]);
 }
 
+/// Whether [path] writes a slot's `m_Id` — the field a slot is selected by, so a
+/// write to it renumbers slots exactly as a repair does.
+///
+/// Mirrors `path_writes_a_slot_id` in crates/gore-save/src/lib.rs.
+bool _pathWritesASlotId(List<Object?> path) {
+  if (path.isEmpty || path.last != 'm_Id') return false;
+  return _pathReachesInventorySlot(path.sublist(0, path.length - 1));
+}
+
 /// Whether a slot-reaching [path] belongs to the inventory [actorId] names. An
 /// NPC's inventory hangs under that character's own map entry, so its key
 /// settles it; the controlled player's hangs off `m_SavedPlayers`. A path that
@@ -3868,10 +3877,7 @@ bool structuredEditRewrites(
     // Narrower still: it only rewrites ids, but it does so across every
     // container in the save, so it is not scoped to one actor.
     case 'private.inventory.repairSlots':
-      if (typedPath.isEmpty || typedPath.last != 'm_Id') return false;
-      return _pathReachesInventorySlot(
-        typedPath.sublist(0, typedPath.length - 1),
-      );
+      return _pathWritesASlotId(typedPath);
     default:
       return false;
   }
@@ -3913,6 +3919,13 @@ bool _mayInvalidateOrdinals(Map<String, Object?> edit) {
     // setAdd/setRemove change a set's cardinality, arrayRemove/arrayDuplicate an
     // array's length.
     return true;
+  }
+  if (path == 'private.typed.setValue') {
+    // It can add or drop no container element — but writing a slot's m_Id
+    // renumbers slots, which is the other half of what invalidates an ordinal a
+    // later edit was addressed with.
+    final typedPath = _rawTypedEditPath(edit);
+    return typedPath != null && _pathWritesASlotId(typedPath);
   }
   return const {
     'private.inventory.addItem',

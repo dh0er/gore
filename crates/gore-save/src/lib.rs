@@ -9125,6 +9125,13 @@ fn slot_edit_targets_actor(path: &[properties::PathSeg], actor_id: Option<&str>)
     }
 }
 
+/// Whether `path` writes a slot's `m_Id` — the field a slot is selected by, so a
+/// write to it renumbers slots exactly as a repair does.
+fn path_writes_a_slot_id(path: &[properties::PathSeg]) -> bool {
+    matches!(path.last(), Some(properties::PathSeg::Name(name)) if name == "m_Id")
+        && path_reaches_inventory_slot(&path[..path.len() - 1])
+}
+
 /// Whether `path` reaches a slot of an inventory container — the array itself, or an
 /// element of it.
 fn path_reaches_inventory_slot(path: &[properties::PathSeg]) -> bool {
@@ -9191,10 +9198,7 @@ fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) ->
         }
         // Narrower still: it only rewrites ids, but it does so across every
         // container in the save, so it is not scoped to one actor.
-        PrivateEdit::InventoryRepairSlots => matches!(
-            path.last(),
-            Some(properties::PathSeg::Name(name)) if name == "m_Id"
-        ) && path_reaches_inventory_slot(&path[..path.len().saturating_sub(1)]),
+        PrivateEdit::InventoryRepairSlots => path_writes_a_slot_id(path),
         _ => false,
     }
 }
@@ -9235,9 +9239,10 @@ fn may_invalidate_caller_ordinals(edit: &PrivateEdit) -> bool {
         // classification is complete rather than relying on the other guard.
         PrivateEdit::StoryApply(_) => true,
 
-        // Ordinal-stable below. A setValue resolves to a scalar, a string or a
-        // native struct; none of the three can add or drop a container element.
-        PrivateEdit::TypedSetValue(_) => false,
+        // A setValue resolves to a scalar, a string or a native struct, so it can
+        // add or drop no container element — but writing a slot's m_Id renumbers
+        // slots, which is the other half of what invalidates a caller's ordinal.
+        PrivateEdit::TypedSetValue(edit) => path_writes_a_slot_id(&edit.path),
         // Fixed-size boolean patches.
         PrivateEdit::FactionsForgive(_) => false,
         // Fresh whole-payload string scan, then a string patch.
@@ -20799,6 +20804,56 @@ mod tests {
         ])
         .unwrap();
         assert!(!structured_edit_rewrites(&add_for(None), &attribute));
+    }
+
+    #[test]
+    fn writing_a_slot_id_invalidates_a_later_slot_selector() {
+        // A slot is selected by its m_Id, so a raw write to that field renumbers
+        // slots just as a repair does. A count edit pinned to a slot id afterwards
+        // would pick whichever slot now carries it — the wrong stack, when two hold
+        // the same item.
+        let slot_id_path = properties::parse_path(&[
+            "m_GenericData".to_string(),
+            "{CharacterStates}".to_string(),
+            "InventoriesByGlobalId".to_string(),
+            "{Lizard-1}".to_string(),
+            "m_Inventory".to_string(),
+            "m_Values".to_string(),
+            "Items".to_string(),
+            "[1]".to_string(),
+            "m_Slots".to_string(),
+            "[0]".to_string(),
+            "m_Id".to_string(),
+        ])
+        .unwrap();
+        let renumber = PrivateEdit::TypedSetValue(PrivateTypedSetValueEdit {
+            path: slot_id_path.clone(),
+            value: json!(5),
+        });
+        assert!(may_invalidate_caller_ordinals(&renumber));
+
+        // A count edit pinned to a slot id is the consumer it would retarget.
+        let pinned_count = PrivateEdit::InventoryItemCount(PrivateInventoryItemCountEdit {
+            id: None,
+            path: Some("/Script/Angelscript.ItMi_Orenugget".to_string()),
+            count: 3,
+            actor_id: Some("Lizard-1".to_string()),
+            slot_id: Some(5),
+            container_type: None,
+        });
+        assert!(carries_caller_ordinal(&pinned_count));
+
+        // An ordinary value write is still ordinal-stable.
+        let mut count_path = slot_id_path;
+        count_path.pop();
+        count_path.push(properties::PathSeg::Name("m_SlotData".to_string()));
+        count_path.push(properties::PathSeg::Name("m_ItemCount".to_string()));
+        assert!(!may_invalidate_caller_ordinals(&PrivateEdit::TypedSetValue(
+            PrivateTypedSetValueEdit {
+                path: count_path,
+                value: json!(3),
+            }
+        )));
     }
 
     #[test]
