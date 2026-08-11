@@ -1425,12 +1425,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
       ...orderedSplicing.where((k) => k.edit['path'] == storyStateApplyPath),
     ];
 
-    // Pack that sequence into as few write_saves as the core will accept. It only
-    // refuses one combination — an edit addressed by an index or slot id placed
-    // after an edit that can change how many elements a container holds — so a new
-    // sub-write starts exactly when the next edit would hit that rule, plus one
-    // each for the two operations that must stand alone. In practice a whole
-    // editing session lands in a single write instead of one per splicing edit.
+    // Pack that sequence into as few write_saves as the core will accept. It
+    // refuses two combinations — an edit addressed by an index or slot id placed
+    // after an edit that can change how many elements a container holds, and a
+    // raw typed edit sharing a write with a structured operation that rewrites
+    // what it addresses (order-independent) — so a new sub-write starts exactly
+    // when the next edit would hit either rule, plus one each for the two
+    // operations that must stand alone. In practice a whole editing session
+    // lands in a single write instead of one per splicing edit.
     final worklist = <_SubWrite>[];
     var current = <Map<String, Object?>>[];
     var currentMayInvalidateOrdinals = false;
@@ -1454,7 +1456,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
         worklist.add(_SubWrite(edits: [keyed.edit]));
         continue;
       }
-      if (currentMayInvalidateOrdinals && _carriesCallerOrdinal(keyed.edit)) {
+      // Two reasons to start a new sub-write: the ordinal rule (positional —
+      // only an ordinal-carrying edit AFTER an ordinal-invalidating one), and
+      // the same-target rule (order-independent, so it is checked against every
+      // edit already in this batch, both ways round).
+      if ((currentMayInvalidateOrdinals && _carriesCallerOrdinal(keyed.edit)) ||
+          current.any((edit) => editsRewriteSameTarget(edit, keyed.edit))) {
         flush();
       }
       current.add(keyed.edit);
@@ -3697,6 +3704,193 @@ const _typedEditPaths = {
   'private.typed.arrayDuplicate',
 };
 
+/// The path a raw `private.typed.*` edit addresses, or `null` when [edit] is not
+/// one. Mirrors `raw_typed_path` in crates/gore-save/src/lib.rs.
+List<Object?>? _rawTypedEditPath(Map<String, Object?> edit) {
+  if (!_typedEditPaths.contains(edit['path'])) return null;
+  final value = edit['value'];
+  if (value is! Map) return null;
+  final path = value['path'];
+  return path is List ? path : null;
+}
+
+/// The key of a `{likeThis}` map-key segment, or `null` when [segment] is not
+/// one. The generic All-data browser writes map keys wrapped in braces, and the
+/// core's `parse_path` turns exactly those into `PathSeg::MapKey`.
+String? _mapKeySegment(Object? segment) {
+  if (segment is! String) return null;
+  if (segment.length < 2 ||
+      !segment.startsWith('{') ||
+      !segment.endsWith('}')) {
+    return null;
+  }
+  return segment.substring(1, segment.length - 1);
+}
+
+/// Whether [segment] is an `[i]` element segment.
+bool _isIndexSegment(Object? segment) =>
+    segment is String &&
+    segment.length >= 2 &&
+    segment.startsWith('[') &&
+    segment.endsWith(']');
+
+/// Map keys compare trimmed and case-insensitively, as the core does.
+bool _sameMapKey(String left, String right) =>
+    left.trim().toLowerCase() == right.trim().toLowerCase();
+
+/// Mirrors `path_has_name` in crates/gore-save/src/lib.rs.
+bool _pathHasName(List<Object?> path, String name) =>
+    path.any((segment) => segment == name);
+
+/// Mirrors `path_has_key` in crates/gore-save/src/lib.rs.
+bool _pathHasKey(List<Object?> path, String key) => path.any((segment) {
+  final found = _mapKeySegment(segment);
+  return found != null && _sameMapKey(found, key);
+});
+
+/// Whether [path] descends into [map]'s entry for [key] — or into the map as a
+/// whole, which collides with every entry in it.
+///
+/// Mirrors `path_enters_map_entry` in crates/gore-save/src/lib.rs, including its
+/// last clause: a segment after the map that is not a `{key}` addresses it some
+/// other way, which is too unclear to call safe.
+bool _pathEntersMapEntry(List<Object?> path, String map, String key) {
+  final at = path.indexWhere((segment) => segment == map);
+  if (at < 0) return false;
+  if (at + 1 >= path.length) return true;
+  final found = _mapKeySegment(path[at + 1]);
+  if (found == null) return true;
+  return _sameMapKey(found, key);
+}
+
+/// Whether [path] reaches a slot of an inventory container — the array itself,
+/// or an element of it.
+///
+/// Mirrors `path_reaches_inventory_slot` in crates/gore-save/src/lib.rs.
+bool _pathReachesInventorySlot(List<Object?> path) {
+  final at = path.indexWhere((segment) => segment == 'm_Slots');
+  if (at < 0) return false;
+  if (at + 1 >= path.length) return true;
+  return _isIndexSegment(path[at + 1]);
+}
+
+/// Whether a slot-reaching [path] belongs to the inventory [actorId] names. An
+/// NPC's inventory hangs under that character's own map entry, so its key
+/// settles it; the controlled player's hangs off `m_SavedPlayers`. A path that
+/// fits neither description is treated as a conflict rather than waved through.
+///
+/// Mirrors `slot_edit_targets_actor` in crates/gore-save/src/lib.rs.
+bool _slotEditTargetsActor(List<Object?> path, String? actorId) {
+  if (!_pathReachesInventorySlot(path)) return false;
+  if (actorId != null) return _pathHasKey(path, actorId);
+  return _pathHasName(path, 'm_SavedPlayers') ||
+      !path.any((segment) => _mapKeySegment(segment) != null);
+}
+
+/// The actor a structured inventory edit targets, or `null` for the controlled
+/// player — which is also what a blank `actorId` means to the core.
+String? _inventoryEditActorId(Map<String, Object?> edit) {
+  final value = edit['value'];
+  final actorId = value is Map ? value['actorId'] : null;
+  return actorId is String && actorId.trim().isNotEmpty ? actorId : null;
+}
+
+/// Whether the raw typed edit at [typedPath] addresses something the structured
+/// [structured] edit rewrites AS A WHOLE.
+///
+/// Mirrors `structured_edit_rewrites` in crates/gore-save/src/lib.rs. Ordering
+/// cannot rescue such a pair — a structured operation resolves its own target
+/// and recreates it, so whichever runs second discards the other's work — which
+/// is why the core refuses the two in ONE write whichever way round they come.
+/// The packer therefore has to put them in SEPARATE sub-writes; sequential
+/// writes are safe, because the core re-reads the file and re-resolves every
+/// symbolic target per write.
+@visibleForTesting
+bool structuredEditRewrites(
+  Map<String, Object?> structured,
+  List<Object?> typedPath,
+) {
+  final op = structured['path'];
+  if (op is! String) return false;
+  final value = structured['value'];
+  final fields = value is Map ? value : const <Object?, Object?>{};
+  switch (op) {
+    // Patches or appends a modifier under this NPC's relationship entry.
+    case 'private.npc.setRelationship':
+      final id = fields['id'];
+      return id is String &&
+          id.trim().isNotEmpty &&
+          _pathEntersMapEntry(typedPath, 'RelationshipByGlobalId', id);
+    // Learning or unlearning rewrites this actor's effect elements. Broader
+    // than the same-actor `EffectSpec/Def` refusal above: ANY leaf of that
+    // actor's ActiveEffects is rewritten wholesale.
+    case 'private.skills.set':
+      final actor = _skillEditActor(structured);
+      return actor != null &&
+          _pathHasName(typedPath, 'ActiveEffects') &&
+          _pathHasKey(typedPath, actor);
+    // Adds or removes an unlock event in the hero's memory.
+    case 'private.glossary.setSegment':
+      return _pathHasName(typedPath, 'MemorizedEvents') &&
+          _pathHasKey(typedPath, 'Hero');
+    // Strips memory events, death tags and the corpse entry.
+    case 'private.npc.revive':
+      return _pathHasName(typedPath, 'MemorizedEvents') ||
+          _pathHasName(typedPath, 'LooseTagsByGlobalId') ||
+          _pathHasName(typedPath, 'm_SavedInventories');
+    // Insert or update ONE character's knowledge entry. Another character's
+    // entry is a different map value, and every applier re-resolves its target
+    // by key, so the two do not collide.
+    case 'private.knowledge.addCharacter':
+      final name = fields['value'];
+      return name is String &&
+          _pathEntersMapEntry(
+            typedPath,
+            'CharacterKnowledgeByUniqueName',
+            name,
+          );
+    case 'private.knowledge.setEntry':
+      final character = fields['character'];
+      return character is String &&
+          _pathEntersMapEntry(
+            typedPath,
+            'CharacterKnowledgeByUniqueName',
+            character,
+          );
+    // Claims a whole slot — but only in the inventory it targets; another
+    // actor's slots are a different subtree.
+    case 'private.inventory.addItem':
+    case 'private.inventory.removeItem':
+      return _slotEditTargetsActor(
+        typedPath,
+        _inventoryEditActorId(structured),
+      );
+    // Narrower still: it only rewrites ids, but it does so across every
+    // container in the save, so it is not scoped to one actor.
+    case 'private.inventory.repairSlots':
+      if (typedPath.isEmpty || typedPath.last != 'm_Id') return false;
+      return _pathReachesInventorySlot(
+        typedPath.sublist(0, typedPath.length - 1),
+      );
+    default:
+      return false;
+  }
+}
+
+/// Whether [left] and [right] address the same target in the sense above, in
+/// EITHER direction — the pair test the packer uses. The core's rule is
+/// order-independent, so a batch may hold neither ordering of such a pair.
+@visibleForTesting
+bool editsRewriteSameTarget(
+  Map<String, Object?> left,
+  Map<String, Object?> right,
+) {
+  final leftPath = _rawTypedEditPath(left);
+  if (leftPath != null && structuredEditRewrites(right, leftPath)) return true;
+  final rightPath = _rawTypedEditPath(right);
+  return rightPath != null && structuredEditRewrites(left, rightPath);
+}
+
 /// Edits that must be the only edit in their `write_save`, whatever else is
 /// pending. Both are refused as peers by the core: a story batch takes its
 /// compare-and-set snapshot from the payload as it enters and proves its own
@@ -3782,22 +3976,21 @@ bool _carriesCallerOrdinal(Map<String, Object?> edit) {
 /// `npc::npc_inventory_path`), and both are rewritten alike.
 @visibleForTesting
 bool isInventorySlotTypedEdit(Map<String, Object?> edit) {
-  if (!_typedEditPaths.contains(edit['path'])) return false;
-  final path = (edit['value'] as Map?)?['path'];
-  if (path is! List) return false;
-  final segments = path.whereType<String>().toList();
-  if (segments.isNotEmpty && segments.last == 'm_Slots') return true;
-  for (var index = 0; index + 1 < segments.length; index++) {
-    if (segments[index] != 'm_Slots') continue;
-    final slot = segments[index + 1];
-    if (slot.startsWith('[') && slot.endsWith(']')) return true;
-  }
-  return false;
+  // Exactly the reach the core's `path_reaches_inventory_slot` describes, so
+  // the two cannot drift apart. This predicate is broader than the core's rule
+  // in one respect on purpose: it is not scoped to the add's/removal's actor,
+  // so a queued slot edit for ANY actor is refused rather than merely split.
+  final path = _rawTypedEditPath(edit);
+  return path != null && _pathReachesInventorySlot(path);
 }
 
 /// A raw typed edit that writes a slot's `m_Id` — the one field the whole-save
 /// repair rewrites, and therefore the only one it can collide with. Anything
 /// else inside a slot survives the repair untouched.
+///
+/// Deliberately narrower than [structuredEditRewrites]'s repair arm, which
+/// matches any `m_Id` leaf below a slot: the shapes only that one catches are
+/// SPLIT across sub-writes by the packer, not refused with an error.
 @visibleForTesting
 bool isInventorySlotIdTypedEdit(Map<String, Object?> edit) {
   if (!_typedEditPaths.contains(edit['path'])) return false;

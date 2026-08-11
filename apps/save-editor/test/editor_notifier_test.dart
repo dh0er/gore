@@ -2098,6 +2098,563 @@ void main() {
   );
 
   // ---------------------------------------------------------------------------
+  // The core's SAME-TARGET rule is order-independent: a structured operation
+  // rewrites its target wholesale, so a raw typed edit addressing what it
+  // rewrites is refused in the same write whichever way round the two come.
+  // The packer must SPLIT those pairs into sequential sub-writes (which is how
+  // they ran before batching existed) instead of building a write the core
+  // rejects — a rejection fails the whole Save with nothing committed.
+  // ---------------------------------------------------------------------------
+
+  test(
+    'saveAllPending splits an All-Data MemorizedEvents edit from an NPC revive',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // A plain value edit inside an NPC's MemorizedEvents (not a structural
+      // array op, so the memory-event guard above does not refuse it)...
+      notifier.setPendingEdit(
+        'typed:lizard-memory-time',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': [
+                  'LongTermMemoryByGlobalId',
+                  '{Lizard-1}',
+                  'MemorizedEvents',
+                  '[2]',
+                  'Time',
+                  'TotalSeconds',
+                ],
+                'value': 12.0,
+              },
+            },
+          ],
+        ),
+      );
+      // ...plus the revive, which strips memory events wholesale.
+      notifier.setPendingEdit(
+        'npc.revive:Lizard-1',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.npc.revive',
+              'value': {'id': 'Lizard-1'},
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isTrue);
+      expect(notifier.state.error, isNull);
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      // TWO writes: sequential, so the typed edit lands and the revive then
+      // re-reads the file and strips events from what is on disk.
+      expect(writes, hasLength(2));
+      expect(
+        (writes[0].payload['edits'] as List).map((e) => (e as Map)['path']),
+        ['private.typed.setValue'],
+      );
+      expect(
+        (writes[1].payload['edits'] as List).map((e) => (e as Map)['path']),
+        ['private.npc.revive'],
+      );
+      // Backup-once still holds, on the first write.
+      expect(writes.where((w) => w.payload['backup'] == true), hasLength(1));
+      expect(writes.first.payload['backup'], isTrue);
+      expect(notifier.state.pendingEdits, isEmpty);
+    },
+  );
+
+  test(
+    'saveAllPending splits a knowledge edit from a typed edit in the SAME entry',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingEdit(
+        'knowledge',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.knowledge.setEntry',
+              'value': {
+                'character': 'Diego',
+                'entry': 'Info_Whatslife',
+                'present': true,
+              },
+            },
+          ],
+        ),
+      );
+      // An All-data edit inside the very entry that setEntry rewrites.
+      notifier.setPendingEdit(
+        'typed:diego-knowledge',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': [
+                  'CharacterKnowledgeByUniqueName',
+                  '{Diego}',
+                  'Knowledge',
+                  'm_Size',
+                ],
+                'value': 3,
+              },
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isTrue);
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(2));
+      expect(
+        (writes[0].payload['edits'] as List).map((e) => (e as Map)['path']),
+        ['private.typed.setValue'],
+      );
+      expect(
+        (writes[1].payload['edits'] as List).map((e) => (e as Map)['path']),
+        ['private.knowledge.setEntry'],
+      );
+    },
+  );
+
+  test(
+    'saveAllPending keeps a knowledge edit and a DIFFERENT entry in one write',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      notifier.setPendingEdit(
+        'knowledge',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.knowledge.setEntry',
+              'value': {
+                'character': 'Diego',
+                'entry': 'Info_Whatslife',
+                'present': true,
+              },
+            },
+          ],
+        ),
+      );
+      // Another character's entry is a different map value; every applier
+      // re-resolves its target by key, so the two do not collide.
+      notifier.setPendingEdit(
+        'typed:xardas-knowledge',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': [
+                  'CharacterKnowledgeByUniqueName',
+                  '{Xardas}',
+                  'Knowledge',
+                  'm_Size',
+                ],
+                'value': 3,
+              },
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isTrue);
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(1));
+      expect(
+        (writes.single.payload['edits'] as List).map((e) => (e as Map)['path']),
+        ['private.typed.setValue', 'private.knowledge.setEntry'],
+      );
+    },
+  );
+
+  test(
+    'saveAllPending splits a non-Def ActiveEffects edit from a same-actor skill edit',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // A leaf of the hero's ActiveEffects that is NOT EffectSpec/Def, so the
+      // same-actor Def refusal does not fire — but the core still rejects the
+      // pair in one write, because a skill edit rewrites that actor's effect
+      // elements wholesale.
+      notifier.setPendingEdit(
+        'typed:effect-level',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': [
+                  'ActiveEffectsByGlobalId',
+                  '{Hero}',
+                  'ActiveEffects',
+                  '[0]',
+                  'EffectSpec',
+                  'Level',
+                ],
+                'value': 3.0,
+              },
+            },
+          ],
+        ),
+      );
+      notifier.setPendingEdit(
+        'skills',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.skills.set',
+              'value': {
+                'actor': 'Hero',
+                'base': 'Melee_OneHanded',
+                'tier': 'Master',
+              },
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      // Not refused — split. The old Def-only check would have let this ride
+      // one write, which the core now rejects outright.
+      expect(ok, isTrue);
+      expect(notifier.state.error, isNull);
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(2));
+      expect(
+        (writes[0].payload['edits'] as List).map((e) => (e as Map)['path']),
+        ['private.typed.setValue'],
+      );
+      expect(
+        (writes[1].payload['edits'] as List).map((e) => (e as Map)['path']),
+        ['private.skills.set'],
+      );
+    },
+  );
+
+  test(
+    'saveAllPending splits the slot repair from an m_Id below a slot payload',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // An m_Id that is not the slot's own leaf: narrower than the repair's
+      // refusal guard, so it is not refused — but the core counts it as a
+      // conflict, so it has to be split.
+      notifier.setPendingEdit(
+        'typed:payload-id',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': [
+                  'm_SavedPlayers',
+                  '[0]',
+                  'm_Inventory',
+                  'm_Slots',
+                  '[3]',
+                  'm_Payload',
+                  'm_Id',
+                ],
+                'value': 4,
+              },
+            },
+          ],
+        ),
+      );
+      notifier.setPendingEdit(
+        'inventory:repair',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.repairSlots',
+              'value': <String, Object?>{},
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isTrue);
+      expect(notifier.state.error, isNull);
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(2));
+      expect(
+        (writes[0].payload['edits'] as List).map((e) => (e as Map)['path']),
+        ['private.typed.setValue'],
+      );
+      expect(
+        (writes[1].payload['edits'] as List).map((e) => (e as Map)['path']),
+        ['private.inventory.repairSlots'],
+      );
+    },
+  );
+
+  test(
+    'saveAllPending keeps the slot repair with a non-id slot edit in one write',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      // The repair only rewrites ids, so anything else inside a slot survives
+      // it untouched — the new split must not over-fire here.
+      notifier.setPendingEdit(
+        'typed:slot-count',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': [
+                  'm_SavedPlayers',
+                  '[0]',
+                  'm_Inventory',
+                  'm_Slots',
+                  '[3]',
+                  'm_SlotData',
+                  'm_ItemCount',
+                ],
+                'value': 7,
+              },
+            },
+          ],
+        ),
+      );
+      notifier.setPendingEdit(
+        'inventory:repair',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.repairSlots',
+              'value': <String, Object?>{},
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isTrue);
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(1));
+      // The repair still runs last inside that write.
+      expect(
+        (writes.single.payload['edits'] as List).map((e) => (e as Map)['path']),
+        ['private.typed.setValue', 'private.inventory.repairSlots'],
+      );
+    },
+  );
+
+  group('the same-target predicate the packer splits on', () {
+    Map<String, Object?> typedEdit(List<String> path) => {
+      'path': 'private.typed.setValue',
+      'value': {'path': path, 'value': 1},
+    };
+    Map<String, Object?> addItem(String? actorId) => {
+      'path': 'private.inventory.addItem',
+      'value': {
+        'path': '/Script/Angelscript.ItMi_Orenugget',
+        'count': 1,
+        'actorId': ?actorId,
+      },
+    };
+    const playerSlot = [
+      'm_SavedPlayers',
+      '[0]',
+      'm_Inventory',
+      'm_Slots',
+      '[3]',
+      'm_SlotData',
+      'm_ItemCount',
+    ];
+    List<String> npcSlot(String id) => [
+      'm_GenericData',
+      '{CharacterStates}',
+      'NPCCharacters',
+      'InventoryByGlobalId',
+      '{$id}',
+      'InventoryItems',
+      'm_Values',
+      'Items',
+      '[6]',
+      'm_Slots',
+      '[3]',
+      'm_SlotData',
+      'm_ItemCount',
+    ];
+
+    test('an inventory add only claims ITS actor\'s slots', () {
+      // The core allows an add for one actor beside a raw slot edit for
+      // another, so the packer must not split them. (Today saveAllPending
+      // refuses that combination outright, one refusal earlier — this pins the
+      // packing rule itself, which is what the core enforces.)
+      expect(
+        editsRewriteSameTarget(addItem(null), typedEdit(playerSlot)),
+        isTrue,
+      );
+      expect(
+        editsRewriteSameTarget(addItem(null), typedEdit(npcSlot('Lizard-1'))),
+        isFalse,
+      );
+      expect(
+        editsRewriteSameTarget(
+          addItem('Lizard-1'),
+          typedEdit(npcSlot('Lizard-1')),
+        ),
+        isTrue,
+      );
+      expect(
+        editsRewriteSameTarget(
+          addItem('Lizard-1'),
+          typedEdit(npcSlot('Lizard-2')),
+        ),
+        isFalse,
+      );
+      expect(
+        editsRewriteSameTarget(addItem('Lizard-1'), typedEdit(playerSlot)),
+        isFalse,
+      );
+    });
+
+    test('an actor key matches trimmed and case-insensitively', () {
+      expect(
+        editsRewriteSameTarget(
+          addItem('lizard-1'),
+          typedEdit(npcSlot(' LIZARD-1 ')),
+        ),
+        isTrue,
+      );
+    });
+
+    test('it holds in BOTH directions', () {
+      final revive = {
+        'path': 'private.npc.revive',
+        'value': {'id': 'Lizard-1'},
+      };
+      final typed = typedEdit([
+        'LongTermMemoryByGlobalId',
+        '{Lizard-1}',
+        'MemorizedEvents',
+      ]);
+      expect(editsRewriteSameTarget(revive, typed), isTrue);
+      expect(editsRewriteSameTarget(typed, revive), isTrue);
+    });
+
+    test('addressing a whole map collides with every entry in it', () {
+      final setEntry = {
+        'path': 'private.knowledge.setEntry',
+        'value': {'character': 'Diego', 'entry': 'Info_X', 'present': true},
+      };
+      expect(
+        structuredEditRewrites(setEntry, const [
+          'CharacterKnowledgeByUniqueName',
+        ]),
+        isTrue,
+      );
+      expect(
+        structuredEditRewrites(setEntry, const [
+          'CharacterKnowledgeByUniqueName',
+          '{Diego}',
+        ]),
+        isTrue,
+      );
+      expect(
+        structuredEditRewrites(setEntry, const [
+          'CharacterKnowledgeByUniqueName',
+          '{Xardas}',
+        ]),
+        isFalse,
+      );
+    });
+
+    test('a skill edit with no actor defends the hero\'s effects', () {
+      final skills = {
+        'path': 'private.skills.set',
+        'value': {'base': 'Melee_OneHanded', 'tier': 'Master'},
+      };
+      expect(
+        structuredEditRewrites(skills, const [
+          'ActiveEffectsByGlobalId',
+          '{Hero}',
+          'ActiveEffects',
+          '[0]',
+          'EffectSpec',
+          'Level',
+        ]),
+        isTrue,
+      );
+      expect(
+        structuredEditRewrites(skills, const [
+          'ActiveEffectsByGlobalId',
+          '{Lizard-1}',
+          'ActiveEffects',
+          '[0]',
+          'EffectSpec',
+          'Level',
+        ]),
+        isFalse,
+      );
+    });
+
+    test('two raw typed edits never count as a same-target pair', () {
+      // Only a STRUCTURED operation rewrites a target wholesale; two typed
+      // edits are ordered by the ordinal rule instead.
+      expect(
+        editsRewriteSameTarget(
+          typedEdit(playerSlot),
+          typedEdit(const [
+            'm_SavedPlayers',
+            '[0]',
+            'm_Inventory',
+            'm_Slots',
+            '[3]',
+            'm_Id',
+          ]),
+        ),
+        isFalse,
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Bug #1: a fresh inspection must reset the selected actor to the player so a
   // stale NPC GlobalId from the previous save can't drive the actor-aware tabs.
   // ---------------------------------------------------------------------------
