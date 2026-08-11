@@ -260,20 +260,35 @@ void main() {
     expect(failure.missingCommands, ['mgr_apply', 'mgr_status']);
   });
 
+  test('a core without the consumed preflight command is blocked', () {
+    final commands = managerRequiredCoreCommands
+        .where((command) => command != 'mgr_preflight_v1')
+        .toList();
+    final probe = _Probe(
+      states: {'old.dll': CoreCandidateState.present},
+      inspections: {
+        'old.dll': _currentEvidence(coreInfo: _coreInfo(commands: commands)),
+      },
+    );
+
+    final failure = _blocked(
+      inspectCoreCandidates(candidates: const ['old.dll'], probe: probe),
+    );
+
+    expect(failure.reason, CoreBootstrapFailureReason.requiredCommandsMissing);
+    expect(failure.missingCommands, ['mgr_preflight_v1']);
+  });
+
   test(
-    'future fields and commands are accepted without requiring preflight',
+    'preflight is required while future fields and commands stay additive',
     () {
-      expect(managerRequiredCoreCommands, isNot(contains('mgr_preflight_v1')));
+      expect(managerRequiredCoreCommands, contains('mgr_preflight_v1'));
       final probe = _Probe(
         states: {'future.dll': CoreCandidateState.present},
         inspections: {
           'future.dll': _currentEvidence(
             coreInfo: _coreInfo(
-              commands: [
-                ...managerRequiredCoreCommands,
-                'mgr_preflight_v1',
-                'future_command_v99',
-              ],
+              commands: [...managerRequiredCoreCommands, 'future_command_v99'],
               extra: const {'future_field': true},
             ),
           ),
@@ -332,7 +347,7 @@ void main() {
       expect(detail, isNot(contains(bidiControl)));
     }
     expect(report['missing_commands'], ['mgr_status']);
-    expect(report['required_commands'], isNot(contains('mgr_preflight_v1')));
+    expect(report['required_commands'], contains('mgr_preflight_v1'));
     expect(encoded, isNot(contains('private-tail')));
   });
 }

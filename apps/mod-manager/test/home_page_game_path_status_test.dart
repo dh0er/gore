@@ -118,6 +118,8 @@ class _StatefulFake implements GoreCoreFfiService {
           'ok': true,
           'status': {'state': 'nothing_deployed'},
         };
+      case 'mgr_preflight_v1':
+        return fakeHealthyManagerPreflightResponse();
       default:
         return {'ok': true};
     }
@@ -162,6 +164,9 @@ void main() {
     await tester.pumpAndSettle();
 
     final before = fake.calls.where((c) => c.command == 'mgr_status').length;
+    final beforePreflight = fake.calls
+        .where((c) => c.command == 'mgr_preflight_v1')
+        .length;
     expect(before, greaterThanOrEqualTo(1), reason: 'startup refresh ran');
 
     // Flip the mod's enabled flag (persists the loadout).
@@ -178,6 +183,14 @@ void main() {
       after,
       before + 1,
       reason: 'a loadout edit must refresh status exactly once',
+    );
+    final afterPreflight = fake.calls
+        .where((c) => c.command == 'mgr_preflight_v1')
+        .length;
+    expect(
+      afterPreflight,
+      beforePreflight + 1,
+      reason: 'a settled loadout edit must refresh preflight exactly once',
     );
   });
 

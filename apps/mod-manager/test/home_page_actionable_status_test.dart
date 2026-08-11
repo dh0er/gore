@@ -89,6 +89,8 @@ class _HomeCore implements GoreCoreFfiService {
           return pending.future;
         }
         return {'ok': true, 'status': status};
+      case 'mgr_preflight_v1':
+        return fakeHealthyManagerPreflightResponse();
       case 'mgr_apply':
         return {
           'ok': true,

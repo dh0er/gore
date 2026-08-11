@@ -53,6 +53,19 @@ class AppLocalizationsPl extends AppLocalizations {
       'Nie udało się skopiować szczegółów technicznych. Spróbuj ponownie.';
 
   @override
+  String get preflightAttention => 'Konfiguracja wymaga uwagi.';
+
+  @override
+  String get preflightUnavailable =>
+      'Diagnostyka konfiguracji jest niedostępna.';
+
+  @override
+  String get preflightRetry => 'Sprawdź ponownie';
+
+  @override
+  String get preflightReviewStatus => 'Sprawdź stan';
+
+  @override
   String get statusUnknown => 'Nieznany';
 
   @override

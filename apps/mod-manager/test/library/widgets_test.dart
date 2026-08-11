@@ -167,6 +167,7 @@ class _RemoveCore implements GoreCoreFfiService {
         'ok': true,
         'status': {'state': removed ? 'changes_pending' : statusState},
       },
+      'mgr_preflight_v1' => fakeHealthyManagerPreflightResponse(),
       'mgr_set_loadout' => {'ok': true},
       _ => {
         'ok': false,

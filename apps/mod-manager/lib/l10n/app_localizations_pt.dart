@@ -53,6 +53,19 @@ class AppLocalizationsPt extends AppLocalizations {
       'Não foi possível copiar os detalhes técnicos. Tente novamente.';
 
   @override
+  String get preflightAttention => 'A configuração requer atenção.';
+
+  @override
+  String get preflightUnavailable =>
+      'O diagnóstico da configuração não está disponível.';
+
+  @override
+  String get preflightRetry => 'Verificar novamente';
+
+  @override
+  String get preflightReviewStatus => 'Verificar estado';
+
+  @override
   String get statusUnknown => 'Desconhecido';
 
   @override
@@ -478,6 +491,19 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   @override
   String get coreTechnicalDetailsCopyFailed =>
       'Não foi possível copiar os detalhes técnicos. Tente novamente.';
+
+  @override
+  String get preflightAttention => 'A configuração requer atenção.';
+
+  @override
+  String get preflightUnavailable =>
+      'O diagnóstico da configuração não está disponível.';
+
+  @override
+  String get preflightRetry => 'Verificar novamente';
+
+  @override
+  String get preflightReviewStatus => 'Verificar status';
 
   @override
   String get statusUnknown => 'Desconhecido';

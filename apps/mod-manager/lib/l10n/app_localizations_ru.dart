@@ -53,6 +53,18 @@ class AppLocalizationsRu extends AppLocalizations {
       'Не удалось скопировать технические сведения. Повторите попытку.';
 
   @override
+  String get preflightAttention => 'Настройка требует внимания.';
+
+  @override
+  String get preflightUnavailable => 'Диагностика настройки недоступна.';
+
+  @override
+  String get preflightRetry => 'Проверить снова';
+
+  @override
+  String get preflightReviewStatus => 'Проверить состояние';
+
+  @override
   String get statusUnknown => 'Неизвестно';
 
   @override

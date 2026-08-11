@@ -53,6 +53,19 @@ class AppLocalizationsDe extends AppLocalizations {
       'Die technischen Details konnten nicht kopiert werden. Versuche es erneut.';
 
   @override
+  String get preflightAttention => 'Die Einrichtung benötigt Aufmerksamkeit.';
+
+  @override
+  String get preflightUnavailable =>
+      'Die Einrichtungsdiagnose ist nicht verfügbar.';
+
+  @override
+  String get preflightRetry => 'Erneut prüfen';
+
+  @override
+  String get preflightReviewStatus => 'Status prüfen';
+
+  @override
   String get statusUnknown => 'Unbekannt';
 
   @override

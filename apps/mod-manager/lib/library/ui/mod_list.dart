@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 
 import '../../l10n/app_localizations.dart';
+import '../../preflight/domain/preflight_notifier.dart';
 import '../../status/domain/status_notifier.dart';
 import '../domain/conflicts_provider.dart';
 import '../domain/library_notifier.dart';
@@ -26,10 +27,12 @@ class ModList extends ConsumerWidget {
     final selected = ref.watch(selectedModProvider);
     final conflicts = ref.watch(conflictsProvider);
     final status = ref.watch(statusProvider);
+    final preflight = ref.watch(preflightProvider);
     final mutationsBlocked =
         library.busy ||
         !library.authoritative ||
         status.busy ||
+        preflight.busy ||
         conflicts.isLoading;
 
     // Join loadout order -> library mods; skip any entry whose mod is missing
@@ -70,6 +73,7 @@ class ModList extends ConsumerWidget {
           if (current.busy ||
               !current.authoritative ||
               ref.read(statusProvider).busy ||
+              ref.read(preflightProvider).busy ||
               ref.read(conflictsProvider).isLoading) {
             return;
           }
@@ -97,6 +101,7 @@ class ModList extends ConsumerWidget {
         if (current.busy ||
             !current.authoritative ||
             ref.read(statusProvider).busy ||
+            ref.read(preflightProvider).busy ||
             ref.read(conflictsProvider).isLoading) {
           return;
         }

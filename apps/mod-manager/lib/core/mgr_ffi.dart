@@ -1,4 +1,5 @@
 import '../library/domain/models.dart';
+import '../preflight/domain/models.dart';
 import 'core_service.dart';
 
 /// Typed wrappers over the gore-ffi mod-manager commands (`mgr_*`).
@@ -87,6 +88,19 @@ class MgrFfi {
     return ManagerStatusView.fromJson(
       status is Map ? status.cast<String, Object?>() : const {},
     );
+  }
+
+  /// Read-only, bounded setup/deployment evidence for one explicit game root.
+  Future<ManagerPreflightView> preflight(String gameRoot) async {
+    final r = await _call('mgr_preflight_v1', {'game_root': gameRoot});
+    try {
+      return ManagerPreflightView.fromJson(r['preflight']);
+    } on FormatException catch (error) {
+      throw MgrFfiException(
+        'mgr_preflight_v1: invalid response: ${error.message}',
+        code: 'MGR_PREFLIGHT_INVALID_RESPONSE',
+      );
+    }
   }
 
   /// Remove everything the manager deployed from the install. True when
