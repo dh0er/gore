@@ -97,7 +97,10 @@
       }
     }
   },
-  "conflictWinner": "winner",
+  "conflictWinner": "intended winner",
+  "@conflictWinner": {
+    "description": "Labels the mod expected to win by intended Manager load order, not a proven runtime outcome."
+  },
   "noConflicts": "No recognized conflicts.",
   "conflictCoverageIncomplete": "Conflict knowledge is incomplete for enabled mods; additional conflicts may exist.",
   "loadOrderDirection": "Load order: lower priority first; later mods have higher intended priority.",

@@ -66,7 +66,7 @@
   "takeOverAction": "Übernehmen",
   "refreshAction": "Aktualisieren",
   "conflictsTitle": "Befunde ({count})",
-  "conflictWinner": "Gewinner",
+  "conflictWinner": "vorgesehener Gewinner",
   "noConflicts": "Keine erkannten Konflikte.",
   "conflictCoverageIncomplete": "Das Konfliktwissen für aktivierte Mods ist unvollständig; weitere Konflikte können bestehen.",
   "loadOrderDirection": "Ladereihenfolge: zuerst niedrige Priorität; spätere Mods haben eine höhere beabsichtigte Priorität.",

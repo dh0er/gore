@@ -235,7 +235,7 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
-  String get conflictWinner => 'приоритет';
+  String get conflictWinner => 'предполагаемый победитель';
 
   @override
   String get noConflicts => 'Распознанные конфликты отсутствуют.';

@@ -94,6 +94,8 @@ void _compact200Percent(WidgetTester tester) {
 void main() {
   test('coverage copy is generated for all 12 supported locales', () async {
     expect(AppLocalizations.supportedLocales, hasLength(12));
+    final english = await AppLocalizations.delegate.load(const Locale('en'));
+    expect(english.conflictWinner, 'intended winner');
     for (final locale in AppLocalizations.supportedLocales) {
       final l10n = await AppLocalizations.delegate.load(locale);
       expect(

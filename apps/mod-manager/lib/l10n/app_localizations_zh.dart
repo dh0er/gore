@@ -220,7 +220,7 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
-  String get conflictWinner => '生效';
+  String get conflictWinner => '預期生效';
 
   @override
   String get noConflicts => '未识别到冲突。';
@@ -618,7 +618,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   }
 
   @override
-  String get conflictWinner => '生效';
+  String get conflictWinner => '预期生效';
 
   @override
   String get noConflicts => '未识别到冲突。';

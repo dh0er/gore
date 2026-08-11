@@ -512,10 +512,10 @@ abstract class AppLocalizations {
   /// **'Findings ({count})'**
   String conflictsTitle(int count);
 
-  /// No description provided for @conflictWinner.
+  /// Labels the mod expected to win by intended Manager load order, not a proven runtime outcome.
   ///
   /// In en, this message translates to:
-  /// **'winner'**
+  /// **'intended winner'**
   String get conflictWinner;
 
   /// No description provided for @noConflicts.

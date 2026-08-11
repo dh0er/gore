@@ -238,7 +238,7 @@ class AppLocalizationsPt extends AppLocalizations {
   }
 
   @override
-  String get conflictWinner => 'vencedor';
+  String get conflictWinner => 'vencedor previsto';
 
   @override
   String get noConflicts => 'Nenhum conflito reconhecido.';
@@ -663,7 +663,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   }
 
   @override
-  String get conflictWinner => 'vencedor';
+  String get conflictWinner => 'vencedor previsto';
 
   @override
   String get noConflicts => 'Nenhum conflito reconhecido.';

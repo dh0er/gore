@@ -235,7 +235,7 @@ class AppLocalizationsPl extends AppLocalizations {
   }
 
   @override
-  String get conflictWinner => 'zwycięzca';
+  String get conflictWinner => 'zamierzony zwycięzca';
 
   @override
   String get noConflicts => 'Brak rozpoznanych konfliktów.';

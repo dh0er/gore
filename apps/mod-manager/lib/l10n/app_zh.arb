@@ -66,7 +66,7 @@
   "takeOverAction": "接管",
   "refreshAction": "刷新",
   "conflictsTitle": "检测结果 ({count})",
-  "conflictWinner": "生效",
+  "conflictWinner": "預期生效",
   "noConflicts": "未识别到冲突。",
   "conflictCoverageIncomplete": "已启用模组的冲突信息不完整，可能还存在其他冲突。",
   "loadOrderDirection": "加载顺序：低优先级在前，后面的模组具有更高的预期优先级。",

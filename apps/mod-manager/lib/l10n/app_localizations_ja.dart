@@ -226,7 +226,7 @@ class AppLocalizationsJa extends AppLocalizations {
   }
 
   @override
-  String get conflictWinner => '優先';
+  String get conflictWinner => '想定上の勝者';
 
   @override
   String get noConflicts => '認識された競合はありません。';
