@@ -71,8 +71,8 @@ class _StatefulFake implements GoreCoreFfiService {
 
 /// A single loc_patch component whose target set we can vary.
 List<Map<String, Object?>> _loc(List<String> targets) => [
-      {'type': 'loc_patch', 'rel': 'loc/edits.json', 'targets': targets},
-    ];
+  {'type': 'loc_patch', 'rel': 'loc/edits.json', 'targets': targets},
+];
 
 List<Map<String, Object?>> _lua({required bool opaque}) => [
   {
@@ -84,53 +84,99 @@ List<Map<String, Object?>> _lua({required bool opaque}) => [
   },
 ];
 
+List<Map<String, Object?>> _covered(String coverage) => [
+  {
+    'type': 'triplet',
+    'rel_base': 'containers/Pack',
+    'targets': const ['/Game/Observed'],
+    'coverage': coverage,
+  },
+];
+
+List<Map<String, Object?>> _raw(Object target) => [
+  {
+    'type': 'raw_file',
+    'rel': 'raw/payload.bin',
+    'target_file': target,
+    'coverage': 'exact',
+  },
+];
+
+List<Map<String, Object?>> _unknownTarget(String target) => [
+  {
+    'type': 'future_component',
+    'rel': 'future/payload',
+    'future_target': target,
+    'coverage': 'future_precision',
+  },
+];
+
+List<Map<String, Object?>> _futureRawTarget(String slot) => [
+  {
+    'type': 'raw_file',
+    'rel': 'raw/future.bin',
+    'target_file': {
+      'future_destination': {'slot': slot},
+    },
+    'coverage': 'opaque',
+  },
+];
+
 /// Drive the container until every pending microtask/future settles.
 Future<void> _settle() => Future<void>.delayed(Duration.zero);
 
 void main() {
-  test('conflictsProvider re-analyzes when a mod content changes (same loadout)',
-      () async {
-    final fake = _StatefulFake(_loc(const ['itfo_cheese|german']));
-    final container = ProviderContainer(overrides: [
-      coreServiceProvider.overrideWithValue(fake),
-    ]);
-    addTearDown(container.dispose);
+  test(
+    'conflictsProvider re-analyzes when a mod content changes (same loadout)',
+    () async {
+      final fake = _StatefulFake(_loc(const ['itfo_cheese|german']));
+      final container = ProviderContainer(
+        overrides: [coreServiceProvider.overrideWithValue(fake)],
+      );
+      addTearDown(container.dispose);
 
-    // Hold live subscriptions so neither provider is auto-disposed between
-    // reads — otherwise a bare `read` would recompute from scratch each time
-    // (re-running analyze regardless of the key) and the test would prove
-    // nothing about the key. With a listener, analyze only re-runs when the
-    // watched key actually changes.
-    container.listen(libraryProvider, (_, _) {});
-    container.listen(conflictsProvider, (_, _) {});
+      // Hold live subscriptions so neither provider is auto-disposed between
+      // reads — otherwise a bare `read` would recompute from scratch each time
+      // (re-running analyze regardless of the key) and the test would prove
+      // nothing about the key. With a listener, analyze only re-runs when the
+      // watched key actually changes.
+      container.listen(libraryProvider, (_, _) {});
+      container.listen(conflictsProvider, (_, _) {});
 
-    // Let the initial library refresh + first analyze settle.
-    await container.read(conflictsProvider.future);
-    await container.read(libraryProvider.notifier).refresh();
-    await _settle();
-    await container.read(conflictsProvider.future);
-    final baseline = fake.analyzeCount;
-    expect(baseline, greaterThanOrEqualTo(1), reason: 'analyze ran at least once');
+      // Let the initial library refresh + first analyze settle.
+      await container.read(conflictsProvider.future);
+      await container.read(libraryProvider.notifier).refresh();
+      await _settle();
+      await container.read(conflictsProvider.future);
+      final baseline = fake.analyzeCount;
+      expect(
+        baseline,
+        greaterThanOrEqualTo(1),
+        reason: 'analyze ran at least once',
+      );
 
-    // Same-id UPDATE: change m1's component targets, keep the loadout identical.
-    fake.setComponents(_loc(const ['itfo_apple|german', 'itfo_bread|german']));
-    await container.read(libraryProvider.notifier).refresh();
-    await _settle();
-    // The conflicts key now folds in the changed targets → analyze re-runs.
-    await container.read(conflictsProvider.future);
+      // Same-id UPDATE: change m1's component targets, keep the loadout identical.
+      fake.setComponents(
+        _loc(const ['itfo_apple|german', 'itfo_bread|german']),
+      );
+      await container.read(libraryProvider.notifier).refresh();
+      await _settle();
+      // The conflicts key now folds in the changed targets → analyze re-runs.
+      await container.read(conflictsProvider.future);
 
-    expect(
-      fake.analyzeCount,
-      greaterThan(baseline),
-      reason: 'a same-id content change must trigger a re-analyze',
-    );
-  });
+      expect(
+        fake.analyzeCount,
+        greaterThan(baseline),
+        reason: 'a same-id content change must trigger a re-analyze',
+      );
+    },
+  );
 
   test('conflictsProvider does NOT re-analyze when nothing changed', () async {
     final fake = _StatefulFake(_loc(const ['itfo_cheese|german']));
-    final container = ProviderContainer(overrides: [
-      coreServiceProvider.overrideWithValue(fake),
-    ]);
+    final container = ProviderContainer(
+      overrides: [coreServiceProvider.overrideWithValue(fake)],
+    );
     addTearDown(container.dispose);
 
     container.listen(libraryProvider, (_, _) {});
@@ -180,6 +226,138 @@ void main() {
       expect(fake.analyzeCount, greaterThan(baseline));
     },
   );
+
+  test('conflictsProvider re-analyzes when only coverage changes', () async {
+    final fake = _StatefulFake(_covered('advisory'));
+    final container = ProviderContainer(
+      overrides: [coreServiceProvider.overrideWithValue(fake)],
+    );
+    addTearDown(container.dispose);
+    container.listen(libraryProvider, (_, _) {});
+    container.listen(conflictsProvider, (_, _) {});
+
+    await container.read(conflictsProvider.future);
+    await container.read(libraryProvider.notifier).refresh();
+    await _settle();
+    await container.read(conflictsProvider.future);
+    final baseline = fake.analyzeCount;
+
+    fake.setComponents(_covered('opaque'));
+    await container.read(libraryProvider.notifier).refresh();
+    await _settle();
+    await container.read(conflictsProvider.future);
+
+    expect(fake.analyzeCount, greaterThan(baseline));
+  });
+
+  test(
+    'raw target variant and bank name changes invalidate conflicts',
+    () async {
+      final fake = _StatefulFake(_raw('lcache'));
+      final container = ProviderContainer(
+        overrides: [coreServiceProvider.overrideWithValue(fake)],
+      );
+      addTearDown(container.dispose);
+      container.listen(libraryProvider, (_, _) {});
+      container.listen(conflictsProvider, (_, _) {});
+
+      await container.read(conflictsProvider.future);
+      await container.read(libraryProvider.notifier).refresh();
+      await _settle();
+      await container.read(conflictsProvider.future);
+      var baseline = fake.analyzeCount;
+
+      fake.setComponents(
+        _raw({
+          'bank': {'name': 'SFX.bank'},
+        }),
+      );
+      await container.read(libraryProvider.notifier).refresh();
+      await _settle();
+      await container.read(conflictsProvider.future);
+      expect(fake.analyzeCount, greaterThan(baseline));
+      baseline = fake.analyzeCount;
+
+      fake.setComponents(
+        _raw({
+          'bank': {'name': 'Music.bank'},
+        }),
+      );
+      await container.read(libraryProvider.notifier).refresh();
+      await _settle();
+      await container.read(conflictsProvider.future);
+      expect(fake.analyzeCount, greaterThan(baseline));
+    },
+  );
+
+  test('structured key distinguishes delimiter-bearing target sets', () async {
+    final fake = _StatefulFake(_loc(const ['a+b']));
+    final container = ProviderContainer(
+      overrides: [coreServiceProvider.overrideWithValue(fake)],
+    );
+    addTearDown(container.dispose);
+    container.listen(libraryProvider, (_, _) {});
+    container.listen(conflictsProvider, (_, _) {});
+
+    await container.read(conflictsProvider.future);
+    await container.read(libraryProvider.notifier).refresh();
+    await _settle();
+    await container.read(conflictsProvider.future);
+    final baseline = fake.analyzeCount;
+
+    fake.setComponents(_loc(const ['a', 'b']));
+    await container.read(libraryProvider.notifier).refresh();
+    await _settle();
+    await container.read(conflictsProvider.future);
+
+    expect(fake.analyzeCount, greaterThan(baseline));
+  });
+
+  test('unknown component payload changes invalidate conflicts', () async {
+    final fake = _StatefulFake(_unknownTarget('A'));
+    final container = ProviderContainer(
+      overrides: [coreServiceProvider.overrideWithValue(fake)],
+    );
+    addTearDown(container.dispose);
+    container.listen(libraryProvider, (_, _) {});
+    container.listen(conflictsProvider, (_, _) {});
+
+    await container.read(conflictsProvider.future);
+    await container.read(libraryProvider.notifier).refresh();
+    await _settle();
+    await container.read(conflictsProvider.future);
+    final baseline = fake.analyzeCount;
+
+    fake.setComponents(_unknownTarget('B'));
+    await container.read(libraryProvider.notifier).refresh();
+    await _settle();
+    await container.read(conflictsProvider.future);
+
+    expect(fake.analyzeCount, greaterThan(baseline));
+  });
+
+  test('future raw-target payload changes invalidate conflicts', () async {
+    final fake = _StatefulFake(_futureRawTarget('A'));
+    final container = ProviderContainer(
+      overrides: [coreServiceProvider.overrideWithValue(fake)],
+    );
+    addTearDown(container.dispose);
+    container.listen(libraryProvider, (_, _) {});
+    container.listen(conflictsProvider, (_, _) {});
+
+    await container.read(conflictsProvider.future);
+    await container.read(libraryProvider.notifier).refresh();
+    await _settle();
+    await container.read(conflictsProvider.future);
+    final baseline = fake.analyzeCount;
+
+    fake.setComponents(_futureRawTarget('B'));
+    await container.read(libraryProvider.notifier).refresh();
+    await _settle();
+    await container.read(conflictsProvider.future);
+
+    expect(fake.analyzeCount, greaterThan(baseline));
+  });
 
   test('unknown info advisory is ordered but has no winner', () {
     const conflict = ConflictView(

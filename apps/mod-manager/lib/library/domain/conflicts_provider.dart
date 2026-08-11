@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/providers.dart';
@@ -12,7 +14,7 @@ import 'models.dart';
 final conflictsProvider = FutureProvider<List<ConflictView>>((ref) {
   // Key on a stable String derived from BOTH:
   //  * the loadout entries (id + enabled) — toggling/reordering changes this;
-  //  * each mod's content signature (id + its components' kind|opaque|targets) —
+  //  * each mod's content signature (id + every analyzer-relevant component fact) —
   //    re-importing a mod under the SAME id changes LibraryState.mods (its
   //    components/targets) but NOT the loadout entries, so without this a
   //    same-id update would keep the stale conflicts.
@@ -30,20 +32,56 @@ final conflictsProvider = FutureProvider<List<ConflictView>>((ref) {
 });
 
 /// A stable, value-comparable key that changes when the loadout entries change
-/// OR when any mod's deployable content (its components' kinds + opacity +
-/// targets) changes — including a same-id re-import that swaps a mod's targets.
+/// OR when any mod's deployable content (kind, coverage, opacity, targets, or
+/// raw-file destination) changes — including a same-id re-import.
 String _conflictsKey(LibraryState s) {
-  final loadout = [
-    for (final e in s.loadout.entries) '${e.id}:${e.enabled}',
-  ].join(',');
-  // Per mod: id plus each component's kind, opacity and target list, so either
-  // a changed known footprint or newly-incomplete UE4SS metadata alters the key.
-  final mods = [
-    for (final m in s.mods)
-      '${m.id}='
-          '${[for (final c in m.components) '${c.kind}:${c.opaque}[${c.targets.join('+')}]'].join(';')}',
-  ].join(',');
-  return '$loadout|$mods';
+  // JSON gives every list and string an unambiguous boundary. Hand-built
+  // delimiters alias valid values (`['a+b']` versus `['a', 'b']`) and can keep
+  // a stale analysis cached after a same-id re-import.
+  return jsonEncode({
+    'loadout': [
+      for (final entry in s.loadout.entries)
+        {'id': entry.id, 'enabled': entry.enabled},
+    ],
+    'mods': [
+      for (final mod in s.mods)
+        {
+          'id': mod.id,
+          'components': [
+            for (final component in mod.components)
+              {
+                // `raw` preserves fields this app version does not model. They
+                // can still affect a newer native analyzer, so reconstructing
+                // only today's view would leave stale conflicts cached.
+                'raw': _canonicalJson(component.raw),
+                // Missing/unknown wire values are interpreted conservatively
+                // by ComponentView; cache that effective grade as well.
+                'coverage': component.coverage.name,
+              },
+          ],
+        },
+    ],
+  });
+}
+
+/// Recursively sort JSON object keys while preserving array order and scalar
+/// types. FFI-decoded component [raw] values are JSON by contract, so this is
+/// a stable semantic encoding rather than one that depends on map insertion
+/// order.
+Object? _canonicalJson(Object? value) {
+  if (value is List) {
+    return [for (final item in value) _canonicalJson(item)];
+  }
+  if (value is Map) {
+    final entries = [
+      for (final entry in value.entries)
+        MapEntry(entry.key as String, _canonicalJson(entry.value)),
+    ]..sort((a, b) => a.key.compareTo(b.key));
+    return <String, Object?>{
+      for (final entry in entries) entry.key: entry.value,
+    };
+  }
+  return value;
 }
 
 /// Every conflict that involves [modId].

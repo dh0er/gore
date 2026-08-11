@@ -1523,6 +1523,41 @@ fn mgr_loadout_path(payload: &Value) -> PathBuf {
     }
 }
 
+/// Project one stored manager component onto the GUI wire contract.
+///
+/// `coverage` is deliberately injected here instead of added to `ComponentInfo`: library sidecars
+/// and their fingerprints remain byte/shape compatible while every Manager response receives the
+/// current derived truth.
+fn mgr_component_wire_value(component: &gore_mod::mgr::ComponentInfo) -> Value {
+    let mut value = serde_json::to_value(component).unwrap_or(Value::Null);
+    if let Value::Object(object) = &mut value {
+        object.insert(
+            "coverage".to_string(),
+            serde_json::to_value(component.footprint_coverage())
+                .unwrap_or_else(|_| Value::String("opaque".to_string())),
+        );
+    }
+    value
+}
+
+/// The single shared Manager entry projection for both library listing and import responses.
+fn mgr_entry_wire_value(entry: &gore_mod::mgr::ModEntryMeta) -> Value {
+    let mut value = serde_json::to_value(entry).unwrap_or(Value::Null);
+    if let Value::Object(object) = &mut value {
+        object.insert(
+            "components".to_string(),
+            Value::Array(
+                entry
+                    .components
+                    .iter()
+                    .map(mgr_component_wire_value)
+                    .collect(),
+            ),
+        );
+    }
+    value
+}
+
 /// `{library_dir?, loadout_path?}` → `{ok, mods:[ModEntryMeta], loadout:Loadout}`. Raw library +
 /// loadout, unreconciled (the UI reconciles ids against the library itself).
 fn mgr_library_list(payload: Value) -> Value {
@@ -1538,7 +1573,7 @@ fn mgr_library_list(payload: Value) -> Value {
     };
     json!({
         "ok": true,
-        "mods": serde_json::to_value(&mods).unwrap_or(Value::Null),
+        "mods": Value::Array(mods.iter().map(mgr_entry_wire_value).collect()),
         "loadout": serde_json::to_value(&loadout).unwrap_or(Value::Null),
     })
 }
@@ -1588,7 +1623,7 @@ fn mgr_import(payload: Value) -> Value {
             )
         }
     }
-    json!({"ok": true, "entry": serde_json::to_value(&entry).unwrap_or(Value::Null)})
+    json!({"ok": true, "entry": mgr_entry_wire_value(&entry)})
 }
 
 /// `{id, library_dir?}` → `{ok, removed:bool}` — delete a library entry (absent id → removed:false).
@@ -2397,6 +2432,28 @@ mod tests {
         assert_eq!(imp["entry"]["name"], "Probe");
         assert_eq!(imp["entry"]["kind"], "goremod");
         let id = imp["entry"]["id"].as_str().unwrap().to_string();
+        let imported_components = imp["entry"]["components"].as_array().unwrap();
+        assert!(!imported_components.is_empty(), "fixture component: {imp}");
+        assert!(
+            imported_components
+                .iter()
+                .all(|component| component.get("coverage").is_some()),
+            "mgr_import must project mandatory coverage: {imp}"
+        );
+        assert_eq!(imported_components[0]["coverage"], "exact");
+
+        let sidecar: Value = serde_json::from_slice(
+            &std::fs::read(lib.join(&id).join(gore_mod::mgr::META_FILE)).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            sidecar["components"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|component| component.get("coverage").is_none()),
+            "coverage is a derived wire field, not persisted metadata: {sidecar}"
+        );
 
         let list = mgr_call(
             "mgr_library_list",
@@ -2407,6 +2464,18 @@ mod tests {
         assert_eq!(mods.len(), 1, "one imported mod: {list}");
         assert_eq!(mods[0]["id"], id);
         assert_eq!(mods[0]["name"], "Probe");
+        assert_eq!(
+            mods[0]["components"], imp["entry"]["components"],
+            "list and import must share one entry projection"
+        );
+        assert!(
+            mods[0]["components"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|component| component.get("coverage").is_some()),
+            "mgr_library_list must project mandatory coverage: {list}"
+        );
 
         // BUG 3: the import must ALSO register a disabled loadout slot (mirror `gore mgr import`),
         // so a GUI-imported mod is visible to apply/status/analyze (which read the on-disk loadout)
