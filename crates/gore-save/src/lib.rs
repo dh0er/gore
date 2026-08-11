@@ -12189,10 +12189,11 @@ fn apply_private_inventory_add_item_to_payload_reusing(
     })?;
     let mut patched = payload.clone();
     let mut needs_type_patch = false;
+    let ids_already_aligned;
     // `patched` starts out byte-for-byte the buffer `root` describes. Filling a free
     // slot only writes to it when that slot still carried the previous item's state,
     // so track whether anything moved and skip the re-parse below when nothing did.
-    let mut patched_matches_root = true;
+    let patched_matches_root;
     if let Some(free_index) = free_index {
         // A slot is picked as free on its empty definition alone, and an older
         // build could leave one blank while its payload still held the removed
@@ -12335,17 +12336,37 @@ fn apply_private_inventory_add_item_to_payload_reusing(
             id_target,
             properties::ScalarValue::Int(new_id),
         )?;
+        // Whether the ids need re-aligning is decidable from THIS parse: the two
+        // writes above are fixed-size, so every other slot still holds the id it
+        // shows here, and the edited one was just set to its own index. Deciding it
+        // now saves the whole-payload parse the re-align would otherwise open with,
+        // and the proof below re-checks the invariant on the bytes that land.
+        let slots_after = properties::resolve(&retargeted.properties, &slots_segs)?;
+        let properties::PropertyValue::Array {
+            elements: slots_after,
+        } = &slots_after.value
+        else {
+            return Err(CoreError::Parse(
+                "MainContainer m_Slots is not a plain slot array after the edit".to_string(),
+            ));
+        };
+        ids_already_aligned = slots_after.iter().enumerate().all(|(index, slot)| {
+            index == new_index
+                || i32::try_from(index).is_ok_and(|expected| slot_id(slot) == Some(expected))
+        });
     }
 
     // 5. Re-align the edited container's slot ids with their indices. The append
     //    above keeps the invariant on its own for a healthy save; this also
     //    repairs a MainContainer an earlier build left misaligned.
-    let slots_path = {
-        let mut path = inventory_path.clone();
-        path.extend_from_slice(&slots_suffix);
-        path
-    };
-    normalize_slot_ids(&mut patched, &slots_path)?;
+    if !ids_already_aligned {
+        let slots_path = {
+            let mut path = inventory_path.clone();
+            path.extend_from_slice(&slots_suffix);
+            path
+        };
+        normalize_slot_ids(&mut patched, &slots_path)?;
+    }
 
     // 6. Final proof: strict re-parse AND the new slot must exist in the
     //    MainContainer itself with the requested path and count. A global
