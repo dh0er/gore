@@ -96,6 +96,19 @@ void main() {
     );
   });
 
+  test('enabled mod without component metadata fails closed', () {
+    expect(
+      hasIncompleteEnabledFootprintKnowledge(
+        LibraryState(
+          authoritative: true,
+          mods: [_mod('empty', const [])],
+          loadout: const LoadoutView(entries: [LoadoutEntryView(id: 'empty')]),
+        ),
+      ),
+      isTrue,
+    );
+  });
+
   test('disabled non-exact components do not qualify conflict findings', () {
     expect(
       hasIncompleteEnabledFootprintKnowledge(

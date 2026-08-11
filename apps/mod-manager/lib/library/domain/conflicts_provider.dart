@@ -50,9 +50,10 @@ bool hasIncompleteEnabledFootprintKnowledge(LibraryState state) {
     if (!entry.enabled) continue;
     final mod = modsById[entry.id];
     if (mod == null) return true;
-    if (mod.components.any(
-      (component) => component.coverage != FootprintCoverage.exact,
-    )) {
+    if (mod.components.isEmpty ||
+        mod.components.any(
+          (component) => component.coverage != FootprintCoverage.exact,
+        )) {
       return true;
     }
   }
