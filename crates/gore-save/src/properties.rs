@@ -54,8 +54,28 @@ pub struct PropStr(Arc<str>);
 /// short, internal, non-attacker-chosen strings, so the default SipHash costs more
 /// than the allocation interning is there to avoid. This is the usual
 /// multiply-and-rotate word hash.
-#[derive(Default, Clone, Copy)]
+///
+/// The names come out of the save file, so they are chosen by whoever wrote it —
+/// and a fixed hash that anyone can read here would let a crafted save drop
+/// thousands of names into one bucket and turn the millions of lookups a parse
+/// makes into a quadratic hang, long before the size caps could bite. The state is
+/// therefore started from a value drawn once per process, which no save can know.
+/// This is not a cryptographic hash and does not pretend to be; it is that unknown
+/// starting point that makes collisions impossible to work out ahead of time.
+#[derive(Clone, Copy)]
 struct NameHasher(u64);
+
+/// Drawn once per process from the standard library's randomly seeded hasher, so
+/// no dependency is needed to get an unpredictable value.
+fn name_hash_seed() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    static SEED: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *SEED.get_or_init(|| {
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        hasher.write_u8(0);
+        hasher.finish()
+    })
+}
 
 impl std::hash::Hasher for NameHasher {
     fn finish(&self) -> u64 {
@@ -78,13 +98,19 @@ impl std::hash::Hasher for NameHasher {
     }
 }
 
-#[derive(Default, Clone, Copy)]
-struct NameHasherBuilder;
+#[derive(Clone, Copy)]
+struct NameHasherBuilder(u64);
+
+impl NameHasherBuilder {
+    fn new() -> Self {
+        NameHasherBuilder(name_hash_seed())
+    }
+}
 
 impl std::hash::BuildHasher for NameHasherBuilder {
     type Hasher = NameHasher;
     fn build_hasher(&self) -> NameHasher {
-        NameHasher::default()
+        NameHasher(self.0)
     }
 }
 
@@ -92,7 +118,7 @@ thread_local! {
     /// Names seen on this thread. Bounded so a save full of unique strings cannot
     /// grow it without limit; past the cap new names simply are not shared.
     static INTERNED_NAMES: std::cell::RefCell<HashSet<Arc<str>, NameHasherBuilder>> =
-        std::cell::RefCell::new(HashSet::with_hasher(NameHasherBuilder));
+        std::cell::RefCell::new(HashSet::with_hasher(NameHasherBuilder::new()));
     /// Bytes of text the table above is holding on to.
     static INTERNED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -3041,6 +3067,44 @@ fn read_array_value(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The names being hashed come out of the save file, so the table has to be
+    /// keyed by something the file's author cannot know: without that, collisions
+    /// can be worked out in advance and a crafted save turns every lookup of a
+    /// parse into a linear scan. The seed is what supplies that, so this pins that
+    /// it genuinely reaches the hash rather than sitting unused beside it.
+    #[test]
+    fn the_name_hash_depends_on_the_per_process_seed() {
+        use std::hash::{BuildHasher, Hash, Hasher};
+
+        fn hash_with(seed: u64, text: &str) -> u64 {
+            let mut hasher = NameHasherBuilder(seed).build_hasher();
+            text.hash(&mut hasher);
+            hasher.finish()
+        }
+
+        let name = "GameplayTagContainer";
+        assert_eq!(
+            hash_with(1, name),
+            hash_with(1, name),
+            "the same seed has to keep hashing a name the same way"
+        );
+        assert_ne!(
+            hash_with(1, name),
+            hash_with(2, name),
+            "a different seed has to move the name somewhere else"
+        );
+        assert_ne!(
+            name_hash_seed(),
+            0,
+            "the drawn seed has to be a real value, not a zero standing in for one"
+        );
+        assert_eq!(
+            name_hash_seed(),
+            name_hash_seed(),
+            "the seed is drawn once, so the table cannot lose track of its own keys"
+        );
+    }
 
     /// The shared name table lives as long as the thread, so it must not be able to
     /// pin an unbounded amount of text: a name past the length limit is handed back
