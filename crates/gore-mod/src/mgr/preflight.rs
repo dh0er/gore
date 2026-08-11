@@ -555,10 +555,7 @@ fn inspect_relative(
                 ))
             }
             Ok(metadata) if super::model::metadata_is_link(&metadata) => {
-                return Err(format!(
-                    "preflight path is a symbolic link or reparse point: {}",
-                    display_path(&child_path)
-                ))
+                return Ok(Occupant::Obstructed)
             }
             Ok(_) => {}
         }
@@ -1453,6 +1450,21 @@ mod tests {
     use super::*;
     use crate::mgr::{LoadoutEntry, ModEntryMeta, ModKind};
 
+    #[cfg(unix)]
+    fn make_dir_link(target: &Path, link: &Path) -> bool {
+        std::os::unix::fs::symlink(target, link).unwrap();
+        true
+    }
+
+    #[cfg(windows)]
+    fn make_dir_link(target: &Path, link: &Path) -> bool {
+        match std::os::windows::fs::symlink_dir(target, link) {
+            Ok(()) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => false,
+            Err(error) => panic!("creating test directory symlink failed: {error}"),
+        }
+    }
+
     fn install_fixture() -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
         for directory in [
@@ -1555,6 +1567,25 @@ mod tests {
             inspect_install(root.directory.as_ref(), false).code,
             "install_incomplete"
         );
+    }
+
+    #[test]
+    fn install_link_occupants_are_removable_obstructions() {
+        let install = install_fixture();
+        let script = install.path().join("G1R/Script");
+        let target = install.path().join("linked-script-target");
+        fs::remove_dir(&script).unwrap();
+        fs::create_dir(&target).unwrap();
+        if !make_dir_link(&target, &script) {
+            return;
+        }
+
+        let root = inspect_game_root(install.path());
+        let check = inspect_install(root.directory.as_ref(), false);
+        assert_eq!(check.state, PreflightStateV1::Problem);
+        assert_eq!(check.code, "install_paths_obstructed");
+        assert_eq!(check.action, "remove_obstruction");
+        assert_eq!(check.items, vec![r"G1R\Script"]);
     }
 
     #[test]
