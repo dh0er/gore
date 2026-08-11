@@ -142,6 +142,13 @@ struct InstallMutationInspection {
     blocks_deployment_recovery: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeploymentRecoveryEvidence {
+    NotSeen,
+    Seen,
+    InspectionFailed,
+}
+
 enum EvidenceFailure {
     Problem(String),
     Unknown(String),
@@ -217,7 +224,7 @@ where
     let loadout = inspect_loadout(library_dir, loadout_path);
     let install = inspect_install(root.directory.as_ref(), loadout.requires_script_cache);
     let loadout_healthy = loadout.check.state == PreflightStateV1::Ok;
-    let (mut deployment, deployment_recovery_seen) = inspect_deployment(
+    let (mut deployment, deployment_recovery) = inspect_deployment(
         root.root.as_deref(),
         library_dir,
         loadout.loadout.as_ref(),
@@ -226,7 +233,7 @@ where
     );
     let install_mutation = inspect_install_mutation(
         root.root.as_deref(),
-        deployment_recovery_seen,
+        deployment_recovery,
         install_state,
         deploy_recovery,
     );
@@ -989,7 +996,7 @@ fn inspect_deployment<S>(
     loadout: Option<&Loadout>,
     loadout_healthy: bool,
     status: S,
-) -> (PreflightCheckV1, bool)
+) -> (PreflightCheckV1, DeploymentRecoveryEvidence)
 where
     S: FnOnce(&Path, &Path, &Loadout) -> crate::Result<ManagerStatus>,
 {
@@ -1002,7 +1009,7 @@ where
                 "repair_preflight_inputs",
                 "deployment state needs a readable game root and valid loadout",
             ),
-            false,
+            DeploymentRecoveryEvidence::NotSeen,
         );
     };
     // Status resolves the deploy-record states that do not depend on the target loadout before it
@@ -1010,7 +1017,11 @@ where
     // unreadable, but never project an InSync/ChangesPending conclusion from the fallback target.
     let fallback_loadout = Loadout::default();
     let status = status(game_root, library_dir, loadout.unwrap_or(&fallback_loadout));
-    let deployment_recovery_seen = matches!(&status, Ok(ManagerStatus::RecoveryRequired));
+    let deployment_recovery = match &status {
+        Ok(ManagerStatus::RecoveryRequired) => DeploymentRecoveryEvidence::Seen,
+        Err(_) => DeploymentRecoveryEvidence::InspectionFailed,
+        _ => DeploymentRecoveryEvidence::NotSeen,
+    };
     let check = match status {
         Ok(ManagerStatus::NothingDeployed) => PreflightCheckV1::new(
             PreflightCheckIdV1::Deployment,
@@ -1119,12 +1130,12 @@ where
         )
         .with_items([error.to_string()]),
     };
-    (check, deployment_recovery_seen)
+    (check, deployment_recovery)
 }
 
 fn inspect_install_mutation<P, R>(
     game_root: Option<&Path>,
-    deployment_recovery_seen: bool,
+    deployment_recovery: DeploymentRecoveryEvidence,
     install_state: P,
     deploy_recovery: R,
 ) -> InstallMutationInspection
@@ -1185,8 +1196,14 @@ where
             }
         )
     }));
-    if deployment_recovery_seen {
-        items.push("deployment status: recovery required".to_owned());
+    match deployment_recovery {
+        DeploymentRecoveryEvidence::Seen => {
+            items.push("deployment status: recovery required".to_owned())
+        }
+        DeploymentRecoveryEvidence::InspectionFailed => {
+            items.push("deployment status: inspection failed".to_owned())
+        }
+        DeploymentRecoveryEvidence::NotSeen => {}
     }
     if recovery.as_ref().is_ok_and(|required| *required) {
         items.push("deploy record: recovery required".to_owned());
@@ -1210,6 +1227,9 @@ where
             blocks_deployment_recovery: true,
         };
     }
+    let unauthenticated_deploy_recovery = deployment_recovery
+        == DeploymentRecoveryEvidence::InspectionFailed
+        && recovery.as_ref().is_ok_and(|required| *required);
     if probe.disposition == InstallCompileStateDisposition::InspectionFailed
         || probe.game_process == InstallCompileGameProcessDisposition::InspectionFailed
         || !probe.issues.is_empty()
@@ -1247,13 +1267,26 @@ where
             blocks_deployment_recovery: true,
         };
     }
+    if unauthenticated_deploy_recovery {
+        return InstallMutationInspection {
+            check: PreflightCheckV1::new(
+                PreflightCheckIdV1::InstallMutation,
+                PreflightStateV1::Unknown,
+                "install_mutation_inspection_failed",
+                "inspect_deployment",
+                "the deploy record requires recovery but its ownership evidence could not be authenticated",
+            )
+            .with_items(items),
+            blocks_deployment_recovery: true,
+        };
+    }
     let probe_recovery = probe.disposition
         == InstallCompileStateDisposition::RecoveryArtifactsPresent
         || !probe.artifacts.is_empty();
-    let independent_deploy_recovery =
-        recovery.is_ok_and(|required| required) && !deployment_recovery_seen;
+    let independent_deploy_recovery = recovery.is_ok_and(|required| required)
+        && deployment_recovery == DeploymentRecoveryEvidence::NotSeen;
     let independent_recovery = probe_recovery || independent_deploy_recovery;
-    if deployment_recovery_seen || independent_recovery {
+    if deployment_recovery == DeploymentRecoveryEvidence::Seen || independent_recovery {
         return InstallMutationInspection {
             check: PreflightCheckV1::new(
                 PreflightCheckIdV1::InstallMutation,
@@ -1914,6 +1947,26 @@ mod tests {
         );
         assert_eq!(state.checks[3].state, PreflightStateV1::Unknown);
         assert_eq!(state.checks[3].code, "deployment_inspection_failed");
+
+        let recovery = run_with(
+            install.path(),
+            &install.path().join("library"),
+            &install.path().join("loadout.json"),
+            |_, _, _| {
+                Err(crate::ModError::Other(
+                    "invalid recovery identity".to_owned(),
+                ))
+            },
+            |_| safe_probe(),
+            |_| Ok(true),
+        );
+        assert_eq!(recovery.checks[3].action, "inspect_deployment");
+        assert_eq!(recovery.checks[4].state, PreflightStateV1::Unknown);
+        assert_eq!(
+            recovery.checks[4].code,
+            "install_mutation_inspection_failed"
+        );
+        assert_eq!(recovery.checks[4].action, "inspect_deployment");
     }
 
     #[test]
@@ -2195,7 +2248,14 @@ mod tests {
                     .any(|item| item.starts_with("deployed: ")));
                 assert!(check.items.iter().any(|item| item.starts_with("target: ")));
             }
-            assert_eq!(recovery_seen, code == "deployment_recovery_required");
+            assert_eq!(
+                recovery_seen,
+                if code == "deployment_recovery_required" {
+                    DeploymentRecoveryEvidence::Seen
+                } else {
+                    DeploymentRecoveryEvidence::NotSeen
+                }
+            );
         }
     }
 
