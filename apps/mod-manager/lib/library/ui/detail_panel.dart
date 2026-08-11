@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../l10n/app_localizations.dart';
+import '../../preflight/domain/preflight_notifier.dart';
 import '../../status/domain/status_notifier.dart';
 import '../domain/conflicts_provider.dart';
 import '../domain/library_notifier.dart';
@@ -81,6 +82,7 @@ class DetailPanel extends ConsumerWidget {
     if (before.busy ||
         !before.authoritative ||
         ref.read(statusProvider).busy ||
+        ref.read(preflightProvider).busy ||
         ref.read(conflictsProvider).isLoading ||
         before.modById(mod.id) == null) {
       return;
@@ -158,10 +160,12 @@ class DetailPanel extends ConsumerWidget {
 
     final conflicts = ref.watch(conflictsProvider);
     final status = ref.watch(statusProvider);
+    final preflight = ref.watch(preflightProvider);
     final removeBlocked =
         library.busy ||
         !library.authoritative ||
         status.busy ||
+        preflight.busy ||
         conflicts.isLoading;
     final order = [for (final e in library.loadout.entries) e.id];
     final myConflicts = conflictsForMod(conflicts.value ?? const [], mod.id);

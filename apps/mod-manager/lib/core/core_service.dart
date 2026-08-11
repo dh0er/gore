@@ -5,6 +5,8 @@ import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 import 'package:path/path.dart' as p;
 
+import 'diagnostic_text.dart';
+
 final class _GoreCoreResponseV2 extends Struct {
   external Pointer<Uint8> data;
 
@@ -38,6 +40,7 @@ const managerRequiredCoreCommands = <String>[
   'mgr_apply',
   'mgr_import',
   'mgr_library_list',
+  'mgr_preflight_v1',
   'mgr_remove',
   'mgr_set_loadout',
   'mgr_status',
@@ -96,9 +99,9 @@ final class CoreBootstrapFailure {
     Iterable<String> missingCommands = const [],
     String? detail,
   }) {
-    final boundedPath = _boundedText(candidatePath, 512);
-    final boundedVersion = _boundedText(coreVersion, 128);
-    final boundedDetail = _boundedText(detail, 512);
+    final boundedPath = boundedDiagnosticText(candidatePath, 512);
+    final boundedVersion = boundedDiagnosticText(coreVersion, 128);
+    final boundedDetail = boundedDiagnosticText(detail, 512);
     final missing =
         missingCommands
             .where(managerRequiredCoreCommands.contains)
@@ -144,7 +147,7 @@ final class CoreBootstrapFailure {
   final bool detailTruncated;
 
   String technicalReport({String? managerVersion}) {
-    final boundedManagerVersion = _boundedText(managerVersion, 128);
+    final boundedManagerVersion = boundedDiagnosticText(managerVersion, 128);
     final report = <String, Object?>{
       'schema': 'gore-manager-core-bootstrap-v1',
       'reason': reason.wireCode,
@@ -575,7 +578,7 @@ CoreBootstrapState _evaluateCoreCandidate(
 
   return CoreBootstrapReady(
     libraryPath: candidate,
-    coreVersion: _boundedText(coreVersion, 128).value,
+    coreVersion: boundedDiagnosticText(coreVersion, 128).value,
   );
 }
 
@@ -711,6 +714,37 @@ class FakeGoreCoreFfiService implements GoreCoreFfiService {
   }
 }
 
+/// Complete neutral preflight fixture for app/widget tests using the generic
+/// fake core. Custom fakes can return this from their command switch too.
+Map<String, Object?> fakeHealthyManagerPreflightResponse() {
+  const ids = [
+    'game_root',
+    'install',
+    'loadout',
+    'deployment',
+    'install_mutation',
+    'ue4ss',
+    'write_access',
+  ];
+  return {
+    'ok': true,
+    'preflight': {
+      'format': 1,
+      'checks': [
+        for (final id in ids)
+          {
+            'id': id,
+            'state': id == 'write_access' ? 'unverified' : 'ok',
+            'code': id == 'write_access' ? 'unverified_read_only' : 'ready',
+            'action': id == 'write_access' ? 'verify_during_apply' : 'none',
+            'detail': 'test evidence',
+            'items': <String>[],
+          },
+      ],
+    },
+  };
+}
+
 GoreCoreFfiService createCoreService() {
   final state = inspectCoreCandidates(
     candidates: _candidateLibraryPaths(),
@@ -721,40 +755,6 @@ GoreCoreFfiService createCoreService() {
       NativeGoreCoreFfiService._(libraryPath, coreVersion),
     CoreBootstrapBlocked(:final failure) => MissingGoreCoreFfiService(failure),
   };
-}
-
-({String? value, bool truncated}) _boundedText(String? raw, int maxRunes) {
-  if (raw == null) return (value: null, truncated: false);
-  final buffer = StringBuffer();
-  var count = 0;
-  var truncated = false;
-  var previousWasSpace = false;
-  for (final rune in raw.runes) {
-    if (count == maxRunes) {
-      truncated = true;
-      break;
-    }
-    final isControl =
-        rune < 0x20 ||
-        (rune >= 0x7f && rune <= 0x9f) ||
-        rune == 0x061c ||
-        (rune >= 0x200e && rune <= 0x200f) ||
-        rune == 0x2028 ||
-        rune == 0x2029 ||
-        (rune >= 0x202a && rune <= 0x202e) ||
-        (rune >= 0x2066 && rune <= 0x2069);
-    final isSpace = isControl || rune == 0x20;
-    if (isSpace) {
-      if (!previousWasSpace && buffer.isNotEmpty) buffer.write(' ');
-      previousWasSpace = true;
-    } else {
-      buffer.writeCharCode(rune);
-      previousWasSpace = false;
-    }
-    count++;
-  }
-  final value = buffer.toString().trim();
-  return (value: value.isEmpty ? null : value, truncated: truncated);
 }
 
 List<String> _candidateLibraryPaths() {

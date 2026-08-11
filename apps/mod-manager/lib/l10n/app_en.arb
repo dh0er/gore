@@ -12,6 +12,10 @@
   "coreCopyTechnicalDetails": "Copy technical details",
   "coreTechnicalDetailsCopied": "Technical details copied",
   "coreTechnicalDetailsCopyFailed": "Technical details could not be copied. Try again.",
+  "preflightAttention": "Setup needs attention.",
+  "preflightUnavailable": "Setup diagnosis is unavailable.",
+  "preflightRetry": "Check again",
+  "preflightReviewStatus": "Review status",
   "statusUnknown": "Unknown",
   "@statusUnknown": {
     "description": "Deployment status is unavailable or uses an unsupported future state."

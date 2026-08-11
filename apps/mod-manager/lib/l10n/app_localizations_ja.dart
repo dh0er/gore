@@ -50,6 +50,18 @@ class AppLocalizationsJa extends AppLocalizations {
   String get coreTechnicalDetailsCopyFailed => '技術情報をコピーできませんでした。もう一度お試しください。';
 
   @override
+  String get preflightAttention => 'セットアップの確認が必要です。';
+
+  @override
+  String get preflightUnavailable => 'セットアップ診断を利用できません。';
+
+  @override
+  String get preflightRetry => '再確認';
+
+  @override
+  String get preflightReviewStatus => '状態を確認';
+
+  @override
   String get statusUnknown => '不明';
 
   @override

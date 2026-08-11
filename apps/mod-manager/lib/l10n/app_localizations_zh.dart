@@ -48,6 +48,18 @@ class AppLocalizationsZh extends AppLocalizations {
   String get coreTechnicalDetailsCopyFailed => '无法复制技术详细信息。请重试。';
 
   @override
+  String get preflightAttention => '设置需要处理。';
+
+  @override
+  String get preflightUnavailable => '设置诊断不可用。';
+
+  @override
+  String get preflightRetry => '重新检查';
+
+  @override
+  String get preflightReviewStatus => '检查状态';
+
+  @override
   String get statusUnknown => '未知';
 
   @override
@@ -444,6 +456,18 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get coreTechnicalDetailsCopyFailed => '无法复制技术详细信息。请重试。';
+
+  @override
+  String get preflightAttention => '设置需要处理。';
+
+  @override
+  String get preflightUnavailable => '设置诊断不可用。';
+
+  @override
+  String get preflightRetry => '重新检查';
+
+  @override
+  String get preflightReviewStatus => '检查状态';
 
   @override
   String get statusUnknown => '未知';

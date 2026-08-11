@@ -53,6 +53,18 @@ class AppLocalizationsEn extends AppLocalizations {
       'Technical details could not be copied. Try again.';
 
   @override
+  String get preflightAttention => 'Setup needs attention.';
+
+  @override
+  String get preflightUnavailable => 'Setup diagnosis is unavailable.';
+
+  @override
+  String get preflightRetry => 'Check again';
+
+  @override
+  String get preflightReviewStatus => 'Review status';
+
+  @override
   String get statusUnknown => 'Unknown';
 
   @override

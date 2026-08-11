@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'package:path/path.dart' as p;
 
+final _windowsPath = p.Context(style: p.Style.windows);
+
 /// Derive the game root (the folder containing `G1R/`) from the configured path.
 ///
 /// That path may be the install **root** itself — the shared `game_path` set by
@@ -22,10 +24,44 @@ String? gameRootFromExe(String? path) {
   return null;
 }
 
+/// Pure lexical candidate for read-only Manager diagnosis.
+///
+/// Unlike [gameRootFromExe], this deliberately does not require the selected
+/// path to exist. A stale or malformed persisted value must reach native
+/// preflight so it can explain the problem instead of being collapsed into
+/// "no path". Only the exact supported executable shape is converted to its
+/// install root; every other non-blank value is forwarded unchanged.
+String? diagnosticGameRootCandidate(String? path) {
+  if (path == null || path.trim().isEmpty) return null;
+  final normalized = _windowsPath.normalize(path);
+  final parts = _windowsPath.split(normalized);
+  const tail = ['G1R', 'Binaries', 'Win64', 'G1R-Win64-Shipping.exe'];
+  if (parts.length >= tail.length) {
+    final offset = parts.length - tail.length;
+    var exactExe = true;
+    for (var index = 0; index < tail.length; index++) {
+      if (parts[offset + index].toLowerCase() != tail[index].toLowerCase()) {
+        exactExe = false;
+        break;
+      }
+    }
+    if (exactExe) {
+      var root = normalized;
+      for (var index = 0; index < tail.length; index++) {
+        root = _windowsPath.dirname(root);
+      }
+      return root;
+    }
+  }
+  return path;
+}
+
 /// The loose FMOD bank directory, or null if the game root can't be resolved.
 String? fmodDesktopDir(String? exePath) {
   final root = gameRootFromExe(exePath);
-  return root == null ? null : p.join(root, 'G1R', 'Content', 'FMOD', 'Desktop');
+  return root == null
+      ? null
+      : p.join(root, 'G1R', 'Content', 'FMOD', 'Desktop');
 }
 
 /// The bank files a user can mod (excludes Master/mixer banks with no audio).

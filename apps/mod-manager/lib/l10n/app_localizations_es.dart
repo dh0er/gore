@@ -53,6 +53,19 @@ class AppLocalizationsEs extends AppLocalizations {
       'No se pudieron copiar los detalles técnicos. Inténtalo de nuevo.';
 
   @override
+  String get preflightAttention => 'La configuración necesita atención.';
+
+  @override
+  String get preflightUnavailable =>
+      'El diagnóstico de configuración no está disponible.';
+
+  @override
+  String get preflightRetry => 'Comprobar de nuevo';
+
+  @override
+  String get preflightReviewStatus => 'Revisar estado';
+
+  @override
   String get statusUnknown => 'Desconocido';
 
   @override

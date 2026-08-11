@@ -37,4 +37,33 @@ void main() {
       expect(gameRootFromExe(''), isNull);
     });
   });
+
+  group('diagnosticGameRootCandidate', () {
+    test('forwards an explicit root without touching the filesystem', () {
+      const root = r'C:\missing\Gothic Remake';
+      expect(diagnosticGameRootCandidate(root), root);
+    });
+
+    test('lexically derives the root from the exact executable shape', () {
+      const exe =
+          r'C:\missing\Gothic Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe';
+      expect(diagnosticGameRootCandidate(exe), r'C:\missing\Gothic Remake');
+    });
+
+    test('matches the executable shape case-insensitively', () {
+      const exe = r'C:\missing\g1r\BINARIES\win64\g1r-win64-shipping.EXE';
+      expect(diagnosticGameRootCandidate(exe), r'C:\missing');
+    });
+
+    test('forwards a wrong executable name for native diagnosis', () {
+      const wrong = r'C:\missing\G1R\Binaries\Win64\other.exe';
+      expect(diagnosticGameRootCandidate(wrong), wrong);
+    });
+
+    test('returns null only for null or blank selections', () {
+      expect(diagnosticGameRootCandidate(null), isNull);
+      expect(diagnosticGameRootCandidate(''), isNull);
+      expect(diagnosticGameRootCandidate('   '), isNull);
+    });
+  });
 }

@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_manager/core/core_service.dart';
 import 'package:gore_manager/core/mgr_ffi.dart';
 import 'package:gore_manager/library/domain/models.dart';
+import 'package:gore_manager/preflight/domain/models.dart';
 
 /// mgr_library_list fixture: two mods that together cover every component
 /// type of the contract (plus one unknown type), the raw_file target_file
@@ -369,6 +370,129 @@ void main() {
         expect(s.raw['foo'], 1);
       },
     );
+  });
+
+  group('MgrFfi.preflight', () {
+    Map<String, Object?> response({
+      String futureState = 'ok',
+      String futureAction = 'none',
+    }) {
+      const ids = [
+        'game_root',
+        'install',
+        'loadout',
+        'deployment',
+        'install_mutation',
+        'ue4ss',
+        'write_access',
+      ];
+      return {
+        'ok': true,
+        'preflight': {
+          'format': 1,
+          'checks': [
+            for (var index = 0; index < ids.length; index++)
+              {
+                'id': ids[index],
+                'state': index == 1 ? futureState : 'ok',
+                'code': index == 1 ? 'future_code' : 'ready',
+                'action': index == 1 ? futureAction : 'none',
+                'detail': 'evidence $index',
+                'items': <String>['item $index'],
+                'future_field': true,
+              },
+          ],
+          'future_top_level': true,
+        },
+      };
+    }
+
+    test('sends only the explicit root and parses the fixed report', () async {
+      final fake = FakeGoreCoreFfiService(
+        responses: {'mgr_preflight_v1': response()},
+      );
+
+      final report = await MgrFfi(fake).preflight(r'C:\game');
+
+      expect(fake.calls.single.command, 'mgr_preflight_v1');
+      expect(fake.calls.single.payload, {'game_root': r'C:\game'});
+      expect(report.checks, hasLength(7));
+      expect(report.check(PreflightCheckId.install).detail, 'evidence 1');
+      expect(report.primarySetupFinding, isNull);
+    });
+
+    test('an unconfigured fake does not fabricate a healthy report', () async {
+      final fake = FakeGoreCoreFfiService(responses: const {});
+
+      await expectLater(
+        MgrFfi(fake).preflight('C:/game'),
+        throwsA(
+          isA<MgrFfiException>()
+              .having(
+                (error) => error.message,
+                'message',
+                contains('mgr_preflight_v1'),
+              )
+              .having((error) => error.code, 'code', 'UNKNOWN'),
+        ),
+      );
+    });
+
+    test(
+      'future vocabulary is preserved and has no executable action',
+      () async {
+        final fake = FakeGoreCoreFfiService(
+          responses: {
+            'mgr_preflight_v1': response(
+              futureState: 'future_attention',
+              futureAction: 'format_drive',
+            ),
+          },
+        );
+
+        final report = await MgrFfi(fake).preflight('C:/game');
+        final finding = report.primarySetupFinding!;
+        expect(finding.rawState, 'future_attention');
+        expect(finding.state, isNull);
+        expect(finding.rawAction, 'format_drive');
+        expect(finding.action, isNull);
+      },
+    );
+
+    test('malformed format, order, or field types fail closed', () async {
+      final malformed = <Map<String, Object?>>[];
+      final wrongFormat = response();
+      (wrongFormat['preflight'] as Map<String, Object?>)['format'] = 2;
+      malformed.add(wrongFormat);
+
+      final wrongOrder = response();
+      final checks =
+          (wrongOrder['preflight'] as Map<String, Object?>)['checks'] as List;
+      (checks[0] as Map<String, Object?>)['id'] = 'install';
+      malformed.add(wrongOrder);
+
+      final wrongItems = response();
+      final typedChecks =
+          (wrongItems['preflight'] as Map<String, Object?>)['checks'] as List;
+      (typedChecks[0] as Map<String, Object?>)['items'] = [1];
+      malformed.add(wrongItems);
+
+      for (final wire in malformed) {
+        final fake = FakeGoreCoreFfiService(
+          responses: {'mgr_preflight_v1': wire},
+        );
+        await expectLater(
+          MgrFfi(fake).preflight('C:/game'),
+          throwsA(
+            isA<MgrFfiException>().having(
+              (error) => error.code,
+              'code',
+              'MGR_PREFLIGHT_INVALID_RESPONSE',
+            ),
+          ),
+        );
+      }
+    });
   });
 
   group('MgrFfi errors', () {

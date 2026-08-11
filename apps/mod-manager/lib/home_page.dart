@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,15 +9,30 @@ import 'app/game_paths.dart';
 import 'app/ui/about_dialog.dart';
 import 'app/ui/window_chrome.dart';
 import 'conflicts/ui/conflict_panel.dart';
+import 'core/diagnostic_text.dart';
 import 'l10n/app_localizations.dart';
 import 'library/domain/conflicts_provider.dart';
 import 'library/domain/library_notifier.dart';
 import 'library/domain/models.dart';
 import 'library/ui/detail_panel.dart';
 import 'library/ui/mod_list.dart';
+import 'preflight/domain/models.dart';
+import 'preflight/domain/preflight_notifier.dart';
 import 'settings/ui/settings_tab.dart';
 import 'status/domain/status_notifier.dart';
 import 'status/ui/status_details_dialog.dart';
+
+bool _preflightFindingUsesRetry(PreflightCheckView finding) =>
+    switch (finding.action) {
+      PreflightActionKind.selectGameRoot ||
+      PreflightActionKind.recoverDeployment ||
+      PreflightActionKind.removeStudioDeployment ||
+      PreflightActionKind.reviewApply ||
+      PreflightActionKind.reviewReapply ||
+      PreflightActionKind.inspectDeployment ||
+      PreflightActionKind.runFullStatus => false,
+      _ => true,
+    };
 
 /// Home: a Mods tab (library list + detail + conflicts, with an import/apply
 /// action bar) and the unchanged Settings tab.
@@ -39,15 +56,33 @@ class _HomePageState extends ConsumerState<HomePage> {
   final FocusNode _settingsGamePathFocusNode = FocusNode(
     debugLabel: 'mod-manager-settings-game-path',
   );
+  final FocusNode _preflightRetryFocusNode = FocusNode(
+    debugLabel: 'mod-manager-preflight-retry',
+  );
   ({FocusNode node, String? removedModId})? _pendingFocus;
   int _pendingFocusGeneration = 0;
+  ({String root, int generation})? _preflightRetryFocusRequest;
 
   String? get _gameRoot => gameRootFromExe(ref.read(gameExePathProvider));
 
   bool get _focusBlocked =>
       ref.read(libraryProvider).busy ||
       ref.read(statusProvider).busy ||
+      ref.read(preflightProvider).busy ||
       ref.read(conflictsProvider).isLoading;
+
+  void _refreshPreflightWhenIdle() {
+    if (!mounted) return;
+    final preflight = ref.read(preflightProvider);
+    if (!preflight.pending ||
+        preflight.busy ||
+        ref.read(libraryProvider).busy ||
+        ref.read(statusProvider).busy ||
+        ref.read(conflictsProvider).isLoading) {
+      return;
+    }
+    unawaited(ref.read(preflightProvider.notifier).refresh());
+  }
 
   void _queueFocusWhenIdle(FocusNode node, {String? removedModId}) {
     final selected = ref.read(selectedModProvider);
@@ -99,12 +134,62 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   void _queueRefreshFocus() => _queueFocusWhenIdle(_libraryRefreshFocusNode);
 
+  void _rememberPreflightRetryFocus(String? root, int generation) {
+    _preflightRetryFocusRequest =
+        root != null && _preflightRetryFocusNode.hasFocus
+        ? (root: root, generation: generation)
+        : null;
+  }
+
+  void _settlePreflightRetryFocus(
+    PreflightState? previous,
+    PreflightState next,
+  ) {
+    final request = _preflightRetryFocusRequest;
+    if (request == null || previous?.busy != true || next.busy) return;
+    _preflightRetryFocusRequest = null;
+    final finding = next.authoritative
+        ? next.report?.primarySetupFinding
+        : null;
+    if (next.candidateRoot != request.root ||
+        next.generation != request.generation ||
+        (next.error == null &&
+            (finding == null || !_preflightFindingUsesRetry(finding)))) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final latest = ref.read(preflightProvider);
+      final latestFinding = latest.authoritative
+          ? latest.report?.primarySetupFinding
+          : null;
+      final retryStillVisible =
+          latest.error != null ||
+          (latestFinding != null && _preflightFindingUsesRetry(latestFinding));
+      final currentFocus = FocusManager.instance.primaryFocus;
+      final focusMovedElsewhere =
+          currentFocus != null &&
+          currentFocus != _preflightRetryFocusNode &&
+          currentFocus is! FocusScopeNode;
+      if (latest.candidateRoot != request.root ||
+          latest.generation != request.generation ||
+          latest.busy ||
+          !retryStillVisible ||
+          focusMovedElsewhere ||
+          _preflightRetryFocusNode.context == null) {
+        return;
+      }
+      _preflightRetryFocusNode.requestFocus();
+    });
+  }
+
   @override
   void dispose() {
     _importFocusNode.dispose();
     _libraryRefreshFocusNode.dispose();
     _statusDetailsFocusNode.dispose();
     _settingsGamePathFocusNode.dispose();
+    _preflightRetryFocusNode.dispose();
     super.dispose();
   }
 
@@ -119,7 +204,11 @@ class _HomePageState extends ConsumerState<HomePage> {
     // listener below and path changes get exactly one refresh here.
     ref.listen<String?>(gameExePathProvider, (previous, next) {
       if (!mounted) return;
+      ref
+          .read(preflightProvider.notifier)
+          .selectRoot(diagnosticGameRootCandidate(next));
       ref.read(statusProvider.notifier).refresh(gameRootFromExe(next));
+      _refreshPreflightWhenIdle();
     });
 
     // Enabling, disabling, reordering, importing, or removing mods changes what a
@@ -129,6 +218,14 @@ class _HomePageState extends ConsumerState<HomePage> {
     // once the library settles (not busy) whenever the loadout entries changed.
     ref.listen<LibraryState>(libraryProvider, (previous, next) {
       if (!mounted) return;
+      final invalidatesPreflight =
+          previous == null ||
+          (!previous.busy && next.busy) ||
+          previous.authoritative != next.authoritative ||
+          !_sameLoadoutEntries(previous.loadout, next.loadout);
+      if (invalidatesPreflight) {
+        ref.read(preflightProvider.notifier).invalidateLibrary();
+      }
       if (next.authoritative) {
         final selected = ref.read(selectedModProvider);
         if (selected != null && next.modById(selected) == null) {
@@ -144,12 +241,20 @@ class _HomePageState extends ConsumerState<HomePage> {
         ref.read(statusProvider.notifier).refresh(_gameRoot);
       }
       _flushPendingFocusWhenIdle();
+      _refreshPreflightWhenIdle();
     });
     ref.listen<StatusState>(statusProvider, (previous, next) {
       _flushPendingFocusWhenIdle();
+      _refreshPreflightWhenIdle();
     });
     ref.listen(conflictsProvider, (previous, next) {
       _flushPendingFocusWhenIdle();
+      _refreshPreflightWhenIdle();
+    });
+    ref.listen<PreflightState>(preflightProvider, (previous, next) {
+      _settlePreflightRetryFocus(previous, next);
+      _flushPendingFocusWhenIdle();
+      _refreshPreflightWhenIdle();
     });
     ref.listen<String?>(selectedModProvider, (previous, next) {
       final pending = _pendingFocus;
@@ -159,6 +264,9 @@ class _HomePageState extends ConsumerState<HomePage> {
         _pendingFocus = null;
         _pendingFocusGeneration++;
       }
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _refreshPreflightWhenIdle();
     });
 
     final l10n = AppLocalizations.of(context);
@@ -260,9 +368,11 @@ class _HomePageState extends ConsumerState<HomePage> {
                     libraryRefreshFocusNode: _libraryRefreshFocusNode,
                     statusDetailsFocusNode: _statusDetailsFocusNode,
                     settingsGamePathFocusNode: _settingsGamePathFocusNode,
+                    preflightRetryFocusNode: _preflightRetryFocusNode,
                     queueImportFocusAfterRemove: _queueImportFocusAfterRemove,
                     queueRefreshFocusAfterRemove: _queueRefreshFocusAfterRemove,
                     queueRefreshFocus: _queueRefreshFocus,
+                    rememberPreflightRetryFocus: _rememberPreflightRetryFocus,
                   ),
                   SettingsTab(gamePathFocusNode: _settingsGamePathFocusNode),
                 ],
@@ -282,18 +392,22 @@ class _ModsTab extends ConsumerWidget {
     required this.libraryRefreshFocusNode,
     required this.statusDetailsFocusNode,
     required this.settingsGamePathFocusNode,
+    required this.preflightRetryFocusNode,
     required this.queueImportFocusAfterRemove,
     required this.queueRefreshFocusAfterRemove,
     required this.queueRefreshFocus,
+    required this.rememberPreflightRetryFocus,
   });
 
   final FocusNode importFocusNode;
   final FocusNode libraryRefreshFocusNode;
   final FocusNode statusDetailsFocusNode;
   final FocusNode settingsGamePathFocusNode;
+  final FocusNode preflightRetryFocusNode;
   final ValueChanged<String> queueImportFocusAfterRemove;
   final ValueChanged<String> queueRefreshFocusAfterRemove;
   final VoidCallback queueRefreshFocus;
+  final void Function(String? root, int generation) rememberPreflightRetryFocus;
 
   String? _gameRoot(WidgetRef ref) =>
       gameRootFromExe(ref.read(gameExePathProvider));
@@ -305,6 +419,7 @@ class _ModsTab extends ConsumerWidget {
         library.busy ||
         !library.authoritative ||
         ref.read(statusProvider).busy ||
+        ref.read(preflightProvider).busy ||
         ref.read(conflictsProvider).isLoading) {
       return;
     }
@@ -322,6 +437,7 @@ class _ModsTab extends ConsumerWidget {
         library.busy ||
         !library.authoritative ||
         ref.read(statusProvider).busy ||
+        ref.read(preflightProvider).busy ||
         ref.read(conflictsProvider).isLoading) {
       return;
     }
@@ -350,19 +466,26 @@ class _ModsTab extends ConsumerWidget {
           studioActiveForCurrentRoot,
           statusError: status.gameRoot == root ? status.error : null,
         ) ||
+        ref.read(preflightProvider).busy ||
         ref.read(conflictsProvider).isLoading) {
       return;
     }
-    await ref.read(statusProvider.notifier).apply(root);
-    // Applying resets deployed==target; the library isn't touched, but a
-    // re-analyze is cheap and the status was already refreshed by apply().
-    ref.invalidate(conflictsProvider);
+    try {
+      await ref.read(statusProvider.notifier).apply(root);
+    } finally {
+      // Applying can change install/recovery evidence even when native reports
+      // an error. Discard the old snapshot and re-read after status/conflicts
+      // settle rather than leaving a stale setup finding authoritative.
+      ref.invalidate(conflictsProvider);
+      ref.read(preflightProvider.notifier).invalidateLibrary();
+    }
   }
 
   Future<void> _refreshAll(WidgetRef ref, {String? expectedRoot}) async {
     if ((expectedRoot != null && _gameRoot(ref) != expectedRoot) ||
         ref.read(libraryProvider).busy ||
         ref.read(statusProvider).busy ||
+        ref.read(preflightProvider).busy ||
         ref.read(conflictsProvider).isLoading) {
       return;
     }
@@ -398,7 +521,11 @@ class _ModsTab extends ConsumerWidget {
       ),
     );
     if (ok != true || _gameRoot(ref) != root || _statusActionBusy(ref)) return;
-    await ref.read(statusProvider.notifier).undeployAll(root);
+    try {
+      await ref.read(statusProvider.notifier).undeployAll(root);
+    } finally {
+      ref.read(preflightProvider.notifier).invalidateLibrary();
+    }
   }
 
   Future<void> _recoverDeployment(
@@ -429,7 +556,11 @@ class _ModsTab extends ConsumerWidget {
       ),
     );
     if (ok != true || _gameRoot(ref) != root || !_canRecover(ref, root)) return;
-    await ref.read(statusProvider.notifier).undeployAll(root);
+    try {
+      await ref.read(statusProvider.notifier).undeployAll(root);
+    } finally {
+      ref.read(preflightProvider.notifier).invalidateLibrary();
+    }
   }
 
   Future<void> _promptTakeOver(
@@ -462,7 +593,11 @@ class _ModsTab extends ConsumerWidget {
     if (ok != true || _gameRoot(ref) != root || !_canTakeOver(ref, root)) {
       return;
     }
-    await ref.read(statusProvider.notifier).undeployAll(root);
+    try {
+      await ref.read(statusProvider.notifier).undeployAll(root);
+    } finally {
+      ref.read(preflightProvider.notifier).invalidateLibrary();
+    }
   }
 
   bool _canRecover(WidgetRef ref, String root) {
@@ -479,7 +614,15 @@ class _ModsTab extends ConsumerWidget {
   bool _statusActionBusy(WidgetRef ref) =>
       ref.read(libraryProvider).busy ||
       ref.read(statusProvider).busy ||
+      ref.read(preflightProvider).busy ||
       ref.read(conflictsProvider).isLoading;
+
+  void _openSettings(BuildContext context) {
+    DefaultTabController.of(context).animateTo(1);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (context.mounted) settingsGamePathFocusNode.requestFocus();
+    });
+  }
 
   Future<void> _showStatusDetails(BuildContext context, WidgetRef ref) async {
     final result = await showDialog<StatusDetailsResult>(
@@ -492,13 +635,17 @@ class _ModsTab extends ConsumerWidget {
           final status = dialogRef.watch(statusProvider);
           final library = dialogRef.watch(libraryProvider);
           final conflicts = dialogRef.watch(conflictsProvider);
+          final preflight = dialogRef.watch(preflightProvider);
           final statusForCurrentRoot = status.statusRoot == gameRoot
               ? status.status
               : null;
           final studioActiveForCurrentRoot =
               status.gameRoot == gameRoot && status.studioActive;
           final operationsBusy =
-              library.busy || status.busy || conflicts.isLoading;
+              library.busy ||
+              status.busy ||
+              preflight.busy ||
+              conflicts.isLoading;
           final applyEnabled = canApply(
             statusForCurrentRoot,
             library,
@@ -513,7 +660,8 @@ class _ModsTab extends ConsumerWidget {
             currentRoot: gameRoot,
             library: library,
             operationsBusy: operationsBusy,
-            applyEnabled: applyEnabled && !conflicts.isLoading,
+            applyEnabled:
+                applyEnabled && !preflight.busy && !conflicts.isLoading,
           );
         },
       ),
@@ -540,10 +688,7 @@ class _ModsTab extends ConsumerWidget {
           await _promptTakeOver(context, ref, expectedRoot);
         }
       case StatusDetailsAction.settings:
-        DefaultTabController.of(context).animateTo(1);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (context.mounted) settingsGamePathFocusNode.requestFocus();
-        });
+        _openSettings(context);
       case StatusDetailsAction.close || null:
         break;
     }
@@ -562,10 +707,12 @@ class _ModsTab extends ConsumerWidget {
     final gamePath = ref.watch(gameExePathProvider);
     final gameRoot = gameRootFromExe(gamePath);
     final status = ref.watch(statusProvider);
+    final preflight = ref.watch(preflightProvider);
     final library = ref.watch(libraryProvider);
     final conflicts = ref.watch(conflictsProvider);
     final conflictCount = conflicts.value?.length ?? 0;
-    final operationsBusy = library.busy || status.busy || conflicts.isLoading;
+    final operationsBusy =
+        library.busy || status.busy || preflight.busy || conflicts.isLoading;
     final libraryMutationsBlocked = operationsBusy || !library.authoritative;
     final compactConflictPanel =
         media.size.height < 560 &&
@@ -588,6 +735,7 @@ class _ModsTab extends ConsumerWidget {
           studioActiveForCurrentRoot,
           statusError: status.gameRoot == gameRoot ? status.error : null,
         ) &&
+        !preflight.busy &&
         !conflicts.isLoading;
 
     final importAction = MenuAnchor(
@@ -638,7 +786,7 @@ class _ModsTab extends ConsumerWidget {
       focusNode: statusDetailsFocusNode,
       onPressed: () => _showStatusDetails(context, ref),
     );
-    final progress = status.busy || conflicts.isLoading
+    final progress = status.busy || preflight.busy || conflicts.isLoading
         ? const SizedBox(
             key: ValueKey('manager-operation-progress'),
             width: 16,
@@ -742,10 +890,14 @@ class _ModsTab extends ConsumerWidget {
 
         // Game-path hint / apply-report / errors banner.
         _InfoBanner(
-          gameRoot: gameRoot,
           status: status,
+          preflight: preflight,
           libraryRefreshFocusNode: libraryRefreshFocusNode,
           queueRefreshFocus: queueRefreshFocus,
+          openSettings: () => _openSettings(context),
+          openStatusDetails: () => _showStatusDetails(context, ref),
+          preflightRetryFocusNode: preflightRetryFocusNode,
+          rememberPreflightRetryFocus: rememberPreflightRetryFocus,
         ),
 
         const Divider(height: 1),
@@ -979,16 +1131,24 @@ class _StatusChip extends StatelessWidget {
 /// echoes the last apply report + warnings, or surfaces an error.
 class _InfoBanner extends ConsumerWidget {
   const _InfoBanner({
-    required this.gameRoot,
     required this.status,
+    required this.preflight,
     required this.libraryRefreshFocusNode,
     required this.queueRefreshFocus,
+    required this.openSettings,
+    required this.openStatusDetails,
+    required this.preflightRetryFocusNode,
+    required this.rememberPreflightRetryFocus,
   });
 
-  final String? gameRoot;
   final StatusState status;
+  final PreflightState preflight;
   final FocusNode libraryRefreshFocusNode;
   final VoidCallback queueRefreshFocus;
+  final VoidCallback openSettings;
+  final VoidCallback openStatusDetails;
+  final FocusNode preflightRetryFocusNode;
+  final void Function(String? root, int generation) rememberPreflightRetryFocus;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -996,17 +1156,63 @@ class _InfoBanner extends ConsumerWidget {
     final theme = Theme.of(context);
     final library = ref.watch(libraryProvider);
     final conflicts = ref.watch(conflictsProvider);
-    final refreshBlocked = library.busy || status.busy || conflicts.isLoading;
+    final refreshBlocked =
+        library.busy || status.busy || preflight.busy || conflicts.isLoading;
 
     final children = <Widget>[];
 
-    if (gameRoot == null) {
+    if (preflight.candidateRoot == null) {
       children.add(
         _line(
           theme,
           Icons.info_outline,
           l10n.errorSetGamePath,
           theme.colorScheme.onSurfaceVariant,
+          key: const ValueKey('preflight-no-game-path'),
+          maxLines: 2,
+          action: TextButton.icon(
+            key: const ValueKey('preflight-settings-action'),
+            onPressed: openSettings,
+            icon: const Icon(Icons.settings_outlined),
+            label: Text(l10n.statusDetailsOpenSettings),
+          ),
+        ),
+      );
+    }
+
+    final finding = preflight.authoritative
+        ? preflight.report?.primarySetupFinding
+        : null;
+    if (preflight.candidateRoot != null && preflight.error != null) {
+      final message = _withDiagnostic(
+        l10n.preflightUnavailable,
+        preflight.error,
+      );
+      children.add(
+        _line(
+          theme,
+          Icons.error_outline,
+          message,
+          theme.colorScheme.error,
+          key: const ValueKey('preflight-unavailable'),
+          liveRegion: true,
+          maxLines: 2,
+          action: _preflightRetryAction(l10n, ref, refreshBlocked),
+        ),
+      );
+    } else if (finding != null) {
+      final isProblem = finding.state == PreflightStateKind.problem;
+      final message = _withDiagnostic(l10n.preflightAttention, finding.detail);
+      children.add(
+        _line(
+          theme,
+          isProblem ? Icons.error_outline : Icons.warning_amber_rounded,
+          message,
+          isProblem ? theme.colorScheme.error : Colors.amber.shade800,
+          key: const ValueKey('preflight-setup-finding'),
+          liveRegion: true,
+          maxLines: 2,
+          action: _preflightAction(l10n, ref, finding, refreshBlocked),
         ),
       );
     }
@@ -1038,6 +1244,7 @@ class _InfoBanner extends ConsumerWidget {
                 : () async {
                     if (ref.read(libraryProvider).busy ||
                         ref.read(statusProvider).busy ||
+                        ref.read(preflightProvider).busy ||
                         ref.read(conflictsProvider).isLoading) {
                       return;
                     }
@@ -1106,14 +1313,82 @@ class _InfoBanner extends ConsumerWidget {
     );
   }
 
+  Widget _preflightAction(
+    AppLocalizations l10n,
+    WidgetRef ref,
+    PreflightCheckView finding,
+    bool blocked,
+  ) {
+    return switch (finding.action) {
+      PreflightActionKind.selectGameRoot => TextButton.icon(
+        key: const ValueKey('preflight-settings-action'),
+        onPressed: blocked ? null : openSettings,
+        icon: const Icon(Icons.settings_outlined),
+        label: Text(l10n.statusDetailsOpenSettings),
+      ),
+      PreflightActionKind.recoverDeployment ||
+      PreflightActionKind.removeStudioDeployment ||
+      PreflightActionKind.reviewApply ||
+      PreflightActionKind.reviewReapply ||
+      PreflightActionKind.inspectDeployment ||
+      PreflightActionKind.runFullStatus => TextButton.icon(
+        key: const ValueKey('preflight-status-action'),
+        onPressed: blocked ? null : openStatusDetails,
+        icon: const Icon(Icons.fact_check_outlined),
+        label: Text(l10n.preflightReviewStatus),
+      ),
+      _ => _preflightRetryAction(l10n, ref, blocked),
+    };
+  }
+
+  Widget _preflightRetryAction(
+    AppLocalizations l10n,
+    WidgetRef ref,
+    bool blocked,
+  ) {
+    return TextButton.icon(
+      key: const ValueKey('preflight-retry-action'),
+      focusNode: preflightRetryFocusNode,
+      onPressed: blocked
+          ? null
+          : () {
+              if (ref.read(libraryProvider).busy ||
+                  ref.read(statusProvider).busy ||
+                  ref.read(preflightProvider).busy ||
+                  ref.read(conflictsProvider).isLoading) {
+                return;
+              }
+              final current = ref.read(preflightProvider);
+              rememberPreflightRetryFocus(
+                current.candidateRoot,
+                current.generation + 1,
+              );
+              ref.read(preflightProvider.notifier).retry();
+            },
+      icon: const Icon(Icons.refresh),
+      label: Text(l10n.preflightRetry),
+    );
+  }
+
+  String _withDiagnostic(String friendly, String? raw) {
+    final bounded = boundedDiagnosticText(raw, 512);
+    final value = bounded.value;
+    if (value == null) return friendly;
+    return '$friendly $value${bounded.truncated ? '…' : ''}';
+  }
+
   Widget _line(
     ThemeData theme,
     IconData icon,
     String text,
     Color color, {
+    Key? key,
     Widget? action,
+    bool liveRegion = false,
+    int? maxLines,
   }) {
-    return Padding(
+    final line = Padding(
+      key: key,
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1121,14 +1396,21 @@ class _InfoBanner extends ConsumerWidget {
           Icon(icon, size: 16, color: color),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(
-              text,
-              style: theme.textTheme.bodySmall?.copyWith(color: color),
+            child: Tooltip(
+              message: text,
+              child: Text(
+                text,
+                maxLines: maxLines,
+                overflow: maxLines == null ? null : TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall?.copyWith(color: color),
+              ),
             ),
           ),
           if (action != null) ...[const SizedBox(width: 8), action],
         ],
       ),
     );
+    if (!liveRegion) return line;
+    return Semantics(container: true, liveRegion: true, child: line);
   }
 }

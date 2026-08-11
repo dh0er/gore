@@ -188,6 +188,30 @@ abstract class AppLocalizations {
   /// **'Technical details could not be copied. Try again.'**
   String get coreTechnicalDetailsCopyFailed;
 
+  /// No description provided for @preflightAttention.
+  ///
+  /// In en, this message translates to:
+  /// **'Setup needs attention.'**
+  String get preflightAttention;
+
+  /// No description provided for @preflightUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Setup diagnosis is unavailable.'**
+  String get preflightUnavailable;
+
+  /// No description provided for @preflightRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Check again'**
+  String get preflightRetry;
+
+  /// No description provided for @preflightReviewStatus.
+  ///
+  /// In en, this message translates to:
+  /// **'Review status'**
+  String get preflightReviewStatus;
+
   /// Deployment status is unavailable or uses an unsupported future state.
   ///
   /// In en, this message translates to:
