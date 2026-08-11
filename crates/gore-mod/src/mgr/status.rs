@@ -19,12 +19,15 @@
 //! Pure read-only: it reads the record, verifies the recorded live files and pristine backups, and
 //! reads each enabled mod's library sidecar to fingerprint it; it never writes.
 
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use serde::Serialize;
 
 use super::loadout::{Loadout, LoadoutEntry};
 use super::model::LibraryRoot;
+
+const MAX_STATUS_META_BYTES: u64 = 16 * 1024 * 1024;
 
 /// The manager's deployment state relative to a target loadout. `#[serde(tag = "state")]` so the
 /// UI can switch on a single discriminant field.
@@ -388,23 +391,17 @@ fn status_with_failure_policy(
             });
         }
     };
-    for e in &target_enabled {
-        let current = match read_library_fingerprint(&library, &e.id) {
-            Some(fp) => fp,
-            // Can't read/parse the library entry → treat as changed (re-apply rebuilds from it).
-            None => {
-                return Ok(ManagerStatus::ChangesPending {
-                    deployed: record.loadout,
-                    target: target_enabled,
-                });
-            }
-        };
-        if record.deployed_fingerprints.get(&e.id) != Some(&current) {
-            return Ok(ManagerStatus::ChangesPending {
-                deployed: record.loadout,
-                target: target_enabled,
-            });
-        }
+    let mut remaining_meta_bytes = MAX_STATUS_META_BYTES;
+    if !library_fingerprints_match(
+        &library,
+        &target_enabled,
+        &record.deployed_fingerprints,
+        &mut remaining_meta_bytes,
+    ) {
+        return Ok(ManagerStatus::ChangesPending {
+            deployed: record.loadout,
+            target: target_enabled,
+        });
     }
 
     Ok(ManagerStatus::InSync {
@@ -415,8 +412,42 @@ fn status_with_failure_policy(
 /// Read `<library_dir>/<id>/gore-manager-meta.json` and compute its content [`ModEntryMeta::fingerprint`].
 /// `None` if the sidecar is missing or unparseable — the caller treats that as "changed" so a
 /// removed/corrupt library entry can never leave status reporting InSync over stale deployed bytes.
-fn read_library_fingerprint(library: &LibraryRoot, id: &str) -> Option<String> {
-    Some(library.entry(id).ok()?.read_meta().ok()?.fingerprint())
+fn library_fingerprints_match(
+    library: &LibraryRoot,
+    target: &[LoadoutEntry],
+    deployed: &BTreeMap<String, String>,
+    remaining_meta_bytes: &mut u64,
+) -> bool {
+    let mut inspected_ids = HashSet::new();
+    for entry in target {
+        if !inspected_ids.insert(entry.id.as_str()) {
+            continue;
+        }
+        let Some(current) =
+            read_library_fingerprint(library, &entry.id, remaining_meta_bytes)
+        else {
+            return false;
+        };
+        if deployed.get(&entry.id) != Some(&current) {
+            return false;
+        }
+    }
+    true
+}
+
+fn read_library_fingerprint(
+    library: &LibraryRoot,
+    id: &str,
+    remaining_meta_bytes: &mut u64,
+) -> Option<String> {
+    Some(
+        library
+            .entry(id)
+            .ok()?
+            .read_meta_bounded(remaining_meta_bytes)
+            .ok()?
+            .fingerprint(),
+    )
 }
 
 #[cfg(test)]
@@ -1317,6 +1348,55 @@ mod tests {
             status(&game, &lib, &loadout(&[("mod-a", true)])).unwrap(),
             ManagerStatus::InSync { loadout: deployed }
         );
+    }
+
+    #[test]
+    fn fingerprint_pass_has_an_aggregate_budget_and_deduplicates_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let alpha = lib_meta_with("alpha", "same");
+        let beta = lib_meta_with("beta", "same");
+        let alpha_fp = write_lib_meta(&lib, &alpha);
+        let beta_fp = write_lib_meta(&lib, &beta);
+        let sidecar_len = |id: &str| {
+            std::fs::metadata(lib.join(id).join(META_FILE))
+                .unwrap()
+                .len()
+        };
+        let alpha_len = sidecar_len("alpha");
+        let beta_len = sidecar_len("beta");
+        let library = LibraryRoot::open(&lib).unwrap();
+        let deployed = BTreeMap::from([
+            ("alpha".to_string(), alpha_fp),
+            ("beta".to_string(), beta_fp),
+        ]);
+
+        let mut duplicate_budget = alpha_len;
+        assert!(library_fingerprints_match(
+            &library,
+            &[le("alpha", true), le("alpha", true)],
+            &deployed,
+            &mut duplicate_budget,
+        ));
+        assert_eq!(duplicate_budget, 0);
+
+        let distinct = [le("alpha", true), le("beta", true)];
+        let mut short_budget = alpha_len + beta_len - 1;
+        assert!(!library_fingerprints_match(
+            &library,
+            &distinct,
+            &deployed,
+            &mut short_budget,
+        ));
+
+        let mut exact_budget = alpha_len + beta_len;
+        assert!(library_fingerprints_match(
+            &library,
+            &distinct,
+            &deployed,
+            &mut exact_budget,
+        ));
+        assert_eq!(exact_budget, 0);
     }
 
     #[cfg(any(unix, windows))]
