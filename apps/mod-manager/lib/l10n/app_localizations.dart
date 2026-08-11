@@ -509,7 +509,7 @@ abstract class AppLocalizations {
   /// No description provided for @conflictsTitle.
   ///
   /// In en, this message translates to:
-  /// **'Conflicts ({count})'**
+  /// **'Findings ({count})'**
   String conflictsTitle(int count);
 
   /// No description provided for @conflictWinner.
@@ -521,8 +521,74 @@ abstract class AppLocalizations {
   /// No description provided for @noConflicts.
   ///
   /// In en, this message translates to:
-  /// **'No conflicts.'**
+  /// **'No recognized conflicts.'**
   String get noConflicts;
+
+  /// No description provided for @conflictCoverageIncomplete.
+  ///
+  /// In en, this message translates to:
+  /// **'Conflict knowledge is incomplete for enabled mods; additional conflicts may exist.'**
+  String get conflictCoverageIncomplete;
+
+  /// No description provided for @loadOrderDirection.
+  ///
+  /// In en, this message translates to:
+  /// **'Load order: lower priority first; later mods have higher intended priority.'**
+  String get loadOrderDirection;
+
+  /// No description provided for @footprintCoverageScope.
+  ///
+  /// In en, this message translates to:
+  /// **'Coverage describes recognized conflict targets only; it does not prove runtime priority.'**
+  String get footprintCoverageScope;
+
+  /// No description provided for @footprintCoverageExact.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact — the component\'s conflict-target list is complete.'**
+  String get footprintCoverageExact;
+
+  /// No description provided for @footprintCoveragePartial.
+  ///
+  /// In en, this message translates to:
+  /// **'Partial — listed conflict targets are known, but the component can affect more.'**
+  String get footprintCoveragePartial;
+
+  /// No description provided for @footprintCoverageAdvisory.
+  ///
+  /// In en, this message translates to:
+  /// **'Advisory — listed targets are hints, not exhaustive proof.'**
+  String get footprintCoverageAdvisory;
+
+  /// No description provided for @footprintCoverageOpaque.
+  ///
+  /// In en, this message translates to:
+  /// **'Opaque — the component\'s conflict targets are unknown.'**
+  String get footprintCoverageOpaque;
+
+  /// No description provided for @footprintCoverageExactLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact'**
+  String get footprintCoverageExactLabel;
+
+  /// No description provided for @footprintCoveragePartialLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Partial'**
+  String get footprintCoveragePartialLabel;
+
+  /// No description provided for @footprintCoverageAdvisoryLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Advisory'**
+  String get footprintCoverageAdvisoryLabel;
+
+  /// No description provided for @footprintCoverageOpaqueLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Opaque'**
+  String get footprintCoverageOpaqueLabel;
 
   /// No description provided for @conflictsUnverified.
   ///

@@ -186,7 +186,8 @@ class DetailPanel extends ConsumerWidget {
         // --- Components -------------------------------------------------
         Text(l10n.componentsTitle, style: theme.textTheme.titleSmall),
         const SizedBox(height: 4),
-        for (final c in mod.components) _ComponentRow(component: c, l10n: l10n),
+        for (var i = 0; i < mod.components.length; i++)
+          _ComponentRow(component: mod.components[i], index: i, l10n: l10n),
 
         // --- Conflicts for this mod -------------------------------------
         if (myConflicts.isNotEmpty) ...[
@@ -254,14 +255,22 @@ class _MetaRow extends StatelessWidget {
 }
 
 class _ComponentRow extends StatelessWidget {
-  const _ComponentRow({required this.component, required this.l10n});
+  const _ComponentRow({
+    required this.component,
+    required this.index,
+    required this.l10n,
+  });
   final ComponentView component;
+  final int index;
   final AppLocalizations l10n;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final targets = component.targets;
+    final targets = <String>[
+      ...component.targets,
+      if (component.rawFileTarget case final target?) _rawTargetLabel(target),
+    ];
     final shown = targets.take(_kTargetCap).toList();
     final extra = targets.length - shown.length;
     return Padding(
@@ -283,6 +292,12 @@ class _ComponentRow extends StatelessWidget {
                   style: theme.textTheme.bodySmall,
                   overflow: TextOverflow.ellipsis,
                 ),
+              ),
+              const SizedBox(width: 6),
+              _FootprintCoverageBadge(
+                coverage: component.coverage,
+                index: index,
+                l10n: l10n,
               ),
             ],
           ),
@@ -311,6 +326,76 @@ class _ComponentRow extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+String _rawTargetLabel(RawFileTargetView target) {
+  if (target.kind == 'bank') {
+    final name = target.bankName;
+    return name == null ? target.kind : 'bank:$name';
+  }
+  return target.kind;
+}
+
+class _FootprintCoverageBadge extends StatelessWidget {
+  const _FootprintCoverageBadge({
+    required this.coverage,
+    required this.index,
+    required this.l10n,
+  });
+
+  final FootprintCoverage coverage;
+  final int index;
+  final AppLocalizations l10n;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final description = footprintCoverageLabel(l10n, coverage);
+    final label = footprintCoverageShortLabel(l10n, coverage);
+    final (Color background, Color foreground) = switch (coverage) {
+      FootprintCoverage.exact => (
+        scheme.secondaryContainer,
+        scheme.onSecondaryContainer,
+      ),
+      FootprintCoverage.partial => (
+        scheme.tertiaryContainer,
+        scheme.onTertiaryContainer,
+      ),
+      FootprintCoverage.advisory => (
+        scheme.surfaceContainerHighest,
+        scheme.onSurfaceVariant,
+      ),
+      FootprintCoverage.opaque => (
+        scheme.errorContainer,
+        scheme.onErrorContainer,
+      ),
+    };
+    return Tooltip(
+      message: description,
+      excludeFromSemantics: true,
+      child: Semantics(
+        key: ValueKey('component-footprint-coverage-$index'),
+        container: true,
+        label: description,
+        child: ExcludeSemantics(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+            decoration: BoxDecoration(
+              color: background,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              label,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: foreground,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

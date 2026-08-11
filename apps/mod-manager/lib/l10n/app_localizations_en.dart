@@ -232,14 +232,54 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String conflictsTitle(int count) {
-    return 'Conflicts ($count)';
+    return 'Findings ($count)';
   }
 
   @override
   String get conflictWinner => 'winner';
 
   @override
-  String get noConflicts => 'No conflicts.';
+  String get noConflicts => 'No recognized conflicts.';
+
+  @override
+  String get conflictCoverageIncomplete =>
+      'Conflict knowledge is incomplete for enabled mods; additional conflicts may exist.';
+
+  @override
+  String get loadOrderDirection =>
+      'Load order: lower priority first; later mods have higher intended priority.';
+
+  @override
+  String get footprintCoverageScope =>
+      'Coverage describes recognized conflict targets only; it does not prove runtime priority.';
+
+  @override
+  String get footprintCoverageExact =>
+      'Exact — the component\'s conflict-target list is complete.';
+
+  @override
+  String get footprintCoveragePartial =>
+      'Partial — listed conflict targets are known, but the component can affect more.';
+
+  @override
+  String get footprintCoverageAdvisory =>
+      'Advisory — listed targets are hints, not exhaustive proof.';
+
+  @override
+  String get footprintCoverageOpaque =>
+      'Opaque — the component\'s conflict targets are unknown.';
+
+  @override
+  String get footprintCoverageExactLabel => 'Exact';
+
+  @override
+  String get footprintCoveragePartialLabel => 'Partial';
+
+  @override
+  String get footprintCoverageAdvisoryLabel => 'Advisory';
+
+  @override
+  String get footprintCoverageOpaqueLabel => 'Opaque';
 
   @override
   String get conflictsUnverified =>

@@ -231,14 +231,54 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String conflictsTitle(int count) {
-    return 'Конфликты ($count)';
+    return 'Результаты ($count)';
   }
 
   @override
   String get conflictWinner => 'приоритет';
 
   @override
-  String get noConflicts => 'Нет конфликтов.';
+  String get noConflicts => 'Распознанные конфликты отсутствуют.';
+
+  @override
+  String get conflictCoverageIncomplete =>
+      'Сведения о конфликтах включённых модов неполны; возможны дополнительные конфликты.';
+
+  @override
+  String get loadOrderDirection =>
+      'Порядок загрузки: сначала низкий приоритет; более поздние моды имеют более высокий предполагаемый приоритет.';
+
+  @override
+  String get footprintCoverageScope =>
+      'Покрытие описывает только распознанные цели конфликтов и не доказывает приоритет во время выполнения.';
+
+  @override
+  String get footprintCoverageExact =>
+      'Точное — список целей конфликтов компонента полон.';
+
+  @override
+  String get footprintCoveragePartial =>
+      'Частичное — указанные цели известны, но компонент может затрагивать и другие.';
+
+  @override
+  String get footprintCoverageAdvisory =>
+      'Ориентировочное — указанные цели являются подсказками, а не исчерпывающим доказательством.';
+
+  @override
+  String get footprintCoverageOpaque =>
+      'Непрозрачное — цели конфликтов компонента неизвестны.';
+
+  @override
+  String get footprintCoverageExactLabel => 'Точное';
+
+  @override
+  String get footprintCoveragePartialLabel => 'Частичное';
+
+  @override
+  String get footprintCoverageAdvisoryLabel => 'Ориентировочное';
+
+  @override
+  String get footprintCoverageOpaqueLabel => 'Непрозрачное';
 
   @override
   String get conflictsUnverified =>

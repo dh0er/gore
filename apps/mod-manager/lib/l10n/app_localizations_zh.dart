@@ -216,14 +216,47 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String conflictsTitle(int count) {
-    return '冲突 ($count)';
+    return '检测结果 ($count)';
   }
 
   @override
   String get conflictWinner => '生效';
 
   @override
-  String get noConflicts => '无冲突。';
+  String get noConflicts => '未识别到冲突。';
+
+  @override
+  String get conflictCoverageIncomplete => '已启用模组的冲突信息不完整，可能还存在其他冲突。';
+
+  @override
+  String get loadOrderDirection => '加载顺序：低优先级在前，后面的模组具有更高的预期优先级。';
+
+  @override
+  String get footprintCoverageScope => '覆盖度仅描述已识别的冲突目标，不能证明运行时优先级。';
+
+  @override
+  String get footprintCoverageExact => '精确 — 组件的冲突目标列表完整。';
+
+  @override
+  String get footprintCoveragePartial => '部分 — 已列出的冲突目标是已知的，但组件可能影响更多目标。';
+
+  @override
+  String get footprintCoverageAdvisory => '参考 — 已列出的目标只是线索，并非完整证明。';
+
+  @override
+  String get footprintCoverageOpaque => '不透明 — 组件的冲突目标未知。';
+
+  @override
+  String get footprintCoverageExactLabel => '精确';
+
+  @override
+  String get footprintCoveragePartialLabel => '部分';
+
+  @override
+  String get footprintCoverageAdvisoryLabel => '参考';
+
+  @override
+  String get footprintCoverageOpaqueLabel => '不透明';
 
   @override
   String get conflictsUnverified => '在刷新库状态之前，冲突尚未验证。';
@@ -581,14 +614,47 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String conflictsTitle(int count) {
-    return '冲突 ($count)';
+    return '检测结果 ($count)';
   }
 
   @override
   String get conflictWinner => '生效';
 
   @override
-  String get noConflicts => '无冲突。';
+  String get noConflicts => '未识别到冲突。';
+
+  @override
+  String get conflictCoverageIncomplete => '已启用模组的冲突信息不完整，可能还存在其他冲突。';
+
+  @override
+  String get loadOrderDirection => '加载顺序：低优先级在前，后面的模组具有更高的预期优先级。';
+
+  @override
+  String get footprintCoverageScope => '覆盖度仅描述已识别的冲突目标，不能证明运行时优先级。';
+
+  @override
+  String get footprintCoverageExact => '精确 — 组件的冲突目标列表完整。';
+
+  @override
+  String get footprintCoveragePartial => '部分 — 已列出的冲突目标是已知的，但组件可能影响更多目标。';
+
+  @override
+  String get footprintCoverageAdvisory => '参考 — 已列出的目标只是线索，并非完整证明。';
+
+  @override
+  String get footprintCoverageOpaque => '不透明 — 组件的冲突目标未知。';
+
+  @override
+  String get footprintCoverageExactLabel => '精确';
+
+  @override
+  String get footprintCoveragePartialLabel => '部分';
+
+  @override
+  String get footprintCoverageAdvisoryLabel => '参考';
+
+  @override
+  String get footprintCoverageOpaqueLabel => '不透明';
 
   @override
   String get conflictsUnverified => '在刷新库状态之前，冲突尚未验证。';

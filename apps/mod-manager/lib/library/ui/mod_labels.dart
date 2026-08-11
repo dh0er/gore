@@ -26,6 +26,33 @@ String severityLabel(AppLocalizations l10n, String severity) {
   };
 }
 
+/// Human explanation for one derived conflict-footprint coverage grade.
+String footprintCoverageLabel(
+  AppLocalizations l10n,
+  FootprintCoverage coverage,
+) {
+  return switch (coverage) {
+    FootprintCoverage.exact => l10n.footprintCoverageExact,
+    FootprintCoverage.partial => l10n.footprintCoveragePartial,
+    FootprintCoverage.advisory => l10n.footprintCoverageAdvisory,
+    FootprintCoverage.opaque => l10n.footprintCoverageOpaque,
+  };
+}
+
+/// Compact localized category for the per-component badge. The adjacent
+/// tooltip/semantic label uses [footprintCoverageLabel] for the full meaning.
+String footprintCoverageShortLabel(
+  AppLocalizations l10n,
+  FootprintCoverage coverage,
+) {
+  return switch (coverage) {
+    FootprintCoverage.exact => l10n.footprintCoverageExactLabel,
+    FootprintCoverage.partial => l10n.footprintCoveragePartialLabel,
+    FootprintCoverage.advisory => l10n.footprintCoverageAdvisoryLabel,
+    FootprintCoverage.opaque => l10n.footprintCoverageOpaqueLabel,
+  };
+}
+
 /// A short chip caption summarizing one class of component, e.g. `loc 12`,
 /// `AS 1`, `pak`, `tex 4`.
 class ComponentChip {

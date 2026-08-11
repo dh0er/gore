@@ -222,14 +222,51 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String conflictsTitle(int count) {
-    return '競合 ($count)';
+    return '検出結果 ($count)';
   }
 
   @override
   String get conflictWinner => '優先';
 
   @override
-  String get noConflicts => '競合はありません。';
+  String get noConflicts => '認識された競合はありません。';
+
+  @override
+  String get conflictCoverageIncomplete =>
+      '有効な Mod の競合情報は不完全です。ほかにも競合が存在する可能性があります。';
+
+  @override
+  String get loadOrderDirection => 'ロード順: 低い優先度が先で、後の Mod ほど意図された優先度が高くなります。';
+
+  @override
+  String get footprintCoverageScope =>
+      'カバレッジは認識済みの競合ターゲットだけを示し、実行時の優先度を保証しません。';
+
+  @override
+  String get footprintCoverageExact => '完全 — コンポーネントの競合ターゲット一覧は完全です。';
+
+  @override
+  String get footprintCoveragePartial =>
+      '部分的 — 表示された競合ターゲットは既知ですが、ほかにも影響する可能性があります。';
+
+  @override
+  String get footprintCoverageAdvisory =>
+      '参考 — 表示されたターゲットは手掛かりであり、網羅的な証明ではありません。';
+
+  @override
+  String get footprintCoverageOpaque => '不透明 — コンポーネントの競合ターゲットは不明です。';
+
+  @override
+  String get footprintCoverageExactLabel => '完全';
+
+  @override
+  String get footprintCoveragePartialLabel => '部分的';
+
+  @override
+  String get footprintCoverageAdvisoryLabel => '参考';
+
+  @override
+  String get footprintCoverageOpaqueLabel => '不透明';
 
   @override
   String get conflictsUnverified => 'ライブラリの状態を更新するまで、競合は未確認です。';

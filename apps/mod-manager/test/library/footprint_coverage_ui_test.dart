@@ -1,0 +1,188 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:gore_manager/conflicts/ui/conflict_panel.dart';
+import 'package:gore_manager/core/core_service.dart';
+import 'package:gore_manager/core/providers.dart';
+import 'package:gore_manager/l10n/app_localizations.dart';
+import 'package:gore_manager/library/ui/detail_panel.dart';
+import 'package:gore_manager/library/ui/mod_list.dart';
+
+Map<String, Object?> _libraryList() => {
+  'ok': true,
+  'mods': [
+    {
+      'id': 'External.Mixed',
+      'kind': 'foreign_mixed',
+      'name': 'External Mixed Pack',
+      'components': [
+        {
+          'type': 'raw_file',
+          'rel': 'raw/SFX.bank',
+          'target_file': {
+            'bank': {'name': 'SFX'},
+          },
+          'coverage': 'exact',
+        },
+        {
+          'type': 'ue4ss_lua',
+          'name': 'Runtime',
+          'rel': 'ue4ss/Runtime',
+          'targets': ['BP_Player.Health'],
+          'opaque': true,
+          'coverage': 'partial',
+        },
+        {
+          'type': 'triplet',
+          'rel_base': 'containers/Community',
+          'targets': ['/Game/Community/Observed'],
+          'coverage': 'advisory',
+        },
+        {
+          'type': 'loose_pak',
+          'rel': 'paks/Unreadable_P.pak',
+          'targets': <String>[],
+          'coverage': 'opaque',
+        },
+      ],
+    },
+  ],
+  'loadout': {
+    'format': 1,
+    'entries': [
+      {'id': 'External.Mixed', 'enabled': true},
+    ],
+  },
+};
+
+FakeGoreCoreFfiService _core() => FakeGoreCoreFfiService(
+  responses: {
+    'mgr_library_list': _libraryList(),
+    'mgr_analyze': {'ok': true, 'conflicts': <Object?>[]},
+  },
+);
+
+Widget _app(Widget child) => ProviderScope(
+  overrides: [coreServiceProvider.overrideWithValue(_core())],
+  child: MaterialApp(
+    localizationsDelegates: const [
+      AppLocalizations.delegate,
+      GlobalMaterialLocalizations.delegate,
+      GlobalWidgetsLocalizations.delegate,
+      GlobalCupertinoLocalizations.delegate,
+    ],
+    supportedLocales: AppLocalizations.supportedLocales,
+    builder: (context, built) => MediaQuery(
+      data: MediaQuery.of(
+        context,
+      ).copyWith(textScaler: const TextScaler.linear(2)),
+      child: built!,
+    ),
+    home: Scaffold(body: child),
+  ),
+);
+
+void _compact200Percent(WidgetTester tester) {
+  tester.view.physicalSize = const Size(700, 460);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+}
+
+void main() {
+  test('coverage copy is generated for all 12 supported locales', () async {
+    expect(AppLocalizations.supportedLocales, hasLength(12));
+    for (final locale in AppLocalizations.supportedLocales) {
+      final l10n = await AppLocalizations.delegate.load(locale);
+      expect(
+        [
+          l10n.footprintCoverageExact,
+          l10n.footprintCoveragePartial,
+          l10n.footprintCoverageAdvisory,
+          l10n.footprintCoverageOpaque,
+          l10n.footprintCoverageExactLabel,
+          l10n.footprintCoveragePartialLabel,
+          l10n.footprintCoverageAdvisoryLabel,
+          l10n.footprintCoverageOpaqueLabel,
+          l10n.footprintCoverageScope,
+          l10n.loadOrderDirection,
+          l10n.conflictCoverageIncomplete,
+        ].every((value) => value.trim().isNotEmpty),
+        isTrue,
+        reason: locale.toLanguageTag(),
+      );
+    }
+  });
+
+  testWidgets(
+    'component detail exposes all grades and raw footprint at compact 200%',
+    (tester) async {
+      _compact200Percent(tester);
+      final semantics = tester.ensureSemantics();
+      await tester.pumpWidget(_app(const DetailPanel()));
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(DetailPanel)),
+      );
+      container.read(selectedModProvider.notifier).state = 'External.Mixed';
+      await tester.pumpAndSettle();
+
+      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+      expect(find.text(l10n.footprintCoverageExactLabel), findsOneWidget);
+      expect(
+        tester
+            .getSemantics(
+              find.byKey(const ValueKey('component-footprint-coverage-0')),
+            )
+            .label,
+        l10n.footprintCoverageExact,
+      );
+      final scrollable = find.descendant(
+        of: find.byType(DetailPanel),
+        matching: find.byType(Scrollable),
+      );
+      for (final text in [
+        'bank:SFX',
+        l10n.footprintCoveragePartialLabel,
+        l10n.footprintCoverageAdvisoryLabel,
+        l10n.footprintCoverageOpaqueLabel,
+      ]) {
+        await tester.scrollUntilVisible(
+          find.text(text),
+          120,
+          scrollable: scrollable,
+        );
+        expect(find.text(text), findsOneWidget);
+      }
+      expect(tester.takeException(), isNull);
+      semantics.dispose();
+    },
+  );
+
+  testWidgets(
+    'zero findings stay qualified when enabled coverage is non-exact',
+    (tester) async {
+      _compact200Percent(tester);
+      final semantics = tester.ensureSemantics();
+      await tester.pumpWidget(_app(const ConflictPanel()));
+      await tester.pumpAndSettle();
+
+      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+      expect(find.text(l10n.noConflicts), findsOneWidget);
+      expect(find.text('No conflicts.'), findsNothing);
+      expect(find.text(l10n.conflictCoverageIncomplete), findsOneWidget);
+      expect(find.text(l10n.loadOrderDirection), findsOneWidget);
+      expect(find.text(l10n.footprintCoverageScope), findsOneWidget);
+      final label = tester
+          .getSemantics(find.byKey(const ValueKey('conflict-knowledge-note')))
+          .label;
+      expect(label, contains(l10n.conflictCoverageIncomplete));
+      expect(label, contains(l10n.loadOrderDirection));
+      expect(label, contains(l10n.footprintCoverageScope));
+      expect(tester.takeException(), isNull);
+      semantics.dispose();
+    },
+  );
+}

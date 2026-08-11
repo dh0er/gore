@@ -232,14 +232,54 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String conflictsTitle(int count) {
-    return 'Conflits ($count)';
+    return 'Résultats ($count)';
   }
 
   @override
   String get conflictWinner => 'gagnant';
 
   @override
-  String get noConflicts => 'Aucun conflit.';
+  String get noConflicts => 'Aucun conflit reconnu.';
+
+  @override
+  String get conflictCoverageIncomplete =>
+      'La connaissance des conflits des mods activés est incomplète ; d’autres conflits peuvent exister.';
+
+  @override
+  String get loadOrderDirection =>
+      'Ordre de chargement : priorité basse d’abord ; les mods placés après ont une priorité prévue plus élevée.';
+
+  @override
+  String get footprintCoverageScope =>
+      'La couverture décrit uniquement les cibles de conflit reconnues ; elle ne prouve pas la priorité à l’exécution.';
+
+  @override
+  String get footprintCoverageExact =>
+      'Exacte — la liste des cibles de conflit du composant est complète.';
+
+  @override
+  String get footprintCoveragePartial =>
+      'Partielle — les cibles indiquées sont connues, mais le composant peut en affecter d’autres.';
+
+  @override
+  String get footprintCoverageAdvisory =>
+      'Indicative — les cibles indiquées sont des indices, pas une preuve exhaustive.';
+
+  @override
+  String get footprintCoverageOpaque =>
+      'Opaque — les cibles de conflit du composant sont inconnues.';
+
+  @override
+  String get footprintCoverageExactLabel => 'Exacte';
+
+  @override
+  String get footprintCoveragePartialLabel => 'Partielle';
+
+  @override
+  String get footprintCoverageAdvisoryLabel => 'Indicative';
+
+  @override
+  String get footprintCoverageOpaqueLabel => 'Opaque';
 
   @override
   String get conflictsUnverified =>
