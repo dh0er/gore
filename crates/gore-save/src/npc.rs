@@ -1481,8 +1481,8 @@ pub fn apply_relationship(
     }
 
     // Refuse accidental map entries for non-characters/typos.
-    let root = parse_private_root(payload)?;
-    let attributes = find_character_map(&root, ATTRIBUTES_TYPE)
+    let checked = parse_private_root(payload)?;
+    let attributes = find_character_map(&checked, ATTRIBUTES_TYPE)
         .ok_or_else(|| CoreError::Parse(format!("no {ATTRIBUTES_TYPE} map found in save")))?;
     if lookup_entry(attributes, id).is_none() {
         return Err(CoreError::InvalidRequest(format!(
@@ -1495,8 +1495,14 @@ pub fn apply_relationship(
     // retains Weight 1000 after SaveGame load. Reparse after every splice
     // because Friend/Neutral/Enemy have different byte lengths.
     let mut missing_entry = false;
+    // The check above parsed the payload nobody has written to yet, so the first
+    // pass reuses it; every later pass follows a splice and needs its own.
+    let mut unwritten = Some(checked);
     loop {
-        let root = parse_private_root(payload)?;
+        let root = match unwritten.take() {
+            Some(root) => root,
+            None => parse_private_root(payload)?,
+        };
         let Some((map_path, map_property)) = find_property_by_name(&root, RELATIONSHIP_MAP) else {
             return Err(CoreError::Parse(format!(
                 "{RELATIONSHIP_MAP} map not found in save"

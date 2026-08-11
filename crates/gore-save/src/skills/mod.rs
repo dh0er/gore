@@ -357,13 +357,14 @@ pub fn apply_skill_set(payload: &mut Vec<u8>, edit: &SkillSetEdit) -> Result<(),
         Some(idx) => {
             if want_untrained && !has_untrained {
                 // Unlearn: no `_Untrained` class exists, so remove the element.
-                container_edit(payload, &array_path, ContainerEdit::ArrayRemove(idx))
-            } else if element_class_at(payload, &array_path, idx)?.as_deref()
+                container_edit(payload, &root, &array_path, ContainerEdit::ArrayRemove(idx))?;
+                Ok(())
+            } else if element_class_at(&root, &array_path, idx)?.as_deref()
                 == Some(target_class.as_str())
             {
                 Ok(()) // already the requested class
             } else {
-                retarget_def(payload, &array_path, idx, &target_class)
+                retarget_def(payload, &root, &array_path, idx, &target_class)
             }
         }
         None => {
@@ -380,35 +381,36 @@ pub fn apply_skill_set(payload: &mut Vec<u8>, edit: &SkillSetEdit) -> Result<(),
             // element.
             match same_category_donor.or(any_donor) {
                 Some(donor_idx) => {
-                    container_edit(
+                    let cloned = container_edit(
                         payload,
+                        &root,
                         &array_path,
                         ContainerEdit::ArrayDuplicate(donor_idx),
                     )?;
                     // ArrayDuplicate inserts the copy right after the source.
-                    retarget_def(payload, &array_path, donor_idx + 1, &target_class)
+                    retarget_def(payload, &cloned, &array_path, donor_idx + 1, &target_class)
                 }
                 None => {
-                    container_edit(
+                    let appended = container_edit(
                         payload,
+                        &root,
                         &array_path,
                         ContainerEdit::ArrayInsertBytes(donor::donor_template()),
                     )?;
                     // ArrayInsertBytes appends at the end of the array.
-                    retarget_def(payload, &array_path, element_count, &target_class)
+                    retarget_def(payload, &appended, &array_path, element_count, &target_class)
                 }
             }
         }
     }
 }
 
-/// Re-parse the payload and read the class string of the element at `index`.
+/// The class string of the element at `index`, read from an existing parse.
 fn element_class_at(
-    payload: &[u8],
+    root: &properties::RootObject,
     array_path: &[String],
     index: usize,
 ) -> Result<Option<String>, CoreError> {
-    let root = properties::parse_private_root(payload)?;
     let segs = properties::parse_path(array_path)?;
     let resolved = properties::resolve_chain(&root.properties, &segs)?;
     let PropertyValue::Array { elements } = &resolved.target.value else {
@@ -422,12 +424,14 @@ fn element_class_at(
 
 /// Apply a structural container edit to the array at `array_path`, validating on
 /// a scratch copy before committing (mirrors the generic typed container apply).
+/// `root` must describe `payload` as it stands. Returns the proof parse, which
+/// describes the bytes just installed, so the next step needs no parse of its own.
 fn container_edit(
     payload: &mut Vec<u8>,
+    root: &properties::RootObject,
     array_path: &[String],
     edit: ContainerEdit,
-) -> Result<(), CoreError> {
-    let root = properties::parse_private_root(payload)?;
+) -> Result<properties::RootObject, CoreError> {
     let segs = properties::parse_path(array_path)?;
     let resolved = properties::resolve_chain(&root.properties, &segs)?;
     let target = resolved.target.clone();
@@ -438,19 +442,21 @@ fn container_edit(
         &resolved.enclosing_size_fields,
         &edit,
     )?;
-    properties::parse_private_root(&patched).map_err(|err| {
+    let proof = properties::parse_private_root(&patched).map_err(|err| {
         CoreError::Parse(format!(
             "skill container edit produced an inconsistent payload: {err}"
         ))
     })?;
     *payload = patched;
-    Ok(())
+    Ok(proof)
 }
 
 /// Retarget the `EffectSpec/Def` ObjectProperty of the array element at `index`
 /// to `new_class` (a length-changing string patch), validating on a scratch copy.
+/// `root` must describe `payload` as it stands.
 fn retarget_def(
     payload: &mut Vec<u8>,
+    root: &properties::RootObject,
     array_path: &[String],
     index: usize,
     new_class: &str,
@@ -460,7 +466,6 @@ fn retarget_def(
     def_path.push("EffectSpec".to_string());
     def_path.push("Def".to_string());
 
-    let root = properties::parse_private_root(payload)?;
     let segs = properties::parse_path(&def_path)?;
     let resolved = properties::resolve_chain(&root.properties, &segs)?;
     let target = resolved.target.clone();
