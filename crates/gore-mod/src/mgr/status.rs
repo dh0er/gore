@@ -130,11 +130,11 @@ fn valid_file_identity(identity: &str) -> bool {
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
 }
 
-fn validate_recovery_identities(record: &crate::DeployRecord) -> crate::Result<()> {
+fn validate_record_identities(record: &crate::DeployRecord) -> crate::Result<()> {
     for (path, identity) in &record.deployed_hashes {
         if !valid_file_identity(identity) {
             return Err(crate::ModError::Other(format!(
-                "recovery record contains an invalid deployed file identity for {path}"
+                "deploy record contains an invalid deployed file identity for {path}"
             )));
         }
     }
@@ -145,14 +145,14 @@ fn validate_recovery_identities(record: &crate::DeployRecord) -> crate::Result<(
                 .any(|identity| !valid_file_identity(identity))
         {
             return Err(crate::ModError::Other(format!(
-                "recovery record contains an invalid alternate file identity for {path}"
+                "deploy record contains an invalid alternate file identity for {path}"
             )));
         }
     }
     for (path, identity) in &record.ue4ss_tree_fingerprints {
         if !valid_sha256_identity(identity) {
             return Err(crate::ModError::Other(format!(
-                "recovery record contains an invalid UE4SS tree identity for {path}"
+                "deploy record contains an invalid UE4SS tree identity for {path}"
             )));
         }
     }
@@ -163,7 +163,7 @@ fn validate_recovery_identities(record: &crate::DeployRecord) -> crate::Result<(
                 .any(|identity| !valid_sha256_identity(identity))
         {
             return Err(crate::ModError::Other(format!(
-                "recovery record contains an invalid alternate UE4SS tree identity for {path}"
+                "deploy record contains an invalid alternate UE4SS tree identity for {path}"
             )));
         }
     }
@@ -404,8 +404,10 @@ fn status_with_failure_policy(
     let recovery_required = record.phase == crate::DeployPhase::RecoveryRequired
         || !record.file_cleanup_claims.is_empty()
         || !record.ue4ss_cleanup_claims.is_empty();
-    if recovery_required && failure_policy == InspectionFailurePolicy::Preserve {
-        validate_recovery_identities(&record)?;
+    if failure_policy == InspectionFailurePolicy::Preserve
+        && (recovery_required || record.owner != "manager")
+    {
+        validate_record_identities(&record)?;
     }
     if recovery_required {
         return Ok(ManagerStatus::RecoveryRequired);
@@ -877,6 +879,34 @@ mod tests {
                 mod_name: "SoloMod".into()
             }
         );
+    }
+
+    #[test]
+    fn preflight_rejects_malformed_studio_ownership_before_removal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game = tmp.path().join("game");
+        let lib = tmp.path().join("lib");
+        let live = game.join("G1R/Story/VoiceOver/owned.zip");
+        let record = DeployRecord {
+            mod_name: "SoloMod".into(),
+            deployed_hashes: BTreeMap::from([(live.display().to_string(), "malformed".into())]),
+            ..Default::default()
+        };
+        write_record(&game, &record);
+        let before = std::fs::read(record_path(&game)).unwrap();
+
+        assert_eq!(
+            status(&game, &lib, &Loadout::default()).unwrap(),
+            ManagerStatus::StudioDeployActive {
+                mod_name: "SoloMod".into()
+            }
+        );
+        let error = status_for_preflight(&game, &lib, &Loadout::default()).unwrap_err();
+        assert!(
+            error.to_string().contains("invalid deployed file identity"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(record_path(&game)).unwrap(), before);
     }
 
     /// A manager record whose loadout equals the target's enabled entries AND whose recorded
