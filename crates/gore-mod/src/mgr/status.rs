@@ -37,6 +37,7 @@ const MAX_PREFLIGHT_STATUS_META_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_PREFLIGHT_STATUS_HASH_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 const MAX_PREFLIGHT_STATUS_HASH_ENTRIES: u64 = 250_000;
 const MAX_PREFLIGHT_STATUS_TREE_ENTRIES: u64 = 250_000;
+const MAX_PREFLIGHT_STATUS_PATH_ENTRIES: u64 = 250_000;
 
 /// The manager's deployment state relative to a target loadout. `#[serde(tag = "state")]` so the
 /// UI can switch on a single discriminant field.
@@ -79,6 +80,7 @@ struct DeploymentInspection {
     remaining_hash_bytes: u64,
     remaining_hash_entries: u64,
     remaining_tree_entries: u64,
+    remaining_path_entries: u64,
     file_matches: HashMap<(String, String), bool>,
     legacy_hashes: HashMap<String, String>,
     tree_fingerprints: HashMap<String, String>,
@@ -90,11 +92,13 @@ impl DeploymentInspection {
         remaining_hash_bytes: u64,
         remaining_hash_entries: u64,
         remaining_tree_entries: u64,
+        remaining_path_entries: u64,
     ) -> Self {
         Self {
             remaining_hash_bytes,
             remaining_hash_entries,
             remaining_tree_entries,
+            remaining_path_entries,
             file_matches: HashMap::new(),
             legacy_hashes: HashMap::new(),
             tree_fingerprints: HashMap::new(),
@@ -111,6 +115,75 @@ impl DeploymentInspection {
         self.remaining_hash_entries -= 1;
         Ok(())
     }
+
+    fn deployment_path_key(&mut self, path: &Path) -> crate::Result<String> {
+        if self.remaining_path_entries == 0 {
+            return Err(crate::ModError::InspectionBound(
+                "deployment inspection exhausted its path-entry budget".into(),
+            ));
+        }
+        self.remaining_path_entries -= 1;
+
+        // Preserve the old `same_path` semantics by resolving existing aliases, but do so only
+        // once per budgeted record entry instead of once per active/stale pair. Missing or
+        // inaccessible paths still get a component-normalized lexical key.
+        let canonical = std::fs::canonicalize(path).ok();
+        let normalized: std::path::PathBuf = canonical
+            .as_deref()
+            .unwrap_or(path)
+            .components()
+            .collect();
+        Ok(crate::record_path_key(&normalized))
+    }
+}
+
+#[derive(Debug)]
+struct Ue4ssPathIndex<'a> {
+    active_keys: HashSet<String>,
+    active: Vec<(&'a str, String)>,
+    stale: Vec<(&'a str, String)>,
+    fingerprints: HashMap<String, &'a str>,
+}
+
+fn ue4ss_path_index<'a>(
+    record: &'a crate::DeployRecord,
+    inspection: &mut DeploymentInspection,
+) -> crate::Result<Ue4ssPathIndex<'a>> {
+    let mut active_keys = HashSet::new();
+    let mut active = Vec::new();
+    for path in record
+        .ue4ss_mod_dir
+        .iter()
+        .chain(record.ue4ss_mod_dirs.iter())
+    {
+        let key = inspection.deployment_path_key(Path::new(path))?;
+        if active_keys.insert(key.clone()) {
+            active.push((path.as_str(), key));
+        }
+    }
+
+    let mut fingerprints = HashMap::new();
+    for (path, fingerprint) in &record.ue4ss_tree_fingerprints {
+        let key = inspection.deployment_path_key(Path::new(path))?;
+        // BTreeMap iteration is stable; retaining the first alias preserves the old
+        // `tree_fingerprint_for_path` lookup order while making subsequent reads constant-time.
+        fingerprints.entry(key).or_insert(fingerprint.as_str());
+    }
+
+    let mut seen_stale = HashSet::new();
+    let mut stale = Vec::new();
+    for path in &record.stale_ue4ss_dirs {
+        let key = inspection.deployment_path_key(Path::new(path))?;
+        if seen_stale.insert(key.clone()) {
+            stale.push((path.as_str(), key));
+        }
+    }
+    Ok(Ue4ssPathIndex {
+        active_keys,
+        active,
+        stale,
+        fingerprints,
+    })
 }
 
 fn metadata_for_status(path: &Path) -> crate::Result<Option<std::fs::Metadata>> {
@@ -367,12 +440,13 @@ fn status_with_failure_policy(
     // modded file and is now gone/replaced).
     let mut inspection = match failure_policy {
         InspectionFailurePolicy::TreatAsDrift => {
-            DeploymentInspection::new(u64::MAX, u64::MAX, u64::MAX)
+            DeploymentInspection::new(u64::MAX, u64::MAX, u64::MAX, u64::MAX)
         }
         InspectionFailurePolicy::Preserve => DeploymentInspection::new(
             MAX_PREFLIGHT_STATUS_HASH_BYTES,
             MAX_PREFLIGHT_STATUS_HASH_ENTRIES,
             MAX_PREFLIGHT_STATUS_TREE_ENTRIES,
+            MAX_PREFLIGHT_STATUS_PATH_ENTRIES,
         ),
     };
     let mut drifted = Vec::new();
@@ -479,19 +553,18 @@ fn status_with_failure_policy(
             drifted.push(path.clone());
         }
     }
-    for path in record
-        .ue4ss_mod_dir
-        .iter()
-        .chain(record.ue4ss_mod_dirs.iter())
-    {
-        let expected = crate::tree_fingerprint_for_path(
-            Path::new(path.as_str()),
-            &record.ue4ss_tree_fingerprints,
-        );
+    let Ue4ssPathIndex {
+        active_keys: active_ue4ss_paths,
+        active: active_ue4ss_entries,
+        stale: stale_ue4ss_paths,
+        fingerprints: ue4ss_fingerprints,
+    } = ue4ss_path_index(&record, &mut inspection)?;
+    for (path, key) in active_ue4ss_entries {
+        let expected = ue4ss_fingerprints.get(&key).copied();
         let matches = match expected {
             Some(fingerprint) => {
                 tree_matches_for_status(
-                    Path::new(path.as_str()),
+                    Path::new(path),
                     fingerprint,
                     failure_policy,
                     &mut inspection,
@@ -500,17 +573,14 @@ fn status_with_failure_policy(
             None => false,
         };
         if !matches {
-            drifted.push(path.clone());
+            drifted.push(path.to_owned());
         }
     }
-    for path in &record.stale_ue4ss_dirs {
-        let mirrors_active = record
-            .ue4ss_mod_dir
-            .iter()
-            .chain(record.ue4ss_mod_dirs.iter())
-            .any(|active| crate::same_path(Path::new(path), active));
-        if !mirrors_active && path_exists_for_status(Path::new(path), failure_policy)? {
-            drifted.push(path.clone());
+    for (path, key) in stale_ue4ss_paths {
+        if !active_ue4ss_paths.contains(&key)
+            && path_exists_for_status(Path::new(path), failure_policy)?
+        {
+            drifted.push(path.to_owned());
         }
     }
 
@@ -1689,6 +1759,117 @@ mod tests {
     }
 
     #[test]
+    fn ue4ss_path_index_deduplicates_aliases_and_bounds_linear_work() {
+        let tmp = tempfile::tempdir().unwrap();
+        let active = tmp.path().join("game/G1R/Binaries/Win64/ue4ss/Mods/Active");
+        let stale = tmp.path().join("game/G1R/Binaries/Win64/ue4ss/Mods/Stale");
+        let active_alias = format!("{}{}", active.display(), std::path::MAIN_SEPARATOR);
+        let stale_alias = format!("{}{}", stale.display(), std::path::MAIN_SEPARATOR);
+        let record = DeployRecord {
+            ue4ss_mod_dir: Some(active.display().to_string()),
+            ue4ss_mod_dirs: vec![active_alias.clone()],
+            stale_ue4ss_dirs: vec![active_alias, stale.display().to_string(), stale_alias],
+            ue4ss_tree_fingerprints: BTreeMap::from([
+                (active.display().to_string(), "same".into()),
+                (
+                    format!("{}{}", active.display(), std::path::MAIN_SEPARATOR),
+                    "same".into(),
+                ),
+            ]),
+            ..Default::default()
+        };
+
+        // Two active, two fingerprints, and three stale entries consume seven units, regardless
+        // of the number of possible pairs. Normalized aliases retain only one key apiece.
+        let mut exact = DeploymentInspection::new(0, 0, 0, 7);
+        let Ue4ssPathIndex {
+            active_keys,
+            active: active_paths,
+            stale: stale_paths,
+            fingerprints,
+        } = ue4ss_path_index(&record, &mut exact).unwrap();
+        assert_eq!(exact.remaining_path_entries, 0);
+        assert_eq!(active_keys.len(), 1);
+        assert_eq!(active_paths.len(), 1);
+        assert_eq!(stale_paths.len(), 2);
+        assert_eq!(fingerprints.len(), 1);
+        assert!(active_keys.contains(&stale_paths[0].1));
+        assert!(!active_keys.contains(&stale_paths[1].1));
+
+        let mut short = DeploymentInspection::new(0, 0, 0, 6);
+        let error = ue4ss_path_index(&record, &mut short).unwrap_err();
+        assert!(matches!(&error, crate::ModError::InspectionBound(_)));
+        assert!(error.to_string().contains("path-entry budget"), "{error}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ue4ss_path_index_preserves_existing_short_name_aliases() {
+        use std::os::windows::ffi::{OsStrExt as _, OsStringExt as _};
+        use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+
+        fn short_path(path: &Path) -> Option<std::path::PathBuf> {
+            let input: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+            let required = unsafe { GetShortPathNameW(input.as_ptr(), std::ptr::null_mut(), 0) };
+            if required == 0 {
+                return None;
+            }
+            let mut output = vec![0u16; required as usize];
+            let written = unsafe {
+                GetShortPathNameW(input.as_ptr(), output.as_mut_ptr(), output.len() as u32)
+            };
+            if written == 0 || written as usize >= output.len() {
+                return None;
+            }
+            output.truncate(written as usize);
+            Some(std::ffi::OsString::from_wide(&output).into())
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let game = tmp.path().join("game");
+        let library = tmp.path().join("library");
+        let active = game.join(
+            "G1R/Binaries/Win64/ue4ss/Mods/A deliberately long UE4SS directory name",
+        );
+        std::fs::create_dir_all(&active).unwrap();
+        std::fs::create_dir_all(&library).unwrap();
+        let Some(short_name) =
+            short_path(&active).and_then(|path| path.file_name().map(|name| name.to_os_string()))
+        else {
+            return;
+        };
+        let short_alias = active.parent().unwrap().join(short_name);
+        if crate::record_path_key(&active) == crate::record_path_key(&short_alias) {
+            return;
+        }
+        assert!(short_alias.is_dir());
+
+        write_record(
+            &game,
+            &DeployRecord {
+                mod_name: "manager".into(),
+                owner: "manager".into(),
+                ue4ss_mod_dirs: vec![active.display().to_string()],
+                stale_ue4ss_dirs: vec![short_alias.display().to_string()],
+                ue4ss_tree_fingerprints: BTreeMap::from([(
+                    short_alias.display().to_string(),
+                    crate::tree_fingerprint(&active).unwrap(),
+                )]),
+                ..Default::default()
+            },
+        );
+
+        let expected = ManagerStatus::InSync {
+            loadout: Vec::new(),
+        };
+        assert_eq!(status(&game, &library, &Loadout::default()).unwrap(), expected);
+        assert_eq!(
+            status_for_preflight(&game, &library, &Loadout::default()).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
     fn deployment_hashing_is_cached_and_aggregate_bounded() {
         assert!(
             MAX_PREFLIGHT_STATUS_HASH_BYTES
@@ -1701,7 +1882,7 @@ mod tests {
         std::fs::write(&beta, b"beta").unwrap();
         let alpha_hash = crate::sha256_file(&alpha).unwrap();
         let beta_hash = crate::sha256_file(&beta).unwrap();
-        let mut files = DeploymentInspection::new(5, 2, 0);
+        let mut files = DeploymentInspection::new(5, 2, 0, u64::MAX);
 
         for _ in 0..2 {
             assert!(file_matches_for_status(
@@ -1724,7 +1905,7 @@ mod tests {
         assert!(error.to_string().contains("hashing budget"), "{error}");
 
         let alpha_legacy_hash = crate::content_hash(b"alpha");
-        let mut legacy = DeploymentInspection::new(4, 1, 0);
+        let mut legacy = DeploymentInspection::new(4, 1, 0, u64::MAX);
         let error = file_matches_for_status(
             &alpha,
             &alpha_legacy_hash,
@@ -1735,7 +1916,7 @@ mod tests {
         assert!(matches!(&error, crate::ModError::InspectionBound(_)));
         assert!(error.to_string().contains("hashing budget"), "{error}");
 
-        let mut file_entries = DeploymentInspection::new(100, 1, 0);
+        let mut file_entries = DeploymentInspection::new(100, 1, 0, u64::MAX);
         assert!(file_matches_for_status(
             &alpha,
             &alpha_hash,
@@ -1760,7 +1941,7 @@ mod tests {
         std::fs::write(tree.join("payload"), b"tree").unwrap();
         std::fs::write(other_tree.join("payload"), b"tree").unwrap();
         let tree_hash = crate::tree_fingerprint(&tree).unwrap();
-        let mut trees = DeploymentInspection::new(4, 0, 1);
+        let mut trees = DeploymentInspection::new(4, 0, 1, u64::MAX);
         for _ in 0..2 {
             assert!(tree_matches_for_status(
                 &tree,
@@ -1808,7 +1989,7 @@ mod tests {
 
         let legacy_hash = crate::content_hash(b"alpha");
         let wrong_legacy_hash = crate::content_hash(b"other");
-        let mut legacy = DeploymentInspection::new(5, 1, 0);
+        let mut legacy = DeploymentInspection::new(5, 1, 0, u64::MAX);
         assert!(file_matches_for_status(
             &file,
             &legacy_hash,
@@ -1835,7 +2016,7 @@ mod tests {
         assert_eq!(legacy.file_matches.len(), 2);
         assert_eq!(legacy.legacy_hashes.len(), 1);
 
-        let mut sha256 = DeploymentInspection::new(5, 1, 0);
+        let mut sha256 = DeploymentInspection::new(5, 1, 0, u64::MAX);
         assert_eq!(
             sha256_for_status(&file, InspectionFailurePolicy::Preserve, &mut sha256).unwrap(),
             sha256_for_status(
@@ -1855,7 +2036,7 @@ mod tests {
         let tree_alias = toggle_verbatim(&tree.with_file_name("TREE"));
         assert!(tree_alias.is_dir());
         let tree_hash = crate::tree_fingerprint(&tree).unwrap();
-        let mut trees = DeploymentInspection::new(4, 0, 1);
+        let mut trees = DeploymentInspection::new(4, 0, 1, u64::MAX);
         assert!(tree_matches_for_status(
             &tree,
             &tree_hash,
