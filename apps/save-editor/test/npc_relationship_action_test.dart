@@ -46,7 +46,9 @@ void main() {
 
     notifier.setPendingNpcRelationship('Asghan-1', NpcRelationship.friend);
 
-    final pending = notifier.state.pendingEdits['npc.relationship:Asghan-1'];
+    // The registry key folds the id the way the core folds it, so two
+    // spellings of one NPC cannot sit here side by side.
+    final pending = notifier.state.pendingEdits['npc.relationship:asghan-1'];
     expect(pending, isNotNull);
     expect(pending!.edits.single, {
       'path': 'private.npc.setRelationship',

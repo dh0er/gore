@@ -127,11 +127,14 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Repair'), findsOneWidget);
   });
 
-  testWidgets('the repair is written last, after id-addressed edits', (
+  testWidgets('the repair is applied last, after id-addressed edits', (
     tester,
   ) async {
     // The repair rewrites every misaligned m_Id, so an NPC removal pinned to the
-    // id the UI showed has to reach the core FIRST or it would no longer match.
+    // id the UI showed has to be applied FIRST or it would no longer match.
+    // The two now batch into one write_save, which the core applies
+    // sequentially — so position inside that payload is what carries the
+    // requirement, and the repair must be the LAST edit in it.
     final core = _InventoryCoreService(misalignedSlots: 3, npcRemovable: true);
     await pumpApp(tester, core);
     await openPlayerInventory(tester);
@@ -155,9 +158,13 @@ void main() {
           .map((e) => e['path'])
           .toList();
     }).toList();
-    expect(writes.length, greaterThanOrEqualTo(2));
-    expect(writes.first, contains('private.inventory.removeItem'));
-    expect(writes.last, ['private.inventory.repairSlots']);
+    // Every edit of this Save, flattened in the exact order the core applies
+    // them across the (now single) write.
+    final applied = [for (final write in writes) ...write];
+    expect(applied, [
+      'private.inventory.removeItem',
+      'private.inventory.repairSlots',
+    ]);
   });
 
   testWidgets('without write capability the warning stays, the action goes', (

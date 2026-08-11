@@ -207,7 +207,7 @@ pub(crate) fn char_key(global_id: &str) -> String {
 /// type name). `None` for non-map / non-struct-valued maps.
 fn map_value_struct_type(prop: &Property) -> Option<&str> {
     let (_key, value) = prop.descriptor.map.as_deref()?;
-    value.struct_type.as_ref().map(|(ty, _pkg)| ty.as_str())
+    value.struct_type.as_deref().map(|(ty, _pkg)| ty.as_str())
 }
 
 /// Find the character-state map of `struct_type` and return its entries keyed by
@@ -778,7 +778,7 @@ fn find_character_map_path<'a>(
         path: &mut Vec<String>,
     ) -> Option<&'a [(PropertyValue, PropertyValue)]> {
         for p in props {
-            path.push(p.name.clone());
+            path.push(p.name.to_string());
             if let PropertyValue::Map { entries, .. } = &p.value {
                 if map_value_struct_type(p) == Some(struct_type) {
                     return Some(entries);
@@ -884,14 +884,14 @@ fn collect_attribute_rows(
         }
         PropertyValue::Struct(StructValue::Properties(inner)) => {
             for p in inner {
-                path.push(p.name.clone());
+                path.push(p.name.to_string());
                 collect_attribute_rows(&p.value, path, out);
                 path.pop();
             }
         }
         PropertyValue::Struct(StructValue::Instanced(Some(i))) => {
             for p in &i.properties {
-                path.push(p.name.clone());
+                path.push(p.name.to_string());
                 collect_attribute_rows(&p.value, path, out);
                 path.pop();
             }
@@ -907,7 +907,7 @@ fn collect_attribute_rows(
             for (idx, o) in objs.iter().enumerate() {
                 path.push(format!("[{idx}]"));
                 for p in &o.properties {
-                    path.push(p.name.clone());
+                    path.push(p.name.to_string());
                     collect_attribute_rows(&p.value, path, out);
                     path.pop();
                 }
@@ -1116,7 +1116,7 @@ pub fn npc_inventory_path(root: &RootObject, global_id: &str) -> Option<Vec<Stri
     let container = entry_props(value)?.first()?;
     // The entry is addressed by its map key; then descend to the container prop.
     path.push(map_key_segment(global_id));
-    path.push(container.name.clone());
+    path.push(container.name.to_string());
     Some(path)
 }
 
@@ -1187,30 +1187,36 @@ fn memory_owners(root: &RootObject) -> Vec<(String, &PropertyValue)> {
 ///
 /// Re-scanning from scratch each call (rather than caching indices across the
 /// splicing removal loop) is what keeps the loop correct as removals shift indices.
-fn next_kill_memory_to_remove(root: &RootObject, id: &str) -> Option<(String, usize)> {
+fn kill_memories_to_remove(root: &RootObject, id: &str) -> Vec<(String, Vec<usize>)> {
+    let mut out = Vec::new();
     for (owner_id, memory) in memory_owners(root) {
         let Some(PropertyValue::Array { elements }) = struct_member(memory, "MemorizedEvents")
         else {
             continue;
         };
         let is_own = owner_id == id;
-        let found = elements.iter().position(|element| {
-            if is_own {
-                // Own defeat/kill residue only — an event about a DIFFERENT
-                // character (this NPC killed/executed someone else) is real
-                // memory and must be preserved across revive.
-                event_has_any_tag(element, REVIVE_EVENT_TAGS)
-                    && affected_character_id(element).map_or(true, |a| a == id)
-            } else {
-                event_has_any_tag(element, KILL_EVENT_TAGS)
-                    && affected_character_id(element) == Some(id)
-            }
-        });
-        if let Some(index) = found {
-            return Some((owner_id, index));
+        let found: Vec<usize> = elements
+            .iter()
+            .enumerate()
+            .filter(|(_, element)| {
+                if is_own {
+                    // Own defeat/kill residue only — an event about a DIFFERENT
+                    // character (this NPC killed/executed someone else) is real
+                    // memory and must be preserved across revive.
+                    event_has_any_tag(element, REVIVE_EVENT_TAGS)
+                        && affected_character_id(element).map_or(true, |a| a == id)
+                } else {
+                    event_has_any_tag(element, KILL_EVENT_TAGS)
+                        && affected_character_id(element) == Some(id)
+                }
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if !found.is_empty() {
+            out.push((owner_id, found));
         }
     }
-    None
+    out
 }
 
 /// The typed path (from the private root) to NPC `id`'s `MemorizedEvents` array:
@@ -1257,34 +1263,34 @@ fn is_corpse_key_for(key: &str, id: &str) -> bool {
 /// path to the `m_SavedInventories` MapProperty; [`resolve_chain`] re-resolves it
 /// for the enclosing size fields. The payload is re-parsed before each splice so
 /// offsets and indices stay fresh.
-fn remove_corpse_inventory(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreError> {
-    loop {
-        let root = parse_private_root(payload)?;
-        let Some((path, map_prop)) = find_property_by_name(&root, SAVED_INVENTORIES_MAP) else {
-            return Ok(()); // no corpse map => nothing to remove
-        };
-        let PropertyValue::Map { entries, .. } = &map_prop.value else {
-            return Ok(());
-        };
-        let Some(entry_index) = entries.iter().position(|(k, _v)| {
+fn plan_corpse_removal(root: &RootObject, id: &str) -> Result<Option<ReviveEdit>, CoreError> {
+    let Some((path, map_prop)) = find_property_by_name(root, SAVED_INVENTORIES_MAP) else {
+        return Ok(None); // no corpse map => nothing to remove
+    };
+    let PropertyValue::Map { entries, .. } = &map_prop.value else {
+        return Ok(None);
+    };
+    let entry_indices: Vec<usize> = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, (k, _v))| {
             map_key_to_string(k)
                 .as_deref()
                 .is_some_and(|k| is_corpse_key_for(k, id))
-        }) else {
-            return Ok(()); // no corpse for this NPC (e.g. an alive NPC) => done
-        };
-
-        let segs = parse_path(&path)?;
-        let chain = resolve_chain(&root.properties, &segs)?;
-        let target = chain.target.clone();
-        let enclosing = chain.enclosing_size_fields.clone();
-        patch_container(
-            payload,
-            &target,
-            &enclosing,
-            &ContainerEdit::MapRemove { entry_index },
-        )?;
+        })
+        .map(|(index, _)| index)
+        .collect();
+    if entry_indices.is_empty() {
+        return Ok(None); // no corpse for this NPC (e.g. an alive NPC) => done
     }
+
+    let segs = parse_path(&path)?;
+    let chain = resolve_chain(&root.properties, &segs)?;
+    Ok(Some(ReviveEdit::RemoveMapEntries {
+        target: chain.target.clone(),
+        enclosing: chain.enclosing_size_fields,
+        indices: entry_indices,
+    }))
 }
 
 /// Strip the death loose tags ([`DEAD_LOOSE_TAGS`]: `State.Dead`,
@@ -1299,38 +1305,32 @@ fn remove_corpse_inventory(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreEr
 /// [`patch_map_value_tag_container`] (not [`patch_tag_container`], which would clobber
 /// the key). The payload is re-parsed before each removal so offsets stay fresh.
 /// No-op (Ok) if the map / entry is absent or carries none of the tags.
-fn remove_dead_loose_tags(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreError> {
-    for tag in DEAD_LOOSE_TAGS {
-        loop {
-            let root = parse_private_root(payload)?;
-            let Some((path, map_prop)) = find_property_by_name(&root, LOOSE_TAGS_MAP) else {
-                return Ok(()); // no loose-tags map => nothing to strip
-            };
-            let PropertyValue::Map { entries, .. } = &map_prop.value else {
-                return Ok(());
-            };
-            let Some(entry_index) = entries
-                .iter()
-                .position(|(k, _v)| map_key_to_string(k).as_deref() == Some(id))
-            else {
-                break; // no entry for this NPC => move to next tag (will also break)
-            };
-            // Enclosing size fields for the MAP property (ancestors); the map's own
-            // size field is handled inside patch_map_value_tag_container.
-            let segs = parse_path(&path)?;
-            let chain = resolve_chain(&root.properties, &segs)?;
-            let target = chain.target.clone();
-            let enclosing = chain.enclosing_size_fields.clone();
-            let removed =
-                patch_map_value_tag_container(payload, &target, &enclosing, entry_index, tag)?;
-            if !removed {
-                break; // this tag is gone => next tag
-            }
-            // Re-parse and re-scan in case the same tag appears more than once
-            // (defensive; a container normally holds each tag at most once).
-        }
-    }
-    Ok(())
+fn plan_dead_loose_tag_removal(
+    root: &RootObject,
+    id: &str,
+) -> Result<Option<ReviveEdit>, CoreError> {
+    let Some((path, map_prop)) = find_property_by_name(root, LOOSE_TAGS_MAP) else {
+        return Ok(None); // no loose-tags map => nothing to strip
+    };
+    let PropertyValue::Map { entries, .. } = &map_prop.value else {
+        return Ok(None);
+    };
+    let Some(entry_index) = entries
+        .iter()
+        .position(|(k, _v)| map_key_to_string(k).as_deref() == Some(id))
+    else {
+        return Ok(None); // no entry for this NPC => nothing to strip
+    };
+    // Enclosing size fields for the MAP property (ancestors); the map's own size
+    // field is handled inside patch_map_value_tag_container, which strips every
+    // listed tag from this one view of the container.
+    let segs = parse_path(&path)?;
+    let chain = resolve_chain(&root.properties, &segs)?;
+    Ok(Some(ReviveEdit::RemoveTags {
+        target: chain.target.clone(),
+        enclosing: chain.enclosing_size_fields,
+        entry_index,
+    }))
 }
 
 /// Restore NPC `id`'s `Health` to its `MaxHealth` `BaseValue` (both `BaseValue` and
@@ -1340,9 +1340,8 @@ fn remove_dead_loose_tags(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreErr
 ///
 /// Errors if the NPC has no `Health` attribute or no `MaxHealth` `BaseValue` to
 /// revive to.
-fn restore_hp_to_max(payload: &mut [u8], id: &str) -> Result<(), CoreError> {
+fn plan_hp_restore(root: &RootObject, id: &str) -> Result<Vec<ReviveEdit>, CoreError> {
     let (base_path, current_path, max_hp, needs_patch) = {
-        let root = parse_private_root(payload)?;
         let rows = npc_attributes(&root, id)?;
         let health = rows
             .iter()
@@ -1369,17 +1368,23 @@ fn restore_hp_to_max(payload: &mut [u8], id: &str) -> Result<(), CoreError> {
     };
 
     if !needs_patch {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
-    let root = parse_private_root(payload)?;
     let base_segs = parse_path(&base_path)?;
     let base_target = resolve_chain(&root.properties, &base_segs)?.target.clone();
     let cur_segs = parse_path(&current_path)?;
     let cur_target = resolve_chain(&root.properties, &cur_segs)?.target.clone();
-    patch_scalar(payload, &base_target, ScalarValue::Float(max_hp))?;
-    patch_scalar(payload, &cur_target, ScalarValue::Float(max_hp))?;
-    Ok(())
+    Ok(vec![
+        ReviveEdit::SetFloat {
+            target: base_target,
+            value: max_hp,
+        },
+        ReviveEdit::SetFloat {
+            target: cur_target,
+            value: max_hp,
+        },
+    ])
 }
 
 fn relationship_name_property(name: &str, value: &str) -> Vec<u8> {
@@ -1481,8 +1486,8 @@ pub fn apply_relationship(
     }
 
     // Refuse accidental map entries for non-characters/typos.
-    let root = parse_private_root(payload)?;
-    let attributes = find_character_map(&root, ATTRIBUTES_TYPE)
+    let checked = parse_private_root(payload)?;
+    let attributes = find_character_map(&checked, ATTRIBUTES_TYPE)
         .ok_or_else(|| CoreError::Parse(format!("no {ATTRIBUTES_TYPE} map found in save")))?;
     if lookup_entry(attributes, id).is_none() {
         return Err(CoreError::InvalidRequest(format!(
@@ -1495,8 +1500,14 @@ pub fn apply_relationship(
     // retains Weight 1000 after SaveGame load. Reparse after every splice
     // because Friend/Neutral/Enemy have different byte lengths.
     let mut missing_entry = false;
-    loop {
-        let root = parse_private_root(payload)?;
+    // One pass over the modifiers: the scan below collects EVERY mismatch and
+    // settles whether a strong override already exists, so the parse taken for the
+    // existence check above serves the whole edit. The writes then run back to
+    // front — the append copies the existing bytes verbatim and adds at the end, so
+    // it cannot move a mismatch, and the mismatches themselves are patched
+    // descending — which is what makes one parse enough.
+    'entry: {
+        let root = &checked;
         let Some((map_path, map_property)) = find_property_by_name(&root, RELATIONSHIP_MAP) else {
             return Err(CoreError::Parse(format!(
                 "{RELATIONSHIP_MAP} map not found in save"
@@ -1510,7 +1521,7 @@ pub fn apply_relationship(
             .find(|(key, _)| map_key_to_string(key).as_deref() == Some(id))
         else {
             missing_entry = true;
-            break;
+            break 'entry;
         };
         let Some(entry_properties) = entry_props(entry_value) else {
             return Err(CoreError::Parse(format!(
@@ -1524,7 +1535,7 @@ pub fn apply_relationship(
                 "{RELATIONSHIP_MAP}[{id:?}] has no {ACTIVE_RELATIONSHIP_MODIFIERS} array"
             )));
         };
-        let mut next_mismatch = None;
+        let mut mismatches: Vec<usize> = Vec::new();
         let mut found_strong_override = false;
         match &array_property.value {
             PropertyValue::ObjectInstances(modifiers) => {
@@ -1545,8 +1556,7 @@ pub fn apply_relationship(
                         found_strong_override = true;
                     }
                     if current != relationship.enum_label() {
-                        next_mismatch = Some(index);
-                        break;
+                        mismatches.push(index);
                     }
                 }
             }
@@ -1558,26 +1568,32 @@ pub fn apply_relationship(
             }
         }
 
-        if let Some(index) = next_mismatch {
-            let mut path = map_path;
+        // Resolve every mismatch against this parse before anything is written.
+        let mut mismatch_targets = Vec::new();
+        for index in &mismatches {
+            let mut path = map_path.clone();
             path.push(format!("{{{id}}}"));
             path.push(ACTIVE_RELATIONSHIP_MODIFIERS.to_string());
             path.push(format!("[{index}]"));
             path.push("Relationship".to_string());
             let chain = resolve_chain(&root.properties, &parse_path(&path)?)?;
-            let target = chain.target.clone();
-            let enclosing = chain.enclosing_size_fields.clone();
-            patch_string(payload, &target, &enclosing, relationship.enum_label())?;
-            continue;
+            mismatch_targets.push((chain.target.clone(), chain.enclosing_size_fields));
         }
 
         if found_strong_override {
-            break;
+            // Nothing to append: patch the mismatches back to front and stop.
+            for (target, enclosing) in mismatch_targets.into_iter().rev() {
+                patch_string(payload, &target, &enclosing, relationship.enum_label())?;
+            }
+            break 'entry;
         }
 
         // The map entry exists but has only unrelated modifiers or a weak
         // legacy `_Story_Permanent` override. Append the strong, indefinite
-        // `_Story` representation while preserving every existing object.
+        // `_Story` representation while preserving every existing object. The
+        // append goes first: it rewrites the array body starting from the same
+        // offset with the existing bytes unchanged, so the mismatch targets below
+        // still sit where this parse said they do.
         let mut path = map_path;
         path.push(format!("{{{id}}}"));
         path.push(ACTIVE_RELATIONSHIP_MODIFIERS.to_string());
@@ -1621,13 +1637,19 @@ pub fn apply_relationship(
             }
             _ => unreachable!("array encoding validated above"),
         }
-        // Reparse and verify the newly appended object before finishing.
+
+        // Back to front, so the append above and each patch leave the targets still
+        // to come exactly where this parse found them.
+        for (target, enclosing) in mismatch_targets.into_iter().rev() {
+            patch_string(payload, &target, &enclosing, relationship.enum_label())?;
+        }
     }
 
     if missing_entry {
-        // No entry existed: append a fully-formed inline map key/value pair.
-        let root = parse_private_root(payload)?;
-        let (map_path, map_property) = find_property_by_name(&root, RELATIONSHIP_MAP)
+        // No entry existed: append a fully-formed inline map key/value pair. Nothing
+        // has been written at this point, so the existence check's parse still holds.
+        let root = &checked;
+        let (map_path, map_property) = find_property_by_name(root, RELATIONSHIP_MAP)
             .ok_or_else(|| CoreError::Parse(format!("{RELATIONSHIP_MAP} map not found in save")))?;
         let PropertyValue::Map { entries, .. } = &map_property.value else {
             return Err(CoreError::Parse(format!("{RELATIONSHIP_MAP} is not a map")));
@@ -1667,6 +1689,90 @@ pub fn apply_relationship(
     Ok(())
 }
 
+/// One planned change to the payload, resolved from a single parse.
+///
+/// Reviving touches four unrelated places in the save, and each used to re-parse
+/// because the one before it had spliced. It does not have to: a splice only moves
+/// bytes AFTER itself, so a change whose target sits earlier is untouched by one
+/// already applied. Planning every change against one parse and then applying them
+/// back to front therefore needs exactly one parse — and `patch_container` reads
+/// each enclosing size field from the current bytes, so the size cascade stays
+/// correct as the payload shrinks underneath it.
+enum ReviveEdit {
+    RemoveArrayElements {
+        target: Property,
+        enclosing: Vec<usize>,
+        indices: Vec<usize>,
+    },
+    RemoveMapEntries {
+        target: Property,
+        enclosing: Vec<usize>,
+        indices: Vec<usize>,
+    },
+    RemoveTags {
+        target: Property,
+        enclosing: Vec<usize>,
+        entry_index: usize,
+    },
+    SetFloat {
+        target: Property,
+        value: f32,
+    },
+}
+
+impl ReviveEdit {
+    /// The byte range this change reads and writes within.
+    fn range(&self) -> core::ops::Range<usize> {
+        let target = match self {
+            ReviveEdit::RemoveArrayElements { target, .. }
+            | ReviveEdit::RemoveMapEntries { target, .. }
+            | ReviveEdit::RemoveTags { target, .. }
+            | ReviveEdit::SetFloat { target, .. } => target,
+        };
+        target.value_offset..target.value_offset + target.value_size.max(1)
+    }
+
+    fn apply(self, payload: &mut Vec<u8>) -> Result<(), CoreError> {
+        match self {
+            ReviveEdit::RemoveArrayElements {
+                target,
+                enclosing,
+                indices,
+            } => patch_container(
+                payload,
+                &target,
+                &enclosing,
+                &ContainerEdit::ArrayRemoveMany(indices),
+            ),
+            ReviveEdit::RemoveMapEntries {
+                target,
+                enclosing,
+                indices,
+            } => patch_container(
+                payload,
+                &target,
+                &enclosing,
+                &ContainerEdit::MapRemoveMany(indices),
+            ),
+            ReviveEdit::RemoveTags {
+                target,
+                enclosing,
+                entry_index,
+            } => patch_map_value_tag_container(
+                payload,
+                &target,
+                &enclosing,
+                entry_index,
+                DEAD_LOOSE_TAGS,
+            )
+            .map(|_| ()),
+            ReviveEdit::SetFloat { target, value } => {
+                patch_scalar(payload, &target, ScalarValue::Float(value))
+            }
+        }
+    }
+}
+
 /// REVIVE NPC `id` in a decoded private payload, in place — restore a KILLED NPC
 /// to its alive state by undoing all persisted death state.
 ///
@@ -1677,43 +1783,52 @@ pub fn apply_relationship(
 /// 3. Remove the NPC's lootable corpse entry from `m_SavedInventories`.
 /// 4. Restore Health to MaxHealth.
 ///
-/// Each structural step reparses before continuing, so shifted offsets and
-/// indices are never reused. An already-alive NPC with full HP is a clean no-op.
+/// Everything is planned against ONE parse and applied back to front, so no step
+/// reuses an offset a later one moved. An already-alive NPC with full HP is a clean
+/// no-op.
 pub fn apply_revive(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreError> {
-    // ── Phase 1: strip every kill/defeat memory event across ALL owners ──────
-    // Re-parse/re-scan/splice loop: each removal shifts later indices and offsets,
-    // so we locate the next matching event afresh every iteration. The scan returns
-    // the owner it found so we splice the correct owner's MemorizedEvents array.
-    loop {
-        let root = parse_private_root(payload)?;
-        let Some((owner_id, index)) = next_kill_memory_to_remove(&root, id) else {
-            break;
-        };
+    let root = parse_private_root(payload)?;
+
+    // Everything reviving has to change, planned against this one parse: the
+    // kill/defeat memory events across every owner, the authoritative death tags,
+    // the lootable-corpse entries, and the health restore.
+    let mut edits = Vec::new();
+    for (owner_id, indices) in kill_memories_to_remove(&root, id) {
         let path = memorized_events_array_path(&root, &owner_id).ok_or_else(|| {
             CoreError::Parse(format!(
                 "memory owner {owner_id:?} has no MemorizedEvents array to revive"
             ))
         })?;
-        let segs = parse_path(&path)?;
-        let chain = resolve_chain(&root.properties, &segs)?;
-        let target = chain.target.clone();
-        let enclosing = chain.enclosing_size_fields.clone();
-        patch_container(
-            payload,
-            &target,
-            &enclosing,
-            &ContainerEdit::ArrayRemove(index),
-        )?;
+        let chain = resolve_chain(&root.properties, &parse_path(&path)?)?;
+        edits.push(ReviveEdit::RemoveArrayElements {
+            target: chain.target.clone(),
+            enclosing: chain.enclosing_size_fields,
+            indices,
+        });
     }
+    edits.extend(plan_dead_loose_tag_removal(&root, id)?);
+    edits.extend(plan_corpse_removal(&root, id)?);
+    edits.extend(plan_hp_restore(&root, id)?);
+    drop(root);
 
-    // ── Phase 2: strip the authoritative death loose tags (the native gate) ──
-    remove_dead_loose_tags(payload, id)?;
-
-    // ── Phase 3: remove the lootable-corpse entry (its own re-parse/splice) ──
-    remove_corpse_inventory(payload, id)?;
-
-    // ── Phase 4: restore HP to max (no-op if already full) ───────────────────
-    restore_hp_to_max(payload, id)
+    // Back to front, so no change moves a target still to be applied. The ranges
+    // must not overlap for that to hold; they never do (the four live in different
+    // maps), but a save that made them overlap would be corrupted silently, so it
+    // is checked rather than assumed.
+    edits.sort_by_key(|edit| core::cmp::Reverse(edit.range().start));
+    for pair in edits.windows(2) {
+        let (later, earlier) = (pair[0].range(), pair[1].range());
+        if earlier.end > later.start {
+            return Err(CoreError::Parse(format!(
+                "revive would edit overlapping byte ranges ({:?} and {:?}); refusing",
+                earlier, later
+            )));
+        }
+    }
+    for edit in edits {
+        edit.apply(payload)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

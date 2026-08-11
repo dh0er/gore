@@ -907,13 +907,13 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
     }
   }
 
-  /// UE Names compare case-insensitively, so the entry part of the pending
-  /// key is folded to lower case: an add and a remove that differ only in
-  /// casing address the same logical entry and toggle instead of coexisting
-  /// as conflicting setAdd + setRemove ops. The queued edit itself keeps the
-  /// caller's original casing.
+  /// UE Names compare case-insensitively and the core folds surrounding space
+  /// too, so both parts of the pending key are folded the same way: an add and a
+  /// remove that differ only in casing or spacing address the same logical entry
+  /// and toggle instead of coexisting as two entries the core then sees as one
+  /// target and refuses. The queued edit itself keeps the caller's original text.
   String _pendingKey(String character, String entry) =>
-      '$character\t${entry.toLowerCase()}';
+      '${foldEditTargetPart(character)}\t${foldEditTargetPart(entry)}';
 
   void _removeEntry(String entry) {
     final character = _selectedCharacter;
@@ -1038,15 +1038,17 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
     final character = _selectedCharacter;
 
     // Compute sets for rendering — only include edits for the selected NPC.
-    // removedEntries holds lower-cased values to match the case-folded
-    // pending keys: lookups against displayed entries fold too.
+    // removedEntries holds folded values to match the folded pending keys:
+    // lookups against displayed entries fold the same way.
     final removedEntries = <String>{};
     final addedEntries = <String>[];
     if (character != null) {
-      final prefix = '$character\t';
+      final prefix = '${foldEditTargetPart(character)}\t';
       for (final e in _pending.entries) {
         if (!e.key.startsWith(prefix)) continue;
-        if (!e.value.isAdd) removedEntries.add(e.value.entry.toLowerCase());
+        if (!e.value.isAdd) {
+          removedEntries.add(foldEditTargetPart(e.value.entry));
+        }
         if (e.value.isAdd) addedEntries.add(e.value.entry);
       }
     }
@@ -1254,7 +1256,7 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
                               itemBuilder: (context, index) {
                                 final entry = _entries.entries[index];
                                 final isRemoved = removedEntries.contains(
-                                  entry.toLowerCase(),
+                                  foldEditTargetPart(entry),
                                 );
                                 final meta = _knowledgeCatalog?.entryById(
                                   entry,

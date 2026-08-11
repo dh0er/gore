@@ -307,9 +307,16 @@ impl SkillSetEdit {
 /// - not learned, `tier != Untrained` → clone a donor element (or the embedded
 ///   template on an empty array) and retarget its `Def`.
 /// - otherwise a no-op.
-pub fn apply_skill_set(payload: &mut Vec<u8>, edit: &SkillSetEdit) -> Result<(), CoreError> {
-    let root = properties::parse_private_root(payload)?;
-    let (base_path, elements) = locate_active_effects(&root, &edit.actor).ok_or_else(|| {
+pub(crate) fn apply_skill_set(
+    payload: &mut Vec<u8>,
+    edit: &SkillSetEdit,
+    cache: &mut crate::PayloadRoot,
+) -> Result<(), CoreError> {
+    // `fresh`, not `structural`: the decision below reads decoded Def strings off
+    // the tree, so a parse that predates an in-place write by an earlier edit in
+    // the batch could pick the wrong element.
+    let root = cache.fresh(payload)?;
+    let (base_path, elements) = locate_active_effects(root, &edit.actor).ok_or_else(|| {
         CoreError::UnsupportedEdit(format!(
             "actor {:?} has no ActiveEffects array to edit skills in",
             edit.actor
@@ -352,18 +359,23 @@ pub fn apply_skill_set(payload: &mut Vec<u8>, edit: &SkillSetEdit) -> Result<(),
         p
     };
     let element_count = elements.len();
+    // Read the existing element's class here, while the tree is still in hand; the
+    // borrow of the cache ends with this block so the writes below can hand it their
+    // proof parses.
+    let existing_class = existing
+        .and_then(|idx| elements.get(idx))
+        .and_then(element_class)
+        .map(str::to_string);
 
     match existing {
         Some(idx) => {
             if want_untrained && !has_untrained {
                 // Unlearn: no `_Untrained` class exists, so remove the element.
-                container_edit(payload, &array_path, ContainerEdit::ArrayRemove(idx))
-            } else if element_class_at(payload, &array_path, idx)?.as_deref()
-                == Some(target_class.as_str())
-            {
+                container_edit(payload, cache, &array_path, ContainerEdit::ArrayRemove(idx))
+            } else if existing_class.as_deref() == Some(target_class.as_str()) {
                 Ok(()) // already the requested class
             } else {
-                retarget_def(payload, &array_path, idx, &target_class)
+                retarget_def(payload, cache, &array_path, idx, &target_class)
             }
         }
         None => {
@@ -382,75 +394,60 @@ pub fn apply_skill_set(payload: &mut Vec<u8>, edit: &SkillSetEdit) -> Result<(),
                 Some(donor_idx) => {
                     container_edit(
                         payload,
+                        cache,
                         &array_path,
                         ContainerEdit::ArrayDuplicate(donor_idx),
                     )?;
                     // ArrayDuplicate inserts the copy right after the source.
-                    retarget_def(payload, &array_path, donor_idx + 1, &target_class)
+                    retarget_def(payload, cache, &array_path, donor_idx + 1, &target_class)
                 }
                 None => {
                     container_edit(
                         payload,
+                        cache,
                         &array_path,
                         ContainerEdit::ArrayInsertBytes(donor::donor_template()),
                     )?;
                     // ArrayInsertBytes appends at the end of the array.
-                    retarget_def(payload, &array_path, element_count, &target_class)
+                    retarget_def(payload, cache, &array_path, element_count, &target_class)
                 }
             }
         }
     }
 }
 
-/// Re-parse the payload and read the class string of the element at `index`.
-fn element_class_at(
-    payload: &[u8],
-    array_path: &[String],
-    index: usize,
-) -> Result<Option<String>, CoreError> {
-    let root = properties::parse_private_root(payload)?;
-    let segs = properties::parse_path(array_path)?;
-    let resolved = properties::resolve_chain(&root.properties, &segs)?;
-    let PropertyValue::Array { elements } = &resolved.target.value else {
-        return Ok(None);
-    };
-    Ok(elements
-        .get(index)
-        .and_then(element_class)
-        .map(str::to_string))
-}
-
-/// Apply a structural container edit to the array at `array_path`, validating on
-/// a scratch copy before committing (mirrors the generic typed container apply).
+/// Resolves through `cache` and hands it the proof parse afterwards, so a run of
+/// skill edits in one write parses the payload once per edit rather than per step.
 fn container_edit(
     payload: &mut Vec<u8>,
+    cache: &mut crate::PayloadRoot,
     array_path: &[String],
     edit: ContainerEdit,
 ) -> Result<(), CoreError> {
-    let root = properties::parse_private_root(payload)?;
-    let segs = properties::parse_path(array_path)?;
-    let resolved = properties::resolve_chain(&root.properties, &segs)?;
-    let target = resolved.target.clone();
+    let (target, enclosing) = {
+        let root = cache.fresh(payload)?;
+        let segs = properties::parse_path(array_path)?;
+        let resolved = properties::resolve_chain(&root.properties, &segs)?;
+        (resolved.target.clone(), resolved.enclosing_size_fields)
+    };
     let mut patched = payload.clone();
-    properties::patch_container(
-        &mut patched,
-        &target,
-        &resolved.enclosing_size_fields,
-        &edit,
-    )?;
-    properties::parse_private_root(&patched).map_err(|err| {
+    properties::patch_container(&mut patched, &target, &enclosing, &edit)?;
+    let proof = properties::parse_private_root(&patched).map_err(|err| {
         CoreError::Parse(format!(
             "skill container edit produced an inconsistent payload: {err}"
         ))
     })?;
     *payload = patched;
+    cache.adopt(proof);
     Ok(())
 }
 
 /// Retarget the `EffectSpec/Def` ObjectProperty of the array element at `index`
 /// to `new_class` (a length-changing string patch), validating on a scratch copy.
+/// Resolves through `cache` and hands it the proof parse afterwards.
 fn retarget_def(
     payload: &mut Vec<u8>,
+    cache: &mut crate::PayloadRoot,
     array_path: &[String],
     index: usize,
     new_class: &str,
@@ -460,23 +457,23 @@ fn retarget_def(
     def_path.push("EffectSpec".to_string());
     def_path.push("Def".to_string());
 
-    let root = properties::parse_private_root(payload)?;
-    let segs = properties::parse_path(&def_path)?;
-    let resolved = properties::resolve_chain(&root.properties, &segs)?;
-    let target = resolved.target.clone();
+    let (target, enclosing) = {
+        let root = cache.fresh(payload)?;
+        let segs = properties::parse_path(&def_path)?;
+        let resolved = properties::resolve_chain(&root.properties, &segs)?;
+        (resolved.target.clone(), resolved.enclosing_size_fields)
+    };
     let mut patched = payload.clone();
-    properties::patch_string(
-        &mut patched,
-        &target,
-        &resolved.enclosing_size_fields,
-        new_class,
-    )?;
-    properties::parse_private_root(&patched).map_err(|err| {
+    properties::patch_string(&mut patched, &target, &enclosing, new_class)?;
+    let proof = properties::parse_private_root(&patched).map_err(|err| {
         CoreError::Parse(format!(
             "skill Def retarget produced an inconsistent payload: {err}"
         ))
     })?;
     *payload = patched;
+    // The proof describes exactly the bytes just installed, so the next edit in the
+    // batch resolves against it instead of parsing the payload again.
+    cache.adopt(proof);
     Ok(())
 }
 

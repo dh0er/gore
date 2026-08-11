@@ -27,12 +27,223 @@
 
 use crate::{CoreError, Reader};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 
 pub const TAG_FLAG_NATIVE_SERIALIZE: u8 = 0x08;
 pub const TAG_FLAG_BOOL_TRUE: u8 = 0x10;
 
 const MAX_DEPTH: usize = 96;
+
+/// An interned property or type name.
+///
+/// A real save's payload parses into ~1.4 million properties, and the names on them
+/// are drawn from a few thousand distinct strings — `"IntProperty"` alone appears
+/// hundreds of thousands of times. Allocating one `String` per occurrence made the
+/// allocator the parser's dominant cost, so names are shared instead: equal text is
+/// stored once per thread and handed out as a cheap pointer clone.
+///
+/// It compares and reads like a `&str` (`Deref`, `PartialEq<&str>`, `Display`), so
+/// call sites treat it as the string it is.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PropStr(Arc<str>);
+
+/// A small non-cryptographic hasher for the name table.
+///
+/// The table is looked up several million times per parse and holds nothing but
+/// short, internal, non-attacker-chosen strings, so the default SipHash costs more
+/// than the allocation interning is there to avoid. This is the usual
+/// multiply-and-rotate word hash.
+///
+/// The names come out of the save file, so they are chosen by whoever wrote it —
+/// and a fixed hash that anyone can read here would let a crafted save drop
+/// thousands of names into one bucket and turn the millions of lookups a parse
+/// makes into a quadratic hang, long before the size caps could bite. The state is
+/// therefore started from a value drawn once per process, which no save can know.
+/// This is not a cryptographic hash and does not pretend to be; it is that unknown
+/// starting point that makes collisions impossible to work out ahead of time.
+#[derive(Clone, Copy)]
+struct NameHasher(u64);
+
+/// Drawn once per process from the standard library's randomly seeded hasher, so
+/// no dependency is needed to get an unpredictable value.
+fn name_hash_seed() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    static SEED: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *SEED.get_or_init(|| {
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        hasher.write_u8(0);
+        hasher.finish()
+    })
+}
+
+impl std::hash::Hasher for NameHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        const SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
+        let mut hash = self.0;
+        let mut chunks = bytes.chunks_exact(8);
+        for chunk in &mut chunks {
+            let word = u64::from_le_bytes(chunk.try_into().expect("chunks_exact(8)"));
+            hash = (hash.rotate_left(5) ^ word).wrapping_mul(SEED);
+        }
+        let mut tail = 0u64;
+        for (index, byte) in chunks.remainder().iter().enumerate() {
+            tail |= u64::from(*byte) << (index * 8);
+        }
+        self.0 = (hash.rotate_left(5) ^ tail).wrapping_mul(SEED);
+    }
+}
+
+#[derive(Clone, Copy)]
+struct NameHasherBuilder(u64);
+
+impl NameHasherBuilder {
+    fn new() -> Self {
+        NameHasherBuilder(name_hash_seed())
+    }
+}
+
+impl std::hash::BuildHasher for NameHasherBuilder {
+    type Hasher = NameHasher;
+    fn build_hasher(&self) -> NameHasher {
+        NameHasher(self.0)
+    }
+}
+
+thread_local! {
+    /// Names seen on this thread. Bounded so a save full of unique strings cannot
+    /// grow it without limit; past the cap new names simply are not shared.
+    static INTERNED_NAMES: std::cell::RefCell<HashSet<Arc<str>, NameHasherBuilder>> =
+        std::cell::RefCell::new(HashSet::with_hasher(NameHasherBuilder::new()));
+    /// Bytes of text the table above is holding on to.
+    static INTERNED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// What the shared table may keep. A count alone does not bound memory: the table
+/// lives for the life of the thread, and a malformed or modded save could fill it
+/// with tens of thousands of very long names and pin them there long after the save
+/// was closed. Real property names are short and few, so a name that busts either
+/// limit is simply not shared — it is still returned, and it is released with the
+/// tree that holds it, exactly as before interning existed.
+const MAX_INTERNED_NAMES: usize = 1 << 16;
+const MAX_INTERNED_BYTES: usize = 4 << 20;
+const MAX_INTERNED_NAME_LEN: usize = 256;
+
+impl PropStr {
+    /// Intern `text`, reusing the copy this thread already holds when there is one.
+    pub fn new(text: &str) -> Self {
+        INTERNED_NAMES.with(|names| {
+            let mut names = names.borrow_mut();
+            if let Some(shared) = names.get(text) {
+                return PropStr(shared.clone());
+            }
+            let shared: Arc<str> = Arc::from(text);
+            if text.len() <= MAX_INTERNED_NAME_LEN && names.len() < MAX_INTERNED_NAMES {
+                INTERNED_BYTES.with(|held| {
+                    let next = held.get().saturating_add(text.len());
+                    if next <= MAX_INTERNED_BYTES {
+                        held.set(next);
+                        names.insert(shared.clone());
+                    }
+                });
+            }
+            PropStr(shared)
+        })
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for PropStr {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for PropStr {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::borrow::Borrow<str> for PropStr {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for PropStr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<&str> for PropStr {
+    fn from(value: &str) -> Self {
+        PropStr::new(value)
+    }
+}
+
+impl From<String> for PropStr {
+    fn from(value: String) -> Self {
+        PropStr::new(&value)
+    }
+}
+
+impl From<&PropStr> for String {
+    fn from(value: &PropStr) -> Self {
+        value.0.to_string()
+    }
+}
+
+impl PartialEq<str> for PropStr {
+    fn eq(&self, other: &str) -> bool {
+        &*self.0 == other
+    }
+}
+
+impl PartialEq<&str> for PropStr {
+    fn eq(&self, other: &&str) -> bool {
+        &*self.0 == *other
+    }
+}
+
+impl PartialEq<String> for PropStr {
+    fn eq(&self, other: &String) -> bool {
+        &*self.0 == other.as_str()
+    }
+}
+
+impl PartialEq<PropStr> for str {
+    fn eq(&self, other: &PropStr) -> bool {
+        self == &*other.0
+    }
+}
+
+impl PartialEq<PropStr> for &str {
+    fn eq(&self, other: &PropStr) -> bool {
+        *self == &*other.0
+    }
+}
+
+impl PartialEq<PropStr> for String {
+    fn eq(&self, other: &PropStr) -> bool {
+        self.as_str() == &*other.0
+    }
+}
+
+impl serde::Serialize for PropStr {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RootObject {
@@ -46,8 +257,8 @@ pub struct RootObject {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Property {
-    pub name: String,
-    pub type_name: String,
+    pub name: PropStr,
+    pub type_name: PropStr,
     pub descriptor: Descriptor,
     pub array_index: u32,
     pub tag_flags: u8,
@@ -69,10 +280,12 @@ impl Property {
 /// Type descriptors serialized between the property type and the value header.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Descriptor {
-    /// StructProperty: (struct_type, package)
-    pub struct_type: Option<(String, String)>,
+    /// StructProperty: (struct_type, package). Boxed like the others: a payload
+    /// parses into over a million properties and most carry no descriptor at all,
+    /// so what this costs when absent is what matters.
+    pub struct_type: Option<Box<(PropStr, PropStr)>>,
     /// EnumProperty: (enum_type, package, underlying_type)
-    pub enum_type: Option<(String, String, String)>,
+    pub enum_type: Option<Box<(PropStr, PropStr, PropStr)>>,
     /// Array/Set inner type, Map key/value types (with nested descriptors).
     pub inner: Option<Box<InnerDescriptor>>,
     pub map: Option<Box<(InnerDescriptor, InnerDescriptor)>>,
@@ -80,9 +293,9 @@ pub struct Descriptor {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct InnerDescriptor {
-    pub type_name: String,
-    pub struct_type: Option<(String, String)>,
-    pub enum_type: Option<(String, String, String)>,
+    pub type_name: PropStr,
+    pub struct_type: Option<Box<(PropStr, PropStr)>>,
+    pub enum_type: Option<Box<(PropStr, PropStr, PropStr)>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -165,7 +378,7 @@ pub enum StructValue {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct InstancedStruct {
-    pub actual_type: String,
+    pub actual_type: PropStr,
     /// Absolute offset of the u32 `data_size` field preceding the body.
     /// Length-changing edits inside this struct must adjust it.
     pub data_size_offset: usize,
@@ -527,7 +740,7 @@ fn walk_search(
             display.push_str(" › ");
         }
         display.push_str(&p.name);
-        path.push(p.name.clone());
+        path.push(p.name.to_string());
         let addressable =
             ancestors_addressable && name_counts.get(p.name.as_str()).copied() == Some(1);
 
@@ -537,7 +750,7 @@ fn walk_search(
                 ctx.record(PropertyHit {
                     path: path.clone(),
                     display: display.clone(),
-                    type_name: p.type_name.clone(),
+                    type_name: p.type_name.to_string(),
                     value_display,
                     editable: addressable && scalar_editable(&p.value),
                 });
@@ -878,14 +1091,14 @@ fn walk_browse_properties(
             display.push_str(" › ");
         }
         display.push_str(&property.name);
-        path.push(property.name.clone());
+        path.push(property.name.to_string());
         let addressable =
             ancestors_addressable && name_counts.get(property.name.as_str()).copied() == Some(1);
         let kind = property_kind(&property.value);
         let struct_type = property
             .descriptor
             .struct_type
-            .as_ref()
+            .as_deref()
             .map(|(name, _)| name.as_str());
         let value_display = browse_value_preview(&property.value);
         let addressable_editable = addressable && browse_value_editable(&property.value);
@@ -903,7 +1116,7 @@ fn walk_browse_properties(
                 ordinal,
                 path: path.clone(),
                 display: display.clone(),
-                type_name: property.type_name.clone(),
+                type_name: property.type_name.to_string(),
                 struct_type: struct_type.map(str::to_string),
                 kind: kind.to_string(),
                 value_display,
@@ -1256,7 +1469,7 @@ pub fn find_path_in_properties<'a>(
         path: &mut Vec<String>,
     ) -> Option<&'a Property> {
         for p in props {
-            path.push(p.name.clone());
+            path.push(p.name.to_string());
             if p.name == name {
                 return Some(p);
             }
@@ -1637,7 +1850,7 @@ pub fn container_layout(payload: &[u8], property: &Property) -> Result<Container
     }
     Ok(ContainerLayout {
         kind,
-        inner_type: inner.type_name.clone(),
+        inner_type: inner.type_name.to_string(),
         count_offset,
         count,
         element_ranges,
@@ -1672,7 +1885,7 @@ pub fn tag_container_layout(
     let struct_type = property
         .descriptor
         .struct_type
-        .as_ref()
+        .as_deref()
         .map(|(name, _)| name.as_str());
     if struct_type != Some("GameplayTagContainer") {
         return Err(CoreError::InvalidRequest(format!(
@@ -1769,6 +1982,11 @@ pub enum ContainerEdit {
     SetRemove(String),
     /// Remove an ArrayProperty element by index.
     ArrayRemove(usize),
+    /// Remove several ArrayProperty elements in one splice pass. The indices are
+    /// resolved against ONE layout, so a caller stripping many elements neither
+    /// re-parses between them nor has to reason about how each removal shifts the
+    /// next. Duplicates are ignored; order does not matter.
+    ArrayRemoveMany(Vec<usize>),
     /// Duplicate an ArrayProperty element in place (copy inserted right after
     /// the source element).
     ArrayDuplicate(usize),
@@ -1781,6 +1999,9 @@ pub enum ContainerEdit {
     /// The bytes must be schema-valid for this map's key/value descriptors; the
     /// caller validates via the re-parse it performs afterwards.
     MapInsert { entry_bytes: Vec<u8> },
+    /// Remove several MapProperty entries in one splice pass, like
+    /// [`ContainerEdit::ArrayRemoveMany`].
+    MapRemoveMany(Vec<usize>),
     /// Remove the (key+value) entry at `entry_index` from a MapProperty (the
     /// entry's whole byte range is spliced out, the count decremented). The index
     /// is into [`map_layout`]'s `entry_ranges` (entry order == on-disk order).
@@ -1826,7 +2047,9 @@ pub fn patch_container(
     // rejects MapProperty, so resolve the Array/Set layout lazily and skip it
     // for the map path. The shared size-chain fixup below runs for both.
     let layout = match edit {
-        ContainerEdit::MapInsert { .. } | ContainerEdit::MapRemove { .. } => None,
+        ContainerEdit::MapInsert { .. }
+        | ContainerEdit::MapRemove { .. }
+        | ContainerEdit::MapRemoveMany(_) => None,
         _ => Some(container_layout(payload, target)?),
     };
     let require_kind = |wanted: ContainerKind, op: &str| {
@@ -1841,10 +2064,12 @@ pub fn patch_container(
             )))
         }
     };
-    // Each edit is one splice: either remove a byte range or insert bytes at a
-    // position. `count_delta` is +1 or -1.
-    let (remove_range, insert_at, insert_bytes, count_delta): (
-        Option<core::ops::Range<usize>>,
+    // Each edit is one splice pass: either remove byte ranges or insert bytes at a
+    // position. Removals are a LIST so an edit can drop several elements resolved
+    // from one layout; they are spliced back to front below, which leaves every
+    // range before the one being removed exactly where it was.
+    let (remove_ranges, insert_at, insert_bytes, count_delta): (
+        Vec<core::ops::Range<usize>>,
         usize,
         Vec<u8>,
         i64,
@@ -1867,7 +2092,7 @@ pub fn patch_container(
                 )));
             }
             let end = target.value_offset + target.value_size;
-            (None, end, encode_fstring_value(value), 1)
+            (Vec::new(), end, encode_fstring_value(value), 1)
         }
         ContainerEdit::SetRemove(value) => {
             require_kind(ContainerKind::Set, "setRemove")?;
@@ -1878,7 +2103,7 @@ pub fn patch_container(
             let index = set_element_position(elements, value, fold_case)
                 .ok_or_else(|| CoreError::Parse(format!("set does not contain {value:?}")))?;
             let range = layout.element_ranges[index].clone();
-            (Some(range.clone()), range.start, Vec::new(), -1)
+            (vec![range.clone()], range.start, Vec::new(), -1)
         }
         ContainerEdit::ArrayRemove(index) => {
             require_kind(ContainerKind::Array, "arrayRemove")?;
@@ -1889,7 +2114,7 @@ pub fn patch_container(
                     layout.count
                 ))
             })?;
-            (Some(range.clone()), range.start, Vec::new(), -1)
+            (vec![range.clone()], range.start, Vec::new(), -1)
         }
         ContainerEdit::ArrayDuplicate(index) => {
             require_kind(ContainerKind::Array, "arrayDuplicate")?;
@@ -1901,14 +2126,35 @@ pub fn patch_container(
                 ))
             })?;
             let bytes = payload[range.clone()].to_vec();
-            (None, range.end, bytes, 1)
+            (Vec::new(), range.end, bytes, 1)
         }
         ContainerEdit::ArrayInsertBytes(bytes) => {
             require_kind(ContainerKind::Array, "arrayInsertBytes")?;
             // Append after the last element; for an empty array this is the end
             // of the value (right after the count u32).
             let end = target.value_offset + target.value_size;
-            (None, end, bytes.clone(), 1)
+            (Vec::new(), end, bytes.clone(), 1)
+        }
+        ContainerEdit::ArrayRemoveMany(indices) => {
+            require_kind(ContainerKind::Array, "arrayRemoveMany")?;
+            let layout = layout.as_ref().expect("array edit resolves a layout");
+            let ranges = distinct_element_ranges(indices, &layout.element_ranges, layout.count)?;
+            let start = ranges.first().map_or(target.value_offset, |range| range.start);
+            let removed = ranges.len() as i64;
+            (ranges, start, Vec::new(), -removed)
+        }
+        ContainerEdit::MapRemoveMany(indices) => {
+            if target.type_name != "MapProperty" {
+                return Err(CoreError::InvalidRequest(format!(
+                    "mapRemoveMany requires a MapProperty target, got {}",
+                    target.type_name
+                )));
+            }
+            let map = map_layout(payload, target)?;
+            let ranges = distinct_element_ranges(indices, &map.entry_ranges, map.count)?;
+            let start = ranges.first().map_or(target.value_offset, |range| range.start);
+            let removed = ranges.len() as i64;
+            (ranges, start, Vec::new(), -removed)
         }
         ContainerEdit::MapInsert { entry_bytes } => {
             if target.type_name != "MapProperty" {
@@ -1918,7 +2164,7 @@ pub fn patch_container(
                 )));
             }
             let insert_at = target.value_offset + target.value_size; // end of map body
-            (None, insert_at, entry_bytes.clone(), 1)
+            (Vec::new(), insert_at, entry_bytes.clone(), 1)
         }
         ContainerEdit::MapRemove { entry_index } => {
             if target.type_name != "MapProperty" {
@@ -1934,7 +2180,7 @@ pub fn patch_container(
                     map.count
                 ))
             })?;
-            (Some(range.clone()), range.start, Vec::new(), -1)
+            (vec![range.clone()], range.start, Vec::new(), -1)
         }
     };
     // The entry/element count lives at `count_offset`; its current value comes
@@ -1942,7 +2188,9 @@ pub fn patch_container(
     // Both are computed before any mutation (offsets stay valid until the
     // splice), preserving the "failed patch leaves payload untouched" rule.
     let (count, count_offset) = match edit {
-        ContainerEdit::MapInsert { .. } | ContainerEdit::MapRemove { .. } => {
+        ContainerEdit::MapInsert { .. }
+        | ContainerEdit::MapRemove { .. }
+        | ContainerEdit::MapRemoveMany(_) => {
             let map = map_layout(payload, target)?;
             (map.count, map.count_offset)
         }
@@ -1951,7 +2199,7 @@ pub fn patch_container(
             (layout.count, layout.count_offset)
         }
     };
-    let removed = remove_range.as_ref().map_or(0, |r| r.len());
+    let removed: usize = remove_ranges.iter().map(|range| range.len()).sum();
     let delta = insert_bytes.len() as i64 - removed as i64;
     let new_count = u32::try_from(count as i64 + count_delta)
         .map_err(|_| CoreError::Parse("container count underflow".to_string()))?;
@@ -1988,16 +2236,40 @@ pub fn patch_container(
     for (offset, value) in writes {
         payload[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
-    match remove_range {
-        Some(range) => {
+    if remove_ranges.is_empty() {
+        payload.splice(insert_at..insert_at, insert_bytes);
+    } else {
+        // Back to front: removing a later range cannot move an earlier one.
+        for range in remove_ranges.into_iter().rev() {
             payload.splice(range, core::iter::empty());
-        }
-        None => {
-            payload.splice(insert_at..insert_at, insert_bytes);
         }
     }
     Ok(())
 }
+
+/// The byte ranges of `indices` within `ranges`, de-duplicated and sorted ascending
+/// so a caller can splice them back to front.
+fn distinct_element_ranges(
+    indices: &[usize],
+    ranges: &[core::ops::Range<usize>],
+    count: usize,
+) -> Result<Vec<core::ops::Range<usize>>, CoreError> {
+    let mut wanted = indices.to_vec();
+    wanted.sort_unstable();
+    wanted.dedup();
+    wanted
+        .into_iter()
+        .map(|index| {
+            ranges.get(index).cloned().ok_or_else(|| {
+                CoreError::InvalidRequest(format!(
+                    "container index {index} out of bounds ({count} elements)"
+                ))
+            })
+        })
+        .collect()
+}
+
+
 
 /// Add or remove one tag in a native `GameplayTagContainer` value, applied by
 /// [`patch_tag_container`].
@@ -2119,8 +2391,8 @@ pub fn patch_map_value_tag_container(
     map_property: &Property,
     enclosing_size_fields: &[usize],
     entry_index: usize,
-    tag: &str,
-) -> Result<bool, CoreError> {
+    tags: &[&str],
+) -> Result<usize, CoreError> {
     if map_property.type_name != "MapProperty" {
         return Err(CoreError::InvalidRequest(format!(
             "patch_map_value_tag_container requires a MapProperty target, got {}",
@@ -2135,7 +2407,7 @@ pub fn patch_map_value_tag_container(
     let value_is_tag_container = value_desc.type_name == "StructProperty"
         && value_desc
             .struct_type
-            .as_ref()
+            .as_deref()
             .map(|(name, _)| name.as_str())
             == Some("GameplayTagContainer");
     if !value_is_tag_container {
@@ -2182,12 +2454,19 @@ pub fn patch_map_value_tag_container(
         }
         (count, ranges)
     };
-    let Some((_t, range)) = tag_ranges.into_iter().find(|(t, _)| t == tag) else {
-        return Ok(false); // tag not present => nothing to remove
-    };
-
-    let delta = -(range.len() as i64);
-    let new_count = u32::try_from(count as i64 - 1)
+    // Every requested tag that is present, in container order, so they can be
+    // spliced back to front from this one view of the container.
+    let ranges: Vec<core::ops::Range<usize>> = tag_ranges
+        .into_iter()
+        .filter(|(name, _)| tags.contains(&name.as_str()))
+        .map(|(_, range)| range)
+        .collect();
+    if ranges.is_empty() {
+        return Ok(0); // none of them present => nothing to remove
+    }
+    let first_start = ranges[0].start;
+    let delta = -(ranges.iter().map(|range| range.len()).sum::<usize>() as i64);
+    let new_count = u32::try_from(count as i64 - ranges.len() as i64)
         .map_err(|_| CoreError::Parse("tag container count underflow".to_string()))?;
 
     // Compute every size-field rewrite up front; mutate only once all are valid.
@@ -2199,7 +2478,7 @@ pub fn patch_map_value_tag_container(
             .map_err(|_| CoreError::Parse("map size would leave the u32 range".to_string()))?,
     ));
     for &offset in enclosing_size_fields {
-        if offset + 4 > range.start {
+        if offset + 4 > first_start {
             return Err(CoreError::Parse(format!(
                 "enclosing size field at 0x{offset:x} does not precede the patch target"
             )));
@@ -2212,13 +2491,17 @@ pub fn patch_map_value_tag_container(
         })?;
         writes.push((offset, updated));
     }
-    // The count field precedes the spliced range, so writing it first is safe.
+    // The count field precedes every spliced range, so writing it first is safe.
     writes.push((count_offset, new_count));
     for (offset, value) in writes {
         payload[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
-    payload.splice(range, core::iter::empty());
-    Ok(true)
+    let removed = ranges.len();
+    // Back to front: removing a later tag cannot move an earlier one.
+    for range in ranges.into_iter().rev() {
+        payload.splice(range, core::iter::empty());
+    }
+    Ok(removed)
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -2267,8 +2550,20 @@ pub fn count_properties(props: &[Property]) -> PropertyCounts {
     acc
 }
 
+thread_local! {
+    /// How many whole-payload parses this thread has done.
+    ///
+    /// A parse costs about half a second on a real save and allocates a tree of a
+    /// few hundred megabytes, so how often an edit re-parses is the number that
+    /// decides how long a write takes — and unlike wall-clock time it is exactly
+    /// reproducible. `crates/gore-save/examples/json_timer.rs` reports it beside the
+    /// elapsed time. Counting costs one thread-local increment per parse.
+    pub static PARSE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Parse a full decompressed private payload (strict: every byte accounted for).
 pub fn parse_private_root(payload: &[u8]) -> Result<RootObject, CoreError> {
+    PARSE_COUNT.with(|c| c.set(c.get() + 1));
     parse_private_root_at(payload, 0)
 }
 
@@ -2349,19 +2644,19 @@ pub(crate) fn read_property_list(r: &mut Reader, depth: usize) -> Result<Vec<Pro
     }
     let mut out = Vec::new();
     loop {
-        let name = r.fstring()?;
+        let name = r.prop_str()?;
         if name == "None" {
             return Ok(out);
         }
-        let type_name = r.fstring()?;
+        let type_name = r.prop_str()?;
         out.push(read_property(r, name, type_name, depth)?);
     }
 }
 
 fn read_property(
     r: &mut Reader,
-    name: String,
-    type_name: String,
+    name: PropStr,
+    type_name: PropStr,
     depth: usize,
 ) -> Result<Property, CoreError> {
     let descriptor = read_descriptor(r, &type_name)?;
@@ -2412,10 +2707,10 @@ fn read_descriptor(r: &mut Reader, type_name: &str) -> Result<Descriptor, CoreEr
     let mut descriptor = Descriptor::default();
     match type_name {
         "StructProperty" => {
-            descriptor.struct_type = Some(read_struct_descriptor(r)?);
+            descriptor.struct_type = Some(Box::new(read_struct_descriptor(r)?));
         }
         "EnumProperty" => {
-            descriptor.enum_type = Some(read_enum_descriptor(r)?);
+            descriptor.enum_type = Some(Box::new(read_enum_descriptor(r)?));
         }
         "ArrayProperty" | "SetProperty" => {
             descriptor.inner = Some(Box::new(read_inner_descriptor(r)?));
@@ -2433,21 +2728,21 @@ fn read_descriptor(r: &mut Reader, type_name: &str) -> Result<Descriptor, CoreEr
     Ok(descriptor)
 }
 
-fn read_struct_descriptor(r: &mut Reader) -> Result<(String, String), CoreError> {
+fn read_struct_descriptor(r: &mut Reader) -> Result<(PropStr, PropStr), CoreError> {
     let _count = r.u32()?;
-    let struct_type = r.fstring()?;
+    let struct_type = r.prop_str()?;
     let _package_count = r.u32()?;
-    let package = r.fstring()?;
+    let package = r.prop_str()?;
     Ok((struct_type, package))
 }
 
-fn read_enum_descriptor(r: &mut Reader) -> Result<(String, String, String), CoreError> {
+fn read_enum_descriptor(r: &mut Reader) -> Result<(PropStr, PropStr, PropStr), CoreError> {
     let _count = r.u32()?;
-    let enum_type = r.fstring()?;
+    let enum_type = r.prop_str()?;
     let _package_count = r.u32()?;
-    let package = r.fstring()?;
+    let package = r.prop_str()?;
     let _underlying_count = r.u32()?;
-    let underlying = r.fstring()?;
+    let underlying = r.prop_str()?;
     Ok((enum_type, package, underlying))
 }
 
@@ -2457,15 +2752,15 @@ fn read_inner_descriptor(r: &mut Reader) -> Result<InnerDescriptor, CoreError> {
 }
 
 fn read_inner_descriptor_body(r: &mut Reader) -> Result<InnerDescriptor, CoreError> {
-    let type_name = r.fstring()?;
+    let type_name = r.prop_str()?;
     let mut inner = InnerDescriptor {
         type_name: type_name.clone(),
         struct_type: None,
         enum_type: None,
     };
     match type_name.as_str() {
-        "StructProperty" => inner.struct_type = Some(read_struct_descriptor(r)?),
-        "EnumProperty" => inner.enum_type = Some(read_enum_descriptor(r)?),
+        "StructProperty" => inner.struct_type = Some(Box::new(read_struct_descriptor(r)?)),
+        "EnumProperty" => inner.enum_type = Some(Box::new(read_enum_descriptor(r)?)),
         _ => {}
     }
     Ok(inner)
@@ -2507,7 +2802,7 @@ fn read_sized_value(
         "StructProperty" => {
             let (struct_type, _) = descriptor
                 .struct_type
-                .as_ref()
+                .as_deref()
                 .ok_or_else(|| CoreError::Parse("StructProperty missing descriptor".into()))?;
             Ok(PropertyValue::Struct(read_struct_value(
                 r,
@@ -2600,7 +2895,7 @@ fn read_inline_value(
         "StructProperty" => {
             let (struct_type, _) = inner
                 .struct_type
-                .as_ref()
+                .as_deref()
                 .ok_or_else(|| CoreError::Parse("inline struct missing descriptor".into()))?;
             // Inline structs carry no tag_flags; decide native-vs-proplist by type.
             Ok(PropertyValue::Struct(read_struct_value(
@@ -2684,7 +2979,7 @@ fn read_struct_value(
             Ok(StructValue::GameplayTagContainer(tags))
         }
         "InstancedStruct" => {
-            let actual_type = r.fstring()?;
+            let actual_type = r.prop_str()?;
             let data_size_offset = r.abs_pos();
             let data_size = r.u32()? as usize;
             let body_base = r.abs_pos();
@@ -2772,6 +3067,65 @@ fn read_array_value(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The names being hashed come out of the save file, so the table has to be
+    /// keyed by something the file's author cannot know: without that, collisions
+    /// can be worked out in advance and a crafted save turns every lookup of a
+    /// parse into a linear scan. The seed is what supplies that, so this pins that
+    /// it genuinely reaches the hash rather than sitting unused beside it.
+    #[test]
+    fn the_name_hash_depends_on_the_per_process_seed() {
+        use std::hash::{BuildHasher, Hash, Hasher};
+
+        fn hash_with(seed: u64, text: &str) -> u64 {
+            let mut hasher = NameHasherBuilder(seed).build_hasher();
+            text.hash(&mut hasher);
+            hasher.finish()
+        }
+
+        let name = "GameplayTagContainer";
+        assert_eq!(
+            hash_with(1, name),
+            hash_with(1, name),
+            "the same seed has to keep hashing a name the same way"
+        );
+        assert_ne!(
+            hash_with(1, name),
+            hash_with(2, name),
+            "a different seed has to move the name somewhere else"
+        );
+        assert_ne!(
+            name_hash_seed(),
+            0,
+            "the drawn seed has to be a real value, not a zero standing in for one"
+        );
+        assert_eq!(
+            name_hash_seed(),
+            name_hash_seed(),
+            "the seed is drawn once, so the table cannot lose track of its own keys"
+        );
+    }
+
+    /// The shared name table lives as long as the thread, so it must not be able to
+    /// pin an unbounded amount of text: a name past the length limit is handed back
+    /// like any other, but is not retained for sharing.
+    #[test]
+    fn the_name_table_does_not_retain_outsized_names() {
+        let short = "IntProperty";
+        assert_eq!(
+            PropStr::new(short).as_str().as_ptr(),
+            PropStr::new(short).as_str().as_ptr(),
+            "an ordinary name is stored once and shared"
+        );
+
+        let outsized = "X".repeat(MAX_INTERNED_NAME_LEN + 1);
+        assert_eq!(PropStr::new(&outsized).as_str(), outsized);
+        assert_ne!(
+            PropStr::new(&outsized).as_str().as_ptr(),
+            PropStr::new(&outsized).as_str().as_ptr(),
+            "an outsized name is not kept in the table"
+        );
+    }
 
     fn fstring(value: &str) -> Vec<u8> {
         let mut out = Vec::new();
@@ -3259,10 +3613,10 @@ mod tests {
             &target,
             &chain.enclosing_size_fields,
             1, // Npc-B
-            "State.Dead",
+            &["State.Dead"],
         )
         .unwrap();
-        assert!(removed);
+        assert_eq!(removed, 1);
 
         assert_eq!(reparse_loose_tags(&payload, "Npc-A"), vec!["State.Aggro"]);
         assert_eq!(
@@ -3287,10 +3641,10 @@ mod tests {
             &target,
             &chain.enclosing_size_fields,
             0,
-            "State.Dead",
+            &["State.Dead"],
         )
         .unwrap();
-        assert!(!removed, "tag absent => no removal");
+        assert_eq!(removed, 0, "tag absent => no removal");
         assert_eq!(payload, before, "no-op leaves payload byte-identical");
     }
 
@@ -3745,8 +4099,8 @@ mod tests {
     fn exhaustive_browser_marks_unaddressable_and_duplicate_map_keys_read_only() {
         fn leaf(name: &str, value: i32) -> PropertyValue {
             PropertyValue::Struct(StructValue::Properties(vec![Property {
-                name: name.to_string(),
-                type_name: "IntProperty".to_string(),
+                name: name.into(),
+                type_name: "IntProperty".into(),
                 descriptor: Descriptor::default(),
                 array_index: 0,
                 tag_flags: 0,
@@ -3759,8 +4113,8 @@ mod tests {
             class: "/Script/Test.Save".to_string(),
             flag: 0,
             properties: vec![Property {
-                name: "Values".to_string(),
-                type_name: "MapProperty".to_string(),
+                name: "Values".into(),
+                type_name: "MapProperty".into(),
                 descriptor: Descriptor::default(),
                 array_index: 0,
                 tag_flags: 0,

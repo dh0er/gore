@@ -190,7 +190,7 @@ class AttributeDetail extends ConsumerWidget {
               editable: editable,
               reloadKey: (inspection, npcId),
               actor: npcId,
-              pendingKey: 'skills:$npcId',
+              pendingKey: 'skills:${foldEditTargetPart(npcId)}',
               showRoster: false,
             ),
             attributeLabel: attributeLabel,

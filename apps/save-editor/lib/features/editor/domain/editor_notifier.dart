@@ -1098,18 +1098,40 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // A glossary segment operation with a questStatePath updates that
     // CurrentState itself. Refuse a raw typed write to the exact same path;
     // sequencing the two would silently make whichever sub-write runs last win.
-    for (final keyed in allEdits) {
-      final edit = keyed.edit;
-      if (edit['path'] != 'private.glossary.setSegment') continue;
-      final value = edit['value'];
-      if (value is! Map) continue;
-      final rawQuestPath = value['questStatePath'];
-      if (rawQuestPath is! List) continue;
-      final questPath = List<Object?>.from(rawQuestPath);
-      if (!typedPaths.any((path) => _sameEditorPath(path, questPath))) continue;
-      final path = questPath.join(' › ');
-      state = state.copyWith(error: _l10n.editorGlossaryQuestConflict(path));
-      return false;
+    //
+    // This has to catch every pair the core's own rule claims, or the packer
+    // splits the pair into two writes and lets the later one win in silence.
+    // So: any raw typed operation, not only a value write; the quest path under
+    // either of the two names the core reads it from; and the paths compared the
+    // way the core compares them, where an index segment is a number and [04]
+    // and [4] are one and the same.
+    if (hasGlossarySegmentEdit) {
+      final rawTypedPaths = <List<Object?>>[];
+      for (final keyed in allEdits) {
+        final editPath = keyed.edit['path'];
+        if (editPath is! String || !editPath.startsWith('private.typed.')) {
+          continue;
+        }
+        final value = keyed.edit['value'];
+        if (value is! Map) continue;
+        final rawPath = value['path'];
+        if (rawPath is List) rawTypedPaths.add(List<Object?>.from(rawPath));
+      }
+      for (final keyed in allEdits) {
+        final edit = keyed.edit;
+        if (edit['path'] != 'private.glossary.setSegment') continue;
+        final value = edit['value'];
+        if (value is! Map) continue;
+        final rawQuestPath = value['questStatePath'] ?? value['statePath'];
+        if (rawQuestPath is! List) continue;
+        final questPath = List<Object?>.from(rawQuestPath);
+        if (!rawTypedPaths.any((path) => _sameCorePath(path, questPath))) {
+          continue;
+        }
+        final path = questPath.join(' › ');
+        state = state.copyWith(error: _l10n.editorGlossaryQuestConflict(path));
+        return false;
+      }
     }
 
     // A structured relationship edit patches or appends an object below this
@@ -1403,39 +1425,94 @@ class EditorNotifier extends StateNotifier<EditorState> {
               k.edit['path'] != repairSlotsPath,
         )
         .toList();
-
-    // Build the worklist: ONE write for the fixed-size batch (if any) FIRST,
-    // then one write per splicing edit. Backup is taken on the FIRST sub-write
-    // only, so a Save makes exactly one pristine snapshot regardless of
-    // sub-write count.
-    //
-    // The fixed batch leads for two reasons:
-    //  - It carries syncPersistentDataList, so making it the backup-taking write
-    //    means the PersistentDataList.sav companion is updated WITH a restorable
-    //    companion backup (the synced write must be the one that takes backup).
-    //  - A splicing npc.revive writes HP (restore→Max). Running the fixed batch
-    //    first means a conflicting manual Health edit on the SAME NPC is applied
-    //    BEFORE revive, so the Revive action's HP wins (last write).
-    // If there is no fixed batch, the first splice takes backup:true instead.
-    final worklist = <_SubWrite>[
-      if (fixedBatch.isNotEmpty)
-        _SubWrite(
-          edits: [for (final keyed in fixedBatch) keyed.edit],
-          // syncPersistentDataList keys off a public/fixed edit, so it rides the
-          // fixed-size batch.
-          syncPersistentDataList: syncPersistent,
-        ),
-      for (final keyed in orderedSplicing) _SubWrite(edits: [keyed.edit]),
-      // All skill edits together, in their own trailing write: they batch safely
-      // among themselves but must not share a write with an index-addressed peer
-      // (see skillPath above).
-      if (skillEdits.isNotEmpty)
-        _SubWrite(edits: [for (final keyed in skillEdits) keyed.edit]),
-      // Last: the slot repair, so every id-addressed edit above resolved against
-      // the ids the user saw (see repairSlotsPath).
-      if (repairEdits.isNotEmpty)
-        _SubWrite(edits: [for (final keyed in repairEdits) keyed.edit]),
+    // Only one edit in this batch can move anything: a raw write to a slot's
+    // m_Id, which renumbers the ids and positions that a count or an indexed
+    // edit is addressed BY. Splitting the two would not make them safe — the
+    // second write would still resolve an id the first had already moved — but
+    // their order among the fixed edits is free, so let everything that moves
+    // nothing go first, where it still resolves against the layout the user was
+    // looking at. That is also the order the core accepts, so the pair keeps
+    // sharing one write.
+    final fixedMoversLast = [
+      ...fixedBatch.where((k) => !_mayInvalidateOrdinals(k.edit)),
+      ...fixedBatch.where((k) => _mayInvalidateOrdinals(k.edit)),
     ];
+
+    // The edits in the exact order they must reach the core, which applies a batch
+    // sequentially against one payload and re-resolves every edit's target as it
+    // goes. All the ordering this method computed above is preserved by simple
+    // concatenation:
+    //  - the fixed batch leads. It carries syncPersistentDataList, so it is the
+    //    backup-taking write; and a manual Health edit lands before a splicing
+    //    npc.revive's HP restore, so the Revive action still wins as last writer.
+    //  - the splices keep glossary adds ahead of removals and array removals
+    //    index-descending.
+    //  - skills follow, then the slot repair, so every id-addressed edit above
+    //    resolved against the ids the user actually saw.
+    //  - story goes last: it always needs its own write, and putting it at the end
+    //    keeps it from taking the backup away from the syncPersistentDataList one.
+    final ordered = <_KeyedEdit>[
+      ...fixedMoversLast,
+      ...orderedSplicing.where((k) => k.edit['path'] != storyStateApplyPath),
+      ...skillEdits,
+      ...repairEdits,
+      ...orderedSplicing.where((k) => k.edit['path'] == storyStateApplyPath),
+    ];
+
+    // Pack that sequence into as few write_saves as the core will accept. It
+    // refuses three combinations — an edit addressed by an index or slot id
+    // placed after an edit that can change how many elements a container holds,
+    // a raw typed edit sharing a write with a structured operation that rewrites
+    // what it addresses, and two structured operations that rewrite one target
+    // (the last two order-independent) — so a new sub-write starts exactly when
+    // the next edit would hit any of them, plus one each for the two operations
+    // that must stand alone. In practice a whole editing session lands in a
+    // single write instead of one per splicing edit.
+    //
+    // A split is not a way to make a pair safe, only a way to keep the core from
+    // refusing the whole write: the checks further up refuse the combinations
+    // where running the two in sequence would resolve the second against a
+    // layout the first moved.
+    final worklist = <_SubWrite>[];
+    var current = <Map<String, Object?>>[];
+    var currentMayInvalidateOrdinals = false;
+    // syncPersistentDataList keys off a public/fixed edit, so it belongs to the
+    // first batch — which is also the one that takes the backup, so the companion
+    // file is updated with a restorable snapshot beside it.
+    var syncPending = syncPersistent;
+    void flush() {
+      if (current.isEmpty) return;
+      worklist.add(
+        _SubWrite(edits: current, syncPersistentDataList: syncPending),
+      );
+      syncPending = false;
+      current = <Map<String, Object?>>[];
+      currentMayInvalidateOrdinals = false;
+    }
+
+    for (final keyed in ordered) {
+      if (_exclusiveEditPaths.contains(keyed.edit['path'])) {
+        flush();
+        worklist.add(_SubWrite(edits: [keyed.edit]));
+        continue;
+      }
+      // Two reasons to start a new sub-write: the ordinal rule (positional —
+      // only an ordinal-carrying edit AFTER an ordinal-invalidating one), and
+      // the same-target rule (order-independent, so it is checked against every
+      // edit already in this batch, both ways round).
+      if ((currentMayInvalidateOrdinals && _carriesCallerOrdinal(keyed.edit)) ||
+          current.any(
+            (edit) =>
+                editsRewriteSameTarget(edit, keyed.edit) ||
+                structuredEditsShareATarget(edit, keyed.edit),
+          )) {
+        flush();
+      }
+      current.add(keyed.edit);
+      currentMayInvalidateOrdinals =
+          currentMayInvalidateOrdinals || _mayInvalidateOrdinals(keyed.edit);
+    }
+    flush();
     // Hang the placement notes on whichever sub-write goes first. It is the one
     // that takes the backup, and — for a position edit, which is never a
     // splicing edit — the one that actually carries the move.
@@ -2839,10 +2916,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return GlossaryPage.fromJson(data);
   }
 
-  static String _glossaryPendingKey(
-    String documentClass,
-    String segmentClass,
-  ) => 'glossary.segment:$documentClass::$segmentClass';
+  static String _glossaryPendingKey(String documentClass, String segmentClass) =>
+      'glossary.segment:${foldEditTargetPart(documentClass)}'
+      '::${foldEditTargetPart(segmentClass)}';
 
   /// Queue one atomic glossary segment toggle. Each segment deliberately owns
   /// its own pending key because the core may splice the Hero memory array;
@@ -3356,7 +3432,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
     );
   }
 
-  static String _npcRelationshipPendingKey(String id) => 'npc.relationship:$id';
+  /// Folded like the core folds the id it keys the operation by, so two entries
+  /// for one NPC cannot sit in the registry side by side and then collide.
+  static String _npcRelationshipPendingKey(String id) =>
+      'npc.relationship:${foldEditTargetPart(id)}';
 
   /// Register an explicit permanent NPC-to-Hero relationship override under
   /// its own structural pending key. The game otherwise derives this value at
@@ -3571,6 +3650,129 @@ bool _sameEditorPath(List<Object?> left, List<Object?> right) {
   return true;
 }
 
+/// What a structured edit rewrites as a whole, for the operations that resolve
+/// their target from a key and then replace whatever they find there. Two edits
+/// naming the same one cannot share a write.
+///
+/// Mirrors `structured_edit_target` in crates/gore-save/src/lib.rs, down to how
+/// it folds each part of the key and how it reads an asset name out of a class
+/// reference. The pending registry keys these operations by the same folded
+/// target, so a pair should not get this far; if one does, two writes lose less
+/// than a refusal that takes every unrelated edit in the batch down with it.
+/// Whether [left] and [right] are two structured operations rewriting one
+/// target — the pair the core refuses, so the packer splits it.
+@visibleForTesting
+bool structuredEditsShareATarget(
+  Map<String, Object?> left,
+  Map<String, Object?> right,
+) {
+  final target = _structuredEditTarget(left);
+  return target != null && _structuredEditTarget(right) == target;
+}
+
+String? _structuredEditTarget(Map<String, Object?> edit) {
+  final op = edit['path'];
+  if (op is! String) return null;
+  final value = edit['value'];
+  final fields = value is Map ? value : const <Object?, Object?>{};
+  String key(List<String> parts) => [op, ...parts].join('');
+  switch (op) {
+    case 'private.npc.setRelationship':
+      return key([foldEditTargetPart(fields['id'])]);
+    case 'private.skills.set':
+      // Read through the same helper the other rules use, so an actor left
+      // empty resolves to the hero everywhere or nowhere. It reads the raw
+      // text, before any folding, so a blank of spaces stays an actor.
+      return key([
+        foldEditTargetPart(_skillEditActor(edit)),
+        foldEditTargetPart(fields['base']),
+      ]);
+    case 'private.knowledge.setEntry':
+      return key([
+        foldEditTargetPart(fields['character']),
+        foldEditTargetPart(fields['entry']),
+      ]);
+    case 'private.glossary.setSegment':
+      return key([
+        _foldAssetName(fields['documentClass']),
+        _foldAssetName(fields['segmentClass']),
+      ]);
+    default:
+      return null;
+  }
+}
+
+/// One part of a target key, folded the way the core folds it — and the way the
+/// pending registry has to key these operations so two entries cannot collapse
+/// into one target only once the core sees them.
+///
+/// The core folds ASCII case only (`to_ascii_lowercase`), so this does too:
+/// Dart's own `toLowerCase` also folds Ä to ä, which would put two targets the
+/// core keeps apart under one key and let the second edit quietly replace the
+/// first.
+String foldEditTargetPart(Object? part) {
+  if (part is! String) return '';
+  final trimmed = part.trim();
+  final folded = StringBuffer();
+  for (final unit in trimmed.codeUnits) {
+    const a = 0x41, z = 0x5a, toLower = 0x20;
+    folded.writeCharCode(unit >= a && unit <= z ? unit + toLower : unit);
+  }
+  return folded.toString();
+}
+
+/// The asset name of a `/Package.Asset` class reference, folded. The core keys a
+/// glossary segment by the asset names and refuses a pair whose packages differ.
+String _foldAssetName(Object? part) {
+  final text = part is String ? part : '';
+  final dot = text.lastIndexOf('.');
+  return foldEditTargetPart(dot < 0 ? text : text.substring(dot + 1));
+}
+
+/// Whether [path] addresses the `CurrentState` of a quest entry — the leaf a
+/// glossary segment operation rewrites beside the hero's memory.
+///
+/// Mirrors `path_is_a_quest_current_state` in crates/gore-save/src/lib.rs,
+/// including why it claims the shape rather than one entry: the operation can be
+/// sent without a quest path at all and the core then derives the leaf from the
+/// save, which nothing here can do.
+bool _pathIsAQuestCurrentState(List<Object?> path) {
+  if (path.length < 2) return false;
+  if (path.last != 'CurrentState') return false;
+  if (_mapKeySegment(path[path.length - 2]) == null) return false;
+  return _pathHasName(path, 'QuestDataByClass');
+}
+
+/// Whether two raw segment lists address the same path in the sense the core
+/// gives them: `parse_path` reads `{k}` as a map key and `[n]` as an index, so
+/// `[03]` and `[3]` are one and the same segment to it even though the two
+/// strings differ. Used where a mirror has to agree with the core exactly;
+/// [_sameEditorPath] compares the segments as the editor wrote them.
+bool _sameCorePath(List<Object?> left, List<Object?> right) {
+  if (left.length != right.length) return false;
+  for (var i = 0; i < left.length; i++) {
+    if (!_sameCoreSegment(left[i], right[i])) return false;
+  }
+  return true;
+}
+
+bool _sameCoreSegment(Object? left, Object? right) {
+  if (left == right) return true;
+  final index = _indexSegment(left);
+  return index != null && index == _indexSegment(right);
+}
+
+/// The number of an `[n]` index segment, or null when [segment] is not one.
+int? _indexSegment(Object? segment) {
+  if (segment is! String) return null;
+  if (segment.length < 3 ||
+      !segment.startsWith('[') ||
+      !segment.endsWith(']')) {
+    return null;
+  }
+  return int.tryParse(segment.substring(1, segment.length - 1));
+}
+
 bool _editorPathIsPrefix(List<Object?> prefix, List<Object?> path) {
   if (prefix.length > path.length) return false;
   for (var i = 0; i < prefix.length; i++) {
@@ -3627,7 +3829,11 @@ String? _skillEditActor(Map<String, Object?> edit) {
   if (edit['path'] != 'private.skills.set') return null;
   final value = edit['value'];
   if (value is! Map) return null;
-  return (value['actor'] as String?) ?? 'Hero';
+  // The core takes the actor when it is a non-empty string and the hero
+  // otherwise, so an empty one is the hero here too — a rule this shares with
+  // the target key, and the two must not disagree.
+  final actor = value['actor'];
+  return actor is String && actor.isNotEmpty ? actor : 'Hero';
 }
 
 /// The actor whose ActiveEffects a raw `private.typed.setValue` on an
@@ -3671,6 +3877,278 @@ const _typedEditPaths = {
   'private.typed.arrayDuplicate',
 };
 
+/// The path a raw `private.typed.*` edit addresses, or `null` when [edit] is not
+/// one. Mirrors `raw_typed_path` in crates/gore-save/src/lib.rs.
+List<Object?>? _rawTypedEditPath(Map<String, Object?> edit) {
+  if (!_typedEditPaths.contains(edit['path'])) return null;
+  final value = edit['value'];
+  if (value is! Map) return null;
+  final path = value['path'];
+  return path is List ? path : null;
+}
+
+/// The key of a `{likeThis}` map-key segment, or `null` when [segment] is not
+/// one. The generic All-data browser writes map keys wrapped in braces, and the
+/// core's `parse_path` turns exactly those into `PathSeg::MapKey`.
+String? _mapKeySegment(Object? segment) {
+  if (segment is! String) return null;
+  if (segment.length < 2 ||
+      !segment.startsWith('{') ||
+      !segment.endsWith('}')) {
+    return null;
+  }
+  return segment.substring(1, segment.length - 1);
+}
+
+/// Whether [segment] is an `[i]` element segment.
+bool _isIndexSegment(Object? segment) =>
+    segment is String &&
+    segment.length >= 2 &&
+    segment.startsWith('[') &&
+    segment.endsWith(']');
+
+/// Map keys compare trimmed and case-insensitively, as the core does.
+bool _sameMapKey(String left, String right) =>
+    left.trim().toLowerCase() == right.trim().toLowerCase();
+
+/// Mirrors `path_has_name` in crates/gore-save/src/lib.rs.
+bool _pathHasName(List<Object?> path, String name) =>
+    path.any((segment) => segment == name);
+
+/// Mirrors `path_has_key` in crates/gore-save/src/lib.rs.
+bool _pathHasKey(List<Object?> path, String key) => path.any((segment) {
+  final found = _mapKeySegment(segment);
+  return found != null && _sameMapKey(found, key);
+});
+
+/// Whether [path] descends into [map]'s entry for [key] — or into the map as a
+/// whole, which collides with every entry in it.
+///
+/// Mirrors `path_enters_map_entry` in crates/gore-save/src/lib.rs, including its
+/// last clause: a segment after the map that is not a `{key}` addresses it some
+/// other way, which is too unclear to call safe.
+bool _pathEntersMapEntry(List<Object?> path, String map, String key) {
+  final at = path.indexWhere((segment) => segment == map);
+  if (at < 0) return false;
+  if (at + 1 >= path.length) return true;
+  final found = _mapKeySegment(path[at + 1]);
+  if (found == null) return true;
+  return _sameMapKey(found, key);
+}
+
+/// Whether [path] reaches a slot of an inventory container — the array itself,
+/// or an element of it.
+///
+/// Mirrors `path_reaches_inventory_slot` in crates/gore-save/src/lib.rs.
+bool _pathReachesInventorySlot(List<Object?> path) {
+  final at = path.indexWhere((segment) => segment == 'm_Slots');
+  if (at < 0) return false;
+  if (at + 1 >= path.length) return true;
+  return _isIndexSegment(path[at + 1]);
+}
+
+/// Whether [path] writes a slot's `m_Id` — the field a slot is selected by, so a
+/// write to it renumbers slots exactly as a repair does.
+///
+/// Mirrors `path_writes_a_slot_id` in crates/gore-save/src/lib.rs.
+bool _pathWritesASlotId(List<Object?> path) {
+  if (path.isEmpty || path.last != 'm_Id') return false;
+  return _pathReachesInventorySlot(path.sublist(0, path.length - 1));
+}
+
+/// Whether a slot-reaching [path] belongs to the inventory [actorId] names. An
+/// NPC's inventory hangs under that character's own map entry, so its key
+/// settles it; the controlled player's hangs off `m_SavedPlayers`. A path that
+/// fits neither description is treated as a conflict rather than waved through.
+///
+/// Mirrors `slot_edit_targets_actor` in crates/gore-save/src/lib.rs.
+bool _slotEditTargetsActor(List<Object?> path, String? actorId) {
+  if (!_pathReachesInventorySlot(path)) return false;
+  if (actorId != null) return _pathHasKey(path, actorId);
+  return _pathHasName(path, 'm_SavedPlayers') ||
+      !path.any((segment) => _mapKeySegment(segment) != null);
+}
+
+/// The actor a structured inventory edit targets, or `null` for the controlled
+/// player — which is also what a blank `actorId` means to the core.
+String? _inventoryEditActorId(Map<String, Object?> edit) {
+  final value = edit['value'];
+  final actorId = value is Map ? value['actorId'] : null;
+  return actorId is String && actorId.trim().isNotEmpty ? actorId : null;
+}
+
+/// Whether the raw typed edit at [typedPath] addresses something the structured
+/// [structured] edit rewrites AS A WHOLE.
+///
+/// Mirrors `structured_edit_rewrites` in crates/gore-save/src/lib.rs. Ordering
+/// cannot rescue such a pair — a structured operation resolves its own target
+/// and recreates it, so whichever runs second discards the other's work — which
+/// is why the core refuses the two in ONE write whichever way round they come.
+/// The packer therefore has to put them in SEPARATE sub-writes; sequential
+/// writes are safe, because the core re-reads the file and re-resolves every
+/// symbolic target per write.
+@visibleForTesting
+bool structuredEditRewrites(
+  Map<String, Object?> structured,
+  List<Object?> typedPath,
+) {
+  final op = structured['path'];
+  if (op is! String) return false;
+  final value = structured['value'];
+  final fields = value is Map ? value : const <Object?, Object?>{};
+  switch (op) {
+    // Patches or appends a modifier under this NPC's relationship entry.
+    case 'private.npc.setRelationship':
+      final id = fields['id'];
+      return id is String &&
+          id.trim().isNotEmpty &&
+          _pathEntersMapEntry(typedPath, 'RelationshipByGlobalId', id);
+    // Learning or unlearning rewrites this actor's effect elements. Broader
+    // than the same-actor `EffectSpec/Def` refusal above: ANY leaf of that
+    // actor's ActiveEffects is rewritten wholesale.
+    case 'private.skills.set':
+      final actor = _skillEditActor(structured);
+      return actor != null &&
+          _pathHasName(typedPath, 'ActiveEffects') &&
+          _pathHasKey(typedPath, actor);
+    // Adds or removes an unlock event in the hero's memory, and rewrites the
+    // CurrentState of the quest leaf that stands for the same segment.
+    case 'private.glossary.setSegment':
+      return (_pathHasName(typedPath, 'MemorizedEvents') &&
+              _pathHasKey(typedPath, 'Hero')) ||
+          _pathIsAQuestCurrentState(typedPath);
+    // Strips memory events, death tags and the corpse entry.
+    case 'private.npc.revive':
+      return _pathHasName(typedPath, 'MemorizedEvents') ||
+          _pathHasName(typedPath, 'LooseTagsByGlobalId') ||
+          _pathHasName(typedPath, 'm_SavedInventories');
+    // Insert or update ONE character's knowledge entry. Another character's
+    // entry is a different map value, and every applier re-resolves its target
+    // by key, so the two do not collide.
+    case 'private.knowledge.addCharacter':
+      final name = fields['value'];
+      return name is String &&
+          _pathEntersMapEntry(
+            typedPath,
+            'CharacterKnowledgeByUniqueName',
+            name,
+          );
+    case 'private.knowledge.setEntry':
+      final character = fields['character'];
+      return character is String &&
+          _pathEntersMapEntry(
+            typedPath,
+            'CharacterKnowledgeByUniqueName',
+            character,
+          );
+    // Claims a whole slot — but only in the inventory it targets; another
+    // actor's slots are a different subtree.
+    case 'private.inventory.addItem':
+    case 'private.inventory.removeItem':
+      return _slotEditTargetsActor(
+        typedPath,
+        _inventoryEditActorId(structured),
+      );
+    // Narrower still: it only rewrites ids, but it does so across every
+    // container in the save, so it is not scoped to one actor.
+    case 'private.inventory.repairSlots':
+      return _pathWritesASlotId(typedPath);
+    default:
+      return false;
+  }
+}
+
+/// Whether [left] and [right] address the same target in the sense above, in
+/// EITHER direction — the pair test the packer uses. The core's rule is
+/// order-independent, so a batch may hold neither ordering of such a pair.
+@visibleForTesting
+bool editsRewriteSameTarget(
+  Map<String, Object?> left,
+  Map<String, Object?> right,
+) {
+  final leftPath = _rawTypedEditPath(left);
+  if (leftPath != null && structuredEditRewrites(right, leftPath)) return true;
+  final rightPath = _rawTypedEditPath(right);
+  return rightPath != null && structuredEditRewrites(left, rightPath);
+}
+
+/// Edits that must be the only edit in their `write_save`, whatever else is
+/// pending. Both are refused as peers by the core: a story batch takes its
+/// compare-and-set snapshot from the payload as it enters and proves its own
+/// postconditions before committing, and a reset replaces the whole inventory.
+const _exclusiveEditPaths = {
+  storyStateApplyPath,
+  'private.inventory.reset',
+};
+
+/// Whether [edit] can change how many elements a container holds, or renumber
+/// inventory slot ids — the only two things that invalidate an index or slot id a
+/// later edit in the same write was addressed with.
+///
+/// Mirrors `may_invalidate_caller_ordinals` in crates/gore-save/src/lib.rs. Keep the
+/// two in step: the core rejects the write outright when they disagree.
+bool _mayInvalidateOrdinals(Map<String, Object?> edit) {
+  final path = edit['path'];
+  if (path is! String) return true;
+  if (_typedEditPaths.contains(path) && path != 'private.typed.setValue') {
+    // setAdd/setRemove change a set's cardinality, arrayRemove/arrayDuplicate an
+    // array's length.
+    return true;
+  }
+  if (path == 'private.typed.setValue') {
+    // It can add or drop no container element — but writing a slot's m_Id
+    // renumbers slots, which is the other half of what invalidates an ordinal a
+    // later edit was addressed with.
+    final typedPath = _rawTypedEditPath(edit);
+    return typedPath != null && _pathWritesASlotId(typedPath);
+  }
+  return const {
+    'private.inventory.addItem',
+    'private.inventory.removeItem',
+    'private.inventory.reset',
+    'private.inventory.repairSlots',
+    'private.knowledge.addCharacter',
+    'private.knowledge.setEntry',
+    'private.npc.revive',
+    'private.npc.setRelationship',
+    'private.glossary.setSegment',
+    'private.skills.set',
+    storyStateApplyPath,
+  }.contains(path);
+}
+
+/// Whether [edit] addresses its target with an index or slot id the user's view of
+/// the save supplied — something an earlier length change would silently retarget.
+///
+/// Mirrors `carries_caller_ordinal` in crates/gore-save/src/lib.rs.
+bool _carriesCallerOrdinal(Map<String, Object?> edit) {
+  final path = edit['path'];
+  if (path is! String) return false;
+  final value = edit['value'];
+  if (path == 'private.typed.arrayRemove' ||
+      path == 'private.typed.arrayDuplicate') {
+    return true;
+  }
+  if (_typedEditPaths.contains(path)) {
+    final raw = value is Map ? value['path'] : null;
+    return raw is List &&
+        raw.whereType<String>().any(
+          (segment) => segment.startsWith('[') && segment.endsWith(']'),
+        );
+  }
+  if (path == 'private.inventory.setItemCount') {
+    // A slot id is an index by invariant. The player path carries an ordinal even
+    // without one: it finds the stack through a positional scan of the payload
+    // rather than through the typed tree.
+    return (value is Map ? value['slotId'] : null) != null ||
+        (value is Map ? value['actorId'] : null) == null;
+  }
+  if (path == 'private.inventory.removeItem') {
+    return (value is Map ? value['slotId'] : null) != null;
+  }
+  return false;
+}
+
 /// A raw typed edit that reaches a slot — INTO one (its id, its count, a set or
 /// array inside its payload, anything below `m_Slots/[i]`) or AT the slot array
 /// itself, which an array operation addresses by ending at `m_Slots` and naming
@@ -3686,22 +4164,21 @@ const _typedEditPaths = {
 /// `npc::npc_inventory_path`), and both are rewritten alike.
 @visibleForTesting
 bool isInventorySlotTypedEdit(Map<String, Object?> edit) {
-  if (!_typedEditPaths.contains(edit['path'])) return false;
-  final path = (edit['value'] as Map?)?['path'];
-  if (path is! List) return false;
-  final segments = path.whereType<String>().toList();
-  if (segments.isNotEmpty && segments.last == 'm_Slots') return true;
-  for (var index = 0; index + 1 < segments.length; index++) {
-    if (segments[index] != 'm_Slots') continue;
-    final slot = segments[index + 1];
-    if (slot.startsWith('[') && slot.endsWith(']')) return true;
-  }
-  return false;
+  // Exactly the reach the core's `path_reaches_inventory_slot` describes, so
+  // the two cannot drift apart. This predicate is broader than the core's rule
+  // in one respect on purpose: it is not scoped to the add's/removal's actor,
+  // so a queued slot edit for ANY actor is refused rather than merely split.
+  final path = _rawTypedEditPath(edit);
+  return path != null && _pathReachesInventorySlot(path);
 }
 
 /// A raw typed edit that writes a slot's `m_Id` — the one field the whole-save
 /// repair rewrites, and therefore the only one it can collide with. Anything
 /// else inside a slot survives the repair untouched.
+///
+/// Deliberately narrower than [structuredEditRewrites]'s repair arm, which
+/// matches any `m_Id` leaf below a slot: the shapes only that one catches are
+/// SPLIT across sub-writes by the packer, not refused with an error.
 @visibleForTesting
 bool isInventorySlotIdTypedEdit(Map<String, Object?> edit) {
   if (!_typedEditPaths.contains(edit['path'])) return false;

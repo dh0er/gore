@@ -568,6 +568,52 @@ def resolve_git_sha() -> str:
     return probe.stdout.strip() or "dev" if probe.returncode == 0 else "dev"
 
 
+def _git(args: list[str]) -> str | None:
+    """Run a git command in the repository root; None if git or the repo is absent."""
+    try:
+        probe = subprocess.run(
+            ["git", *args], cwd=ROOT, capture_output=True, text=True, check=False
+        )
+    except OSError:
+        return None
+    return probe.stdout if probe.returncode == 0 else None
+
+
+def discard_line_ending_only_churn(project: str) -> None:
+    """Restore tracked files a build rewrote with different line endings only.
+
+    `flutter build` regenerates the tracked l10n sources, and on Windows writes them
+    with CRLF where the repository stores LF. `git diff` reports nothing, because
+    `.gitattributes` marks them `text eol=lf` and Git normalises the difference
+    away — but `git status` still calls them modified and never stops, so a build
+    left behind a worktree that looked dirty and aborted any tooling that insists on
+    a clean branch.
+
+    A file is restored only when `git diff` reports nothing for it — the same
+    question, asked the way Git itself answers it. Normalisation applies, so a
+    line-ending-only difference shows as no diff, while anything Git would carry
+    into a commit shows up. That covers a changed file mode as well: an executable
+    bit is not part of a blob's contents, so comparing blob hashes would have missed
+    a `chmod +x` and thrown it away. A genuinely regenerated file — a real
+    translation change — is left exactly where it is, for the developer to review
+    and commit.
+    """
+    project_dir = pdir(project).relative_to(ROOT).as_posix()
+    status = _git(["status", "--porcelain=v1", "-z", "--", project_dir])
+    if not status:
+        return
+    for entry in status.split("\0"):
+        # Worktree-modified, unstaged: "_M<path>". Anything staged or untracked is
+        # the developer's business, not ours.
+        if not entry.startswith(" M "):
+            continue
+        path = entry[3:]
+        real_diff = _git(["diff", "--raw", "--", path])
+        if real_diff is None or real_diff.strip():
+            continue  # a difference Git would keep: contents, or the file mode
+        _git(["checkout", "--", path])
+
+
 # --------------------------------------------------------------------------- #
 # Build recipes                                                               #
 # --------------------------------------------------------------------------- #
@@ -985,6 +1031,10 @@ def build_project(project: str, release: bool, dry: bool) -> None:
 
     if dry:
         return
+    # The build rewrote the generated l10n sources; put back the ones that differ in
+    # line endings alone, so a build does not leave a worktree that reads as dirty
+    # (see discard_line_ending_only_churn).
+    discard_line_ending_only_churn(project)
     rel = flutter_build_dir(project, release)
     if not rel.exists():
         raise SystemExit(f"missing flutter output: {rel}")
