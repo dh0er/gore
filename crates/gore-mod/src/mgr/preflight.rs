@@ -134,6 +134,7 @@ struct LoadoutInspection {
     check: PreflightCheckV1,
     loadout: Option<Loadout>,
     ue4ss: Ue4ssRequirement,
+    requires_script_cache: bool,
 }
 
 struct InstallMutationInspection {
@@ -213,8 +214,8 @@ where
     R: FnOnce(&Path) -> crate::Result<bool>,
 {
     let root = inspect_game_root(game_root);
-    let install = inspect_install(root.directory.as_ref());
     let loadout = inspect_loadout(library_dir, loadout_path);
+    let install = inspect_install(root.directory.as_ref(), loadout.requires_script_cache);
     let loadout_healthy = loadout.check.state == PreflightStateV1::Ok;
     let (mut deployment, deployment_recovery_seen) = inspect_deployment(
         root.root.as_deref(),
@@ -423,7 +424,10 @@ fn inspect_game_root(selected: &Path) -> RootInspection {
     }
 }
 
-fn inspect_install(root: Option<&SecureDirectory>) -> PreflightCheckV1 {
+fn inspect_install(
+    root: Option<&SecureDirectory>,
+    requires_script_cache: bool,
+) -> PreflightCheckV1 {
     let Some(root) = root else {
         return PreflightCheckV1::new(
             PreflightCheckIdV1::Install,
@@ -462,6 +466,19 @@ fn inspect_install(root: Option<&SecureDirectory>) -> PreflightCheckV1 {
             Err(error) => failures.push(format!("{label}: {error}")),
         }
     }
+    if requires_script_cache {
+        let label = r"G1R\Script\PrecompiledScript_Shipping.Cache";
+        match inspect_relative(
+            root,
+            &["G1R", "Script", "PrecompiledScript_Shipping.Cache"],
+            Wanted::File,
+        ) {
+            Ok(Occupant::Wanted) => {}
+            Ok(Occupant::Missing) => missing.push(label.to_owned()),
+            Ok(Occupant::Obstructed) => obstructed.push(label.to_owned()),
+            Err(error) => failures.push(format!("{label}: {error}")),
+        }
+    }
     if !failures.is_empty() {
         return PreflightCheckV1::new(
             PreflightCheckIdV1::Install,
@@ -488,7 +505,11 @@ fn inspect_install(root: Option<&SecureDirectory>) -> PreflightCheckV1 {
             PreflightStateV1::Ok,
             "install_recognized",
             "none",
-            "the executable, Paks, Story\\Cache, and Script paths are present",
+            if requires_script_cache {
+                "the executable, Paks, Story\\Cache, Script, and required AngelScript cache paths are present"
+            } else {
+                "the executable, Paks, Story\\Cache, and Script paths are present"
+            },
         );
     }
     let executable_missing = missing.iter().any(|item| item.ends_with(".exe"));
@@ -580,6 +601,7 @@ fn inspect_loadout(library_dir: &Path, loadout_path: &Path) -> LoadoutInspection
             ),
             loadout: Some(loadout),
             ue4ss: Ue4ssRequirement::NotRequired,
+            requires_script_cache: false,
         };
     }
 
@@ -611,12 +633,14 @@ fn inspect_loadout(library_dir: &Path, loadout_path: &Path) -> LoadoutInspection
                 .with_items([failure.message()]),
                 loadout: Some(loadout),
                 ue4ss: Ue4ssRequirement::Unknown,
+                requires_script_cache: false,
             };
         }
     };
     let mut problems = Vec::new();
     let mut unknowns = Vec::new();
     let mut requires_ue4ss = false;
+    let mut requires_script_cache = false;
     for entry in &enabled {
         match inspect_enabled_meta(&library, library_dir, &entry.id) {
             Ok(meta) => {
@@ -624,6 +648,10 @@ fn inspect_loadout(library_dir: &Path, loadout_path: &Path) -> LoadoutInspection
                     .components
                     .iter()
                     .any(|component| matches!(component, ComponentInfo::Ue4ssLua { .. }));
+                requires_script_cache |= meta
+                    .components
+                    .iter()
+                    .any(|component| matches!(component, ComponentInfo::AngelScriptPatch { .. }));
             }
             Err(error) => match error {
                 EvidenceFailure::Problem(message) => {
@@ -652,6 +680,7 @@ fn inspect_loadout(library_dir: &Path, loadout_path: &Path) -> LoadoutInspection
             } else {
                 Ue4ssRequirement::Unknown
             },
+            requires_script_cache,
         };
     }
     if !problems.is_empty() {
@@ -670,6 +699,7 @@ fn inspect_loadout(library_dir: &Path, loadout_path: &Path) -> LoadoutInspection
             } else {
                 Ue4ssRequirement::Unknown
             },
+            requires_script_cache,
         };
     }
     LoadoutInspection {
@@ -692,6 +722,7 @@ fn inspect_loadout(library_dir: &Path, loadout_path: &Path) -> LoadoutInspection
         } else {
             Ue4ssRequirement::NotRequired
         },
+        requires_script_cache,
     }
 }
 
@@ -812,6 +843,7 @@ fn loadout_failure(failure: EvidenceFailure) -> LoadoutInspection {
             .with_items([failure.message()]),
         loadout: None,
         ue4ss: Ue4ssRequirement::Unknown,
+        requires_script_cache: false,
     }
 }
 
@@ -1506,7 +1538,7 @@ mod tests {
         .unwrap();
         let root = inspect_game_root(install.path());
         assert_eq!(
-            inspect_install(root.directory.as_ref()).code,
+            inspect_install(root.directory.as_ref(), false).code,
             "install_not_recognized"
         );
 
@@ -1520,7 +1552,7 @@ mod tests {
         fs::remove_dir(install.path().join("G1R/Script")).unwrap();
         let root = inspect_game_root(install.path());
         assert_eq!(
-            inspect_install(root.directory.as_ref()).code,
+            inspect_install(root.directory.as_ref(), false).code,
             "install_incomplete"
         );
     }
@@ -1707,7 +1739,9 @@ mod tests {
         let loadout = root.path().join("loadout.json");
         write_enabled_loadout(&loadout, &["deferred"]);
 
-        let check = inspect_loadout(&library, &loadout).check;
+        let inspected = inspect_loadout(&library, &loadout);
+        assert!(inspected.requires_script_cache);
+        let check = inspected.check;
         assert_eq!(check.state, PreflightStateV1::Ok);
         assert_eq!(check.code, "loadout_metadata_ready");
         assert_eq!(check.action, "none");
@@ -1716,6 +1750,60 @@ mod tests {
             .items
             .iter()
             .any(|item| item.contains("unverified until Apply")));
+    }
+
+    #[test]
+    fn script_patch_defers_apply_until_the_install_cache_exists() {
+        let install = install_fixture();
+        let library = install.path().join("library");
+        fs::create_dir(&library).unwrap();
+        write_library_meta(
+            &library,
+            "script",
+            vec![ComponentInfo::AngelScriptPatch {
+                rel: "scripts".to_owned(),
+                targets: Vec::new(),
+            }],
+        );
+        fs::create_dir(library.join("script/scripts")).unwrap();
+        fs::write(library.join("script/scripts/manifest.json"), b"[]").unwrap();
+        let loadout = install.path().join("loadout.json");
+        write_enabled_loadout(&loadout, &["script"]);
+
+        let inspect = || {
+            run_with(
+                install.path(),
+                &library,
+                &loadout,
+                |_, _, _| {
+                    Ok(ManagerStatus::ChangesPending {
+                        deployed: Vec::new(),
+                        target: Vec::new(),
+                    })
+                },
+                |_| safe_probe(),
+                |_| Ok(false),
+            )
+        };
+        let missing = inspect();
+        assert_eq!(missing.checks[1].code, "install_incomplete");
+        assert_eq!(missing.checks[1].action, "verify_game_files");
+        assert!(missing.checks[1]
+            .items
+            .iter()
+            .any(|item| item.ends_with("PrecompiledScript_Shipping.Cache")));
+        assert_eq!(missing.checks[3].action, "verify_game_files");
+
+        fs::write(
+            install
+                .path()
+                .join("G1R/Script/PrecompiledScript_Shipping.Cache"),
+            b"cache",
+        )
+        .unwrap();
+        let ready = inspect();
+        assert_eq!(ready.checks[1].code, "install_recognized");
+        assert_eq!(ready.checks[3].action, "review_apply");
     }
 
     #[test]
