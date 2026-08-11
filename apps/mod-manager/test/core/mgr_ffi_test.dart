@@ -7,101 +7,112 @@ import 'package:gore_manager/library/domain/models.dart';
 /// type of the contract (plus one unknown type), the raw_file target_file
 /// externally-tagged variants, and a loadout with mixed enabled flags.
 Map<String, Object?> _libraryListResponse() => {
-      'ok': true,
-      'mods': [
+  'ok': true,
+  'mods': [
+    {
+      'id': 'mod-a',
+      'kind': 'goremod',
+      'name': 'Better Torches',
+      'version': '1.2.0',
+      'author': 'dh',
+      'imported_at': '2026-07-01T12:00:00Z',
+      'source': 'BetterTorches.goremod',
+      // `targets` are conflict-analysis footprint keys, not file paths:
+      // ue4ss dir name, loc "id|set", audio "bank|sample", asset paths,
+      // AngelScript module names.
+      'components': [
         {
-          'id': 'mod-a',
-          'kind': 'goremod',
-          'name': 'Better Torches',
-          'version': '1.2.0',
-          'author': 'dh',
-          'imported_at': '2026-07-01T12:00:00Z',
-          'source': 'BetterTorches.goremod',
-          // `targets` are conflict-analysis footprint keys, not file paths:
-          // ue4ss dir name, loc "id|set", audio "bank|sample", asset paths,
-          // AngelScript module names.
-          'components': [
-            {
-              'type': 'ue4ss_lua',
-              'name': 'torches',
-              'rel': 'scripts/torches',
-              'targets': ['torches'],
-              'opaque': true,
-            },
-            {
-              'type': 'loc_patch',
-              'rel': 'loc/patch.json',
-              'targets': ['itlstorch|german'],
-            },
-            {
-              'type': 'audio_patch',
-              'rel': 'audio/sfx_patch.json',
-              'targets': ['SFX|vob_fire_torch'],
-            },
-            {
-              'type': 'texture_patch',
-              'rel': 'textures/torches',
-              'targets': ['/Game/Gothic/Textures/T_Torch_D'],
-            },
-            {
-              'type': 'angel_script_patch',
-              'rel': 'scripts/patch.as',
-              'targets': ['Game/Items/ItLsTorch'],
-            },
-          ],
+          'type': 'ue4ss_lua',
+          'name': 'torches',
+          'rel': 'scripts/torches',
+          'targets': ['torches'],
+          'opaque': true,
+          'coverage': 'partial',
         },
         {
-          'id': 'mod-b',
-          'kind': 'foreign_mixed',
-          'name': 'Foreign Pack',
-          'components': [
-            {
-              'type': 'triplet',
-              'rel_base': 'triplet/pack',
-              'targets': [
-                '/Game/Gothic/Textures/T_Pack_A',
-                '/Game/Gothic/Textures/T_Pack_B',
-                '/Game/Gothic/Meshes/SM_Pack',
-              ],
-            },
-            {
-              'type': 'loose_pak',
-              'rel': 'paks/loose_P.pak',
-              'targets': ['/Game/Gothic/Textures/T_Loose'],
-            },
-            {
-              'type': 'raw_file',
-              'rel': 'raw/SFX.bank',
-              'target_file': {
-                'bank': {'name': 'SFX'},
-              },
-            },
-            {
-              'type': 'raw_file',
-              'rel': 'raw/Game.lcache',
-              'target_file': 'lcache',
-            },
-            {
-              'type': 'raw_file',
-              'rel': 'raw/cache.bin',
-              'target_file': 'script_cache',
-            },
-            {
-              // Unknown/future component type: must parse as a generic view.
-              'type': 'hologram',
-              'rel': 'future/thing',
-            },
-          ],
+          'type': 'loc_patch',
+          'rel': 'loc/patch.json',
+          'targets': ['itlstorch|german'],
+          'coverage': 'exact',
+        },
+        {
+          'type': 'audio_patch',
+          'rel': 'audio/sfx_patch.json',
+          'targets': ['SFX|vob_fire_torch'],
+          'coverage': 'exact',
+        },
+        {
+          'type': 'texture_patch',
+          'rel': 'textures/torches',
+          'targets': ['/Game/Gothic/Textures/T_Torch_D'],
+          'coverage': 'exact',
+        },
+        {
+          'type': 'angel_script_patch',
+          'rel': 'scripts/patch.as',
+          'targets': ['Game/Items/ItLsTorch'],
+          'coverage': 'exact',
         },
       ],
-      'loadout': {
-        'format': 1,
-        'entries': [
-          {'id': 'mod-a', 'enabled': true},
-          {'id': 'mod-b', 'enabled': false},
-        ],
-      },
-    };
+    },
+    {
+      'id': 'mod-b',
+      'kind': 'foreign_mixed',
+      'name': 'Foreign Pack',
+      'components': [
+        {
+          'type': 'triplet',
+          'rel_base': 'triplet/pack',
+          'targets': [
+            '/Game/Gothic/Textures/T_Pack_A',
+            '/Game/Gothic/Textures/T_Pack_B',
+            '/Game/Gothic/Meshes/SM_Pack',
+          ],
+          'coverage': 'advisory',
+        },
+        {
+          'type': 'loose_pak',
+          'rel': 'paks/loose_P.pak',
+          'targets': ['/Game/Gothic/Textures/T_Loose'],
+          'coverage': 'exact',
+        },
+        {
+          'type': 'raw_file',
+          'rel': 'raw/SFX.bank',
+          'target_file': {
+            'bank': {'name': 'SFX'},
+          },
+          'coverage': 'exact',
+        },
+        {
+          'type': 'raw_file',
+          'rel': 'raw/Game.lcache',
+          'target_file': 'lcache',
+          'coverage': 'exact',
+        },
+        {
+          'type': 'raw_file',
+          'rel': 'raw/cache.bin',
+          'target_file': 'script_cache',
+          'coverage': 'exact',
+        },
+        {
+          // Unknown/future component type: must parse as a generic view.
+          'type': 'hologram',
+          'rel': 'future/thing',
+          'coverage': 'future_precision',
+        },
+      ],
+    },
+  ],
+  'loadout': {
+    'format': 1,
+    'entries': [
+      {'id': 'mod-a', 'enabled': true},
+      {'id': 'mod-b', 'enabled': false},
+    ],
+  },
+};
 
 void main() {
   group('canonical native response decoding', () {
@@ -146,26 +157,25 @@ void main() {
       expect(a.author, 'dh');
       expect(a.importedAt, '2026-07-01T12:00:00Z');
       expect(a.source, 'BetterTorches.goremod');
-      expect(
-        a.components.map((c) => c.kind),
-        [
-          'ue4ss_lua',
-          'loc_patch',
-          'audio_patch',
-          'texture_patch',
-          'angel_script_patch',
-        ],
-      );
+      expect(a.components.map((c) => c.kind), [
+        'ue4ss_lua',
+        'loc_patch',
+        'audio_patch',
+        'texture_patch',
+        'angel_script_patch',
+      ]);
       final lua = a.components[0];
       expect(lua.name, 'torches');
       expect(lua.rel, 'scripts/torches');
       expect(lua.targets, ['torches']);
       expect(lua.opaque, isTrue);
+      expect(lua.coverage, FootprintCoverage.partial);
       expect(lua.displayLabel, 'torches');
       final loc = a.components[1];
       expect(loc.rel, 'loc/patch.json');
       expect(loc.targets, ['itlstorch|german']);
       expect(loc.opaque, isFalse);
+      expect(loc.coverage, FootprintCoverage.exact);
       expect(loc.displayLabel, 'loc/patch.json');
 
       final b = mods[1];
@@ -177,13 +187,16 @@ void main() {
       expect(triplet.kind, 'triplet');
       expect(triplet.rel, 'triplet/pack'); // rel_base surfaces as rel
       expect(triplet.targets, hasLength(3));
+      expect(triplet.coverage, FootprintCoverage.advisory);
       final loosePak = b.components[1];
       expect(loosePak.kind, 'loose_pak');
       expect(loosePak.rel, 'paks/loose_P.pak');
+      expect(loosePak.coverage, FootprintCoverage.exact);
       final rawBank = b.components[2];
       expect(rawBank.kind, 'raw_file');
       expect(rawBank.rawFileTarget?.kind, 'bank');
       expect(rawBank.rawFileTarget?.bankName, 'SFX');
+      expect(rawBank.coverage, FootprintCoverage.exact);
       final rawLcache = b.components[3];
       expect(rawLcache.rawFileTarget?.kind, 'lcache');
       expect(rawLcache.rawFileTarget?.bankName, isNull);
@@ -195,6 +208,7 @@ void main() {
       expect(unknown.rel, 'future/thing');
       expect(unknown.rawFileTarget, isNull);
       expect(unknown.raw['type'], 'hologram');
+      expect(unknown.coverage, FootprintCoverage.opaque);
 
       expect(loadout.format, 1);
       expect(loadout.entries, hasLength(2));
@@ -203,6 +217,61 @@ void main() {
       expect(loadout.entries[1].id, 'mod-b');
       expect(loadout.entries[1].enabled, isFalse);
     });
+
+    test(
+      'older DLL coverage is inferred conservatively from component facts',
+      () {
+        FootprintCoverage coverage(Map<String, Object?> json) =>
+            ComponentView.fromJson(json).coverage;
+
+        expect(
+          coverage({'type': 'loc_patch', 'targets': <String>[]}),
+          FootprintCoverage.exact,
+        );
+        expect(
+          coverage({'type': 'raw_file', 'target_file': 'lcache'}),
+          FootprintCoverage.exact,
+        );
+        expect(
+          coverage({
+            'type': 'ue4ss_lua',
+            'targets': ['Class.Field'],
+            'opaque': true,
+          }),
+          FootprintCoverage.partial,
+        );
+        expect(
+          coverage({'type': 'ue4ss_lua', 'opaque': true}),
+          FootprintCoverage.opaque,
+        );
+        expect(
+          coverage({
+            'type': 'triplet',
+            'targets': ['/Game/Observed'],
+          }),
+          FootprintCoverage.advisory,
+        );
+        expect(coverage({'type': 'triplet'}), FootprintCoverage.opaque);
+        expect(
+          coverage({
+            'type': 'loose_pak',
+            'targets': ['/Game/Indexed'],
+          }),
+          FootprintCoverage.exact,
+        );
+        expect(coverage({'type': 'loose_pak'}), FootprintCoverage.opaque);
+        expect(
+          coverage({'type': 'future_component'}),
+          FootprintCoverage.opaque,
+        );
+        expect(
+          coverage({'type': 'loc_patch', 'coverage': 'future_precision'}),
+          FootprintCoverage.opaque,
+          reason:
+              'a present unknown grade must fail closed instead of inferring',
+        );
+      },
+    );
   });
 
   group('MgrFfi.status', () {
@@ -286,18 +355,20 @@ void main() {
         'drifted': ['G1R/Content/FMOD/Desktop/SFX.bank'],
       });
       expect(s, isA<ManagerStatusGameUpdated>());
-      expect(
-        (s as ManagerStatusGameUpdated).drifted,
-        ['G1R/Content/FMOD/Desktop/SFX.bank'],
-      );
+      expect((s as ManagerStatusGameUpdated).drifted, [
+        'G1R/Content/FMOD/Desktop/SFX.bank',
+      ]);
     });
 
-    test('parses a future state as ManagerStatusUnknown, keeping raw', () async {
-      final s = await parse({'state': 'reticulating_splines', 'foo': 1});
-      expect(s, isA<ManagerStatusUnknown>());
-      expect(s.state, 'reticulating_splines');
-      expect(s.raw['foo'], 1);
-    });
+    test(
+      'parses a future state as ManagerStatusUnknown, keeping raw',
+      () async {
+        final s = await parse({'state': 'reticulating_splines', 'foo': 1});
+        expect(s, isA<ManagerStatusUnknown>());
+        expect(s.state, 'reticulating_splines');
+        expect(s.raw['foo'], 1);
+      },
+    );
   });
 
   group('MgrFfi errors', () {
@@ -409,6 +480,7 @@ void main() {
                   'type': 'loose_pak',
                   'rel': 'paks/loose_P.pak',
                   'targets': ['G1R/Content/Paks/~mods/loose_P.pak'],
+                  'coverage': 'exact',
                 },
               ],
             },
@@ -418,6 +490,7 @@ void main() {
       final entry = await MgrFfi(fake).import('D:/downloads/loose_P.pak');
       expect(entry.id, 'mod-c');
       expect(entry.kind, 'foreign_pak');
+      expect(entry.components.single.coverage, FootprintCoverage.exact);
       expect(fake.calls.single.payload, {'path': 'D:/downloads/loose_P.pak'});
     });
 

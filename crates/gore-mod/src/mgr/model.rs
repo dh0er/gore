@@ -1933,6 +1933,20 @@ pub enum ModKind {
     ForeignMixed,
 }
 
+/// How completely a component's metadata describes its conflict-analysis footprint.
+///
+/// This is derived from [`ComponentInfo`] rather than stored in the library sidecar. It says
+/// nothing about runtime precedence: even an exact footprint can still have unproven ordering
+/// semantics in the game.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FootprintCoverage {
+    Exact,
+    Partial,
+    Advisory,
+    Opaque,
+}
+
 /// One deployable component of a library mod. `rel`/`rel_base` are paths inside the mod's
 /// library dir; `targets` are the game-side footprint keys used for conflict analysis.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1997,6 +2011,48 @@ pub enum ComponentInfo {
     },
 }
 
+impl ComponentInfo {
+    /// Derive how completely this component's metadata describes its footprint.
+    ///
+    /// Container scans remain compatible with corrupt or unreadable inputs: an empty scan is
+    /// opaque rather than an import failure. IoStore package discovery is advisory even when it
+    /// finds packages, while a successfully indexed plain Pak is exhaustive.
+    #[must_use]
+    pub fn footprint_coverage(&self) -> FootprintCoverage {
+        match self {
+            Self::Ue4ssLua {
+                targets, opaque, ..
+            } => match (*opaque, targets.is_empty()) {
+                (false, _) => FootprintCoverage::Exact,
+                (true, false) => FootprintCoverage::Partial,
+                (true, true) => FootprintCoverage::Opaque,
+            },
+            Self::Triplet { targets, .. } => {
+                if targets.is_empty() {
+                    FootprintCoverage::Opaque
+                } else {
+                    FootprintCoverage::Advisory
+                }
+            }
+            Self::LoosePak { targets, .. } => {
+                if targets.is_empty() {
+                    FootprintCoverage::Opaque
+                } else {
+                    FootprintCoverage::Exact
+                }
+            }
+            Self::LocPatch { .. }
+            | Self::AudioPatch { .. }
+            | Self::TexturePatch { .. }
+            | Self::AngelScriptPatch { .. }
+            | Self::FilePatch { .. }
+            | Self::PakFilePatch { .. }
+            | Self::VoiceArchivePatch { .. }
+            | Self::RawFile { .. } => FootprintCoverage::Exact,
+        }
+    }
+}
+
 /// The single live game file a [`ComponentInfo::RawFile`] replaces wholesale.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -2010,6 +2066,135 @@ pub enum RawTarget {
 mod tests {
     use super::*;
     use std::io::Write as _;
+
+    #[test]
+    fn footprint_coverage_matrix_is_conservative_and_derived() {
+        let exact = vec![
+            ComponentInfo::Ue4ssLua {
+                name: "Precise".into(),
+                rel: "ue4ss/Precise".into(),
+                targets: vec![],
+                opaque: false,
+            },
+            ComponentInfo::LocPatch {
+                rel: "loc".into(),
+                targets: vec![],
+            },
+            ComponentInfo::AudioPatch {
+                rel: "audio".into(),
+                targets: vec![],
+            },
+            ComponentInfo::TexturePatch {
+                rel: "texture".into(),
+                targets: vec![],
+            },
+            ComponentInfo::AngelScriptPatch {
+                rel: "scripts".into(),
+                targets: vec![],
+            },
+            ComponentInfo::FilePatch {
+                rel: "files".into(),
+                targets: vec![],
+            },
+            ComponentInfo::PakFilePatch {
+                rel: "pak_files".into(),
+                targets: vec![],
+            },
+            ComponentInfo::VoiceArchivePatch {
+                rel: "voice".into(),
+                targets: vec![],
+            },
+            ComponentInfo::LoosePak {
+                rel: "indexed.pak".into(),
+                targets: vec!["/Game/Indexed".into()],
+            },
+            ComponentInfo::RawFile {
+                rel: "raw/Game.lcache".into(),
+                target_file: RawTarget::Lcache,
+            },
+        ];
+        for component in exact {
+            assert_eq!(
+                component.footprint_coverage(),
+                FootprintCoverage::Exact,
+                "component: {component:?}"
+            );
+        }
+
+        let cases = [
+            (
+                ComponentInfo::Ue4ssLua {
+                    name: "Partial".into(),
+                    rel: "ue4ss/Partial".into(),
+                    targets: vec!["Class.Field".into()],
+                    opaque: true,
+                },
+                FootprintCoverage::Partial,
+            ),
+            (
+                ComponentInfo::Ue4ssLua {
+                    name: "Opaque".into(),
+                    rel: "ue4ss/Opaque".into(),
+                    targets: vec![],
+                    opaque: true,
+                },
+                FootprintCoverage::Opaque,
+            ),
+            (
+                ComponentInfo::Triplet {
+                    rel_base: "container".into(),
+                    targets: vec!["/Game/Observed".into()],
+                },
+                FootprintCoverage::Advisory,
+            ),
+            (
+                ComponentInfo::Triplet {
+                    rel_base: "unreadable".into(),
+                    targets: vec![],
+                },
+                FootprintCoverage::Opaque,
+            ),
+            (
+                ComponentInfo::LoosePak {
+                    rel: "unreadable.pak".into(),
+                    targets: vec![],
+                },
+                FootprintCoverage::Opaque,
+            ),
+        ];
+        for (component, expected) in cases {
+            assert_eq!(
+                component.footprint_coverage(),
+                expected,
+                "component: {component:?}"
+            );
+        }
+
+        let serialized = serde_json::to_value(ComponentInfo::LoosePak {
+            rel: "indexed.pak".into(),
+            targets: vec!["/Game/Indexed".into()],
+        })
+        .unwrap();
+        assert!(
+            serialized.get("coverage").is_none(),
+            "derived coverage must not enter library metadata: {serialized}"
+        );
+        assert_eq!(
+            [
+                FootprintCoverage::Exact,
+                FootprintCoverage::Partial,
+                FootprintCoverage::Advisory,
+                FootprintCoverage::Opaque,
+            ]
+            .map(|coverage| serde_json::to_value(coverage).unwrap()),
+            [
+                serde_json::json!("exact"),
+                serde_json::json!("partial"),
+                serde_json::json!("advisory"),
+                serde_json::json!("opaque"),
+            ]
+        );
+    }
 
     #[cfg(unix)]
     fn make_file_link(target: &Path, link: &Path) -> bool {
