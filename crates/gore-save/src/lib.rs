@@ -9092,8 +9092,37 @@ fn path_has_name(path: &[properties::PathSeg], name: &str) -> bool {
 }
 
 fn path_has_key(path: &[properties::PathSeg], key: &str) -> bool {
-    path.iter()
-        .any(|segment| matches!(segment, properties::PathSeg::MapKey(found) if found == key))
+    path.iter().any(|segment| {
+        matches!(segment, properties::PathSeg::MapKey(found)
+            if found.trim().eq_ignore_ascii_case(key.trim()))
+    })
+}
+
+/// Whether a slot-reaching `path` belongs to the inventory `actor_id` names.
+///
+/// An NPC's inventory hangs under that character's own map entry, so its key
+/// settles it. The controlled player's hangs off `m_SavedPlayers`; a slot path that
+/// goes through there is the player's, and one that does not but names some
+/// character key belongs to somebody else. A path that fits neither description is
+/// treated as a conflict rather than waved through — a save with no
+/// `m_SavedPlayers` at all falls back to whatever `m_Inventory` exists, and there is
+/// nothing in the path to tell whose it is.
+///
+/// Container scope is deliberately NOT narrowed: which `Items[i]` a structured edit
+/// resolves to depends on the enum order inside the save, which is not visible here.
+fn slot_edit_targets_actor(path: &[properties::PathSeg], actor_id: Option<&str>) -> bool {
+    if !path_reaches_inventory_slot(path) {
+        return false;
+    }
+    match actor_id {
+        Some(id) => path_has_key(path, id),
+        None => {
+            path_has_name(path, "m_SavedPlayers")
+                || !path
+                    .iter()
+                    .any(|segment| matches!(segment, properties::PathSeg::MapKey(_)))
+        }
+    }
 }
 
 /// Whether `path` reaches a slot of an inventory container — the array itself, or an
@@ -9147,11 +9176,16 @@ fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) ->
             path_enters_map_entry(path, "CharacterKnowledgeByUniqueName", &edit.character)
         }
         // Claims a whole slot: the add fills a blank one and resets its payload, the
-        // removal blanks one.
-        PrivateEdit::InventoryAddItem(_) | PrivateEdit::InventoryRemoveItem(_) => {
-            path_reaches_inventory_slot(path)
+        // removal blanks one. Only in the inventory it targets — another actor's
+        // slots are a different subtree.
+        PrivateEdit::InventoryAddItem(add) => {
+            slot_edit_targets_actor(path, add.actor_id.as_deref())
         }
-        // Narrower: it only rewrites ids.
+        PrivateEdit::InventoryRemoveItem(remove) => {
+            slot_edit_targets_actor(path, remove.actor_id.as_deref())
+        }
+        // Narrower still: it only rewrites ids, but it does so across every
+        // container in the save, so it is not scoped to one actor.
         PrivateEdit::InventoryRepairSlots => matches!(
             path.last(),
             Some(properties::PathSeg::Name(name)) if name == "m_Id"
@@ -20694,6 +20728,72 @@ mod tests {
             properties::PropertyValue::Int(3),
             "the last edit in the batch must win"
         );
+    }
+
+    #[test]
+    fn an_inventory_write_only_conflicts_with_its_own_actors_slots() {
+        let player_slot = properties::parse_path(&[
+            "m_GenericData".to_string(),
+            "{PlayersSavedData}".to_string(),
+            "m_SavedPlayers".to_string(),
+            "[0]".to_string(),
+            "m_Inventory".to_string(),
+            "m_Values".to_string(),
+            "Items".to_string(),
+            "[1]".to_string(),
+            "m_Slots".to_string(),
+            "[2]".to_string(),
+            "m_SlotData".to_string(),
+            "m_ItemCount".to_string(),
+        ])
+        .unwrap();
+        let npc_slot = |id: &str| {
+            properties::parse_path(&[
+                "m_GenericData".to_string(),
+                "{CharacterStates}".to_string(),
+                "InventoriesByGlobalId".to_string(),
+                format!("{{{id}}}"),
+                "m_Inventory".to_string(),
+                "m_Values".to_string(),
+                "Items".to_string(),
+                "[1]".to_string(),
+                "m_Slots".to_string(),
+                "[2]".to_string(),
+                "m_SlotData".to_string(),
+                "m_ItemCount".to_string(),
+            ])
+            .unwrap()
+        };
+
+        let add_for = |actor: Option<&str>| {
+            PrivateEdit::InventoryAddItem(PrivateInventoryAddItemEdit {
+                path: "/Script/Angelscript.ItMi_Orenugget".to_string(),
+                count: 1,
+                actor_id: actor.map(str::to_string),
+            })
+        };
+
+        // The player's add collides with the player's slots, not an NPC's.
+        assert!(structured_edit_rewrites(&add_for(None), &player_slot));
+        assert!(!structured_edit_rewrites(&add_for(None), &npc_slot("Lizard-1")));
+
+        // An NPC's add collides with that NPC's slots, not another's nor the
+        // player's.
+        let for_lizard = add_for(Some("Lizard-1"));
+        assert!(structured_edit_rewrites(&for_lizard, &npc_slot("Lizard-1")));
+        assert!(!structured_edit_rewrites(&for_lizard, &npc_slot("Lizard-2")));
+        assert!(!structured_edit_rewrites(&for_lizard, &player_slot));
+
+        // A path that reaches no slot at all is unrelated either way.
+        let attribute = properties::parse_path(&[
+            "m_GenericData".to_string(),
+            "{CharacterStates}".to_string(),
+            "AttributesByGlobalId".to_string(),
+            "{Hero}".to_string(),
+            "Health".to_string(),
+        ])
+        .unwrap();
+        assert!(!structured_edit_rewrites(&add_for(None), &attribute));
     }
 
     #[test]
