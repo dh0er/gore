@@ -44,6 +44,21 @@ void main() {
       expect(diagnosticGameRootCandidate(root), root);
     });
 
+    test('matches status normalization for existing nested selections', () {
+      final root = Directory.systemTemp.createTempSync('gore_diagnostic_root');
+      addTearDown(() => root.deleteSync(recursive: true));
+      final g1r = Directory(p.join(root.path, 'G1R'));
+      final nested = Directory(p.join(g1r.path, 'Binaries', 'Win64'));
+      nested.createSync(recursive: true);
+
+      expect(diagnosticGameRootCandidate(g1r.path), root.path);
+      expect(diagnosticGameRootCandidate(nested.path), root.path);
+      expect(
+        diagnosticGameRootCandidate(nested.path),
+        gameRootFromExe(nested.path),
+      );
+    });
+
     test('lexically derives the root from the exact executable shape', () {
       const exe =
           r'C:\missing\Gothic Remake\G1R\Binaries\Win64\G1R-Win64-Shipping.exe';

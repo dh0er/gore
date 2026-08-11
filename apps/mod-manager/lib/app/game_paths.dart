@@ -24,15 +24,20 @@ String? gameRootFromExe(String? path) {
   return null;
 }
 
-/// Pure lexical candidate for read-only Manager diagnosis.
+/// Candidate root for read-only Manager diagnosis.
 ///
-/// Unlike [gameRootFromExe], this deliberately does not require the selected
-/// path to exist. A stale or malformed persisted value must reach native
-/// preflight so it can explain the problem instead of being collapsed into
-/// "no path". Only the exact supported executable shape is converted to its
-/// install root; every other non-blank value is forwarded unchanged.
+/// Existing selections use the same root normalization as status and Apply so
+/// every Manager lane judges the same installation. A stale or malformed value
+/// must still reach native preflight instead of being collapsed into "no path",
+/// so an unresolved exact executable is normalized lexically and every other
+/// non-blank value is forwarded unchanged.
 String? diagnosticGameRootCandidate(String? path) {
   if (path == null || path.trim().isEmpty) return null;
+  final existingRoot = gameRootFromExe(path);
+  if (existingRoot != null &&
+      Directory(p.join(existingRoot, 'G1R')).existsSync()) {
+    return existingRoot;
+  }
   final normalized = _windowsPath.normalize(path);
   final parts = _windowsPath.split(normalized);
   const tail = ['G1R', 'Binaries', 'Win64', 'G1R-Win64-Shipping.exe'];
