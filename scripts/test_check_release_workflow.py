@@ -324,6 +324,37 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
                 )
                 self.assert_invalid(release=changed, mentions="build command changed")
 
+    def test_manager_artifact_verification_is_pinned_before_upload(self) -> None:
+        command = (
+            "python scripts/verify_mod_manager_release.py "
+            "--version ${{ steps.version.outputs.version }}"
+        )
+        removed = mutate_job(
+            self.release,
+            "gore-mod-manager",
+            f"      - name: Verify release artifacts\n        run: {command}\n\n",
+            "",
+        )
+        self.assert_invalid(release=removed, mentions="exact step order changed")
+
+        bypassed = mutate_job(
+            self.release,
+            "gore-mod-manager",
+            f"        run: {command}\n",
+            f"        run: {command}\n        continue-on-error: true\n",
+        )
+        self.assert_invalid(release=bypassed, mentions="field set changed")
+
+        wrong_version = mutate_job(
+            self.release,
+            "gore-mod-manager",
+            command,
+            "python scripts/verify_mod_manager_release.py --version 0.0.0",
+        )
+        self.assert_invalid(
+            release=wrong_version, mentions="artifact verification.run: changed"
+        )
+
     def test_all_upload_names_and_paths_are_pinned(self) -> None:
         for product, contract in PRODUCTS.items():
             with self.subTest(product=product, field="name"):

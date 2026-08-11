@@ -349,6 +349,9 @@ jobs:
       - name: Build installer
         run: python build.py gore-mod-manager installer
 
+      - name: Verify release artifacts
+        run: python scripts/verify_mod_manager_release.py --version ${{ steps.version.outputs.version }}
+
       - name: Extract release notes from CHANGELOG.md
         shell: pwsh
         run: |

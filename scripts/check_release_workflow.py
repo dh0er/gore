@@ -78,6 +78,7 @@ class ProductContract:
     make_latest: str
     publish_files: str
     publish_body: str
+    artifact_verify_command: str | None = None
     appcast_command: str | None = None
     feed_command: str | None = None
 
@@ -255,6 +256,10 @@ PRODUCTS: dict[str, ProductContract] = {
             "${{ steps.version.outputs.version }}-setup.exe"
         ),
         publish_body="dist/gore-mod-manager/RELEASE_NOTES.md",
+        artifact_verify_command=(
+            "python scripts/verify_mod_manager_release.py "
+            "--version ${{ steps.version.outputs.version }}"
+        ),
         appcast_command=(
             "python scripts/appcast.py --title gore-mod-manager "
             "--version ${{ steps.version.outputs.version }} "
@@ -784,7 +789,7 @@ def _validate_release_step_allowlist(
 ) -> None:
     context = f"release.jobs.{product}.steps"
     if contract.appcast_command is not None:
-        expected_order = (
+        expected_order_list = [
             "uses:actions/checkout@v4",
             "name:Resolve and verify version",
             "uses:dtolnay/rust-toolchain@stable",
@@ -797,9 +802,9 @@ def _validate_release_step_allowlist(
             "name:Upload build artifact",
             "name:Publish GitHub release",
             f"name:Update {product} appcast feed",
-        )
+        ]
     else:
-        expected_order = (
+        expected_order_list = [
             "uses:actions/checkout@v4",
             "name:Resolve and verify version",
             "uses:dtolnay/rust-toolchain@stable",
@@ -808,7 +813,11 @@ def _validate_release_step_allowlist(
             "name:Extract release notes from CHANGELOG.md",
             "name:Upload build artifact",
             "name:Publish GitHub release",
-        )
+        ]
+    if contract.artifact_verify_command is not None:
+        build_index = expected_order_list.index(f"name:{contract.build_step}")
+        expected_order_list.insert(build_index + 1, "name:Verify release artifacts")
+    expected_order = tuple(expected_order_list)
     actual_order = tuple(_step_identity(step, context) for step in steps)
     if actual_order != expected_order:
         problems.append(f"{context}: exact step order changed ({actual_order!r})")
@@ -877,9 +886,9 @@ def _validate_release_step_allowlist(
             f"{context}.inno",
             problems,
         )
-        notes_index = 7
+        notes_index = 7 + (contract.artifact_verify_command is not None)
     else:
-        notes_index = 5
+        notes_index = 5 + (contract.artifact_verify_command is not None)
 
     _expect_simple_step(
         steps[notes_index],
@@ -916,6 +925,32 @@ def _validate_product_steps(
     ]
     if len(build_like) != 1 or (build is not None and build_like[0] is not build):
         problems.append(f"{context}: unexpected or duplicate build command")
+
+    verify_like = [
+        step
+        for step in steps
+        if (run := step.fields.get("run")) is not None
+        and "verify_mod_manager_release.py" in _scalar(run, context)
+    ]
+    if contract.artifact_verify_command is None:
+        if verify_like:
+            problems.append(f"{context}: unexpected artifact verification")
+    else:
+        verify = _named_step(steps, "Verify release artifacts", context, problems)
+        if verify is not None:
+            _expect_simple_step(
+                verify,
+                {
+                    "name": "Verify release artifacts",
+                    "run": contract.artifact_verify_command,
+                },
+                f"{context} artifact verification",
+                problems,
+            )
+        if len(verify_like) != 1 or (
+            verify is not None and verify_like[0] is not verify
+        ):
+            problems.append(f"{context}: unexpected or duplicate artifact verification")
 
     upload = _named_step(steps, "Upload build artifact", context, problems)
     if upload is not None:
