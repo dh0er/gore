@@ -13,8 +13,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Mod library, load order, conflict detection, and declarative Apply/Undeploy.
 - Windows installer with WinSparkle update checks; the portable zip remains
   self-contained and updater-free.
-- Documented that uninstalling removes the app and its UI preferences but does
-  not undeploy mods or erase the shared imported library, loadout, and GORE
-  configuration.
+- Documented that uninstalling removes the app and its normal
+  `%LOCALAPPDATA%` UI preferences, while an `%APPDATA%` fallback needs manual
+  cleanup; uninstall does not undeploy mods or erase the shared imported
+  library, loadout, and GORE configuration.
 - Included WinSparkle 0.8.1, Expat, and OpenSSL attributions in the shipped
   third-party notices.

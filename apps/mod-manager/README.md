@@ -53,17 +53,20 @@ portable builds are deliberately updater-free.
   Extract it to a normal writable folder, run `gore_manager.exe`, and replace
   that extracted app folder manually when updating. “Portable” describes the
   app package; user data is not stored beside the executable.
-- Both packages share `%LOCALAPPDATA%\gore\mod-manager\` for the imported mod
-  library and loadout, plus `%LOCALAPPDATA%\gore\config.json` for shared GORE
-  settings such as the selected game. `%APPDATA%` is the fallback when
-  `%LOCALAPPDATA%` is unavailable. Manager-only UI preferences live under
-  `%LOCALAPPDATA%\gore\gore-manager\`.
+- Both packages normally share `%LOCALAPPDATA%\gore\mod-manager\` for the
+  imported mod library and loadout, `%LOCALAPPDATA%\gore\config.json` for
+  shared GORE settings such as the selected game, and
+  `%LOCALAPPDATA%\gore\gore-manager\` for Manager-only UI preferences. If
+  `%LOCALAPPDATA%` is unavailable, the app uses the same relative paths under
+  `%APPDATA%` instead.
 - Before uninstalling or deleting a portable copy, use **Undeploy** if Manager
   has applied mods. Removing the app does not undo a deployment in the game
-  directory. The installer uninstaller removes the installed app and
-  Manager-only UI preferences; it intentionally preserves the shared config,
-  imported library, and loadout. Delete `%LOCALAPPDATA%\gore\mod-manager\`
-  manually only if you also want to discard that retained library and loadout.
+  directory. The installer uninstaller removes the installed app and its
+  normal `%LOCALAPPDATA%` UI preferences; it intentionally preserves the
+  shared config, imported library, and loadout. In the `%APPDATA%` fallback
+  case, remove `%APPDATA%\gore\gore-manager\` manually to discard UI
+  preferences. Delete the active data root's `gore\mod-manager\` directory
+  manually only if you also want to discard the retained library and loadout.
 
 ## Build / run
 
