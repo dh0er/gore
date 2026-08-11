@@ -98,6 +98,36 @@ pub(crate) enum SecureNode {
     Directory(SecureDirectory),
 }
 
+#[derive(Debug)]
+pub(crate) enum MetaReadFailure {
+    AggregateBudgetExhausted {
+        required: u64,
+        remaining: u64,
+        path: PathBuf,
+    },
+    Other(crate::ModError),
+}
+
+impl MetaReadFailure {
+    fn into_mod_error(self) -> crate::ModError {
+        match self {
+            Self::AggregateBudgetExhausted {
+                remaining, path, ..
+            } => crate::ModError::Other(format!(
+                "library sidecar exceeds the {remaining} byte limit: {}",
+                path.display()
+            )),
+            Self::Other(error) => error,
+        }
+    }
+}
+
+impl From<crate::ModError> for MetaReadFailure {
+    fn from(error: crate::ModError) -> Self {
+        Self::Other(error)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TreeSnapshotLimits {
     pub(crate) max_entries: usize,
@@ -1347,12 +1377,39 @@ impl LibraryEntry {
     /// Read metadata within a caller's remaining aggregate budget, charging the authoritative
     /// opened-handle length before any allocation, read, or parsing work begins.
     pub(crate) fn read_meta_bounded(&self, remaining: &mut u64) -> crate::Result<ModEntryMeta> {
-        let limit = (*remaining).min(LIBRARY_META_MAX_BYTES);
-        let bytes = self.read_payload_bounded_with(
-            Path::new(META_FILE),
+        self.read_meta_bounded_classified(remaining)
+            .map_err(MetaReadFailure::into_mod_error)
+    }
+
+    /// The preflight needs to distinguish its aggregate inspection ceiling from an individually
+    /// unsupported sidecar. Both decisions use the authoritative opened handle length.
+    pub(crate) fn read_meta_bounded_classified(
+        &self,
+        remaining: &mut u64,
+    ) -> Result<ModEntryMeta, MetaReadFailure> {
+        let mut file = self.open_payload_file(Path::new(META_FILE), "library sidecar")?;
+        let path = file.path().to_path_buf();
+        let expected = file.len();
+        if expected > LIBRARY_META_MAX_BYTES {
+            return Err(MetaReadFailure::Other(crate::ModError::Other(format!(
+                "library sidecar exceeds the {LIBRARY_META_MAX_BYTES} byte limit: {}",
+                path.display()
+            ))));
+        }
+        if expected > *remaining {
+            return Err(MetaReadFailure::AggregateBudgetExhausted {
+                required: expected,
+                remaining: *remaining,
+                path,
+            });
+        }
+        *remaining -= expected;
+        let bytes = self.read_open_payload_bounded(
+            path,
+            &mut file,
+            expected,
             "library sidecar",
-            limit,
-            |expected| *remaining -= expected,
+            LIBRARY_META_MAX_BYTES,
         )?;
         let meta: ModEntryMeta = serde_json::from_slice(&bytes).map_err(|error| {
             crate::ModError::Other(format!(
@@ -1391,6 +1448,17 @@ impl LibraryEntry {
         let (path, mut file, expected) = self.open_payload_bounded(rel, label, limit)?;
         after_metadata(expected);
 
+        self.read_open_payload_bounded(path, &mut file, expected, label, limit)
+    }
+
+    fn read_open_payload_bounded(
+        &self,
+        path: PathBuf,
+        file: &mut SecureFile,
+        expected: u64,
+        label: &str,
+        limit: u64,
+    ) -> crate::Result<Vec<u8>> {
         let capacity = usize::try_from(expected).map_err(|_| {
             crate::ModError::Other(format!(
                 "{label} is too large for this process address space: {}",
@@ -1418,7 +1486,7 @@ impl LibraryEntry {
                 path.display()
             )));
         }
-        self.verify_open_payload_unchanged(&file, label, expected, observed)?;
+        self.verify_open_payload_unchanged(file, label, expected, observed)?;
         Ok(bytes)
     }
 

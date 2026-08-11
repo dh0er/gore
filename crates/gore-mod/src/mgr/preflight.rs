@@ -16,7 +16,7 @@ use gore_as::compile::{
 use serde::Serialize;
 
 use super::loadout::Loadout;
-use super::model::{ComponentInfo, LibraryRoot, SecureDirectory, SecureNode};
+use super::model::{ComponentInfo, LibraryRoot, MetaReadFailure, SecureDirectory, SecureNode};
 use super::status::ManagerStatus;
 
 const FORMAT: u32 = 1;
@@ -154,12 +154,13 @@ enum DeploymentRecoveryEvidence {
 enum EvidenceFailure {
     Problem(String),
     Unknown(String),
+    Bounded(String),
 }
 
 impl EvidenceFailure {
     fn message(self) -> String {
         match self {
-            Self::Problem(message) | Self::Unknown(message) => message,
+            Self::Problem(message) | Self::Unknown(message) | Self::Bounded(message) => message,
         }
     }
 }
@@ -635,6 +636,12 @@ fn inspect_loadout_with_meta_budget(
                     "inspect_permissions",
                     "enabled mods exist but the Manager library could not be safely inspected",
                 ),
+                EvidenceFailure::Bounded(_) => (
+                    PreflightStateV1::Unknown,
+                    "enabled_library_inspection_bounded",
+                    "verify_during_apply",
+                    "enabled mods exist but the bounded preflight could not finish inspecting the Manager library",
+                ),
             };
             return LoadoutInspection {
                 check: PreflightCheckV1::new(
@@ -653,6 +660,7 @@ fn inspect_loadout_with_meta_budget(
     };
     let mut problems = Vec::new();
     let mut unknowns = Vec::new();
+    let mut bounded = Vec::new();
     let mut requires_ue4ss = false;
     let mut requires_script_cache = false;
     let mut remaining_meta_bytes = meta_budget;
@@ -679,11 +687,15 @@ fn inspect_loadout_with_meta_budget(
                 EvidenceFailure::Unknown(message) => {
                     push_bounded_evidence(&mut unknowns, format!("{}: {message}", entry.id));
                 }
+                EvidenceFailure::Bounded(message) => {
+                    push_bounded_evidence(&mut bounded, format!("{}: {message}", entry.id));
+                }
             },
         }
     }
     if !unknowns.is_empty() {
         unknowns.extend(problems);
+        unknowns.extend(bounded);
         return LoadoutInspection {
             check: PreflightCheckV1::new(
                 PreflightCheckIdV1::Loadout,
@@ -703,6 +715,7 @@ fn inspect_loadout_with_meta_budget(
         };
     }
     if !problems.is_empty() {
+        problems.extend(bounded);
         return LoadoutInspection {
             check: PreflightCheckV1::new(
                 PreflightCheckIdV1::Loadout,
@@ -712,6 +725,25 @@ fn inspect_loadout_with_meta_budget(
                 "one or more enabled mods have invalid metadata or missing or obstructed required top-level entry points",
             )
             .with_items(problems),
+            loadout: Some(loadout),
+            ue4ss: if requires_ue4ss {
+                Ue4ssRequirement::Required
+            } else {
+                Ue4ssRequirement::Unknown
+            },
+            requires_script_cache,
+        };
+    }
+    if !bounded.is_empty() {
+        return LoadoutInspection {
+            check: PreflightCheckV1::new(
+                PreflightCheckIdV1::Loadout,
+                PreflightStateV1::Unknown,
+                "enabled_mod_metadata_budget_exhausted",
+                "verify_during_apply",
+                "enabled mod metadata exceeded the bounded read-only inspection budget; Apply performs authoritative per-mod validation",
+            )
+            .with_items(bounded),
             loadout: Some(loadout),
             ue4ss: if requires_ue4ss {
                 Ue4ssRequirement::Required
@@ -795,16 +827,28 @@ fn inspect_enabled_meta(
         }
         Ok(_) => {}
     }
-    let result = (|| {
-        let library_entry = library.entry(id)?;
-        let meta = library_entry.read_meta_bounded(remaining_meta_bytes)?;
-        for component in &meta.components {
-            super::apply::validate_component_descriptor_for_default_apply(component)?;
-            validate_component_payload_presence(&library_entry, component)?;
+    let library_entry = library.entry(id).map_err(classify_mod_error)?;
+    let meta = match library_entry.read_meta_bounded_classified(remaining_meta_bytes) {
+        Ok(meta) => meta,
+        Err(MetaReadFailure::AggregateBudgetExhausted {
+            required,
+            remaining,
+            path,
+        }) => {
+            return Err(EvidenceFailure::Bounded(format!(
+                "aggregate metadata inspection budget exhausted: {required} bytes required with {remaining} remaining at {}",
+                display_path(&path)
+            )))
         }
-        Ok(meta)
-    })();
-    result.map_err(classify_mod_error)
+        Err(MetaReadFailure::Other(error)) => return Err(classify_mod_error(error)),
+    };
+    for component in &meta.components {
+        super::apply::validate_component_descriptor_for_default_apply(component)
+            .map_err(classify_mod_error)?;
+        validate_component_payload_presence(&library_entry, component)
+            .map_err(classify_mod_error)?;
+    }
+    Ok(meta)
 }
 
 fn validate_component_payload_presence(
@@ -856,6 +900,12 @@ fn loadout_failure(failure: EvidenceFailure) -> LoadoutInspection {
             "loadout_inspection_failed",
             "inspect_permissions",
             "the Manager loadout could not be safely inspected",
+        ),
+        EvidenceFailure::Bounded(_) => (
+            PreflightStateV1::Unknown,
+            "loadout_inspection_bounded",
+            "verify_during_apply",
+            "the bounded read-only preflight could not finish inspecting the Manager loadout",
         ),
     };
     LoadoutInspection {
@@ -1692,13 +1742,17 @@ mod tests {
         write_enabled_loadout(&loadout, &["alpha", "beta"]);
         let over_budget =
             inspect_loadout_with_meta_budget(&library, &loadout, alpha_len + beta_len - 1);
-        assert_eq!(over_budget.check.state, PreflightStateV1::Problem);
-        assert_eq!(over_budget.check.code, "enabled_mods_unreadable");
+        assert_eq!(over_budget.check.state, PreflightStateV1::Unknown);
+        assert_eq!(
+            over_budget.check.code,
+            "enabled_mod_metadata_budget_exhausted"
+        );
+        assert_eq!(over_budget.check.action, "verify_during_apply");
         assert!(over_budget
             .check
             .items
             .iter()
-            .any(|item| item.contains("byte limit")));
+            .any(|item| item.contains("aggregate metadata inspection budget exhausted")));
 
         assert_eq!(
             inspect_loadout_with_meta_budget(&library, &loadout, alpha_len + beta_len)
@@ -1707,6 +1761,18 @@ mod tests {
             "loadout_metadata_ready"
         );
 
+        let oversized_dir = library.join("oversized");
+        fs::create_dir(&oversized_dir).unwrap();
+        let oversized =
+            fs::File::create(oversized_dir.join(super::super::model::META_FILE)).unwrap();
+        oversized.set_len(MAX_LOADOUT_META_BYTES + 1).unwrap();
+        drop(oversized);
+        write_enabled_loadout(&loadout, &["alpha", "oversized"]);
+        let unsupported = inspect_loadout_with_meta_budget(&library, &loadout, alpha_len);
+        assert_eq!(unsupported.check.state, PreflightStateV1::Problem);
+        assert_eq!(unsupported.check.code, "enabled_mods_unreadable");
+        assert_eq!(unsupported.check.action, "repair_library");
+
         fs::write(
             library
                 .join("alpha")
@@ -1714,12 +1780,15 @@ mod tests {
             b"{",
         )
         .unwrap();
+        write_enabled_loadout(&loadout, &["alpha", "beta"]);
         let corrupt = inspect_loadout_with_meta_budget(&library, &loadout, 1);
+        assert_eq!(corrupt.check.state, PreflightStateV1::Problem);
+        assert_eq!(corrupt.check.code, "enabled_mods_unreadable");
         assert!(corrupt
             .check
             .items
             .iter()
-            .any(|item| item.starts_with("beta:") && item.contains("0 byte limit")));
+            .any(|item| item.starts_with("alpha:") && item.contains("corrupt library sidecar")));
     }
 
     fn write_library_meta(library: &Path, id: &str, components: Vec<ComponentInfo>) {
