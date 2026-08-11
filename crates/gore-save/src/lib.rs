@@ -9156,9 +9156,14 @@ fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) ->
         PrivateEdit::SkillSet(skill) => {
             path_has_name(path, "ActiveEffects") && path_has_key(path, &skill.actor)
         }
-        // Adds or removes an unlock event in the hero's memory.
-        PrivateEdit::GlossarySetSegment(_) => {
-            path_has_name(path, "MemorizedEvents") && path_has_key(path, skills::HERO)
+        // Adds or removes an unlock event in the hero's memory — and, when the
+        // caller supplied one, rewrites that quest's CurrentState as well.
+        PrivateEdit::GlossarySetSegment(glossary) => {
+            (path_has_name(path, "MemorizedEvents") && path_has_key(path, skills::HERO))
+                || glossary
+                    .quest_state_path
+                    .as_ref()
+                    .is_some_and(|quest| quest.as_slice() == path)
         }
         // Strips memory events, death tags and the corpse entry.
         PrivateEdit::NpcRevive(_) => {
@@ -20794,6 +20799,55 @@ mod tests {
         ])
         .unwrap();
         assert!(!structured_edit_rewrites(&add_for(None), &attribute));
+    }
+
+    #[test]
+    fn a_glossary_write_also_guards_the_quest_state_it_rewrites() {
+        // Unlocking a segment can carry a quest-state path, and then it rewrites
+        // that CurrentState too. A raw edit of the same leaf must not share the
+        // write in either order.
+        let quest_state = properties::parse_path(&[
+            "QuestDataByClass".to_string(),
+            "{/Script/Angelscript.Quest_OldCamp_SLEEPER}".to_string(),
+            "CurrentState".to_string(),
+        ])
+        .unwrap();
+        let elsewhere = properties::parse_path(&[
+            "QuestDataByClass".to_string(),
+            "{/Script/Angelscript.Quest_Something_Else}".to_string(),
+            "CurrentState".to_string(),
+        ])
+        .unwrap();
+
+        let with_quest = PrivateEdit::GlossarySetSegment(PrivateGlossarySetSegmentEdit {
+            package: "/Script/Angelscript".to_string(),
+            document_asset: "Document_Glossary_Meatbug".to_string(),
+            segment_asset: "DocumentSegment_Glossary_Meatbug_Entry2".to_string(),
+            unlocked: true,
+            quest_state_path: Some(quest_state.clone()),
+        });
+        assert!(structured_edit_rewrites(&with_quest, &quest_state));
+        assert!(!structured_edit_rewrites(&with_quest, &elsewhere));
+
+        // Without one, the quest state is not its business.
+        let without_quest = PrivateEdit::GlossarySetSegment(PrivateGlossarySetSegmentEdit {
+            package: "/Script/Angelscript".to_string(),
+            document_asset: "Document_Glossary_Meatbug".to_string(),
+            segment_asset: "DocumentSegment_Glossary_Meatbug_Entry2".to_string(),
+            unlocked: true,
+            quest_state_path: None,
+        });
+        assert!(!structured_edit_rewrites(&without_quest, &quest_state));
+
+        // The hero's memory events stay guarded either way.
+        let hero_memory = properties::parse_path(&[
+            "LongTermMemoryByGlobalId".to_string(),
+            "{Hero}".to_string(),
+            "MemorizedEvents".to_string(),
+            "[3]".to_string(),
+        ])
+        .unwrap();
+        assert!(structured_edit_rewrites(&without_quest, &hero_memory));
     }
 
     #[test]

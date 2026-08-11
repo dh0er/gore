@@ -93,9 +93,19 @@ thread_local! {
     /// grow it without limit; past the cap new names simply are not shared.
     static INTERNED_NAMES: std::cell::RefCell<HashSet<Arc<str>, NameHasherBuilder>> =
         std::cell::RefCell::new(HashSet::with_hasher(NameHasherBuilder));
+    /// Bytes of text the table above is holding on to.
+    static INTERNED_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// What the shared table may keep. A count alone does not bound memory: the table
+/// lives for the life of the thread, and a malformed or modded save could fill it
+/// with tens of thousands of very long names and pin them there long after the save
+/// was closed. Real property names are short and few, so a name that busts either
+/// limit is simply not shared — it is still returned, and it is released with the
+/// tree that holds it, exactly as before interning existed.
 const MAX_INTERNED_NAMES: usize = 1 << 16;
+const MAX_INTERNED_BYTES: usize = 4 << 20;
+const MAX_INTERNED_NAME_LEN: usize = 256;
 
 impl PropStr {
     /// Intern `text`, reusing the copy this thread already holds when there is one.
@@ -106,8 +116,14 @@ impl PropStr {
                 return PropStr(shared.clone());
             }
             let shared: Arc<str> = Arc::from(text);
-            if names.len() < MAX_INTERNED_NAMES {
-                names.insert(shared.clone());
+            if text.len() <= MAX_INTERNED_NAME_LEN && names.len() < MAX_INTERNED_NAMES {
+                INTERNED_BYTES.with(|held| {
+                    let next = held.get().saturating_add(text.len());
+                    if next <= MAX_INTERNED_BYTES {
+                        held.set(next);
+                        names.insert(shared.clone());
+                    }
+                });
             }
             PropStr(shared)
         })
@@ -3025,6 +3041,27 @@ fn read_array_value(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shared name table lives as long as the thread, so it must not be able to
+    /// pin an unbounded amount of text: a name past the length limit is handed back
+    /// like any other, but is not retained for sharing.
+    #[test]
+    fn the_name_table_does_not_retain_outsized_names() {
+        let short = "IntProperty";
+        assert_eq!(
+            PropStr::new(short).as_str().as_ptr(),
+            PropStr::new(short).as_str().as_ptr(),
+            "an ordinary name is stored once and shared"
+        );
+
+        let outsized = "X".repeat(MAX_INTERNED_NAME_LEN + 1);
+        assert_eq!(PropStr::new(&outsized).as_str(), outsized);
+        assert_ne!(
+            PropStr::new(&outsized).as_str().as_ptr(),
+            PropStr::new(&outsized).as_str().as_ptr(),
+            "an outsized name is not kept in the table"
+        );
+    }
 
     fn fstring(value: &str) -> Vec<u8> {
         let mut out = Vec::new();
