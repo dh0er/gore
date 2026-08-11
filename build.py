@@ -569,11 +569,14 @@ def discard_line_ending_only_churn(project: str) -> None:
     left behind a worktree that looked dirty and aborted any tooling that insists on
     a clean branch.
 
-    A file is restored only when Git's own filtered hash of the working copy already
-    equals what the index holds, which means the two differ in nothing but line
-    endings. A genuinely regenerated file — a real translation change — hashes
-    differently and is left exactly where it is, for the developer to review and
-    commit.
+    A file is restored only when `git diff` reports nothing for it — the same
+    question, asked the way Git itself answers it. Normalisation applies, so a
+    line-ending-only difference shows as no diff, while anything Git would carry
+    into a commit shows up. That covers a changed file mode as well: an executable
+    bit is not part of a blob's contents, so comparing blob hashes would have missed
+    a `chmod +x` and thrown it away. A genuinely regenerated file — a real
+    translation change — is left exactly where it is, for the developer to review
+    and commit.
     """
     project_dir = pdir(project).relative_to(ROOT).as_posix()
     status = _git(["status", "--porcelain=v1", "-z", "--", project_dir])
@@ -585,12 +588,10 @@ def discard_line_ending_only_churn(project: str) -> None:
         if not entry.startswith(" M "):
             continue
         path = entry[3:]
-        indexed = _git(["rev-parse", f":{path}"])
-        working = _git(["hash-object", "--path", path, "--", path])
-        if indexed is None or working is None:
-            continue
-        if indexed.strip() == working.strip():
-            _git(["checkout", "--", path])
+        real_diff = _git(["diff", "--raw", "--", path])
+        if real_diff is None or real_diff.strip():
+            continue  # a difference Git would keep: contents, or the file mode
+        _git(["checkout", "--", path])
 
 
 # --------------------------------------------------------------------------- #
