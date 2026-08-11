@@ -2809,6 +2809,33 @@ void main() {
         isTrue,
       );
 
+      // The core reads an ABSENT or empty actor as the hero, and it decides that
+      // before folding, so a blank of spaces stays an actor of its own.
+      expect(
+        structuredEditsShareATarget(
+          skill('Hero', 'Ranged_Bow', 'Trained'),
+          {
+            'path': 'private.skills.set',
+            'value': {'base': 'Ranged_Bow', 'tier': 'Untrained'},
+          },
+        ),
+        isTrue,
+      );
+      expect(
+        structuredEditsShareATarget(
+          skill('Hero', 'Ranged_Bow', 'Trained'),
+          skill('', 'Ranged_Bow', 'Untrained'),
+        ),
+        isTrue,
+      );
+      expect(
+        structuredEditsShareATarget(
+          skill('Hero', 'Ranged_Bow', 'Trained'),
+          skill(' ', 'Ranged_Bow', 'Untrained'),
+        ),
+        isFalse,
+      );
+
       // Two skills of one character, and one skill of two characters, are two
       // targets — batching those is the point.
       expect(

@@ -1038,15 +1038,17 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
     final character = _selectedCharacter;
 
     // Compute sets for rendering — only include edits for the selected NPC.
-    // removedEntries holds lower-cased values to match the case-folded
-    // pending keys: lookups against displayed entries fold too.
+    // removedEntries holds folded values to match the folded pending keys:
+    // lookups against displayed entries fold the same way.
     final removedEntries = <String>{};
     final addedEntries = <String>[];
     if (character != null) {
       final prefix = '${foldEditTargetPart(character)}\t';
       for (final e in _pending.entries) {
         if (!e.key.startsWith(prefix)) continue;
-        if (!e.value.isAdd) removedEntries.add(e.value.entry.toLowerCase());
+        if (!e.value.isAdd) {
+          removedEntries.add(foldEditTargetPart(e.value.entry));
+        }
         if (e.value.isAdd) addedEntries.add(e.value.entry);
       }
     }
@@ -1254,7 +1256,7 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
                               itemBuilder: (context, index) {
                                 final entry = _entries.entries[index];
                                 final isRemoved = removedEntries.contains(
-                                  entry.toLowerCase(),
+                                  foldEditTargetPart(entry),
                                 );
                                 final meta = _knowledgeCatalog?.entryById(
                                   entry,

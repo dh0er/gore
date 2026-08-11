@@ -3680,8 +3680,11 @@ String? _structuredEditTarget(Map<String, Object?> edit) {
     case 'private.npc.setRelationship':
       return key([foldEditTargetPart(fields['id'])]);
     case 'private.skills.set':
-      // An absent actor is the hero, as the core reads it.
-      final actor = fields['actor'] is String ? fields['actor'] : 'Hero';
+      // The core takes the actor when it is a non-empty string and the hero
+      // otherwise — before any folding, so a blank of spaces is an actor to it
+      // and must stay one here.
+      final rawActor = fields['actor'];
+      final actor = rawActor is String && rawActor.isNotEmpty ? rawActor : 'Hero';
       return key([
         foldEditTargetPart(actor),
         foldEditTargetPart(fields['base']),
