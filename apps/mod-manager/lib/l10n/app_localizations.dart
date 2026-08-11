@@ -122,6 +122,150 @@ abstract class AppLocalizations {
   /// **'Unknown'**
   String get statusUnknown;
 
+  /// No description provided for @statusDetailsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Deployment: {status}'**
+  String statusDetailsTitle(String status);
+
+  /// No description provided for @statusDetailsOpen.
+  ///
+  /// In en, this message translates to:
+  /// **'Show deployment details: {status}'**
+  String statusDetailsOpen(String status);
+
+  /// No description provided for @statusDetailsNoRoot.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a game installation in Settings to inspect its deployment status.'**
+  String get statusDetailsNoRoot;
+
+  /// No description provided for @statusDetailsNoDeployment.
+  ///
+  /// In en, this message translates to:
+  /// **'No Manager deployment is installed for this game.'**
+  String get statusDetailsNoDeployment;
+
+  /// No description provided for @statusDetailsInSyncDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The deployed mods match the current loadout.'**
+  String get statusDetailsInSyncDescription;
+
+  /// No description provided for @statusDetailsDeployedLoadout.
+  ///
+  /// In en, this message translates to:
+  /// **'Deployed load order'**
+  String get statusDetailsDeployedLoadout;
+
+  /// No description provided for @statusDetailsChangesDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The current deployment differs from what Apply will install.'**
+  String get statusDetailsChangesDescription;
+
+  /// No description provided for @statusDetailsCurrentlyDeployed.
+  ///
+  /// In en, this message translates to:
+  /// **'Currently deployed'**
+  String get statusDetailsCurrentlyDeployed;
+
+  /// No description provided for @statusDetailsAfterApply.
+  ///
+  /// In en, this message translates to:
+  /// **'After Apply'**
+  String get statusDetailsAfterApply;
+
+  /// No description provided for @statusDetailsGameUpdatedDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Game files changed after the last deployment. Reapply the loadout to restore the Manager-owned files.'**
+  String get statusDetailsGameUpdatedDescription;
+
+  /// No description provided for @statusDetailsDriftedFiles.
+  ///
+  /// In en, this message translates to:
+  /// **'Changed files'**
+  String get statusDetailsDriftedFiles;
+
+  /// No description provided for @statusDetailsStudioDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Mod Studio currently owns this game installation. Take over before applying a Manager loadout.'**
+  String get statusDetailsStudioDescription;
+
+  /// No description provided for @statusDetailsStudioMod.
+  ///
+  /// In en, this message translates to:
+  /// **'Studio mod: {name}'**
+  String statusDetailsStudioMod(String name);
+
+  /// No description provided for @statusDetailsStudioNameUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'Studio did not report a mod name.'**
+  String get statusDetailsStudioNameUnknown;
+
+  /// No description provided for @statusDetailsRecoveryDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'A deployment was interrupted. Recover it before applying or removing Manager mods.'**
+  String get statusDetailsRecoveryDescription;
+
+  /// No description provided for @statusDetailsUnknownDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Deployment status could not be verified. Refresh before applying mods.'**
+  String get statusDetailsUnknownDescription;
+
+  /// No description provided for @statusDetailsUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'The installed core did not provide these details.'**
+  String get statusDetailsUnavailable;
+
+  /// No description provided for @statusDetailsEmptyLoadout.
+  ///
+  /// In en, this message translates to:
+  /// **'No mods in this loadout.'**
+  String get statusDetailsEmptyLoadout;
+
+  /// No description provided for @statusDetailsLastError.
+  ///
+  /// In en, this message translates to:
+  /// **'Last error'**
+  String get statusDetailsLastError;
+
+  /// No description provided for @statusDetailsLastApply.
+  ///
+  /// In en, this message translates to:
+  /// **'Last Apply'**
+  String get statusDetailsLastApply;
+
+  /// No description provided for @statusDetailsAppliedMods.
+  ///
+  /// In en, this message translates to:
+  /// **'Applied mods'**
+  String get statusDetailsAppliedMods;
+
+  /// No description provided for @statusDetailsWarnings.
+  ///
+  /// In en, this message translates to:
+  /// **'Warnings'**
+  String get statusDetailsWarnings;
+
+  /// No description provided for @statusDetailsReapply.
+  ///
+  /// In en, this message translates to:
+  /// **'Reapply'**
+  String get statusDetailsReapply;
+
+  /// No description provided for @statusDetailsOpenSettings.
+  ///
+  /// In en, this message translates to:
+  /// **'Open Settings'**
+  String get statusDetailsOpenSettings;
+
   /// No description provided for @recoveryAction.
   ///
   /// In en, this message translates to:

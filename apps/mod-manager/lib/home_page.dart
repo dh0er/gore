@@ -15,6 +15,7 @@ import 'library/ui/detail_panel.dart';
 import 'library/ui/mod_list.dart';
 import 'settings/ui/settings_tab.dart';
 import 'status/domain/status_notifier.dart';
+import 'status/ui/status_details_dialog.dart';
 
 /// Home: a Mods tab (library list + detail + conflicts, with an import/apply
 /// action bar) and the unchanged Settings tab.
@@ -31,6 +32,12 @@ class _HomePageState extends ConsumerState<HomePage> {
   );
   final FocusNode _libraryRefreshFocusNode = FocusNode(
     debugLabel: 'mod-manager-refresh-unknown-library',
+  );
+  final FocusNode _statusDetailsFocusNode = FocusNode(
+    debugLabel: 'mod-manager-status-details',
+  );
+  final FocusNode _settingsGamePathFocusNode = FocusNode(
+    debugLabel: 'mod-manager-settings-game-path',
   );
   ({FocusNode node, String? removedModId})? _pendingFocus;
   int _pendingFocusGeneration = 0;
@@ -96,6 +103,8 @@ class _HomePageState extends ConsumerState<HomePage> {
   void dispose() {
     _importFocusNode.dispose();
     _libraryRefreshFocusNode.dispose();
+    _statusDetailsFocusNode.dispose();
+    _settingsGamePathFocusNode.dispose();
     super.dispose();
   }
 
@@ -210,12 +219,32 @@ class _HomePageState extends ConsumerState<HomePage> {
                       padding: const EdgeInsetsDirectional.only(start: 4),
                       tabs: [
                         Tab(
-                          icon: const Icon(Icons.extension_outlined),
-                          text: l10n.tabMods,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.extension_outlined),
+                              const SizedBox(width: 8),
+                              Text(
+                                l10n.tabMods,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
                         ),
                         Tab(
-                          icon: const Icon(Icons.settings_outlined),
-                          text: l10n.tabSettings,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.settings_outlined),
+                              const SizedBox(width: 8),
+                              Text(
+                                l10n.tabSettings,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
                         ),
                       ],
                     ),
@@ -229,11 +258,13 @@ class _HomePageState extends ConsumerState<HomePage> {
                   _ModsTab(
                     importFocusNode: _importFocusNode,
                     libraryRefreshFocusNode: _libraryRefreshFocusNode,
+                    statusDetailsFocusNode: _statusDetailsFocusNode,
+                    settingsGamePathFocusNode: _settingsGamePathFocusNode,
                     queueImportFocusAfterRemove: _queueImportFocusAfterRemove,
                     queueRefreshFocusAfterRemove: _queueRefreshFocusAfterRemove,
                     queueRefreshFocus: _queueRefreshFocus,
                   ),
-                  const SettingsTab(),
+                  SettingsTab(gamePathFocusNode: _settingsGamePathFocusNode),
                 ],
               ),
             ),
@@ -249,6 +280,8 @@ class _ModsTab extends ConsumerWidget {
   const _ModsTab({
     required this.importFocusNode,
     required this.libraryRefreshFocusNode,
+    required this.statusDetailsFocusNode,
+    required this.settingsGamePathFocusNode,
     required this.queueImportFocusAfterRemove,
     required this.queueRefreshFocusAfterRemove,
     required this.queueRefreshFocus,
@@ -256,6 +289,8 @@ class _ModsTab extends ConsumerWidget {
 
   final FocusNode importFocusNode;
   final FocusNode libraryRefreshFocusNode;
+  final FocusNode statusDetailsFocusNode;
+  final FocusNode settingsGamePathFocusNode;
   final ValueChanged<String> queueImportFocusAfterRemove;
   final ValueChanged<String> queueRefreshFocusAfterRemove;
   final VoidCallback queueRefreshFocus;
@@ -293,17 +328,40 @@ class _ModsTab extends ConsumerWidget {
     await ref.read(libraryProvider.notifier).import(file.path);
   }
 
-  Future<void> _apply(BuildContext context, WidgetRef ref) async {
-    final root = _gameRoot(ref);
-    if (root == null) return;
+  Future<void> _apply(
+    BuildContext context,
+    WidgetRef ref,
+    String expectedRoot,
+  ) async {
+    if (_gameRoot(ref) != expectedRoot) return;
+    final root = expectedRoot;
+    final status = ref.read(statusProvider);
+    final library = ref.read(libraryProvider);
+    final statusForCurrentRoot = status.statusRoot == root
+        ? status.status
+        : null;
+    final studioActiveForCurrentRoot =
+        status.gameRoot == root && status.studioActive;
+    if (!canApply(
+          statusForCurrentRoot,
+          library,
+          true,
+          status.busy,
+          studioActiveForCurrentRoot,
+          statusError: status.gameRoot == root ? status.error : null,
+        ) ||
+        ref.read(conflictsProvider).isLoading) {
+      return;
+    }
     await ref.read(statusProvider.notifier).apply(root);
     // Applying resets deployed==target; the library isn't touched, but a
     // re-analyze is cheap and the status was already refreshed by apply().
     ref.invalidate(conflictsProvider);
   }
 
-  Future<void> _refreshAll(WidgetRef ref) async {
-    if (ref.read(libraryProvider).busy ||
+  Future<void> _refreshAll(WidgetRef ref, {String? expectedRoot}) async {
+    if ((expectedRoot != null && _gameRoot(ref) != expectedRoot) ||
+        ref.read(libraryProvider).busy ||
         ref.read(statusProvider).busy ||
         ref.read(conflictsProvider).isLoading) {
       return;
@@ -311,10 +369,18 @@ class _ModsTab extends ConsumerWidget {
     await ref.read(libraryProvider.notifier).refresh();
   }
 
-  Future<void> _undeployAll(BuildContext context, WidgetRef ref) async {
+  Future<void> _undeployAll(
+    BuildContext context,
+    WidgetRef ref,
+    String? expectedRoot,
+  ) async {
     final l10n = AppLocalizations.of(context);
-    final root = _gameRoot(ref);
-    if (root == null) return;
+    if (expectedRoot == null ||
+        _gameRoot(ref) != expectedRoot ||
+        _statusActionBusy(ref)) {
+      return;
+    }
+    final root = expectedRoot;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -331,14 +397,20 @@ class _ModsTab extends ConsumerWidget {
         ],
       ),
     );
-    if (ok != true) return;
+    if (ok != true || _gameRoot(ref) != root || _statusActionBusy(ref)) return;
     await ref.read(statusProvider.notifier).undeployAll(root);
   }
 
-  Future<void> _recoverDeployment(BuildContext context, WidgetRef ref) async {
+  Future<void> _recoverDeployment(
+    BuildContext context,
+    WidgetRef ref,
+    String expectedRoot,
+  ) async {
     final l10n = AppLocalizations.of(context);
-    final root = _gameRoot(ref);
-    if (root == null) return;
+    if (_gameRoot(ref) != expectedRoot || !_canRecover(ref, expectedRoot)) {
+      return;
+    }
+    final root = expectedRoot;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -356,13 +428,20 @@ class _ModsTab extends ConsumerWidget {
         ],
       ),
     );
-    if (ok != true) return;
+    if (ok != true || _gameRoot(ref) != root || !_canRecover(ref, root)) return;
     await ref.read(statusProvider.notifier).undeployAll(root);
   }
 
-  Future<void> _promptTakeOver(BuildContext context, WidgetRef ref) async {
+  Future<void> _promptTakeOver(
+    BuildContext context,
+    WidgetRef ref,
+    String expectedRoot,
+  ) async {
     final l10n = AppLocalizations.of(context);
-    final root = _gameRoot(ref);
+    if (_gameRoot(ref) != expectedRoot || !_canTakeOver(ref, expectedRoot)) {
+      return;
+    }
+    final root = expectedRoot;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -380,14 +459,106 @@ class _ModsTab extends ConsumerWidget {
         ],
       ),
     );
-    if (ok != true || root == null) return;
+    if (ok != true || _gameRoot(ref) != root || !_canTakeOver(ref, root)) {
+      return;
+    }
     await ref.read(statusProvider.notifier).undeployAll(root);
+  }
+
+  bool _canRecover(WidgetRef ref, String root) {
+    final status = ref.read(statusProvider);
+    return !_statusActionBusy(ref) &&
+        status.statusRoot == root &&
+        status.status is ManagerStatusRecoveryRequired;
+  }
+
+  bool _canTakeOver(WidgetRef ref, String root) =>
+      !_statusActionBusy(ref) &&
+      statusHasStudioOwnership(ref.read(statusProvider), root);
+
+  bool _statusActionBusy(WidgetRef ref) =>
+      ref.read(libraryProvider).busy ||
+      ref.read(statusProvider).busy ||
+      ref.read(conflictsProvider).isLoading;
+
+  Future<void> _showStatusDetails(BuildContext context, WidgetRef ref) async {
+    final result = await showDialog<StatusDetailsResult>(
+      context: context,
+      builder: (dialogContext) => Consumer(
+        builder: (context, dialogRef, _) {
+          final gameRoot = gameRootFromExe(
+            dialogRef.watch(gameExePathProvider),
+          );
+          final status = dialogRef.watch(statusProvider);
+          final library = dialogRef.watch(libraryProvider);
+          final conflicts = dialogRef.watch(conflictsProvider);
+          final statusForCurrentRoot = status.statusRoot == gameRoot
+              ? status.status
+              : null;
+          final studioActiveForCurrentRoot =
+              status.gameRoot == gameRoot && status.studioActive;
+          final operationsBusy =
+              library.busy || status.busy || conflicts.isLoading;
+          final applyEnabled = canApply(
+            statusForCurrentRoot,
+            library,
+            gameRoot != null,
+            status.busy,
+            studioActiveForCurrentRoot,
+            statusError: status.gameRoot == gameRoot ? status.error : null,
+          );
+
+          return StatusDetailsDialog(
+            state: status,
+            currentRoot: gameRoot,
+            library: library,
+            operationsBusy: operationsBusy,
+            applyEnabled: applyEnabled && !conflicts.isLoading,
+          );
+        },
+      ),
+    );
+    if (!context.mounted) return;
+
+    final action = result?.action;
+    final expectedRoot = result?.rootAtClick;
+    switch (action) {
+      case StatusDetailsAction.apply:
+        if (expectedRoot != null) {
+          await _apply(context, ref, expectedRoot);
+        }
+      case StatusDetailsAction.refresh:
+        if (expectedRoot != null) {
+          await _refreshAll(ref, expectedRoot: expectedRoot);
+        }
+      case StatusDetailsAction.recover:
+        if (expectedRoot != null) {
+          await _recoverDeployment(context, ref, expectedRoot);
+        }
+      case StatusDetailsAction.takeOver:
+        if (expectedRoot != null) {
+          await _promptTakeOver(context, ref, expectedRoot);
+        }
+      case StatusDetailsAction.settings:
+        DefaultTabController.of(context).animateTo(1);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (context.mounted) settingsGamePathFocusNode.requestFocus();
+        });
+      case StatusDetailsAction.close || null:
+        break;
+    }
+
+    if (!context.mounted || action == StatusDetailsAction.settings) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (context.mounted) statusDetailsFocusNode.requestFocus();
+    });
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
+    final media = MediaQuery.of(context);
     final gamePath = ref.watch(gameExePathProvider);
     final gameRoot = gameRootFromExe(gamePath);
     final status = ref.watch(statusProvider);
@@ -396,6 +567,10 @@ class _ModsTab extends ConsumerWidget {
     final conflictCount = conflicts.value?.length ?? 0;
     final operationsBusy = library.busy || status.busy || conflicts.isLoading;
     final libraryMutationsBlocked = operationsBusy || !library.authoritative;
+    final compactConflictPanel =
+        media.size.height < 560 &&
+        (media.size.width < 784 || media.textScaler.scale(1) > 1.35);
+    final conflictPanelHeight = compactConflictPanel ? 72.0 : 240.0;
 
     // Apply is enabled when the enabled loadout differs from what's deployed —
     // including the first-ever deploy (nothing_deployed + >=1 enabled mod).
@@ -404,13 +579,107 @@ class _ModsTab extends ConsumerWidget {
         : null;
     final studioActiveForCurrentRoot =
         status.gameRoot == gameRoot && status.studioActive;
-    final applyEnabled = canApply(
-      statusForCurrentRoot,
-      library,
-      gameRoot != null,
-      status.busy,
-      studioActiveForCurrentRoot,
-      statusError: status.error,
+    final applyEnabled =
+        canApply(
+          statusForCurrentRoot,
+          library,
+          gameRoot != null,
+          status.busy,
+          studioActiveForCurrentRoot,
+          statusError: status.gameRoot == gameRoot ? status.error : null,
+        ) &&
+        !conflicts.isLoading;
+
+    final importAction = MenuAnchor(
+      builder: (ctx, controller, _) => OutlinedButton.icon(
+        key: const ValueKey('import-mod-action'),
+        focusNode: importFocusNode,
+        onPressed: libraryMutationsBlocked
+            ? null
+            : () => controller.isOpen ? controller.close() : controller.open(),
+        icon: const Icon(Icons.add),
+        label: Text(
+          l10n.actionImport,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+      menuChildren: [
+        MenuItemButton(
+          leadingIcon: const Icon(Icons.folder_open),
+          onPressed: libraryMutationsBlocked ? null : () => _importFolder(ref),
+          child: Text(l10n.importFolder),
+        ),
+        MenuItemButton(
+          leadingIcon: const Icon(Icons.insert_drive_file_outlined),
+          onPressed: libraryMutationsBlocked
+              ? null
+              : () => _importFile(ref, l10n),
+          child: Text(l10n.importFile),
+        ),
+      ],
+    );
+    final applyAction = Tooltip(
+      message: l10n.applyTooltip,
+      child: FilledButton.icon(
+        key: const ValueKey('apply-loadout-action'),
+        onPressed: applyEnabled ? () => _apply(context, ref, gameRoot!) : null,
+        icon: const Icon(Icons.play_arrow),
+        label: Text(
+          l10n.actionApply,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    );
+    final statusAction = _StatusChip(
+      state: status,
+      currentRoot: gameRoot,
+      focusNode: statusDetailsFocusNode,
+      onPressed: () => _showStatusDetails(context, ref),
+    );
+    final progress = status.busy || conflicts.isLoading
+        ? const SizedBox(
+            key: ValueKey('manager-operation-progress'),
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          )
+        : null;
+    final overflowAction = PopupMenuButton<_OverflowSelection>(
+      key: const ValueKey('manager-overflow-action'),
+      enabled: !operationsBusy,
+      onSelected: (selection) => switch (selection.action) {
+        _OverflowAction.refresh => _refreshAll(
+          ref,
+          expectedRoot: selection.rootAtMenuBuild,
+        ),
+        _OverflowAction.undeployAll => _undeployAll(
+          context,
+          ref,
+          selection.rootAtMenuBuild,
+        ),
+      },
+      itemBuilder: (ctx) {
+        final rootAtMenuBuild = gameRoot;
+        return [
+          PopupMenuItem(
+            value: (
+              action: _OverflowAction.refresh,
+              rootAtMenuBuild: rootAtMenuBuild,
+            ),
+            child: Text(l10n.refreshAction),
+          ),
+          PopupMenuItem(
+            value: (
+              action: _OverflowAction.undeployAll,
+              rootAtMenuBuild: rootAtMenuBuild,
+            ),
+            enabled: rootAtMenuBuild != null,
+            child: Text(l10n.undeployAllAction),
+          ),
+        ];
+      },
     );
 
     return Column(
@@ -418,88 +687,56 @@ class _ModsTab extends ConsumerWidget {
         // --- Action bar -------------------------------------------------
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Row(
-            children: [
-              // Import: folder or file, chosen from a menu (one picker can't
-              // offer both directories and files).
-              MenuAnchor(
-                builder: (ctx, controller, _) => OutlinedButton.icon(
-                  key: const ValueKey('import-mod-action'),
-                  focusNode: importFocusNode,
-                  onPressed: libraryMutationsBlocked
-                      ? null
-                      : () => controller.isOpen
-                            ? controller.close()
-                            : controller.open(),
-                  icon: const Icon(Icons.add),
-                  label: Text(l10n.actionImport),
-                ),
-                menuChildren: [
-                  MenuItemButton(
-                    leadingIcon: const Icon(Icons.folder_open),
-                    onPressed: libraryMutationsBlocked
-                        ? null
-                        : () => _importFolder(ref),
-                    child: Text(l10n.importFolder),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final textScale = MediaQuery.textScalerOf(context).scale(1);
+              final compact = constraints.maxWidth < 760 || textScale > 1.35;
+              if (!compact) {
+                return Row(
+                  children: [
+                    importAction,
+                    const SizedBox(width: 8),
+                    applyAction,
+                    const SizedBox(width: 12),
+                    statusAction,
+                    if (progress != null) ...[
+                      const SizedBox(width: 12),
+                      progress,
+                    ],
+                    const Spacer(),
+                    overflowAction,
+                  ],
+                );
+              }
+              return Column(
+                key: const ValueKey('compact-manager-action-bar'),
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [importAction, applyAction],
                   ),
-                  MenuItemButton(
-                    leadingIcon: const Icon(Icons.insert_drive_file_outlined),
-                    onPressed: libraryMutationsBlocked
-                        ? null
-                        : () => _importFile(ref, l10n),
-                    child: Text(l10n.importFile),
-                  ),
-                ],
-              ),
-              const SizedBox(width: 8),
-              Tooltip(
-                message: l10n.applyTooltip,
-                child: FilledButton.icon(
-                  onPressed: applyEnabled ? () => _apply(context, ref) : null,
-                  icon: const Icon(Icons.play_arrow),
-                  label: Text(l10n.actionApply),
-                ),
-              ),
-              const SizedBox(width: 12),
-              _StatusChip(
-                state: status,
-                currentRoot: gameRoot,
-                onStudioTap: operationsBusy || gameRoot == null
-                    ? null
-                    : () => _promptTakeOver(context, ref),
-                onRecoveryTap: operationsBusy || gameRoot == null
-                    ? null
-                    : () => _recoverDeployment(context, ref),
-              ),
-              if (status.busy || conflicts.isLoading) ...[
-                const SizedBox(width: 12),
-                const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-              ],
-              const Spacer(),
-              PopupMenuButton<_OverflowAction>(
-                key: const ValueKey('manager-overflow-action'),
-                enabled: !operationsBusy,
-                onSelected: (action) => switch (action) {
-                  _OverflowAction.refresh => _refreshAll(ref),
-                  _OverflowAction.undeployAll => _undeployAll(context, ref),
-                },
-                itemBuilder: (ctx) => [
-                  PopupMenuItem(
-                    value: _OverflowAction.refresh,
-                    child: Text(l10n.refreshAction),
-                  ),
-                  PopupMenuItem(
-                    value: _OverflowAction.undeployAll,
-                    enabled: gameRoot != null,
-                    child: Text(l10n.undeployAllAction),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Align(
+                          alignment: AlignmentDirectional.centerStart,
+                          child: statusAction,
+                        ),
+                      ),
+                      if (progress != null) ...[
+                        const SizedBox(width: 8),
+                        progress,
+                      ],
+                      const SizedBox(width: 4),
+                      overflowAction,
+                    ],
                   ),
                 ],
-              ),
-            ],
+              );
+            },
           ),
         ),
 
@@ -541,7 +778,12 @@ class _ModsTab extends ConsumerWidget {
                   : l10n.conflictsUnverified,
             ),
             leading: const Icon(Icons.merge_type),
-            children: const [SizedBox(height: 240, child: ConflictPanel())],
+            children: [
+              SizedBox(
+                height: conflictPanelHeight,
+                child: const ConflictPanel(),
+              ),
+            ],
           ),
         ),
       ],
@@ -617,20 +859,24 @@ bool _sameLoadoutEntries(LoadoutView a, LoadoutView b) {
 
 enum _OverflowAction { refresh, undeployAll }
 
-/// The deployment-status chip. Maps each [ManagerStatusView] variant to a
-/// localized label + tone; tapping the studio-deploy variant runs [onStudioTap].
+typedef _OverflowSelection = ({
+  _OverflowAction action,
+  String? rootAtMenuBuild,
+});
+
+/// Stable, keyboard-focusable deployment-status trigger.
 class _StatusChip extends StatelessWidget {
   const _StatusChip({
     required this.state,
     required this.currentRoot,
-    required this.onStudioTap,
-    required this.onRecoveryTap,
+    required this.focusNode,
+    required this.onPressed,
   });
 
   final StatusState state;
   final String? currentRoot;
-  final VoidCallback? onStudioTap;
-  final VoidCallback? onRecoveryTap;
+  final FocusNode focusNode;
+  final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -698,40 +944,34 @@ class _StatusChip extends StatelessWidget {
       ),
     };
 
-    final chip = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 16, color: fg),
-          const SizedBox(width: 6),
-          Text(label, style: TextStyle(color: fg, fontSize: 13)),
-        ],
+    final semanticsLabel = l10n.statusDetailsOpen(label);
+    return Semantics(
+      key: const ValueKey('status-details-semantics'),
+      container: true,
+      liveRegion: true,
+      button: true,
+      enabled: true,
+      label: semanticsLabel,
+      onTap: onPressed,
+      excludeSemantics: true,
+      child: Tooltip(
+        message: semanticsLabel,
+        child: TextButton.icon(
+          key: const ValueKey('status-details-trigger'),
+          focusNode: focusNode,
+          onPressed: onPressed,
+          style: TextButton.styleFrom(
+            backgroundColor: bg,
+            foregroundColor: fg,
+            minimumSize: const Size(0, 40),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            shape: const StadiumBorder(),
+          ),
+          icon: Icon(icon, size: 16),
+          label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
       ),
     );
-
-    if (isStudio) {
-      return InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: onStudioTap,
-        child: chip,
-      );
-    }
-    if (status is ManagerStatusRecoveryRequired) {
-      return Tooltip(
-        message: l10n.recoveryAction,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: onRecoveryTap,
-          child: chip,
-        ),
-      );
-    }
-    return chip;
   }
 }
 
@@ -835,9 +1075,21 @@ class _InfoBanner extends ConsumerWidget {
           theme.colorScheme.onSurfaceVariant,
         ),
       );
-      for (final w in report.warnings) {
+      const maxWarningsInBanner = 3;
+      for (final w in report.warnings.take(maxWarningsInBanner)) {
         children.add(
           _line(theme, Icons.warning_amber_rounded, w, Colors.amber.shade800),
+        );
+      }
+      final remainingWarnings = report.warnings.length - maxWarningsInBanner;
+      if (remainingWarnings > 0) {
+        children.add(
+          _line(
+            theme,
+            Icons.more_horiz,
+            l10n.targetsMore(remainingWarnings),
+            Colors.amber.shade800,
+          ),
         );
       }
     }

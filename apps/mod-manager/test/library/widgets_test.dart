@@ -1028,7 +1028,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('tapping the studio chip opens the take-over dialog', (
+  testWidgets('studio status details open the take-over dialog', (
     tester,
   ) async {
     final exe = _makeGameExe();
@@ -1047,16 +1047,19 @@ void main() {
     await tester.pumpAndSettle();
 
     final l10n = await AppLocalizations.delegate.load(const Locale('en'));
-    // Before tapping, the take-over dialog isn't shown.
+    // Before opening status details, the take-over dialog isn't shown.
     expect(find.text(l10n.takeOverBody), findsNothing);
 
-    // The status chip shows the studio-deploy label; tap it. (The same label
-    // is also the dialog title, so target the chip via its InkWell ancestor.)
+    await tester.tap(find.byKey(const ValueKey('status-details-trigger')));
+    await tester.pumpAndSettle();
+    expect(find.text(l10n.statusDetailsStudioDescription), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('status-details-action-take-over')),
+      findsOneWidget,
+    );
+
     await tester.tap(
-      find.ancestor(
-        of: find.text(l10n.statusStudioDeploy),
-        matching: find.byType(InkWell),
-      ),
+      find.byKey(const ValueKey('status-details-action-take-over')),
     );
     await tester.pumpAndSettle();
 
@@ -1066,12 +1069,13 @@ void main() {
       find.widgetWithText(FilledButton, l10n.takeOverAction),
       findsOneWidget,
     );
-    // The title now appears twice (chip + dialog).
     expect(find.text(l10n.takeOverTitle), findsNWidgets(2));
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('recovery chip opens the undeploy recovery path', (tester) async {
+  testWidgets('recovery status details open the undeploy recovery path', (
+    tester,
+  ) async {
     final exe = _makeGameExe();
     final fake = FakeGoreCoreFfiService(
       responses: {
@@ -1095,11 +1099,16 @@ void main() {
     );
     expect(apply.onPressed, isNull);
 
+    await tester.tap(find.byKey(const ValueKey('status-details-trigger')));
+    await tester.pumpAndSettle();
+    expect(find.text(l10n.statusDetailsRecoveryDescription), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('status-details-action-recover')),
+      findsOneWidget,
+    );
+
     await tester.tap(
-      find.ancestor(
-        of: find.text(l10n.statusRecoveryRequired),
-        matching: find.byType(InkWell),
-      ),
+      find.byKey(const ValueKey('status-details-action-recover')),
     );
     await tester.pumpAndSettle();
     expect(find.text(l10n.recoveryRequiredConfirm), findsOneWidget);

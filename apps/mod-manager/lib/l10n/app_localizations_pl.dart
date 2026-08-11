@@ -12,6 +12,93 @@ class AppLocalizationsPl extends AppLocalizations {
   String get statusUnknown => 'Nieznany';
 
   @override
+  String statusDetailsTitle(String status) {
+    return 'Wdrożenie: $status';
+  }
+
+  @override
+  String statusDetailsOpen(String status) {
+    return 'Pokaż szczegóły wdrożenia: $status';
+  }
+
+  @override
+  String get statusDetailsNoRoot =>
+      'Wybierz instalację gry w Ustawieniach, aby sprawdzić stan wdrożenia.';
+
+  @override
+  String get statusDetailsNoDeployment =>
+      'Dla tej gry nie zainstalowano wdrożenia menedżera.';
+
+  @override
+  String get statusDetailsInSyncDescription =>
+      'Wdrożone mody są zgodne z bieżącym zestawem.';
+
+  @override
+  String get statusDetailsDeployedLoadout => 'Wdrożona kolejność ładowania';
+
+  @override
+  String get statusDetailsChangesDescription =>
+      'Bieżące wdrożenie różni się od tego, co zainstaluje Zastosuj.';
+
+  @override
+  String get statusDetailsCurrentlyDeployed => 'Obecnie wdrożone';
+
+  @override
+  String get statusDetailsAfterApply => 'Po zastosowaniu';
+
+  @override
+  String get statusDetailsGameUpdatedDescription =>
+      'Pliki gry zmieniły się po ostatnim wdrożeniu. Zastosuj zestaw ponownie, aby przywrócić pliki menedżera.';
+
+  @override
+  String get statusDetailsDriftedFiles => 'Zmienione pliki';
+
+  @override
+  String get statusDetailsStudioDescription =>
+      'Mod Studio kontroluje obecnie tę instalację gry. Przejmij ją przed zastosowaniem zestawu menedżera.';
+
+  @override
+  String statusDetailsStudioMod(String name) {
+    return 'Mod Studio: $name';
+  }
+
+  @override
+  String get statusDetailsStudioNameUnknown => 'Studio nie podało nazwy moda.';
+
+  @override
+  String get statusDetailsRecoveryDescription =>
+      'Wdrożenie zostało przerwane. Odzyskaj je przed zastosowaniem lub usunięciem modów menedżera.';
+
+  @override
+  String get statusDetailsUnknownDescription =>
+      'Nie udało się zweryfikować stanu wdrożenia. Odśwież go przed zastosowaniem modów.';
+
+  @override
+  String get statusDetailsUnavailable =>
+      'Zainstalowany rdzeń nie podał tych szczegółów.';
+
+  @override
+  String get statusDetailsEmptyLoadout => 'Brak modów w tym zestawie.';
+
+  @override
+  String get statusDetailsLastError => 'Ostatni błąd';
+
+  @override
+  String get statusDetailsLastApply => 'Ostatnie zastosowanie';
+
+  @override
+  String get statusDetailsAppliedMods => 'Zastosowane mody';
+
+  @override
+  String get statusDetailsWarnings => 'Ostrzeżenia';
+
+  @override
+  String get statusDetailsReapply => 'Zastosuj ponownie';
+
+  @override
+  String get statusDetailsOpenSettings => 'Otwórz Ustawienia';
+
+  @override
   String get recoveryAction => 'Odzyskaj';
 
   @override

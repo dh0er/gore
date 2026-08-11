@@ -12,6 +12,94 @@ class AppLocalizationsEs extends AppLocalizations {
   String get statusUnknown => 'Desconocido';
 
   @override
+  String statusDetailsTitle(String status) {
+    return 'Despliegue: $status';
+  }
+
+  @override
+  String statusDetailsOpen(String status) {
+    return 'Mostrar detalles del despliegue: $status';
+  }
+
+  @override
+  String get statusDetailsNoRoot =>
+      'Elige una instalación del juego en Ajustes para consultar su estado de despliegue.';
+
+  @override
+  String get statusDetailsNoDeployment =>
+      'No hay ningún despliegue del gestor instalado para este juego.';
+
+  @override
+  String get statusDetailsInSyncDescription =>
+      'Los mods desplegados coinciden con la configuración actual.';
+
+  @override
+  String get statusDetailsDeployedLoadout => 'Orden de carga desplegado';
+
+  @override
+  String get statusDetailsChangesDescription =>
+      'El despliegue actual difiere de lo que instalará Aplicar.';
+
+  @override
+  String get statusDetailsCurrentlyDeployed => 'Desplegado actualmente';
+
+  @override
+  String get statusDetailsAfterApply => 'Después de Aplicar';
+
+  @override
+  String get statusDetailsGameUpdatedDescription =>
+      'Los archivos del juego cambiaron después del último despliegue. Vuelve a aplicar la configuración para restaurar los archivos del gestor.';
+
+  @override
+  String get statusDetailsDriftedFiles => 'Archivos modificados';
+
+  @override
+  String get statusDetailsStudioDescription =>
+      'Mod Studio controla actualmente esta instalación del juego. Toma el control antes de aplicar una configuración del gestor.';
+
+  @override
+  String statusDetailsStudioMod(String name) {
+    return 'Mod de Studio: $name';
+  }
+
+  @override
+  String get statusDetailsStudioNameUnknown =>
+      'Studio no indicó el nombre del mod.';
+
+  @override
+  String get statusDetailsRecoveryDescription =>
+      'Se interrumpió un despliegue. Recupéralo antes de aplicar o eliminar mods del gestor.';
+
+  @override
+  String get statusDetailsUnknownDescription =>
+      'No se pudo verificar el estado del despliegue. Actualízalo antes de aplicar mods.';
+
+  @override
+  String get statusDetailsUnavailable =>
+      'El núcleo instalado no proporcionó estos detalles.';
+
+  @override
+  String get statusDetailsEmptyLoadout => 'No hay mods en esta configuración.';
+
+  @override
+  String get statusDetailsLastError => 'Último error';
+
+  @override
+  String get statusDetailsLastApply => 'Última aplicación';
+
+  @override
+  String get statusDetailsAppliedMods => 'Mods aplicados';
+
+  @override
+  String get statusDetailsWarnings => 'Advertencias';
+
+  @override
+  String get statusDetailsReapply => 'Volver a aplicar';
+
+  @override
+  String get statusDetailsOpenSettings => 'Abrir Ajustes';
+
+  @override
   String get recoveryAction => 'Recuperar';
 
   @override

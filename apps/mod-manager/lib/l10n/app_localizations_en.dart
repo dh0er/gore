@@ -12,6 +12,94 @@ class AppLocalizationsEn extends AppLocalizations {
   String get statusUnknown => 'Unknown';
 
   @override
+  String statusDetailsTitle(String status) {
+    return 'Deployment: $status';
+  }
+
+  @override
+  String statusDetailsOpen(String status) {
+    return 'Show deployment details: $status';
+  }
+
+  @override
+  String get statusDetailsNoRoot =>
+      'Choose a game installation in Settings to inspect its deployment status.';
+
+  @override
+  String get statusDetailsNoDeployment =>
+      'No Manager deployment is installed for this game.';
+
+  @override
+  String get statusDetailsInSyncDescription =>
+      'The deployed mods match the current loadout.';
+
+  @override
+  String get statusDetailsDeployedLoadout => 'Deployed load order';
+
+  @override
+  String get statusDetailsChangesDescription =>
+      'The current deployment differs from what Apply will install.';
+
+  @override
+  String get statusDetailsCurrentlyDeployed => 'Currently deployed';
+
+  @override
+  String get statusDetailsAfterApply => 'After Apply';
+
+  @override
+  String get statusDetailsGameUpdatedDescription =>
+      'Game files changed after the last deployment. Reapply the loadout to restore the Manager-owned files.';
+
+  @override
+  String get statusDetailsDriftedFiles => 'Changed files';
+
+  @override
+  String get statusDetailsStudioDescription =>
+      'Mod Studio currently owns this game installation. Take over before applying a Manager loadout.';
+
+  @override
+  String statusDetailsStudioMod(String name) {
+    return 'Studio mod: $name';
+  }
+
+  @override
+  String get statusDetailsStudioNameUnknown =>
+      'Studio did not report a mod name.';
+
+  @override
+  String get statusDetailsRecoveryDescription =>
+      'A deployment was interrupted. Recover it before applying or removing Manager mods.';
+
+  @override
+  String get statusDetailsUnknownDescription =>
+      'Deployment status could not be verified. Refresh before applying mods.';
+
+  @override
+  String get statusDetailsUnavailable =>
+      'The installed core did not provide these details.';
+
+  @override
+  String get statusDetailsEmptyLoadout => 'No mods in this loadout.';
+
+  @override
+  String get statusDetailsLastError => 'Last error';
+
+  @override
+  String get statusDetailsLastApply => 'Last Apply';
+
+  @override
+  String get statusDetailsAppliedMods => 'Applied mods';
+
+  @override
+  String get statusDetailsWarnings => 'Warnings';
+
+  @override
+  String get statusDetailsReapply => 'Reapply';
+
+  @override
+  String get statusDetailsOpenSettings => 'Open Settings';
+
+  @override
   String get recoveryAction => 'Recover';
 
   @override

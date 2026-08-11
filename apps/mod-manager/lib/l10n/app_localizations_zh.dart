@@ -12,6 +12,86 @@ class AppLocalizationsZh extends AppLocalizations {
   String get statusUnknown => '未知';
 
   @override
+  String statusDetailsTitle(String status) {
+    return '部署：$status';
+  }
+
+  @override
+  String statusDetailsOpen(String status) {
+    return '显示部署详情：$status';
+  }
+
+  @override
+  String get statusDetailsNoRoot => '请在设置中选择游戏安装位置以查看部署状态。';
+
+  @override
+  String get statusDetailsNoDeployment => '此游戏没有管理器部署。';
+
+  @override
+  String get statusDetailsInSyncDescription => '已部署模组与当前配置一致。';
+
+  @override
+  String get statusDetailsDeployedLoadout => '已部署的加载顺序';
+
+  @override
+  String get statusDetailsChangesDescription => '当前部署与应用后将安装的内容不同。';
+
+  @override
+  String get statusDetailsCurrentlyDeployed => '当前部署';
+
+  @override
+  String get statusDetailsAfterApply => '应用后';
+
+  @override
+  String get statusDetailsGameUpdatedDescription =>
+      '自上次部署后，游戏文件已更改。请重新应用配置以恢复管理器拥有的文件。';
+
+  @override
+  String get statusDetailsDriftedFiles => '已更改的文件';
+
+  @override
+  String get statusDetailsStudioDescription =>
+      'Mod Studio 当前控制此游戏安装。应用管理器配置前请先接管。';
+
+  @override
+  String statusDetailsStudioMod(String name) {
+    return 'Studio 模组：$name';
+  }
+
+  @override
+  String get statusDetailsStudioNameUnknown => 'Studio 未报告模组名称。';
+
+  @override
+  String get statusDetailsRecoveryDescription => '部署被中断。应用或移除管理器模组前请先恢复。';
+
+  @override
+  String get statusDetailsUnknownDescription => '无法验证部署状态。应用模组前请刷新。';
+
+  @override
+  String get statusDetailsUnavailable => '已安装的核心未提供这些详情。';
+
+  @override
+  String get statusDetailsEmptyLoadout => '此配置中没有模组。';
+
+  @override
+  String get statusDetailsLastError => '上次错误';
+
+  @override
+  String get statusDetailsLastApply => '上次应用';
+
+  @override
+  String get statusDetailsAppliedMods => '已应用的模组';
+
+  @override
+  String get statusDetailsWarnings => '警告';
+
+  @override
+  String get statusDetailsReapply => '重新应用';
+
+  @override
+  String get statusDetailsOpenSettings => '打开设置';
+
+  @override
   String get recoveryAction => '恢复';
 
   @override
@@ -256,6 +336,86 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get statusUnknown => '未知';
+
+  @override
+  String statusDetailsTitle(String status) {
+    return '部署：$status';
+  }
+
+  @override
+  String statusDetailsOpen(String status) {
+    return '显示部署详情：$status';
+  }
+
+  @override
+  String get statusDetailsNoRoot => '请在设置中选择游戏安装位置以查看部署状态。';
+
+  @override
+  String get statusDetailsNoDeployment => '此游戏没有管理器部署。';
+
+  @override
+  String get statusDetailsInSyncDescription => '已部署模组与当前配置一致。';
+
+  @override
+  String get statusDetailsDeployedLoadout => '已部署的加载顺序';
+
+  @override
+  String get statusDetailsChangesDescription => '当前部署与应用后将安装的内容不同。';
+
+  @override
+  String get statusDetailsCurrentlyDeployed => '当前部署';
+
+  @override
+  String get statusDetailsAfterApply => '应用后';
+
+  @override
+  String get statusDetailsGameUpdatedDescription =>
+      '自上次部署后，游戏文件已更改。请重新应用配置以恢复管理器拥有的文件。';
+
+  @override
+  String get statusDetailsDriftedFiles => '已更改的文件';
+
+  @override
+  String get statusDetailsStudioDescription =>
+      'Mod Studio 当前控制此游戏安装。应用管理器配置前请先接管。';
+
+  @override
+  String statusDetailsStudioMod(String name) {
+    return 'Studio 模组：$name';
+  }
+
+  @override
+  String get statusDetailsStudioNameUnknown => 'Studio 未报告模组名称。';
+
+  @override
+  String get statusDetailsRecoveryDescription => '部署被中断。应用或移除管理器模组前请先恢复。';
+
+  @override
+  String get statusDetailsUnknownDescription => '无法验证部署状态。应用模组前请刷新。';
+
+  @override
+  String get statusDetailsUnavailable => '已安装的核心未提供这些详情。';
+
+  @override
+  String get statusDetailsEmptyLoadout => '此配置中没有模组。';
+
+  @override
+  String get statusDetailsLastError => '上次错误';
+
+  @override
+  String get statusDetailsLastApply => '上次应用';
+
+  @override
+  String get statusDetailsAppliedMods => '已应用的模组';
+
+  @override
+  String get statusDetailsWarnings => '警告';
+
+  @override
+  String get statusDetailsReapply => '重新应用';
+
+  @override
+  String get statusDetailsOpenSettings => '打开设置';
 
   @override
   String get recoveryAction => '恢复';

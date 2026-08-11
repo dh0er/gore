@@ -12,6 +12,94 @@ class AppLocalizationsDe extends AppLocalizations {
   String get statusUnknown => 'Unbekannt';
 
   @override
+  String statusDetailsTitle(String status) {
+    return 'Bereitstellung: $status';
+  }
+
+  @override
+  String statusDetailsOpen(String status) {
+    return 'Bereitstellungsdetails anzeigen: $status';
+  }
+
+  @override
+  String get statusDetailsNoRoot =>
+      'Wähle in den Einstellungen eine Spielinstallation aus, um ihren Bereitstellungsstatus zu prüfen.';
+
+  @override
+  String get statusDetailsNoDeployment =>
+      'Für dieses Spiel ist keine Manager-Bereitstellung installiert.';
+
+  @override
+  String get statusDetailsInSyncDescription =>
+      'Die bereitgestellten Mods entsprechen der aktuellen Ladeliste.';
+
+  @override
+  String get statusDetailsDeployedLoadout => 'Bereitgestellte Ladereihenfolge';
+
+  @override
+  String get statusDetailsChangesDescription =>
+      'Die aktuelle Bereitstellung unterscheidet sich von dem, was Anwenden installieren wird.';
+
+  @override
+  String get statusDetailsCurrentlyDeployed => 'Aktuell bereitgestellt';
+
+  @override
+  String get statusDetailsAfterApply => 'Nach Anwenden';
+
+  @override
+  String get statusDetailsGameUpdatedDescription =>
+      'Spieldateien wurden seit der letzten Bereitstellung geändert. Wende die Ladeliste erneut an, um die Manager-Dateien wiederherzustellen.';
+
+  @override
+  String get statusDetailsDriftedFiles => 'Geänderte Dateien';
+
+  @override
+  String get statusDetailsStudioDescription =>
+      'Mod Studio besitzt derzeit diese Spielinstallation. Übernimm sie, bevor du eine Manager-Ladeliste anwendest.';
+
+  @override
+  String statusDetailsStudioMod(String name) {
+    return 'Studio-Mod: $name';
+  }
+
+  @override
+  String get statusDetailsStudioNameUnknown =>
+      'Studio hat keinen Mod-Namen gemeldet.';
+
+  @override
+  String get statusDetailsRecoveryDescription =>
+      'Eine Bereitstellung wurde unterbrochen. Stelle sie wieder her, bevor du Manager-Mods anwendest oder entfernst.';
+
+  @override
+  String get statusDetailsUnknownDescription =>
+      'Der Bereitstellungsstatus konnte nicht überprüft werden. Aktualisiere ihn, bevor du Mods anwendest.';
+
+  @override
+  String get statusDetailsUnavailable =>
+      'Der installierte Core hat diese Details nicht bereitgestellt.';
+
+  @override
+  String get statusDetailsEmptyLoadout => 'Keine Mods in dieser Ladeliste.';
+
+  @override
+  String get statusDetailsLastError => 'Letzter Fehler';
+
+  @override
+  String get statusDetailsLastApply => 'Letztes Anwenden';
+
+  @override
+  String get statusDetailsAppliedMods => 'Angewendete Mods';
+
+  @override
+  String get statusDetailsWarnings => 'Warnungen';
+
+  @override
+  String get statusDetailsReapply => 'Erneut anwenden';
+
+  @override
+  String get statusDetailsOpenSettings => 'Einstellungen öffnen';
+
+  @override
   String get recoveryAction => 'Wiederherstellen';
 
   @override
