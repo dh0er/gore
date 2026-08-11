@@ -238,10 +238,12 @@ impl Property {
 /// Type descriptors serialized between the property type and the value header.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Descriptor {
-    /// StructProperty: (struct_type, package)
-    pub struct_type: Option<(PropStr, PropStr)>,
+    /// StructProperty: (struct_type, package). Boxed like the others: a payload
+    /// parses into over a million properties and most carry no descriptor at all,
+    /// so what this costs when absent is what matters.
+    pub struct_type: Option<Box<(PropStr, PropStr)>>,
     /// EnumProperty: (enum_type, package, underlying_type)
-    pub enum_type: Option<(PropStr, PropStr, PropStr)>,
+    pub enum_type: Option<Box<(PropStr, PropStr, PropStr)>>,
     /// Array/Set inner type, Map key/value types (with nested descriptors).
     pub inner: Option<Box<InnerDescriptor>>,
     pub map: Option<Box<(InnerDescriptor, InnerDescriptor)>>,
@@ -250,8 +252,8 @@ pub struct Descriptor {
 #[derive(Debug, Clone, PartialEq)]
 pub struct InnerDescriptor {
     pub type_name: PropStr,
-    pub struct_type: Option<(PropStr, PropStr)>,
-    pub enum_type: Option<(PropStr, PropStr, PropStr)>,
+    pub struct_type: Option<Box<(PropStr, PropStr)>>,
+    pub enum_type: Option<Box<(PropStr, PropStr, PropStr)>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1054,7 +1056,7 @@ fn walk_browse_properties(
         let struct_type = property
             .descriptor
             .struct_type
-            .as_ref()
+            .as_deref()
             .map(|(name, _)| name.as_str());
         let value_display = browse_value_preview(&property.value);
         let addressable_editable = addressable && browse_value_editable(&property.value);
@@ -1841,7 +1843,7 @@ pub fn tag_container_layout(
     let struct_type = property
         .descriptor
         .struct_type
-        .as_ref()
+        .as_deref()
         .map(|(name, _)| name.as_str());
     if struct_type != Some("GameplayTagContainer") {
         return Err(CoreError::InvalidRequest(format!(
@@ -2363,7 +2365,7 @@ pub fn patch_map_value_tag_container(
     let value_is_tag_container = value_desc.type_name == "StructProperty"
         && value_desc
             .struct_type
-            .as_ref()
+            .as_deref()
             .map(|(name, _)| name.as_str())
             == Some("GameplayTagContainer");
     if !value_is_tag_container {
@@ -2663,10 +2665,10 @@ fn read_descriptor(r: &mut Reader, type_name: &str) -> Result<Descriptor, CoreEr
     let mut descriptor = Descriptor::default();
     match type_name {
         "StructProperty" => {
-            descriptor.struct_type = Some(read_struct_descriptor(r)?);
+            descriptor.struct_type = Some(Box::new(read_struct_descriptor(r)?));
         }
         "EnumProperty" => {
-            descriptor.enum_type = Some(read_enum_descriptor(r)?);
+            descriptor.enum_type = Some(Box::new(read_enum_descriptor(r)?));
         }
         "ArrayProperty" | "SetProperty" => {
             descriptor.inner = Some(Box::new(read_inner_descriptor(r)?));
@@ -2715,8 +2717,8 @@ fn read_inner_descriptor_body(r: &mut Reader) -> Result<InnerDescriptor, CoreErr
         enum_type: None,
     };
     match type_name.as_str() {
-        "StructProperty" => inner.struct_type = Some(read_struct_descriptor(r)?),
-        "EnumProperty" => inner.enum_type = Some(read_enum_descriptor(r)?),
+        "StructProperty" => inner.struct_type = Some(Box::new(read_struct_descriptor(r)?)),
+        "EnumProperty" => inner.enum_type = Some(Box::new(read_enum_descriptor(r)?)),
         _ => {}
     }
     Ok(inner)
@@ -2758,7 +2760,7 @@ fn read_sized_value(
         "StructProperty" => {
             let (struct_type, _) = descriptor
                 .struct_type
-                .as_ref()
+                .as_deref()
                 .ok_or_else(|| CoreError::Parse("StructProperty missing descriptor".into()))?;
             Ok(PropertyValue::Struct(read_struct_value(
                 r,
@@ -2851,7 +2853,7 @@ fn read_inline_value(
         "StructProperty" => {
             let (struct_type, _) = inner
                 .struct_type
-                .as_ref()
+                .as_deref()
                 .ok_or_else(|| CoreError::Parse("inline struct missing descriptor".into()))?;
             // Inline structs carry no tag_flags; decide native-vs-proplist by type.
             Ok(PropertyValue::Struct(read_struct_value(

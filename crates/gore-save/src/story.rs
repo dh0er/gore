@@ -933,7 +933,7 @@ fn unique_story_map_value<'a>(
         || value_descriptor.type_name != "StructProperty"
         || !value_descriptor
             .struct_type
-            .as_ref()
+            .as_deref()
             .is_some_and(|(name, package)| {
                 name == expected_value_struct && package == expected_value_package
             })
@@ -941,7 +941,7 @@ fn unique_story_map_value<'a>(
     {
         let actual_struct = value_descriptor
             .struct_type
-            .as_ref()
+            .as_deref()
             .map(|(name, package)| format!("{name}@{package}"))
             .unwrap_or_else(|| "<missing>".to_string());
         return Err(CoreError::Parse(format!(

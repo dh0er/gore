@@ -207,7 +207,7 @@ pub(crate) fn char_key(global_id: &str) -> String {
 /// type name). `None` for non-map / non-struct-valued maps.
 fn map_value_struct_type(prop: &Property) -> Option<&str> {
     let (_key, value) = prop.descriptor.map.as_deref()?;
-    value.struct_type.as_ref().map(|(ty, _pkg)| ty.as_str())
+    value.struct_type.as_deref().map(|(ty, _pkg)| ty.as_str())
 }
 
 /// Find the character-state map of `struct_type` and return its entries keyed by

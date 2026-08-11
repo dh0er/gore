@@ -5221,7 +5221,7 @@ fn npc_relationship_set_writable(root: &properties::RootObject) -> bool {
     let supported_value = value.type_name == "StructProperty"
         && value
             .struct_type
-            .as_ref()
+            .as_deref()
             .is_some_and(|(kind, _)| kind == "CharacterStateSaveGameData_Relationship");
     property.type_name == "MapProperty"
         && supported_key
@@ -7572,7 +7572,7 @@ fn summarize_memory_event_properties(
         let struct_type = property
             .descriptor
             .struct_type
-            .as_ref()
+            .as_deref()
             .map(|(name, _)| name.as_str());
         let type_name = struct_type.map_or_else(
             || property.type_name.to_string(),
@@ -9849,7 +9849,7 @@ fn coerce_native_struct_value(
     let descriptor = property
         .descriptor
         .struct_type
-        .as_ref()
+        .as_deref()
         .map(|(name, _)| name.as_str())
         .ok_or_else(|| {
             CoreError::UnsupportedEdit(
