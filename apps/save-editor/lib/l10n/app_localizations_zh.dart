@@ -407,6 +407,64 @@ class AppLocalizationsZh extends AppLocalizations {
   String get tabInventory => '物品栏';
 
   @override
+  String get tabTrade => '交易';
+
+  @override
+  String get traderNotAMerchant => '该角色不进行交易。';
+
+  @override
+  String get traderOre => '矿石（购买力）';
+
+  @override
+  String get traderNoOre => '无矿石';
+
+  @override
+  String get traderStockCurrent => '库存';
+
+  @override
+  String get traderStockBase => '补货基准';
+
+  @override
+  String get traderStockBaseHint => '商人补货的基准。会随剧情推进而增长，因此不是初始状态。';
+
+  @override
+  String get traderOreHint => '矿石是殖民地的货币。商人持有的数量决定了他能付给你多少。';
+
+  @override
+  String get traderPriceWarning => '价格会随商人的库存量和持有矿石而变化，因此修改这些数字也可能改变他的开价。';
+
+  @override
+  String get traderAddItem => '添加物品';
+
+  @override
+  String get traderRemoveItem => '移除条目';
+
+  @override
+  String get traderNeverTraded => '尚未在此交易';
+
+  @override
+  String get traderTraded => '已在此交易过';
+
+  @override
+  String get traderReadOnlyCore => '此核心版本只能读取商人数据。';
+
+  @override
+  String get traderEmptyStock => '没有库存。';
+
+  @override
+  String get traderUnknownItem => '不在物品目录中';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return '商人数据加载失败：$details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count 条';
+  }
+
+  @override
   String get tabWorld => '世界';
 
   @override
@@ -3090,6 +3148,64 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get tabInventory => '物品栏';
+
+  @override
+  String get tabTrade => '交易';
+
+  @override
+  String get traderNotAMerchant => '该角色不进行交易。';
+
+  @override
+  String get traderOre => '矿石（购买力）';
+
+  @override
+  String get traderNoOre => '无矿石';
+
+  @override
+  String get traderStockCurrent => '库存';
+
+  @override
+  String get traderStockBase => '补货基准';
+
+  @override
+  String get traderStockBaseHint => '商人补货的基准。会随剧情推进而增长，因此不是初始状态。';
+
+  @override
+  String get traderOreHint => '矿石是殖民地的货币。商人持有的数量决定了他能付给你多少。';
+
+  @override
+  String get traderPriceWarning => '价格会随商人的库存量和持有矿石而变化，因此修改这些数字也可能改变他的开价。';
+
+  @override
+  String get traderAddItem => '添加物品';
+
+  @override
+  String get traderRemoveItem => '移除条目';
+
+  @override
+  String get traderNeverTraded => '尚未在此交易';
+
+  @override
+  String get traderTraded => '已在此交易过';
+
+  @override
+  String get traderReadOnlyCore => '此核心版本只能读取商人数据。';
+
+  @override
+  String get traderEmptyStock => '没有库存。';
+
+  @override
+  String get traderUnknownItem => '不在物品目录中';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return '商人数据加载失败：$details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count 条';
+  }
 
   @override
   String get tabWorld => '世界';

@@ -194,7 +194,7 @@ fn find_crime_blob(root: &RootObject) -> Option<(Vec<String>, &[Property])> {
 /// anywhere in the tree. Returns the path of `m_GenericData` (with `{key}`/`[i]`
 /// segments) and the instanced struct's property list. Used for both the crime
 /// blob and the `GameTime` subsystem.
-fn find_generic_instanced<'a>(
+pub(crate) fn find_generic_instanced<'a>(
     root: &'a RootObject,
     target_key: &str,
 ) -> Option<(Vec<String>, &'a [Property])> {

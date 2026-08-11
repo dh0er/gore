@@ -422,6 +422,68 @@ class AppLocalizationsRu extends AppLocalizations {
   String get tabInventory => 'Инвентарь';
 
   @override
+  String get tabTrade => 'Торговля';
+
+  @override
+  String get traderNotAMerchant => 'Этот персонаж не торгует.';
+
+  @override
+  String get traderOre => 'Руда (покупательная способность)';
+
+  @override
+  String get traderNoOre => 'нет руды';
+
+  @override
+  String get traderStockCurrent => 'Запас';
+
+  @override
+  String get traderStockBase => 'База пополнения';
+
+  @override
+  String get traderStockBaseHint =>
+      'То, к чему торговец пополняет запасы. Растёт по ходу сюжета, поэтому это не исходное состояние.';
+
+  @override
+  String get traderOreHint =>
+      'Руда — валюта колонии. Сколько её у торговца, тем он и может вам заплатить.';
+
+  @override
+  String get traderPriceWarning =>
+      'Цены зависят от того, сколько у торговца товара и руды, поэтому изменение этих чисел может сдвинуть и его расценки.';
+
+  @override
+  String get traderAddItem => 'Добавить предмет';
+
+  @override
+  String get traderRemoveItem => 'Удалить строку';
+
+  @override
+  String get traderNeverTraded => 'здесь ещё не торговали';
+
+  @override
+  String get traderTraded => 'здесь уже торговали';
+
+  @override
+  String get traderReadOnlyCore =>
+      'Эта сборка ядра может только читать данные торговцев.';
+
+  @override
+  String get traderEmptyStock => 'Товара нет.';
+
+  @override
+  String get traderUnknownItem => 'нет в каталоге предметов';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return 'Не удалось загрузить торговцев: $details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count строк';
+  }
+
+  @override
   String get tabWorld => 'Мир';
 
   @override

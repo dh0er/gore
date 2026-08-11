@@ -420,6 +420,68 @@ class AppLocalizationsIt extends AppLocalizations {
   String get tabInventory => 'Inventario';
 
   @override
+  String get tabTrade => 'Commercio';
+
+  @override
+  String get traderNotAMerchant => 'Questo personaggio non commercia.';
+
+  @override
+  String get traderOre => 'Minerale (potere d\'acquisto)';
+
+  @override
+  String get traderNoOre => 'nessun minerale';
+
+  @override
+  String get traderStockCurrent => 'Scorte';
+
+  @override
+  String get traderStockBase => 'Base di rifornimento';
+
+  @override
+  String get traderStockBaseHint =>
+      'Ciò verso cui il mercante si rifornisce. Cresce con la storia, quindi non è uno stato originale.';
+
+  @override
+  String get traderOreHint =>
+      'Il minerale è la valuta della colonia. Quello che un mercante possiede è ciò con cui può pagarti.';
+
+  @override
+  String get traderPriceWarning =>
+      'I prezzi reagiscono a quanto un mercante ha in magazzino e a quanto minerale possiede, quindi cambiare questi numeri può spostare anche quanto chiede.';
+
+  @override
+  String get traderAddItem => 'Aggiungi oggetto';
+
+  @override
+  String get traderRemoveItem => 'Rimuovi riga';
+
+  @override
+  String get traderNeverTraded => 'mai commerciato qui';
+
+  @override
+  String get traderTraded => 'già commerciato qui';
+
+  @override
+  String get traderReadOnlyCore =>
+      'Questa build del core può solo leggere i dati dei mercanti.';
+
+  @override
+  String get traderEmptyStock => 'Niente in magazzino.';
+
+  @override
+  String get traderUnknownItem => 'non presente nel catalogo oggetti';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return 'Caricamento dei mercanti non riuscito: $details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count righe';
+  }
+
+  @override
   String get tabWorld => 'Mondo';
 
   @override

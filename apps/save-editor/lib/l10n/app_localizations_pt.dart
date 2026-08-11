@@ -420,6 +420,68 @@ class AppLocalizationsPt extends AppLocalizations {
   String get tabInventory => 'Inventário';
 
   @override
+  String get tabTrade => 'Comércio';
+
+  @override
+  String get traderNotAMerchant => 'Esta personagem não comercia.';
+
+  @override
+  String get traderOre => 'Minério (poder de compra)';
+
+  @override
+  String get traderNoOre => 'sem minério';
+
+  @override
+  String get traderStockCurrent => 'Estoque';
+
+  @override
+  String get traderStockBase => 'Base de reposição';
+
+  @override
+  String get traderStockBaseHint =>
+      'Aquilo que o mercador repõe. Cresce com o progresso da história, por isso não é um estado original.';
+
+  @override
+  String get traderOreHint =>
+      'O minério é a moeda da colónia. O que um mercador tem é aquilo com que te pode pagar.';
+
+  @override
+  String get traderPriceWarning =>
+      'Os preços reagem ao que o mercador tem em estoque e ao minério que possui, por isso mudar estes números também pode alterar o que ele cobra.';
+
+  @override
+  String get traderAddItem => 'Adicionar item';
+
+  @override
+  String get traderRemoveItem => 'Remover linha';
+
+  @override
+  String get traderNeverTraded => 'nunca negociaste aqui';
+
+  @override
+  String get traderTraded => 'já negociaste aqui';
+
+  @override
+  String get traderReadOnlyCore =>
+      'Esta versão do núcleo só consegue ler os dados dos mercadores.';
+
+  @override
+  String get traderEmptyStock => 'Nada em estoque.';
+
+  @override
+  String get traderUnknownItem => 'não está no catálogo de itens';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return 'Falha ao carregar mercadores: $details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count linhas';
+  }
+
+  @override
   String get tabWorld => 'Mundo';
 
   @override
@@ -3201,6 +3263,68 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get tabInventory => 'Inventário';
+
+  @override
+  String get tabTrade => 'Comércio';
+
+  @override
+  String get traderNotAMerchant => 'Este personagem não comercia.';
+
+  @override
+  String get traderOre => 'Minério (poder de compra)';
+
+  @override
+  String get traderNoOre => 'sem minério';
+
+  @override
+  String get traderStockCurrent => 'Estoque';
+
+  @override
+  String get traderStockBase => 'Base de reposição';
+
+  @override
+  String get traderStockBaseHint =>
+      'Aquilo que o mercador repõe. Cresce com o progresso da história, por isso não é um estado original.';
+
+  @override
+  String get traderOreHint =>
+      'O minério é a moeda da colônia. O que um mercador tem é aquilo com que ele pode te pagar.';
+
+  @override
+  String get traderPriceWarning =>
+      'Os preços reagem ao que o mercador tem em estoque e ao minério que possui, por isso mudar esses números também pode alterar o que ele cobra.';
+
+  @override
+  String get traderAddItem => 'Adicionar item';
+
+  @override
+  String get traderRemoveItem => 'Remover linha';
+
+  @override
+  String get traderNeverTraded => 'nunca negociou aqui';
+
+  @override
+  String get traderTraded => 'já negociou aqui';
+
+  @override
+  String get traderReadOnlyCore =>
+      'Esta versão do núcleo só consegue ler os dados dos mercadores.';
+
+  @override
+  String get traderEmptyStock => 'Nada em estoque.';
+
+  @override
+  String get traderUnknownItem => 'não está no catálogo de itens';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return 'Falha ao carregar mercadores: $details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count linhas';
+  }
 
   @override
   String get tabWorld => 'Mundo';

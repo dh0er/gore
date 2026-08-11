@@ -7,6 +7,7 @@ import 'package:goresave/features/editor/ui/attribute_detail.dart';
 import 'package:goresave/features/editor/ui/character_master_list.dart';
 import 'package:goresave/features/editor/ui/inventory_detail.dart';
 import 'package:goresave/features/editor/ui/position_detail.dart';
+import 'package:goresave/features/editor/ui/trader_detail.dart';
 import 'package:goresave/features/editor/ui/progression_panel.dart'
     show KnowledgeDetail, EventsDetail;
 import 'package:goresave/l10n/app_localizations.dart';
@@ -100,6 +101,23 @@ class CharactersTab extends ConsumerWidget {
             actor: selected,
             canCompress: inventoryCanCompress,
             showActorHeader: false,
+          );
+
+    // Handel: a merchant's shop, which is NOT his inventory — it lives in a
+    // global array keyed by uniqueName. Orphans have no such record, and the
+    // panel itself shows the same empty state for any non-merchant, so it only
+    // needs the orphan guard the other actor-backed panes take.
+    final Widget tradeBody = isOrphan
+        ? _MessagePane(
+            icon: Icons.storefront_outlined,
+            title: l10n.tabTrade,
+            body: l10n.characterNoActorBody,
+          )
+        : TraderPanel(
+            inspection: inspection,
+            notifier: notifier,
+            actor: selected,
+            editable: progressionEditable,
           );
 
     // Position: the player's transform editor (its only home — it used to sit
@@ -200,7 +218,7 @@ class CharactersTab extends ConsumerWidget {
         const VerticalDivider(width: 1),
         Expanded(
           child: DefaultTabController(
-            length: 5,
+            length: 6,
             child: Column(
               children: [
                 ActorDetailHeader(
@@ -232,6 +250,10 @@ class CharactersTab extends ConsumerWidget {
                       text: l10n.sectionEvents,
                     ),
                     Tab(
+                      icon: const Icon(Icons.storefront_outlined),
+                      text: l10n.tabTrade,
+                    ),
+                    Tab(
                       icon: const Icon(Icons.place_outlined),
                       text: l10n.heroTransform,
                     ),
@@ -244,6 +266,7 @@ class CharactersTab extends ConsumerWidget {
                       _KeepAliveTab(child: inventoryBody),
                       _KeepAliveTab(child: knowledgeBody),
                       _KeepAliveTab(child: eventsBody),
+                      _KeepAliveTab(child: tradeBody),
                       _KeepAliveTab(child: positionBody),
                     ],
                   ),

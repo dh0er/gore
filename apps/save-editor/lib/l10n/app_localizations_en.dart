@@ -418,6 +418,67 @@ class AppLocalizationsEn extends AppLocalizations {
   String get tabInventory => 'Inventory';
 
   @override
+  String get tabTrade => 'Trade';
+
+  @override
+  String get traderNotAMerchant => 'This character does not trade.';
+
+  @override
+  String get traderOre => 'Ore (purchasing power)';
+
+  @override
+  String get traderNoOre => 'no ore';
+
+  @override
+  String get traderStockCurrent => 'Stock';
+
+  @override
+  String get traderStockBase => 'Restock baseline';
+
+  @override
+  String get traderStockBaseHint =>
+      'What the merchant restocks back toward. It grows with story progress, so it is not a vanilla snapshot.';
+
+  @override
+  String get traderOreHint =>
+      'Ore is the colony\'s currency. The amount a merchant holds is what he can pay you with.';
+
+  @override
+  String get traderPriceWarning =>
+      'Prices react to how much a merchant stocks and how much ore he holds, so changing these numbers can also move what he charges.';
+
+  @override
+  String get traderAddItem => 'Add item';
+
+  @override
+  String get traderRemoveItem => 'Remove line';
+
+  @override
+  String get traderNeverTraded => 'never traded here';
+
+  @override
+  String get traderTraded => 'already traded here';
+
+  @override
+  String get traderReadOnlyCore => 'This core build can only read trader data.';
+
+  @override
+  String get traderEmptyStock => 'Nothing in stock.';
+
+  @override
+  String get traderUnknownItem => 'not in the item catalog';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return 'Trader load failed: $details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count lines';
+  }
+
+  @override
   String get tabWorld => 'World';
 
   @override

@@ -7,6 +7,7 @@ pub mod properties;
 pub mod skills;
 pub mod startsaves;
 pub mod story;
+pub mod traders;
 
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
@@ -490,6 +491,18 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             let kraken_backend = codec_backend::KrakenBackend::default();
             let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
             list_guild_crimes_command(&path, codec_backend)
+        }
+        "private.traders.list" => {
+            let path = required_path(&payload)?;
+            let kraken_backend = codec_backend::KrakenBackend::default();
+            let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
+            traders_list_command(&path, codec_backend)
+        }
+        "private.traders.detail" => {
+            let path = required_path(&payload)?;
+            let kraken_backend = codec_backend::KrakenBackend::default();
+            let codec_backend = Some(&kraken_backend as &dyn codec_backend::CodecBackend);
+            trader_detail_command(&path, &payload, codec_backend)
         }
         "validate_roundtrip" => {
             let path = required_path(&payload)?;
@@ -6570,6 +6583,71 @@ fn npc_inventory_command(
     Ok(summary)
 }
 
+/// `private.traders.list`: every merchant's shop record in array order.
+///
+/// Payload: `{ path }`. Returns `{ traders: [...], writable: [...] }`.
+///
+/// The generic typed edit cannot reach these values — it refuses paths that end
+/// on a map entry — so the trader commands are the only way in and advertise
+/// themselves here for the app to feature-detect.
+fn traders_list_command(
+    path: &Path,
+    backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<Value, CoreError> {
+    let backend = backend.ok_or_else(|| {
+        CoreError::Codec("reading traders requires a working codec backend".to_string())
+    })?;
+    let root = decode_private_root_cached(path, backend)?;
+    let traders = traders::list_traders(&root)?;
+    // addItem needs nothing but a trader row; setStock and removeItem need a
+    // line that already exists, so they are advertised only when there is one.
+    let mut writable = vec!["private.traders.addItem"];
+    if traders
+        .iter()
+        .any(|t| t.item_count > 0 || t.default_item_count > 0)
+    {
+        writable.push("private.traders.setStock");
+        writable.push("private.traders.removeItem");
+    }
+    Ok(json!({
+        "traders": traders,
+        "writable": writable,
+    }))
+}
+
+/// `private.traders.detail`: one merchant's full record.
+///
+/// Payload: `{ path, index }` — or `{ path, uniqueName }`, which resolves to an
+/// index and fails on an ambiguous name rather than guessing. Two shipped rows
+/// share the name `None`, so the index is the authoritative address.
+fn trader_detail_command(
+    path: &Path,
+    payload: &Value,
+    backend: Option<&dyn codec_backend::CodecBackend>,
+) -> Result<Value, CoreError> {
+    let backend = backend.ok_or_else(|| {
+        CoreError::Codec("reading traders requires a working codec backend".to_string())
+    })?;
+    let root = decode_private_root_cached(path, backend)?;
+    let index = match payload.get("index").and_then(Value::as_u64) {
+        Some(i) => i as usize,
+        None => {
+            let name = payload
+                .get("uniqueName")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest(
+                        "missing payload.index or payload.uniqueName".to_string(),
+                    )
+                })?;
+            traders::index_of_unique_name(&traders::list_traders(&root)?, name)?
+        }
+    };
+    let detail = traders::trader_detail(&root, index)?;
+    serde_json::to_value(detail)
+        .map_err(|e| CoreError::Parse(format!("serializing trader detail failed: {e}")))
+}
+
 /// Property lookup inside a struct-valued map entry (tagged property list or
 /// InstancedStruct wrapper).
 pub(crate) fn struct_member<'a>(
@@ -8902,6 +8980,21 @@ fn apply_private_edits(
                 parse_private_inventory_reset_edit(edit).map(PrivateEdit::InventoryReset)
             }
             "private.inventory.repairSlots" => Ok(PrivateEdit::InventoryRepairSlots),
+            // Length-neutral: the count is a bare i32 at the tail of its map
+            // entry, so several of these batch safely into one write. Do NOT
+            // list it as a splicing edit.
+            "private.traders.setStock" => {
+                parse_private_traders_set_stock_edit(edit).map(PrivateEdit::TraderSetStock)
+            }
+            // Structural: both splice the map body and shift every later offset,
+            // so they are listed as splicing edits below and must stand alone.
+            "private.traders.addItem" => {
+                parse_private_traders_stock_line_edit(edit, true).map(PrivateEdit::TraderAddItem)
+            }
+            "private.traders.removeItem" => {
+                parse_private_traders_stock_line_edit(edit, false)
+                    .map(PrivateEdit::TraderRemoveItem)
+            }
             "private.story.apply" => {
                 parse_private_story_apply_edit(edit).map(PrivateEdit::StoryApply)
             }
@@ -9217,6 +9310,17 @@ fn structured_edit_target(edit: &PrivateEdit) -> Option<(&'static str, String)> 
                 glossary.segment_asset.as_str(),
             ]),
         )),
+        // Declarative: it sets one stock line to one count. Two of them naming the
+        // same line would silently discard one. addItem/removeItem are deliberately
+        // absent — they ADD to or drop from the map, and two of them name two
+        // different lines, which is what a batch is for.
+        PrivateEdit::TraderSetStock(stock) => Some((
+            "stock line of that trader",
+            key([
+                &format!("{}\u{1e}{}", stock.index, stock.map.property_name()),
+                stock.path.as_str(),
+            ]),
+        )),
         _ => None,
     }
 }
@@ -9313,6 +9417,9 @@ fn may_invalidate_caller_ordinals(edit: &PrivateEdit) -> bool {
         // Splices the StoryPropertyValues map. Already exclusive; listed so the
         // classification is complete rather than relying on the other guard.
         PrivateEdit::StoryApply(_) => true,
+        // Splice an entry into or out of a trader's stock map, which changes how
+        // many entries it holds and renumbers every later one.
+        PrivateEdit::TraderAddItem(_) | PrivateEdit::TraderRemoveItem(_) => true,
 
         // A setValue resolves to a scalar, a string or a native struct, so it can
         // add or drop no container element — but writing a slot's m_Id renumbers
@@ -9326,6 +9433,9 @@ fn may_invalidate_caller_ordinals(edit: &PrivateEdit) -> bool {
         PrivateEdit::PlayerAttribute(_)
         | PrivateEdit::PlayerTransform(_)
         | PrivateEdit::InventoryItemCount(_) => false,
+        // Overwrites a bare i32 at the tail of an existing map entry: no entry is
+        // added or dropped, nothing moves, no slot id is touched.
+        PrivateEdit::TraderSetStock(_) => false,
     }
 }
 
@@ -9359,6 +9469,12 @@ fn carries_caller_ordinal(edit: &PrivateEdit) -> bool {
         // moves the window it searches.
         PrivateEdit::InventoryItemCount(edit) => edit.slot_id.is_some() || edit.actor_id.is_none(),
         PrivateEdit::InventoryRemoveItem(edit) => edit.slot_id.is_some(),
+        // Every trader edit addresses its row by an index into m_Traders that the
+        // caller read off a `private.traders.list` taken before this write. The
+        // line itself is addressed by item path, which no peer can renumber.
+        PrivateEdit::TraderSetStock(_)
+        | PrivateEdit::TraderAddItem(_)
+        | PrivateEdit::TraderRemoveItem(_) => true,
         _ => false,
     }
 }
@@ -9480,6 +9596,115 @@ enum PrivateEdit {
     KnowledgeSetEntry(PrivateKnowledgeSetEntryEdit),
     FactionsForgive(PrivateFactionsForgiveEdit),
     SkillSet(skills::SkillSetEdit),
+    TraderSetStock(traders::SetStockEdit),
+    TraderAddItem(traders::StockLineEdit),
+    TraderRemoveItem(traders::StockLineEdit),
+}
+
+/// `private.traders.addItem` / `private.traders.removeItem` — insert or drop one
+/// stock line.
+///
+/// Value: `{ index, path, map?, count? }`. `count` is required for an insert and
+/// ignored for a removal. Like `setStock`, the trader is addressed by ARRAY INDEX
+/// because `m_TradersUniqueName` is not unique.
+fn parse_private_traders_stock_line_edit(
+    edit: &Edit,
+    needs_count: bool,
+) -> Result<traders::StockLineEdit, CoreError> {
+    let op = if needs_count { "addItem" } else { "removeItem" };
+    let value = edit.value.as_object().ok_or_else(|| {
+        CoreError::InvalidRequest(format!("private.traders.{op} value must be an object"))
+    })?;
+    let index = value.get("index").and_then(Value::as_u64).ok_or_else(|| {
+        CoreError::InvalidRequest(format!(
+            "private.traders.{op} requires integer value.index"
+        ))
+    })? as usize;
+    let path = value
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|p| !p.trim().is_empty())
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(format!(
+                "private.traders.{op} requires a non-empty value.path"
+            ))
+        })?
+        .to_string();
+    let count = if needs_count {
+        let raw = value.get("count").and_then(Value::as_i64).ok_or_else(|| {
+            CoreError::InvalidRequest(
+                "private.traders.addItem requires integer value.count".to_string(),
+            )
+        })?;
+        // Sold-out lines are deleted rather than left at zero, so inserting a
+        // zero-count line would write a state the game never produces.
+        if !(1..=i32::MAX as i64).contains(&raw) {
+            return Err(CoreError::InvalidRequest(
+                "private.traders.addItem value.count must be a positive i32".to_string(),
+            ));
+        }
+        raw as i32
+    } else {
+        0
+    };
+    let map = match value.get("map").and_then(Value::as_str) {
+        Some(raw) => traders::StockMap::parse(raw)?,
+        None => traders::StockMap::Current,
+    };
+    Ok(traders::StockLineEdit {
+        index,
+        map,
+        path,
+        count,
+    })
+}
+
+/// `private.traders.setStock` — set one existing stock line of one trader.
+///
+/// Value: `{ index, path, count, map? }`. `map` is `"current"` (default) or
+/// `"default"`. The trader is addressed by ARRAY INDEX because
+/// `m_TradersUniqueName` is not unique (two shipped rows are named `None`).
+fn parse_private_traders_set_stock_edit(edit: &Edit) -> Result<traders::SetStockEdit, CoreError> {
+    let value = edit.value.as_object().ok_or_else(|| {
+        CoreError::InvalidRequest("private.traders.setStock value must be an object".to_string())
+    })?;
+    let index = value.get("index").and_then(Value::as_u64).ok_or_else(|| {
+        CoreError::InvalidRequest(
+            "private.traders.setStock requires integer value.index".to_string(),
+        )
+    })? as usize;
+    let path = value
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|p| !p.trim().is_empty())
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(
+                "private.traders.setStock requires a non-empty value.path".to_string(),
+            )
+        })?
+        .to_string();
+    let count = value.get("count").and_then(Value::as_i64).ok_or_else(|| {
+        CoreError::InvalidRequest(
+            "private.traders.setStock requires integer value.count".to_string(),
+        )
+    })?;
+    // Sold-out lines are deleted, never negative, so a negative count would be a
+    // state the game never writes.
+    if !(0..=i32::MAX as i64).contains(&count) {
+        return Err(CoreError::InvalidRequest(
+            "private.traders.setStock value.count must fit a non-negative i32".to_string(),
+        ));
+    }
+    let map = match value.get("map").and_then(Value::as_str) {
+        Some(raw) => traders::StockMap::parse(raw)?,
+        None => traders::StockMap::Current,
+    };
+    Ok(traders::SetStockEdit {
+        index,
+        map,
+        path,
+        count: count as i32,
+    })
 }
 
 fn parse_private_story_apply_edit(edit: &Edit) -> Result<Vec<story::StoryChange>, CoreError> {
@@ -11006,6 +11231,9 @@ fn apply_private_edit_to_payload_uncached(
         PrivateEdit::SkillSet(edit) => {
             skills::apply_skill_set(payload, edit, &mut PayloadRoot::default())
         }
+        PrivateEdit::TraderSetStock(edit) => traders::apply_set_stock(payload, edit),
+        PrivateEdit::TraderAddItem(edit) => traders::apply_add_item(payload, edit),
+        PrivateEdit::TraderRemoveItem(edit) => traders::apply_remove_item(payload, edit),
         PrivateEdit::NpcRevive(edit) => npc::apply_revive(payload, &edit.id),
         PrivateEdit::NpcRelationship(edit) => {
             npc::apply_relationship(payload, &edit.id, edit.relationship)

@@ -422,6 +422,68 @@ class AppLocalizationsFr extends AppLocalizations {
   String get tabInventory => 'Inventaire';
 
   @override
+  String get tabTrade => 'Commerce';
+
+  @override
+  String get traderNotAMerchant => 'Ce personnage ne fait pas de commerce.';
+
+  @override
+  String get traderOre => 'Minerai (pouvoir d\'achat)';
+
+  @override
+  String get traderNoOre => 'aucun minerai';
+
+  @override
+  String get traderStockCurrent => 'Stock';
+
+  @override
+  String get traderStockBase => 'Base de réapprovisionnement';
+
+  @override
+  String get traderStockBaseHint =>
+      'Ce vers quoi le marchand se réapprovisionne. Cela augmente avec l\'histoire, ce n\'est donc pas un état d\'origine.';
+
+  @override
+  String get traderOreHint =>
+      'Le minerai est la monnaie de la colonie. Ce qu\'un marchand possède est ce avec quoi il peut vous payer.';
+
+  @override
+  String get traderPriceWarning =>
+      'Les prix réagissent au stock du marchand et au minerai qu\'il détient : modifier ces nombres peut donc aussi changer ses tarifs.';
+
+  @override
+  String get traderAddItem => 'Ajouter un objet';
+
+  @override
+  String get traderRemoveItem => 'Retirer la ligne';
+
+  @override
+  String get traderNeverTraded => 'jamais commercé ici';
+
+  @override
+  String get traderTraded => 'déjà commercé ici';
+
+  @override
+  String get traderReadOnlyCore =>
+      'Cette version du cœur ne peut que lire les données des marchands.';
+
+  @override
+  String get traderEmptyStock => 'Rien en stock.';
+
+  @override
+  String get traderUnknownItem => 'absent du catalogue d\'objets';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return 'Échec du chargement des marchands : $details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count lignes';
+  }
+
+  @override
   String get tabWorld => 'Monde';
 
   @override

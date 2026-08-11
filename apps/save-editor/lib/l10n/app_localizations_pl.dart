@@ -421,6 +421,68 @@ class AppLocalizationsPl extends AppLocalizations {
   String get tabInventory => 'Ekwipunek';
 
   @override
+  String get tabTrade => 'Handel';
+
+  @override
+  String get traderNotAMerchant => 'Ta postać nie handluje.';
+
+  @override
+  String get traderOre => 'Ruda (siła nabywcza)';
+
+  @override
+  String get traderNoOre => 'brak rudy';
+
+  @override
+  String get traderStockCurrent => 'Zapas';
+
+  @override
+  String get traderStockBase => 'Baza uzupełniania';
+
+  @override
+  String get traderStockBaseHint =>
+      'To, do czego kupiec uzupełnia zapasy. Rośnie wraz z fabułą, więc nie jest stanem pierwotnym.';
+
+  @override
+  String get traderOreHint =>
+      'Ruda jest walutą kolonii. To, ile kupiec jej ma, jest tym, czym może ci zapłacić.';
+
+  @override
+  String get traderPriceWarning =>
+      'Ceny reagują na to, ile kupiec ma na stanie i ile ma rudy, więc zmiana tych liczb może też zmienić jego stawki.';
+
+  @override
+  String get traderAddItem => 'Dodaj przedmiot';
+
+  @override
+  String get traderRemoveItem => 'Usuń pozycję';
+
+  @override
+  String get traderNeverTraded => 'nigdy tu nie handlowano';
+
+  @override
+  String get traderTraded => 'już tu handlowano';
+
+  @override
+  String get traderReadOnlyCore =>
+      'Ta wersja rdzenia może tylko odczytywać dane kupców.';
+
+  @override
+  String get traderEmptyStock => 'Brak zapasów.';
+
+  @override
+  String get traderUnknownItem => 'brak w katalogu przedmiotów';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return 'Nie udało się wczytać kupców: $details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count pozycji';
+  }
+
+  @override
   String get tabWorld => 'Świat';
 
   @override

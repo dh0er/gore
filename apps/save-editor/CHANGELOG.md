@@ -10,6 +10,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- A Trade tab shows what a merchant offers for sale and how much ore he has to
+  buy with. Stock counts and his ore can be changed, lines can be added and
+  removed, and the restock baseline is editable next to the live stock.
 - An NPC can be moved, with the same location picker the hero has.
 - An NPC's daily routine can be switched off, so he stays where he was put
   instead of walking back within seconds. It can be switched back on again, as

@@ -419,6 +419,67 @@ class AppLocalizationsDe extends AppLocalizations {
   String get tabInventory => 'Inventar';
 
   @override
+  String get tabTrade => 'Handel';
+
+  @override
+  String get traderNotAMerchant => 'Diese Person handelt nicht.';
+
+  @override
+  String get traderOre => 'Erz (Kaufkraft)';
+
+  @override
+  String get traderNoOre => 'kein Erz';
+
+  @override
+  String get traderStockCurrent => 'Bestand';
+
+  @override
+  String get traderStockBase => 'Nachschub-Basis';
+
+  @override
+  String get traderStockBaseHint =>
+      'Worauf der Händler wieder auffüllt. Wächst mit dem Story-Fortschritt, ist also kein Vanilla-Stand.';
+
+  @override
+  String get traderOreHint =>
+      'Erz ist die Währung der Kolonie. Was ein Händler davon hat, ist das, womit er dich bezahlen kann.';
+
+  @override
+  String get traderPriceWarning =>
+      'Preise reagieren darauf, wie viel ein Händler auf Lager hat und wie viel Erz er besitzt — diese Zahlen zu ändern kann also auch seine Preise verschieben.';
+
+  @override
+  String get traderAddItem => 'Item hinzufügen';
+
+  @override
+  String get traderRemoveItem => 'Zeile entfernen';
+
+  @override
+  String get traderNeverTraded => 'hier noch nie gehandelt';
+
+  @override
+  String get traderTraded => 'hier schon gehandelt';
+
+  @override
+  String get traderReadOnlyCore => 'Dieser Core kann Händlerdaten nur lesen.';
+
+  @override
+  String get traderEmptyStock => 'Nichts auf Lager.';
+
+  @override
+  String get traderUnknownItem => 'nicht im Item-Katalog';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return 'Die Händlerdaten konnten nicht geladen werden: $details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count Zeilen';
+  }
+
+  @override
   String get tabWorld => 'Welt';
 
   @override

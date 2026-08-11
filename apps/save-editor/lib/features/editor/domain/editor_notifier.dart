@@ -17,6 +17,7 @@ import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/domain/progression_models.dart';
 import 'package:goresave/features/editor/domain/skills_models.dart';
 import 'package:goresave/features/editor/domain/story_state_models.dart';
+import 'package:goresave/features/editor/domain/trader_models.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/l10n/app_localizations_en.dart';
 import 'package:goresave/utils/default_paths.dart';
@@ -1279,6 +1280,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
       'private.glossary.setSegment',
       'private.npc.revive',
       'private.npc.setRelationship',
+      // Both splice a trader's stock map, which shifts every later byte offset
+      // and renumbers the map's entry indices. private.traders.setStock is
+      // deliberately absent: it overwrites a bare i32 in place, so it batches.
+      'private.traders.addItem',
+      'private.traders.removeItem',
       storyStateApplyPath,
     };
     // A skill edit can learn/unlearn — splicing the hero's ActiveEffects array —
@@ -2798,6 +2804,77 @@ class EditorNotifier extends StateNotifier<EditorState> {
       return SkillsResult(error: _l10n.editorSkillsLoadFailed('$error'));
     }
   }
+
+  /// Load every merchant's shop record (`private.traders.list`).
+  ///
+  /// Returns a result carrying an inline [TradersResult.error] instead of
+  /// throwing, and reports which trader commands this core build offers so the
+  /// panel degrades to read-only against an older core rather than sending a
+  /// command that does not exist.
+  Future<TradersResult> loadTraders() async {
+    final path = state.selectedPath;
+    if (path == null) {
+      return TradersResult(error: _l10n.editorNoSaveSelected);
+    }
+    try {
+      final response = await _execute(
+        'private.traders.list',
+        payload: {'path': path},
+      );
+      if (response['ok'] != true) {
+        return TradersResult(
+          error: _l10n.editorTradersLoadFailed(_errorDetails(response)),
+        );
+      }
+      return TradersResult.fromJson(
+        (response['data'] as Map).cast<String, Object?>(),
+      );
+    } catch (error) {
+      return TradersResult(error: _l10n.editorTradersLoadFailed('$error'));
+    }
+  }
+
+  /// Load one merchant's full record by its `m_Traders` index.
+  ///
+  /// The index, not the name, is the address: two shipped rows are named `None`
+  /// and the core refuses to guess between them.
+  Future<TraderDetailResult> loadTraderDetail(int index) async {
+    final path = state.selectedPath;
+    if (path == null) {
+      return TraderDetailResult(error: _l10n.editorNoSaveSelected);
+    }
+    try {
+      final response = await _execute(
+        'private.traders.detail',
+        payload: {'path': path, 'index': index},
+      );
+      if (response['ok'] != true) {
+        return TraderDetailResult(
+          error: _l10n.editorTradersLoadFailed(_errorDetails(response)),
+        );
+      }
+      return TraderDetailResult(
+        detail: TraderDetail.fromJson(
+          (response['data'] as Map).cast<String, Object?>(),
+        ),
+      );
+    } catch (error) {
+      return TraderDetailResult(error: _l10n.editorTradersLoadFailed('$error'));
+    }
+  }
+
+  /// Queue one trader stock change. Re-editing the same line replaces its
+  /// pending edit rather than stacking a second one.
+  void setTraderStockEdit(TraderStockEdit edit) {
+    setPendingEdit(
+      edit.pendingKey,
+      PendingSaveEdit(edits: [edit.toEdit()]),
+    );
+  }
+
+  /// Drop a queued trader change (the user reverted the field).
+  void clearTraderStockEdit(TraderStockEdit edit) =>
+      clearPendingEdit(edit.pendingKey);
 
   /// Run one progression section query. Returns the raw data map, or null
   /// with [onError] called, so each typed loader below can build its own page

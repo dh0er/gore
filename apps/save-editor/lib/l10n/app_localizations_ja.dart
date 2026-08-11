@@ -412,6 +412,65 @@ class AppLocalizationsJa extends AppLocalizations {
   String get tabInventory => 'インベントリ';
 
   @override
+  String get tabTrade => '取引';
+
+  @override
+  String get traderNotAMerchant => 'このキャラクターは取引をしません。';
+
+  @override
+  String get traderOre => '鉱石（購買力）';
+
+  @override
+  String get traderNoOre => '鉱石なし';
+
+  @override
+  String get traderStockCurrent => '在庫';
+
+  @override
+  String get traderStockBase => '補充の基準';
+
+  @override
+  String get traderStockBaseHint => '商人が補充する基準。ストーリーの進行とともに増えるため、初期状態ではありません。';
+
+  @override
+  String get traderOreHint => '鉱石はコロニーの通貨です。商人が持っている量が、あなたに支払える額です。';
+
+  @override
+  String get traderPriceWarning =>
+      '価格は商人の在庫量と保有鉱石に反応します。これらの数値を変えると、提示価格も動くことがあります。';
+
+  @override
+  String get traderAddItem => 'アイテムを追加';
+
+  @override
+  String get traderRemoveItem => '行を削除';
+
+  @override
+  String get traderNeverTraded => 'ここで取引したことがない';
+
+  @override
+  String get traderTraded => 'ここで取引済み';
+
+  @override
+  String get traderReadOnlyCore => 'このコアは商人データの読み取りのみ可能です。';
+
+  @override
+  String get traderEmptyStock => '在庫がありません。';
+
+  @override
+  String get traderUnknownItem => 'アイテムカタログにありません';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return '商人データの読み込みに失敗しました: $details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count 行';
+  }
+
+  @override
   String get tabWorld => 'ワールド';
 
   @override

@@ -836,6 +836,114 @@ abstract class AppLocalizations {
   /// **'Inventory'**
   String get tabInventory;
 
+  /// No description provided for @tabTrade.
+  ///
+  /// In en, this message translates to:
+  /// **'Trade'**
+  String get tabTrade;
+
+  /// No description provided for @traderNotAMerchant.
+  ///
+  /// In en, this message translates to:
+  /// **'This character does not trade.'**
+  String get traderNotAMerchant;
+
+  /// No description provided for @traderOre.
+  ///
+  /// In en, this message translates to:
+  /// **'Ore (purchasing power)'**
+  String get traderOre;
+
+  /// No description provided for @traderNoOre.
+  ///
+  /// In en, this message translates to:
+  /// **'no ore'**
+  String get traderNoOre;
+
+  /// No description provided for @traderStockCurrent.
+  ///
+  /// In en, this message translates to:
+  /// **'Stock'**
+  String get traderStockCurrent;
+
+  /// No description provided for @traderStockBase.
+  ///
+  /// In en, this message translates to:
+  /// **'Restock baseline'**
+  String get traderStockBase;
+
+  /// No description provided for @traderStockBaseHint.
+  ///
+  /// In en, this message translates to:
+  /// **'What the merchant restocks back toward. It grows with story progress, so it is not a vanilla snapshot.'**
+  String get traderStockBaseHint;
+
+  /// No description provided for @traderOreHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Ore is the colony\'s currency. The amount a merchant holds is what he can pay you with.'**
+  String get traderOreHint;
+
+  /// No description provided for @traderPriceWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Prices react to how much a merchant stocks and how much ore he holds, so changing these numbers can also move what he charges.'**
+  String get traderPriceWarning;
+
+  /// No description provided for @traderAddItem.
+  ///
+  /// In en, this message translates to:
+  /// **'Add item'**
+  String get traderAddItem;
+
+  /// No description provided for @traderRemoveItem.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove line'**
+  String get traderRemoveItem;
+
+  /// No description provided for @traderNeverTraded.
+  ///
+  /// In en, this message translates to:
+  /// **'never traded here'**
+  String get traderNeverTraded;
+
+  /// No description provided for @traderTraded.
+  ///
+  /// In en, this message translates to:
+  /// **'already traded here'**
+  String get traderTraded;
+
+  /// No description provided for @traderReadOnlyCore.
+  ///
+  /// In en, this message translates to:
+  /// **'This core build can only read trader data.'**
+  String get traderReadOnlyCore;
+
+  /// No description provided for @traderEmptyStock.
+  ///
+  /// In en, this message translates to:
+  /// **'Nothing in stock.'**
+  String get traderEmptyStock;
+
+  /// No description provided for @traderUnknownItem.
+  ///
+  /// In en, this message translates to:
+  /// **'not in the item catalog'**
+  String get traderUnknownItem;
+
+  /// No description provided for @editorTradersLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Trader load failed: {details}'**
+  String editorTradersLoadFailed(String details);
+
+  /// No description provided for @traderStockLineCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} lines'**
+  String traderStockLineCount(int count);
+
   /// No description provided for @tabWorld.
   ///
   /// In en, this message translates to:
