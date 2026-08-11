@@ -167,18 +167,33 @@ void main() {
     (tester) async {
       _compact200Percent(tester);
       final semantics = tester.ensureSemantics();
-      await tester.pumpWidget(_app(const ConflictPanel()));
+      await tester.pumpWidget(
+        _app(const SizedBox(height: 72, child: ConflictPanel())),
+      );
       await tester.pumpAndSettle();
 
       final l10n = await AppLocalizations.delegate.load(const Locale('en'));
       expect(find.text(l10n.noConflicts), findsOneWidget);
       expect(find.text('No conflicts.'), findsNothing);
+      final panelRect = tester.getRect(find.byType(ConflictPanel));
+      final resultRect = tester.getRect(find.text(l10n.noConflicts));
+      expect(resultRect.top, lessThan(panelRect.bottom));
+      expect(resultRect.bottom, greaterThan(panelRect.top));
+      final knowledgeNote = find.byKey(
+        const ValueKey('conflict-knowledge-note'),
+      );
+      await tester.scrollUntilVisible(
+        knowledgeNote,
+        60,
+        scrollable: find.descendant(
+          of: find.byType(ConflictPanel),
+          matching: find.byType(Scrollable),
+        ),
+      );
       expect(find.text(l10n.conflictCoverageIncomplete), findsOneWidget);
       expect(find.text(l10n.loadOrderDirection), findsOneWidget);
       expect(find.text(l10n.footprintCoverageScope), findsOneWidget);
-      final label = tester
-          .getSemantics(find.byKey(const ValueKey('conflict-knowledge-note')))
-          .label;
+      final label = tester.getSemantics(knowledgeNote).label;
       expect(label, contains(l10n.conflictCoverageIncomplete));
       expect(label, contains(l10n.loadOrderDirection));
       expect(label, contains(l10n.footprintCoverageScope));

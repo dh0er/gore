@@ -54,16 +54,16 @@ class ConflictPanel extends ConsumerWidget {
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              _ConflictKnowledgeNote(
-                incompleteCoverage: incompleteCoverage,
-                l10n: l10n,
-              ),
-              const SizedBox(height: 12),
               Text(
                 l10n.noConflicts,
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
+              ),
+              const SizedBox(height: 12),
+              _ConflictKnowledgeNote(
+                incompleteCoverage: incompleteCoverage,
+                l10n: l10n,
               ),
             ],
           );
