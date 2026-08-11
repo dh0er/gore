@@ -7,9 +7,18 @@ import '../../l10n/app_localizations.dart';
 import '../core_service.dart';
 
 class CoreUnavailablePage extends StatefulWidget {
-  const CoreUnavailablePage({super.key, required this.failure});
+  const CoreUnavailablePage({super.key, required this.failure})
+    : _managerVersionLoader = null;
+
+  /// Test-only seam for controlling the asynchronous package-info lookup.
+  const CoreUnavailablePage.forTesting(
+    this._managerVersionLoader, {
+    super.key,
+    required this.failure,
+  });
 
   final CoreBootstrapFailure failure;
+  final Future<String?> Function()? _managerVersionLoader;
 
   @override
   State<CoreUnavailablePage> createState() => _CoreUnavailablePageState();
@@ -22,6 +31,7 @@ class _CoreUnavailablePageState extends State<CoreUnavailablePage> {
   final GlobalKey _copyVisibilityKey = GlobalKey(
     debugLabel: 'core-unavailable-copy-visibility',
   );
+  late final Future<void> _managerVersionReady;
   String? _managerVersion;
   bool _copied = false;
   bool _copyFailed = false;
@@ -29,7 +39,7 @@ class _CoreUnavailablePageState extends State<CoreUnavailablePage> {
   @override
   void initState() {
     super.initState();
-    _loadManagerVersion();
+    _managerVersionReady = _loadManagerVersion();
     WidgetsBinding.instance.addPostFrameCallback((_) => _revealCopyAction());
   }
 
@@ -41,8 +51,11 @@ class _CoreUnavailablePageState extends State<CoreUnavailablePage> {
 
   Future<void> _loadManagerVersion() async {
     try {
-      final info = await PackageInfo.fromPlatform();
-      if (mounted) setState(() => _managerVersion = info.version);
+      final loader = widget._managerVersionLoader;
+      final version = loader == null
+          ? (await PackageInfo.fromPlatform()).version
+          : await loader();
+      if (mounted) setState(() => _managerVersion = version);
     } catch (_) {
       // Version metadata is useful support evidence, never a prerequisite for
       // showing or copying the bounded bootstrap report.
@@ -50,6 +63,8 @@ class _CoreUnavailablePageState extends State<CoreUnavailablePage> {
   }
 
   Future<void> _copyDetails() async {
+    await _managerVersionReady;
+    if (!mounted) return;
     var copied = false;
     try {
       await Clipboard.setData(ClipboardData(text: _technicalReport));

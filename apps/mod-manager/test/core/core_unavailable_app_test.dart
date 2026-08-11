@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -306,6 +307,65 @@ void main() {
     expect(
       tester.widget<FilledButton>(copyFinder).focusNode?.hasPrimaryFocus,
       isTrue,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('copy waits for manager version metadata', (tester) async {
+    final version = Completer<String?>();
+    String? clipboardText;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          clipboardText = (call.arguments as Map)['text'] as String?;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    final failure = CoreBootstrapFailure(
+      reason: CoreBootstrapFailureReason.dllMissing,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        locale: const Locale('en'),
+        localizationsDelegates: const [
+          AppLocalizations.delegate,
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: CoreUnavailablePage.forTesting(
+          () => version.future,
+          failure: failure,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(clipboardText, isNull);
+    expect(
+      find.byKey(const ValueKey('core-technical-details-copied')),
+      findsNothing,
+    );
+
+    version.complete('7.8.9');
+    await tester.pumpAndSettle();
+
+    expect(jsonDecode(clipboardText!)['manager_version'], '7.8.9');
+    expect(
+      find.byKey(const ValueKey('core-technical-details-copied')),
+      findsOneWidget,
     );
     expect(tester.takeException(), isNull);
   });
