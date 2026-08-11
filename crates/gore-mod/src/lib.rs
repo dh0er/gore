@@ -5077,6 +5077,7 @@ fn commit_plan_guarded(
 
 fn write_record_file(game_root: &Path, record: &DeployRecord) -> Result<()> {
     validate_record(game_root, record)?;
+    validate_record_identities(record)?;
     let bytes = serde_json::to_vec_pretty(record)?;
     if bytes.len() as u64 > MAX_DEPLOY_RECORD_BYTES {
         return Err(ModError::Other(format!(
@@ -7252,6 +7253,94 @@ fn path_exists_no_follow(path: &Path) -> bool {
 /// Whether `list` already contains a path referring to the same file as `p` (`same_path_s`).
 fn contains_same_path(list: &[String], p: &str) -> bool {
     list.iter().any(|x| same_path_s(x, p))
+}
+
+fn valid_sha256_identity(identity: &str) -> bool {
+    identity.strip_prefix("sha256:").is_some_and(|hex| {
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+fn valid_file_identity(identity: &str) -> bool {
+    valid_sha256_identity(identity)
+        || (identity.len() == 16
+            && identity
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+}
+
+/// Require the exact lowercase identities GORE writes. This remains separate from structural
+/// record parsing so legacy public status can keep its read-only classification, while preflight
+/// and every attempted record publication fail closed before trusting noncanonical ownership.
+pub(crate) fn validate_record_identities(record: &DeployRecord) -> Result<()> {
+    for (path, identity) in &record.deployed_hashes {
+        if !valid_file_identity(identity) {
+            return Err(ModError::Other(format!(
+                "deploy record contains an invalid deployed file identity for {path}"
+            )));
+        }
+    }
+    for (path, identities) in &record.recovery_file_hashes {
+        if identities.is_empty()
+            || identities
+                .iter()
+                .any(|identity| !valid_file_identity(identity))
+        {
+            return Err(ModError::Other(format!(
+                "deploy record contains an invalid alternate file identity for {path}"
+            )));
+        }
+    }
+    for (path, identity) in &record.backup_hashes {
+        if !valid_sha256_identity(identity) {
+            return Err(ModError::Other(format!(
+                "deploy record contains an invalid backup SHA-256 identity for {path}"
+            )));
+        }
+    }
+    for (path, identity) in &record.ue4ss_tree_fingerprints {
+        if !valid_sha256_identity(identity) {
+            return Err(ModError::Other(format!(
+                "deploy record contains an invalid UE4SS tree identity for {path}"
+            )));
+        }
+    }
+    for (path, identities) in &record.recovery_tree_fingerprints {
+        if identities.is_empty()
+            || identities
+                .iter()
+                .any(|identity| !valid_sha256_identity(identity))
+        {
+            return Err(ModError::Other(format!(
+                "deploy record contains an invalid alternate UE4SS tree identity for {path}"
+            )));
+        }
+    }
+    for (source, claim) in &record.file_cleanup_claims {
+        if claim.expected_hashes.is_empty()
+            || claim
+                .expected_hashes
+                .iter()
+                .any(|identity| !valid_file_identity(identity))
+        {
+            return Err(ModError::Other(format!(
+                "deploy record contains an invalid cleanup file identity for {source}"
+            )));
+        }
+        if claim
+            .restore_hash
+            .as_deref()
+            .is_some_and(|identity| !valid_sha256_identity(identity))
+        {
+            return Err(ModError::Other(format!(
+                "deploy record contains an invalid cleanup restore identity for {source}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -13001,6 +13090,90 @@ mod tests {
         assert_eq!(std::fs::read(&live).unwrap(), b"modded");
         assert_eq!(std::fs::read(&bak).unwrap(), b"pristine");
         assert_eq!(std::fs::read(&path).unwrap(), record_bytes);
+    }
+
+    #[test]
+    fn undeploy_rejects_noncanonical_ownership_before_recovery_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let live = game.join("G1R/Story/VoiceOver/target.zip");
+        let backup = bak_path(&live);
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"modded").unwrap();
+        std::fs::write(&backup, b"pristine").unwrap();
+        let canonical = sha256_file(&backup).unwrap();
+        let noncanonical = format!(
+            "sha256:{}",
+            canonical
+                .strip_prefix("sha256:")
+                .unwrap()
+                .to_ascii_uppercase()
+        );
+        assert_ne!(noncanonical, canonical);
+        let record = DeployRecord {
+            backups: vec![(
+                live.display().to_string(),
+                backup.display().to_string(),
+                true,
+            )],
+            deployed_hashes: BTreeMap::from([(
+                live.display().to_string(),
+                content_hash(b"modded"),
+            )]),
+            backup_hashes: BTreeMap::from([(backup.display().to_string(), noncanonical)]),
+            ..Default::default()
+        };
+        let path = record_path(&game);
+        let record_bytes = serde_json::to_vec(&record).unwrap();
+        std::fs::write(&path, &record_bytes).unwrap();
+
+        let error = undeploy(&game).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("invalid backup SHA-256 identity"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&live).unwrap(), b"modded");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"pristine");
+        assert_eq!(std::fs::read(&path).unwrap(), record_bytes);
+    }
+
+    #[test]
+    fn record_identity_validation_covers_cleanup_claims() {
+        let canonical_sha = format!("sha256:{}", "a".repeat(64));
+        let noncanonical_sha = format!("sha256:{}", "A".repeat(64));
+        let noncanonical_legacy = "A".repeat(16);
+        let cases = [
+            DeployRecord {
+                file_cleanup_claims: BTreeMap::from([(
+                    "source".into(),
+                    FileCleanupClaim {
+                        holder: "holder".into(),
+                        expected_hashes: vec![noncanonical_legacy],
+                        restore_from: None,
+                        restore_hash: None,
+                    },
+                )]),
+                ..Default::default()
+            },
+            DeployRecord {
+                file_cleanup_claims: BTreeMap::from([(
+                    "source".into(),
+                    FileCleanupClaim {
+                        holder: "holder".into(),
+                        expected_hashes: vec![canonical_sha],
+                        restore_from: Some("backup".into()),
+                        restore_hash: Some(noncanonical_sha),
+                    },
+                )]),
+                ..Default::default()
+            },
+        ];
+
+        for record in cases {
+            assert!(validate_record_identities(&record).is_err());
+        }
     }
 
     #[test]

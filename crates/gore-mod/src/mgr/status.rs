@@ -113,63 +113,6 @@ impl DeploymentInspection {
     }
 }
 
-fn valid_sha256_identity(identity: &str) -> bool {
-    identity.strip_prefix("sha256:").is_some_and(|hex| {
-        hex.len() == 64
-            && hex
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    })
-}
-
-fn valid_file_identity(identity: &str) -> bool {
-    valid_sha256_identity(identity)
-        || (identity.len() == 16
-            && identity
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
-}
-
-fn validate_record_identities(record: &crate::DeployRecord) -> crate::Result<()> {
-    for (path, identity) in &record.deployed_hashes {
-        if !valid_file_identity(identity) {
-            return Err(crate::ModError::Other(format!(
-                "deploy record contains an invalid deployed file identity for {path}"
-            )));
-        }
-    }
-    for (path, identities) in &record.recovery_file_hashes {
-        if identities.is_empty()
-            || identities
-                .iter()
-                .any(|identity| !valid_file_identity(identity))
-        {
-            return Err(crate::ModError::Other(format!(
-                "deploy record contains an invalid alternate file identity for {path}"
-            )));
-        }
-    }
-    for (path, identity) in &record.ue4ss_tree_fingerprints {
-        if !valid_sha256_identity(identity) {
-            return Err(crate::ModError::Other(format!(
-                "deploy record contains an invalid UE4SS tree identity for {path}"
-            )));
-        }
-    }
-    for (path, identities) in &record.recovery_tree_fingerprints {
-        if identities.is_empty()
-            || identities
-                .iter()
-                .any(|identity| !valid_sha256_identity(identity))
-        {
-            return Err(crate::ModError::Other(format!(
-                "deploy record contains an invalid alternate UE4SS tree identity for {path}"
-            )));
-        }
-    }
-    Ok(())
-}
-
 fn metadata_for_status(path: &Path) -> crate::Result<Option<std::fs::Metadata>> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) => Ok(Some(metadata)),
@@ -261,7 +204,7 @@ fn tree_matches_for_status(
         if crate::metadata_is_link(&metadata) || !metadata.is_dir() {
             return Ok(false);
         }
-        if !valid_sha256_identity(expected) {
+        if !crate::valid_sha256_identity(expected) {
             return Err(crate::ModError::Other(format!(
                 "invalid recorded UE4SS tree SHA-256 identity for {}",
                 path.display()
@@ -407,7 +350,7 @@ fn status_with_failure_policy(
     if failure_policy == InspectionFailurePolicy::Preserve
         && (recovery_required || record.owner != "manager")
     {
-        validate_record_identities(&record)?;
+        crate::validate_record_identities(&record)?;
     }
     if recovery_required {
         return Ok(ManagerStatus::RecoveryRequired);
@@ -904,6 +847,58 @@ mod tests {
         let error = status_for_preflight(&game, &lib, &Loadout::default()).unwrap_err();
         assert!(
             error.to_string().contains("invalid deployed file identity"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(record_path(&game)).unwrap(), before);
+    }
+
+    #[test]
+    fn preflight_rejects_noncanonical_studio_backup_before_removal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game = tmp.path().join("game");
+        let lib = tmp.path().join("lib");
+        let live = game.join("G1R/Story/VoiceOver/owned.zip");
+        let backup = crate::bak_path(&live);
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"deployed").unwrap();
+        std::fs::write(&backup, b"pristine").unwrap();
+        let canonical = crate::sha256_file(&backup).unwrap();
+        let noncanonical = format!(
+            "sha256:{}",
+            canonical
+                .strip_prefix("sha256:")
+                .unwrap()
+                .to_ascii_uppercase()
+        );
+        assert_ne!(noncanonical, canonical);
+        let record = DeployRecord {
+            mod_name: "SoloMod".into(),
+            backups: vec![(
+                live.display().to_string(),
+                backup.display().to_string(),
+                true,
+            )],
+            deployed_hashes: BTreeMap::from([(
+                live.display().to_string(),
+                crate::content_hash(b"deployed"),
+            )]),
+            backup_hashes: BTreeMap::from([(backup.display().to_string(), noncanonical)]),
+            ..Default::default()
+        };
+        write_record(&game, &record);
+        let before = std::fs::read(record_path(&game)).unwrap();
+
+        assert_eq!(
+            status(&game, &lib, &Loadout::default()).unwrap(),
+            ManagerStatus::StudioDeployActive {
+                mod_name: "SoloMod".into()
+            }
+        );
+        let error = status_for_preflight(&game, &lib, &Loadout::default()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("invalid backup SHA-256 identity"),
             "{error}"
         );
         assert_eq!(std::fs::read(record_path(&game)).unwrap(), before);
