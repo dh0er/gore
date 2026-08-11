@@ -347,9 +347,7 @@ fn status_with_failure_policy(
     let recovery_required = record.phase == crate::DeployPhase::RecoveryRequired
         || !record.file_cleanup_claims.is_empty()
         || !record.ue4ss_cleanup_claims.is_empty();
-    if failure_policy == InspectionFailurePolicy::Preserve
-        && (recovery_required || record.owner != "manager")
-    {
+    if failure_policy == InspectionFailurePolicy::Preserve {
         crate::validate_record_identities(&record)?;
     }
     if recovery_required {
@@ -904,6 +902,57 @@ mod tests {
         assert_eq!(std::fs::read(record_path(&game)).unwrap(), before);
     }
 
+    #[test]
+    fn preflight_rejects_noncanonical_manager_ownership_before_reapply() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game = tmp.path().join("game");
+        let lib = tmp.path().join("lib");
+        let live = game.join("G1R/Story/VoiceOver/owned.zip");
+        let backup = crate::bak_path(&live);
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"deployed").unwrap();
+        std::fs::write(&backup, b"pristine").unwrap();
+        let live_identity = crate::content_hash(b"deployed");
+        let noncanonical_live = live_identity.to_ascii_uppercase();
+        assert_ne!(noncanonical_live, live_identity);
+        let backup_identity = crate::sha256_file(&backup).unwrap();
+        let noncanonical_backup = format!(
+            "sha256:{}",
+            backup_identity
+                .strip_prefix("sha256:")
+                .unwrap()
+                .to_ascii_uppercase()
+        );
+        assert_ne!(noncanonical_backup, backup_identity);
+        let record = |deployed, backup_hash| DeployRecord {
+            mod_name: "manager".into(),
+            owner: "manager".into(),
+            backups: vec![(
+                live.display().to_string(),
+                backup.display().to_string(),
+                true,
+            )],
+            deployed_hashes: BTreeMap::from([(live.display().to_string(), deployed)]),
+            backup_hashes: BTreeMap::from([(backup.display().to_string(), backup_hash)]),
+            ..Default::default()
+        };
+        let cases = [
+            record(noncanonical_live, backup_identity),
+            record(live_identity, noncanonical_backup),
+        ];
+
+        for record in cases {
+            write_record(&game, &record);
+            let before = std::fs::read(record_path(&game)).unwrap();
+            assert!(matches!(
+                status(&game, &lib, &Loadout::default()).unwrap(),
+                ManagerStatus::GameUpdated { .. }
+            ));
+            assert!(status_for_preflight(&game, &lib, &Loadout::default()).is_err());
+            assert_eq!(std::fs::read(record_path(&game)).unwrap(), before);
+        }
+    }
+
     /// A manager record whose loadout equals the target's enabled entries AND whose recorded
     /// fingerprints still match the library → InSync; a disabled target entry is excluded from the
     /// comparison.
@@ -1051,20 +1100,10 @@ mod tests {
         assert!(status_for_preflight(&game, &lib, &Loadout::default()).is_err());
 
         std::fs::remove_file(&live).unwrap();
-        assert_eq!(
-            status_for_preflight(&game, &lib, &Loadout::default()).unwrap(),
-            ManagerStatus::GameUpdated {
-                drifted: vec![live.display().to_string()]
-            }
-        );
+        assert!(status_for_preflight(&game, &lib, &Loadout::default()).is_err());
 
         std::fs::create_dir(&live).unwrap();
-        assert_eq!(
-            status_for_preflight(&game, &lib, &Loadout::default()).unwrap(),
-            ManagerStatus::GameUpdated {
-                drifted: vec![live.display().to_string()]
-            }
-        );
+        assert!(status_for_preflight(&game, &lib, &Loadout::default()).is_err());
     }
 
     #[test]
@@ -1460,12 +1499,7 @@ mod tests {
         assert!(status_for_preflight(&game, &lib, &Loadout::default()).is_err());
 
         std::fs::remove_dir_all(&tree).unwrap();
-        assert_eq!(
-            status_for_preflight(&game, &lib, &Loadout::default()).unwrap(),
-            ManagerStatus::GameUpdated {
-                drifted: vec![tree.display().to_string()]
-            }
-        );
+        assert!(status_for_preflight(&game, &lib, &Loadout::default()).is_err());
     }
 
     #[test]
