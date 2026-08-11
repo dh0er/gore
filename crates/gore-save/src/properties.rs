@@ -27,6 +27,7 @@
 
 use crate::{CoreError, Reader};
 use serde_json::{Value, json};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -658,14 +659,70 @@ pub fn search_properties(
         total: &mut total,
         hits: &mut hits,
     };
-    walk_search(
-        &root.properties,
-        &mut Vec::new(),
-        &mut String::new(),
-        true,
-        &mut ctx,
-    );
+    walk_search(&root.properties, &mut SearchPath::default(), true, &mut ctx);
     (hits, total)
+}
+
+/// The path to the property currently being visited, carried down the walk and
+/// unwound on the way back up.
+///
+/// A real save holds well over a million properties, so this is the walk's hot
+/// data structure and everything about it is shaped to avoid per-property
+/// allocation:
+///
+/// * `segments` borrows property names straight out of the tree and only owns
+///   the `[index]` / `{mapKey}` segments it has to format, so descending into a
+///   plain named property allocates nothing.
+/// * `lower` is the lower-cased twin of `display`, maintained in lockstep. The
+///   query terms are lower-cased once up front and matched against it, instead
+///   of lower-casing the whole display path again at every leaf.
+#[derive(Default)]
+struct SearchPath<'a> {
+    segments: Vec<Cow<'a, str>>,
+    display: String,
+    lower: String,
+}
+
+/// What [`SearchPath::push`] has to undo, so a pop restores the exact state.
+struct SearchMark {
+    display_len: usize,
+    lower_len: usize,
+}
+
+impl<'a> SearchPath<'a> {
+    /// Append one path segment (with the ` › ` separator when it joins a named
+    /// property to its parent) and return the mark that unwinds it.
+    fn push(&mut self, segment: Cow<'a, str>, separate: bool) -> SearchMark {
+        let mark = SearchMark {
+            display_len: self.display.len(),
+            lower_len: self.lower.len(),
+        };
+        if separate && !self.display.is_empty() {
+            self.display.push_str(" › ");
+            self.lower.push_str(" › ");
+        }
+        self.display.push_str(&segment);
+        // Lower-casing per segment rather than per leaf is what makes the match
+        // cheap. It agrees with lower-casing the joined path: every segment is
+        // followed by a separator or the end of the string, so no character sits
+        // in a different word-final position in one form than in the other.
+        self.lower
+            .extend(segment.chars().flat_map(char::to_lowercase));
+        self.segments.push(segment);
+        mark
+    }
+
+    fn pop(&mut self, mark: SearchMark) {
+        self.segments.pop();
+        self.display.truncate(mark.display_len);
+        self.lower.truncate(mark.lower_len);
+    }
+
+    /// Materialize the owned path a hit carries. Only ever called for a property
+    /// that actually lands in the requested page.
+    fn to_owned_segments(&self) -> Vec<String> {
+        self.segments.iter().map(|s| s.to_string()).collect()
+    }
 }
 
 struct SearchCtx<'a> {
@@ -677,13 +734,21 @@ struct SearchCtx<'a> {
 }
 
 impl SearchCtx<'_> {
-    /// Record a match: count it toward the total and push it if it falls inside
-    /// the requested page window.
-    fn record(&mut self, hit: PropertyHit) {
+    /// Whether the path built so far contains every query term.
+    fn matches(&self, path: &SearchPath) -> bool {
+        self.terms.iter().all(|term| path.lower.contains(term))
+    }
+
+    /// Record a match: count it toward the total and, only when it falls inside
+    /// the requested page, build the hit. The tree is always walked in full to
+    /// get an accurate total, so building hits lazily keeps the ~1.4M properties
+    /// a full scan visits from each paying for a path and value clone they would
+    /// only need if they were among the 50 rows actually returned.
+    fn record(&mut self, hit: impl FnOnce() -> PropertyHit) {
         let index = *self.total;
         *self.total += 1;
         if index >= self.offset && self.hits.len() < self.limit {
-            self.hits.push(hit);
+            self.hits.push(hit());
         }
     }
 }
@@ -723,71 +788,92 @@ fn scalar_display(value: &PropertyValue) -> Option<String> {
     })
 }
 
-fn walk_search(
-    props: &[Property],
-    path: &mut Vec<String>,
-    display: &mut String,
+/// Whether [`scalar_display`] would produce a value — i.e. whether this is a
+/// leaf the search reports rather than a container it descends into. The search
+/// asks this first and only formats the value for a property that reaches the
+/// result page, so the two must agree on every variant (asserted by
+/// `scalar_display_agrees_with_is_scalar`).
+fn is_scalar(value: &PropertyValue) -> bool {
+    matches!(
+        value,
+        PropertyValue::Int(_)
+            | PropertyValue::UInt32(_)
+            | PropertyValue::Int64(_)
+            | PropertyValue::Float(_)
+            | PropertyValue::Double(_)
+            | PropertyValue::Bool(_)
+            | PropertyValue::Byte(_)
+            | PropertyValue::Str(_)
+            | PropertyValue::Name(_)
+            | PropertyValue::Object(_)
+            | PropertyValue::Enum(_)
+            | PropertyValue::SoftObject(_)
+    )
+}
+
+/// Whether `name` occurs exactly once in `props`. Property lists are almost
+/// always short, so a linear scan beats building a whole `HashMap` per list —
+/// and the walk builds one per list, once per node in the tree.
+fn occurs_once(props: &[Property], name: &str) -> bool {
+    let mut seen = 0usize;
+    for property in props {
+        if property.name == name {
+            seen += 1;
+            if seen > 1 {
+                return false;
+            }
+        }
+    }
+    seen == 1
+}
+
+fn walk_search<'a>(
+    props: &'a [Property],
+    path: &mut SearchPath<'a>,
     ancestors_addressable: bool,
     ctx: &mut SearchCtx,
 ) {
-    let mut name_counts = HashMap::<&str, usize>::new();
-    for property in props {
-        *name_counts.entry(property.name.as_str()).or_default() += 1;
-    }
     for p in props {
-        let display_len = display.len();
-        if !display.is_empty() {
-            display.push_str(" › ");
-        }
-        display.push_str(&p.name);
-        path.push(p.name.to_string());
-        let addressable =
-            ancestors_addressable && name_counts.get(p.name.as_str()).copied() == Some(1);
+        let mark = path.push(Cow::Borrowed(p.name.as_str()), true);
+        let addressable = ancestors_addressable && occurs_once(props, &p.name);
 
         // Leaf value?
-        if let Some(value_display) = scalar_display(&p.value) {
-            if ctx.terms.iter().all(|t| display.to_lowercase().contains(t)) {
-                ctx.record(PropertyHit {
-                    path: path.clone(),
-                    display: display.clone(),
+        if is_scalar(&p.value) {
+            if ctx.matches(path) {
+                ctx.record(|| PropertyHit {
+                    path: path.to_owned_segments(),
+                    display: path.display.clone(),
                     type_name: p.type_name.to_string(),
-                    value_display,
+                    value_display: scalar_display(&p.value).unwrap_or_default(),
                     editable: addressable && scalar_editable(&p.value),
                 });
             }
         } else {
-            walk_value_search(&p.value, path, display, addressable, ctx);
+            walk_value_search(&p.value, path, addressable, ctx);
         }
 
-        path.pop();
-        display.truncate(display_len);
+        path.pop(mark);
     }
 }
 
-fn walk_value_search(
-    value: &PropertyValue,
-    path: &mut Vec<String>,
-    display: &mut String,
+fn walk_value_search<'a>(
+    value: &'a PropertyValue,
+    path: &mut SearchPath<'a>,
     ancestors_addressable: bool,
     ctx: &mut SearchCtx,
 ) {
     match value {
         PropertyValue::Struct(StructValue::Properties(inner)) => {
-            walk_search(inner, path, display, ancestors_addressable, ctx);
+            walk_search(inner, path, ancestors_addressable, ctx);
         }
         PropertyValue::Struct(StructValue::Instanced(Some(i))) => {
-            walk_search(&i.properties, path, display, ancestors_addressable, ctx);
+            walk_search(&i.properties, path, ancestors_addressable, ctx);
         }
         PropertyValue::ObjectInstances(objs) => {
             for (idx, obj) in objs.iter().enumerate() {
-                descend_indexed(
-                    idx,
-                    &obj.properties,
-                    path,
-                    display,
-                    ancestors_addressable,
-                    ctx,
-                );
+                let mark = path.push(Cow::Owned(format!("[{idx}]")), false);
+                walk_search(&obj.properties, path, ancestors_addressable, ctx);
+                path.pop(mark);
             }
         }
         PropertyValue::Map { entries, .. } => {
@@ -808,67 +894,33 @@ fn walk_value_search(
                     Some(label) => format!("{{{label}}} [#{index}]"),
                     None => format!("{{? #{index}}}"),
                 };
-                descend_value(
-                    &segment,
-                    value,
-                    path,
-                    display,
-                    ancestors_addressable && unique,
-                    ctx,
-                );
+                descend_value(segment, value, path, ancestors_addressable && unique, ctx);
             }
         }
         PropertyValue::Array { elements } | PropertyValue::Set { elements, .. } => {
             for (idx, el) in elements.iter().enumerate() {
-                descend_value(
-                    &format!("[{idx}]"),
-                    el,
-                    path,
-                    display,
-                    ancestors_addressable,
-                    ctx,
-                );
+                descend_value(format!("[{idx}]"), el, path, ancestors_addressable, ctx);
             }
         }
         _ => {}
     }
 }
 
-fn descend_indexed(
-    idx: usize,
-    props: &[Property],
-    path: &mut Vec<String>,
-    display: &mut String,
+fn descend_value<'a>(
+    seg: String,
+    value: &'a PropertyValue,
+    path: &mut SearchPath<'a>,
     descendants_addressable: bool,
     ctx: &mut SearchCtx,
 ) {
-    let display_len = display.len();
-    let seg = format!("[{idx}]");
-    display.push_str(&seg);
-    path.push(seg);
-    walk_search(props, path, display, descendants_addressable, ctx);
-    path.pop();
-    display.truncate(display_len);
-}
-
-fn descend_value(
-    seg: &str,
-    value: &PropertyValue,
-    path: &mut Vec<String>,
-    display: &mut String,
-    descendants_addressable: bool,
-    ctx: &mut SearchCtx,
-) {
-    let display_len = display.len();
-    display.push_str(seg);
-    path.push(seg.to_string());
-    if let Some(value_display) = scalar_display(value) {
-        if ctx.terms.iter().all(|t| display.to_lowercase().contains(t)) {
-            ctx.record(PropertyHit {
-                path: path.clone(),
-                display: display.clone(),
+    let mark = path.push(Cow::Owned(seg), false);
+    if is_scalar(value) {
+        if ctx.matches(path) {
+            ctx.record(|| PropertyHit {
+                path: path.to_owned_segments(),
+                display: path.display.clone(),
                 type_name: container_value_type(value).to_string(),
-                value_display,
+                value_display: scalar_display(value).unwrap_or_default(),
                 // This hit's path ends on a `{mapKey}` or `[index]` segment.
                 // `setValue` only resolves to tagged Property nodes and rejects
                 // paths ending on a container element, so such scalars are not
@@ -877,10 +929,9 @@ fn descend_value(
             });
         }
     } else {
-        walk_value_search(value, path, display, descendants_addressable, ctx);
+        walk_value_search(value, path, descendants_addressable, ctx);
     }
-    path.pop();
-    display.truncate(display_len);
+    path.pop(mark);
 }
 
 fn hex_guid(raw: &[u8; 16]) -> String {
@@ -4218,6 +4269,55 @@ mod tests {
         let (empty, total_end) = search_properties(&root, "", 99, 10);
         assert!(empty.is_empty());
         assert_eq!(total_end, 2);
+    }
+
+    /// The search asks `is_scalar` whether a value is a leaf and only calls
+    /// `scalar_display` for the properties that reach the result page. A variant
+    /// the two disagree about would either be silently dropped from the results
+    /// or reported with an empty value, so pin the agreement over one value of
+    /// every variant.
+    #[test]
+    fn scalar_display_agrees_with_is_scalar() {
+        let values = [
+            PropertyValue::Int(1),
+            PropertyValue::UInt32(1),
+            PropertyValue::Int64(1),
+            PropertyValue::Float(1.0),
+            PropertyValue::Double(1.0),
+            PropertyValue::Bool(true),
+            PropertyValue::Byte(1),
+            PropertyValue::Str("s".into()),
+            PropertyValue::Name("n".into()),
+            PropertyValue::Object("o".into()),
+            PropertyValue::Enum("e".into()),
+            PropertyValue::SoftObject(SoftObjectPath {
+                package_name: "p".into(),
+                asset_name: "a".into(),
+                sub_path: String::new(),
+            }),
+            PropertyValue::Opaque(vec![1]),
+            PropertyValue::Array { elements: vec![] },
+            PropertyValue::Set {
+                elements: vec![],
+                num_to_remove: 0,
+            },
+            PropertyValue::Map {
+                entries: vec![],
+                num_to_remove: 0,
+            },
+            PropertyValue::ObjectInstances(vec![]),
+            PropertyValue::Struct(StructValue::Properties(vec![])),
+            PropertyValue::Struct(StructValue::Instanced(None)),
+            PropertyValue::Struct(StructValue::GameplayTagContainer(vec![])),
+            PropertyValue::Struct(StructValue::Guid([0; 16])),
+        ];
+        for value in &values {
+            assert_eq!(
+                is_scalar(value),
+                scalar_display(value).is_some(),
+                "is_scalar disagrees with scalar_display for {value:?}"
+            );
+        }
     }
 
     #[test]
