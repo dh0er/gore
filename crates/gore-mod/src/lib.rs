@@ -14125,10 +14125,7 @@ mod tests {
                 prior_live.display().to_string(),
                 content_hash(b"prior-modded"),
             )]),
-            backup_hashes: BTreeMap::from([(
-                prior_backup.display().to_string(),
-                noncanonical,
-            )]),
+            backup_hashes: BTreeMap::from([(prior_backup.display().to_string(), noncanonical)]),
             ..Default::default()
         };
         let record_path = record_path(&game);

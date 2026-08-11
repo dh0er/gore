@@ -1185,6 +1185,41 @@ where
         _ => DeploymentRecoveryEvidence::NotSeen,
     };
     let check = match status {
+        Ok(ManagerStatus::NothingDeployed)
+            if loadout_readiness != LoadoutReadiness::Blocked
+                && loadout.is_some_and(|loadout| {
+                    loadout.entries.iter().any(|entry| entry.enabled)
+                }) =>
+        {
+            const SAMPLE_TARGETS: usize = 6;
+            let enabled = loadout
+                .expect("the match guard established a loadout")
+                .entries
+                .iter()
+                .filter(|entry| entry.enabled)
+                .collect::<Vec<_>>();
+            let target_count = enabled.len();
+            let mut items = vec!["deployed count: 0".to_owned(), format!(
+                "target count: {target_count}"
+            )];
+            items.extend(
+                enabled
+                    .into_iter()
+                    .take(SAMPLE_TARGETS)
+                    .map(|entry| format!("target: {}", entry.id)),
+            );
+            if target_count > SAMPLE_TARGETS {
+                items.push("additional target entries omitted by the native bound".into());
+            }
+            PreflightCheckV1::new(
+                PreflightCheckIdV1::Deployment,
+                PreflightStateV1::Problem,
+                "deployment_changes_pending",
+                "review_apply",
+                "no Manager deployment is active; Apply performs authoritative validation before deploying the selected loadout",
+            )
+            .with_items(items)
+        }
         Ok(ManagerStatus::NothingDeployed) => PreflightCheckV1::new(
             PreflightCheckIdV1::Deployment,
             PreflightStateV1::Ok,
@@ -2525,6 +2560,18 @@ mod tests {
         assert_eq!(report.checks[3].code, "deployment_not_inspected");
         assert_eq!(report.checks[3].action, "resolve_loadout_check");
 
+        let undeployed = run_with(
+            install.path(),
+            &library,
+            &loadout,
+            |_, _, _| Ok(ManagerStatus::NothingDeployed),
+            |_| safe_probe(),
+            |_| Ok(false),
+        );
+        assert_eq!(undeployed.checks[2].code, "enabled_mods_unreadable");
+        assert_eq!(undeployed.checks[3].code, "deployment_none");
+        assert_eq!(undeployed.checks[3].action, "none");
+
         write_library_meta(
             &library,
             "unsafe",
@@ -2587,6 +2634,50 @@ mod tests {
             .iter()
             .any(|item| item.contains("required loose pak child is missing")));
         assert_eq!(report.checks[3].action, "resolve_loadout_check");
+    }
+
+    #[test]
+    fn first_apply_is_actionable_for_a_ready_nonempty_loadout() {
+        let install = install_fixture();
+        let library = install.path().join("library");
+        fs::create_dir(&library).unwrap();
+        write_library_meta(&library, "alpha", Vec::new());
+        let loadout = install.path().join("loadout.json");
+        write_enabled_loadout(&loadout, &["alpha"]);
+
+        let inspect = |probe: InstallCompileStateProbe| {
+            run_with(
+                install.path(),
+                &library,
+                &loadout,
+                |_, _, _| Ok(ManagerStatus::NothingDeployed),
+                |_| probe,
+                |_| Ok(false),
+            )
+        };
+        let ready = inspect(safe_probe());
+        assert_eq!(ready.checks[2].code, "loadout_metadata_ready");
+        assert_eq!(ready.checks[3].state, PreflightStateV1::Problem);
+        assert_eq!(ready.checks[3].code, "deployment_changes_pending");
+        assert_eq!(ready.checks[3].action, "review_apply");
+        assert!(ready.checks[3]
+            .items
+            .iter()
+            .any(|item| item == "target: alpha"));
+
+        let running = InstallCompileStateProbe {
+            disposition: InstallCompileStateDisposition::GameProcessRunning,
+            safe_to_compile: false,
+            game_process: InstallCompileGameProcessDisposition::Running,
+            artifacts: Vec::new(),
+            issues: Vec::new(),
+        };
+        assert_eq!(inspect(running).checks[3].action, "close_game");
+
+        fs::write(&loadout, serde_json::to_vec(&Loadout::default()).unwrap()).unwrap();
+        let empty = inspect(safe_probe());
+        assert_eq!(empty.checks[3].code, "deployment_none");
+        assert_eq!(empty.checks[3].action, "none");
     }
 
     #[test]
