@@ -138,6 +138,7 @@ jobs:
           --title gore-save-editor
           --version ${{ steps.version.outputs.version }}
           --installer dist/gore-save-editor/gore-save-editor-${{ steps.version.outputs.version }}-setup.exe
+          --public-key apps/save-editor/dsa_pub.pem
           --notes dist/gore-save-editor/RELEASE_NOTES.md
           --release-tag gore-save-editor-v${{ steps.version.outputs.version }}
           --output dist/gore-save-editor/appcast-windows.xml
@@ -257,6 +258,7 @@ jobs:
           --title gore-mod-studio
           --version ${{ steps.version.outputs.version }}
           --installer dist/gore-mod-studio/gore-mod-studio-${{ steps.version.outputs.version }}-setup.exe
+          --public-key apps/mod-studio/dsa_pub.pem
           --notes dist/gore-mod-studio/RELEASE_NOTES.md
           --release-tag gore-mod-studio-v${{ steps.version.outputs.version }}
           --output dist/gore-mod-studio/appcast-windows.xml
@@ -376,6 +378,7 @@ jobs:
           --title gore-mod-manager
           --version ${{ steps.version.outputs.version }}
           --installer dist/gore-mod-manager/gore-mod-manager-${{ steps.version.outputs.version }}-setup.exe
+          --public-key apps/mod-manager/dsa_pub.pem
           --notes dist/gore-mod-manager/RELEASE_NOTES.md
           --release-tag gore-mod-manager-v${{ steps.version.outputs.version }}
           --output dist/gore-mod-manager/appcast-windows.xml

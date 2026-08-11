@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+import posixpath
 import re
 import unittest
 
-from check_release_workflow import PRODUCTS, PUBLISH_GUARD, validate_workflows
+from check_release_workflow import (
+    APPCAST_KEYS,
+    PRODUCTS,
+    PUBLISH_GUARD,
+    validate_appcast_key_resources,
+    validate_workflows,
+)
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -55,6 +62,10 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
         cls.release = (ROOT / ".github" / "workflows" / "release.yml").read_text(
             encoding="utf-8"
         )
+        cls.runner_resources = {
+            product: (ROOT / contract.runner_rc).read_text(encoding="utf-8")
+            for product, contract in APPCAST_KEYS.items()
+        }
 
     def assert_invalid(
         self,
@@ -74,6 +85,9 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
 
     def test_current_workflows_pass(self) -> None:
         self.assertEqual(validate_workflows(self.ci, self.release), [])
+        self.assertEqual(
+            validate_appcast_key_resources(self.runner_resources), []
+        )
 
     def test_ci_must_be_reusable_and_read_only(self) -> None:
         without_call = replace_once(self.ci, "  workflow_call:\n", "")
@@ -422,6 +436,35 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
                     "gh release upload changed-appcast",
                 )
                 self.assert_invalid(release=changed, mentions="feed command changed")
+
+    def test_all_appcasts_are_bound_to_their_embedded_public_key(self) -> None:
+        for product, contract in APPCAST_KEYS.items():
+            with self.subTest(product=product):
+                changed = mutate_job(
+                    self.release,
+                    product,
+                    f"--public-key {contract.public_key}",
+                    "--public-key apps/changed/dsa_pub.pem",
+                )
+                self.assert_invalid(release=changed, mentions="appcast command changed")
+
+    def test_runner_resources_are_bound_to_the_workflow_public_keys(self) -> None:
+        for product, contract in APPCAST_KEYS.items():
+            with self.subTest(product=product):
+                relative_key = posixpath.relpath(
+                    contract.public_key, posixpath.dirname(contract.runner_rc)
+                )
+                changed = dict(self.runner_resources)
+                changed[product] = replace_once(
+                    changed[product],
+                    f'DSAPEM                  "{relative_key}"',
+                    'DSAPEM                  "../../changed.pem"',
+                )
+                problems = validate_appcast_key_resources(changed)
+                self.assertTrue(
+                    any(contract.runner_rc in problem for problem in problems),
+                    f"changed {product} Runner.rc unexpectedly passed: {problems}",
+                )
 
     def test_duplicate_and_unsupported_yaml_shapes_fail_closed(self) -> None:
         duplicate = mutate_job(
