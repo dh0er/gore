@@ -264,6 +264,47 @@ void main() {
     },
   );
 
+  testWidgets(
+    'fully hidden ownership group reports truncation without claiming empty',
+    (tester) async {
+      await _open(
+        tester,
+        _state({
+          'state': 'in_sync',
+          'loadout': <Object?>[],
+          'manager_owned': _ownedEvidence(
+            recovery: ['\u202e'],
+            recoveryTotal: 2,
+          ),
+        }),
+      );
+
+      await tester.tap(
+        find.byKey(const ValueKey('status-details-manager-owned')),
+      );
+      await tester.pumpAndSettle();
+
+      final recovery = find.byKey(
+        const ValueKey('status-details-group-owned-recovery'),
+      );
+      expect(
+        find.descendant(
+          of: recovery,
+          matching: find.text('No paths recorded in this group.'),
+        ),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: recovery,
+          matching: find.text('0 of 2 recorded paths shown.'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('\u202e'), findsNothing);
+    },
+  );
+
   testWidgets('unauthorized states ignore even syntactically valid evidence', (
     tester,
   ) async {

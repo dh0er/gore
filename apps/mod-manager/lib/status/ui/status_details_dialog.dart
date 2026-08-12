@@ -381,6 +381,7 @@ class StatusDetailsDialog extends StatelessWidget {
       }
     }
     final hidden = values.length < group.total;
+    final allRecordedPathsHidden = values.isEmpty && group.total > 0;
     return Column(
       key: ValueKey('status-details-group-$keyName'),
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -390,10 +391,12 @@ class StatusDetailsDialog extends StatelessWidget {
           keyName: keyName,
           title: title,
           values: values,
-          emptyText: l10n.statusDetailsOwnershipEmpty,
+          emptyText: allRecordedPathsHidden
+              ? l10n.statusDetailsOwnershipShown(0, group.total)
+              : l10n.statusDetailsOwnershipEmpty,
           selectable: true,
         ),
-        if (hidden) ...[
+        if (hidden && !allRecordedPathsHidden) ...[
           const SizedBox(height: 8),
           Text(
             l10n.statusDetailsOwnershipShown(values.length, group.total),
