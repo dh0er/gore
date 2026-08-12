@@ -141,6 +141,7 @@
   "traderAddItem": "Añadir objeto",
   "traderRemoveItem": "Quitar línea",
   "traderReadOnlyCore": "Esta versión del núcleo solo puede leer los datos del mercader.",
+  "traderDifficultyStockUnsupported": "Este mercader tiene existencias por dificultad, que el editor no modela. La edición está desactivada aquí, porque un cambio parecería correcto mientras deja intactas esas existencias adicionales.",
   "traderEmptyStock": "Sin existencias.",
   "traderUnknownItem": "no está en el catálogo de objetos",
   "editorTradersLoadFailed": "Error al cargar los mercaderes: {details}",

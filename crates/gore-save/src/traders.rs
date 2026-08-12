@@ -279,6 +279,12 @@ pub fn trader_detail(root: &RootObject, index: usize) -> Result<TraderDetail, Co
 
 /// Resolve a trader by `m_TradersUniqueName`.
 ///
+/// Case-insensitively, because a caller's name comes from
+/// `private.characters.list`, which returns the stored knowledge key where one
+/// exists — and that key's casing can differ from the trader row's while the
+/// same list marks the character a trader through a lowercase join. An exact
+/// compare would mark him and then fail to find him.
+///
 /// Rejects an ambiguous name instead of picking the first hit: the two sentinel
 /// rows share the name `None` and are otherwise indistinguishable, so silently
 /// choosing one would edit an arbitrary record.
@@ -286,7 +292,10 @@ pub fn index_of_unique_name(
     summaries: &[TraderSummary],
     unique_name: &str,
 ) -> Result<usize, CoreError> {
-    let mut matches = summaries.iter().filter(|s| s.unique_name == unique_name);
+    let wanted = unique_name.to_ascii_lowercase();
+    let mut matches = summaries
+        .iter()
+        .filter(|s| s.unique_name.to_ascii_lowercase() == wanted);
     let first = matches
         .next()
         .ok_or_else(|| CoreError::InvalidRequest(format!("no trader named {unique_name}")))?;
@@ -704,6 +713,34 @@ mod tests {
         let list = list_traders(&root).expect("list");
         assert_eq!(list[0].ore, None);
         assert!(!list[0].traded);
+    }
+
+    #[test]
+    fn name_lookup_folds_case() {
+        // A character's unique name is the stored knowledge key where one
+        // exists, whose casing can differ from the trader row's. The character
+        // list marks him a trader through a lowercase join, so an exact compare
+        // here would mark him and then refuse to resolve him.
+        let root = root_with(vec![trader(
+            "OC_STT_Dexter_329",
+            &[(ORE_PATH, 55)],
+            937101.34,
+        )]);
+        let list = list_traders(&root).expect("list");
+        assert_eq!(index_of_unique_name(&list, "oc_stt_dexter_329").unwrap(), 0);
+        assert_eq!(index_of_unique_name(&list, "OC_stt_Dexter_329").unwrap(), 0);
+    }
+
+    #[test]
+    fn case_only_duplicates_are_still_ambiguous() {
+        // Folding case must not turn two distinct rows into a silent pick.
+        let root = root_with(vec![
+            trader("OC_STT_Dexter_329", &[(ORE_PATH, 1)], NEVER_TRADED),
+            trader("oc_stt_dexter_329", &[(ORE_PATH, 2)], NEVER_TRADED),
+        ]);
+        let list = list_traders(&root).expect("list");
+        let err = index_of_unique_name(&list, "OC_STT_Dexter_329").unwrap_err();
+        assert!(matches!(err, CoreError::InvalidRequest(m) if m.contains("ambiguous")));
     }
 
     #[test]

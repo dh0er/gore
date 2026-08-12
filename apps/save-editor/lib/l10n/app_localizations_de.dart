@@ -458,6 +458,10 @@ class AppLocalizationsDe extends AppLocalizations {
   String get traderReadOnlyCore => 'Dieser Core kann Händlerdaten nur lesen.';
 
   @override
+  String get traderDifficultyStockUnsupported =>
+      'Dieser Händler führt Bestand je Schwierigkeitsgrad, den der Editor nicht abbildet. Bearbeiten ist deshalb gesperrt — eine Änderung sähe erfolgreich aus, ließe diesen zusätzlichen Bestand aber unangetastet.';
+
+  @override
   String get traderEmptyStock => 'Nichts auf Lager.';
 
   @override

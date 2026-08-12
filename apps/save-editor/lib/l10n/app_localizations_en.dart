@@ -457,6 +457,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get traderReadOnlyCore => 'This core build can only read trader data.';
 
   @override
+  String get traderDifficultyStockUnsupported =>
+      'This merchant carries per-difficulty stock, which the editor does not model. Editing is disabled here, because a change would look successful while leaving that extra stock untouched.';
+
+  @override
   String get traderEmptyStock => 'Nothing in stock.';
 
   @override

@@ -461,6 +461,10 @@ class AppLocalizationsPl extends AppLocalizations {
       'Ta wersja rdzenia może tylko odczytywać dane kupców.';
 
   @override
+  String get traderDifficultyStockUnsupported =>
+      'Ten kupiec ma zapasy zależne od poziomu trudności, których edytor nie odwzorowuje. Edycja jest tu wyłączona, bo zmiana wyglądałaby na udaną, zostawiając te dodatkowe zapasy nietknięte.';
+
+  @override
   String get traderEmptyStock => 'Brak zapasów.';
 
   @override

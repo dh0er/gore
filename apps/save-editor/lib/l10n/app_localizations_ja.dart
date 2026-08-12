@@ -450,6 +450,10 @@ class AppLocalizationsJa extends AppLocalizations {
   String get traderReadOnlyCore => 'このコアは商人データの読み取りのみ可能です。';
 
   @override
+  String get traderDifficultyStockUnsupported =>
+      'この商人は難易度ごとの在庫を持っており、エディタはそれを扱えません。変更は成功したように見えても、その追加在庫はそのまま残るため、ここでの編集は無効です。';
+
+  @override
   String get traderEmptyStock => '在庫がありません。';
 
   @override

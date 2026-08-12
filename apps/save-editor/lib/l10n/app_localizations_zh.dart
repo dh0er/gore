@@ -444,6 +444,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String get traderReadOnlyCore => '此核心版本只能读取商人数据。';
 
   @override
+  String get traderDifficultyStockUnsupported =>
+      '该商人拥有按难度区分的库存，编辑器并未建模。此处已禁用编辑，因为修改看似成功，却会让这部分额外库存原封不动。';
+
+  @override
   String get traderEmptyStock => '没有库存。';
 
   @override
@@ -3180,6 +3184,10 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get traderReadOnlyCore => '此核心版本只能读取商人数据。';
+
+  @override
+  String get traderDifficultyStockUnsupported =>
+      '该商人拥有按难度区分的库存，编辑器并未建模。此处已禁用编辑，因为修改看似成功，却会让这部分额外库存原封不动。';
 
   @override
   String get traderEmptyStock => '没有库存。';

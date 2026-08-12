@@ -460,6 +460,10 @@ class AppLocalizationsEs extends AppLocalizations {
       'Esta versión del núcleo solo puede leer los datos del mercader.';
 
   @override
+  String get traderDifficultyStockUnsupported =>
+      'Este mercader tiene existencias por dificultad, que el editor no modela. La edición está desactivada aquí, porque un cambio parecería correcto mientras deja intactas esas existencias adicionales.';
+
+  @override
   String get traderEmptyStock => 'Sin existencias.';
 
   @override

@@ -568,6 +568,30 @@ void main() {
       );
     });
 
+    testWidgets('unmodelled per-difficulty stock turns the panel read-only', (
+      tester,
+    ) async {
+      // The edits reach only m_Items and m_DefaultItems. A save carrying stock
+      // the editor does not model would take an edit, report success, and leave
+      // that other stock standing — so it says so and offers nothing.
+      await pumpApp(
+        tester,
+        _TraderCoreService(playerIsTrader: true, hasItemsByDifficulty: true),
+      );
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('per-difficulty stock'), findsOneWidget);
+      expect(find.widgetWithText(OutlinedButton, 'Add item'), findsNothing);
+      expect(find.byIcon(Icons.delete_outline), findsNothing);
+      final oreField = tester.widget<TextField>(
+        find.descendant(of: oreCard, matching: find.byType(TextField)),
+      );
+      expect(oreField.enabled, isFalse);
+    });
+
     testWidgets('a merchant shows his ore and both stock sections', (
       tester,
     ) async {
@@ -601,9 +625,16 @@ class _RecordedRequest {
 /// real row optionally carries the player's own unique name so the Handel tab
 /// can be exercised without inventing a second character.
 class _TraderCoreService implements GoresaveCoreService {
-  _TraderCoreService({this.playerIsTrader = false});
+  _TraderCoreService({
+    this.playerIsTrader = false,
+    this.hasItemsByDifficulty = false,
+  });
 
   final bool playerIsTrader;
+
+  /// Per-difficulty stock, which the editor does not model. Empty in every real
+  /// save seen so far, so the fixture has to fake it.
+  final bool hasItemsByDifficulty;
   final requests = <_RecordedRequest>[];
 
   /// Whatever unique name the app resolved for the pinned player row. The
@@ -777,7 +808,7 @@ class _TraderCoreService implements GoresaveCoreService {
               },
             ],
             'generatedEvents': ['OnWorldStart'],
-            'hasItemsByDifficulty': false,
+            'hasItemsByDifficulty': hasItemsByDifficulty,
           },
         };
       case 'list_backups':

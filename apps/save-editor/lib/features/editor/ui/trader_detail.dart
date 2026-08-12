@@ -147,9 +147,16 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
     }
 
     final list = _list;
-    final canSet = widget.editable && (list?.canSetStock ?? false);
-    final canAdd = widget.editable && (list?.canAddItem ?? false);
-    final canRemove = widget.editable && (list?.canRemoveItem ?? false);
+    // Per-difficulty stock is not modelled, and the edits reach only m_Items and
+    // m_DefaultItems. A save that carries it would take an edit, report success,
+    // and leave that other stock standing — so nothing here is editable then.
+    final unsupported = detail.hasItemsByDifficulty;
+    final canSet =
+        widget.editable && !unsupported && (list?.canSetStock ?? false);
+    final canAdd =
+        widget.editable && !unsupported && (list?.canAddItem ?? false);
+    final canRemove =
+        widget.editable && !unsupported && (list?.canRemoveItem ?? false);
 
     // The live stock gets the ore its own card, because that number is the
     // merchant's purchasing power and not just another line. The restock
@@ -168,8 +175,17 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
         children: [
           // First, because it qualifies every number below it — the ore as much
           // as the stock counts.
+          if (unsupported) ...[
+            _NoteCard(
+              text: l10n.traderDifficultyStockUnsupported,
+              tone: _NoteTone.warning,
+            ),
+            const SizedBox(height: 12),
+          ],
           _NoteCard(text: l10n.traderPriceWarning),
-          if (widget.editable && !(list?.canSetStock ?? false)) ...[
+          if (widget.editable &&
+              !unsupported &&
+              !(list?.canSetStock ?? false)) ...[
             const SizedBox(height: 12),
             Text(l10n.traderReadOnlyCore, style: theme.textTheme.bodySmall),
           ],
@@ -451,28 +467,44 @@ class _OreCard extends ConsumerWidget {
   }
 }
 
+/// Whether a note merely explains something or reports a limit that stops the
+/// panel from doing what it otherwise would.
+enum _NoteTone { info, warning }
+
 class _NoteCard extends StatelessWidget {
-  const _NoteCard({required this.text});
+  const _NoteCard({required this.text, this.tone = _NoteTone.info});
 
   final String text;
+  final _NoteTone tone;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isWarning = tone == _NoteTone.warning;
     return Card(
       margin: EdgeInsets.zero,
+      color: isWarning ? theme.colorScheme.errorContainer : null,
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Icon(
-              Icons.info_outline,
+              isWarning ? Icons.warning_amber_outlined : Icons.info_outline,
               size: 18,
-              color: theme.colorScheme.primary,
+              color: isWarning
+                  ? theme.colorScheme.onErrorContainer
+                  : theme.colorScheme.primary,
             ),
             const SizedBox(width: 8),
-            Expanded(child: Text(text, style: theme.textTheme.bodySmall)),
+            Expanded(
+              child: Text(
+                text,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: isWarning ? theme.colorScheme.onErrorContainer : null,
+                ),
+              ),
+            ),
           ],
         ),
       ),

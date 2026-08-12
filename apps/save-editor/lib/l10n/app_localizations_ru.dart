@@ -462,6 +462,10 @@ class AppLocalizationsRu extends AppLocalizations {
       'Эта сборка ядра может только читать данные торговцев.';
 
   @override
+  String get traderDifficultyStockUnsupported =>
+      'У этого торговца есть запас по уровню сложности, который редактор не моделирует. Правка здесь отключена: изменение выглядело бы успешным, но этот дополнительный запас остался бы нетронутым.';
+
+  @override
   String get traderEmptyStock => 'Товара нет.';
 
   @override

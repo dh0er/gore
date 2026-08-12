@@ -460,6 +460,10 @@ class AppLocalizationsPt extends AppLocalizations {
       'Esta versão do núcleo só consegue ler os dados dos mercadores.';
 
   @override
+  String get traderDifficultyStockUnsupported =>
+      'Este mercador tem existências por dificuldade, que o editor não modela. A edição está desativada aqui, porque uma alteração pareceria bem-sucedida deixando essas existências intactas.';
+
+  @override
   String get traderEmptyStock => 'Nada em estoque.';
 
   @override
@@ -3297,6 +3301,10 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   @override
   String get traderReadOnlyCore =>
       'Esta versão do núcleo só consegue ler os dados dos mercadores.';
+
+  @override
+  String get traderDifficultyStockUnsupported =>
+      'Este mercador tem estoque por dificuldade, que o editor não modela. A edição está desativada aqui, porque uma alteração pareceria bem-sucedida deixando esse estoque intacto.';
 
   @override
   String get traderEmptyStock => 'Nada em estoque.';

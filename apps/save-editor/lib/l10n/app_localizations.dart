@@ -908,6 +908,12 @@ abstract class AppLocalizations {
   /// **'This core build can only read trader data.'**
   String get traderReadOnlyCore;
 
+  /// No description provided for @traderDifficultyStockUnsupported.
+  ///
+  /// In en, this message translates to:
+  /// **'This merchant carries per-difficulty stock, which the editor does not model. Editing is disabled here, because a change would look successful while leaving that extra stock untouched.'**
+  String get traderDifficultyStockUnsupported;
+
   /// No description provided for @traderEmptyStock.
   ///
   /// In en, this message translates to:

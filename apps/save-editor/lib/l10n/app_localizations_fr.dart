@@ -462,6 +462,10 @@ class AppLocalizationsFr extends AppLocalizations {
       'Cette version du cœur ne peut que lire les données des marchands.';
 
   @override
+  String get traderDifficultyStockUnsupported =>
+      'Ce marchand possède un stock par difficulté, que l\'éditeur ne modélise pas. L\'édition est désactivée ici, car une modification semblerait réussie tout en laissant ce stock supplémentaire intact.';
+
+  @override
   String get traderEmptyStock => 'Rien en stock.';
 
   @override

@@ -143,6 +143,7 @@
   "traderAddItem": "Item hinzufügen",
   "traderRemoveItem": "Zeile entfernen",
   "traderReadOnlyCore": "Dieser Core kann Händlerdaten nur lesen.",
+  "traderDifficultyStockUnsupported": "Dieser Händler führt Bestand je Schwierigkeitsgrad, den der Editor nicht abbildet. Bearbeiten ist deshalb gesperrt — eine Änderung sähe erfolgreich aus, ließe diesen zusätzlichen Bestand aber unangetastet.",
   "traderEmptyStock": "Nichts auf Lager.",
   "traderUnknownItem": "nicht im Item-Katalog",
   "editorTradersLoadFailed": "Die Händlerdaten konnten nicht geladen werden: {details}",

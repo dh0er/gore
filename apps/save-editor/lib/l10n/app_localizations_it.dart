@@ -460,6 +460,10 @@ class AppLocalizationsIt extends AppLocalizations {
       'Questa build del core può solo leggere i dati dei mercanti.';
 
   @override
+  String get traderDifficultyStockUnsupported =>
+      'Questo mercante ha scorte per difficoltà, che l\'editor non modella. La modifica è disattivata qui, perché sembrerebbe riuscita lasciando però intatte quelle scorte aggiuntive.';
+
+  @override
   String get traderEmptyStock => 'Niente in magazzino.';
 
   @override
