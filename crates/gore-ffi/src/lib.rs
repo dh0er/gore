@@ -275,7 +275,7 @@ pub use transport::{
 };
 
 /// Increment only when the current JSON command/response protocol changes incompatibly.
-const CORE_PROTOCOL_ABI: u32 = 1;
+const CORE_PROTOCOL_ABI: u32 = 2;
 
 /// Every command understood by [`dispatch`], kept in bytewise ascending order so capability
 /// negotiation is deterministic across builds and platforms.
@@ -2028,7 +2028,7 @@ mod tests {
             v,
             json!({
                 "ok": true,
-                "abi": 1,
+                "abi": 2,
                 "version": env!("CARGO_PKG_VERSION"),
                 "commands": [
                     "audio_extract",

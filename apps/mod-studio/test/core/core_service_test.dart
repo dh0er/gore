@@ -151,6 +151,7 @@ void main() {
             'message': 'unknown command: core_info',
           },
         });
+        final oldAbi = _coreInfoResponse(abi: 1);
         final wrongAbi = _coreInfoResponse(abi: goreCoreAbi + 1);
         final missingAuthoring = _coreInfoResponse(
           commands: requiredStudioCoreCommands
@@ -211,6 +212,7 @@ void main() {
 
         final decisions = [
           missingCoreInfo,
+          oldAbi,
           wrongAbi,
           missingAuthoring,
           missingVoice,
