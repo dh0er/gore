@@ -512,10 +512,14 @@ pub fn apply_add_item(payload: &mut Vec<u8>, edit: &StockLineEdit) -> Result<(),
             edit.path
         )));
     }
-    if edit.count < 0 {
-        return Err(CoreError::InvalidRequest(
-            "stock count must not be negative".to_string(),
-        ));
+    // Same boundary apply_set_stock draws, and for the same reason: a
+    // zero-valued entry is a record the game never writes. This is public, so
+    // the request parser is not the only way in.
+    if edit.count < 1 {
+        return Err(CoreError::InvalidRequest(format!(
+            "stock count must be positive; {} cannot be inserted with {}",
+            edit.path, edit.count
+        )));
     }
     let (target, enclosing, keys) = resolve_stock_map(payload, edit.index, edit.map)?;
     if keys.iter().any(|k| k == &edit.path) {
@@ -984,6 +988,28 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, CoreError::InvalidRequest(m) if m.contains("not a known item class")));
         assert_eq!(payload, before, "a rejected add must not touch the payload");
+    }
+
+    #[test]
+    fn add_item_rejects_a_zero_count() {
+        // A line the merchant holds none of is simply absent from the map, so
+        // inserting one at zero would invent a state the game never produces.
+        let mut payload = real_payload();
+        let index = first_ore_trader(&payload);
+        let path = unstocked_catalog_item(&payload, index);
+        let before = payload.clone();
+        let err = apply_add_item(
+            &mut payload,
+            &StockLineEdit {
+                index,
+                map: StockMap::Current,
+                path,
+                count: 0,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, CoreError::InvalidRequest(m) if m.contains("positive")));
+        assert_eq!(payload, before);
     }
 
     #[test]
