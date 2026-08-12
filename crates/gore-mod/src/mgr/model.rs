@@ -1,28 +1,67 @@
 //! Library-entry metadata: the cross-tool contract describing one imported mod.
 //!
 //! Every mod in the manager library is a normalized dir with a [`META_FILE`] sidecar holding a
-//! [`ModEntryMeta`]. These shapes are a locked contract shared across the manager UI, CLI and
-//! engine — do not rename fields or variants.
+//! public [`ModEntryMeta`] plus optional manager-private metadata. The public shapes are a locked
+//! contract shared across the manager UI, CLI and engine — do not rename fields or variants.
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 
 /// Sidecar filename inside each library mod dir.
 pub const META_FILE: &str = "gore-manager-meta.json";
 const LIBRARY_META_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
+/// Manager-private fields persisted beside, but deliberately outside, the public
+/// [`ModEntryMeta`] contract.  Older sidecars have no `_manager` member and continue to parse.
+/// Consumers that deserialize `ModEntryMeta` directly ignore this additive object, while manager
+/// library reads retain it for safe import identity decisions.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ManagerPrivateMeta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) import_identity: Option<ImportIdentityMeta>,
+}
+
+/// Bounded hints for reconnecting an external source to one already-imported library entry.
+/// Neither digest is authority: import re-hashes every selected live entry before using it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ImportIdentityMeta {
+    pub(crate) format: u32,
+    pub(crate) source_sha256: String,
+    pub(crate) tree_sha256: String,
+    /// True when import added a source-name-derived wrapper around a root `Scripts/main.lua`
+    /// tree. Identity hashing normalizes that synthetic component so moving or renaming the
+    /// external source does not manufacture different content identity.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) synthetic_root_ue4ss_wrapper: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct LibrarySidecar {
+    #[serde(flatten)]
+    pub(crate) entry: ModEntryMeta,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_manager")]
+    pub(crate) manager: Option<ManagerPrivateMeta>,
+}
+
 #[cfg(windows)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct FileIdentity {
     volume: u64,
     id: [u8; 16],
 }
 
 #[cfg(unix)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct FileIdentity {
     device: u64,
     inode: u64,
@@ -30,14 +69,14 @@ pub(crate) struct FileIdentity {
 
 #[cfg(windows)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct FileRevision {
+pub(crate) struct FileRevision {
     last_write_time: i64,
     change_time: i64,
 }
 
 #[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct FileRevision {
+pub(crate) struct FileRevision {
     modified_seconds: i64,
     modified_nanoseconds: i64,
     changed_seconds: i64,
@@ -108,8 +147,50 @@ pub(crate) enum MetaReadFailure {
     Other(crate::ModError),
 }
 
+/// One bounded public sidecar read plus the separately parsed manager-private envelope. Public
+/// consumers deliberately ignore `_manager`; identity selection uses the strict result and never
+/// downgrades a present-but-invalid private envelope to a legacy sidecar.
+#[derive(Debug)]
+pub(crate) struct LibraryIdentityInspection {
+    pub(crate) entry: ModEntryMeta,
+    pub(crate) manager: crate::Result<Option<ManagerPrivateMeta>>,
+    pub(crate) sidecar_sha256: String,
+}
+
+/// Crash-released operating-system lock for one canonical manager-library inode. Windows locks a
+/// persistent direct-child file; Unix locks the already-opened directory descriptor itself, whose
+/// inode cannot be substituted by unlinking a lock-file name. The retained root is the sole Unix
+/// namespace authority for the mutation lane.
+#[derive(Debug)]
+pub(crate) struct LibraryMutationFileGuard {
+    #[cfg(windows)]
+    _file: std::fs::File,
+    #[cfg(windows)]
+    root: RenameDirectoryGuard,
+    #[cfg(unix)]
+    root: SecureDirectory,
+}
+
+impl LibraryMutationFileGuard {
+    pub(crate) fn path(&self) -> &Path {
+        self.root.path()
+    }
+
+    #[cfg(any(not(unix), test))]
+    pub(crate) fn identity(&self) -> FileIdentity {
+        self.root.identity()
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn retained_library(&self) -> LibraryRoot {
+        LibraryRoot {
+            directory: self.root.clone(),
+        }
+    }
+}
+
 impl MetaReadFailure {
-    fn into_mod_error(self) -> crate::ModError {
+    pub(crate) fn into_mod_error(self) -> crate::ModError {
         match self {
             Self::AggregateBudgetExhausted {
                 remaining, path, ..
@@ -178,6 +259,14 @@ impl SecureFile {
 
     pub(crate) fn path(&self) -> &Path {
         &self.final_path
+    }
+
+    pub(crate) fn identity(&self) -> FileIdentity {
+        self.identity
+    }
+
+    pub(crate) fn revision(&self) -> FileRevision {
+        self.revision
     }
 
     pub(crate) fn verify_len(&self, expected: u64, label: &str) -> crate::Result<()> {
@@ -357,7 +446,7 @@ impl SecureDirectory {
         self.secure_child_from_opened(opened, label)
     }
 
-    fn open_optional_child(
+    pub(crate) fn open_optional_child(
         &self,
         name: &std::ffi::OsStr,
         label: &str,
@@ -420,6 +509,16 @@ impl SecureDirectory {
     }
 
     pub(crate) fn open_relative_file(&self, rel: &Path, label: &str) -> crate::Result<SecureFile> {
+        match self.open_relative_node(rel, label)? {
+            SecureNode::File(file) => Ok(file),
+            SecureNode::Directory(directory) => Err(crate::ModError::Other(format!(
+                "{label} must be a regular file: {}",
+                directory.path().display()
+            ))),
+        }
+    }
+
+    pub(crate) fn open_relative_node(&self, rel: &Path, label: &str) -> crate::Result<SecureNode> {
         let components: Vec<_> = rel.components().collect();
         if components.is_empty() {
             return Err(crate::ModError::Other(format!("{label} path is empty")));
@@ -432,17 +531,12 @@ impl SecureDirectory {
                     rel.display()
                 )));
             };
-            match directory.open_child(name, label)? {
-                SecureNode::File(file) if index + 1 == components.len() => return Ok(file),
-                SecureNode::Directory(child) if index + 1 < components.len() => {
-                    directory = child;
-                }
-                SecureNode::Directory(child) => {
-                    return Err(crate::ModError::Other(format!(
-                        "{label} must be a regular file: {}",
-                        child.path().display()
-                    )))
-                }
+            let node = directory.open_child(name, label)?;
+            if index + 1 == components.len() {
+                return Ok(node);
+            }
+            match node {
+                SecureNode::Directory(child) => directory = child,
                 SecureNode::File(file) => {
                     return Err(crate::ModError::Other(format!(
                         "{label} path crosses a regular file: {}",
@@ -451,7 +545,7 @@ impl SecureDirectory {
                 }
             }
         }
-        unreachable!("non-empty relative path returns its final file")
+        unreachable!("non-empty relative path returns its final node")
     }
 
     /// Create one direct child directory beneath this retained, no-follow parent and immediately
@@ -597,6 +691,141 @@ impl SecureDirectory {
         drop(actual);
         self.remove_child_directory(name, label)
     }
+
+    /// Atomically rename a direct child between two retained directory descriptors. Unix callers
+    /// use this for every library publication/recovery move, so a renamed configured library path
+    /// cannot redirect the operation into a replacement directory.
+    #[cfg(unix)]
+    pub(crate) fn rename_child_to(
+        &self,
+        from: &std::ffi::OsStr,
+        target: &SecureDirectory,
+        to: &std::ffi::OsStr,
+        label: &str,
+    ) -> crate::Result<()> {
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::os::unix::io::AsRawFd as _;
+
+        validate_plain_component(from, label)?;
+        validate_plain_component(to, label)?;
+        let from = std::ffi::CString::new(from.as_bytes())
+            .map_err(|_| crate::ModError::Other(format!("{label} source contains NUL")))?;
+        let to = std::ffi::CString::new(to.as_bytes())
+            .map_err(|_| crate::ModError::Other(format!("{label} destination contains NUL")))?;
+        loop {
+            // SAFETY: both retained directory descriptors and NUL-terminated child names remain
+            // valid for the call. `renameat` never resolves either child outside those parents.
+            if unsafe {
+                libc::renameat(
+                    self.anchor.file.as_raw_fd(),
+                    from.as_ptr(),
+                    target.anchor.file.as_raw_fd(),
+                    to.as_ptr(),
+                )
+            } == 0
+            {
+                self.sync_after_mutation(label)?;
+                if self.identity() != target.identity() {
+                    target.sync_after_mutation(label)?;
+                }
+                return Ok(());
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(crate::io(&format!(
+                    "renaming {label} between retained directories {} and {}",
+                    self.path().display(),
+                    target.path().display()
+                ))(error));
+            }
+        }
+    }
+
+    /// Recursively delete one direct child tree using only no-follow opens and `unlinkat` beneath
+    /// retained directory descriptors. This is intended for manager-owned transaction/entry
+    /// cleanup while the per-library mutation lock is held.
+    #[cfg(unix)]
+    pub(crate) fn remove_child_tree(
+        &self,
+        name: &std::ffi::OsStr,
+        label: &str,
+    ) -> crate::Result<()> {
+        let child = match self.open_child(name, label)? {
+            SecureNode::Directory(directory) => directory,
+            SecureNode::File(file) => {
+                return Err(crate::ModError::Other(format!(
+                    "{label} must be a real directory: {}",
+                    file.path().display()
+                )))
+            }
+        };
+        remove_secure_directory_contents(&child, label)?;
+        let identity = child.identity();
+        drop(child);
+        self.remove_child_directory_if_identity(name, identity, label)
+    }
+
+    /// Identity-bound counterpart used by deferred cleanup guards. The direct child must still be
+    /// the exact directory the caller retained before any recursive unlink is attempted. A missing
+    /// child is already clean; a replacement is refused without touching either tree.
+    #[cfg(unix)]
+    pub(crate) fn remove_optional_child_tree_if_identity(
+        &self,
+        name: &std::ffi::OsStr,
+        expected: FileIdentity,
+        label: &str,
+    ) -> crate::Result<()> {
+        let Some(node) = self.open_optional_child(name, label)? else {
+            return Ok(());
+        };
+        let child = match node {
+            SecureNode::Directory(directory) => directory,
+            SecureNode::File(file) => {
+                return Err(crate::ModError::Other(format!(
+                    "refusing to remove replaced {label}: expected a directory, found file {}",
+                    file.path().display()
+                )))
+            }
+        };
+        if child.identity() != expected {
+            return Err(crate::ModError::Other(format!(
+                "refusing to remove replaced {label}: filesystem identity changed at {}",
+                child.path().display()
+            )));
+        }
+        remove_secure_directory_contents(&child, label)?;
+        drop(child);
+        self.remove_child_directory_if_identity(name, expected, label)
+    }
+}
+
+#[cfg(unix)]
+fn remove_secure_directory_contents(directory: &SecureDirectory, label: &str) -> crate::Result<()> {
+    let mut names = directory
+        .read_dir(label)?
+        .map(|entry| {
+            entry
+                .map(|entry| entry.file_name())
+                .map_err(crate::io(&format!("reading {label} child")))
+        })
+        .collect::<crate::Result<Vec<_>>>()?;
+    names.sort();
+    for name in names {
+        match directory.open_child(&name, label)? {
+            SecureNode::File(file) => {
+                let identity = file.identity();
+                drop(file);
+                directory.remove_child_file_if_identity(&name, identity, label)?;
+            }
+            SecureNode::Directory(child) => {
+                remove_secure_directory_contents(&child, label)?;
+                let identity = child.identity();
+                drop(child);
+                directory.remove_child_directory_if_identity(&name, identity, label)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Open an existing absolute directory component-by-component. Unlike `canonicalize` followed by
@@ -658,6 +887,64 @@ pub(crate) fn open_directory_chain_nofollow(
     Ok(directory)
 }
 
+#[cfg(unix)]
+fn openat_retry(
+    directory_fd: libc::c_int,
+    name: &std::ffi::CStr,
+    flags: libc::c_int,
+    mode: libc::mode_t,
+) -> std::io::Result<libc::c_int> {
+    loop {
+        // SAFETY: callers retain the directory descriptor and `name` for the duration of this
+        // call. Supplying the mode argument is valid for every `openat` call and is consumed when
+        // `O_CREAT` is present.
+        let fd = unsafe { libc::openat(directory_fd, name.as_ptr(), flags, mode) };
+        if fd >= 0 {
+            return Ok(fd);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn fstat_retry(fd: libc::c_int) -> std::io::Result<libc::stat> {
+    loop {
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: `stat` points to writable storage and callers provide a retained descriptor.
+        if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } == 0 {
+            // SAFETY: successful `fstat` initialized the structure.
+            return Ok(unsafe { stat.assume_init() });
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn fstatat_retry(
+    directory_fd: libc::c_int,
+    name: &std::ffi::CStr,
+    flags: libc::c_int,
+) -> std::io::Result<libc::stat> {
+    loop {
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: both the retained descriptor/name and writable result pointer are valid.
+        if unsafe { libc::fstatat(directory_fd, name.as_ptr(), stat.as_mut_ptr(), flags) } == 0 {
+            // SAFETY: successful `fstatat` initialized the structure.
+            return Ok(unsafe { stat.assume_init() });
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
 #[cfg(windows)]
 fn create_child_directory_new(
     parent: &DirectoryAnchor,
@@ -677,11 +964,15 @@ fn create_child_directory_new(
 
     let name = std::ffi::CString::new(name.as_bytes())
         .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
-    let result = unsafe { libc::mkdirat(parent.file.as_raw_fd(), name.as_ptr(), 0o700) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
+    loop {
+        // SAFETY: the retained directory descriptor and NUL-terminated child name are valid.
+        if unsafe { libc::mkdirat(parent.file.as_raw_fd(), name.as_ptr(), 0o700) } == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
     }
 }
 
@@ -725,20 +1016,20 @@ fn create_child_file_new(
 
     let name = std::ffi::CString::new(name.as_bytes())
         .map_err(|_| crate::ModError::Other(format!("{label} child name contains NUL")))?;
-    let fd = unsafe {
-        libc::openat(
-            parent.file.as_raw_fd(),
-            name.as_ptr(),
-            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            0o600,
-        )
+    let fd = match openat_retry(
+        parent.file.as_raw_fd(),
+        &name,
+        libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        0o600,
+    ) {
+        Ok(fd) => fd,
+        Err(error) => {
+            return Err(crate::io(&format!(
+                "creating {label} relative to retained parent {}",
+                parent.final_path.display()
+            ))(error))
+        }
     };
-    if fd < 0 {
-        return Err(crate::io(&format!(
-            "creating {label} relative to retained parent {}",
-            parent.final_path.display()
-        ))(std::io::Error::last_os_error()));
-    }
     Ok(unsafe { std::fs::File::from_raw_fd(fd) })
 }
 
@@ -771,14 +1062,18 @@ fn remove_child(
     let name = std::ffi::CString::new(name.as_bytes())
         .map_err(|_| crate::ModError::Other(format!("{label} child name contains NUL")))?;
     let flags = if directory { libc::AT_REMOVEDIR } else { 0 };
-    let result = unsafe { libc::unlinkat(parent.file.as_raw_fd(), name.as_ptr(), flags) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(crate::io(&format!(
-            "removing {label} relative to retained parent {}",
-            parent.final_path.display()
-        ))(std::io::Error::last_os_error()))
+    loop {
+        // SAFETY: the retained directory descriptor and NUL-terminated child name are valid.
+        if unsafe { libc::unlinkat(parent.file.as_raw_fd(), name.as_ptr(), flags) } == 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(crate::io(&format!(
+                "removing {label} relative to retained parent {}",
+                parent.final_path.display()
+            ))(error));
+        }
     }
 }
 
@@ -1248,29 +1543,29 @@ fn open_optional_child_node(
     let c_name = std::ffi::CString::new(raw_name)
         .map_err(|_| crate::ModError::Other(format!("{label} child name contains NUL")))?;
     run_open_child_race_hook(&parent.final_path.join(name));
-    let fd = unsafe {
-        libc::openat(
-            parent.file.as_raw_fd(),
-            c_name.as_ptr(),
-            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
-        )
+    let fd = match openat_retry(
+        parent.file.as_raw_fd(),
+        &c_name,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+        0,
+    ) {
+        Ok(fd) => fd,
+        Err(error) => {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                return Ok(None);
+            }
+            if error.raw_os_error() == Some(libc::ELOOP) {
+                return Err(crate::ModError::Other(format!(
+                    "{label} is a symbolic link: {}",
+                    parent.final_path.join(name).display()
+                )));
+            }
+            return Err(crate::io(&format!(
+                "opening {label} relative to validated parent {}",
+                parent.final_path.display()
+            ))(error));
+        }
     };
-    if fd < 0 {
-        let error = std::io::Error::last_os_error();
-        if error.kind() == std::io::ErrorKind::NotFound {
-            return Ok(None);
-        }
-        if error.raw_os_error() == Some(libc::ELOOP) {
-            return Err(crate::ModError::Other(format!(
-                "{label} is a symbolic link: {}",
-                parent.final_path.join(name).display()
-            )));
-        }
-        return Err(crate::io(&format!(
-            "opening {label} relative to validated parent {}",
-            parent.final_path.display()
-        ))(error));
-    }
     let file = unsafe { std::fs::File::from_raw_fd(fd) };
     let metadata = file
         .metadata()
@@ -1305,6 +1600,144 @@ fn secure_directory_enumeration_path(anchor: &DirectoryAnchor) -> crate::Result<
     ))
 }
 
+#[cfg(windows)]
+const LIBRARY_MUTATION_LOCK_FILE: &str = ".gore-manager-library.lock";
+
+#[cfg(windows)]
+fn acquire_library_mutation_file_lock(
+    library: SecureDirectory,
+) -> crate::Result<LibraryMutationFileGuard> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        LockFileEx, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        LOCKFILE_EXCLUSIVE_LOCK,
+    };
+    use windows_sys::Win32::System::IO::OVERLAPPED;
+
+    let path = library.path().join(LIBRARY_MUTATION_LOCK_FILE);
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        // Cooperative processes must be able to open the same persistent file while another owns
+        // its kernel byte lock. DELETE sharing is intentionally excluded for ordinary Win32
+        // namespace operations. This is coordination, not a security boundary against a same-user
+        // process using POSIX-style rename flags; callers revalidate FileIdInfo and journal seals.
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(&path)
+        .map_err(crate::io(
+            "opening persistent manager-library mutation lock",
+        ))?;
+    let opened = finish_opened_windows_node(&path, "manager-library mutation lock", file)?;
+    if !opened.metadata.is_file()
+        || !handle_path_is_direct_child(library.path(), &opened.final_path)
+    {
+        return Err(crate::ModError::Other(format!(
+            "manager-library mutation lock is not a regular direct child: {}",
+            opened.final_path.display()
+        )));
+    }
+
+    // A waiter must not retain the no-DELETE traversal handle while blocking: on Windows that
+    // would prevent the current lock owner from renaming library children. Preserve the exact root
+    // identity with a rename-compatible handle before entering LockFileEx instead.
+    let root = library.into_rename_guard("manager library mutation root")?;
+
+    let mut overlapped = OVERLAPPED::default();
+    // SAFETY: `opened.file` remains alive in the returned guard. This is a synchronous blocking
+    // one-byte lock at offset zero, and `overlapped` is valid for the duration of the call.
+    let locked = unsafe {
+        LockFileEx(
+            opened.file.as_raw_handle(),
+            LOCKFILE_EXCLUSIVE_LOCK,
+            0,
+            1,
+            0,
+            &mut overlapped,
+        )
+    };
+    if locked == 0 {
+        return Err(crate::io(
+            "locking persistent manager-library mutation lock",
+        )(std::io::Error::last_os_error()));
+    }
+    if identity_from_open_file(&opened.file, "manager-library mutation lock")? != opened.identity {
+        return Err(crate::ModError::Other(
+            "manager-library mutation lock changed filesystem identity while locking".into(),
+        ));
+    }
+    Ok(LibraryMutationFileGuard {
+        _file: opened.file,
+        root,
+    })
+}
+
+#[cfg(unix)]
+fn acquire_library_mutation_file_lock(
+    library: SecureDirectory,
+) -> crate::Result<LibraryMutationFileGuard> {
+    use std::os::unix::io::AsRawFd as _;
+
+    let fd = library.anchor.file.as_raw_fd();
+    let before = fstat_retry(fd).map_err(crate::io(
+        "reading manager-library directory identity before locking",
+    ))?;
+    if before.st_mode & libc::S_IFMT != libc::S_IFDIR {
+        return Err(crate::ModError::Other(format!(
+            "manager-library mutation authority is not a directory: {}",
+            library.path().display()
+        )));
+    }
+
+    loop {
+        // SAFETY: the retained canonical directory descriptor remains valid in `library`.
+        // Omitting LOCK_NB requests a blocking exclusive flock. Directory inodes cannot be
+        // substituted by unlinking/recreating a child lock-file name.
+        if unsafe { libc::flock(fd, libc::LOCK_EX) } == 0 {
+            break;
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(crate::io(
+                "locking manager-library directory mutation authority",
+            )(error));
+        }
+    }
+
+    let after = fstat_retry(fd).map_err(crate::io(
+        "revalidating locked manager-library directory identity",
+    ))?;
+    let dot = std::ffi::CString::new(".").expect("literal contains no NUL");
+    let named = fstatat_retry(fd, &dot, libc::AT_SYMLINK_NOFOLLOW).map_err(crate::io(
+        "revalidating locked manager-library directory through fstatat",
+    ))?;
+    if before.st_dev != after.st_dev
+        || before.st_ino != after.st_ino
+        || after.st_dev != named.st_dev
+        || after.st_ino != named.st_ino
+        || after.st_mode & libc::S_IFMT != libc::S_IFDIR
+        || named.st_mode & libc::S_IFMT != libc::S_IFDIR
+    {
+        return Err(crate::ModError::Other(format!(
+            "manager-library directory identity changed or became unsafe while waiting for its inode lock: {}",
+            library.path().display()
+        )));
+    }
+
+    Ok(LibraryMutationFileGuard { root: library })
+}
+
+#[cfg(not(any(windows, unix)))]
+fn acquire_library_mutation_file_lock(
+    _library: SecureDirectory,
+) -> crate::Result<LibraryMutationFileGuard> {
+    Err(crate::ModError::Other(
+        "manager-library cross-process locking is unsupported on this platform".into(),
+    ))
+}
+
 /// Canonical manager-library root used to prove that entry and payload paths stay inside the
 /// configured library. The library root itself may be reached through a user-configured alias;
 /// entries and payloads may not introduce further symbolic links/reparse points.
@@ -1333,6 +1766,24 @@ impl LibraryRoot {
         Ok(Self { directory })
     }
 
+    #[cfg(any(not(unix), test))]
+    pub(crate) fn identity(&self) -> FileIdentity {
+        self.directory.identity()
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn secure_directory(&self) -> &SecureDirectory {
+        &self.directory
+    }
+
+    /// Acquire the per-library kernel lock. Canonical aliases converge on the same Windows lock
+    /// file or Unix directory inode. Windows additionally retains FileIdInfo for immediate
+    /// pathname revalidation; this is cooperative-process coordination, not hostile same-user
+    /// access control.
+    pub(crate) fn acquire_mutation_lock(self) -> crate::Result<LibraryMutationFileGuard> {
+        acquire_library_mutation_file_lock(self.directory)
+    }
+
     /// Resolve `id` as one real, direct library child. A safe lexical component is necessary but
     /// not sufficient: the child may have been replaced by a symlink/junction after import.
     pub(crate) fn entry(&self, id: &str) -> crate::Result<LibraryEntry> {
@@ -1356,6 +1807,10 @@ impl LibraryRoot {
         })
     }
 
+    pub(crate) fn read_dir(&self) -> crate::Result<std::fs::ReadDir> {
+        self.directory.read_dir("manager library")
+    }
+
     pub(crate) fn sync_after_mutation(&self) -> crate::Result<()> {
         self.directory.sync_after_mutation("manager library")
     }
@@ -1364,6 +1819,10 @@ impl LibraryRoot {
 impl LibraryEntry {
     pub(crate) fn path(&self) -> &Path {
         self.directory.path()
+    }
+
+    pub(crate) fn secure_directory(&self) -> &SecureDirectory {
+        &self.directory
     }
 
     /// Read the bounded sidecar only after proving it is a regular in-entry file, then require the
@@ -1387,6 +1846,76 @@ impl LibraryEntry {
         &self,
         remaining: &mut u64,
     ) -> Result<ModEntryMeta, MetaReadFailure> {
+        let bytes = self.read_sidecar_bytes_bounded_classified(remaining)?;
+        let entry: ModEntryMeta = serde_json::from_slice(&bytes).map_err(|error| {
+            crate::ModError::Other(format!(
+                "corrupt library sidecar for {:?} at {}: {error}",
+                self.id,
+                self.path().join(META_FILE).display()
+            ))
+        })?;
+        self.validate_claimed_id(&entry.id)?;
+        Ok(entry)
+    }
+
+    /// Identity imports parse the public metadata first, then inspect `_manager` from the same
+    /// bounded bytes. Missing `_manager` is the sole legacy case. Any present null, wrong shape,
+    /// unknown field, or missing import identity is retained as a strict error for the caller.
+    pub(crate) fn read_identity_sidecar_bounded_classified(
+        &self,
+        remaining: &mut u64,
+    ) -> Result<LibraryIdentityInspection, MetaReadFailure> {
+        let bytes = self.read_sidecar_bytes_bounded_classified(remaining)?;
+        let entry: ModEntryMeta = serde_json::from_slice(&bytes).map_err(|error| {
+            crate::ModError::Other(format!(
+                "corrupt public library sidecar for {:?} at {}: {error}",
+                self.id,
+                self.path().join(META_FILE).display()
+            ))
+        })?;
+        self.validate_claimed_id(&entry.id)?;
+
+        let manager = (|| -> crate::Result<Option<ManagerPrivateMeta>> {
+            let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+            let object = value.as_object().ok_or_else(|| {
+                crate::ModError::Other(format!(
+                    "library sidecar for {:?} is not a JSON object",
+                    self.id
+                ))
+            })?;
+            let Some(private) = object.get("_manager") else {
+                return Ok(None);
+            };
+            if private.is_null() {
+                return Err(crate::ModError::Other(
+                    "present _manager metadata must not be null".into(),
+                ));
+            }
+            let manager: ManagerPrivateMeta =
+                serde_json::from_value(private.clone()).map_err(|error| {
+                    crate::ModError::Other(format!(
+                        "invalid manager-private library metadata for {:?}: {error}",
+                        self.id
+                    ))
+                })?;
+            if manager.import_identity.is_none() {
+                return Err(crate::ModError::Other(
+                    "present _manager metadata is missing import_identity".into(),
+                ));
+            }
+            Ok(Some(manager))
+        })();
+        Ok(LibraryIdentityInspection {
+            entry,
+            manager,
+            sidecar_sha256: sha256_hex(&bytes),
+        })
+    }
+
+    fn read_sidecar_bytes_bounded_classified(
+        &self,
+        remaining: &mut u64,
+    ) -> Result<Vec<u8>, MetaReadFailure> {
         let mut file = self.open_payload_file(Path::new(META_FILE), "library sidecar")?;
         let path = file.path().to_path_buf();
         let expected = file.len();
@@ -1411,15 +1940,7 @@ impl LibraryEntry {
             "library sidecar",
             LIBRARY_META_MAX_BYTES,
         )?;
-        let meta: ModEntryMeta = serde_json::from_slice(&bytes).map_err(|error| {
-            crate::ModError::Other(format!(
-                "corrupt library sidecar for {:?} at {}: {error}",
-                self.id,
-                self.path().join(META_FILE).display()
-            ))
-        })?;
-        self.validate_claimed_id(&meta.id)?;
-        Ok(meta)
+        Ok(bytes)
     }
 
     /// Read one already-validated library payload through an opened file handle and a hard byte
@@ -1815,6 +2336,17 @@ impl LibraryEntry {
     }
 }
 
+fn sha256_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = Sha256::digest(bytes);
+    let mut output = String::with_capacity(64);
+    for byte in digest {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
 #[allow(clippy::too_many_arguments)]
 fn snapshot_secure_directory(
     source: &SecureDirectory,
@@ -1987,11 +2519,10 @@ pub struct ModEntryMeta {
 }
 
 impl ModEntryMeta {
-    /// A content fingerprint that changes when the mod is re-imported as an update (same id, new
-    /// components/bytes). `imported_at` is microsecond-resolution (set at import), so it differs on
-    /// every re-import — even within the same second, with unchanged component descriptors and only
-    /// changed payload bytes — giving mgr_status a reliable "content changed" signal. The serialized
-    /// components are folded in too, so a structural change flips the fingerprint on its own.
+    /// A deployment fingerprint that changes when a re-import publishes changed payload bytes or
+    /// component metadata. `imported_at` is microsecond-resolution and refreshes for a changed
+    /// normalized tree, while an unchanged import or pure source rebind preserves it. Serialized
+    /// components are folded in too, so a classification change flips the fingerprint on its own.
     pub fn fingerprint(&self) -> String {
         let body = serde_json::to_string(&self.components).unwrap_or_default();
         crate::name_hash(&format!("{}|{}", self.imported_at, body))

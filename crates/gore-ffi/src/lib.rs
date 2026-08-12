@@ -1587,7 +1587,8 @@ fn mgr_library_list(payload: Value) -> Value {
     })
 }
 
-/// `{path, library_dir?, loadout_path?}` → `{ok, entry:ModEntryMeta}` — import a source into the
+/// `{path, library_dir?, loadout_path?}` →
+/// `{ok, entry:ModEntryMeta, disposition, matched_by}` — import a source into the
 /// library AND register it in the loadout (disabled) if not already present. Mirrors
 /// `gore mgr import`: without this, a GUI-imported mod is invisible to apply/status/analyze (which
 /// read the on-disk loadout, not the GUI's in-memory reconcile) until some other mutation.
@@ -1596,10 +1597,28 @@ fn mgr_import(payload: Value) -> Value {
         return err("BAD_REQUEST", "missing 'path'");
     };
     let lib = mgr_library_dir(&payload);
-    let entry = match gore_mod::mgr::import::import(&lib, std::path::Path::new(path)) {
-        Ok(entry) => entry,
-        Err(e) => return err("IMPORT_FAILED", e.to_string()),
+    let outcome = match gore_mod::mgr::import::import_detailed(&lib, std::path::Path::new(path)) {
+        Ok(outcome) => outcome,
+        Err(error @ gore_mod::mgr::import::ImportError::DuplicateAmbiguous { .. }) => {
+            return err_with_details(
+                "IMPORT_DUPLICATE_AMBIGUOUS",
+                error.to_string(),
+                json!({"candidate_ids": error.candidate_ids()}),
+            );
+        }
+        Err(error @ gore_mod::mgr::import::ImportError::IdentityConflict { .. }) => {
+            let candidates = error
+                .conflict_candidates()
+                .expect("identity-conflict variant carries bounded candidates");
+            return err_with_details(
+                "IMPORT_IDENTITY_CONFLICT",
+                error.to_string(),
+                json!({"candidates": candidates}),
+            );
+        }
+        Err(error) => return err("IMPORT_FAILED", error.to_string()),
     };
+    let entry = &outcome.entry;
     // Register the new mod in the loadout (disabled) so enable/apply can find it. Skip if an entry
     // with this id already exists (a re-import / update): keep its current enabled state + order.
     let lo_path = mgr_loadout_path(&payload);
@@ -1632,7 +1651,12 @@ fn mgr_import(payload: Value) -> Value {
             )
         }
     }
-    json!({"ok": true, "entry": mgr_entry_wire_value(&entry)})
+    json!({
+        "ok": true,
+        "entry": mgr_entry_wire_value(entry),
+        "disposition": outcome.disposition.as_str(),
+        "matched_by": outcome.matched_by.as_str(),
+    })
 }
 
 /// `{id, library_dir?}` → `{ok, removed:bool}` — delete a library entry (absent id → removed:false).
@@ -2370,6 +2394,94 @@ mod tests {
         dir
     }
 
+    fn copy_mgr_test_tree(source: &std::path::Path, destination: &std::path::Path) {
+        std::fs::create_dir_all(destination).unwrap();
+        for entry in std::fs::read_dir(source).unwrap() {
+            let entry = entry.unwrap();
+            let target = destination.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_mgr_test_tree(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), target).unwrap();
+            }
+        }
+    }
+
+    fn write_mgr_test_zip(source: &std::path::Path, destination: &std::path::Path) {
+        fn add(
+            writer: &mut zip::ZipWriter<std::fs::File>,
+            root: &std::path::Path,
+            directory: &std::path::Path,
+        ) {
+            let mut entries: Vec<_> = std::fs::read_dir(directory)
+                .unwrap()
+                .map(|entry| entry.unwrap())
+                .collect();
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries {
+                if entry.file_type().unwrap().is_dir() {
+                    add(writer, root, &entry.path());
+                    continue;
+                }
+                let relative = entry
+                    .path()
+                    .strip_prefix(root)
+                    .unwrap()
+                    .components()
+                    .map(|component| component.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                writer
+                    .start_file(relative, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                writer
+                    .write_all(&std::fs::read(entry.path()).unwrap())
+                    .unwrap();
+            }
+        }
+
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(destination).unwrap());
+        add(&mut writer, source, source);
+        writer.finish().unwrap();
+    }
+
+    fn mgr_visible_library_snapshot(root: &std::path::Path) -> Vec<(String, Option<Vec<u8>>)> {
+        fn walk(
+            root: &std::path::Path,
+            current: &std::path::Path,
+            out: &mut Vec<(String, Option<Vec<u8>>)>,
+        ) {
+            let mut entries: Vec<_> = std::fs::read_dir(current)
+                .unwrap()
+                .map(|entry| entry.unwrap())
+                .collect();
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries {
+                if current == root && entry.file_name().to_string_lossy().starts_with('.') {
+                    continue;
+                }
+                let relative = entry
+                    .path()
+                    .strip_prefix(root)
+                    .unwrap()
+                    .components()
+                    .map(|component| component.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                if entry.file_type().unwrap().is_dir() {
+                    out.push((relative, None));
+                    walk(root, &entry.path(), out);
+                } else {
+                    out.push((relative, Some(std::fs::read(entry.path()).unwrap())));
+                }
+            }
+        }
+
+        let mut snapshot = Vec::new();
+        walk(root, root, &mut snapshot);
+        snapshot
+    }
+
     #[test]
     fn a_deploy_reports_the_localization_edits_it_could_not_write() {
         // `DeployRecord` skips both lists when it serializes, on purpose: they describe one run and
@@ -2439,8 +2551,28 @@ mod tests {
             }),
         );
         assert_eq!(imp["ok"], true, "resp: {imp}");
+        let mut top_level_keys: Vec<_> = imp
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        top_level_keys.sort_unstable();
+        assert_eq!(
+            top_level_keys,
+            ["disposition", "entry", "matched_by", "ok"],
+            "mgr_import success wire is the old entry plus two additive fields: {imp}"
+        );
+        assert_eq!(imp["disposition"], "created");
+        assert_eq!(imp["matched_by"], "none");
         assert_eq!(imp["entry"]["name"], "Probe");
         assert_eq!(imp["entry"]["kind"], "goremod");
+        assert!(
+            imp["entry"].get("_manager").is_none()
+                && imp["entry"].get("source_sha256").is_none()
+                && imp["entry"].get("tree_sha256").is_none(),
+            "private identity must not cross FFI: {imp}"
+        );
         let id = imp["entry"]["id"].as_str().unwrap().to_string();
         let imported_components = imp["entry"]["components"].as_array().unwrap();
         assert!(!imported_components.is_empty(), "fixture component: {imp}");
@@ -2463,6 +2595,21 @@ mod tests {
                 .iter()
                 .all(|component| component.get("coverage").is_none()),
             "coverage is a derived wire field, not persisted metadata: {sidecar}"
+        );
+        assert_eq!(sidecar["_manager"]["import_identity"]["format"], 1);
+        assert_eq!(
+            sidecar["_manager"]["import_identity"]["source_sha256"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
+        assert_eq!(
+            sidecar["_manager"]["import_identity"]["tree_sha256"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
         );
 
         let list = mgr_call(
@@ -2548,6 +2695,8 @@ mod tests {
             }),
         );
         assert_eq!(reimp["ok"], true, "resp: {reimp}");
+        assert_eq!(reimp["disposition"], "unchanged");
+        assert_eq!(reimp["matched_by"], "source");
         assert_eq!(reimp["entry"]["id"], id, "same source → same id");
 
         let after_reimport = mgr_call(
@@ -2565,6 +2714,302 @@ mod tests {
             entries[0]["enabled"], true,
             "re-import preserves the existing enabled state"
         );
+    }
+
+    #[test]
+    fn mgr_import_moved_source_preserves_id_order_enabled_and_loadout_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("library");
+        let lo = tmp.path().join("loadout.json");
+        let source = write_goremod_bundle(&tmp.path().join("source-root"), "MovedProbe");
+        let other = write_goremod_bundle(&tmp.path().join("other-root"), "OtherProbe");
+        let first = mgr_call(
+            "mgr_import",
+            json!({
+                "path": source.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        let second = mgr_call(
+            "mgr_import",
+            json!({
+                "path": other.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(first["ok"], true, "{first}");
+        assert_eq!(second["ok"], true, "{second}");
+        let first_id = first["entry"]["id"].as_str().unwrap();
+        let second_id = second["entry"]["id"].as_str().unwrap();
+        let set = mgr_call(
+            "mgr_set_loadout",
+            json!({
+                "loadout_path": lo.display().to_string(),
+                "loadout": {"format": 1, "entries": [
+                    {"id": second_id, "enabled": false},
+                    {"id": first_id, "enabled": true}
+                ]}
+            }),
+        );
+        assert_eq!(set["ok"], true, "{set}");
+        let loadout_before = std::fs::read(&lo).unwrap();
+        let moved = tmp.path().join("rebound").join("MovedProbe");
+        std::fs::create_dir_all(moved.parent().unwrap()).unwrap();
+        std::fs::rename(&source, &moved).unwrap();
+
+        let rebound = mgr_call(
+            "mgr_import",
+            json!({
+                "path": moved.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(rebound["ok"], true, "{rebound}");
+        assert_eq!(rebound["entry"]["id"], first_id);
+        assert_eq!(rebound["disposition"], "updated");
+        assert_eq!(rebound["matched_by"], "content");
+        assert_eq!(
+            rebound["entry"]["imported_at"], first["entry"]["imported_at"],
+            "pure source rebind preserves deployment fingerprint input"
+        );
+        assert_eq!(std::fs::read(&lo).unwrap(), loadout_before);
+        let listed = mgr_call(
+            "mgr_library_list",
+            json!({
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(listed["loadout"]["entries"][0]["id"], second_id);
+        assert_eq!(listed["loadout"]["entries"][0]["enabled"], false);
+        assert_eq!(listed["loadout"]["entries"][1]["id"], first_id);
+        assert_eq!(listed["loadout"]["entries"][1]["enabled"], true);
+    }
+
+    #[test]
+    fn mgr_import_moved_zip_preserves_id_order_enabled_and_loadout_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("library");
+        let lo = tmp.path().join("loadout.json");
+        let bundle = write_goremod_bundle(&tmp.path().join("bundle-root"), "MovedZipProbe");
+        let archive = tmp.path().join("download").join("MovedZipProbe.zip");
+        std::fs::create_dir_all(archive.parent().unwrap()).unwrap();
+        write_mgr_test_zip(&bundle, &archive);
+        let other = write_goremod_bundle(&tmp.path().join("other-root"), "OtherZipProbe");
+
+        let imported = mgr_call(
+            "mgr_import",
+            json!({
+                "path": archive.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        let other_imported = mgr_call(
+            "mgr_import",
+            json!({
+                "path": other.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(imported["ok"], true, "{imported}");
+        assert_eq!(other_imported["ok"], true, "{other_imported}");
+        let imported_id = imported["entry"]["id"].as_str().unwrap();
+        let other_id = other_imported["entry"]["id"].as_str().unwrap();
+        let set = mgr_call(
+            "mgr_set_loadout",
+            json!({
+                "loadout_path": lo.display().to_string(),
+                "loadout": {"format": 1, "entries": [
+                    {"id": other_id, "enabled": false},
+                    {"id": imported_id, "enabled": true}
+                ]}
+            }),
+        );
+        assert_eq!(set["ok"], true, "{set}");
+        let loadout_before = std::fs::read(&lo).unwrap();
+        let moved = tmp.path().join("moved").join("renamed.zip");
+        std::fs::create_dir_all(moved.parent().unwrap()).unwrap();
+        std::fs::rename(&archive, &moved).unwrap();
+
+        let rebound = mgr_call(
+            "mgr_import",
+            json!({
+                "path": moved.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(rebound["ok"], true, "{rebound}");
+        assert_eq!(rebound["entry"]["id"], imported_id);
+        assert_eq!(rebound["disposition"], "updated");
+        assert_eq!(rebound["matched_by"], "content");
+        assert_eq!(
+            rebound["entry"]["imported_at"],
+            imported["entry"]["imported_at"]
+        );
+        assert_eq!(std::fs::read(&lo).unwrap(), loadout_before);
+    }
+
+    #[test]
+    fn mgr_import_identity_refusals_are_structured_and_leave_state_byte_identical() {
+        // Duplicate-content ambiguity: clone one valid managed entry, give the clone its own valid
+        // id and source hint, then approach both through a third source path with equal bytes.
+        {
+            let tmp = tempfile::tempdir().unwrap();
+            let lib = tmp.path().join("library");
+            let lo = tmp.path().join("loadout.json");
+            let source = write_goremod_bundle(&tmp.path().join("source"), "DuplicateProbe");
+            let first = mgr_call(
+                "mgr_import",
+                json!({
+                    "path": source.display().to_string(),
+                    "library_dir": lib.display().to_string(),
+                    "loadout_path": lo.display().to_string()
+                }),
+            );
+            assert_eq!(first["ok"], true, "{first}");
+            let first_id = first["entry"]["id"].as_str().unwrap();
+            let duplicate_id = "verified-duplicate";
+            copy_mgr_test_tree(&lib.join(first_id), &lib.join(duplicate_id));
+            let duplicate_sidecar_path = lib.join(duplicate_id).join(gore_mod::mgr::META_FILE);
+            let mut duplicate_sidecar: Value =
+                serde_json::from_slice(&std::fs::read(&duplicate_sidecar_path).unwrap()).unwrap();
+            duplicate_sidecar["id"] = Value::String(duplicate_id.into());
+            duplicate_sidecar["_manager"]["import_identity"]["source_sha256"] =
+                Value::String("0".repeat(64));
+            std::fs::write(
+                &duplicate_sidecar_path,
+                serde_json::to_vec_pretty(&duplicate_sidecar).unwrap(),
+            )
+            .unwrap();
+            let moved = tmp.path().join("moved").join("DuplicateProbe");
+            copy_mgr_test_tree(&source, &moved);
+            let library_before = mgr_visible_library_snapshot(&lib);
+            let loadout_before = std::fs::read(&lo).unwrap();
+
+            let response = mgr_call(
+                "mgr_import",
+                json!({
+                    "path": moved.display().to_string(),
+                    "library_dir": lib.display().to_string(),
+                    "loadout_path": lo.display().to_string()
+                }),
+            );
+            assert_eq!(
+                response["error"]["code"], "IMPORT_DUPLICATE_AMBIGUOUS",
+                "{response}"
+            );
+            let mut expected_ids = vec![first_id.to_owned(), duplicate_id.to_owned()];
+            expected_ids.sort();
+            assert_eq!(
+                response["error"]["details"],
+                json!({"candidate_ids": expected_ids})
+            );
+            assert!(!response.to_string().contains("sha256"));
+            assert!(!response.to_string().contains("_manager"));
+            assert_eq!(mgr_visible_library_snapshot(&lib), library_before);
+            assert_eq!(std::fs::read(&lo).unwrap(), loadout_before);
+            assert!(std::fs::read_dir(&lib).unwrap().all(|entry| {
+                let name = entry.unwrap().file_name();
+                name == ".gore-manager-library.lock" || !name.to_string_lossy().starts_with('.')
+            }));
+        }
+
+        // Source-vs-content split: the bound source now stages B's bytes, so guessing either id
+        // would be destructive. The refusal must happen before loadout registration.
+        {
+            let tmp = tempfile::tempdir().unwrap();
+            let lib = tmp.path().join("library");
+            let lo = tmp.path().join("loadout.json");
+            let a_dir = tmp.path().join("a");
+            let b_dir = tmp.path().join("b");
+            std::fs::create_dir(&a_dir).unwrap();
+            std::fs::create_dir(&b_dir).unwrap();
+            let a = a_dir.join("same_P.pak");
+            let b = b_dir.join("same_P.pak");
+            std::fs::write(&a, b"old").unwrap();
+            std::fs::write(&b, b"new").unwrap();
+            let first = mgr_call(
+                "mgr_import",
+                json!({
+                    "path": a.display().to_string(),
+                    "library_dir": lib.display().to_string(),
+                    "loadout_path": lo.display().to_string()
+                }),
+            );
+            let second = mgr_call(
+                "mgr_import",
+                json!({
+                    "path": b.display().to_string(),
+                    "library_dir": lib.display().to_string(),
+                    "loadout_path": lo.display().to_string()
+                }),
+            );
+            assert_eq!(first["ok"], true, "{first}");
+            assert_eq!(second["ok"], true, "{second}");
+            std::fs::write(&a, b"new").unwrap();
+            let library_before = mgr_visible_library_snapshot(&lib);
+            let loadout_before = std::fs::read(&lo).unwrap();
+
+            let response = mgr_call(
+                "mgr_import",
+                json!({
+                    "path": a.display().to_string(),
+                    "library_dir": lib.display().to_string(),
+                    "loadout_path": lo.display().to_string()
+                }),
+            );
+            assert_eq!(
+                response["error"]["code"], "IMPORT_IDENTITY_CONFLICT",
+                "{response}"
+            );
+            let mut expected = vec![
+                json!({
+                    "id": first["entry"]["id"],
+                    "matched_by": ["entry_id", "source"]
+                }),
+                json!({
+                    "id": second["entry"]["id"],
+                    "matched_by": ["content"]
+                }),
+            ];
+            expected.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
+            assert_eq!(
+                response["error"]["details"],
+                json!({"candidates": expected})
+            );
+            assert!(!response.to_string().contains("sha256"));
+            assert!(!response.to_string().contains("_manager"));
+            assert_eq!(mgr_visible_library_snapshot(&lib), library_before);
+            assert_eq!(std::fs::read(&lo).unwrap(), loadout_before);
+            assert!(std::fs::read_dir(&lib).unwrap().all(|entry| {
+                let name = entry.unwrap().file_name();
+                name == ".gore-manager-library.lock" || !name.to_string_lossy().starts_with('.')
+            }));
+        }
+    }
+
+    #[test]
+    fn mgr_import_non_identity_failures_keep_the_import_failed_code() {
+        let tmp = tempfile::tempdir().unwrap();
+        let unsupported = tmp.path().join("unsupported.7z");
+        std::fs::write(&unsupported, b"not an archive").unwrap();
+        let response = mgr_call(
+            "mgr_import",
+            json!({
+                "path": unsupported.display().to_string(),
+                "library_dir": tmp.path().join("library").display().to_string(),
+                "loadout_path": tmp.path().join("loadout.json").display().to_string()
+            }),
+        );
+        assert_eq!(response["ok"], false, "{response}");
+        assert_eq!(response["error"]["code"], "IMPORT_FAILED", "{response}");
+        assert!(response["error"].get("details").is_none(), "{response}");
     }
 
     #[test]

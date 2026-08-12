@@ -9,11 +9,109 @@ use std::collections::BTreeMap;
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
+use sha2::{Digest as _, Sha256};
+
+#[cfg(not(unix))]
+use super::model::metadata_is_link;
 use super::model::{
-    metadata_is_link, open_directory_nofollow, open_file_nofollow, ComponentInfo, LibraryRoot,
-    ModEntryMeta, ModKind, RawTarget, SecureDirectory, SecureFile, SecureNode, META_FILE,
+    open_directory_nofollow, open_file_nofollow, ComponentInfo, FileIdentity, FileRevision,
+    ImportIdentityMeta, LibraryEntry, LibraryMutationFileGuard, LibraryRoot, LibrarySidecar,
+    ManagerPrivateMeta, MetaReadFailure, ModEntryMeta, ModKind, RawTarget, SecureDirectory,
+    SecureFile, SecureNode, META_FILE,
 };
 use crate::{Component, ModError, ModManifest, ScriptEntry, VoicePatchManifest};
+
+/// Result of one identity-aware import.  The entry remains the same public metadata shape used by
+/// the compatibility [`import`] API; disposition and match provenance are additive native facts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportOutcome {
+    pub entry: ModEntryMeta,
+    pub disposition: ImportDisposition,
+    pub matched_by: ImportMatchedBy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportDisposition {
+    Created,
+    Updated,
+    Unchanged,
+}
+
+impl ImportDisposition {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Updated => "updated",
+            Self::Unchanged => "unchanged",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportMatchedBy {
+    None,
+    Source,
+    Content,
+    EntryId,
+}
+
+/// One bounded, role-truthful witness for an identity conflict. The list in an error is capped for
+/// wire safety, but the decision itself always considers the complete bounded candidate set.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ImportConflictCandidate {
+    pub id: String,
+    pub matched_by: Vec<ImportMatchedBy>,
+}
+
+impl ImportMatchedBy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Source => "source",
+            Self::Content => "content",
+            Self::EntryId => "entry_id",
+        }
+    }
+}
+
+/// Identity refusals stay distinguishable at the FFI boundary.  Everything else remains the
+/// established `IMPORT_FAILED` class and is wrapped in `Failed`.
+#[derive(Debug, thiserror::Error)]
+pub enum ImportError {
+    #[error("multiple existing mods have the same verified content: {candidate_ids:?}")]
+    DuplicateAmbiguous { candidate_ids: Vec<String> },
+    #[error("verified import identities conflict: {candidates:?}")]
+    IdentityConflict {
+        candidates: Vec<ImportConflictCandidate>,
+    },
+    #[error(transparent)]
+    Failed(#[from] ModError),
+}
+
+impl ImportError {
+    pub fn candidate_ids(&self) -> &[String] {
+        match self {
+            Self::DuplicateAmbiguous { candidate_ids } => candidate_ids,
+            _ => &[],
+        }
+    }
+
+    pub fn conflict_candidates(&self) -> Option<&[ImportConflictCandidate]> {
+        match self {
+            Self::IdentityConflict { candidates } => Some(candidates),
+            _ => None,
+        }
+    }
+
+    fn into_mod_error(self) -> ModError {
+        match self {
+            Self::Failed(error) => error,
+            refusal => ModError::Other(refusal.to_string()),
+        }
+    }
+}
 
 /// Default resource envelope for one manager import. These limits are deliberately high enough
 /// for multi-gigabyte IoStore mods, but finite so a malformed or hostile ZIP/manifest cannot grow
@@ -56,42 +154,76 @@ const DEFAULT_IMPORT_LIMITS: ImportLimits = ImportLimits {
 const REPLACEMENT_PREFIX: &str = ".replacing-";
 const REPLACEMENT_STATE_FILE: &str = "replacement.json";
 const REPLACEMENT_BACKUP_DIR: &str = "previous";
+const REPLACEMENT_QUARANTINE_DIR: &str = "quarantine";
+#[cfg(unix)]
+const REPLACEMENT_ATOMIC_TEMP_SUFFIX: &str = ".pending";
 const REPLACEMENT_STATE_MAX_BYTES: u64 = 4 * 1024;
+const IMPORT_IDENTITY_FORMAT: u32 = 1;
+const IMPORT_SOURCE_HASH_DOMAIN: &[u8] = b"gore-manager-import-source-v1\0";
+const IMPORT_TREE_HASH_DOMAIN: &[u8] = b"gore-manager-import-tree-v1\0";
+const MAX_IDENTITY_LIBRARY_ENTRIES: usize = 4_096;
+const MAX_IDENTITY_SIDECAR_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_IDENTITY_REHASH_CANDIDATES: usize = 64;
+const MAX_IDENTITY_REFUSAL_IDS: usize = 2;
+#[cfg(test)]
+const LIBRARY_LOCK_MARKER_ENV: &str = "GORE_TEST_LIBRARY_LOCK_MARKER";
+#[cfg(test)]
+const LIBRARY_LOCK_HOLD_MS_ENV: &str = "GORE_TEST_LIBRARY_LOCK_HOLD_MS";
 
-static REPLACEMENT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// The local mutex establishes one acquisition order inside this process. Windows then owns a
+/// persistent lock-file byte range; Unix flocks the retained canonical library-directory inode.
+/// Together they protect cooperative GORE recovery, identity decisions, sidecar writes,
+/// publication, list recovery, and removal. Untrusted source materialization stays outside the
+/// lane.
+static LIBRARY_MUTATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Import `source` (a folder, `.zip` archive, or single recognized game file) into the library
 /// at `library_dir`, returning the entry metadata that was also written as its sidecar.
 ///
 /// Pipeline: materialize into a `.staging-*` dir under the library (same volume, so activation
-/// is a rename) → detect components + extract targets → write the sidecar → swap into place.
-/// Re-importing the SAME source (same name AND same source file/dir name) replaces its entry —
-/// a mod update — because the id folds both into its hash. Two DIFFERENT mods that happen to
-/// share a display name but come from different sources get DISTINCT ids and coexist, rather than
-/// one silently clobbering the other.
+/// is a rename) → detect components + extract targets → hash/decide under the library lock →
+/// write the private sidecar hints → publish through the existing replacement transaction.
+/// A selected source/content hint is authority only after a bounded no-follow re-hash of the
+/// current entry. New unmatched content keeps the legacy path-derived proposed-id shape.
 pub fn import(library_dir: &Path, source: &Path) -> crate::Result<ModEntryMeta> {
-    import_with_limits(library_dir, source, DEFAULT_IMPORT_LIMITS)
+    import_detailed(library_dir, source)
+        .map(|outcome| outcome.entry)
+        .map_err(ImportError::into_mod_error)
 }
 
+/// Identity-aware import with additive disposition and match provenance.
+pub fn import_detailed(library_dir: &Path, source: &Path) -> Result<ImportOutcome, ImportError> {
+    import_detailed_with_limits(library_dir, source, DEFAULT_IMPORT_LIMITS)
+}
+
+#[cfg(test)]
 fn import_with_limits(
     library_dir: &Path,
     source: &Path,
     limits: ImportLimits,
 ) -> crate::Result<ModEntryMeta> {
+    import_detailed_with_limits(library_dir, source, limits)
+        .map(|outcome| outcome.entry)
+        .map_err(ImportError::into_mod_error)
+}
+
+fn import_detailed_with_limits(
+    library_dir: &Path,
+    source: &Path,
+    limits: ImportLimits,
+) -> Result<ImportOutcome, ImportError> {
     if !source.exists() {
-        return Err(ModError::Other(format!(
-            "import source not found: {}",
-            source.display()
-        )));
+        return Err(
+            ModError::Other(format!("import source not found: {}", source.display())).into(),
+        );
     }
     std::fs::create_dir_all(library_dir).map_err(crate::io("creating library dir"))?;
-    {
-        let _replacement_lock = replacement_lock();
-        recover_interrupted_replacements(library_dir)?;
-    }
 
     // Canonical view so `.`/trailing-separator sources still yield a usable name.
-    let canon = std::fs::canonicalize(source).unwrap_or_else(|_| source.to_path_buf());
+    let canon = std::fs::canonicalize(source).map_err(crate::io(&format!(
+        "resolving import source {}",
+        source.display()
+    )))?;
     let source_name = canon
         .file_name()
         .and_then(|n| n.to_str())
@@ -122,7 +254,8 @@ fn import_with_limits(
                 "refusing to import {}: it is or contains the manager library directory ({})",
                 source.display(),
                 library_dir.display()
-            )));
+            ))
+            .into());
         }
     }
 
@@ -139,7 +272,7 @@ fn import_with_limits(
     // Walk the caller's actual path rather than the canonicalized naming/id view above. This lets
     // materialization reject a root symbolic link or junction instead of silently following it.
     materialize(source, &staging, limits)?;
-    wrap_root_ue4ss(&staging, &fallback_name)?;
+    let mut synthetic_root_ue4ss_wrapper = wrap_root_ue4ss(&staging, &fallback_name)?;
     // A goremod bundle shipped BELOW a wrapper dir (`Wrap/Sub/gore-mod.json`) is re-rooted so the
     // staging (→ entry) root IS the bundle root. This keeps every stored `ComponentInfo.rel`
     // bundle-root-relative (`audio`, not `Wrap/Sub/audio`), which matters because the manifests
@@ -147,18 +280,28 @@ fn import_with_limits(
     // apply then reads `<entry>/audio/0.wav` as authored instead of a nonexistent nested path.
     reroot_nested_bundle(&staging)?;
 
-    let (manifest, components) = detect(&staging, limits)?;
+    let (manifest, mut components) = detect(&staging, limits)?;
+    if manifest.is_some() {
+        // A root GORE bundle can also carry `Scripts/main.lua`. The temporary UE4SS wrapper lets
+        // rerooting find its manifest, but the hoisted result is a bundle again, not a synthetic
+        // foreign-UE4SS layout. Its exact rooted tree therefore remains its content identity.
+        synthetic_root_ue4ss_wrapper = None;
+    }
     if components.is_empty() {
         return Err(ModError::Other(format!(
             "nothing importable recognized in {}",
             source.display()
-        )));
+        ))
+        .into());
     }
     let kind = if manifest.is_some() {
         ModKind::Goremod
     } else {
         foreign_kind(&components)
     };
+    if let Some(wrapper) = synthetic_root_ue4ss_wrapper.as_deref() {
+        validate_synthetic_root_ue4ss_components(kind, &components, wrapper)?;
+    }
     let (name, version, author) = match &manifest {
         Some(m) => (
             m.mod_meta.name.clone(),
@@ -167,61 +310,1584 @@ fn import_with_limits(
         ),
         None => (fallback_name, String::new(), String::new()),
     };
-    let since_epoch = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let now = since_epoch.as_secs() as i64;
-    let now_micros = since_epoch.subsec_micros();
-    // Fold the display name and the FULL canonical source path into the disambiguating hash: a
-    // re-import of the same source path resolves to the same id and replaces the entry (update),
-    // while two different mods that share a display name AND a bare filename but live in different
-    // directories (e.g. two `mod.zip` in different folders) still get different ids and coexist
-    // instead of one silently clobbering the other. The `slug(name)` prefix keeps the dir
-    // human-readable.
-    let id = format!(
-        "{}-{}",
-        slug(&name),
-        crate::name_hash(&format!("{name}\0{}", canon.display()))
-    );
+    // Preserve the legacy proposed-id algorithm for create and legacy same-path binding. Stable
+    // private source/content identity may choose a different existing id below, but never changes
+    // the public id shape or ModEntryMeta fingerprint algorithm.
+    let proposed_id = proposed_import_id(&name, &canon);
+    let source_sha256 = hash_normalized_source_path(&canon);
+    // Retain the exact materialized staging inode before entering the library lane. Unix later
+    // resolves its direct-child name through the locked root fd and requires this identity;
+    // Windows reopens and revalidates it immediately before path-based publication.
+    let mut staged_directory =
+        open_directory_nofollow(&staging, "materialized import staging tree")?;
+
+    let library_lock = library_mutation_lock(library_dir)?;
+    #[cfg(unix)]
+    let mut locked_staging_guard = {
+        // From this point on cleanup must use the retained, locked library inode. Disarm the
+        // configured-path guard even if binding fails: deleting through that path after the lock
+        // is released could target a replacement root. A failed bind therefore leaves, at worst,
+        // an internal dot-directory in the retained inode rather than deleting an unverified path.
+        let bound = LockedStagingGuard::bind(&library_lock, &staging, staged_directory.identity());
+        guard.0 = None;
+        bound?
+    };
+    let canonical_library_dir = library_lock.path().to_path_buf();
+    recover_interrupted_replacements_locked(&library_lock)?;
+    let mut staged_hashes = hash_secure_import_tree_hashes_inner(
+        &staged_directory,
+        limits,
+        false,
+        synthetic_root_ue4ss_wrapper.as_deref(),
+        None,
+    )?;
+    let decision = {
+        let library = library_lock.open_library()?;
+        decide_import_identity(
+            &library,
+            &proposed_id,
+            &source_sha256,
+            &staged_hashes.identity_sha256,
+            limits,
+        )?
+    };
+    let (id, matched_by, previous) = match decision {
+        ImportDecision::Create => (proposed_id, ImportMatchedBy::None, None),
+        ImportDecision::Reuse {
+            id,
+            matched_by,
+            sidecar,
+            seal,
+            identity_tree_sha256,
+        } => (id, matched_by, Some((*sidecar, seal, identity_tree_sha256))),
+    };
+    let same_tree = previous
+        .as_ref()
+        .is_some_and(|(sidecar, seal, identity_tree_sha256)| {
+            identity_tree_sha256 == &staged_hashes.identity_sha256
+                || (sidecar.manager.is_none() && seal.tree_sha256 == staged_hashes.layout_sha256)
+        });
+    // A root UE4SS source is wrapped only to keep the manager sidecar outside the deployable
+    // directory. That wrapper's source-derived name is not content. When an unchanged moved
+    // source binds by normalized content, keep the existing physical wrapper/component metadata
+    // so its deployment fingerprint and status remain stable while the private source hint moves.
+    if same_tree {
+        if let (Some(current_wrapper), Some((previous_sidecar, _, _))) =
+            (synthetic_root_ue4ss_wrapper.as_deref(), previous.as_ref())
+        {
+            if previous_sidecar
+                .manager
+                .as_ref()
+                .and_then(|manager| manager.import_identity.as_ref())
+                .is_some_and(|identity| identity.synthetic_root_ue4ss_wrapper)
+            {
+                let previous_wrapper =
+                    synthetic_root_ue4ss_wrapper_name(&previous_sidecar.entry)?.to_string();
+                staged_directory = rename_synthetic_root_ue4ss_wrapper(
+                    staged_directory,
+                    current_wrapper,
+                    &previous_wrapper,
+                )?;
+                components = previous_sidecar.entry.components.clone();
+                synthetic_root_ue4ss_wrapper = Some(previous_wrapper);
+                staged_hashes = hash_secure_import_tree_hashes_inner(
+                    &staged_directory,
+                    limits,
+                    false,
+                    synthetic_root_ue4ss_wrapper.as_deref(),
+                    None,
+                )?;
+                if previous
+                    .as_ref()
+                    .is_none_or(|(_, _, identity_tree_sha256)| {
+                        identity_tree_sha256 != &staged_hashes.identity_sha256
+                    })
+                {
+                    return Err(ModError::Other(
+                        "normalized root UE4SS identity changed while preserving its wrapper"
+                            .into(),
+                    )
+                    .into());
+                }
+            }
+        }
+    }
+    let imported_at = match &previous {
+        Some((sidecar, _, _)) if same_tree => sidecar.entry.imported_at.clone(),
+        Some((sidecar, _, _)) => changed_import_timestamp(&sidecar.entry.imported_at)?,
+        None => import_timestamp_now(),
+    };
     let meta = ModEntryMeta {
         id: id.clone(),
         kind,
         name,
         version,
         author,
-        imported_at: format_utc(now, now_micros),
+        imported_at,
         source: source_name,
         components,
     };
+    let sidecar = LibrarySidecar {
+        entry: meta.clone(),
+        manager: Some(ManagerPrivateMeta {
+            import_identity: Some(ImportIdentityMeta {
+                format: IMPORT_IDENTITY_FORMAT,
+                source_sha256,
+                tree_sha256: staged_hashes.identity_sha256.clone(),
+                synthetic_root_ue4ss_wrapper: synthetic_root_ue4ss_wrapper.is_some(),
+            }),
+        }),
+    };
+
+    let unchanged = previous
+        .as_ref()
+        .is_some_and(|(previous_sidecar, _, _)| same_tree && previous_sidecar == &sidecar);
 
     // Sidecar goes into staging BEFORE the swap so the entry appears fully formed — a
     // concurrent `list()` never sees a half-imported dir it would have to skip.
-    std::fs::write(staging.join(META_FILE), serde_json::to_vec_pretty(&meta)?)
-        .map_err(crate::io("writing entry sidecar"))?;
-    let entry_dir = library_dir.join(&id);
-    // Activate atomically. Same source (name + source name) ⇒ same id, so a re-import replaces the
-    // previous copy (an update); a different source with the same display name hashes to a different
-    // id and lands in its own dir. When an entry already exists, move it ASIDE first, promote the
+    let staged_sidecar_sha256 =
+        write_manager_sidecar(&staged_directory, &sidecar, limits.max_manifest_bytes)?;
+    let expectation = PublishExpectation {
+        staged: EntryPublishSeal {
+            root_identity: staged_directory.identity(),
+            tree_sha256: staged_hashes.layout_sha256,
+            sidecar_sha256: staged_sidecar_sha256,
+        },
+        current: previous.as_ref().map(|(_, seal, _)| seal.clone()),
+        limits,
+    };
+    let entry_dir = canonical_library_dir.join(&id);
+    if unchanged {
+        run_prepublish_race_hook(&staging, &entry_dir);
+        let library = library_lock.open_library()?;
+        verify_publish_expectation(&library, &staged_directory, &entry_dir, &expectation)?;
+        return Ok(ImportOutcome {
+            entry: previous
+                .as_ref()
+                .expect("unchanged imports have previous metadata")
+                .0
+                .entry
+                .clone(),
+            disposition: ImportDisposition::Unchanged,
+            matched_by,
+        });
+    }
+    // Activate atomically. When identity chooses an existing entry, move it ASIDE first, promote the
     // staged copy, and only then delete the old one — if promotion fails (crash, transient
     // FS/permission/AV), restore the old entry so a failed update never leaves the library (and the
     // loadout that references it) pointing at a now-missing mod. The backup is dot-prefixed so
     // `list()` skips it during the brief window it exists.
+    run_prepublish_failure_hook()?;
+    #[cfg(not(unix))]
     {
-        let _replacement_lock = replacement_lock();
-        recover_interrupted_replacements(library_dir)?;
-        activate_staged_entry(library_dir, &staging, &entry_dir, &id)?;
+        drop(staged_directory);
     }
-    guard.0 = None; // staging IS the entry now — nothing to clean
-    Ok(meta)
+    activate_staged_entry(&library_lock, &staging, &entry_dir, &id, &expectation)?;
+    #[cfg(unix)]
+    locked_staging_guard.disarm();
+    #[cfg(not(unix))]
+    {
+        guard.0 = None; // staging IS the entry now — nothing to clean
+    }
+    Ok(ImportOutcome {
+        entry: meta,
+        disposition: if previous.is_some() {
+            ImportDisposition::Updated
+        } else {
+            ImportDisposition::Created
+        },
+        matched_by,
+    })
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug)]
+enum ImportDecision {
+    Create,
+    Reuse {
+        id: String,
+        matched_by: ImportMatchedBy,
+        sidecar: Box<LibrarySidecar>,
+        seal: EntryPublishSeal,
+        identity_tree_sha256: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct EntryPublishSeal {
+    root_identity: FileIdentity,
+    tree_sha256: String,
+    sidecar_sha256: String,
+}
+
+#[derive(Debug, Clone)]
+struct PublishExpectation {
+    staged: EntryPublishSeal,
+    current: Option<EntryPublishSeal>,
+    limits: ImportLimits,
+}
+
+#[derive(Debug)]
+struct VerifiedIdentityCandidate {
+    id: String,
+    sidecar: LibrarySidecar,
+    current_tree_sha256: String,
+    current_layout_sha256: String,
+    sidecar_sha256: String,
+    root_identity: FileIdentity,
+    identity_managed: bool,
+    source_match: bool,
+    entry_id_match: bool,
+    content_match: bool,
+}
+
+fn decide_import_identity(
+    library: &LibraryRoot,
+    proposed_id: &str,
+    source_sha256: &str,
+    staged_tree_sha256: &str,
+    limits: ImportLimits,
+) -> Result<ImportDecision, ImportError> {
+    let mut names = Vec::new();
+    for entry in library.read_dir()? {
+        let entry = entry.map_err(crate::io("reading manager library identity entry"))?;
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with('.') {
+            continue;
+        }
+        if names.len() >= MAX_IDENTITY_LIBRARY_ENTRIES {
+            return Err(ModError::InspectionBound(format!(
+                "manager import identity entry limit exceeded: more than {MAX_IDENTITY_LIBRARY_ENTRIES}"
+            ))
+            .into());
+        }
+        names.push(name);
+    }
+    names.sort();
+
+    let mut remaining_sidecar_bytes = MAX_IDENTITY_SIDECAR_BYTES;
+    let mut candidates = Vec::new();
+    let mut rehash_budget = IdentityRehashBudget::new(limits);
+    for name in names {
+        let directory_id = name.to_str().ok_or_else(|| {
+            ModError::Other("manager-library entry id is not valid Unicode".into())
+        })?;
+        let entry_id_match = library_ids_equal(directory_id, proposed_id);
+        let entry = library.entry(directory_id).map_err(|error| {
+            ModError::Other(format!(
+                "manager-library entry {directory_id:?} is unsafe or unreadable: {error}"
+            ))
+        })?;
+        let inspection = match entry
+            .read_identity_sidecar_bounded_classified(&mut remaining_sidecar_bytes)
+        {
+            Ok(inspection) => inspection,
+            Err(MetaReadFailure::AggregateBudgetExhausted { .. }) => {
+                return Err(ModError::InspectionBound(format!(
+                    "manager import identity sidecar budget exceeded: {MAX_IDENTITY_SIDECAR_BYTES} bytes"
+                ))
+                .into())
+            }
+            Err(MetaReadFailure::Other(error)) => {
+                return Err(ModError::Other(format!(
+                    "manager-library entry {directory_id:?} has an unreadable public sidecar: {error}"
+                ))
+                .into())
+            }
+        };
+        let manager = inspection.manager.map_err(|error| {
+            ModError::Other(format!(
+                "manager-library entry {directory_id:?} has invalid private identity metadata: {error}"
+            ))
+        })?;
+        let identity = manager
+            .as_ref()
+            .and_then(|manager| manager.import_identity.as_ref());
+        if let Some(identity) = identity {
+            validate_import_identity(identity).map_err(|error| {
+                ModError::Other(format!(
+                    "manager-library entry {:?} has invalid private identity metadata: {error}",
+                    inspection.entry.id
+                ))
+            })?;
+        }
+        let source_match = identity
+            .is_some_and(|identity| constant_time_text_eq(&identity.source_sha256, source_sha256));
+        let content_hint_match = identity.is_some_and(|identity| {
+            constant_time_text_eq(&identity.tree_sha256, staged_tree_sha256)
+        });
+        if !entry_id_match && !source_match && !content_hint_match {
+            // Deliberate V1 boundary: no global re-hash of hint-less legacy entries or stale
+            // negative content hints. Only a proposed-id/source/content-hint candidate is opened.
+            continue;
+        }
+        let identity_wrapper = match identity {
+            Some(identity) if identity.synthetic_root_ue4ss_wrapper => {
+                Some(synthetic_root_ue4ss_wrapper_name(&inspection.entry)?.to_string())
+            }
+            _ => None,
+        };
+        let current_hashes = hash_library_entry_tree_for_identity(
+            &entry,
+            limits,
+            identity_wrapper.as_deref(),
+            &mut rehash_budget,
+        )?;
+        if let Some(identity) = identity {
+            if !constant_time_text_eq(&identity.tree_sha256, &current_hashes.identity_sha256) {
+                return Err(ModError::Other(format!(
+                    "manager-library tampering detected for selected entry {:?}: persisted tree identity does not match its current bounded no-follow tree",
+                    inspection.entry.id
+                ))
+                .into());
+            }
+        }
+        let identity_managed = identity.is_some();
+        let sidecar = LibrarySidecar {
+            entry: inspection.entry,
+            manager,
+        };
+        candidates.push(VerifiedIdentityCandidate {
+            id: sidecar.entry.id.clone(),
+            sidecar,
+            content_match: content_hint_match
+                && constant_time_text_eq(&current_hashes.identity_sha256, staged_tree_sha256),
+            current_tree_sha256: current_hashes.identity_sha256,
+            current_layout_sha256: current_hashes.layout_sha256,
+            sidecar_sha256: inspection.sidecar_sha256,
+            root_identity: entry.secure_directory().identity(),
+            identity_managed,
+            source_match,
+            entry_id_match,
+        });
+    }
+
+    candidates.sort_by(|left, right| left.id.cmp(&right.id));
+    let managed_id_collision = candidates.iter().find(|candidate| {
+        candidate.identity_managed
+            && candidate.entry_id_match
+            && !candidate.source_match
+            && !candidate.content_match
+    });
+    if let Some(collision) = managed_id_collision {
+        return Err(ImportError::IdentityConflict {
+            // This collision is independently sufficient to refuse. Restrict the bounded wire to
+            // the causal witness so lexically earlier content candidates cannot crowd it out.
+            candidates: conflict_details(std::iter::once(collision)),
+        });
+    }
+    let primary: Vec<_> = candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.source_match || (candidate.entry_id_match && !candidate.identity_managed)
+        })
+        .collect();
+    if primary.len() > 1 {
+        return Err(ImportError::IdentityConflict {
+            candidates: conflict_details(primary.iter().copied()),
+        });
+    }
+    let content: Vec<_> = candidates
+        .iter()
+        .filter(|candidate| candidate.content_match)
+        .collect();
+    if let Some(primary) = primary.first().copied() {
+        if content.iter().any(|candidate| candidate.id != primary.id) {
+            let distinct_content = content
+                .iter()
+                .copied()
+                .find(|candidate| candidate.id != primary.id)
+                .expect("conflict predicate found a distinct content candidate");
+            return Err(ImportError::IdentityConflict {
+                // Select the source/legacy-id witness and one distinct content witness before
+                // sorting/capping the diagnostic wire. Both causal roles are therefore retained.
+                candidates: conflict_details([primary, distinct_content]),
+            });
+        }
+        return Ok(reuse_decision(
+            primary,
+            if primary.source_match {
+                ImportMatchedBy::Source
+            } else {
+                ImportMatchedBy::EntryId
+            },
+        ));
+    }
+    if content.len() > 1 {
+        return Err(ImportError::DuplicateAmbiguous {
+            candidate_ids: content
+                .iter()
+                .take(MAX_IDENTITY_REFUSAL_IDS)
+                .map(|candidate| candidate.id.clone())
+                .collect(),
+        });
+    }
+    if let Some(content) = content.first().copied() {
+        return Ok(reuse_decision(content, ImportMatchedBy::Content));
+    }
+    Ok(ImportDecision::Create)
+}
+
+fn conflict_details<'a>(
+    candidates: impl IntoIterator<Item = &'a VerifiedIdentityCandidate>,
+) -> Vec<ImportConflictCandidate> {
+    let mut reasons = BTreeMap::<String, [bool; 3]>::new();
+    for candidate in candidates {
+        let matched = reasons.entry(candidate.id.clone()).or_default();
+        matched[0] |= candidate.entry_id_match;
+        matched[1] |= candidate.source_match;
+        matched[2] |= candidate.content_match;
+    }
+    reasons
+        .into_iter()
+        .take(MAX_IDENTITY_REFUSAL_IDS)
+        .map(|(id, matched)| {
+            let mut matched_by = Vec::with_capacity(3);
+            if matched[0] {
+                matched_by.push(ImportMatchedBy::EntryId);
+            }
+            if matched[1] {
+                matched_by.push(ImportMatchedBy::Source);
+            }
+            if matched[2] {
+                matched_by.push(ImportMatchedBy::Content);
+            }
+            ImportConflictCandidate { id, matched_by }
+        })
+        .collect()
+}
+
+fn reuse_decision(
+    candidate: &VerifiedIdentityCandidate,
+    matched_by: ImportMatchedBy,
+) -> ImportDecision {
+    ImportDecision::Reuse {
+        id: candidate.id.clone(),
+        matched_by,
+        sidecar: Box::new(candidate.sidecar.clone()),
+        seal: EntryPublishSeal {
+            root_identity: candidate.root_identity,
+            tree_sha256: candidate.current_layout_sha256.clone(),
+            sidecar_sha256: candidate.sidecar_sha256.clone(),
+        },
+        identity_tree_sha256: candidate.current_tree_sha256.clone(),
+    }
+}
+
+fn validate_import_identity(identity: &ImportIdentityMeta) -> crate::Result<()> {
+    if identity.format != IMPORT_IDENTITY_FORMAT
+        || !is_lower_sha256(&identity.source_sha256)
+        || !is_lower_sha256(&identity.tree_sha256)
+    {
+        return Err(ModError::Other(format!(
+            "expected format {IMPORT_IDENTITY_FORMAT} and two lowercase SHA-256 digests"
+        )));
+    }
+    Ok(())
+}
+
+fn is_lower_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn constant_time_text_eq(left: &str, right: &str) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.bytes()
+        .zip(right.bytes())
+        .fold(0u8, |difference, (left, right)| difference | (left ^ right))
+        == 0
+}
+
+#[cfg(windows)]
+fn library_ids_equal(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right)
+}
+
+#[cfg(not(windows))]
+fn library_ids_equal(left: &str, right: &str) -> bool {
+    left == right
+}
+
+fn proposed_import_id(name: &str, canonical_source: &Path) -> String {
+    let proposed = format!(
+        "{}-{}",
+        slug(name),
+        crate::name_hash(&format!("{name}\0{}", canonical_source.display()))
+    );
+    proposed_import_id_override(proposed)
+}
+
+#[cfg(test)]
+type ImportPathHook = Option<Box<dyn FnOnce(&Path)>>;
+
+#[cfg(test)]
+type ImportPathPairHook = Option<Box<dyn FnOnce(&Path, &Path)>>;
+
+#[cfg(test)]
+thread_local! {
+    static PROPOSED_IMPORT_ID_OVERRIDE: std::cell::RefCell<Option<String>> = const {
+        std::cell::RefCell::new(None)
+    };
+    static IMPORT_TIMESTAMP_OVERRIDE: std::cell::RefCell<Option<String>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+#[cfg(test)]
+fn inject_proposed_import_id(id: impl Into<String>) {
+    PROPOSED_IMPORT_ID_OVERRIDE.with(|slot| *slot.borrow_mut() = Some(id.into()));
+}
+
+#[cfg(test)]
+fn proposed_import_id_override(fallback: String) -> String {
+    PROPOSED_IMPORT_ID_OVERRIDE.with(|slot| slot.borrow_mut().take().unwrap_or(fallback))
+}
+
+#[cfg(not(test))]
+fn proposed_import_id_override(fallback: String) -> String {
+    fallback
+}
+
+#[cfg(test)]
+fn inject_import_timestamp(timestamp: impl Into<String>) {
+    IMPORT_TIMESTAMP_OVERRIDE.with(|slot| *slot.borrow_mut() = Some(timestamp.into()));
+}
+
+fn import_timestamp_now() -> String {
+    #[cfg(test)]
+    if let Some(timestamp) = IMPORT_TIMESTAMP_OVERRIDE.with(|slot| slot.borrow_mut().take()) {
+        return timestamp;
+    }
+    let since_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    format_utc(since_epoch.as_secs() as i64, since_epoch.subsec_micros())
+}
+
+fn changed_import_timestamp(previous: &str) -> crate::Result<String> {
+    let current = import_timestamp_now();
+    if let (Some((current_seconds, current_micros)), Some((previous_seconds, previous_micros))) =
+        (parse_utc_timestamp(&current), parse_utc_timestamp(previous))
+    {
+        let maximum = parse_utc_timestamp("9999-12-31T23:59:59.999999Z")
+            .expect("maximum manager timestamp is canonical");
+        if (previous_seconds, previous_micros) >= maximum {
+            return Err(ModError::Other(
+                "manager import timestamp exhausted the canonical four-digit RFC 3339 range".into(),
+            ));
+        }
+        let (next_seconds, next_micros) = if previous_micros == 999_999 {
+            (
+                previous_seconds
+                    .checked_add(1)
+                    .ok_or_else(|| ModError::Other("manager import timestamp overflowed".into()))?,
+                0,
+            )
+        } else {
+            (previous_seconds, previous_micros + 1)
+        };
+        let next = (next_seconds, next_micros);
+        if next > maximum {
+            return Err(ModError::Other(
+                "manager import timestamp exhausted the canonical four-digit RFC 3339 range".into(),
+            ));
+        }
+        return Ok(if (current_seconds, current_micros) >= next {
+            format_utc(current_seconds, current_micros)
+        } else {
+            format_utc(next_seconds, next_micros)
+        });
+    }
+    if current != previous {
+        return Ok(current);
+    }
+    // Legacy sidecars did not validate `imported_at`. Preserve compatibility while still ensuring
+    // changed bytes cannot reuse the exact fingerprint when either value is non-canonical.
+    let Some(prefix) = current.strip_suffix('Z') else {
+        return Ok(format!("{current}.000001Z"));
+    };
+    if prefix
+        .rsplit_once('T')
+        .is_some_and(|(_, time)| time.contains('.'))
+    {
+        Ok(format!("{prefix}1Z"))
+    } else {
+        Ok(format!("{prefix}.000001Z"))
+    }
+}
+
+fn parse_utc_timestamp(value: &str) -> Option<(i64, u32)> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 27
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'.'
+        || bytes[26] != b'Z'
+    {
+        return None;
+    }
+    let number = |range: std::ops::Range<usize>| -> Option<i64> {
+        bytes[range].iter().try_fold(0i64, |value, byte| {
+            byte.is_ascii_digit()
+                .then_some(value * 10 + i64::from(byte - b'0'))
+        })
+    };
+    let year = number(0..4)?;
+    let month = u32::try_from(number(5..7)?).ok()?;
+    let day = u32::try_from(number(8..10)?).ok()?;
+    let hour = number(11..13)?;
+    let minute = number(14..16)?;
+    let second = number(17..19)?;
+    let micros = u32::try_from(number(20..26)?).ok()?;
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return None;
+    }
+    let days = days_from_civil(year, month, day);
+    let seconds = days
+        .checked_mul(86_400)?
+        .checked_add(hour * 3_600 + minute * 60 + second)?;
+    (format_utc(seconds, micros) == value).then_some((seconds, micros))
+}
+
+fn hash_normalized_source_path(path: &Path) -> String {
+    let normalized = normalized_source_path_bytes(path);
+    let mut hash = Sha256::new();
+    hash.update(IMPORT_SOURCE_HASH_DOMAIN);
+    hash.update((normalized.len() as u64).to_le_bytes());
+    hash.update(&normalized);
+    digest_hex(hash.finalize().into())
+}
+
+#[cfg(windows)]
+fn normalized_source_path_bytes(path: &Path) -> Vec<u8> {
+    use std::os::windows::ffi::OsStrExt as _;
+
+    let mut units: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .map(|unit| match unit {
+            0x005c => 0x002f,
+            0x0041..=0x005a => unit + 0x0020,
+            _ => unit,
+        })
+        .collect();
+    const VERBATIM: &[u16] = &[b'/' as u16, b'/' as u16, b'?' as u16, b'/' as u16];
+    const VERBATIM_UNC: &[u16] = &[
+        b'/' as u16,
+        b'/' as u16,
+        b'?' as u16,
+        b'/' as u16,
+        b'u' as u16,
+        b'n' as u16,
+        b'c' as u16,
+        b'/' as u16,
+    ];
+    if units.starts_with(VERBATIM_UNC) {
+        units.splice(..VERBATIM_UNC.len(), [b'/' as u16, b'/' as u16]);
+    } else if units.starts_with(VERBATIM) {
+        units.drain(..VERBATIM.len());
+    }
+    units.into_iter().flat_map(u16::to_le_bytes).collect()
+}
+
+#[cfg(unix)]
+fn normalized_source_path_bytes(path: &Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    path.as_os_str().as_bytes().to_vec()
+}
+
+#[cfg(not(any(windows, unix)))]
+fn normalized_source_path_bytes(path: &Path) -> Vec<u8> {
+    path.to_string_lossy().replace('\\', "/").into_bytes()
+}
+
+#[cfg(test)]
+fn hash_import_tree(root: &Path, limits: ImportLimits) -> crate::Result<String> {
+    let root = open_directory_nofollow(root, "normalized import tree")?;
+    hash_secure_import_tree(&root, limits, false)
+}
+
+fn hash_library_entry_tree(entry: &LibraryEntry, limits: ImportLimits) -> crate::Result<String> {
+    hash_secure_import_tree(entry.secure_directory(), limits, true)
+}
+
+fn hash_library_entry_tree_for_identity(
+    entry: &LibraryEntry,
+    limits: ImportLimits,
+    synthetic_root_ue4ss_wrapper: Option<&str>,
+    budget: &mut IdentityRehashBudget,
+) -> crate::Result<ImportTreeHashes> {
+    hash_secure_import_tree_hashes_inner(
+        entry.secure_directory(),
+        limits,
+        true,
+        synthetic_root_ue4ss_wrapper,
+        Some(budget),
+    )
+}
+
+#[derive(Debug, Default)]
+struct TreeHashBudget {
+    entries: usize,
+    bytes: u64,
+}
+
+#[derive(Debug)]
+struct IdentityRehashBudget {
+    candidate_hashes: usize,
+    descriptor_work: usize,
+    bytes: u64,
+    max_descriptor_work: usize,
+    max_bytes: u64,
+}
+
+impl IdentityRehashBudget {
+    fn new(limits: ImportLimits) -> Self {
+        Self {
+            candidate_hashes: 0,
+            descriptor_work: 0,
+            bytes: 0,
+            // Every hash performs a before/after membership collection. One maximally sized
+            // candidate must fit; subsequent candidates share the remaining envelope.
+            max_descriptor_work: limits.max_zip_entries.saturating_mul(2),
+            max_bytes: limits.max_zip_total_uncompressed_bytes,
+        }
+    }
+
+    fn charge_candidate(&mut self, descriptors: &[TreeDescriptor]) -> crate::Result<()> {
+        self.candidate_hashes = self.candidate_hashes.checked_add(1).ok_or_else(|| {
+            ModError::InspectionBound("manager import identity hash work overflowed".into())
+        })?;
+        if self.candidate_hashes > MAX_IDENTITY_REHASH_CANDIDATES {
+            return Err(ModError::InspectionBound(format!(
+                "manager import identity candidate rehash limit exceeded: {} > {MAX_IDENTITY_REHASH_CANDIDATES}",
+                self.candidate_hashes
+            )));
+        }
+        let work = descriptors.len().checked_mul(2).ok_or_else(|| {
+            ModError::InspectionBound("manager import identity entry work overflowed".into())
+        })?;
+        self.descriptor_work = self.descriptor_work.checked_add(work).ok_or_else(|| {
+            ModError::InspectionBound(
+                "manager import identity aggregate entry work overflowed".into(),
+            )
+        })?;
+        if self.descriptor_work > self.max_descriptor_work {
+            return Err(ModError::InspectionBound(format!(
+                "manager import identity aggregate entry work limit exceeded: {} > {}",
+                self.descriptor_work, self.max_descriptor_work
+            )));
+        }
+        let candidate_bytes = descriptors.iter().try_fold(0u64, |total, descriptor| {
+            let length = match descriptor.kind {
+                TreeDescriptorKind::File { length, .. } => length,
+                TreeDescriptorKind::Directory { .. } => 0,
+            };
+            total.checked_add(length).ok_or_else(|| {
+                ModError::InspectionBound(
+                    "manager import identity candidate bytes overflowed".into(),
+                )
+            })
+        })?;
+        self.bytes = self.bytes.checked_add(candidate_bytes).ok_or_else(|| {
+            ModError::InspectionBound("manager import identity aggregate bytes overflowed".into())
+        })?;
+        if self.bytes > self.max_bytes {
+            return Err(ModError::InspectionBound(format!(
+                "manager import identity aggregate byte limit exceeded: {} > {}",
+                self.bytes, self.max_bytes
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TreeDescriptorKind {
+    File {
+        identity: FileIdentity,
+        revision: FileRevision,
+        length: u64,
+    },
+    Directory {
+        identity: FileIdentity,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TreeDescriptor {
+    relative: PathBuf,
+    portable: String,
+    kind: TreeDescriptorKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ImportTreeHashes {
+    /// Content identity. For a synthetic root UE4SS wrapper its first path component is replaced
+    /// with a stable virtual marker; all other paths are exact portable relative paths.
+    identity_sha256: String,
+    /// Exact stored layout. Publication/recovery seals keep this separate so renaming or swapping
+    /// the physical wrapper after identity selection still fails closed.
+    layout_sha256: String,
+}
+
+const SYNTHETIC_ROOT_UE4SS_HASH_COMPONENT: &str = "@gore-root-ue4ss";
+const SYNTHETIC_ROOT_UE4SS_HASH_MODE_DOMAIN: &[u8] = b"synthetic-root-ue4ss\0";
+
+fn hash_secure_import_tree(
+    root: &SecureDirectory,
+    limits: ImportLimits,
+    allow_exact_manager_sidecar: bool,
+) -> crate::Result<String> {
+    hash_secure_import_tree_inner(root, limits, allow_exact_manager_sidecar, None)
+}
+
+fn hash_secure_import_tree_inner(
+    root: &SecureDirectory,
+    limits: ImportLimits,
+    allow_exact_manager_sidecar: bool,
+    identity_budget: Option<&mut IdentityRehashBudget>,
+) -> crate::Result<String> {
+    Ok(hash_secure_import_tree_hashes_inner(
+        root,
+        limits,
+        allow_exact_manager_sidecar,
+        None,
+        identity_budget,
+    )?
+    .layout_sha256)
+}
+
+fn hash_secure_import_tree_hashes_inner(
+    root: &SecureDirectory,
+    limits: ImportLimits,
+    allow_exact_manager_sidecar: bool,
+    synthetic_root_ue4ss_wrapper: Option<&str>,
+    identity_budget: Option<&mut IdentityRehashBudget>,
+) -> crate::Result<ImportTreeHashes> {
+    let descriptors = collect_secure_import_tree(root, limits, allow_exact_manager_sidecar)?;
+    if let Some(budget) = identity_budget {
+        // Debit the complete planned work before the first payload byte is opened/read. The second
+        // membership pass is charged from the same descriptor count and must match it exactly.
+        budget.charge_candidate(&descriptors)?;
+    }
+    let mut identity_hash = Sha256::new();
+    identity_hash.update(IMPORT_TREE_HASH_DOMAIN);
+    if synthetic_root_ue4ss_wrapper.is_some() {
+        identity_hash.update(SYNTHETIC_ROOT_UE4SS_HASH_MODE_DOMAIN);
+    }
+    let mut layout_hash = synthetic_root_ue4ss_wrapper.map(|_| {
+        let mut hash = Sha256::new();
+        hash.update(IMPORT_TREE_HASH_DOMAIN);
+        hash
+    });
+    for descriptor in &descriptors {
+        let identity_path =
+            normalized_import_identity_path(&descriptor.portable, synthetic_root_ue4ss_wrapper)?;
+        let node = root.open_relative_node(
+            &descriptor.relative,
+            "normalized import tree entry selected for hashing",
+        )?;
+        match (descriptor.kind, node) {
+            (TreeDescriptorKind::Directory { identity }, SecureNode::Directory(directory))
+                if directory.identity() == identity =>
+            {
+                hash_tree_record(&mut identity_hash, b'd', &identity_path, None);
+                if let Some(hash) = layout_hash.as_mut() {
+                    hash_tree_record(hash, b'd', &descriptor.portable, None);
+                }
+            }
+            (
+                TreeDescriptorKind::File {
+                    identity,
+                    revision,
+                    length,
+                },
+                SecureNode::File(mut file),
+            ) if file.identity() == identity
+                && file.revision() == revision
+                && file.len() == length =>
+            {
+                hash_tree_record(&mut identity_hash, b'f', &identity_path, Some(length));
+                if let Some(hash) = layout_hash.as_mut() {
+                    hash_tree_record(hash, b'f', &descriptor.portable, Some(length));
+                }
+                hash_open_import_file_dual(
+                    &mut file,
+                    length,
+                    &mut identity_hash,
+                    layout_hash.as_mut(),
+                )?;
+            }
+            _ => {
+                return Err(ModError::Other(format!(
+                    "normalized import tree changed type, identity, size, or content revision while hashing: {}",
+                    root.path().join(&descriptor.relative).display()
+                )));
+            }
+        }
+    }
+    let observed = collect_secure_import_tree(root, limits, allow_exact_manager_sidecar)?;
+    if observed != descriptors {
+        return Err(ModError::Other(format!(
+            "normalized import tree changed identity or membership while hashing: {}",
+            root.path().display()
+        )));
+    }
+    let identity_sha256 = digest_hex(identity_hash.finalize().into());
+    let layout_sha256 = layout_hash
+        .map(|hash| digest_hex(hash.finalize().into()))
+        .unwrap_or_else(|| identity_sha256.clone());
+    Ok(ImportTreeHashes {
+        identity_sha256,
+        layout_sha256,
+    })
+}
+
+fn normalized_import_identity_path(
+    portable: &str,
+    synthetic_root_ue4ss_wrapper: Option<&str>,
+) -> crate::Result<String> {
+    let Some(wrapper) = synthetic_root_ue4ss_wrapper else {
+        return Ok(portable.to_string());
+    };
+    let (root_component, remainder) = portable
+        .split_once('/')
+        .map_or((portable, None), |(root, rest)| (root, Some(rest)));
+    if portable_windows_key(root_component) != portable_windows_key(wrapper) {
+        return Err(ModError::Other(format!(
+            "synthetic root UE4SS identity expected every payload path below {wrapper:?}, found {portable:?}"
+        )));
+    }
+    Ok(match remainder {
+        Some(remainder) => format!("{SYNTHETIC_ROOT_UE4SS_HASH_COMPONENT}/{remainder}"),
+        None => SYNTHETIC_ROOT_UE4SS_HASH_COMPONENT.to_string(),
+    })
+}
+
+fn collect_secure_import_tree(
+    root: &SecureDirectory,
+    limits: ImportLimits,
+    allow_exact_manager_sidecar: bool,
+) -> crate::Result<Vec<TreeDescriptor>> {
+    let mut budget = TreeHashBudget::default();
+    let mut descriptors = BTreeMap::new();
+    collect_secure_import_directory(
+        root,
+        Path::new(""),
+        0,
+        limits,
+        allow_exact_manager_sidecar,
+        &mut budget,
+        &mut descriptors,
+    )?;
+    Ok(descriptors.into_values().collect())
+}
+
+fn collect_secure_import_directory(
+    directory: &SecureDirectory,
+    relative_dir: &Path,
+    depth: usize,
+    limits: ImportLimits,
+    allow_exact_manager_sidecar: bool,
+    budget: &mut TreeHashBudget,
+    descriptors: &mut BTreeMap<String, TreeDescriptor>,
+) -> crate::Result<()> {
+    for child in directory.read_dir("normalized import tree")? {
+        let child = child.map_err(crate::io("reading normalized import tree entry"))?;
+        let name = child.file_name();
+        let name_text = name.to_str().ok_or_else(|| {
+            ModError::Other(format!(
+                "normalized import tree path is not valid Unicode: {}",
+                directory.path().join(&name).display()
+            ))
+        })?;
+        if relative_dir.as_os_str().is_empty() && portable_windows_names_equal(name_text, META_FILE)
+        {
+            if allow_exact_manager_sidecar && name_text == META_FILE {
+                continue;
+            }
+            return Err(ModError::Other(format!(
+                "normalized import tree contains reserved manager-sidecar name {name_text:?}: {}",
+                directory.path().join(&name).display()
+            )));
+        }
+        budget.entries = budget
+            .entries
+            .checked_add(1)
+            .ok_or_else(|| ModError::Other("normalized tree entry count overflowed".into()))?;
+        check_import_limit(
+            "normalized tree entry count",
+            budget.entries as u64,
+            limits.max_zip_entries as u64,
+        )?;
+        let relative = relative_dir.join(&name);
+        let portable = portable_import_rel_path(&relative, &directory.path().join(&name))?;
+        check_import_limit(
+            "normalized tree path bytes",
+            portable.len() as u64,
+            limits.max_zip_path_bytes as u64,
+        )?;
+        let key = portable_windows_key(&portable);
+        let node = directory.open_child(&name, "normalized import tree entry")?;
+        match node {
+            SecureNode::Directory(child) => {
+                if depth >= limits.max_directory_depth {
+                    return Err(ModError::Other(format!(
+                        "normalized tree nesting depth limit exceeded at {}: {} > {}",
+                        child.path().display(),
+                        depth + 1,
+                        limits.max_directory_depth
+                    )));
+                }
+                let descriptor = TreeDescriptor {
+                    relative: relative.clone(),
+                    portable,
+                    kind: TreeDescriptorKind::Directory {
+                        identity: child.identity(),
+                    },
+                };
+                insert_tree_descriptor(descriptors, key, descriptor.clone())?;
+                collect_secure_import_directory(
+                    &child,
+                    &relative,
+                    depth + 1,
+                    limits,
+                    allow_exact_manager_sidecar,
+                    budget,
+                    descriptors,
+                )?;
+            }
+            SecureNode::File(file) => {
+                let expected = file.len();
+                check_import_limit(
+                    "normalized tree file bytes",
+                    expected,
+                    limits.max_zip_entry_uncompressed_bytes,
+                )?;
+                let next_total = budget.bytes.checked_add(expected).ok_or_else(|| {
+                    ModError::Other("normalized tree total byte count overflowed".into())
+                })?;
+                check_import_limit(
+                    "normalized tree total bytes",
+                    next_total,
+                    limits.max_zip_total_uncompressed_bytes,
+                )?;
+                budget.bytes = next_total;
+                let descriptor = TreeDescriptor {
+                    relative,
+                    portable,
+                    kind: TreeDescriptorKind::File {
+                        identity: file.identity(),
+                        revision: file.revision(),
+                        length: expected,
+                    },
+                };
+                insert_tree_descriptor(descriptors, key, descriptor)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn insert_tree_descriptor(
+    descriptors: &mut BTreeMap<String, TreeDescriptor>,
+    key: String,
+    descriptor: TreeDescriptor,
+) -> crate::Result<()> {
+    if let Some(first) = descriptors.insert(key, descriptor.clone()) {
+        return Err(ModError::Other(format!(
+            "normalized import tree contains portable path collision between {:?} and {:?}",
+            first.portable, descriptor.portable
+        )));
+    }
+    Ok(())
+}
+
+fn hash_tree_record(hash: &mut Sha256, marker: u8, path: &str, length: Option<u64>) {
+    hash.update([marker]);
+    hash.update((path.len() as u64).to_le_bytes());
+    hash.update(path.as_bytes());
+    if let Some(length) = length {
+        hash.update(length.to_le_bytes());
+    }
+}
+
+fn hash_open_import_file_dual(
+    file: &mut SecureFile,
+    expected: u64,
+    hash: &mut Sha256,
+    mut second_hash: Option<&mut Sha256>,
+) -> crate::Result<()> {
+    let mut remaining = expected;
+    let mut buffer = [0u8; 64 * 1024];
+    while remaining != 0 {
+        let wanted = usize::try_from(remaining.min(buffer.len() as u64)).unwrap_or(buffer.len());
+        let read = file
+            .file
+            .read(&mut buffer[..wanted])
+            .map_err(crate::io("hashing normalized import tree file"))?;
+        if read == 0 {
+            return Err(ModError::Other(format!(
+                "normalized import tree file changed while hashing: {}",
+                file.path().display()
+            )));
+        }
+        hash.update(&buffer[..read]);
+        if let Some(second_hash) = second_hash.as_deref_mut() {
+            second_hash.update(&buffer[..read]);
+        }
+        remaining -= read as u64;
+    }
+    let mut probe = [0u8; 1];
+    if file
+        .file
+        .read(&mut probe)
+        .map_err(crate::io("probing normalized import tree file"))?
+        != 0
+    {
+        return Err(ModError::Other(format!(
+            "normalized import tree file grew while hashing: {}",
+            file.path().display()
+        )));
+    }
+    file.verify_len(expected, "normalized import tree file")
+}
+
+fn digest_hex(bytes: [u8; 32]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(64);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
+struct BoundedSidecarWriter {
+    bytes: Vec<u8>,
+    limit: u64,
+    exceeded: bool,
+}
+
+impl std::io::Write for BoundedSidecarWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        let next = (self.bytes.len() as u64)
+            .checked_add(buffer.len() as u64)
+            .ok_or_else(|| std::io::Error::other("manager sidecar length overflowed"))?;
+        if next > self.limit {
+            self.exceeded = true;
+            return Err(std::io::Error::other("manager sidecar limit exceeded"));
+        }
+        self.bytes
+            .try_reserve(buffer.len())
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        self.bytes.extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn write_manager_sidecar(
+    root: &SecureDirectory,
+    sidecar: &LibrarySidecar,
+    max_bytes: u64,
+) -> crate::Result<String> {
+    let mut writer = BoundedSidecarWriter {
+        bytes: Vec::new(),
+        limit: max_bytes,
+        exceeded: false,
+    };
+    let serialized = serde_json::to_writer_pretty(&mut writer, sidecar);
+    if writer.exceeded {
+        return Err(ModError::InspectionBound(format!(
+            "manager sidecar serialization exceeds the {max_bytes} byte limit"
+        )));
+    }
+    serialized?;
+    let bytes = writer.bytes;
+    let sidecar_sha256 = digest_hex(Sha256::digest(&bytes).into());
+    let name = std::ffi::OsStr::new(META_FILE);
+    if root.contains_child(name, "staged manager sidecar")? {
+        match root.open_child(name, "existing staged manager sidecar")? {
+            SecureNode::File(file) => {
+                let identity = file.identity();
+                drop(file);
+                root.remove_child_file_if_identity(
+                    name,
+                    identity,
+                    "existing staged manager sidecar",
+                )?;
+            }
+            SecureNode::Directory(directory) => {
+                return Err(ModError::Other(format!(
+                    "staged manager sidecar path is a directory: {}",
+                    directory.path().display()
+                )));
+            }
+        }
+    }
+    let (mut file, _) = root.create_child_file_new(name, "staged manager sidecar")?;
+    file.write_all(&bytes)
+        .map_err(crate::io("writing staged manager sidecar"))?;
+    file.sync_all()
+        .map_err(crate::io("syncing staged manager sidecar"))?;
+    drop(file);
+    root.sync_after_mutation("staged manager sidecar")?;
+    Ok(sidecar_sha256)
+}
+
+#[cfg(test)]
+thread_local! {
+    static PREPUBLISH_FAILURE: std::cell::RefCell<Option<ModError>> = const {
+        std::cell::RefCell::new(None)
+    };
+    static PREPUBLISH_RACE_HOOK: std::cell::RefCell<ImportPathPairHook> =
+        const { std::cell::RefCell::new(None) };
+    static POST_CREATE_RENAME_HOOK: std::cell::RefCell<ImportPathHook> =
+        const { std::cell::RefCell::new(None) };
+    static POST_PROMOTE_RENAME_HOOK: std::cell::RefCell<ImportPathHook> =
+        const { std::cell::RefCell::new(None) };
+    static REPLACEMENT_MARK_FAILURE: std::cell::RefCell<Option<ReplacementPhase>> =
+        const { std::cell::RefCell::new(None) };
+    static LIBRARY_ROOT_SWAP_HOOK: std::cell::RefCell<ImportPathHook> =
+        const { std::cell::RefCell::new(None) };
+    static RECOVERY_SEAL_FAILURE: std::cell::Cell<bool> = const {
+        std::cell::Cell::new(false)
+    };
+}
+
+#[cfg(test)]
+fn inject_prepublish_failure(error: ModError) {
+    PREPUBLISH_FAILURE.with(|slot| *slot.borrow_mut() = Some(error));
+}
+
+#[cfg(test)]
+fn inject_recovery_seal_failure() {
+    RECOVERY_SEAL_FAILURE.with(|slot| slot.set(true));
+}
+
+#[cfg(test)]
+fn run_recovery_seal_failure_hook() -> crate::Result<()> {
+    RECOVERY_SEAL_FAILURE.with(|slot| {
+        if slot.replace(false) {
+            Err(ModError::Other(
+                "injected transient recovery seal read failure".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    })
+}
+
+#[cfg(not(test))]
+fn run_recovery_seal_failure_hook() -> crate::Result<()> {
+    Ok(())
+}
+
+#[cfg(test)]
+fn run_prepublish_failure_hook() -> crate::Result<()> {
+    PREPUBLISH_FAILURE.with(|slot| match slot.borrow_mut().take() {
+        Some(error) => Err(error),
+        None => Ok(()),
+    })
+}
+
+#[cfg(not(test))]
+fn run_prepublish_failure_hook() -> crate::Result<()> {
+    Ok(())
+}
+
+#[cfg(test)]
+fn inject_prepublish_race(hook: impl FnOnce(&Path, &Path) + 'static) {
+    PREPUBLISH_RACE_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+fn run_prepublish_race_hook(staging: &Path, entry: &Path) {
+    PREPUBLISH_RACE_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook(staging, entry);
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn run_prepublish_race_hook(_staging: &Path, _entry: &Path) {}
+
+#[cfg(test)]
+fn inject_post_create_rename(hook: impl FnOnce(&Path) + 'static) {
+    POST_CREATE_RENAME_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+fn run_post_create_rename_hook(entry: &Path) {
+    POST_CREATE_RENAME_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook(entry);
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn run_post_create_rename_hook(_entry: &Path) {}
+
+#[cfg(test)]
+fn inject_post_promote_rename(hook: impl FnOnce(&Path) + 'static) {
+    POST_PROMOTE_RENAME_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+fn run_post_promote_rename_hook(entry: &Path) {
+    POST_PROMOTE_RENAME_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook(entry);
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn run_post_promote_rename_hook(_entry: &Path) {}
+
+#[cfg(test)]
+fn inject_replacement_mark_failure(phase: ReplacementPhase) {
+    REPLACEMENT_MARK_FAILURE.with(|slot| *slot.borrow_mut() = Some(phase));
+}
+
+#[cfg(all(test, unix))]
+fn inject_library_root_swap(hook: impl FnOnce(&Path) + 'static) {
+    LIBRARY_ROOT_SWAP_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+fn run_library_root_swap_hook(path: &Path) {
+    LIBRARY_ROOT_SWAP_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook(path);
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn run_library_root_swap_hook(_path: &Path) {}
+
+#[cfg(test)]
+fn run_replacement_mark_failure(phase: ReplacementPhase) -> crate::Result<()> {
+    REPLACEMENT_MARK_FAILURE.with(|slot| {
+        if slot.borrow().as_ref() == Some(&phase) {
+            slot.borrow_mut().take();
+            Err(ModError::Other(format!(
+                "injected {phase:?} replacement-marker failure"
+            )))
+        } else {
+            Ok(())
+        }
+    })
+}
+
+#[cfg(not(test))]
+fn run_replacement_mark_failure(_phase: ReplacementPhase) -> crate::Result<()> {
+    Ok(())
+}
+
+#[cfg(any(not(unix), test))]
+fn seal_import_path(root: &Path, limits: ImportLimits) -> crate::Result<EntryPublishSeal> {
+    let root = open_directory_nofollow(root, "sealed manager-library tree")?;
+    seal_secure_import_directory(&root, limits)
+}
+
+fn read_secure_child_bounded(
+    directory: &SecureDirectory,
+    name: &std::ffi::OsStr,
+    label: &str,
+    limit: u64,
+) -> crate::Result<Vec<u8>> {
+    let mut file = match directory.open_child(name, label)? {
+        SecureNode::File(file) => file,
+        SecureNode::Directory(child) => {
+            return Err(ModError::Other(format!(
+                "{label} must be a regular file: {}",
+                child.path().display()
+            )))
+        }
+    };
+    if file.len() > limit {
+        return Err(ModError::Other(format!(
+            "{label} exceeds the {limit} byte limit: {}",
+            file.path().display()
+        )));
+    }
+    let expected = file.len();
+    let mut bytes = Vec::with_capacity(usize::try_from(expected).map_err(|_| {
+        ModError::Other(format!(
+            "{label} length does not fit memory on this platform"
+        ))
+    })?);
+    (&mut file.file)
+        .take(expected + 1)
+        .read_to_end(&mut bytes)
+        .map_err(crate::io(&format!("reading {label}")))?;
+    if bytes.len() as u64 != expected {
+        return Err(ModError::Other(format!(
+            "{label} changed length while reading: {}",
+            file.path().display()
+        )));
+    }
+    file.verify_len(expected, label)?;
+    Ok(bytes)
+}
+
+fn seal_secure_import_directory(
+    root: &SecureDirectory,
+    limits: ImportLimits,
+) -> crate::Result<EntryPublishSeal> {
+    let sidecar = read_secure_child_bounded(
+        root,
+        std::ffi::OsStr::new(META_FILE),
+        "manager-library publish sidecar",
+        limits.max_manifest_bytes,
+    )?;
+    Ok(EntryPublishSeal {
+        root_identity: root.identity(),
+        tree_sha256: hash_secure_import_tree(root, limits, true)?,
+        sidecar_sha256: digest_hex(Sha256::digest(&sidecar).into()),
+    })
+}
+
+#[cfg(unix)]
+fn sync_secure_tree(root: &SecureDirectory) -> crate::Result<()> {
+    let mut names = root
+        .read_dir("staged import durability tree")?
+        .map(|entry| {
+            entry
+                .map(|entry| entry.file_name())
+                .map_err(crate::io("reading staged import durability entry"))
+        })
+        .collect::<crate::Result<Vec<_>>>()?;
+    names.sort();
+    for name in names {
+        match root.open_child(&name, "staged import durability entry")? {
+            SecureNode::File(file) => file
+                .file
+                .sync_all()
+                .map_err(crate::io("syncing staged import regular file"))?,
+            SecureNode::Directory(directory) => sync_secure_tree(&directory)?,
+        }
+    }
+    root.sync_after_mutation("staged import durability tree")
+}
+
+fn seal_library_entry(
+    entry: &LibraryEntry,
+    limits: ImportLimits,
+) -> crate::Result<EntryPublishSeal> {
+    let mut remaining = MAX_IDENTITY_SIDECAR_BYTES;
+    let inspection = entry
+        .read_identity_sidecar_bounded_classified(&mut remaining)
+        .map_err(MetaReadFailure::into_mod_error)?;
+    let manager = inspection.manager?;
+    if let Some(identity) = manager
+        .as_ref()
+        .and_then(|manager| manager.import_identity.as_ref())
+    {
+        validate_import_identity(identity)?;
+    }
+    Ok(EntryPublishSeal {
+        root_identity: entry.secure_directory().identity(),
+        tree_sha256: hash_library_entry_tree(entry, limits)?,
+        sidecar_sha256: inspection.sidecar_sha256,
+    })
+}
+
+fn verify_publish_expectation(
+    library: &LibraryRoot,
+    staging: &SecureDirectory,
+    entry_dir: &Path,
+    expectation: &PublishExpectation,
+) -> crate::Result<()> {
+    let staged = seal_secure_import_directory(staging, expectation.limits)?;
+    if staged != expectation.staged {
+        return Err(ModError::Other(format!(
+            "staged import changed after identity decision: {}",
+            staging.path().display()
+        )));
+    }
+    match &expectation.current {
+        Some(expected) => {
+            let id = entry_dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| {
+                    ModError::Other(format!(
+                        "selected manager-library entry id is not valid Unicode: {}",
+                        entry_dir.display()
+                    ))
+                })?;
+            let current = seal_library_entry(&library.entry(id)?, expectation.limits)?;
+            if &current != expected {
+                return Err(ModError::Other(format!(
+                    "selected manager-library entry changed after identity decision: {}",
+                    entry_dir.display()
+                )));
+            }
+        }
+        None => {
+            if metadata_if_present(entry_dir)?.is_some() {
+                return Err(ModError::Other(format!(
+                    "new manager-library entry appeared after identity decision: {}",
+                    entry_dir.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ReplacementPhase {
     Prepared,
     PreviousMoved,
     Promoted,
     Restored,
+    Quarantined,
+}
+
+#[cfg(unix)]
+fn replacement_atomic_temp_name(final_name: &str) -> String {
+    format!("{final_name}{REPLACEMENT_ATOMIC_TEMP_SUFFIX}")
+}
+
+#[cfg(unix)]
+fn replacement_atomic_temp_names() -> Vec<String> {
+    let mut names = vec![replacement_atomic_temp_name(REPLACEMENT_STATE_FILE)];
+    names.extend(
+        [
+            ReplacementPhase::PreviousMoved,
+            ReplacementPhase::Promoted,
+            ReplacementPhase::Restored,
+            ReplacementPhase::Quarantined,
+        ]
+        .into_iter()
+        .map(|phase| replacement_atomic_temp_name(phase.marker().expect("phase marker"))),
+    );
+    names
 }
 
 impl ReplacementPhase {
@@ -231,6 +1897,7 @@ impl ReplacementPhase {
             Self::PreviousMoved => Some("phase-previous-moved"),
             Self::Promoted => Some("phase-promoted"),
             Self::Restored => Some("phase-restored"),
+            Self::Quarantined => Some("phase-quarantined"),
         }
     }
 }
@@ -240,16 +1907,72 @@ struct ReplacementState {
     format: u32,
     id: String,
     phase: ReplacementPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_previous: Option<EntryPublishSeal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_staged: Option<EntryPublishSeal>,
+    #[serde(default)]
+    verification_pending: bool,
 }
 
+fn validate_replacement_state(state: &ReplacementState, location: &Path) -> crate::Result<()> {
+    let valid = crate::is_safe_mod_name(&state.id)
+        && match state.format {
+            1 => {
+                !state.verification_pending
+                    && state.expected_previous.is_none()
+                    && state.expected_staged.is_none()
+            }
+            2 => {
+                state.phase == ReplacementPhase::Prepared
+                    && state.verification_pending
+                    && state.expected_staged.is_some()
+            }
+            _ => false,
+        };
+    if !valid {
+        return Err(ModError::Other(format!(
+            "invalid replacement state in {}",
+            location.display()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_replacement_phase_consistency(
+    state: &ReplacementState,
+    phase: ReplacementPhase,
+    location: &Path,
+) -> crate::Result<()> {
+    if state.format == 2
+        && state.expected_previous.is_none()
+        && matches!(
+            phase,
+            ReplacementPhase::PreviousMoved | ReplacementPhase::Restored
+        )
+    {
+        return Err(ModError::Other(format!(
+            "replacement phase {phase:?} requires a sealed previous entry in {}",
+            location.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(any(not(unix), test))]
 #[derive(Debug)]
 struct ReplacementTransaction {
     root: PathBuf,
     state: ReplacementState,
 }
 
+#[cfg(any(not(unix), test))]
 impl ReplacementTransaction {
-    fn begin(library_dir: &Path, id: &str) -> crate::Result<Self> {
+    fn begin(
+        library_dir: &Path,
+        id: &str,
+        expectation: Option<&PublishExpectation>,
+    ) -> crate::Result<Self> {
         if !crate::is_safe_mod_name(id) {
             return Err(ModError::Other(format!(
                 "invalid replacement entry id {id:?}"
@@ -263,9 +1986,12 @@ impl ReplacementTransaction {
             .map_err(crate::io("creating replacement transaction"))?
             .keep();
         let state = ReplacementState {
-            format: 1,
+            format: u32::from(expectation.is_some()) + 1,
             id: id.to_owned(),
             phase: ReplacementPhase::Prepared,
+            expected_previous: expectation.and_then(|value| value.current.clone()),
+            expected_staged: expectation.map(|value| value.staged.clone()),
+            verification_pending: expectation.is_some(),
         };
         let transaction = Self { root, state };
         if let Err(error) = transaction.write_initial_state() {
@@ -279,12 +2005,17 @@ impl ReplacementTransaction {
         Ok(transaction)
     }
 
+    #[cfg(not(unix))]
     fn from_state(root: PathBuf, state: ReplacementState) -> Self {
         Self { root, state }
     }
 
     fn backup(&self) -> PathBuf {
         self.root.join(REPLACEMENT_BACKUP_DIR)
+    }
+
+    fn quarantine(&self) -> PathBuf {
+        self.root.join(REPLACEMENT_QUARANTINE_DIR)
     }
 
     fn write_initial_state(&self) -> crate::Result<()> {
@@ -310,6 +2041,7 @@ impl ReplacementTransaction {
     /// Phase transitions are append-only marker files. A crash can therefore leave an older
     /// marker, but can never tear/truncate the sole copy of the entry id needed for recovery.
     fn mark(&self, phase: ReplacementPhase) -> crate::Result<()> {
+        run_replacement_mark_failure(phase)?;
         let Some(marker) = phase.marker() else {
             return Ok(());
         };
@@ -332,8 +2064,10 @@ impl ReplacementTransaction {
         }
     }
 
+    #[cfg(not(unix))]
     fn phase(&self) -> crate::Result<ReplacementPhase> {
         for phase in [
+            ReplacementPhase::Quarantined,
             ReplacementPhase::Restored,
             ReplacementPhase::Promoted,
             ReplacementPhase::PreviousMoved,
@@ -361,6 +2095,9 @@ impl ReplacementTransaction {
                 .expect("phase marker"),
             ReplacementPhase::Promoted.marker().expect("phase marker"),
             ReplacementPhase::Restored.marker().expect("phase marker"),
+            ReplacementPhase::Quarantined
+                .marker()
+                .expect("phase marker"),
         ];
         for entry in std::fs::read_dir(&self.root)
             .map_err(crate::io("reading replacement transaction for cleanup"))?
@@ -369,6 +2106,7 @@ impl ReplacementTransaction {
             let name = entry.file_name();
             let known = name == REPLACEMENT_STATE_FILE
                 || name == REPLACEMENT_BACKUP_DIR
+                || name == REPLACEMENT_QUARANTINE_DIR
                 || phase_markers.iter().any(|marker| name == *marker);
             if !known {
                 return Err(ModError::Other(format!(
@@ -376,6 +2114,13 @@ impl ReplacementTransaction {
                     entry.path().display()
                 )));
             }
+        }
+
+        if metadata_if_present(&self.root.join(REPLACEMENT_QUARANTINE_DIR))?.is_some() {
+            return Err(ModError::Other(format!(
+                "refusing to clean a quarantined replacement transaction: {}",
+                self.root.display()
+            )));
         }
 
         // Delete the old payload while the durable state file is still present. If removal is
@@ -415,6 +2160,290 @@ impl ReplacementTransaction {
     }
 }
 
+#[cfg(unix)]
+static UNIX_REPLACEMENT_SEQUENCE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Unix transaction whose namespace operations are all relative to retained directory
+/// descriptors. `display_root` is diagnostics only and is never reopened.
+#[cfg(unix)]
+#[derive(Debug)]
+struct UnixReplacementTransaction {
+    library: LibraryRoot,
+    root: SecureDirectory,
+    root_name: std::ffi::OsString,
+    state: ReplacementState,
+}
+
+#[cfg(unix)]
+impl UnixReplacementTransaction {
+    fn begin(
+        library: &LibraryRoot,
+        id: &str,
+        expectation: &PublishExpectation,
+    ) -> crate::Result<Self> {
+        if !crate::is_safe_mod_name(id) {
+            return Err(ModError::Other(format!(
+                "invalid replacement entry id {id:?}"
+            )));
+        }
+        let mut claimed = None;
+        for _ in 0..128 {
+            let sequence =
+                UNIX_REPLACEMENT_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let name = std::ffi::OsString::from(format!(
+                "{REPLACEMENT_PREFIX}{}-{sequence:016x}",
+                std::process::id()
+            ));
+            if let Some(root) = library
+                .secure_directory()
+                .try_create_child_directory_new(&name, "manager replacement transaction")?
+            {
+                claimed = Some((name, root));
+                break;
+            }
+        }
+        let (root_name, root) = claimed.ok_or_else(|| {
+            ModError::Other("could not claim a unique manager replacement transaction".into())
+        })?;
+        let transaction = Self {
+            library: library.clone(),
+            root,
+            root_name,
+            state: ReplacementState {
+                format: 2,
+                id: id.to_owned(),
+                phase: ReplacementPhase::Prepared,
+                expected_previous: expectation.current.clone(),
+                expected_staged: Some(expectation.staged.clone()),
+                verification_pending: true,
+            },
+        };
+        if let Err(error) = transaction.write_initial_state() {
+            let cleanup = transaction.remove_empty_root().err();
+            return Err(combine_replacement_errors(
+                error,
+                cleanup,
+                transaction.root.path(),
+            ));
+        }
+        Ok(transaction)
+    }
+
+    fn from_state(
+        library: &LibraryRoot,
+        root_name: std::ffi::OsString,
+        root: SecureDirectory,
+        state: ReplacementState,
+    ) -> Self {
+        Self {
+            library: library.clone(),
+            root,
+            root_name,
+            state,
+        }
+    }
+
+    fn write_initial_state(&self) -> crate::Result<()> {
+        self.write_new_json_file(REPLACEMENT_STATE_FILE, &self.state, "replacement state")?;
+        self.root
+            .sync_after_mutation("manager replacement transaction")?;
+        self.library.sync_after_mutation()
+    }
+
+    fn write_new_json_file<T: serde::Serialize>(
+        &self,
+        name: &str,
+        value: &T,
+        label: &str,
+    ) -> crate::Result<()> {
+        let final_name = std::ffi::OsStr::new(name);
+        if self.root.contains_child(final_name, label)? {
+            return Err(ModError::Other(format!(
+                "refusing to replace existing {label} {name:?}"
+            )));
+        }
+        let temp_name = replacement_atomic_temp_name(name);
+        // A process may have stopped after syncing the private temporary file but before rename.
+        // Under the library inode lock it is safe to discard only this exact, known temp name and
+        // retry; the final journal/phase name was never partially visible.
+        self.remove_file_if_present(&temp_name, "incomplete replacement JSON")?;
+        let bytes = serde_json::to_vec(value)?;
+        let (mut file, _) = self
+            .root
+            .create_child_file_new(std::ffi::OsStr::new(&temp_name), label)?;
+        file.write_all(&bytes)
+            .map_err(crate::io(&format!("writing {label}")))?;
+        file.sync_all()
+            .map_err(crate::io(&format!("syncing {label}")))?;
+        drop(file);
+        self.root.rename_child_to(
+            std::ffi::OsStr::new(&temp_name),
+            &self.root,
+            final_name,
+            label,
+        )?;
+        self.root.sync_after_mutation(label)
+    }
+
+    fn mark(&self, phase: ReplacementPhase) -> crate::Result<()> {
+        run_replacement_mark_failure(phase)?;
+        let Some(marker) = phase.marker() else {
+            return Ok(());
+        };
+        let name = std::ffi::OsStr::new(marker);
+        if self.root.contains_child(name, "replacement phase")? {
+            let bytes = read_secure_child_bounded(
+                &self.root,
+                name,
+                "replacement phase",
+                REPLACEMENT_STATE_MAX_BYTES,
+            )?;
+            let existing: ReplacementPhase = serde_json::from_slice(&bytes)?;
+            if existing != phase {
+                return Err(ModError::Other(format!(
+                    "replacement phase marker {marker:?} has the wrong value"
+                )));
+            }
+            return Ok(());
+        }
+        self.write_new_json_file(marker, &phase, "replacement phase")?;
+        self.root.sync_after_mutation("replacement phase")
+    }
+
+    fn phase(&self) -> crate::Result<ReplacementPhase> {
+        for phase in [
+            ReplacementPhase::Quarantined,
+            ReplacementPhase::Restored,
+            ReplacementPhase::Promoted,
+            ReplacementPhase::PreviousMoved,
+        ] {
+            let marker = phase.marker().expect("non-prepared phase");
+            if self
+                .root
+                .contains_child(std::ffi::OsStr::new(marker), "replacement phase")?
+            {
+                let bytes = read_secure_child_bounded(
+                    &self.root,
+                    std::ffi::OsStr::new(marker),
+                    "replacement phase",
+                    REPLACEMENT_STATE_MAX_BYTES,
+                )?;
+                let recorded: ReplacementPhase = serde_json::from_slice(&bytes)?;
+                if recorded != phase {
+                    return Err(ModError::Other(format!(
+                        "replacement phase marker {marker:?} has the wrong value"
+                    )));
+                }
+                return Ok(phase);
+            }
+        }
+        Ok(self.state.phase)
+    }
+
+    fn backup(&self) -> crate::Result<Option<SecureDirectory>> {
+        self.root.open_optional_child_directory(
+            std::ffi::OsStr::new(REPLACEMENT_BACKUP_DIR),
+            "previous replacement entry",
+        )
+    }
+
+    fn quarantine(&self) -> crate::Result<Option<SecureDirectory>> {
+        self.root.open_optional_child_directory(
+            std::ffi::OsStr::new(REPLACEMENT_QUARANTINE_DIR),
+            "quarantined replacement entry",
+        )
+    }
+
+    fn remove_file_if_present(&self, name: &str, label: &str) -> crate::Result<()> {
+        let name = std::ffi::OsStr::new(name);
+        let Some(node) = self.root.open_optional_child(name, label)? else {
+            return Ok(());
+        };
+        let file = match node {
+            SecureNode::File(file) => file,
+            SecureNode::Directory(directory) => {
+                return Err(ModError::Other(format!(
+                    "{label} is not a regular file: {}",
+                    directory.path().display()
+                )))
+            }
+        };
+        let identity = file.identity();
+        drop(file);
+        self.root
+            .remove_child_file_if_identity(name, identity, label)
+    }
+
+    fn cleanup(&self) -> crate::Result<()> {
+        if self.quarantine()?.is_some() {
+            return Err(ModError::Other(format!(
+                "refusing to clean a quarantined replacement transaction: {}",
+                self.root.path().display()
+            )));
+        }
+        let mut names = self
+            .root
+            .read_dir("replacement transaction for cleanup")?
+            .map(|entry| {
+                entry
+                    .map(|entry| entry.file_name())
+                    .map_err(crate::io("reading replacement cleanup entry"))
+            })
+            .collect::<crate::Result<Vec<_>>>()?;
+        names.sort();
+        let markers = [
+            ReplacementPhase::PreviousMoved.marker().expect("marker"),
+            ReplacementPhase::Promoted.marker().expect("marker"),
+            ReplacementPhase::Restored.marker().expect("marker"),
+            ReplacementPhase::Quarantined.marker().expect("marker"),
+        ];
+        let atomic_temps = replacement_atomic_temp_names();
+        for name in &names {
+            let known = name == REPLACEMENT_STATE_FILE
+                || name == REPLACEMENT_BACKUP_DIR
+                || markers.iter().any(|marker| name == marker)
+                || atomic_temps
+                    .iter()
+                    .any(|temp| name == std::ffi::OsStr::new(temp));
+            if !known {
+                return Err(ModError::Other(format!(
+                    "replacement transaction contains an unexpected path: {}",
+                    self.root.path().join(name).display()
+                )));
+            }
+        }
+        if self.backup()?.is_some() {
+            self.root.remove_child_tree(
+                std::ffi::OsStr::new(REPLACEMENT_BACKUP_DIR),
+                "previous replacement entry",
+            )?;
+        }
+        for marker in markers {
+            self.remove_file_if_present(marker, "replacement phase")?;
+        }
+        for temp in atomic_temps {
+            self.remove_file_if_present(&temp, "incomplete replacement JSON")?;
+        }
+        self.remove_file_if_present(REPLACEMENT_STATE_FILE, "replacement state")?;
+        self.root
+            .sync_after_mutation("manager replacement transaction")?;
+        self.remove_empty_root()
+    }
+
+    fn remove_empty_root(&self) -> crate::Result<()> {
+        let identity = self.root.identity();
+        self.library
+            .secure_directory()
+            .remove_child_directory_if_identity(
+                &self.root_name,
+                identity,
+                "manager replacement transaction",
+            )
+    }
+}
+
+#[cfg(any(not(unix), test))]
 fn remove_replacement_file_if_present(path: &Path, label: &str) -> crate::Result<()> {
     let Some(metadata) = metadata_if_present(path)? else {
         return Ok(());
@@ -428,22 +2457,307 @@ fn remove_replacement_file_if_present(path: &Path, label: &str) -> crate::Result
     std::fs::remove_file(path).map_err(crate::io(&format!("removing {label}")))
 }
 
-fn replacement_lock() -> std::sync::MutexGuard<'static, ()> {
-    REPLACEMENT_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+struct LibraryMutationGuard {
+    os: LibraryMutationFileGuard,
+    _process: std::sync::MutexGuard<'static, ()>,
 }
 
+impl LibraryMutationGuard {
+    fn path(&self) -> &Path {
+        self.os.path()
+    }
+
+    fn open_library(&self) -> crate::Result<LibraryRoot> {
+        #[cfg(unix)]
+        {
+            Ok(self.os.retained_library())
+        }
+
+        #[cfg(not(unix))]
+        {
+            let library = LibraryRoot::open(self.os.path())?;
+            if library.identity() != self.os.identity() {
+                return Err(ModError::Other(format!(
+                "manager library changed filesystem identity while its mutation lock was held: {}",
+                self.os.path().display()
+            )));
+            }
+            Ok(library)
+        }
+    }
+}
+
+fn library_mutation_lock(library_dir: &Path) -> crate::Result<LibraryMutationGuard> {
+    let process = LIBRARY_MUTATION_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let library = LibraryRoot::open(library_dir)?;
+    let os = library.acquire_mutation_lock()?;
+    run_library_root_swap_hook(os.path());
+    run_library_lock_acquired_hook()?;
+    Ok(LibraryMutationGuard {
+        os,
+        _process: process,
+    })
+}
+
+#[cfg(test)]
+fn run_library_lock_acquired_hook() -> crate::Result<()> {
+    if let Some(marker) = std::env::var_os(LIBRARY_LOCK_MARKER_ENV) {
+        std::fs::write(&marker, b"locked")
+            .map_err(crate::io("writing manager-library lock test marker"))?;
+    }
+    if let Ok(raw) = std::env::var(LIBRARY_LOCK_HOLD_MS_ENV) {
+        let milliseconds = raw.parse::<u64>().map_err(|error| {
+            ModError::Other(format!(
+                "invalid {LIBRARY_LOCK_HOLD_MS_ENV} test value {raw:?}: {error}"
+            ))
+        })?;
+        std::thread::sleep(std::time::Duration::from_millis(milliseconds));
+    }
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn run_library_lock_acquired_hook() -> crate::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
 fn activate_staged_entry(
-    library_dir: &Path,
+    library_lock: &LibraryMutationGuard,
     staging: &Path,
     entry_dir: &Path,
     id: &str,
+    expectation: &PublishExpectation,
 ) -> crate::Result<()> {
-    let mut rename = rename_replacement_path;
-    activate_staged_entry_with(library_dir, staging, entry_dir, id, &mut rename)
+    run_prepublish_race_hook(staging, entry_dir);
+    let library = library_lock.open_library()?;
+    let root = library.secure_directory();
+    let staging_name = staging.file_name().ok_or_else(|| {
+        ModError::Other(format!(
+            "staged import has no direct-child name: {}",
+            staging.display()
+        ))
+    })?;
+    let staged = root
+        .open_optional_child_directory(staging_name, "staged import selected for publication")?
+        .ok_or_else(|| {
+            ModError::Other(format!(
+                "staged import is not a child of the locked manager-library inode: {}",
+                staging.display()
+            ))
+        })?;
+    if seal_secure_import_directory(&staged, expectation.limits)? != expectation.staged {
+        return Err(ModError::Other(format!(
+            "staged import changed or moved to another library inode before publication: {}",
+            staging.display()
+        )));
+    }
+
+    let id_name = std::ffi::OsStr::new(id);
+    let current = root.open_optional_child_directory(id_name, "current manager-library entry")?;
+    match (&current, &expectation.current) {
+        (Some(current), Some(expected)) => {
+            if seal_secure_import_directory(current, expectation.limits)? != *expected {
+                return Err(ModError::Other(format!(
+                    "selected manager-library entry changed after identity decision: {}",
+                    current.path().display()
+                )));
+            }
+        }
+        (None, None) => {}
+        (None, Some(_)) => {
+            return Err(ModError::Other(format!(
+                "selected manager-library entry disappeared before publication: {id:?}"
+            )))
+        }
+        (Some(current), None) => {
+            return Err(ModError::Other(format!(
+                "new manager-library entry appeared before publication: {}",
+                current.path().display()
+            )))
+        }
+    }
+    sync_secure_tree(&staged)?;
+    drop(staged);
+    drop(current);
+
+    let transaction = UnixReplacementTransaction::begin(&library, id, expectation)?;
+    if expectation.current.is_none() {
+        if let Err(error) = root.rename_child_to(
+            staging_name,
+            root,
+            id_name,
+            "publishing new manager-library entry",
+        ) {
+            let cleanup = transaction.cleanup().err();
+            return Err(combine_replacement_errors(
+                error,
+                cleanup,
+                transaction.root.path(),
+            ));
+        }
+        run_post_create_rename_hook(entry_dir);
+        let observed = library
+            .entry(id)
+            .and_then(|entry| seal_library_entry(&entry, expectation.limits));
+        if !matches!(&observed, Ok(seal) if seal == &expectation.staged) {
+            let quarantine = root
+                .rename_child_to(
+                    id_name,
+                    &transaction.root,
+                    std::ffi::OsStr::new(REPLACEMENT_QUARANTINE_DIR),
+                    "quarantining failed new manager-library entry",
+                )
+                .and_then(|()| transaction.mark(ReplacementPhase::Quarantined))
+                .err();
+            return Err(quarantined_replacement_error(
+                observed
+                    .err()
+                    .unwrap_or_else(|| ModError::Other("new entry seal mismatch".into())),
+                quarantine,
+                transaction.root.path(),
+                "new manager-library entry failed its post-rename seal",
+            ));
+        }
+        transaction.mark(ReplacementPhase::Promoted)?;
+        return transaction.cleanup();
+    }
+
+    if let Err(error) = root.rename_child_to(
+        id_name,
+        &transaction.root,
+        std::ffi::OsStr::new(REPLACEMENT_BACKUP_DIR),
+        "moving previous manager-library entry into recovery transaction",
+    ) {
+        let cleanup = transaction.cleanup().err();
+        return Err(combine_replacement_errors(
+            error,
+            cleanup,
+            transaction.root.path(),
+        ));
+    }
+    let expected_previous = expectation
+        .current
+        .as_ref()
+        .expect("replacement branch has previous seal");
+    let backup = transaction.backup()?.ok_or_else(|| {
+        ModError::Other("previous entry disappeared after anchored rename".into())
+    })?;
+    if seal_secure_import_directory(&backup, expectation.limits)? != *expected_previous {
+        let marker_error = transaction.mark(ReplacementPhase::Quarantined).err();
+        return Err(quarantined_replacement_error(
+            ModError::Other("previous entry failed its post-rename seal".into()),
+            marker_error,
+            transaction.root.path(),
+            "previous entry failed its post-rename seal before promotion",
+        ));
+    }
+    drop(backup);
+    if let Err(error) = transaction.mark(ReplacementPhase::PreviousMoved) {
+        return Err(rollback_previous_unix(error, &transaction, root, id_name));
+    }
+
+    if let Err(error) = root.rename_child_to(
+        staging_name,
+        root,
+        id_name,
+        "promoting staged manager-library entry",
+    ) {
+        return Err(rollback_previous_unix(error, &transaction, root, id_name));
+    }
+    run_post_promote_rename_hook(entry_dir);
+    let live = library.entry(id)?;
+    let promoted_seal = seal_library_entry(&live, expectation.limits);
+    drop(live);
+    if !matches!(&promoted_seal, Ok(seal) if seal == &expectation.staged) {
+        let quarantine = (|| -> crate::Result<()> {
+            root.rename_child_to(
+                id_name,
+                &transaction.root,
+                std::ffi::OsStr::new(REPLACEMENT_QUARANTINE_DIR),
+                "quarantining failed promoted manager-library entry",
+            )?;
+            let backup = transaction.backup()?.ok_or_else(|| {
+                ModError::Other("verified previous entry disappeared during quarantine".into())
+            })?;
+            if seal_secure_import_directory(&backup, expectation.limits)? != *expected_previous {
+                return Err(ModError::Other(
+                    "previous entry changed before quarantine restore".into(),
+                ));
+            }
+            drop(backup);
+            transaction.root.rename_child_to(
+                std::ffi::OsStr::new(REPLACEMENT_BACKUP_DIR),
+                root,
+                id_name,
+                "restoring previous entry after failed promotion",
+            )?;
+            transaction.mark(ReplacementPhase::Quarantined)
+        })()
+        .err();
+        return Err(quarantined_replacement_error(
+            promoted_seal
+                .err()
+                .unwrap_or_else(|| ModError::Other("promoted entry seal mismatch".into())),
+            quarantine,
+            transaction.root.path(),
+            "promoted entry failed its post-rename seal",
+        ));
+    }
+    transaction.mark(ReplacementPhase::Promoted)?;
+    transaction.cleanup()
 }
 
+#[cfg(unix)]
+fn rollback_previous_unix(
+    original: ModError,
+    transaction: &UnixReplacementTransaction,
+    library: &SecureDirectory,
+    id: &std::ffi::OsStr,
+) -> ModError {
+    let rollback = (|| -> crate::Result<()> {
+        transaction.root.rename_child_to(
+            std::ffi::OsStr::new(REPLACEMENT_BACKUP_DIR),
+            library,
+            id,
+            "restoring previous manager-library entry",
+        )?;
+        transaction.mark(ReplacementPhase::Restored)?;
+        transaction.cleanup()
+    })();
+    combine_replacement_errors(original, rollback.err(), transaction.root.path())
+}
+
+#[cfg(not(unix))]
+fn activate_staged_entry(
+    library_lock: &LibraryMutationGuard,
+    staging: &Path,
+    entry_dir: &Path,
+    id: &str,
+    expectation: &PublishExpectation,
+) -> crate::Result<()> {
+    run_prepublish_race_hook(staging, entry_dir);
+    let library = library_lock.open_library()?;
+    let staged_directory = open_directory_nofollow(staging, "staged import before publication")?;
+    verify_publish_expectation(&library, &staged_directory, entry_dir, expectation)?;
+    drop(staged_directory);
+    drop(library);
+    let mut rename = rename_replacement_path;
+    let mut sync = sync_staged_tree;
+    activate_staged_entry_with_sync_inner(
+        library_lock.path(),
+        staging,
+        entry_dir,
+        id,
+        &mut rename,
+        &mut sync,
+        Some(expectation),
+    )
+}
+
+#[cfg(test)]
 fn activate_staged_entry_with<F>(
     library_dir: &Path,
     staging: &Path,
@@ -455,9 +2769,18 @@ where
     F: FnMut(&Path, &Path) -> std::io::Result<()>,
 {
     let mut sync = sync_staged_tree;
-    activate_staged_entry_with_sync(library_dir, staging, entry_dir, id, rename, &mut sync)
+    activate_staged_entry_with_sync_inner(
+        library_dir,
+        staging,
+        entry_dir,
+        id,
+        rename,
+        &mut sync,
+        None,
+    )
 }
 
+#[cfg(test)]
 fn activate_staged_entry_with_sync<F, S>(
     library_dir: &Path,
     staging: &Path,
@@ -470,14 +2793,93 @@ where
     F: FnMut(&Path, &Path) -> std::io::Result<()>,
     S: FnMut(&Path) -> crate::Result<()>,
 {
+    activate_staged_entry_with_sync_inner(
+        library_dir,
+        staging,
+        entry_dir,
+        id,
+        rename,
+        sync_staged,
+        None,
+    )
+}
+
+#[cfg(any(not(unix), test))]
+fn activate_staged_entry_with_sync_inner<F, S>(
+    library_dir: &Path,
+    staging: &Path,
+    entry_dir: &Path,
+    id: &str,
+    rename: &mut F,
+    sync_staged: &mut S,
+    expectation: Option<&PublishExpectation>,
+) -> crate::Result<()>
+where
+    F: FnMut(&Path, &Path) -> std::io::Result<()>,
+    S: FnMut(&Path) -> crate::Result<()>,
+{
     // Content durability comes first. In particular, do not move the previous live entry into a
     // recovery transaction until every staged regular file and directory has reached its platform
     // durability barrier. A sync failure therefore leaves the old entry completely untouched.
     sync_staged(staging)?;
 
-    let Some(previous_metadata) = metadata_if_present(entry_dir)? else {
-        rename(staging, entry_dir).map_err(crate::io("activating library entry"))?;
-        return sync_replacement_directory(library_dir);
+    let previous_metadata = metadata_if_present(entry_dir)?;
+    if let Some(expectation) = expectation {
+        match (previous_metadata.is_some(), expectation.current.is_some()) {
+            (false, true) => {
+                return Err(ModError::Other(format!(
+                    "selected manager-library entry disappeared before publication: {}",
+                    entry_dir.display()
+                )))
+            }
+            (true, false) => {
+                return Err(ModError::Other(format!(
+                    "new manager-library entry appeared before publication: {}",
+                    entry_dir.display()
+                )))
+            }
+            _ => {}
+        }
+    }
+    let Some(previous_metadata) = previous_metadata else {
+        // Create publication also receives a durable verification-pending journal before its
+        // first rename. Recovery can therefore distinguish a verified create from an unsealed
+        // object even if the quarantine marker itself cannot be written.
+        let transaction = ReplacementTransaction::begin(library_dir, id, expectation)?;
+        if let Err(error) = rename(staging, entry_dir) {
+            let original = crate::io("activating library entry")(error);
+            let cleanup = transaction.cleanup();
+            return Err(combine_replacement_errors(
+                original,
+                cleanup.err(),
+                &transaction.root,
+            ));
+        }
+        run_post_create_rename_hook(entry_dir);
+        if let Err(error) = sync_replacement_directory(library_dir) {
+            let quarantine = quarantine_created_entry(&transaction, entry_dir, rename).err();
+            return Err(quarantined_replacement_error(
+                error,
+                quarantine,
+                &transaction.root,
+                "new manager-library entry could not be durably verified",
+            ));
+        }
+        if let Some(expectation) = expectation {
+            if let Err(error) =
+                verify_post_rename_seal(entry_dir, &expectation.staged, expectation.limits)
+            {
+                let quarantine = quarantine_created_entry(&transaction, entry_dir, rename).err();
+                return Err(quarantined_replacement_error(
+                    error,
+                    quarantine,
+                    &transaction.root,
+                    "new manager-library entry failed its post-rename seal",
+                ));
+            }
+        }
+        transaction.mark(ReplacementPhase::Promoted)?;
+        return transaction.cleanup();
     };
     if import_metadata_is_link(&previous_metadata) || !previous_metadata.is_dir() {
         return Err(ModError::Other(format!(
@@ -486,7 +2888,7 @@ where
         )));
     }
 
-    let transaction = ReplacementTransaction::begin(library_dir, id)?;
+    let transaction = ReplacementTransaction::begin(library_dir, id, expectation)?;
     if let Err(error) = rename(entry_dir, &transaction.backup()) {
         let original = crate::io("moving the previous entry aside")(error);
         let cleanup = transaction.cleanup();
@@ -498,6 +2900,21 @@ where
     }
     if let Err(error) = sync_replacement_directory(library_dir) {
         return Err(rollback_previous(error, &transaction, entry_dir, rename));
+    }
+    if let Some(expectation) = expectation {
+        if let Some(expected) = expectation.current.as_ref() {
+            if let Err(error) =
+                verify_post_rename_seal(&transaction.backup(), expected, expectation.limits)
+            {
+                let quarantine = transaction.mark(ReplacementPhase::Quarantined).err();
+                return Err(quarantined_replacement_error(
+                    error,
+                    quarantine,
+                    &transaction.root,
+                    "previous entry failed its post-rename seal before promotion",
+                ));
+            }
+        }
     }
     if let Err(error) = transaction.mark(ReplacementPhase::PreviousMoved) {
         return Err(rollback_previous(error, &transaction, entry_dir, rename));
@@ -511,13 +2928,50 @@ where
             rename,
         ));
     }
+    run_post_promote_rename_hook(entry_dir);
     if let Err(error) = sync_replacement_directory(library_dir) {
+        if let Some(expectation) = expectation {
+            let quarantine = quarantine_promoted_entry(
+                &transaction,
+                entry_dir,
+                rename,
+                expectation.current.as_ref(),
+                expectation.limits,
+            )
+            .err();
+            return Err(quarantined_replacement_error(
+                error,
+                quarantine,
+                &transaction.root,
+                "promoted entry could not be durably verified",
+            ));
+        }
         let phase_error = transaction.mark(ReplacementPhase::Promoted).err();
         return Err(promoted_replacement_error(
             error,
             phase_error,
             &transaction.root,
         ));
+    }
+    if let Some(expectation) = expectation {
+        if let Err(error) =
+            verify_post_rename_seal(entry_dir, &expectation.staged, expectation.limits)
+        {
+            let quarantine = quarantine_promoted_entry(
+                &transaction,
+                entry_dir,
+                rename,
+                expectation.current.as_ref(),
+                expectation.limits,
+            )
+            .err();
+            return Err(quarantined_replacement_error(
+                error,
+                quarantine,
+                &transaction.root,
+                "promoted entry failed its post-rename seal",
+            ));
+        }
     }
     if let Err(error) = transaction.mark(ReplacementPhase::Promoted) {
         return Err(promoted_replacement_error(error, None, &transaction.root));
@@ -528,7 +2982,7 @@ where
     transaction.cleanup()
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, unix)))]
 fn rename_replacement_path(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::rename(from, to)
 }
@@ -561,6 +3015,7 @@ fn rename_replacement_path(from: &Path, to: &Path) -> std::io::Result<()> {
 /// is available on Unix. Windows flushes each regular file here and uses `MoveFileExW` with
 /// `MOVEFILE_WRITE_THROUGH` in [`rename_replacement_path`] as the directory-entry publication
 /// barrier.
+#[cfg(any(not(unix), test))]
 fn sync_staged_tree(root: &Path) -> crate::Result<()> {
     let metadata = std::fs::symlink_metadata(root)
         .map_err(crate::io("reading staged tree root metadata before sync"))?;
@@ -629,7 +3084,7 @@ fn sync_staged_regular_file(path: &Path) -> crate::Result<()> {
         .map_err(crate::io("syncing staged regular file"))
 }
 
-#[cfg(not(windows))]
+#[cfg(any(all(unix, test), not(any(unix, windows))))]
 fn sync_staged_regular_file(path: &Path) -> crate::Result<()> {
     std::fs::File::open(path)
         .map_err(crate::io(&format!(
@@ -640,6 +3095,57 @@ fn sync_staged_regular_file(path: &Path) -> crate::Result<()> {
         .map_err(crate::io("syncing staged regular file"))
 }
 
+#[cfg(any(not(unix), test))]
+fn quarantine_created_entry<F>(
+    transaction: &ReplacementTransaction,
+    entry_dir: &Path,
+    rename: &mut F,
+) -> crate::Result<()>
+where
+    F: FnMut(&Path, &Path) -> std::io::Result<()>,
+{
+    rename(entry_dir, &transaction.quarantine())
+        .map_err(crate::io("moving failed new entry into durable quarantine"))?;
+    let library_dir = transaction
+        .root
+        .parent()
+        .ok_or_else(|| ModError::Other("replacement root has no parent".into()))?;
+    sync_replacement_directory(library_dir)?;
+    sync_replacement_directory(&transaction.root)?;
+    transaction.mark(ReplacementPhase::Quarantined)
+}
+
+#[cfg(any(not(unix), test))]
+fn quarantine_promoted_entry<F>(
+    transaction: &ReplacementTransaction,
+    entry_dir: &Path,
+    rename: &mut F,
+    expected_previous: Option<&EntryPublishSeal>,
+    limits: ImportLimits,
+) -> crate::Result<()>
+where
+    F: FnMut(&Path, &Path) -> std::io::Result<()>,
+{
+    rename(entry_dir, &transaction.quarantine()).map_err(crate::io(
+        "moving failed promoted entry into durable quarantine",
+    ))?;
+    let library_dir = transaction
+        .root
+        .parent()
+        .ok_or_else(|| ModError::Other("replacement root has no parent".into()))?;
+    sync_replacement_directory(library_dir)?;
+    sync_replacement_directory(&transaction.root)?;
+    if let Some(expected) = expected_previous {
+        verify_post_rename_seal(&transaction.backup(), expected, limits)?;
+        rename(&transaction.backup(), entry_dir).map_err(crate::io(
+            "restoring verified previous entry after failed promotion",
+        ))?;
+        sync_replacement_directory(library_dir)?;
+    }
+    transaction.mark(ReplacementPhase::Quarantined)
+}
+
+#[cfg(any(not(unix), test))]
 fn rollback_previous<F>(
     original: ModError,
     transaction: &ReplacementTransaction,
@@ -677,6 +3183,7 @@ fn combine_replacement_errors(
     }
 }
 
+#[cfg(any(not(unix), test))]
 fn promoted_replacement_error(
     original: ModError,
     phase_error: Option<ModError>,
@@ -691,6 +3198,370 @@ fn promoted_replacement_error(
     ))
 }
 
+fn quarantined_replacement_error(
+    original: ModError,
+    marker_error: Option<ModError>,
+    transaction_root: &Path,
+    context: &str,
+) -> ModError {
+    let marker_detail = marker_error
+        .map(|error| format!("; recording quarantine also failed: {error}"))
+        .unwrap_or_default();
+    ModError::Other(format!(
+        "{context}: {original}{marker_detail}; the public entry is fail-closed and recovery evidence was retained at {}",
+        transaction_root.display()
+    ))
+}
+
+#[cfg(any(not(unix), test))]
+fn verify_post_rename_seal(
+    path: &Path,
+    expected: &EntryPublishSeal,
+    limits: ImportLimits,
+) -> crate::Result<()> {
+    let observed = seal_import_path(path, limits)?;
+    if &observed != expected {
+        return Err(ModError::Other(format!(
+            "manager-library object changed across rename: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn recover_interrupted_replacements_locked(
+    library_lock: &LibraryMutationGuard,
+) -> crate::Result<()> {
+    let library = library_lock.open_library()?;
+    #[cfg(unix)]
+    {
+        recover_interrupted_replacements_unix(&library)
+    }
+    #[cfg(not(unix))]
+    {
+        // Cooperative Windows writers share the kernel lock. Reopening and comparing FileIdInfo
+        // immediately before pathname recovery detects an ambient root substitution; the durable
+        // transaction seals below remain the authority for every payload decision.
+        drop(library);
+        recover_interrupted_replacements(library_lock.path())
+    }
+}
+
+#[cfg(unix)]
+fn recover_interrupted_replacements_unix(library: &LibraryRoot) -> crate::Result<()> {
+    let mut names = Vec::new();
+    for entry in library.read_dir()? {
+        let entry = entry.map_err(crate::io("reading replacement transaction entry"))?;
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with(REPLACEMENT_PREFIX) {
+            names.push(name);
+        }
+    }
+    names.sort();
+    for name in names {
+        let root = library
+            .secure_directory()
+            .open_optional_child_directory(&name, "replacement transaction")?
+            .ok_or_else(|| {
+                ModError::Other(format!(
+                    "replacement transaction disappeared while locked: {name:?}"
+                ))
+            })?;
+        recover_replacement_unix(library, name, root)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn recover_replacement_unix(
+    library: &LibraryRoot,
+    root_name: std::ffi::OsString,
+    root: SecureDirectory,
+) -> crate::Result<()> {
+    let state_name = std::ffi::OsStr::new(REPLACEMENT_STATE_FILE);
+    if !root.contains_child(state_name, "replacement state")? {
+        let pending_name = replacement_atomic_temp_name(REPLACEMENT_STATE_FILE);
+        if root.contains_child(
+            std::ffi::OsStr::new(&pending_name),
+            "incomplete replacement state",
+        )? {
+            let names = root
+                .read_dir("unpublished replacement state")?
+                .map(|entry| {
+                    entry
+                        .map(|entry| entry.file_name())
+                        .map_err(crate::io("reading unpublished replacement state child"))
+                })
+                .collect::<crate::Result<Vec<_>>>()?;
+            if names.len() != 1 || names[0] != std::ffi::OsStr::new(&pending_name) {
+                return Err(ModError::Other(format!(
+                    "unpublished replacement state has unexpected recovery objects: {}",
+                    root.path().display()
+                )));
+            }
+            let pending = match root.open_child(
+                std::ffi::OsStr::new(&pending_name),
+                "incomplete replacement state",
+            )? {
+                SecureNode::File(file) => file,
+                SecureNode::Directory(directory) => {
+                    return Err(ModError::Other(format!(
+                        "incomplete replacement state is not a regular file: {}",
+                        directory.path().display()
+                    )))
+                }
+            };
+            let pending_identity = pending.identity();
+            drop(pending);
+            root.remove_child_file_if_identity(
+                std::ffi::OsStr::new(&pending_name),
+                pending_identity,
+                "incomplete replacement state",
+            )?;
+            let root_identity = root.identity();
+            drop(root);
+            return library
+                .secure_directory()
+                .remove_child_directory_if_identity(
+                    &root_name,
+                    root_identity,
+                    "unpublished replacement transaction",
+                );
+        }
+        return recover_legacy_replacement_unix(library, root_name, root);
+    }
+    let state: ReplacementState = serde_json::from_slice(&read_secure_child_bounded(
+        &root,
+        state_name,
+        "replacement state",
+        REPLACEMENT_STATE_MAX_BYTES,
+    )?)?;
+    validate_replacement_state(&state, root.path())?;
+    let transaction = UnixReplacementTransaction::from_state(library, root_name, root, state);
+    let phase = transaction.phase()?;
+    validate_replacement_phase_consistency(&transaction.state, phase, transaction.root.path())?;
+    if phase == ReplacementPhase::Quarantined || transaction.quarantine()?.is_some() {
+        return Err(ModError::Other(format!(
+            "replacement transaction is quarantined; recovery evidence was retained at {}",
+            transaction.root.path().display()
+        )));
+    }
+    let live = library.secure_directory().open_optional_child_directory(
+        std::ffi::OsStr::new(&transaction.state.id),
+        "live manager-library entry during recovery",
+    )?;
+    let backup = transaction.backup()?;
+    if transaction.state.verification_pending {
+        return recover_verification_pending_replacement_unix(transaction, phase, live, backup);
+    }
+
+    match (live, backup) {
+        (Some(_), Some(_)) | (Some(_), None) => transaction.cleanup(),
+        (None, Some(backup)) => {
+            drop(backup);
+            transaction.root.rename_child_to(
+                std::ffi::OsStr::new(REPLACEMENT_BACKUP_DIR),
+                library.secure_directory(),
+                std::ffi::OsStr::new(&transaction.state.id),
+                "restoring interrupted replacement",
+            )?;
+            transaction.mark(ReplacementPhase::Restored)?;
+            transaction.cleanup()
+        }
+        (None, None) => Err(ModError::Other(format!(
+            "cannot recover interrupted replacement {phase:?} for {:?}: both live and backup entries are missing (state at {})",
+            transaction.state.id,
+            transaction.root.path().display()
+        ))),
+    }
+}
+
+#[cfg(unix)]
+fn recover_verification_pending_replacement_unix(
+    transaction: UnixReplacementTransaction,
+    phase: ReplacementPhase,
+    live: Option<SecureDirectory>,
+    backup: Option<SecureDirectory>,
+) -> crate::Result<()> {
+    let expected_staged = transaction
+        .state
+        .expected_staged
+        .as_ref()
+        .expect("verification-pending state was validated");
+    let live_seal = live
+        .as_ref()
+        .map(|entry| {
+            run_recovery_seal_failure_hook()?;
+            seal_secure_import_directory(entry, DEFAULT_IMPORT_LIMITS)
+        })
+        .transpose()?;
+    let live_matches = live_seal
+        .as_ref()
+        .is_some_and(|observed| observed == expected_staged);
+    let expected_previous = transaction.state.expected_previous.as_ref();
+    let live_present = live.is_some();
+    let backup_present = backup.is_some();
+    if live_matches && (expected_previous.is_some() || !backup_present) {
+        // The durable staged seal alone proves promotion completed. Cleanup may already have
+        // removed any subset of the previous tree, including its sidecar, so do not inspect that
+        // manager-owned remainder before recording and completing the verified promotion.
+        drop(live);
+        drop(backup);
+        transaction.mark(ReplacementPhase::Promoted)?;
+        return transaction.cleanup();
+    }
+    let live_previous_matches = match (live_seal.as_ref(), expected_previous) {
+        (Some(observed), Some(expected)) => observed == expected,
+        _ => false,
+    };
+    let backup_seal = backup
+        .as_ref()
+        .map(|entry| {
+            run_recovery_seal_failure_hook()?;
+            seal_secure_import_directory(entry, DEFAULT_IMPORT_LIMITS)
+        })
+        .transpose()?;
+    let backup_matches = match (backup_seal.as_ref(), expected_previous) {
+        (None, None) => true,
+        (Some(observed), Some(expected)) => observed == expected,
+        _ => false,
+    };
+    drop(live);
+    drop(backup);
+
+    match (live_present, backup_present, expected_previous) {
+        (false, false, None) if phase == ReplacementPhase::Prepared => {
+            // A create journals before its first rename. If the process stopped in that window,
+            // there is no public or recovery object to classify and only the empty journal may be
+            // removed. Any unpromoted `.staging-*` directory remains non-public.
+            transaction.cleanup()
+        }
+        (true, false, Some(_)) if live_previous_matches => {
+            // Rollback restores the verified previous object before recording `restored`. A crash
+            // or marker error in that narrow interval is reconstructed from the durable seal.
+            transaction.mark(ReplacementPhase::Restored)?;
+            transaction.cleanup()
+        }
+        (false, true, Some(_)) if backup_matches => {
+            transaction.root.rename_child_to(
+                std::ffi::OsStr::new(REPLACEMENT_BACKUP_DIR),
+                transaction.library.secure_directory(),
+                std::ffi::OsStr::new(&transaction.state.id),
+                "restoring verified interrupted replacement",
+            )?;
+            transaction.mark(ReplacementPhase::Restored)?;
+            transaction.cleanup()
+        }
+        _ => quarantine_mismatched_recovery_unix(&transaction, phase, live_present, backup_matches),
+    }
+}
+
+#[cfg(unix)]
+fn quarantine_mismatched_recovery_unix(
+    transaction: &UnixReplacementTransaction,
+    phase: ReplacementPhase,
+    live_present: bool,
+    backup_matches: bool,
+) -> crate::Result<()> {
+    let original = ModError::Other(format!(
+        "verification-pending replacement objects do not match their durable seals (phase {phase:?})"
+    ));
+    let safety = (|| -> crate::Result<()> {
+        let id = std::ffi::OsStr::new(&transaction.state.id);
+        if live_present {
+            transaction.library.secure_directory().rename_child_to(
+                id,
+                &transaction.root,
+                std::ffi::OsStr::new(REPLACEMENT_QUARANTINE_DIR),
+                "quarantining mismatched live manager-library entry during recovery",
+            )?;
+        }
+        if transaction.state.expected_previous.is_some() && backup_matches {
+            transaction.root.rename_child_to(
+                std::ffi::OsStr::new(REPLACEMENT_BACKUP_DIR),
+                transaction.library.secure_directory(),
+                id,
+                "restoring verified previous manager-library entry during recovery",
+            )?;
+        }
+        Ok(())
+    })();
+    if let Err(safety_error) = safety {
+        return Err(ModError::Other(format!(
+            "refusing ambiguous replacement recovery: {original}; fail-closed quarantine/restore failed: {safety_error}; recovery evidence retained at {}",
+            transaction.root.path().display()
+        )));
+    }
+    let marker_error = transaction.mark(ReplacementPhase::Quarantined).err();
+    Err(quarantined_replacement_error(
+        original,
+        marker_error,
+        transaction.root.path(),
+        "refusing ambiguous replacement recovery",
+    ))
+}
+
+#[cfg(unix)]
+fn recover_legacy_replacement_unix(
+    library: &LibraryRoot,
+    root_name: std::ffi::OsString,
+    root: SecureDirectory,
+) -> crate::Result<()> {
+    let meta_name = std::ffi::OsStr::new(META_FILE);
+    if !root.contains_child(meta_name, "legacy replacement sidecar")? {
+        if root
+            .read_dir("incomplete replacement transaction")?
+            .next()
+            .is_none()
+        {
+            let identity = root.identity();
+            drop(root);
+            return library
+                .secure_directory()
+                .remove_child_directory_if_identity(
+                    &root_name,
+                    identity,
+                    "empty replacement transaction",
+                );
+        }
+        return Err(ModError::Other(format!(
+            "replacement transaction has no recoverable state: {}",
+            root.path().display()
+        )));
+    }
+    let meta: ModEntryMeta = serde_json::from_slice(&read_secure_child_bounded(
+        &root,
+        meta_name,
+        "legacy replacement sidecar",
+        DEFAULT_IMPORT_LIMITS.max_manifest_bytes,
+    )?)?;
+    if !crate::is_safe_mod_name(&meta.id) {
+        return Err(ModError::Other(format!(
+            "legacy replacement contains invalid entry id {:?}",
+            meta.id
+        )));
+    }
+    let live = library.secure_directory().open_optional_child_directory(
+        std::ffi::OsStr::new(&meta.id),
+        "live legacy replacement entry",
+    )?;
+    drop(root);
+    if live.is_some() {
+        drop(live);
+        library
+            .secure_directory()
+            .remove_child_tree(&root_name, "legacy replacement backup")
+    } else {
+        library.secure_directory().rename_child_to(
+            &root_name,
+            library.secure_directory(),
+            std::ffi::OsStr::new(&meta.id),
+            "restoring legacy replacement backup",
+        )
+    }
+}
+
+#[cfg(not(unix))]
 fn recover_interrupted_replacements(library_dir: &Path) -> crate::Result<()> {
     let read_dir = match std::fs::read_dir(library_dir) {
         Ok(read_dir) => read_dir,
@@ -726,26 +3597,45 @@ fn recover_interrupted_replacements(library_dir: &Path) -> crate::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+fn recover_interrupted_replacements_for_test(library_dir: &Path) -> crate::Result<()> {
+    let lock = library_mutation_lock(library_dir)?;
+    recover_interrupted_replacements_locked(&lock)
+}
+
+#[cfg(not(unix))]
 fn recover_replacement(library_dir: &Path, root: PathBuf) -> crate::Result<()> {
     let state_path = root.join(REPLACEMENT_STATE_FILE);
     if !path_present(&state_path)? {
         return recover_legacy_replacement(library_dir, &root);
     }
     let state = read_replacement_state(&state_path)?;
-    if state.format != 1 || !crate::is_safe_mod_name(&state.id) {
-        return Err(ModError::Other(format!(
-            "invalid replacement state in {}",
-            state_path.display()
-        )));
-    }
+    validate_replacement_state(&state, &state_path)?;
     let transaction = ReplacementTransaction::from_state(root, state);
     let phase = transaction.phase()?;
+    validate_replacement_phase_consistency(&transaction.state, phase, &transaction.root)?;
+    if phase == ReplacementPhase::Quarantined {
+        return Err(ModError::Other(format!(
+            "replacement transaction is quarantined after a post-rename identity mismatch; recovery evidence was retained at {}",
+            transaction.root.display()
+        )));
+    }
     let entry_dir = library_dir.join(&transaction.state.id);
     let live = metadata_if_present(&entry_dir)?;
     let backup_path = transaction.backup();
     let backup = metadata_if_present(&backup_path)?;
     validate_replacement_entry_metadata(live.as_ref(), &entry_dir, "live")?;
     validate_replacement_entry_metadata(backup.as_ref(), &backup_path, "backup")?;
+
+    if transaction.state.verification_pending {
+        return recover_verification_pending_replacement(
+            library_dir,
+            transaction,
+            phase,
+            live.is_some(),
+            backup.is_some(),
+        );
+    }
 
     match (live.is_some(), backup.is_some()) {
         // Both paths means promotion completed atomically but cleanup (and possibly its final phase
@@ -772,8 +3662,134 @@ fn recover_replacement(library_dir: &Path, root: PathBuf) -> crate::Result<()> {
     }
 }
 
+#[cfg(not(unix))]
+fn recover_verification_pending_replacement(
+    library_dir: &Path,
+    transaction: ReplacementTransaction,
+    phase: ReplacementPhase,
+    live_present: bool,
+    backup_present: bool,
+) -> crate::Result<()> {
+    let entry_dir = library_dir.join(&transaction.state.id);
+    let expected_staged = transaction
+        .state
+        .expected_staged
+        .as_ref()
+        .expect("verification-pending state was validated");
+    let live_seal = live_present
+        .then(|| {
+            run_recovery_seal_failure_hook()?;
+            seal_import_path(&entry_dir, DEFAULT_IMPORT_LIMITS)
+        })
+        .transpose()?;
+    let live_matches = live_seal
+        .as_ref()
+        .is_some_and(|observed| observed == expected_staged);
+    let expected_previous = transaction.state.expected_previous.as_ref();
+    if live_matches && (expected_previous.is_some() || !backup_present) {
+        // A partial previous tree cannot weaken the exact staged-live proof. In particular, its
+        // sidecar may be the first cleanup child removed before a crash, so never seal it here.
+        transaction.mark(ReplacementPhase::Promoted)?;
+        return transaction.cleanup();
+    }
+    let live_previous_matches = match (live_seal.as_ref(), expected_previous) {
+        (Some(observed), Some(expected)) => observed == expected,
+        _ => false,
+    };
+    let backup_seal = backup_present
+        .then(|| {
+            run_recovery_seal_failure_hook()?;
+            seal_import_path(&transaction.backup(), DEFAULT_IMPORT_LIMITS)
+        })
+        .transpose()?;
+    let backup_matches = match (backup_seal.as_ref(), expected_previous) {
+        (None, None) => true,
+        (Some(observed), Some(expected)) => observed == expected,
+        _ => false,
+    };
+
+    if phase == ReplacementPhase::Quarantined {
+        return Err(ModError::Other(format!(
+            "replacement transaction is quarantined after a verification mismatch; recovery evidence was retained at {}",
+            transaction.root.display()
+        )));
+    }
+
+    match (live_present, backup_present, expected_previous) {
+        (false, false, None) if phase == ReplacementPhase::Prepared => {
+            // The durable create journal preceded its first publication rename. With no live or
+            // backup object present, cleanup removes only transaction metadata.
+            transaction.cleanup()
+        }
+        (true, false, Some(_)) if live_previous_matches => {
+            // The verified previous entry was restored, but the process stopped before the
+            // restored marker and transaction cleanup became durable.
+            transaction.mark(ReplacementPhase::Restored)?;
+            transaction.cleanup()
+        }
+        (false, true, Some(_)) if backup_matches => {
+            rename_replacement_path(&transaction.backup(), &entry_dir)
+                .map_err(crate::io("restoring verified interrupted replacement"))?;
+            sync_replacement_directory(library_dir)?;
+            transaction.mark(ReplacementPhase::Restored)?;
+            transaction.cleanup()
+        }
+        _ => quarantine_mismatched_recovery(
+            library_dir,
+            &transaction,
+            phase,
+            live_present,
+            backup_matches,
+        ),
+    }
+}
+
+#[cfg(not(unix))]
+fn quarantine_mismatched_recovery(
+    library_dir: &Path,
+    transaction: &ReplacementTransaction,
+    phase: ReplacementPhase,
+    live_present: bool,
+    backup_matches: bool,
+) -> crate::Result<()> {
+    let original = ModError::Other(format!(
+        "verification-pending replacement objects do not match their durable seals (phase {phase:?})"
+    ));
+    let entry_dir = library_dir.join(&transaction.state.id);
+    let safety = (|| -> crate::Result<()> {
+        if live_present {
+            rename_replacement_path(&entry_dir, &transaction.quarantine()).map_err(crate::io(
+                "quarantining mismatched live manager-library entry during recovery",
+            ))?;
+            sync_replacement_directory(library_dir)?;
+            sync_replacement_directory(&transaction.root)?;
+        }
+        if transaction.state.expected_previous.is_some() && backup_matches {
+            rename_replacement_path(&transaction.backup(), &entry_dir).map_err(crate::io(
+                "restoring verified previous manager-library entry during recovery",
+            ))?;
+            sync_replacement_directory(library_dir)?;
+        }
+        Ok(())
+    })();
+    if let Err(safety_error) = safety {
+        return Err(ModError::Other(format!(
+            "refusing ambiguous replacement recovery: {original}; fail-closed quarantine/restore failed: {safety_error}; recovery evidence retained at {}",
+            transaction.root.display()
+        )));
+    }
+    let marker_error = transaction.mark(ReplacementPhase::Quarantined).err();
+    Err(quarantined_replacement_error(
+        original,
+        marker_error,
+        &transaction.root,
+        "refusing ambiguous replacement recovery",
+    ))
+}
+
 /// Recover PID-named backups written by the pre-transaction implementation. The entry's own
 /// bounded sidecar supplies the id; no path component is inferred from the dot-directory name.
+#[cfg(not(unix))]
 fn recover_legacy_replacement(library_dir: &Path, root: &Path) -> crate::Result<()> {
     let meta_path = root.join(META_FILE);
     if !path_present(&meta_path)? {
@@ -824,11 +3840,13 @@ fn recover_legacy_replacement(library_dir: &Path, root: &Path) -> crate::Result<
     sync_replacement_directory(library_dir)
 }
 
+#[cfg(not(unix))]
 fn read_replacement_state(path: &Path) -> crate::Result<ReplacementState> {
     let bytes = read_nofollow_bounded(path, "replacement state", REPLACEMENT_STATE_MAX_BYTES)?;
     Ok(serde_json::from_slice(&bytes)?)
 }
 
+#[cfg(not(unix))]
 fn read_nofollow_bounded(path: &Path, label: &str, limit: u64) -> crate::Result<Vec<u8>> {
     let mut file = open_file_nofollow(path, label)?;
     if file.len() > limit {
@@ -858,6 +3876,7 @@ fn read_nofollow_bounded(path: &Path, label: &str, limit: u64) -> crate::Result<
     Ok(bytes)
 }
 
+#[cfg(not(unix))]
 fn validate_replacement_entry_metadata(
     metadata: Option<&std::fs::Metadata>,
     path: &Path,
@@ -885,12 +3904,13 @@ fn metadata_if_present(path: &Path) -> crate::Result<Option<std::fs::Metadata>> 
     }
 }
 
+#[cfg(not(unix))]
 fn path_present(path: &Path) -> crate::Result<bool> {
     metadata_if_present(path).map(|metadata| metadata.is_some())
 }
 
 /// Persist directory-entry changes on platforms that expose a portable directory fsync.
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 fn sync_replacement_directory(path: &Path) -> crate::Result<()> {
     std::fs::File::open(path)
         .map_err(crate::io("opening replacement directory for sync"))?
@@ -916,57 +3936,90 @@ pub fn remove(library_dir: &Path, id: &str) -> crate::Result<bool> {
     if !crate::is_safe_mod_name(id) {
         return Err(ModError::Other(format!("invalid library entry id {id:?}")));
     }
-    let _replacement_lock = replacement_lock();
-    recover_interrupted_replacements(library_dir)?;
-    let dir = library_dir.join(id);
-    let metadata = match std::fs::symlink_metadata(&dir) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => {
-            return Err(crate::io(&format!(
-                "reading library entry metadata {}",
-                dir.display()
-            ))(error))
-        }
-    };
-    if metadata_is_link(&metadata) || !metadata.is_dir() {
-        return Err(ModError::Other(format!(
-            "refusing to remove unsafe library entry: {}",
-            dir.display()
-        )));
+    if metadata_if_present(library_dir)?.is_none() {
+        return Ok(false);
     }
-    let library = LibraryRoot::open(library_dir)?;
-    let entry = library.entry(id)?;
-    let entry_path = entry.path().to_path_buf();
-    // The entry handle intentionally denies FILE_SHARE_DELETE and must be released before the
-    // authorized removal. Keep the validated library-root anchor alive across the path operation:
-    // on Windows it prevents parent replacement, and on Unix it is the exact directory handle that
-    // receives the post-delete durability barrier below.
-    drop(entry);
-    std::fs::remove_dir_all(&entry_path).map_err(crate::io(&format!(
-        "removing entry {}",
-        entry_path.display()
-    )))?;
-    library.sync_after_mutation()?;
-    Ok(true)
+    let library_lock = library_mutation_lock(library_dir)?;
+    #[cfg(not(unix))]
+    let canonical_library_dir = library_lock.path().to_path_buf();
+    recover_interrupted_replacements_locked(&library_lock)?;
+
+    #[cfg(unix)]
+    {
+        let library = library_lock.open_library()?;
+        let name = std::ffi::OsStr::new(id);
+        if library
+            .secure_directory()
+            .open_optional_child_directory(name, "library entry selected for removal")?
+            .is_none()
+        {
+            return Ok(false);
+        }
+        library
+            .secure_directory()
+            .remove_child_tree(name, "manager-library entry")?;
+        Ok(true)
+    }
+
+    #[cfg(not(unix))]
+    {
+        let dir = canonical_library_dir.join(id);
+        let metadata = match std::fs::symlink_metadata(&dir) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => {
+                return Err(crate::io(&format!(
+                    "reading library entry metadata {}",
+                    dir.display()
+                ))(error))
+            }
+        };
+        if metadata_is_link(&metadata) || !metadata.is_dir() {
+            return Err(ModError::Other(format!(
+                "refusing to remove unsafe library entry: {}",
+                dir.display()
+            )));
+        }
+        let library = library_lock.open_library()?;
+        let entry = library.entry(id)?;
+        let entry_path = entry.path().to_path_buf();
+        // The entry handle intentionally denies FILE_SHARE_DELETE and must be released before the
+        // authorized Windows removal. The cooperative library lock remains held, and the root was
+        // re-opened/FileId-checked immediately before this path operation. This does not claim a
+        // hostile same-user namespace boundary.
+        drop(entry);
+        drop(library);
+        std::fs::remove_dir_all(&entry_path).map_err(crate::io(&format!(
+            "removing entry {}",
+            entry_path.display()
+        )))?;
+        let library = library_lock.open_library()?;
+        library.sync_after_mutation()?;
+        Ok(true)
+    }
+}
+
+/// Fail-closed recovery gate for consumers that read deployable library payloads directly. The
+/// guard is intentionally released after recovery; this slice does not claim a joint library/game
+/// transaction, but an interrupted or quarantined import can never be silently consumed by Apply.
+pub(crate) fn recover_library_for_read(library_dir: &Path) -> crate::Result<()> {
+    if metadata_if_present(library_dir)?.is_none() {
+        return Ok(());
+    }
+    let library_lock = library_mutation_lock(library_dir)?;
+    recover_interrupted_replacements_locked(&library_lock)
 }
 
 /// All library entries, sorted by name. Entries with an unreadable/corrupt sidecar are skipped
 /// (with a note on stderr), a missing library dir is an empty library.
 pub fn list(library_dir: &Path) -> crate::Result<Vec<ModEntryMeta>> {
-    let _replacement_lock = replacement_lock();
-    recover_interrupted_replacements(library_dir)?;
-    let rd = match std::fs::read_dir(library_dir) {
-        Ok(rd) => rd,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => {
-            return Err(crate::io(&format!(
-                "reading library {}",
-                library_dir.display()
-            ))(e))
-        }
-    };
-    let library = LibraryRoot::open(library_dir)?;
+    if metadata_if_present(library_dir)?.is_none() {
+        return Ok(Vec::new());
+    }
+    let library_lock = library_mutation_lock(library_dir)?;
+    recover_interrupted_replacements_locked(&library_lock)?;
+    let library = library_lock.open_library()?;
+    let rd = library.read_dir()?;
     let mut out = Vec::new();
     for entry in rd.filter_map(|e| e.ok()) {
         let path = entry.path();
@@ -1100,8 +4153,8 @@ fn direct_container_members(source: &Path, limits: ImportLimits) -> crate::Resul
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
             continue;
         };
-        let lower_name = portable_windows_key(&name);
-        if partitioned_iostore_member_base(&lower_name)
+        let semantic_lower_name = name.to_ascii_lowercase();
+        if partitioned_iostore_member_base(&semantic_lower_name)
             .is_some_and(|base| portable_windows_key(base) == selected_base_key)
         {
             return Err(ModError::Other(format!(
@@ -1683,9 +4736,9 @@ fn safe_zip_entry(name: &str, max_path_bytes: usize) -> Option<String> {
 /// A source that IS a UE4SS mod (root holds `Scripts/main.lua`) gets nested into a `<name>/`
 /// subdir, so entries are uniformly "mod dirs inside the entry" and a later deploy-copy of the
 /// mod dir can never drag the sidecar along.
-fn wrap_root_ue4ss(staging: &Path, name: &str) -> crate::Result<()> {
+fn wrap_root_ue4ss(staging: &Path, name: &str) -> crate::Result<Option<String>> {
     if !staged_regular_file_exists(&staging.join("Scripts").join("main.lua"))? {
-        return Ok(());
+        return Ok(None);
     }
     let tmp = staging.join(".gore-wrap");
     std::fs::create_dir(&tmp).map_err(crate::io("creating wrap dir"))?;
@@ -1707,7 +4760,135 @@ fn wrap_root_ue4ss(staging: &Path, name: &str) -> crate::Result<()> {
         slug(name)
     };
     std::fs::rename(&tmp, staging.join(&safe)).map_err(crate::io("naming mod dir"))?;
+    Ok(Some(safe))
+}
+
+fn validate_synthetic_root_ue4ss_components(
+    kind: ModKind,
+    components: &[ComponentInfo],
+    expected_wrapper: &str,
+) -> crate::Result<()> {
+    if kind != ModKind::ForeignUe4ss {
+        return Err(ModError::Other(
+            "synthetic root UE4SS wrapper did not classify as a foreign UE4SS mod".into(),
+        ));
+    }
+    let wrapper = synthetic_root_ue4ss_wrapper_from_components(components)?;
+    if wrapper != expected_wrapper {
+        return Err(ModError::Other(format!(
+            "synthetic root UE4SS wrapper changed during detection: expected {expected_wrapper:?}, found {wrapper:?}"
+        )));
+    }
     Ok(())
+}
+
+fn synthetic_root_ue4ss_wrapper_name(entry: &ModEntryMeta) -> crate::Result<&str> {
+    if entry.kind != ModKind::ForeignUe4ss {
+        return Err(ModError::Other(format!(
+            "entry {:?} marks a synthetic root UE4SS wrapper but is not a foreign UE4SS mod",
+            entry.id
+        )));
+    }
+    synthetic_root_ue4ss_wrapper_from_components(&entry.components)
+}
+
+fn synthetic_root_ue4ss_wrapper_from_components(
+    components: &[ComponentInfo],
+) -> crate::Result<&str> {
+    let [ComponentInfo::Ue4ssLua { name, rel, .. }] = components else {
+        return Err(ModError::Other(
+            "synthetic root UE4SS identity requires exactly one UE4SS component".into(),
+        ));
+    };
+    if name != rel || rel.contains('/') || rel.contains('\\') || !crate::is_safe_mod_name(rel) {
+        return Err(ModError::Other(format!(
+            "synthetic root UE4SS identity has invalid wrapper metadata: name={name:?} rel={rel:?}"
+        )));
+    }
+    Ok(rel)
+}
+
+fn rename_synthetic_root_ue4ss_wrapper(
+    staging: SecureDirectory,
+    current: &str,
+    previous: &str,
+) -> crate::Result<SecureDirectory> {
+    if !crate::is_safe_mod_name(current) || !crate::is_safe_mod_name(previous) {
+        return Err(ModError::Other(format!(
+            "cannot preserve unsafe synthetic root UE4SS wrapper: {current:?} -> {previous:?}"
+        )));
+    }
+    if current == previous {
+        return Ok(staging);
+    }
+
+    let current_identity = match staging.open_child(
+        std::ffi::OsStr::new(current),
+        "synthetic root UE4SS wrapper selected for preservation",
+    )? {
+        SecureNode::Directory(directory) => directory.identity(),
+        SecureNode::File(file) => {
+            return Err(ModError::Other(format!(
+                "synthetic root UE4SS wrapper is not a directory: {}",
+                file.path().display()
+            )))
+        }
+    };
+    match staging.open_optional_child(
+        std::ffi::OsStr::new(previous),
+        "synthetic root UE4SS wrapper destination",
+    )? {
+        Some(SecureNode::Directory(directory)) if directory.identity() == current_identity => {
+            // This is proof from the filesystem, rather than the deliberately conservative
+            // portable-name key, that the prior public rel resolves to the current wrapper.
+            return Ok(staging);
+        }
+        Some(node) => {
+            return Err(ModError::Other(format!(
+                "cannot preserve synthetic root UE4SS wrapper because a different destination exists: {}",
+                match node {
+                    SecureNode::Directory(directory) => directory.path().display().to_string(),
+                    SecureNode::File(file) => file.path().display().to_string(),
+                }
+            )));
+        }
+        None => {}
+    }
+
+    #[cfg(unix)]
+    staging.rename_child_to(
+        std::ffi::OsStr::new(current),
+        &staging,
+        std::ffi::OsStr::new(previous),
+        "preserving synthetic root UE4SS wrapper",
+    )?;
+    #[cfg(unix)]
+    return Ok(staging);
+
+    #[cfg(not(unix))]
+    {
+        // SecureDirectory intentionally denies DELETE sharing on Windows. Close the staging root
+        // handle for this internal child rename, then bind the same root identity again before
+        // hashing or publication. Cooperative manager processes cannot reach this unique dot
+        // staging tree; a hostile same-user pathname substitution is outside the documented lock
+        // boundary and is still detected by the identity comparison.
+        let expected_root = staging.identity();
+        let staging_path = staging.path().to_path_buf();
+        drop(staging);
+        std::fs::rename(staging_path.join(current), staging_path.join(previous))
+            .map_err(crate::io("preserving synthetic root UE4SS wrapper"))?;
+        let reopened = open_directory_nofollow(
+            &staging_path,
+            "reopening staging after preserving synthetic root UE4SS wrapper",
+        )?;
+        if reopened.identity() != expected_root {
+            return Err(ModError::Other(format!(
+                "staging root changed identity while preserving synthetic root UE4SS wrapper: {}",
+                staging_path.display()
+            )));
+        }
+        Ok(reopened)
+    }
 }
 
 /// If a goremod bundle sits BELOW `staging` (its `gore-mod.json` is in a nested wrapper dir like
@@ -1895,8 +5076,8 @@ fn find_deployable_reroot_sibling(path: &Path, depth: usize) -> crate::Result<Op
                 path.display()
             ))
         })?;
-    if sibling_name.eq_ignore_ascii_case(META_FILE)
-        || sibling_name.eq_ignore_ascii_case(".gore-reroot")
+    if portable_windows_names_equal(sibling_name, META_FILE)
+        || portable_windows_names_equal(sibling_name, ".gore-reroot")
     {
         return Ok(Some(path.to_path_buf()));
     }
@@ -2434,7 +5615,9 @@ impl ForeignScan {
     fn push_raw(&mut self, rel: String, target_file: RawTarget) -> crate::Result<()> {
         let target_key = match &target_file {
             RawTarget::Lcache => "lcache".to_owned(),
-            RawTarget::Bank { name } => format!("bank:{}", portable_windows_key(name)),
+            RawTarget::Bank { name } => {
+                format!("bank:{}", portable_windows_key(name).to_lowercase())
+            }
             RawTarget::ScriptCache => "script_cache".to_owned(),
         };
         if let Some(first) = self.raw_targets.insert(target_key.clone(), rel.clone()) {
@@ -2742,9 +5925,17 @@ fn rel_str(root: &Path, p: &Path) -> String {
     }
 }
 
-/// Portable Windows identity for untrusted relative names: slash-normalized and Unicode-lowercase.
+/// Conservative portable Windows identity for untrusted relative names. Windows compares
+/// case-insensitive filesystem names through an uppercase table (not Unicode lowercase/casefold),
+/// so uppercase also catches final-sigma/long-s aliases that lowercase misses. Full Unicode
+/// expansions may reject additional pairs on non-Windows hosts; that fail-closed over-approximation
+/// is preferable to publishing an archive/tree that aliases after extraction on Windows.
 fn portable_windows_key(value: &str) -> String {
-    value.replace('\\', "/").to_lowercase()
+    value.replace('\\', "/").to_uppercase()
+}
+
+fn portable_windows_names_equal(left: &str, right: &str) -> bool {
+    portable_windows_key(left) == portable_windows_key(right)
 }
 
 /// Join a bundle-dir prefix (may be "") and a manifest-relative path with '/'.
@@ -2806,6 +5997,17 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
 }
 
+/// Inverse of [`civil_from_days`]: a validated civil date to days since 1970-01-01.
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let adjusted_year = year - i64::from(month <= 2);
+    let era = adjusted_year.div_euclid(400);
+    let year_of_era = adjusted_year - era * 400;
+    let shifted_month = i64::from(month) + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * shifted_month + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
 /// Removes the staging dir on drop unless defused (`.0 = None`) — covers every failure path.
 struct StagingGuard(Option<PathBuf>);
 
@@ -2813,6 +6015,76 @@ impl Drop for StagingGuard {
     fn drop(&mut self) {
         if let Some(p) = self.0.take() {
             let _ = std::fs::remove_dir_all(&p);
+        }
+    }
+}
+
+/// Once the library lock is held, Unix cleanup is anchored to that retained inode instead of the
+/// configured pathname. Declaring this guard after `LibraryMutationGuard` makes Rust drop it first
+/// on every `?`/return path, so the inode lock remains held throughout identity-bound cleanup.
+#[cfg(unix)]
+struct LockedStagingGuard {
+    root: SecureDirectory,
+    name: std::ffi::OsString,
+    identity: FileIdentity,
+    armed: bool,
+}
+
+#[cfg(unix)]
+impl LockedStagingGuard {
+    fn bind(
+        library_lock: &LibraryMutationGuard,
+        staging: &Path,
+        expected_identity: FileIdentity,
+    ) -> crate::Result<Self> {
+        let name = staging
+            .file_name()
+            .ok_or_else(|| {
+                ModError::Other(format!(
+                    "staged import has no direct-child name: {}",
+                    staging.display()
+                ))
+            })?
+            .to_os_string();
+        let library = library_lock.open_library()?;
+        let root = library.secure_directory().clone();
+        let child = root
+            .open_optional_child_directory(&name, "staged import cleanup binding")?
+            .ok_or_else(|| {
+                ModError::Other(format!(
+                    "staged import disappeared from the locked manager-library inode: {}",
+                    staging.display()
+                ))
+            })?;
+        if child.identity() != expected_identity {
+            return Err(ModError::Other(format!(
+                "staged import changed filesystem identity while binding cleanup: {}",
+                staging.display()
+            )));
+        }
+        drop(child);
+        Ok(Self {
+            root,
+            name,
+            identity: expected_identity,
+            armed: true,
+        })
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+#[cfg(unix)]
+impl Drop for LockedStagingGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = self.root.remove_optional_child_tree_if_identity(
+                &self.name,
+                self.identity,
+                "failed staged import",
+            );
         }
     }
 }
@@ -2827,6 +6099,112 @@ mod tests {
     };
     use gore_modgen::gen::{OverrideValue, SingleOverride};
     use std::fs;
+
+    fn read_library_sidecar(library: &Path, id: &str) -> LibrarySidecar {
+        serde_json::from_slice(&fs::read(library.join(id).join(META_FILE)).unwrap()).unwrap()
+    }
+
+    fn write_library_sidecar(library: &Path, id: &str, sidecar: &LibrarySidecar) {
+        fs::write(
+            library.join(id).join(META_FILE),
+            serde_json::to_vec_pretty(sidecar).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn copy_test_tree(source: &Path, destination: &Path) {
+        fs::create_dir(destination).unwrap();
+        for entry in fs::read_dir(source).unwrap() {
+            let entry = entry.unwrap();
+            let target = destination.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_test_tree(&entry.path(), &target);
+            } else {
+                fs::copy(entry.path(), target).unwrap();
+            }
+        }
+    }
+
+    fn prepare_format_2_promoted_update(
+        temp_root: &Path,
+        library: &Path,
+        label: &str,
+    ) -> (ModEntryMeta, ModEntryMeta, PathBuf, ReplacementTransaction) {
+        let payload_name = format!("{label}_P.pak");
+        let source = temp_root.join(&payload_name);
+        fs::write(&source, b"verified previous payload").unwrap();
+        let previous_meta = import(library, &source).unwrap();
+        let entry = library.join(&previous_meta.id);
+        let previous_seal = seal_import_path(&entry, DEFAULT_IMPORT_LIMITS).unwrap();
+
+        let staging = library.join(format!(".staging-{label}-recovery"));
+        copy_test_tree(&entry, &staging);
+        fs::write(staging.join(&payload_name), b"verified promoted payload").unwrap();
+        let mut staged_sidecar = read_library_sidecar(library, &previous_meta.id);
+        staged_sidecar.entry.version = "promoted".into();
+        fs::write(
+            staging.join(META_FILE),
+            serde_json::to_vec_pretty(&staged_sidecar).unwrap(),
+        )
+        .unwrap();
+        let promoted_meta = staged_sidecar.entry;
+        let staged_seal = seal_import_path(&staging, DEFAULT_IMPORT_LIMITS).unwrap();
+        let expectation = PublishExpectation {
+            staged: staged_seal,
+            current: Some(previous_seal),
+            limits: DEFAULT_IMPORT_LIMITS,
+        };
+        let transaction =
+            ReplacementTransaction::begin(library, &previous_meta.id, Some(&expectation)).unwrap();
+        fs::rename(&entry, transaction.backup()).unwrap();
+        transaction.mark(ReplacementPhase::PreviousMoved).unwrap();
+        fs::rename(&staging, &entry).unwrap();
+        (previous_meta, promoted_meta, entry, transaction)
+    }
+
+    fn visible_library_snapshot(library: &Path) -> Vec<(String, Option<Vec<u8>>)> {
+        fn walk(root: &Path, path: &Path, out: &mut Vec<(String, Option<Vec<u8>>)>) {
+            let mut entries: Vec<_> = fs::read_dir(path)
+                .unwrap()
+                .map(|entry| entry.unwrap())
+                .collect();
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries {
+                if path == root && entry.file_name().to_string_lossy().starts_with('.') {
+                    continue;
+                }
+                let relative = entry.path().strip_prefix(root).unwrap().to_path_buf();
+                let relative = rel_str(root, &root.join(&relative));
+                if entry.file_type().unwrap().is_dir() {
+                    out.push((relative, None));
+                    walk(root, &entry.path(), out);
+                } else {
+                    out.push((relative, Some(fs::read(entry.path()).unwrap())));
+                }
+            }
+        }
+
+        if !library.exists() {
+            return Vec::new();
+        }
+        let mut snapshot = Vec::new();
+        walk(library, library, &mut snapshot);
+        snapshot
+    }
+
+    fn assert_no_import_residue(library: &Path) {
+        let residue: Vec<_> = fs::read_dir(library)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with(".staging-") || name.starts_with(REPLACEMENT_PREFIX)
+            })
+            .map(|entry| entry.file_name())
+            .collect();
+        assert!(residue.is_empty(), "import residue: {residue:?}");
+    }
 
     #[cfg(unix)]
     fn make_file_link(target: &Path, link: &Path) -> bool {
@@ -3144,6 +6522,7 @@ mod tests {
         let leftovers = fs::read_dir(library)
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name != ".gore-manager-library.lock")
             .collect::<Vec<_>>();
         assert!(
             leftovers.is_empty(),
@@ -3565,6 +6944,7 @@ mod tests {
         let error = import(&library, &source).unwrap_err().to_string();
         assert!(
             error.contains("symbolic link or reparse point")
+                || error.contains("is a symbolic link")
                 || error.contains("Too many levels of symbolic links")
                 || error.contains("without following"),
             "unexpected error: {error}"
@@ -3778,6 +7158,42 @@ mod tests {
         assert!(entry.join("gore-mod.json").is_file());
         assert!(entry.join("loc").join("edits.json").is_file());
         assert_eq!(list(&lib).unwrap(), vec![meta]);
+    }
+
+    #[test]
+    fn root_goremod_with_scripts_main_clears_synthetic_wrapper_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let bundle = mk_mixed_file_bundle(&tmp.path().join("source"), "RootScriptBundle");
+        fs::create_dir_all(bundle.join("Scripts")).unwrap();
+        fs::write(
+            bundle.join("Scripts/main.lua"),
+            b"-- bundle-owned root script",
+        )
+        .unwrap();
+
+        let first = import_detailed(&lib, &bundle).unwrap();
+        assert_eq!(first.entry.kind, ModKind::Goremod);
+        assert!(first.entry.components.iter().all(|component| matches!(
+            component,
+            ComponentInfo::FilePatch { .. } | ComponentInfo::PakFilePatch { .. }
+        )));
+        let entry = lib.join(&first.entry.id);
+        assert!(entry.join("gore-mod.json").is_file());
+        assert!(entry.join("Scripts/main.lua").is_file());
+        assert!(!entry.join("RootScriptBundle").exists());
+        let identity = read_library_sidecar(&lib, &first.entry.id)
+            .manager
+            .and_then(|manager| manager.import_identity)
+            .unwrap();
+        assert!(!identity.synthetic_root_ue4ss_wrapper);
+
+        let second = import_detailed(&lib, &bundle).unwrap();
+        assert_eq!(second.disposition, ImportDisposition::Unchanged);
+        assert_eq!(second.entry.id, first.entry.id);
+        assert_eq!(second.entry.imported_at, first.entry.imported_at);
+        assert_eq!(second.entry.fingerprint(), first.entry.fingerprint());
+        assert_no_import_residue(&lib);
     }
 
     #[test]
@@ -4554,6 +7970,7 @@ mod tests {
         let mut library_names: Vec<_> = fs::read_dir(&lib)
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name != ".gore-manager-library.lock")
             .collect();
         library_names.sort();
         assert_eq!(library_names, vec![entry.file_name().unwrap().to_owned()]);
@@ -4671,6 +8088,7 @@ mod tests {
         let library_names = fs::read_dir(&lib)
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name != ".gore-manager-library.lock")
             .collect::<Vec<_>>();
         assert_eq!(library_names, vec![entry.file_name().unwrap().to_owned()]);
 
@@ -4880,6 +8298,122 @@ mod tests {
         assert!(entry.join("MyLuaMod").join("enabled.txt").is_file());
     }
 
+    #[test]
+    fn moved_root_ue4ss_folder_rebinds_without_deployment_churn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let original = tmp.path().join("OriginalLuaName");
+        fs::create_dir_all(original.join("Scripts")).unwrap();
+        fs::write(original.join("Scripts/main.lua"), b"-- stable lua").unwrap();
+        fs::write(original.join("enabled.txt"), b"").unwrap();
+
+        let first = import_detailed(&lib, &original).unwrap();
+        let first_sidecar = read_library_sidecar(&lib, &first.entry.id);
+        let first_fingerprint = first.entry.fingerprint();
+        let moved = tmp.path().join("RenamedLuaSource");
+        fs::rename(&original, &moved).unwrap();
+
+        let rebound = import_detailed(&lib, &moved).unwrap();
+        assert_eq!(rebound.entry.id, first.entry.id);
+        assert_eq!(rebound.matched_by, ImportMatchedBy::Content);
+        assert_eq!(rebound.disposition, ImportDisposition::Updated);
+        assert_eq!(rebound.entry.imported_at, first.entry.imported_at);
+        assert_eq!(rebound.entry.components, first.entry.components);
+        assert_eq!(rebound.entry.fingerprint(), first_fingerprint);
+        assert_eq!(list(&lib).unwrap().len(), 1);
+        let entry = lib.join(&first.entry.id);
+        assert!(entry.join("OriginalLuaName/Scripts/main.lua").is_file());
+        assert!(!entry.join("RenamedLuaSource").exists());
+
+        let rebound_sidecar = read_library_sidecar(&lib, &first.entry.id);
+        let first_identity = first_sidecar.manager.unwrap().import_identity.unwrap();
+        let rebound_identity = rebound_sidecar.manager.unwrap().import_identity.unwrap();
+        assert!(first_identity.synthetic_root_ue4ss_wrapper);
+        assert!(rebound_identity.synthetic_root_ue4ss_wrapper);
+        assert_eq!(first_identity.tree_sha256, rebound_identity.tree_sha256);
+        assert_ne!(first_identity.source_sha256, rebound_identity.source_sha256);
+
+        fs::write(moved.join("Scripts/main.lua"), b"-- changed lua").unwrap();
+        let changed = import_detailed(&lib, &moved).unwrap();
+        assert_eq!(changed.entry.id, first.entry.id);
+        assert_eq!(changed.matched_by, ImportMatchedBy::Source);
+        assert_eq!(changed.disposition, ImportDisposition::Updated);
+        assert_ne!(changed.entry.imported_at, first.entry.imported_at);
+        assert_ne!(changed.entry.fingerprint(), first_fingerprint);
+    }
+
+    #[test]
+    fn moved_root_ue4ss_zip_rebinds_without_deployment_churn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let payload = tmp.path().join("payload");
+        fs::create_dir_all(payload.join("Scripts")).unwrap();
+        fs::write(payload.join("Scripts/main.lua"), b"-- stable zip lua").unwrap();
+        fs::write(payload.join("enabled.txt"), b"").unwrap();
+        let original = tmp.path().join("OriginalZipName.zip");
+        zip_dir_with_prefix(&payload, "", &original);
+
+        let first = import_detailed(&lib, &original).unwrap();
+        let first_fingerprint = first.entry.fingerprint();
+        let moved = tmp.path().join("RenamedZipSource.zip");
+        fs::rename(&original, &moved).unwrap();
+        let rebound = import_detailed(&lib, &moved).unwrap();
+
+        assert_eq!(rebound.entry.id, first.entry.id);
+        assert_eq!(rebound.matched_by, ImportMatchedBy::Content);
+        assert_eq!(rebound.disposition, ImportDisposition::Updated);
+        assert_eq!(rebound.entry.imported_at, first.entry.imported_at);
+        assert_eq!(rebound.entry.components, first.entry.components);
+        assert_eq!(rebound.entry.fingerprint(), first_fingerprint);
+        assert_eq!(list(&lib).unwrap().len(), 1);
+        let entry = lib.join(&first.entry.id);
+        assert!(entry.join("OriginalZipName/Scripts/main.lua").is_file());
+        assert!(!entry.join("RenamedZipSource").exists());
+    }
+
+    #[test]
+    fn synthetic_root_ue4ss_identity_is_separate_from_authored_wrapper_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let root_mod = tmp.path().join("RootLua");
+        fs::create_dir_all(root_mod.join("Scripts")).unwrap();
+        fs::write(root_mod.join("Scripts/main.lua"), b"-- same lua").unwrap();
+
+        let authored_parent = tmp.path().join("AuthoredParent");
+        let authored_wrapper = authored_parent.join(SYNTHETIC_ROOT_UE4SS_HASH_COMPONENT);
+        fs::create_dir_all(authored_wrapper.join("Scripts")).unwrap();
+        fs::write(authored_wrapper.join("Scripts/main.lua"), b"-- same lua").unwrap();
+
+        let synthetic = import_detailed(&lib, &root_mod).unwrap();
+        let authored = import_detailed(&lib, &authored_parent).unwrap();
+        assert_eq!(synthetic.disposition, ImportDisposition::Created);
+        assert_eq!(authored.disposition, ImportDisposition::Created);
+        assert_ne!(synthetic.entry.id, authored.entry.id);
+        assert_eq!(list(&lib).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn root_ue4ss_rebind_does_not_treat_portable_overapproximation_as_path_proof() {
+        assert!(portable_windows_names_equal("ß", "SS"));
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let original = tmp.path().join("ß");
+        fs::create_dir_all(original.join("Scripts")).unwrap();
+        fs::write(original.join("Scripts/main.lua"), b"-- unicode wrapper").unwrap();
+        let first = import_detailed(&lib, &original).unwrap();
+
+        let moved = tmp.path().join("SS");
+        fs::rename(&original, &moved).unwrap();
+        let rebound = import_detailed(&lib, &moved).unwrap();
+        assert_eq!(rebound.entry.id, first.entry.id);
+        assert_eq!(rebound.matched_by, ImportMatchedBy::Content);
+        assert_eq!(rebound.entry.components, first.entry.components);
+        assert!(lib
+            .join(&first.entry.id)
+            .join("ß/Scripts/main.lua")
+            .is_file());
+    }
+
     /// [import 10] A source with nothing recognizable in it is an error, not an empty entry.
     #[test]
     fn import_empty_dir_rejected() {
@@ -4897,10 +8431,9 @@ mod tests {
         assert!(leftovers.is_empty(), "staging leftovers: {leftovers:?}");
     }
 
-    /// [import 11] Re-importing the SAME source (same name + same source dir/file name) REPLACES
-    /// its entry (same id, one copy) — a mod update.
+    /// An unchanged same-source re-import keeps the stable id, timestamp, and fingerprint.
     #[test]
-    fn reimport_same_source_replaces_entry() {
+    fn reimport_same_source_unchanged_preserves_entry() {
         let tmp = tempfile::tempdir().unwrap();
         let lib = tmp.path().join("lib");
         let src = tmp.path().join("BarMod");
@@ -4908,12 +8441,20 @@ mod tests {
         fs::write(src.join("bar.utoc"), b"junk").unwrap();
         fs::write(src.join("bar.ucas"), b"junk").unwrap();
 
-        let a = import(&lib, &src).unwrap();
-        let b = import(&lib, &src).unwrap();
-        assert_eq!(a.id, b.id);
+        let a = import_detailed(&lib, &src).unwrap();
+        let sidecar_before = fs::read(lib.join(&a.entry.id).join(META_FILE)).unwrap();
+        let b = import_detailed(&lib, &src).unwrap();
+        assert_eq!(a.entry.id, b.entry.id);
+        assert_eq!(b.disposition, ImportDisposition::Unchanged);
+        assert_eq!(b.matched_by, ImportMatchedBy::Source);
+        assert_eq!(a.entry.imported_at, b.entry.imported_at);
+        assert_eq!(a.entry.fingerprint(), b.entry.fingerprint());
+        assert_eq!(
+            fs::read(lib.join(&a.entry.id).join(META_FILE)).unwrap(),
+            sidecar_before
+        );
         assert_eq!(list(&lib).unwrap().len(), 1);
-        // The move-aside backup used for the atomic replace must be cleaned up after a successful
-        // update — no `.replacing-*` dir may linger in the library.
+        // No no-op import may manufacture a replacement transaction.
         let leftovers: Vec<_> = fs::read_dir(&lib)
             .unwrap()
             .filter_map(|e| e.ok())
@@ -4926,6 +8467,1064 @@ mod tests {
     }
 
     #[test]
+    fn moved_folder_rebind_then_changed_same_source_updates_the_original_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let original = tmp.path().join("original-mod");
+        let moved = tmp.path().join("moved-mod");
+        fs::create_dir(&original).unwrap();
+        fs::write(original.join("payload_P.pak"), b"opaque-v1").unwrap();
+
+        let first = import_detailed(&lib, &original).unwrap();
+        fs::rename(&original, &moved).unwrap();
+        let rebound = import_detailed(&lib, &moved).unwrap();
+        assert_eq!(rebound.entry.id, first.entry.id);
+        assert_eq!(rebound.disposition, ImportDisposition::Updated);
+        assert_eq!(rebound.matched_by, ImportMatchedBy::Content);
+        assert_eq!(rebound.entry.imported_at, first.entry.imported_at);
+        assert_eq!(rebound.entry.fingerprint(), first.entry.fingerprint());
+
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        fs::write(moved.join("payload_P.pak"), b"opaque-v2").unwrap();
+        let changed = import_detailed(&lib, &moved).unwrap();
+        assert_eq!(changed.entry.id, first.entry.id);
+        assert_eq!(changed.disposition, ImportDisposition::Updated);
+        assert_eq!(changed.matched_by, ImportMatchedBy::Source);
+        assert_ne!(changed.entry.imported_at, first.entry.imported_at);
+        assert_ne!(changed.entry.fingerprint(), first.entry.fingerprint());
+        assert_eq!(list(&lib).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn legacy_proposed_id_equal_tree_is_bound_without_churning_import_time() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let source = tmp.path().join("legacy_P.pak");
+        fs::write(&source, b"legacy opaque bytes").unwrap();
+        let first = import_detailed(&lib, &source).unwrap();
+        let mut legacy = read_library_sidecar(&lib, &first.entry.id);
+        legacy.manager = None;
+        write_library_sidecar(&lib, &first.entry.id, &legacy);
+
+        let rebound = import_detailed(&lib, &source).unwrap();
+        assert_eq!(rebound.entry.id, first.entry.id);
+        assert_eq!(rebound.matched_by, ImportMatchedBy::EntryId);
+        assert_eq!(rebound.disposition, ImportDisposition::Updated);
+        assert_eq!(rebound.entry.imported_at, first.entry.imported_at);
+        assert_eq!(rebound.entry.fingerprint(), first.entry.fingerprint());
+        assert!(read_library_sidecar(&lib, &first.entry.id)
+            .manager
+            .and_then(|manager| manager.import_identity)
+            .is_some());
+    }
+
+    #[test]
+    fn duplicate_verified_content_refuses_with_two_bounded_ids_and_no_mutation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let original_dir = tmp.path().join("original");
+        let moved_dir = tmp.path().join("moved");
+        fs::create_dir(&original_dir).unwrap();
+        fs::create_dir(&moved_dir).unwrap();
+        let original = original_dir.join("same_P.pak");
+        let moved = moved_dir.join("same_P.pak");
+        fs::write(&original, b"same corrupt pak bytes").unwrap();
+        fs::write(&moved, b"same corrupt pak bytes").unwrap();
+        let first = import_detailed(&lib, &original).unwrap();
+
+        let duplicate_id = "verified-duplicate";
+        copy_test_tree(&lib.join(&first.entry.id), &lib.join(duplicate_id));
+        let mut duplicate = read_library_sidecar(&lib, duplicate_id);
+        duplicate.entry.id = duplicate_id.into();
+        let identity = duplicate
+            .manager
+            .as_mut()
+            .and_then(|manager| manager.import_identity.as_mut())
+            .unwrap();
+        identity.source_sha256 = "0".repeat(64);
+        write_library_sidecar(&lib, duplicate_id, &duplicate);
+        let before = visible_library_snapshot(&lib);
+
+        let error = import_detailed(&lib, &moved).unwrap_err();
+        let ImportError::DuplicateAmbiguous { candidate_ids } = error else {
+            panic!("unexpected error: {error}");
+        };
+        assert_eq!(candidate_ids.len(), 2);
+        assert!(candidate_ids.contains(&first.entry.id));
+        assert!(candidate_ids.contains(&duplicate_id.to_owned()));
+        assert_eq!(visible_library_snapshot(&lib), before);
+        assert_no_import_residue(&lib);
+    }
+
+    #[test]
+    fn source_candidate_and_distinct_content_candidate_refuse_without_mutation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let a_dir = tmp.path().join("a");
+        let b_dir = tmp.path().join("b");
+        fs::create_dir(&a_dir).unwrap();
+        fs::create_dir(&b_dir).unwrap();
+        let a = a_dir.join("same_P.pak");
+        let b = b_dir.join("same_P.pak");
+        fs::write(&a, b"old source bytes").unwrap();
+        fs::write(&b, b"new source bytes").unwrap();
+        let a_entry = import_detailed(&lib, &a).unwrap();
+        let b_entry = import_detailed(&lib, &b).unwrap();
+        for duplicate_id in ["000-content-a", "001-content-b"] {
+            copy_test_tree(&lib.join(&b_entry.entry.id), &lib.join(duplicate_id));
+            let mut duplicate = read_library_sidecar(&lib, duplicate_id);
+            duplicate.entry.id = duplicate_id.into();
+            write_library_sidecar(&lib, duplicate_id, &duplicate);
+        }
+        fs::write(&a, b"new source bytes").unwrap();
+        let before = visible_library_snapshot(&lib);
+
+        let error = import_detailed(&lib, &a).unwrap_err();
+        let ImportError::IdentityConflict { candidates } = error else {
+            panic!("unexpected error: {error}");
+        };
+        let mut expected = vec![
+            ImportConflictCandidate {
+                id: a_entry.entry.id,
+                matched_by: vec![ImportMatchedBy::EntryId, ImportMatchedBy::Source],
+            },
+            ImportConflictCandidate {
+                id: "000-content-a".into(),
+                matched_by: vec![ImportMatchedBy::Content],
+            },
+        ];
+        expected.sort_by(|left, right| left.id.cmp(&right.id));
+        assert_eq!(candidates, expected);
+        assert_eq!(visible_library_snapshot(&lib), before);
+        assert_no_import_residue(&lib);
+    }
+
+    #[test]
+    fn managed_proposed_id_collision_refuses_without_overwriting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let first_source = tmp.path().join("first_P.pak");
+        let colliding_source = tmp.path().join("different_P.pak");
+        fs::write(&first_source, b"first managed bytes").unwrap();
+        fs::write(&colliding_source, b"different managed bytes").unwrap();
+        let first = import_detailed(&lib, &first_source).unwrap();
+        let before = visible_library_snapshot(&lib);
+
+        inject_proposed_import_id(first.entry.id.clone());
+        let error = import_detailed(&lib, &colliding_source).unwrap_err();
+        let ImportError::IdentityConflict { candidates } = error else {
+            panic!("unexpected error: {error}");
+        };
+        assert_eq!(
+            candidates,
+            vec![ImportConflictCandidate {
+                id: first.entry.id,
+                matched_by: vec![ImportMatchedBy::EntryId],
+            }]
+        );
+        assert_eq!(visible_library_snapshot(&lib), before);
+        assert_no_import_residue(&lib);
+    }
+
+    #[test]
+    fn successive_changed_trees_get_monotonic_timestamps_under_a_fixed_or_backward_clock() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let source = tmp.path().join("clock_P.pak");
+        let fixed = "2026-08-11T12:34:56.000000Z";
+        fs::write(&source, b"version one").unwrap();
+        inject_import_timestamp(fixed);
+        let first = import_detailed(&lib, &source).unwrap();
+
+        fs::write(&source, b"version two").unwrap();
+        inject_import_timestamp(fixed);
+        let changed = import_detailed(&lib, &source).unwrap();
+        assert_eq!(changed.entry.id, first.entry.id);
+        assert_eq!(changed.disposition, ImportDisposition::Updated);
+        assert_eq!(changed.matched_by, ImportMatchedBy::Source);
+        assert_eq!(first.entry.imported_at, fixed);
+        assert_eq!(changed.entry.imported_at, "2026-08-11T12:34:56.000001Z");
+        assert_ne!(changed.entry.fingerprint(), first.entry.fingerprint());
+
+        fs::write(&source, b"version three").unwrap();
+        inject_import_timestamp("2026-08-10T01:00:00.000000Z");
+        let changed_again = import_detailed(&lib, &source).unwrap();
+        assert_eq!(changed_again.entry.id, first.entry.id);
+        assert_eq!(changed_again.disposition, ImportDisposition::Updated);
+        assert_eq!(
+            changed_again.entry.imported_at,
+            "2026-08-11T12:34:56.000002Z"
+        );
+        assert_ne!(
+            changed_again.entry.fingerprint(),
+            changed.entry.fingerprint()
+        );
+        assert_ne!(changed_again.entry.fingerprint(), first.entry.fingerprint());
+    }
+
+    #[test]
+    fn staged_and_current_drift_after_decision_abort_before_replacement() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let source = tmp.path().join("race_P.pak");
+        fs::write(&source, b"old source bytes").unwrap();
+        let first = import_detailed(&lib, &source).unwrap();
+        fs::write(&source, b"new source bytes").unwrap();
+        let before_staged_race = visible_library_snapshot(&lib);
+
+        inject_prepublish_race(|staging, _entry| {
+            fs::write(staging.join("race_P.pak"), b"raced staged bytes").unwrap();
+        });
+        let error = import_detailed(&lib, &source).unwrap_err().to_string();
+        assert!(error.contains("staged import changed"), "{error}");
+        assert_eq!(visible_library_snapshot(&lib), before_staged_race);
+        assert_no_import_residue(&lib);
+
+        let original_sidecar = fs::read(lib.join(&first.entry.id).join(META_FILE)).unwrap();
+        inject_prepublish_race(|_staging, entry| {
+            fs::write(entry.join("race_P.pak"), b"external current edit").unwrap();
+        });
+        let error = import_detailed(&lib, &source).unwrap_err().to_string();
+        assert!(
+            error.contains("selected manager-library entry changed"),
+            "{error}"
+        );
+        assert_eq!(
+            fs::read(lib.join(&first.entry.id).join("race_P.pak")).unwrap(),
+            b"external current edit"
+        );
+        assert_eq!(
+            fs::read(lib.join(&first.entry.id).join(META_FILE)).unwrap(),
+            original_sidecar
+        );
+        assert_no_import_residue(&lib);
+    }
+
+    #[test]
+    fn equal_byte_current_directory_swap_fails_the_retained_root_identity_seal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let source = tmp.path().join("identity-swap_P.pak");
+        fs::write(&source, b"previous payload").unwrap();
+        let first = import_detailed(&lib, &source).unwrap();
+        fs::write(&source, b"intended update").unwrap();
+        let before = visible_library_snapshot(&lib);
+        let displaced = lib.join(".externally-displaced-entry");
+        let displaced_for_hook = displaced.clone();
+        inject_prepublish_race(move |_staging, entry| {
+            fs::rename(entry, &displaced_for_hook).unwrap();
+            copy_test_tree(&displaced_for_hook, entry);
+        });
+
+        let error = import_detailed(&lib, &source).unwrap_err().to_string();
+        assert!(
+            error.contains("selected manager-library entry changed"),
+            "{error}"
+        );
+        assert_eq!(visible_library_snapshot(&lib), before);
+        assert_eq!(
+            fs::read(lib.join(&first.entry.id).join("identity-swap_P.pak")).unwrap(),
+            b"previous payload"
+        );
+        fs::remove_dir_all(displaced).unwrap();
+        assert_no_import_residue(&lib);
+    }
+
+    #[test]
+    fn failed_create_post_rename_seal_never_leaves_a_public_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library = tmp.path().join("library");
+        let source = tmp.path().join("create_P.pak");
+        fs::write(&source, b"sealed create bytes").unwrap();
+        inject_post_create_rename(|entry| {
+            fs::write(entry.join("create_P.pak"), b"changed after rename").unwrap();
+        });
+
+        let error = import_detailed(&library, &source).unwrap_err().to_string();
+        assert!(error.contains("post-rename seal"), "{error}");
+        let visible = fs::read_dir(&library)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+            .collect::<Vec<_>>();
+        assert!(
+            visible.is_empty(),
+            "failed create became public: {visible:?}"
+        );
+        let transaction = fs::read_dir(&library)
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(REPLACEMENT_PREFIX)
+            })
+            .expect("failed create retains a durable transaction")
+            .path();
+        assert!(transaction.join(REPLACEMENT_STATE_FILE).is_file());
+        assert!(transaction.join(REPLACEMENT_QUARANTINE_DIR).is_dir());
+        assert!(list(&library)
+            .unwrap_err()
+            .to_string()
+            .contains("quarantined"));
+    }
+
+    #[test]
+    fn quarantine_marker_failure_cannot_make_recovery_delete_verified_previous_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library = tmp.path().join("library");
+        let source = tmp.path().join("replace_P.pak");
+        fs::write(&source, b"verified previous bytes").unwrap();
+        let first = import_detailed(&library, &source).unwrap();
+        let before = visible_library_snapshot(&library);
+
+        fs::write(&source, b"intended promoted bytes").unwrap();
+        inject_post_promote_rename(|entry| {
+            fs::write(entry.join("replace_P.pak"), b"unverified promoted bytes").unwrap();
+        });
+        inject_replacement_mark_failure(ReplacementPhase::Quarantined);
+        let error = import_detailed(&library, &source).unwrap_err().to_string();
+        assert!(error.contains("replacement-marker failure"), "{error}");
+        assert_eq!(visible_library_snapshot(&library), before);
+        assert_eq!(
+            fs::read(library.join(&first.entry.id).join("replace_P.pak")).unwrap(),
+            b"verified previous bytes"
+        );
+
+        let transaction = fs::read_dir(&library)
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(REPLACEMENT_PREFIX)
+            })
+            .expect("marker failure retains a durable transaction")
+            .path();
+        let state_path = transaction.join(REPLACEMENT_STATE_FILE);
+        assert!(state_path.is_file());
+        let state: ReplacementState =
+            serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+        assert_eq!(state.format, 2);
+        assert_eq!(state.id, first.entry.id);
+        assert_eq!(state.phase, ReplacementPhase::Prepared);
+        assert!(state.verification_pending);
+        let previous = state
+            .expected_previous
+            .expect("format-2 update journal seals the previous object");
+        let staged = state
+            .expected_staged
+            .expect("format-2 update journal seals the staged object");
+        assert_ne!(previous.tree_sha256, staged.tree_sha256);
+        assert!(transaction.join(REPLACEMENT_QUARANTINE_DIR).is_dir());
+        assert!(!transaction
+            .join(ReplacementPhase::Quarantined.marker().unwrap())
+            .exists());
+        let recovery = list(&library).unwrap_err().to_string();
+        assert!(recovery.contains("verification") || recovery.contains("quarantined"));
+        assert_eq!(visible_library_snapshot(&library), before);
+    }
+
+    #[test]
+    fn public_metadata_ignores_private_shape_but_identity_import_is_strict() {
+        let private_values = [
+            serde_json::json!("future-private-v2"),
+            serde_json::json!({
+                "import_identity": {
+                    "format": 1,
+                    "source_sha256": "0".repeat(64),
+                    "tree_sha256": "0".repeat(64)
+                },
+                "future_field": true
+            }),
+        ];
+        for private in private_values {
+            let tmp = tempfile::tempdir().unwrap();
+            let lib = tmp.path().join("lib");
+            let source = tmp.path().join("private_P.pak");
+            fs::write(&source, b"private parse bytes").unwrap();
+            let first = import_detailed(&lib, &source).unwrap();
+            let sidecar_path = lib.join(&first.entry.id).join(META_FILE);
+            let mut value: serde_json::Value =
+                serde_json::from_slice(&fs::read(&sidecar_path).unwrap()).unwrap();
+            value["_manager"] = private;
+            fs::write(&sidecar_path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+            let before = visible_library_snapshot(&lib);
+
+            assert_eq!(list(&lib).unwrap(), vec![first.entry.clone()]);
+            let error = import_detailed(&lib, &source).unwrap_err().to_string();
+            assert!(error.contains("private identity metadata"), "{error}");
+            assert_eq!(visible_library_snapshot(&lib), before);
+            assert_no_import_residue(&lib);
+        }
+    }
+
+    #[test]
+    fn unrelated_unsafe_or_corrupt_public_entry_makes_identity_import_fail_closed() {
+        for case in ["plain-file", "missing-sidecar", "corrupt-sidecar"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let lib = tmp.path().join("lib");
+            fs::create_dir(&lib).unwrap();
+            match case {
+                "plain-file" => fs::write(lib.join("unrelated"), b"not a directory").unwrap(),
+                "missing-sidecar" => fs::create_dir(lib.join("unrelated")).unwrap(),
+                "corrupt-sidecar" => {
+                    fs::create_dir(lib.join("unrelated")).unwrap();
+                    fs::write(lib.join("unrelated").join(META_FILE), b"{broken").unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let source = tmp.path().join("new_P.pak");
+            fs::write(&source, b"new import bytes").unwrap();
+            let before = visible_library_snapshot(&lib);
+
+            let error = import_detailed(&lib, &source).unwrap_err().to_string();
+            assert!(
+                error.contains("unsafe or unreadable")
+                    || error.contains("unreadable public sidecar"),
+                "{case}: {error}"
+            );
+            assert_eq!(visible_library_snapshot(&lib), before);
+            assert_no_import_residue(&lib);
+        }
+    }
+
+    #[test]
+    fn selected_hint_tree_tamper_and_prepublish_failure_both_preserve_visible_library() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let source = tmp.path().join("tamper_P.pak");
+        fs::write(&source, b"original").unwrap();
+        let first = import_detailed(&lib, &source).unwrap();
+        fs::write(lib.join(&first.entry.id).join("tamper_P.pak"), b"tampered").unwrap();
+        let tampered_before = visible_library_snapshot(&lib);
+        let error = import_detailed(&lib, &source).unwrap_err().to_string();
+        assert!(error.contains("manager-library tampering"), "{error}");
+        assert_eq!(visible_library_snapshot(&lib), tampered_before);
+        assert_no_import_residue(&lib);
+
+        fs::write(lib.join(&first.entry.id).join("tamper_P.pak"), b"original").unwrap();
+        fs::write(&source, b"updated").unwrap();
+        let before_publish = visible_library_snapshot(&lib);
+        inject_prepublish_failure(ModError::Other("injected prepublish failure".into()));
+        let error = import_detailed(&lib, &source).unwrap_err().to_string();
+        assert!(error.contains("injected prepublish failure"), "{error}");
+        assert_eq!(visible_library_snapshot(&lib), before_publish);
+        assert_no_import_residue(&lib);
+    }
+
+    #[test]
+    fn identity_candidate_rehashes_share_one_aggregate_entry_budget() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let first_source = tmp.path().join("first_P.pak");
+        let second_source = tmp.path().join("second_P.pak");
+        let incoming = tmp.path().join("incoming");
+        fs::write(&first_source, b"first candidate").unwrap();
+        fs::write(&second_source, b"second candidate").unwrap();
+        fs::create_dir(&incoming).unwrap();
+        fs::write(incoming.join("incoming_P.pak"), b"incoming candidate").unwrap();
+        let first = import_detailed(&lib, &first_source).unwrap();
+        let second = import_detailed(&lib, &second_source).unwrap();
+        let incoming_hash = hash_normalized_source_path(&fs::canonicalize(&incoming).unwrap());
+        for id in [&first.entry.id, &second.entry.id] {
+            let mut sidecar = read_library_sidecar(&lib, id);
+            sidecar
+                .manager
+                .as_mut()
+                .unwrap()
+                .import_identity
+                .as_mut()
+                .unwrap()
+                .source_sha256 = incoming_hash.clone();
+            write_library_sidecar(&lib, id, &sidecar);
+        }
+        let before = visible_library_snapshot(&lib);
+
+        let error = import_detailed_with_limits(
+            &lib,
+            &incoming,
+            ImportLimits {
+                max_zip_entries: 1,
+                ..DEFAULT_IMPORT_LIMITS
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, ImportError::Failed(ModError::InspectionBound(_))),
+            "{error}"
+        );
+        assert!(error.to_string().contains("aggregate entry work"));
+        assert_eq!(visible_library_snapshot(&lib), before);
+        assert_no_import_residue(&lib);
+    }
+
+    #[test]
+    fn maximum_canonical_import_timestamp_refuses_changed_bytes_without_mutation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let source = tmp.path().join("timestamp_P.pak");
+        fs::write(&source, b"first timestamp bytes").unwrap();
+        let first = import_detailed(&lib, &source).unwrap();
+        let mut sidecar = read_library_sidecar(&lib, &first.entry.id);
+        sidecar.entry.imported_at = "9999-12-31T23:59:59.999999Z".into();
+        write_library_sidecar(&lib, &first.entry.id, &sidecar);
+        fs::write(&source, b"changed timestamp bytes").unwrap();
+        let before = visible_library_snapshot(&lib);
+
+        let error = import_detailed(&lib, &source).unwrap_err().to_string();
+        assert!(error.contains("timestamp exhausted"), "{error}");
+        assert_eq!(visible_library_snapshot(&lib), before);
+        assert_no_import_residue(&lib);
+    }
+
+    #[test]
+    fn manager_sidecar_serialization_is_capped_before_any_file_is_published() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staging = tmp.path().join("staging");
+        fs::create_dir(&staging).unwrap();
+        let secured = open_directory_nofollow(&staging, "bounded sidecar test").unwrap();
+        let sidecar = LibrarySidecar {
+            entry: ModEntryMeta {
+                id: "bounded".into(),
+                kind: ModKind::ForeignPak,
+                name: "x".repeat(1_024),
+                version: String::new(),
+                author: String::new(),
+                imported_at: "2026-01-01T00:00:00.000000Z".into(),
+                source: "bounded_P.pak".into(),
+                components: Vec::new(),
+            },
+            manager: None,
+        };
+
+        let error = write_manager_sidecar(&secured, &sidecar, 128)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("serialization exceeds"), "{error}");
+        assert!(!staging.join(META_FILE).exists());
+    }
+
+    #[test]
+    fn equal_corrupt_pak_and_iostore_inputs_rebind_and_remain_opaque() {
+        for kind in ["pak", "iostore"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let lib = tmp.path().join("lib");
+            let a = tmp.path().join("a");
+            let b = tmp.path().join("b");
+            fs::create_dir(&a).unwrap();
+            fs::create_dir(&b).unwrap();
+            if kind == "pak" {
+                fs::write(a.join("broken_P.pak"), b"not a pak").unwrap();
+                fs::write(b.join("broken_P.pak"), b"not a pak").unwrap();
+            } else {
+                for extension in ["utoc", "ucas", "pak"] {
+                    fs::write(a.join(format!("broken.{extension}")), b"not iostore").unwrap();
+                    fs::write(b.join(format!("broken.{extension}")), b"not iostore").unwrap();
+                }
+            }
+            let first = import_detailed(&lib, &a).unwrap();
+            assert!(first.entry.components.iter().all(|component| {
+                component.footprint_coverage() == FootprintCoverage::Opaque
+                    || matches!(component, ComponentInfo::Triplet { targets, .. } if targets.is_empty())
+            }));
+            let moved = import_detailed(&lib, &b).unwrap();
+            assert_eq!(moved.entry.id, first.entry.id);
+            assert_eq!(moved.matched_by, ImportMatchedBy::Content);
+            assert_eq!(list(&lib).unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn process_shared_library_lock_serializes_equal_parallel_imports() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let a_dir = tmp.path().join("a");
+        let b_dir = tmp.path().join("b");
+        fs::create_dir(&a_dir).unwrap();
+        fs::create_dir(&b_dir).unwrap();
+        let a = a_dir.join("same_P.pak");
+        let b = b_dir.join("same_P.pak");
+        fs::write(&a, b"parallel identical").unwrap();
+        fs::write(&b, b"parallel identical").unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let mut workers = Vec::new();
+        for source in [a, b] {
+            let library = lib.clone();
+            let barrier = barrier.clone();
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                import_detailed(&library, &source).unwrap()
+            }));
+        }
+        barrier.wait();
+        let outcomes: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        assert_eq!(outcomes[0].entry.id, outcomes[1].entry.id);
+        assert_eq!(list(&lib).unwrap().len(), 1);
+        assert_no_import_residue(&lib);
+    }
+
+    #[test]
+    #[ignore = "child-process worker; invoked explicitly by cross-process lock tests"]
+    fn library_lock_child_worker() {
+        let library = PathBuf::from(std::env::var_os("GORE_TEST_CHILD_LIBRARY").unwrap());
+        match std::env::var("GORE_TEST_CHILD_MODE").unwrap().as_str() {
+            "lock" => {
+                fs::create_dir_all(&library).unwrap();
+                let _guard = library_mutation_lock(&library).unwrap();
+            }
+            "import" => {
+                let source = PathBuf::from(std::env::var_os("GORE_TEST_CHILD_SOURCE").unwrap());
+                let result = PathBuf::from(std::env::var_os("GORE_TEST_CHILD_RESULT").unwrap());
+                let outcome = import_detailed(&library, &source).unwrap();
+                fs::write(result, outcome.entry.id).unwrap();
+            }
+            mode => panic!("unknown child worker mode {mode:?}"),
+        }
+    }
+
+    fn spawn_library_child(
+        library: &Path,
+        mode: &str,
+        marker: &Path,
+        hold_ms: u64,
+        source: Option<&Path>,
+        result: Option<&Path>,
+    ) -> std::process::Child {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .arg("library_lock_child_worker")
+            .arg("--ignored")
+            .arg("--nocapture")
+            .env("GORE_TEST_CHILD_LIBRARY", library)
+            .env("GORE_TEST_CHILD_MODE", mode)
+            .env(LIBRARY_LOCK_MARKER_ENV, marker)
+            .env(LIBRARY_LOCK_HOLD_MS_ENV, hold_ms.to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped());
+        if let Some(source) = source {
+            command.env("GORE_TEST_CHILD_SOURCE", source);
+        }
+        if let Some(result) = result {
+            command.env("GORE_TEST_CHILD_RESULT", result);
+        }
+        command.spawn().unwrap()
+    }
+
+    fn wait_for_test_path(path: &Path) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !path.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for {}",
+                path.display()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    fn assert_child_success(child: std::process::Child) {
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "child failed with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn kernel_library_lock_blocks_other_process_and_is_released_by_crash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library = tmp.path().join("library");
+        let marker_a = tmp.path().join("locked-a");
+        let marker_b = tmp.path().join("locked-b");
+        let mut first = spawn_library_child(&library, "lock", &marker_a, 60_000, None, None);
+        wait_for_test_path(&marker_a);
+        let mut second = spawn_library_child(&library, "lock", &marker_b, 0, None, None);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            !marker_b.exists(),
+            "second process acquired a held library lock"
+        );
+        assert!(
+            second.try_wait().unwrap().is_none(),
+            "second process did not block"
+        );
+
+        first.kill().unwrap();
+        first.wait().unwrap();
+        assert_child_success(second);
+        assert!(marker_b.exists());
+        #[cfg(windows)]
+        assert!(library.join(".gore-manager-library.lock").is_file());
+        #[cfg(unix)]
+        assert!(!library.join(".gore-manager-library.lock").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn kernel_library_lock_rejects_a_non_regular_persistent_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library = tmp.path().join("library");
+        fs::create_dir(&library).unwrap();
+        fs::create_dir(library.join(".gore-manager-library.lock")).unwrap();
+
+        let error = match library_mutation_lock(&library) {
+            Ok(_) => panic!("directory lock path was accepted"),
+            Err(error) => error.to_string(),
+        };
+        assert!(
+            error.contains("mutation lock") || error.contains("Access is denied"),
+            "{error}"
+        );
+        assert!(library.join(".gore-manager-library.lock").is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_lock_owns_the_directory_inode_and_creates_no_replaceable_lockfile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library = tmp.path().join("library");
+        fs::create_dir(&library).unwrap();
+        let guard = library_mutation_lock(&library).unwrap();
+        assert_eq!(
+            guard.open_library().unwrap().identity(),
+            guard.os.identity()
+        );
+        assert!(!library.join(".gore-manager-library.lock").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_root_swap_never_redirects_import_into_the_unlocked_replacement_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let configured = tmp.path().join("library");
+        let retained = tmp.path().join("retained-library");
+        let source = tmp.path().join("root-swap_P.pak");
+        fs::write(&source, b"root swap bytes").unwrap();
+        let configured_for_hook = configured.clone();
+        let retained_for_hook = retained.clone();
+        inject_library_root_swap(move |_locked_path| {
+            fs::rename(&configured_for_hook, &retained_for_hook).unwrap();
+            fs::create_dir(&configured_for_hook).unwrap();
+        });
+
+        let outcome = import_detailed(&configured, &source).unwrap();
+        assert!(retained.join(&outcome.entry.id).is_dir());
+        assert_eq!(fs::read_dir(&configured).unwrap().count(), 0);
+        assert!(!configured.join(&outcome.entry.id).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_root_swap_failure_cleans_staging_through_the_retained_inode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let configured = tmp.path().join("library");
+        let retained = tmp.path().join("retained-library");
+        let source = tmp.path().join("root-swap-failure_P.pak");
+        fs::write(&source, b"root swap failure bytes").unwrap();
+        let configured_for_hook = configured.clone();
+        let retained_for_hook = retained.clone();
+        inject_library_root_swap(move |_locked_path| {
+            fs::rename(&configured_for_hook, &retained_for_hook).unwrap();
+            fs::create_dir(&configured_for_hook).unwrap();
+        });
+        inject_prepublish_failure(ModError::Other(
+            "injected failure after retained-root binding".into(),
+        ));
+
+        let error = import_detailed(&configured, &source)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("injected failure"), "{error}");
+        assert_eq!(fs::read_dir(&configured).unwrap().count(), 0);
+        assert!(
+            fs::read_dir(&retained)
+                .unwrap()
+                .filter_map(Result::ok)
+                .all(|entry| !entry.file_name().to_string_lossy().starts_with(".staging-")),
+            "retained library inode kept failed staging residue"
+        );
+    }
+
+    #[test]
+    fn equal_content_imports_from_two_processes_publish_one_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library = tmp.path().join("library");
+        let source_a_dir = tmp.path().join("a");
+        let source_b_dir = tmp.path().join("b");
+        fs::create_dir(&source_a_dir).unwrap();
+        fs::create_dir(&source_b_dir).unwrap();
+        let source_a = source_a_dir.join("same_P.pak");
+        let source_b = source_b_dir.join("same_P.pak");
+        fs::write(&source_a, b"equal child-process bytes").unwrap();
+        fs::write(&source_b, b"equal child-process bytes").unwrap();
+        let marker_a = tmp.path().join("import-locked-a");
+        let marker_b = tmp.path().join("import-locked-b");
+        let result_a = tmp.path().join("result-a");
+        let result_b = tmp.path().join("result-b");
+
+        let first = spawn_library_child(
+            &library,
+            "import",
+            &marker_a,
+            1_500,
+            Some(&source_a),
+            Some(&result_a),
+        );
+        wait_for_test_path(&marker_a);
+        let mut second = spawn_library_child(
+            &library,
+            "import",
+            &marker_b,
+            0,
+            Some(&source_b),
+            Some(&result_b),
+        );
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            !marker_b.exists(),
+            "second import bypassed the held kernel lock"
+        );
+        assert!(
+            second.try_wait().unwrap().is_none(),
+            "second import did not block"
+        );
+
+        assert_child_success(first);
+        assert_child_success(second);
+        assert_eq!(
+            fs::read_to_string(&result_a).unwrap(),
+            fs::read_to_string(&result_b).unwrap()
+        );
+        assert_eq!(list(&library).unwrap().len(), 1);
+        assert_no_import_residue(&library);
+    }
+
+    #[test]
+    fn normalized_tree_hash_enforces_depth_entry_and_byte_ceilings() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let entries = tmp.path().join("entries");
+        fs::create_dir(&entries).unwrap();
+        fs::write(entries.join("a.bin"), b"a").unwrap();
+        fs::write(entries.join("b.bin"), b"b").unwrap();
+        let error = hash_import_tree(
+            &entries,
+            ImportLimits {
+                max_zip_entries: 1,
+                ..DEFAULT_IMPORT_LIMITS
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("entry count limit"), "{error}");
+
+        let bytes = tmp.path().join("bytes");
+        fs::create_dir(&bytes).unwrap();
+        fs::write(bytes.join("large.bin"), b"ab").unwrap();
+        let error = hash_import_tree(
+            &bytes,
+            ImportLimits {
+                max_zip_entry_uncompressed_bytes: 1,
+                max_zip_total_uncompressed_bytes: 1,
+                ..DEFAULT_IMPORT_LIMITS
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("file bytes limit"), "{error}");
+
+        let depth = tmp.path().join("depth");
+        fs::create_dir_all(depth.join("nested")).unwrap();
+        fs::write(depth.join("nested").join("file.bin"), b"x").unwrap();
+        let error = hash_import_tree(
+            &depth,
+            ImportLimits {
+                max_directory_depth: 0,
+                ..DEFAULT_IMPORT_LIMITS
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("nesting depth limit"), "{error}");
+    }
+
+    #[test]
+    fn normalized_tree_hash_orders_globally_and_reserves_every_root_sidecar_spelling() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tree = tmp.path().join("tree");
+        fs::create_dir_all(tree.join("a")).unwrap();
+        fs::write(tree.join("a.txt"), b"top").unwrap();
+        fs::write(tree.join("a").join("z.bin"), b"nested").unwrap();
+
+        let mut expected = Sha256::new();
+        expected.update(IMPORT_TREE_HASH_DOMAIN);
+        hash_tree_record(&mut expected, b'd', "a", None);
+        hash_tree_record(&mut expected, b'f', "a.txt", Some(3));
+        expected.update(b"top");
+        hash_tree_record(&mut expected, b'f', "a/z.bin", Some(6));
+        expected.update(b"nested");
+        let expected = digest_hex(expected.finalize().into());
+
+        assert_eq!(
+            hash_import_tree(&tree, DEFAULT_IMPORT_LIMITS).unwrap(),
+            expected
+        );
+        fs::write(tree.join(META_FILE), b"private metadata is not payload").unwrap();
+        let error = hash_import_tree(&tree, DEFAULT_IMPORT_LIMITS)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("reserved manager-sidecar"), "{error}");
+        let secured = open_directory_nofollow(&tree, "test manager-library entry").unwrap();
+        assert_eq!(
+            hash_secure_import_tree(&secured, DEFAULT_IMPORT_LIMITS, true).unwrap(),
+            expected
+        );
+
+        fs::remove_file(tree.join(META_FILE)).unwrap();
+        fs::write(
+            tree.join("GORE-MANAGER-META.JSON"),
+            b"case-variant metadata",
+        )
+        .unwrap();
+        for allow_exact in [false, true] {
+            let secured = open_directory_nofollow(&tree, "test reserved-name tree").unwrap();
+            let error = hash_secure_import_tree(&secured, DEFAULT_IMPORT_LIMITS, allow_exact)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("reserved manager-sidecar"), "{error}");
+        }
+    }
+
+    #[test]
+    fn external_import_rejects_exact_and_case_variant_manager_sidecar_names() {
+        for reserved in [META_FILE, "GORE-MANAGER-META.JSON"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let library = tmp.path().join("library");
+            let source = tmp.path().join("source");
+            fs::create_dir(&source).unwrap();
+            fs::write(source.join("opaque_P.pak"), b"opaque bytes").unwrap();
+            fs::write(source.join(reserved), b"caller-controlled sidecar").unwrap();
+
+            let error = import_detailed(&library, &source).unwrap_err().to_string();
+            assert!(error.contains("reserved manager-sidecar"), "{error}");
+            assert!(list(&library).unwrap().is_empty());
+            assert_no_import_residue(&library);
+        }
+    }
+
+    #[test]
+    fn zip_preflight_uses_windows_uppercase_identity_for_final_sigma() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library = tmp.path().join("library");
+        let archive = tmp.path().join("sigma.zip");
+        zip_entries(
+            &archive,
+            &[
+                ("Σ_P.pak", b"first", zip::CompressionMethod::Stored),
+                ("ς_P.pak", b"second", zip::CompressionMethod::Stored),
+            ],
+        );
+
+        let error = import_detailed(&library, &archive).unwrap_err().to_string();
+        assert!(error.contains("portable extraction path"), "{error}");
+        assert!(list(&library).unwrap().is_empty());
+        assert_no_import_residue(&library);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn folder_tree_rejects_final_sigma_collision_and_long_s_sidecar_alias() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sigma_library = tmp.path().join("sigma-library");
+        let sigma_source = tmp.path().join("sigma-source");
+        fs::create_dir(&sigma_source).unwrap();
+        fs::write(sigma_source.join("Σ_P.pak"), b"first").unwrap();
+        fs::write(sigma_source.join("ς_P.pak"), b"second").unwrap();
+        import_detailed(&sigma_library, &sigma_source).unwrap_err();
+        assert_no_import_residue(&sigma_library);
+
+        let alias_library = tmp.path().join("alias-library");
+        let alias_source = tmp.path().join("alias-source");
+        fs::create_dir(&alias_source).unwrap();
+        fs::write(alias_source.join("opaque_P.pak"), b"opaque").unwrap();
+        fs::write(
+            alias_source.join("gore-manager-meta.jſon"),
+            b"caller-controlled alias",
+        )
+        .unwrap();
+        let error = import_detailed(&alias_library, &alias_source)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("reserved manager-sidecar"), "{error}");
+        assert_no_import_residue(&alias_library);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn source_identity_normalizes_windows_case_separators_and_verbatim_prefix() {
+        assert_eq!(
+            hash_normalized_source_path(Path::new(r"\\?\C:\Mods\Example.ZIP")),
+            hash_normalized_source_path(Path::new("c:/mods/example.zip"))
+        );
+        assert_eq!(
+            hash_normalized_source_path(Path::new(r"\\?\UNC\Server\Share\Mod")),
+            hash_normalized_source_path(Path::new(r"\\server\share\mod"))
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[cfg_attr(
+        windows,
+        ignore = "requires Windows symbolic-link privilege; run explicitly on a privileged worker"
+    )]
+    #[test]
+    fn normalized_tree_hash_rejects_links_without_following_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tree = tmp.path().join("tree");
+        fs::create_dir(&tree).unwrap();
+        let outside = tmp.path().join("outside.bin");
+        fs::write(&outside, b"outside").unwrap();
+        assert!(make_file_link(&outside, &tree.join("linked.bin")));
+        let error = hash_import_tree(&tree, DEFAULT_IMPORT_LIMITS)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("symbolic link")
+                || error.contains("reparse point")
+                || error.contains("without following"),
+            "{error}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normalized_tree_hash_rejects_special_files_without_blocking() {
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let tree = tmp.path().join("tree");
+        fs::create_dir(&tree).unwrap();
+        let fifo = tree.join("payload.pipe");
+        let fifo_name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
+        let error = hash_import_tree(&tree, DEFAULT_IMPORT_LIMITS)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("neither a regular file nor directory"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn startup_recovery_restores_an_entry_interrupted_after_move_aside() {
         let tmp = tempfile::tempdir().unwrap();
         let lib = tmp.path().join("lib");
@@ -4934,7 +9533,7 @@ mod tests {
         let meta = import(&lib, &source).unwrap();
         let entry = lib.join(&meta.id);
 
-        let transaction = ReplacementTransaction::begin(&lib, &meta.id).unwrap();
+        let transaction = ReplacementTransaction::begin(&lib, &meta.id, None).unwrap();
         fs::rename(&entry, transaction.backup()).unwrap();
         sync_replacement_directory(&lib).unwrap();
         transaction.mark(ReplacementPhase::PreviousMoved).unwrap();
@@ -4949,6 +9548,25 @@ mod tests {
         assert_eq!(list(&lib).unwrap(), vec![meta]);
         assert_eq!(fs::read(entry.join("old_P.pak")).unwrap(), b"old payload");
         assert!(!transaction.root.exists());
+    }
+
+    #[test]
+    fn startup_recovery_never_guesses_through_a_quarantined_seal_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let source = tmp.path().join("old_P.pak");
+        fs::write(&source, b"old payload").unwrap();
+        let meta = import(&lib, &source).unwrap();
+        let entry = lib.join(&meta.id);
+        let transaction = ReplacementTransaction::begin(&lib, &meta.id, None).unwrap();
+        fs::rename(&entry, transaction.backup()).unwrap();
+        transaction.mark(ReplacementPhase::Quarantined).unwrap();
+
+        let error = list(&lib).unwrap_err().to_string();
+        assert!(error.contains("quarantined"), "{error}");
+        assert!(!entry.exists());
+        assert!(transaction.backup().is_dir());
+        assert!(transaction.root.is_dir());
     }
 
     #[test]
@@ -4971,7 +9589,7 @@ mod tests {
         .unwrap();
         fs::write(staging.join("new_P.pak"), b"new payload").unwrap();
 
-        let transaction = ReplacementTransaction::begin(&lib, &old_meta.id).unwrap();
+        let transaction = ReplacementTransaction::begin(&lib, &old_meta.id, None).unwrap();
         fs::rename(&entry, transaction.backup()).unwrap();
         transaction.mark(ReplacementPhase::PreviousMoved).unwrap();
         fs::rename(&staging, &entry).unwrap();
@@ -4985,12 +9603,262 @@ mod tests {
     }
 
     #[test]
+    fn format_2_recovery_reconstructs_promotion_after_partial_backup_or_marker_cleanup() {
+        for partial_backup in [true, false] {
+            let tmp = tempfile::tempdir().unwrap();
+            let lib = tmp.path().join("lib");
+            let (_previous, promoted, entry, transaction) = prepare_format_2_promoted_update(
+                tmp.path(),
+                &lib,
+                if partial_backup {
+                    "partial"
+                } else {
+                    "markerless"
+                },
+            );
+            transaction.mark(ReplacementPhase::Promoted).unwrap();
+            if partial_backup {
+                let payload = fs::read_dir(transaction.backup())
+                    .unwrap()
+                    .map(Result::unwrap)
+                    .find(|entry| entry.file_name() != META_FILE)
+                    .unwrap();
+                fs::remove_file(payload.path()).unwrap();
+            } else {
+                fs::remove_dir_all(transaction.backup()).unwrap();
+                for phase in [ReplacementPhase::PreviousMoved, ReplacementPhase::Promoted] {
+                    fs::remove_file(transaction.root.join(phase.marker().unwrap())).unwrap();
+                }
+            }
+
+            assert_eq!(list(&lib).unwrap(), vec![promoted]);
+            assert_eq!(
+                fs::read(entry.join(if partial_backup {
+                    "partial_P.pak"
+                } else {
+                    "markerless_P.pak"
+                }))
+                .unwrap(),
+                b"verified promoted payload"
+            );
+            assert!(!transaction.root.exists());
+        }
+    }
+
+    #[test]
+    fn format_2_recovery_accepts_staged_live_after_previous_sidecar_cleanup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let (_previous, promoted, entry, transaction) =
+            prepare_format_2_promoted_update(tmp.path(), &lib, "sidecar-cleanup");
+        transaction.mark(ReplacementPhase::Promoted).unwrap();
+        fs::remove_file(transaction.backup().join(META_FILE)).unwrap();
+        let live_sidecar = fs::read(entry.join(META_FILE)).unwrap();
+        let live_payload = fs::read(entry.join("sidecar-cleanup_P.pak")).unwrap();
+
+        assert_eq!(list(&lib).unwrap(), vec![promoted]);
+        assert_eq!(fs::read(entry.join(META_FILE)).unwrap(), live_sidecar);
+        assert_eq!(
+            fs::read(entry.join("sidecar-cleanup_P.pak")).unwrap(),
+            live_payload
+        );
+        assert!(!transaction.backup().exists());
+        assert!(!transaction.root.exists());
+    }
+
+    #[test]
+    fn transient_recovery_seal_error_never_becomes_a_persistent_quarantine() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let (_previous, promoted, entry, transaction) =
+            prepare_format_2_promoted_update(tmp.path(), &lib, "transient");
+        inject_recovery_seal_failure();
+
+        let error = list(&lib).unwrap_err().to_string();
+        assert!(error.contains("transient recovery seal"), "{error}");
+        assert!(entry.is_dir());
+        assert!(transaction.backup().is_dir());
+        assert!(!transaction.quarantine().exists());
+        assert!(!transaction
+            .root
+            .join(ReplacementPhase::Quarantined.marker().unwrap())
+            .exists());
+
+        assert_eq!(list(&lib).unwrap(), vec![promoted]);
+        assert!(!transaction.root.exists());
+    }
+
+    #[test]
+    fn apply_quarantines_a_false_live_recovery_object_before_deploying_any_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let (previous, _promoted, entry, transaction) =
+            prepare_format_2_promoted_update(tmp.path(), &lib, "apply-recovery");
+        fs::write(
+            entry.join("apply-recovery_P.pak"),
+            b"unverified false live bytes",
+        )
+        .unwrap();
+        let game = tmp.path().join("game");
+        let mods = game.join("G1R/Content/Paks/~mods");
+        fs::create_dir_all(&mods).unwrap();
+        let loadout = crate::mgr::Loadout {
+            format: 1,
+            entries: vec![crate::mgr::LoadoutEntry {
+                id: previous.id.clone(),
+                enabled: true,
+            }],
+        };
+
+        let error = crate::mgr::apply::apply_loadout(&game, &lib, &loadout)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("ambiguous replacement recovery"), "{error}");
+        assert_eq!(
+            fs::read(entry.join("apply-recovery_P.pak")).unwrap(),
+            b"verified previous payload"
+        );
+        assert_eq!(
+            fs::read(transaction.quarantine().join("apply-recovery_P.pak")).unwrap(),
+            b"unverified false live bytes"
+        );
+        assert!(fs::read_dir(&mods).unwrap().next().is_none());
+        assert!(!crate::record_path(&game).exists());
+    }
+
+    #[test]
+    fn malformed_format_2_state_cannot_downgrade_to_presence_based_recovery() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let source = tmp.path().join("state_P.pak");
+        fs::write(&source, b"state payload").unwrap();
+        let meta = import(&lib, &source).unwrap();
+        let before = visible_library_snapshot(&lib);
+        let transaction = ReplacementTransaction::begin(&lib, &meta.id, None).unwrap();
+        assert_eq!(transaction.state.format, 1);
+        let malformed = ReplacementState {
+            format: 2,
+            id: meta.id.clone(),
+            phase: ReplacementPhase::Promoted,
+            expected_previous: None,
+            expected_staged: None,
+            verification_pending: false,
+        };
+        fs::write(
+            transaction.root.join(REPLACEMENT_STATE_FILE),
+            serde_json::to_vec(&malformed).unwrap(),
+        )
+        .unwrap();
+
+        let error = list(&lib).unwrap_err().to_string();
+        assert!(error.contains("invalid replacement state"), "{error}");
+        assert_eq!(visible_library_snapshot(&lib), before);
+        assert!(transaction.root.is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_recovery_discards_only_an_unpublished_partial_state_temp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        fs::create_dir(&lib).unwrap();
+        let transaction = lib.join(format!("{REPLACEMENT_PREFIX}partial-state"));
+        fs::create_dir(&transaction).unwrap();
+        let pending = replacement_atomic_temp_name(REPLACEMENT_STATE_FILE);
+        fs::write(transaction.join(&pending), b"{\"format\":2").unwrap();
+
+        assert!(list(&lib).unwrap().is_empty());
+        assert!(!transaction.exists());
+    }
+
+    #[test]
+    fn format_2_recovery_recognizes_a_verified_previous_entry_before_or_after_restore_marker() {
+        for restored_marker in [false, true] {
+            let tmp = tempfile::tempdir().unwrap();
+            let lib = tmp.path().join("lib");
+            let source = tmp.path().join("old_P.pak");
+            fs::write(&source, b"verified previous payload").unwrap();
+            let meta = import(&lib, &source).unwrap();
+            let entry = lib.join(&meta.id);
+            let previous = seal_import_path(&entry, DEFAULT_IMPORT_LIMITS).unwrap();
+            let mut staged = previous.clone();
+            staged.tree_sha256 = "0".repeat(64);
+            let expectation = PublishExpectation {
+                staged,
+                current: Some(previous),
+                limits: DEFAULT_IMPORT_LIMITS,
+            };
+            let transaction =
+                ReplacementTransaction::begin(&lib, &meta.id, Some(&expectation)).unwrap();
+            if restored_marker {
+                transaction.mark(ReplacementPhase::Restored).unwrap();
+            }
+
+            // This is either a crash immediately after the verification-pending journal became
+            // durable, or immediately after rollback restored the old object. In both cases the
+            // live seal proves that no promotion occurred and recovery may remove only the journal.
+            assert_eq!(list(&lib).unwrap(), vec![meta.clone()]);
+            assert_eq!(
+                fs::read(entry.join("old_P.pak")).unwrap(),
+                b"verified previous payload"
+            );
+            assert!(!transaction.root.exists());
+        }
+    }
+
+    #[test]
+    fn format_2_recovery_cleans_an_empty_pre_rename_create_journal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        fs::create_dir(&lib).unwrap();
+        let expectation = PublishExpectation {
+            staged: EntryPublishSeal {
+                root_identity: open_directory_nofollow(&lib, "test library")
+                    .unwrap()
+                    .identity(),
+                tree_sha256: "1".repeat(64),
+                sidecar_sha256: "2".repeat(64),
+            },
+            current: None,
+            limits: DEFAULT_IMPORT_LIMITS,
+        };
+        let transaction =
+            ReplacementTransaction::begin(&lib, "new-entry", Some(&expectation)).unwrap();
+
+        // A create writes this journal before the first rename. There is no payload object to
+        // recover or quarantine, so startup may remove only the empty transaction metadata.
+        assert!(list(&lib).unwrap().is_empty());
+        assert!(!transaction.root.exists());
+    }
+
+    #[test]
+    fn failed_previous_moved_marker_rolls_back_and_cleans_format_2_journal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let source = tmp.path().join("rollback_P.pak");
+        fs::write(&source, b"verified previous payload").unwrap();
+        let first = import_detailed(&lib, &source).unwrap();
+        let before = visible_library_snapshot(&lib);
+        fs::write(&source, b"new staged payload").unwrap();
+        inject_replacement_mark_failure(ReplacementPhase::PreviousMoved);
+
+        let error = import_detailed(&lib, &source).unwrap_err().to_string();
+        assert!(error.contains("replacement-marker failure"), "{error}");
+        assert_eq!(visible_library_snapshot(&lib), before);
+        assert_eq!(
+            fs::read(lib.join(&first.entry.id).join("rollback_P.pak")).unwrap(),
+            b"verified previous payload"
+        );
+        assert_no_import_residue(&lib);
+    }
+
+    #[test]
     fn replacement_names_are_unique_and_never_clear_an_existing_transaction() {
         let tmp = tempfile::tempdir().unwrap();
         let lib = tmp.path().join("lib");
         fs::create_dir(&lib).unwrap();
-        let first = ReplacementTransaction::begin(&lib, "entry-a").unwrap();
-        let second = ReplacementTransaction::begin(&lib, "entry-a").unwrap();
+        let first = ReplacementTransaction::begin(&lib, "entry-a", None).unwrap();
+        let second = ReplacementTransaction::begin(&lib, "entry-a", None).unwrap();
         assert_ne!(first.root, second.root);
         assert!(first.root.is_dir() && second.root.is_dir());
         first.cleanup().unwrap();
@@ -5040,7 +9908,7 @@ mod tests {
                 .file_name()
                 .to_string_lossy()
                 .starts_with(REPLACEMENT_PREFIX)));
-        recover_interrupted_replacements(&lib).unwrap();
+        recover_interrupted_replacements_for_test(&lib).unwrap();
         assert_eq!(fs::read(entry.join("payload.bin")).unwrap(), b"old");
     }
 
@@ -5129,7 +9997,7 @@ mod tests {
             "the old entry must remain recoverable"
         );
 
-        recover_interrupted_replacements(&lib).unwrap();
+        recover_interrupted_replacements_for_test(&lib).unwrap();
         assert_eq!(fs::read(entry.join("payload.bin")).unwrap(), b"old");
         assert!(fs::read_dir(&lib)
             .unwrap()
@@ -5185,51 +10053,51 @@ mod tests {
         assert!(!staging.exists());
     }
 
-    /// [import 11b] Two mods that share a display NAME but come from DIFFERENT sources must get
-    /// distinct ids and coexist — otherwise the old name-only id let one silently clobber the
-    /// other (data loss). A goremod bundle's name comes from its manifest, so importing the SAME
-    /// manifest-name bundle once as a dir ("Target Probe") and once as a differently-named zip
-    /// ("other.zip") yields identical display names but different `source`s → different ids.
+    /// The same normalized bundle tree moved from a folder to ZIP keeps its entry identity.
     #[test]
-    fn different_source_same_name_coexist() {
+    fn moved_folder_to_zip_rebinds_same_content_identity() {
         let tmp = tempfile::tempdir().unwrap();
         let lib = tmp.path().join("lib");
         let bdir = mk_goremod_bundle(tmp.path()); // manifest name "Target Probe"
 
-        let from_dir = import(&lib, &bdir).unwrap();
+        let from_dir = import_detailed(&lib, &bdir).unwrap();
         let zp = tmp.path().join("other.zip");
         zip_dir_with_prefix(&bdir, "", &zp);
-        let from_zip = import(&lib, &zp).unwrap();
+        let from_zip = import_detailed(&lib, &zp).unwrap();
 
         assert_eq!(
-            from_dir.name, from_zip.name,
+            from_dir.entry.name, from_zip.entry.name,
             "precondition: same display name"
         );
         assert_ne!(
-            from_dir.source, from_zip.source,
+            from_dir.entry.source, from_zip.entry.source,
             "precondition: different source"
         );
-        assert_ne!(
-            from_dir.id, from_zip.id,
-            "distinct sources must not collide into one id"
+        assert_eq!(
+            from_dir.entry.id, from_zip.entry.id,
+            "the same normalized tree moved from a folder to ZIP keeps its id"
         );
-        assert_eq!(list(&lib).unwrap().len(), 2, "both must coexist");
+        assert_eq!(from_zip.disposition, ImportDisposition::Updated);
+        assert_eq!(from_zip.matched_by, ImportMatchedBy::Content);
+        assert_eq!(
+            from_dir.entry.fingerprint(),
+            from_zip.entry.fingerprint(),
+            "pure source rebind preserves deployment identity"
+        );
+        assert_eq!(list(&lib).unwrap().len(), 1);
     }
 
-    /// [import 11c] The nastier collision the name-only id missed: two DIFFERENT mods that share
-    /// both a display name AND a bare filename but live in different directories (`a/mod` vs
-    /// `b/mod`). Only the FULL source path disambiguates them; a filename-only hash would give
-    /// both the same id and silently clobber the first. Must yield distinct ids and coexist.
+    /// Same display/basename but different normalized bytes remain separate entries.
     #[test]
     fn same_filename_different_dir_coexist() {
         let tmp = tempfile::tempdir().unwrap();
         let lib = tmp.path().join("lib");
         let a = tmp.path().join("a").join("mod");
         let b = tmp.path().join("b").join("mod");
-        for d in [&a, &b] {
+        for (d, bytes) in [(&a, b"alpha".as_slice()), (&b, b"bravo".as_slice())] {
             fs::create_dir_all(d).unwrap();
-            fs::write(d.join("bar.utoc"), b"junk").unwrap();
-            fs::write(d.join("bar.ucas"), b"junk").unwrap();
+            fs::write(d.join("bar.utoc"), bytes).unwrap();
+            fs::write(d.join("bar.ucas"), bytes).unwrap();
         }
         let from_a = import(&lib, &a).unwrap();
         let from_b = import(&lib, &b).unwrap();
@@ -5390,8 +10258,8 @@ mod tests {
             format_utc(1_767_225_600, 123_456),
             "2026-01-01T00:00:00.123456Z"
         );
-        // Same second, different microseconds → distinct timestamps, so an entry re-imported within
-        // the same second still gets a fingerprint-distinguishing `imported_at`.
+        // Same second, different microseconds → distinct timestamps, so a changed-tree re-import
+        // can still get a fingerprint-distinguishing `imported_at`.
         assert_ne!(
             format_utc(1_767_225_600, 100),
             format_utc(1_767_225_600, 200)

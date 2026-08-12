@@ -29,6 +29,77 @@ BuildID 24539464 a triplet produced by `gore asset pack` — not a GORE bundle,
 with no `gore-mod.json` anywhere in it — was imported, classified as a foreign
 triplet, and applied with a load-order filename prefix.
 
+### Stable import identity and native result
+
+Re-importing the same bound source resolves to its existing library entry:
+changed bytes update it, while an unchanged tree is a no-op. Moving an
+unchanged source — including moving between a folder and an equivalent ZIP —
+rebinds that entry instead of creating a duplicate. The manager verifies a
+candidate's current library tree before using its private identity hints; it
+does not expose those hints as public entry metadata or use them as a deployment
+fingerprint. For a source whose root is itself a UE4SS mod (`Scripts/main.lua`),
+the content identity normalizes the source-name-derived storage wrapper while
+the publication seal still binds its exact physical name. Ambiguous or
+conflicting verified matches are refused before the
+loadout is changed. One kernel lock serializes recovery, identity decisions,
+publication, listing, and removal across cooperating processes. Windows owns a
+byte range in the persistent `.gore-manager-library.lock` file; Unix instead
+locks the retained canonical library-directory inode and creates no lock file.
+Lock ownership, never the existence of a file, is authoritative, so a crash
+releases it without leaving a stale blocker. Unix recovery and namespace
+mutation stay relative to that retained directory descriptor even if the
+configured pathname is renamed. Windows revalidates the root FileId before
+path-based work and the publication journal revalidates payload seals. These
+mechanisms coordinate GORE processes; neither platform claims an access-control
+boundary against a same-user process deliberately bypassing the manager lock
+(including Windows POSIX-style replacement operations).
+
+Before its first publication rename, the manager durably journals the expected
+staged seal and, for an update, the expected previous seal. Recovery first
+re-seals the live object. An exact staged seal reconstructs promotion even when
+cleanup already removed part of the previous tree. A remaining backup is sealed
+only when needed to decide restore or quarantine. Each seal binds the
+directory's filesystem identity, normalized payload-tree hash, and raw sidecar
+hash. A mismatch remains in a dot-prefixed quarantine transaction instead of
+being exposed as a live entry or guessed through during recovery.
+
+Identity inspection is deliberately bounded. It validates every inspected
+public sidecar and re-hashes candidates selected by an entry id, source hint, or
+content hint. It does not globally re-hash readable hintless legacy entries or
+entries whose valid content hint is a negative match.
+
+The native `mgr_import` success object keeps the existing `entry` and adds two
+top-level string fields:
+
+```json
+{
+  "ok": true,
+  "entry": { "id": "..." },
+  "disposition": "created",
+  "matched_by": "none"
+}
+```
+
+`disposition` is exactly `created`, `updated`, or `unchanged`. `matched_by` is
+exactly `none`, `source`, `content`, or `entry_id`. Consumers that only read the
+existing `entry` object can ignore both additive fields.
+
+Two identity refusals have dedicated native codes. Duplicate verified content
+returns `IMPORT_DUPLICATE_AMBIGUOUS` with at most two ids in
+`error.details.candidate_ids`; a split source/entry-id match and content match
+returns `IMPORT_IDENTITY_CONFLICT`. For example, its exact detail shape is
+`{"candidates":[{"id":"alpha","matched_by":["entry_id","source"]},{"id":"beta","matched_by":["content"]}]}`:
+at most two deterministic witnesses sorted by id, with one or more roles in
+`entry_id`, `source`, `content` order. The bounded witnesses are diagnostic, not
+an exhaustive candidate list. Other import parsing, archive, hashing, safety,
+and resource-limit failures retain the existing `IMPORT_FAILED` code.
+
+Library publication and loadout registration remain two filesystem steps. A
+successful library publication can therefore be followed by a loadout I/O
+error; callers must refresh the authoritative library/loadout state. The
+library lock does not claim a joint transaction or cross-process atomicity for
+the loadout. Identity refusals happen before publication and loadout activation.
+
 ### GORE bundle format gate
 
 Recognizing a root `gore-mod.json` commits import to the closed

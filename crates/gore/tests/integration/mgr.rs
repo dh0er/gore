@@ -90,6 +90,65 @@ fn import(library: &Path, loadout: &Path, bundle: &Path) -> String {
         .to_string()
 }
 
+#[test]
+fn mgr_import_keeps_prefix_and_reports_structured_success_outcome() {
+    let tmp = TempDir::new().unwrap();
+    let library = tmp.path().join("library");
+    let loadout = tmp.path().join("loadout.json");
+    let a_dir = tmp.path().join("a");
+    let b_dir = tmp.path().join("b");
+    std::fs::create_dir(&a_dir).unwrap();
+    std::fs::create_dir(&b_dir).unwrap();
+    let a = a_dir.join("same_P.pak");
+    let b = b_dir.join("same_P.pak");
+    std::fs::write(&a, b"opaque bytes").unwrap();
+    std::fs::write(&b, b"opaque bytes").unwrap();
+
+    let run = |source: &Path| {
+        let output = Command::cargo_bin("gore")
+            .unwrap()
+            .args([
+                "mgr",
+                "import",
+                source.to_str().unwrap(),
+                "--library",
+                library.to_str().unwrap(),
+                "--loadout",
+                loadout.to_str().unwrap(),
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        String::from_utf8(output).unwrap()
+    };
+    let id = |text: &str| {
+        text.lines()
+            .find(|line| line.starts_with("imported "))
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .to_owned()
+    };
+
+    let created = run(&a);
+    assert!(created.starts_with("imported "), "{created}");
+    assert!(created.contains("disposition=created"), "{created}");
+    assert!(created.contains("matched_by=none"), "{created}");
+
+    let unchanged = run(&a);
+    assert_eq!(id(&unchanged), id(&created));
+    assert!(unchanged.contains("disposition=unchanged"), "{unchanged}");
+    assert!(unchanged.contains("matched_by=source"), "{unchanged}");
+
+    let moved = run(&b);
+    assert_eq!(id(&moved), id(&created));
+    assert!(moved.contains("disposition=updated"), "{moved}");
+    assert!(moved.contains("matched_by=content"), "{moved}");
+}
+
 /// The whole loadout lifecycle with NO real game deploy. This is the always-run gate.
 #[test]
 fn mgr_import_list_enable_disable_order_analyze_status_reset() {

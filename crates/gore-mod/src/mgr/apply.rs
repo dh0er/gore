@@ -547,6 +547,9 @@ fn apply_loadout_with_limits(
     // Loadouts are persisted input. Validate ALL slots (including disabled ones) before the empty
     // branch can undeploy an active manager deployment.
     loadout.validate()?;
+    if loadout.entries.iter().any(|entry| entry.enabled) {
+        super::import::recover_library_for_read(library_dir)?;
+    }
 
     // (3) Load the enabled entries' metadata, remembering each one's 0-based slot among the
     //     ENABLED entries (drives per-mod `gm{idx:03}` naming / mount order).
@@ -2992,6 +2995,20 @@ mod tests {
         );
         assert_eq!(rec.managed_paks.len(), 1, "one managed pak recorded");
         assert!(rec.managed_paks[0].ends_with("zzz_gm000_alpha_P.pak"));
+    }
+
+    #[test]
+    fn apply_ignores_malformed_future_manager_private_metadata() {
+        let g = FakeGame::new();
+        let id = g.add_pak_mod("mod-a", "Alpha", "alpha_P", b"PAK-A");
+        let sidecar = g.lib.join(&id).join(META_FILE);
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+        value["_manager"] = serde_json::json!(["future", 2]);
+        fs::write(&sidecar, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+
+        apply_loadout(&g.root, &g.lib, &loadout(&[(&id, true)])).unwrap();
+        assert!(g.mods().join("zzz_gm000_alpha_P.pak").is_file());
     }
 
     /// A re-apply that fails while BUILDING the plan (a mod with an undecodable payload) must not
