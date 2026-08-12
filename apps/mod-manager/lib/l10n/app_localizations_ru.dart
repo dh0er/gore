@@ -165,6 +165,39 @@ class AppLocalizationsRu extends AppLocalizations {
   String get statusRecoveryRequired => 'Требуется восстановление';
 
   @override
+  String get statusDetailsOwnershipTitle => 'Записанные свидетельства владения';
+
+  @override
+  String get statusDetailsOwnershipDescription =>
+      'Пути из записи развёртывания Менеджера. Они не подтверждают, что эти пути существуют сейчас.';
+
+  @override
+  String get statusDetailsOwnershipLive => 'Заменённые файлы игры';
+
+  @override
+  String get statusDetailsOwnershipBackups => 'Резервные копии исходных файлов';
+
+  @override
+  String get statusDetailsOwnershipAdditive =>
+      'Добавленные pak-файлы и контейнеры';
+
+  @override
+  String get statusDetailsOwnershipUe4ss => 'Каталоги модов UE4SS';
+
+  @override
+  String get statusDetailsOwnershipRecovery =>
+      'Файлы и расположения восстановления';
+
+  @override
+  String get statusDetailsOwnershipEmpty =>
+      'В этой группе нет записанных путей.';
+
+  @override
+  String statusDetailsOwnershipShown(int shown, int total) {
+    return 'Показано $shown из $total записанных путей.';
+  }
+
+  @override
   String get appTitle => 'GORE Mod Manager';
 
   @override

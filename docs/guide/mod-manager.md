@@ -239,6 +239,24 @@ disabling a mod in the middle of the order safe.
 
 `reset` restores the pristine install.
 
+The Mod Manager app's deployment-details dialog can expand **Recorded ownership
+evidence** when the same validated deploy-record snapshot has the exact owner
+`manager`. It groups the recorded paths as replaced live files, pristine
+backups, additive pak/container files, UE4SS directories, and recovery
+files/holders. The section is absent for no deployment, Studio ownership, and
+unknown/future status. A Manager recovery record still shows the recovery group,
+including the validated deploy-record path, even when it names no other path.
+
+This is a bounded display projection, not another ownership or cleanup engine.
+Each group is stable and platform-path-key deduplicated, contains at most 128
+whole paths, admits at most 64 KiB of source-path UTF-8 bytes in total, and
+omits any individual path over 4096 bytes rather than shortening it. `total`
+counts unique validated candidates before those display caps, and the UI says
+when fewer paths are shown. The projection contains no content hashes, private
+identity values, existence checks, shared install-mutation lock, or new action.
+It reports what the validated record says; it does not prove that any named
+file or directory currently exists.
+
 ### Evidence boundary
 
 Applying, reordering, and resetting against an offline synthetic game root can

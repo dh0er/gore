@@ -380,6 +380,60 @@ abstract class AppLocalizations {
   /// **'Recovery required'**
   String get statusRecoveryRequired;
 
+  /// No description provided for @statusDetailsOwnershipTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Recorded ownership evidence'**
+  String get statusDetailsOwnershipTitle;
+
+  /// No description provided for @statusDetailsOwnershipDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Paths recorded in the Manager deploy record. They do not prove that those paths still exist.'**
+  String get statusDetailsOwnershipDescription;
+
+  /// No description provided for @statusDetailsOwnershipLive.
+  ///
+  /// In en, this message translates to:
+  /// **'Replaced game files'**
+  String get statusDetailsOwnershipLive;
+
+  /// No description provided for @statusDetailsOwnershipBackups.
+  ///
+  /// In en, this message translates to:
+  /// **'Pristine backups'**
+  String get statusDetailsOwnershipBackups;
+
+  /// No description provided for @statusDetailsOwnershipAdditive.
+  ///
+  /// In en, this message translates to:
+  /// **'Added pak and container files'**
+  String get statusDetailsOwnershipAdditive;
+
+  /// No description provided for @statusDetailsOwnershipUe4ss.
+  ///
+  /// In en, this message translates to:
+  /// **'UE4SS mod directories'**
+  String get statusDetailsOwnershipUe4ss;
+
+  /// No description provided for @statusDetailsOwnershipRecovery.
+  ///
+  /// In en, this message translates to:
+  /// **'Recovery files and holders'**
+  String get statusDetailsOwnershipRecovery;
+
+  /// No description provided for @statusDetailsOwnershipEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No paths recorded in this group.'**
+  String get statusDetailsOwnershipEmpty;
+
+  /// No description provided for @statusDetailsOwnershipShown.
+  ///
+  /// In en, this message translates to:
+  /// **'{shown} of {total} recorded paths shown.'**
+  String statusDetailsOwnershipShown(int shown, int total);
+
   /// No description provided for @appTitle.
   ///
   /// In en, this message translates to:

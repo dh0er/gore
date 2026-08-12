@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/diagnostic_text.dart';
 import '../../l10n/app_localizations.dart';
 import '../../library/domain/library_notifier.dart';
 import '../../library/domain/models.dart';
@@ -14,6 +15,7 @@ typedef StatusDetailsResult = ({
 
 const _lazyListThreshold = 50;
 const _lazyListHeight = 240.0;
+const _maxOwnedPathRunes = 4096;
 
 /// Whether current status authority (or its fail-closed fallback evidence)
 /// still says Studio owns [currentRoot]. A known non-Studio status always
@@ -122,6 +124,14 @@ class StatusDetailsDialog extends StatelessWidget {
         ],
         _ => [_paragraph(context, l10n.statusDetailsUnknownDescription)],
       });
+    }
+
+    final managerOwned = status?.managerOwned;
+    if (!studioActive && managerOwned != null) {
+      content.addAll([
+        const SizedBox(height: 16),
+        _managerOwnedExpansion(context, l10n, managerOwned),
+      ]);
     }
 
     final rootBoundError = currentRoot != null && state.gameRoot == currentRoot
@@ -289,6 +299,109 @@ class StatusDetailsDialog extends StatelessWidget {
       key: ValueKey('status-details-section-$keyName'),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: children,
+    );
+  }
+
+  Widget _managerOwnedExpansion(
+    BuildContext context,
+    AppLocalizations l10n,
+    ManagerOwnedDeploymentView owned,
+  ) {
+    return ExpansionTile(
+      key: const ValueKey('status-details-manager-owned'),
+      initiallyExpanded: false,
+      tilePadding: EdgeInsets.zero,
+      childrenPadding: const EdgeInsetsDirectional.only(
+        start: 16,
+        end: 8,
+        bottom: 8,
+      ),
+      leading: const Icon(Icons.inventory_2_outlined),
+      title: Text(l10n.statusDetailsOwnershipTitle),
+      subtitle: Text(l10n.statusDetailsOwnershipDescription),
+      children: [
+        _managerOwnedGroup(
+          context,
+          l10n,
+          keyName: 'owned-live',
+          title: l10n.statusDetailsOwnershipLive,
+          group: owned.live,
+        ),
+        const SizedBox(height: 16),
+        _managerOwnedGroup(
+          context,
+          l10n,
+          keyName: 'owned-backups',
+          title: l10n.statusDetailsOwnershipBackups,
+          group: owned.backups,
+        ),
+        const SizedBox(height: 16),
+        _managerOwnedGroup(
+          context,
+          l10n,
+          keyName: 'owned-additive',
+          title: l10n.statusDetailsOwnershipAdditive,
+          group: owned.additive,
+        ),
+        const SizedBox(height: 16),
+        _managerOwnedGroup(
+          context,
+          l10n,
+          keyName: 'owned-ue4ss',
+          title: l10n.statusDetailsOwnershipUe4ss,
+          group: owned.ue4ss,
+        ),
+        const SizedBox(height: 16),
+        _managerOwnedGroup(
+          context,
+          l10n,
+          keyName: 'owned-recovery',
+          title: l10n.statusDetailsOwnershipRecovery,
+          group: owned.recovery,
+        ),
+      ],
+    );
+  }
+
+  Widget _managerOwnedGroup(
+    BuildContext context,
+    AppLocalizations l10n, {
+    required String keyName,
+    required String title,
+    required ManagerOwnedPathGroupView group,
+  }) {
+    // Native never truncates a path: it omits paths that exceed its whole-item
+    // cap. Apply the shared diagnostic sanitizer here and likewise omit any
+    // impossible over-rune item instead of displaying a shortened path.
+    final values = <String>[];
+    for (final path in group.items) {
+      final sanitized = boundedDiagnosticText(path, _maxOwnedPathRunes);
+      if (!sanitized.truncated && sanitized.value != null) {
+        values.add(sanitized.value!);
+      }
+    }
+    final hidden = values.length < group.total;
+    return Column(
+      key: ValueKey('status-details-group-$keyName'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _stringListSection(
+          context,
+          keyName: keyName,
+          title: title,
+          values: values,
+          emptyText: l10n.statusDetailsOwnershipEmpty,
+          selectable: true,
+        ),
+        if (hidden) ...[
+          const SizedBox(height: 8),
+          Text(
+            l10n.statusDetailsOwnershipShown(values.length, group.total),
+            key: ValueKey('status-details-$keyName-truncated'),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ],
     );
   }
 

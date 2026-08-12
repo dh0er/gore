@@ -157,6 +157,36 @@ class AppLocalizationsJa extends AppLocalizations {
   String get statusRecoveryRequired => '復旧が必要';
 
   @override
+  String get statusDetailsOwnershipTitle => '記録された所有権の証拠';
+
+  @override
+  String get statusDetailsOwnershipDescription =>
+      'マネージャーのデプロイ記録に保存されたパスです。現在もそのパスが存在することを示すものではありません。';
+
+  @override
+  String get statusDetailsOwnershipLive => '置換されたゲームファイル';
+
+  @override
+  String get statusDetailsOwnershipBackups => '元ファイルのバックアップ';
+
+  @override
+  String get statusDetailsOwnershipAdditive => '追加された pak とコンテナファイル';
+
+  @override
+  String get statusDetailsOwnershipUe4ss => 'UE4SS Mod ディレクトリ';
+
+  @override
+  String get statusDetailsOwnershipRecovery => '復旧ファイルと保持場所';
+
+  @override
+  String get statusDetailsOwnershipEmpty => 'このグループに記録されたパスはありません。';
+
+  @override
+  String statusDetailsOwnershipShown(int shown, int total) {
+    return '記録された $total 件のパスのうち $shown 件を表示しています。';
+  }
+
+  @override
   String get appTitle => 'GORE Mod Manager';
 
   @override

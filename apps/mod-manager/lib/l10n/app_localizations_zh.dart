@@ -152,6 +152,36 @@ class AppLocalizationsZh extends AppLocalizations {
   String get statusRecoveryRequired => '需要恢复';
 
   @override
+  String get statusDetailsOwnershipTitle => '已记录的所有权证据';
+
+  @override
+  String get statusDetailsOwnershipDescription =>
+      '管理器部署记录中保存的路径。这不表示这些路径当前仍然存在。';
+
+  @override
+  String get statusDetailsOwnershipLive => '已替换的游戏文件';
+
+  @override
+  String get statusDetailsOwnershipBackups => '原始文件备份';
+
+  @override
+  String get statusDetailsOwnershipAdditive => '新增的 pak 和容器文件';
+
+  @override
+  String get statusDetailsOwnershipUe4ss => 'UE4SS 模组目录';
+
+  @override
+  String get statusDetailsOwnershipRecovery => '恢复文件和保留位置';
+
+  @override
+  String get statusDetailsOwnershipEmpty => '此组中没有记录的路径。';
+
+  @override
+  String statusDetailsOwnershipShown(int shown, int total) {
+    return '显示了 $total 条已记录路径中的 $shown 条。';
+  }
+
+  @override
   String get appTitle => 'GORE Mod Manager';
 
   @override
@@ -560,6 +590,36 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get statusRecoveryRequired => '需要恢复';
+
+  @override
+  String get statusDetailsOwnershipTitle => '已记录的所有权证据';
+
+  @override
+  String get statusDetailsOwnershipDescription =>
+      '管理器部署记录中保存的路径。这不表示这些路径当前仍然存在。';
+
+  @override
+  String get statusDetailsOwnershipLive => '已替换的游戏文件';
+
+  @override
+  String get statusDetailsOwnershipBackups => '原始文件备份';
+
+  @override
+  String get statusDetailsOwnershipAdditive => '新增的 pak 和容器文件';
+
+  @override
+  String get statusDetailsOwnershipUe4ss => 'UE4SS 模组目录';
+
+  @override
+  String get statusDetailsOwnershipRecovery => '恢复文件和保留位置';
+
+  @override
+  String get statusDetailsOwnershipEmpty => '此组中没有记录的路径。';
+
+  @override
+  String statusDetailsOwnershipShown(int shown, int total) {
+    return '显示了 $total 条已记录路径中的 $shown 条。';
+  }
 
   @override
   String get appTitle => 'GORE Mod Manager';

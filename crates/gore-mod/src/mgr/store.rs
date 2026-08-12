@@ -274,6 +274,15 @@ impl StoreSnapshot {
         super::status::status(game_root, self.library.path(), &self.loadout)
     }
 
+    /// The authoritative status plus bounded display-only Manager ownership evidence from the
+    /// exact same deploy-record read. Existing Rust callers can keep using [`Self::status`].
+    pub fn status_report(
+        &self,
+        game_root: &Path,
+    ) -> crate::Result<super::status::ManagerStatusReport> {
+        super::status::status_report(game_root, self.library.path(), &self.loadout)
+    }
+
     /// Persist an explicit whole-loadout edit while the store is locked. Existing entry edits are
     /// last-writer-wins; concurrently published library ids are still appended disabled.
     pub fn replace_loadout(&mut self, replacement: Loadout) -> crate::Result<()> {

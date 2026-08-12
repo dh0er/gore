@@ -169,6 +169,40 @@ class AppLocalizationsPt extends AppLocalizations {
   String get statusRecoveryRequired => 'Recuperação necessária';
 
   @override
+  String get statusDetailsOwnershipTitle =>
+      'Evidência de propriedade registada';
+
+  @override
+  String get statusDetailsOwnershipDescription =>
+      'Caminhos registados no registo de implementação do gestor. Não provam que esses caminhos ainda existam.';
+
+  @override
+  String get statusDetailsOwnershipLive => 'Ficheiros do jogo substituídos';
+
+  @override
+  String get statusDetailsOwnershipBackups => 'Cópias de segurança originais';
+
+  @override
+  String get statusDetailsOwnershipAdditive =>
+      'Ficheiros pak e contentores adicionados';
+
+  @override
+  String get statusDetailsOwnershipUe4ss => 'Diretórios de mods UE4SS';
+
+  @override
+  String get statusDetailsOwnershipRecovery =>
+      'Ficheiros e locais de recuperação';
+
+  @override
+  String get statusDetailsOwnershipEmpty =>
+      'Nenhum caminho registado neste grupo.';
+
+  @override
+  String statusDetailsOwnershipShown(int shown, int total) {
+    return 'São apresentados $shown de $total caminhos registados.';
+  }
+
+  @override
   String get appTitle => 'GORE Mod Manager';
 
   @override
@@ -605,6 +639,40 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get statusRecoveryRequired => 'Recuperação necessária';
+
+  @override
+  String get statusDetailsOwnershipTitle =>
+      'Evidência de propriedade registrada';
+
+  @override
+  String get statusDetailsOwnershipDescription =>
+      'Caminhos registrados no registro de implantação do gerenciador. Eles não comprovam que esses caminhos ainda existam.';
+
+  @override
+  String get statusDetailsOwnershipLive => 'Arquivos do jogo substituídos';
+
+  @override
+  String get statusDetailsOwnershipBackups => 'Backups originais';
+
+  @override
+  String get statusDetailsOwnershipAdditive =>
+      'Arquivos pak e contêineres adicionados';
+
+  @override
+  String get statusDetailsOwnershipUe4ss => 'Diretórios de mods UE4SS';
+
+  @override
+  String get statusDetailsOwnershipRecovery =>
+      'Arquivos e locais de recuperação';
+
+  @override
+  String get statusDetailsOwnershipEmpty =>
+      'Nenhum caminho registrado neste grupo.';
+
+  @override
+  String statusDetailsOwnershipShown(int shown, int total) {
+    return 'Exibidos $shown de $total caminhos registrados.';
+  }
 
   @override
   String get appTitle => 'GORE Mod Manager';

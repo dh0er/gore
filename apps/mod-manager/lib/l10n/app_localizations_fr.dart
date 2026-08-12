@@ -168,6 +168,39 @@ class AppLocalizationsFr extends AppLocalizations {
   String get statusRecoveryRequired => 'Récupération requise';
 
   @override
+  String get statusDetailsOwnershipTitle => 'Preuves de propriété enregistrées';
+
+  @override
+  String get statusDetailsOwnershipDescription =>
+      'Chemins enregistrés dans le journal de déploiement du gestionnaire. Ils ne prouvent pas que ces chemins existent encore.';
+
+  @override
+  String get statusDetailsOwnershipLive => 'Fichiers du jeu remplacés';
+
+  @override
+  String get statusDetailsOwnershipBackups => 'Sauvegardes d\'origine';
+
+  @override
+  String get statusDetailsOwnershipAdditive =>
+      'Fichiers pak et conteneurs ajoutés';
+
+  @override
+  String get statusDetailsOwnershipUe4ss => 'Dossiers de mods UE4SS';
+
+  @override
+  String get statusDetailsOwnershipRecovery =>
+      'Fichiers et emplacements de récupération';
+
+  @override
+  String get statusDetailsOwnershipEmpty =>
+      'Aucun chemin enregistré dans ce groupe.';
+
+  @override
+  String statusDetailsOwnershipShown(int shown, int total) {
+    return '$shown chemins enregistrés affichés sur $total.';
+  }
+
+  @override
   String get appTitle => 'GORE Mod Manager';
 
   @override

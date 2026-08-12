@@ -166,6 +166,38 @@ class AppLocalizationsPl extends AppLocalizations {
   String get statusRecoveryRequired => 'Wymagane odzyskiwanie';
 
   @override
+  String get statusDetailsOwnershipTitle => 'Zapisane dowody własności';
+
+  @override
+  String get statusDetailsOwnershipDescription =>
+      'Ścieżki zapisane w rekordzie wdrożenia Menedżera. Nie potwierdzają, że te ścieżki nadal istnieją.';
+
+  @override
+  String get statusDetailsOwnershipLive => 'Zastąpione pliki gry';
+
+  @override
+  String get statusDetailsOwnershipBackups => 'Kopie plików oryginalnych';
+
+  @override
+  String get statusDetailsOwnershipAdditive => 'Dodane pliki pak i kontenerów';
+
+  @override
+  String get statusDetailsOwnershipUe4ss => 'Katalogi modów UE4SS';
+
+  @override
+  String get statusDetailsOwnershipRecovery =>
+      'Pliki i lokalizacje odzyskiwania';
+
+  @override
+  String get statusDetailsOwnershipEmpty =>
+      'Brak zapisanych ścieżek w tej grupie.';
+
+  @override
+  String statusDetailsOwnershipShown(int shown, int total) {
+    return 'Wyświetlono $shown z $total zapisanych ścieżek.';
+  }
+
+  @override
   String get appTitle => 'GORE Mod Manager';
 
   @override
