@@ -43,7 +43,13 @@ def _snapshot(directory: Path) -> dict[str, bytes]:
 
 
 class _RuntimeFixture:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        toolset_version: str = "14.44.35207",
+        redist_version: str = "14.44.35112",
+        crt_family: str = "143",
+    ) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.base = Path(self.temp.name)
         self.root = self.base / "repo"
@@ -57,7 +63,7 @@ class _RuntimeFixture:
             self.vc
             / "Tools"
             / "MSVC"
-            / "14.44.35207"
+            / toolset_version
             / "bin"
             / "Hostx64"
             / "x64"
@@ -69,17 +75,8 @@ class _RuntimeFixture:
             self.vc / "Auxiliary" / "Build" / "Microsoft.VCRedistVersion.default.txt"
         )
         version_file.parent.mkdir(parents=True)
-        version_file.write_text("14.44.35112\n", encoding="utf-8")
-        self.crt = (
-            self.vc
-            / "Redist"
-            / "MSVC"
-            / "14.44.35112"
-            / "x64"
-            / "Microsoft.VC143.CRT"
-        )
-        for index, name in enumerate(_RUNTIME_NAMES):
-            _write_pe(self.crt / name, marker=f"source-{index}".encode())
+        version_file.write_text(f"{redist_version}\n", encoding="utf-8")
+        self.crt = self.add_crt_family(crt_family, redist_version)
 
         cache = self.app / "build" / "windows" / "x64" / "CMakeCache.txt"
         cache.parent.mkdir(parents=True, exist_ok=True)
@@ -89,6 +86,19 @@ class _RuntimeFixture:
             encoding="utf-8",
         )
         self.extra_app_imports: tuple[str, ...] = ()
+
+    def add_crt_family(self, family: str, version: str = "14.44.35112") -> Path:
+        crt = (
+            self.vc
+            / "Redist"
+            / "MSVC"
+            / version
+            / "x64"
+            / f"Microsoft.VC{family}.CRT"
+        )
+        for index, name in enumerate(_RUNTIME_NAMES):
+            _write_pe(crt / name, marker=f"{version}-source-{index}".encode())
+        return crt
 
     def close(self) -> None:
         self.temp.cleanup()
@@ -155,6 +165,50 @@ class AppLocalMsvcRuntimeTest(unittest.TestCase):
         )
         for name in _RUNTIME_NAMES:
             self.assertEqual((fixture.bundle / name).read_bytes(), (fixture.crt / name).read_bytes())
+
+    def test_stages_vs2026_vc145_runtime(self) -> None:
+        fixture = _RuntimeFixture(
+            toolset_version="14.51.36231",
+            redist_version="14.51.36231",
+            crt_family="145",
+        )
+        self.addCleanup(fixture.close)
+
+        with fixture.patched(), mock.patch.object(gore_build, "sign_paths"):
+            plan = gore_build._sign_and_stage_app_local_runtime(
+                "gore-mod-manager", fixture.bundle, dry=False
+            )
+
+        self.assertIsNotNone(plan)
+        for name in _RUNTIME_NAMES:
+            self.assertEqual((fixture.bundle / name).read_bytes(), (fixture.crt / name).read_bytes())
+
+    def test_rejects_missing_or_ambiguous_crt_family_before_signing(self) -> None:
+        def missing(fixture: _RuntimeFixture) -> None:
+            shutil.rmtree(fixture.crt)
+
+        def ambiguous(fixture: _RuntimeFixture) -> None:
+            fixture.add_crt_family("145")
+
+        for label, mutate in (("missing", missing), ("ambiguous", ambiguous)):
+            with self.subTest(label=label):
+                fixture = _RuntimeFixture()
+                try:
+                    before = _snapshot(fixture.bundle)
+                    mutate(fixture)
+                    with fixture.patched(), mock.patch.object(
+                        gore_build, "sign_paths"
+                    ) as signer:
+                        with self.assertRaisesRegex(
+                            SystemExit, "exactly one CRT family"
+                        ):
+                            gore_build._sign_and_stage_app_local_runtime(
+                                "gore-mod-manager", fixture.bundle, dry=False
+                            )
+                    signer.assert_not_called()
+                    self.assertEqual(_snapshot(fixture.bundle), before)
+                finally:
+                    fixture.close()
 
     def test_invalid_sources_and_closure_leave_bundle_unchanged(self) -> None:
         def missing_source(fixture: _RuntimeFixture) -> None:

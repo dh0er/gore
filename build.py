@@ -697,6 +697,30 @@ def _cmake_cache_value(project: str, key: str) -> str:
     return values[0].strip()
 
 
+def _msvc_crt_dir(vc_root: Path, redist_version: str) -> Path:
+    x64_dir = vc_root / "Redist" / "MSVC" / redist_version / "x64"
+    try:
+        entries = tuple(x64_dir.iterdir())
+    except OSError as error:
+        raise SystemExit(f"cannot inspect matching x64 MSVC redist {x64_dir}: {error}") from error
+
+    candidates: list[Path] = []
+    for entry in entries:
+        if re.fullmatch(r"Microsoft\.VC[0-9]+\.CRT", entry.name, re.IGNORECASE) is None:
+            continue
+        if entry.is_symlink() or (hasattr(entry, "is_junction") and entry.is_junction()):
+            continue
+        if entry.is_dir():
+            candidates.append(entry)
+    if len(candidates) != 1:
+        names = sorted(entry.name for entry in candidates)
+        raise SystemExit(
+            "matching x64 MSVC redist must contain exactly one CRT family; "
+            f"found {names} under {x64_dir}"
+        )
+    return candidates[0]
+
+
 def _msvc_runtime_sources(
     project: str, runtime_names: tuple[str, ...]
 ) -> tuple[Path, tuple[_AppLocalRuntimeFile, ...]]:
@@ -734,18 +758,14 @@ def _msvc_runtime_sources(
     if re.fullmatch(r"[0-9]+(?:\.[0-9]+){2,3}", redist_version) is None:
         raise SystemExit(f"invalid MSVC redist version in {version_file}: {redist_version!r}")
 
-    crt_dir = (
-        vc_root
-        / "Redist"
-        / "MSVC"
-        / redist_version
-        / "x64"
-        / "Microsoft.VC143.CRT"
-    )
+    crt_dir = _msvc_crt_dir(vc_root, redist_version)
     try:
+        resolved_x64_dir = crt_dir.parent.resolve(strict=True)
         resolved_crt_dir = crt_dir.resolve(strict=True)
     except OSError as error:
-        raise SystemExit(f"matching x64 VC143 redist directory missing: {crt_dir}") from error
+        raise SystemExit(f"cannot resolve x64 MSVC redist directory: {crt_dir}") from error
+    if resolved_crt_dir.parent != resolved_x64_dir:
+        raise SystemExit(f"x64 MSVC runtime escapes its matching Redist directory: {crt_dir}")
 
     files: list[_AppLocalRuntimeFile] = []
     for name in runtime_names:
