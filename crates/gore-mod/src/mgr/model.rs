@@ -34,6 +34,15 @@ pub(crate) struct ImportIdentityMeta {
     pub(crate) format: u32,
     pub(crate) source_sha256: String,
     pub(crate) tree_sha256: String,
+    /// True when import added a source-name-derived wrapper around a root `Scripts/main.lua`
+    /// tree. Identity hashing normalizes that synthetic component so moving or renaming the
+    /// external source does not manufacture different content identity.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) synthetic_root_ue4ss_wrapper: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

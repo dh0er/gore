@@ -37,7 +37,10 @@ unchanged source — including moving between a folder and an equivalent ZIP —
 rebinds that entry instead of creating a duplicate. The manager verifies a
 candidate's current library tree before using its private identity hints; it
 does not expose those hints as public entry metadata or use them as a deployment
-fingerprint. Ambiguous or conflicting verified matches are refused before the
+fingerprint. For a source whose root is itself a UE4SS mod (`Scripts/main.lua`),
+the content identity normalizes the source-name-derived storage wrapper while
+the publication seal still binds its exact physical name. Ambiguous or
+conflicting verified matches are refused before the
 loadout is changed. One kernel lock serializes recovery, identity decisions,
 publication, listing, and removal across cooperating processes. Windows owns a
 byte range in the persistent `.gore-manager-library.lock` file; Unix instead

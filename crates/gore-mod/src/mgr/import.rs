@@ -272,7 +272,7 @@ fn import_detailed_with_limits(
     // Walk the caller's actual path rather than the canonicalized naming/id view above. This lets
     // materialization reject a root symbolic link or junction instead of silently following it.
     materialize(source, &staging, limits)?;
-    wrap_root_ue4ss(&staging, &fallback_name)?;
+    let mut synthetic_root_ue4ss_wrapper = wrap_root_ue4ss(&staging, &fallback_name)?;
     // A goremod bundle shipped BELOW a wrapper dir (`Wrap/Sub/gore-mod.json`) is re-rooted so the
     // staging (→ entry) root IS the bundle root. This keeps every stored `ComponentInfo.rel`
     // bundle-root-relative (`audio`, not `Wrap/Sub/audio`), which matters because the manifests
@@ -280,7 +280,7 @@ fn import_detailed_with_limits(
     // apply then reads `<entry>/audio/0.wav` as authored instead of a nonexistent nested path.
     reroot_nested_bundle(&staging)?;
 
-    let (manifest, components) = detect(&staging, limits)?;
+    let (manifest, mut components) = detect(&staging, limits)?;
     if components.is_empty() {
         return Err(ModError::Other(format!(
             "nothing importable recognized in {}",
@@ -293,6 +293,9 @@ fn import_detailed_with_limits(
     } else {
         foreign_kind(&components)
     };
+    if let Some(wrapper) = synthetic_root_ue4ss_wrapper.as_deref() {
+        validate_synthetic_root_ue4ss_components(kind, &components, wrapper)?;
+    }
     let (name, version, author) = match &manifest {
         Some(m) => (
             m.mod_meta.name.clone(),
@@ -309,7 +312,8 @@ fn import_detailed_with_limits(
     // Retain the exact materialized staging inode before entering the library lane. Unix later
     // resolves its direct-child name through the locked root fd and requires this identity;
     // Windows reopens and revalidates it immediately before path-based publication.
-    let staged_directory = open_directory_nofollow(&staging, "materialized import staging tree")?;
+    let mut staged_directory =
+        open_directory_nofollow(&staging, "materialized import staging tree")?;
 
     let library_lock = library_mutation_lock(library_dir)?;
     #[cfg(unix)]
@@ -324,14 +328,20 @@ fn import_detailed_with_limits(
     };
     let canonical_library_dir = library_lock.path().to_path_buf();
     recover_interrupted_replacements_locked(&library_lock)?;
-    let staged_tree_sha256 = hash_secure_import_tree(&staged_directory, limits, false)?;
+    let mut staged_hashes = hash_secure_import_tree_hashes_inner(
+        &staged_directory,
+        limits,
+        false,
+        synthetic_root_ue4ss_wrapper.as_deref(),
+        None,
+    )?;
     let decision = {
         let library = library_lock.open_library()?;
         decide_import_identity(
             &library,
             &proposed_id,
             &source_sha256,
-            &staged_tree_sha256,
+            &staged_hashes.identity_sha256,
             limits,
         )?
     };
@@ -342,14 +352,63 @@ fn import_detailed_with_limits(
             matched_by,
             sidecar,
             seal,
-        } => (id, matched_by, Some((*sidecar, seal))),
+            identity_tree_sha256,
+        } => (id, matched_by, Some((*sidecar, seal, identity_tree_sha256))),
     };
     let same_tree = previous
         .as_ref()
-        .is_some_and(|(_, seal)| seal.tree_sha256 == staged_tree_sha256);
+        .is_some_and(|(sidecar, seal, identity_tree_sha256)| {
+            identity_tree_sha256 == &staged_hashes.identity_sha256
+                || (sidecar.manager.is_none() && seal.tree_sha256 == staged_hashes.layout_sha256)
+        });
+    // A root UE4SS source is wrapped only to keep the manager sidecar outside the deployable
+    // directory. That wrapper's source-derived name is not content. When an unchanged moved
+    // source binds by normalized content, keep the existing physical wrapper/component metadata
+    // so its deployment fingerprint and status remain stable while the private source hint moves.
+    if same_tree {
+        if let (Some(current_wrapper), Some((previous_sidecar, _, _))) =
+            (synthetic_root_ue4ss_wrapper.as_deref(), previous.as_ref())
+        {
+            if previous_sidecar
+                .manager
+                .as_ref()
+                .and_then(|manager| manager.import_identity.as_ref())
+                .is_some_and(|identity| identity.synthetic_root_ue4ss_wrapper)
+            {
+                let previous_wrapper =
+                    synthetic_root_ue4ss_wrapper_name(&previous_sidecar.entry)?.to_string();
+                staged_directory = rename_synthetic_root_ue4ss_wrapper(
+                    staged_directory,
+                    current_wrapper,
+                    &previous_wrapper,
+                )?;
+                components = previous_sidecar.entry.components.clone();
+                synthetic_root_ue4ss_wrapper = Some(previous_wrapper);
+                staged_hashes = hash_secure_import_tree_hashes_inner(
+                    &staged_directory,
+                    limits,
+                    false,
+                    synthetic_root_ue4ss_wrapper.as_deref(),
+                    None,
+                )?;
+                if previous
+                    .as_ref()
+                    .is_none_or(|(_, _, identity_tree_sha256)| {
+                        identity_tree_sha256 != &staged_hashes.identity_sha256
+                    })
+                {
+                    return Err(ModError::Other(
+                        "normalized root UE4SS identity changed while preserving its wrapper"
+                            .into(),
+                    )
+                    .into());
+                }
+            }
+        }
+    }
     let imported_at = match &previous {
-        Some((sidecar, _)) if same_tree => sidecar.entry.imported_at.clone(),
-        Some((sidecar, _)) => changed_import_timestamp(&sidecar.entry.imported_at)?,
+        Some((sidecar, _, _)) if same_tree => sidecar.entry.imported_at.clone(),
+        Some((sidecar, _, _)) => changed_import_timestamp(&sidecar.entry.imported_at)?,
         None => import_timestamp_now(),
     };
     let meta = ModEntryMeta {
@@ -368,14 +427,15 @@ fn import_detailed_with_limits(
             import_identity: Some(ImportIdentityMeta {
                 format: IMPORT_IDENTITY_FORMAT,
                 source_sha256,
-                tree_sha256: staged_tree_sha256.clone(),
+                tree_sha256: staged_hashes.identity_sha256.clone(),
+                synthetic_root_ue4ss_wrapper: synthetic_root_ue4ss_wrapper.is_some(),
             }),
         }),
     };
 
     let unchanged = previous
         .as_ref()
-        .is_some_and(|(previous_sidecar, _)| same_tree && previous_sidecar == &sidecar);
+        .is_some_and(|(previous_sidecar, _, _)| same_tree && previous_sidecar == &sidecar);
 
     // Sidecar goes into staging BEFORE the swap so the entry appears fully formed — a
     // concurrent `list()` never sees a half-imported dir it would have to skip.
@@ -384,10 +444,10 @@ fn import_detailed_with_limits(
     let expectation = PublishExpectation {
         staged: EntryPublishSeal {
             root_identity: staged_directory.identity(),
-            tree_sha256: staged_tree_sha256,
+            tree_sha256: staged_hashes.layout_sha256,
             sidecar_sha256: staged_sidecar_sha256,
         },
-        current: previous.as_ref().map(|(_, seal)| seal.clone()),
+        current: previous.as_ref().map(|(_, seal, _)| seal.clone()),
         limits,
     };
     let entry_dir = canonical_library_dir.join(&id);
@@ -442,6 +502,7 @@ enum ImportDecision {
         matched_by: ImportMatchedBy,
         sidecar: Box<LibrarySidecar>,
         seal: EntryPublishSeal,
+        identity_tree_sha256: String,
     },
 }
 
@@ -464,6 +525,7 @@ struct VerifiedIdentityCandidate {
     id: String,
     sidecar: LibrarySidecar,
     current_tree_sha256: String,
+    current_layout_sha256: String,
     sidecar_sha256: String,
     root_identity: FileIdentity,
     identity_managed: bool,
@@ -552,10 +614,20 @@ fn decide_import_identity(
             // negative content hints. Only a proposed-id/source/content-hint candidate is opened.
             continue;
         }
-        let current_tree_sha256 =
-            hash_library_entry_tree_for_identity(&entry, limits, &mut rehash_budget)?;
+        let identity_wrapper = match identity {
+            Some(identity) if identity.synthetic_root_ue4ss_wrapper => {
+                Some(synthetic_root_ue4ss_wrapper_name(&inspection.entry)?.to_string())
+            }
+            _ => None,
+        };
+        let current_hashes = hash_library_entry_tree_for_identity(
+            &entry,
+            limits,
+            identity_wrapper.as_deref(),
+            &mut rehash_budget,
+        )?;
         if let Some(identity) = identity {
-            if !constant_time_text_eq(&identity.tree_sha256, &current_tree_sha256) {
+            if !constant_time_text_eq(&identity.tree_sha256, &current_hashes.identity_sha256) {
                 return Err(ModError::Other(format!(
                     "manager-library tampering detected for selected entry {:?}: persisted tree identity does not match its current bounded no-follow tree",
                     inspection.entry.id
@@ -572,8 +644,9 @@ fn decide_import_identity(
             id: sidecar.entry.id.clone(),
             sidecar,
             content_match: content_hint_match
-                && constant_time_text_eq(&current_tree_sha256, staged_tree_sha256),
-            current_tree_sha256,
+                && constant_time_text_eq(&current_hashes.identity_sha256, staged_tree_sha256),
+            current_tree_sha256: current_hashes.identity_sha256,
+            current_layout_sha256: current_hashes.layout_sha256,
             sidecar_sha256: inspection.sidecar_sha256,
             root_identity: entry.secure_directory().identity(),
             identity_managed,
@@ -687,9 +760,10 @@ fn reuse_decision(
         sidecar: Box::new(candidate.sidecar.clone()),
         seal: EntryPublishSeal {
             root_identity: candidate.root_identity,
-            tree_sha256: candidate.current_tree_sha256.clone(),
+            tree_sha256: candidate.current_layout_sha256.clone(),
             sidecar_sha256: candidate.sidecar_sha256.clone(),
         },
+        identity_tree_sha256: candidate.current_tree_sha256.clone(),
     }
 }
 
@@ -947,9 +1021,16 @@ fn hash_library_entry_tree(entry: &LibraryEntry, limits: ImportLimits) -> crate:
 fn hash_library_entry_tree_for_identity(
     entry: &LibraryEntry,
     limits: ImportLimits,
+    synthetic_root_ue4ss_wrapper: Option<&str>,
     budget: &mut IdentityRehashBudget,
-) -> crate::Result<String> {
-    hash_secure_import_tree_inner(entry.secure_directory(), limits, true, Some(budget))
+) -> crate::Result<ImportTreeHashes> {
+    hash_secure_import_tree_hashes_inner(
+        entry.secure_directory(),
+        limits,
+        true,
+        synthetic_root_ue4ss_wrapper,
+        Some(budget),
+    )
 }
 
 #[derive(Debug, Default)]
@@ -1047,6 +1128,19 @@ struct TreeDescriptor {
     kind: TreeDescriptorKind,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ImportTreeHashes {
+    /// Content identity. For a synthetic root UE4SS wrapper its first path component is replaced
+    /// with a stable virtual marker; all other paths are exact portable relative paths.
+    identity_sha256: String,
+    /// Exact stored layout. Publication/recovery seals keep this separate so renaming or swapping
+    /// the physical wrapper after identity selection still fails closed.
+    layout_sha256: String,
+}
+
+const SYNTHETIC_ROOT_UE4SS_HASH_COMPONENT: &str = "@gore-root-ue4ss";
+const SYNTHETIC_ROOT_UE4SS_HASH_MODE_DOMAIN: &[u8] = b"synthetic-root-ue4ss\0";
+
 fn hash_secure_import_tree(
     root: &SecureDirectory,
     limits: ImportLimits,
@@ -1061,15 +1155,42 @@ fn hash_secure_import_tree_inner(
     allow_exact_manager_sidecar: bool,
     identity_budget: Option<&mut IdentityRehashBudget>,
 ) -> crate::Result<String> {
+    Ok(hash_secure_import_tree_hashes_inner(
+        root,
+        limits,
+        allow_exact_manager_sidecar,
+        None,
+        identity_budget,
+    )?
+    .layout_sha256)
+}
+
+fn hash_secure_import_tree_hashes_inner(
+    root: &SecureDirectory,
+    limits: ImportLimits,
+    allow_exact_manager_sidecar: bool,
+    synthetic_root_ue4ss_wrapper: Option<&str>,
+    identity_budget: Option<&mut IdentityRehashBudget>,
+) -> crate::Result<ImportTreeHashes> {
     let descriptors = collect_secure_import_tree(root, limits, allow_exact_manager_sidecar)?;
     if let Some(budget) = identity_budget {
         // Debit the complete planned work before the first payload byte is opened/read. The second
         // membership pass is charged from the same descriptor count and must match it exactly.
         budget.charge_candidate(&descriptors)?;
     }
-    let mut hash = Sha256::new();
-    hash.update(IMPORT_TREE_HASH_DOMAIN);
+    let mut identity_hash = Sha256::new();
+    identity_hash.update(IMPORT_TREE_HASH_DOMAIN);
+    if synthetic_root_ue4ss_wrapper.is_some() {
+        identity_hash.update(SYNTHETIC_ROOT_UE4SS_HASH_MODE_DOMAIN);
+    }
+    let mut layout_hash = synthetic_root_ue4ss_wrapper.map(|_| {
+        let mut hash = Sha256::new();
+        hash.update(IMPORT_TREE_HASH_DOMAIN);
+        hash
+    });
     for descriptor in &descriptors {
+        let identity_path =
+            normalized_import_identity_path(&descriptor.portable, synthetic_root_ue4ss_wrapper)?;
         let node = root.open_relative_node(
             &descriptor.relative,
             "normalized import tree entry selected for hashing",
@@ -1078,7 +1199,10 @@ fn hash_secure_import_tree_inner(
             (TreeDescriptorKind::Directory { identity }, SecureNode::Directory(directory))
                 if directory.identity() == identity =>
             {
-                hash_tree_record(&mut hash, b'd', &descriptor.portable, None);
+                hash_tree_record(&mut identity_hash, b'd', &identity_path, None);
+                if let Some(hash) = layout_hash.as_mut() {
+                    hash_tree_record(hash, b'd', &descriptor.portable, None);
+                }
             }
             (
                 TreeDescriptorKind::File {
@@ -1091,8 +1215,16 @@ fn hash_secure_import_tree_inner(
                 && file.revision() == revision
                 && file.len() == length =>
             {
-                hash_tree_record(&mut hash, b'f', &descriptor.portable, Some(length));
-                hash_open_import_file(&mut file, length, &mut hash)?;
+                hash_tree_record(&mut identity_hash, b'f', &identity_path, Some(length));
+                if let Some(hash) = layout_hash.as_mut() {
+                    hash_tree_record(hash, b'f', &descriptor.portable, Some(length));
+                }
+                hash_open_import_file_dual(
+                    &mut file,
+                    length,
+                    &mut identity_hash,
+                    layout_hash.as_mut(),
+                )?;
             }
             _ => {
                 return Err(ModError::Other(format!(
@@ -1109,7 +1241,35 @@ fn hash_secure_import_tree_inner(
             root.path().display()
         )));
     }
-    Ok(digest_hex(hash.finalize().into()))
+    let identity_sha256 = digest_hex(identity_hash.finalize().into());
+    let layout_sha256 = layout_hash
+        .map(|hash| digest_hex(hash.finalize().into()))
+        .unwrap_or_else(|| identity_sha256.clone());
+    Ok(ImportTreeHashes {
+        identity_sha256,
+        layout_sha256,
+    })
+}
+
+fn normalized_import_identity_path(
+    portable: &str,
+    synthetic_root_ue4ss_wrapper: Option<&str>,
+) -> crate::Result<String> {
+    let Some(wrapper) = synthetic_root_ue4ss_wrapper else {
+        return Ok(portable.to_string());
+    };
+    let (root_component, remainder) = portable
+        .split_once('/')
+        .map_or((portable, None), |(root, rest)| (root, Some(rest)));
+    if portable_windows_key(root_component) != portable_windows_key(wrapper) {
+        return Err(ModError::Other(format!(
+            "synthetic root UE4SS identity expected every payload path below {wrapper:?}, found {portable:?}"
+        )));
+    }
+    Ok(match remainder {
+        Some(remainder) => format!("{SYNTHETIC_ROOT_UE4SS_HASH_COMPONENT}/{remainder}"),
+        None => SYNTHETIC_ROOT_UE4SS_HASH_COMPONENT.to_string(),
+    })
 }
 
 fn collect_secure_import_tree(
@@ -1260,10 +1420,11 @@ fn hash_tree_record(hash: &mut Sha256, marker: u8, path: &str, length: Option<u6
     }
 }
 
-fn hash_open_import_file(
+fn hash_open_import_file_dual(
     file: &mut SecureFile,
     expected: u64,
     hash: &mut Sha256,
+    mut second_hash: Option<&mut Sha256>,
 ) -> crate::Result<()> {
     let mut remaining = expected;
     let mut buffer = [0u8; 64 * 1024];
@@ -1280,6 +1441,9 @@ fn hash_open_import_file(
             )));
         }
         hash.update(&buffer[..read]);
+        if let Some(second_hash) = second_hash.as_deref_mut() {
+            second_hash.update(&buffer[..read]);
+        }
         remaining -= read as u64;
     }
     let mut probe = [0u8; 1];
@@ -4566,9 +4730,9 @@ fn safe_zip_entry(name: &str, max_path_bytes: usize) -> Option<String> {
 /// A source that IS a UE4SS mod (root holds `Scripts/main.lua`) gets nested into a `<name>/`
 /// subdir, so entries are uniformly "mod dirs inside the entry" and a later deploy-copy of the
 /// mod dir can never drag the sidecar along.
-fn wrap_root_ue4ss(staging: &Path, name: &str) -> crate::Result<()> {
+fn wrap_root_ue4ss(staging: &Path, name: &str) -> crate::Result<Option<String>> {
     if !staged_regular_file_exists(&staging.join("Scripts").join("main.lua"))? {
-        return Ok(());
+        return Ok(None);
     }
     let tmp = staging.join(".gore-wrap");
     std::fs::create_dir(&tmp).map_err(crate::io("creating wrap dir"))?;
@@ -4590,7 +4754,135 @@ fn wrap_root_ue4ss(staging: &Path, name: &str) -> crate::Result<()> {
         slug(name)
     };
     std::fs::rename(&tmp, staging.join(&safe)).map_err(crate::io("naming mod dir"))?;
+    Ok(Some(safe))
+}
+
+fn validate_synthetic_root_ue4ss_components(
+    kind: ModKind,
+    components: &[ComponentInfo],
+    expected_wrapper: &str,
+) -> crate::Result<()> {
+    if kind != ModKind::ForeignUe4ss {
+        return Err(ModError::Other(
+            "synthetic root UE4SS wrapper did not classify as a foreign UE4SS mod".into(),
+        ));
+    }
+    let wrapper = synthetic_root_ue4ss_wrapper_from_components(components)?;
+    if wrapper != expected_wrapper {
+        return Err(ModError::Other(format!(
+            "synthetic root UE4SS wrapper changed during detection: expected {expected_wrapper:?}, found {wrapper:?}"
+        )));
+    }
     Ok(())
+}
+
+fn synthetic_root_ue4ss_wrapper_name(entry: &ModEntryMeta) -> crate::Result<&str> {
+    if entry.kind != ModKind::ForeignUe4ss {
+        return Err(ModError::Other(format!(
+            "entry {:?} marks a synthetic root UE4SS wrapper but is not a foreign UE4SS mod",
+            entry.id
+        )));
+    }
+    synthetic_root_ue4ss_wrapper_from_components(&entry.components)
+}
+
+fn synthetic_root_ue4ss_wrapper_from_components(
+    components: &[ComponentInfo],
+) -> crate::Result<&str> {
+    let [ComponentInfo::Ue4ssLua { name, rel, .. }] = components else {
+        return Err(ModError::Other(
+            "synthetic root UE4SS identity requires exactly one UE4SS component".into(),
+        ));
+    };
+    if name != rel || rel.contains('/') || rel.contains('\\') || !crate::is_safe_mod_name(rel) {
+        return Err(ModError::Other(format!(
+            "synthetic root UE4SS identity has invalid wrapper metadata: name={name:?} rel={rel:?}"
+        )));
+    }
+    Ok(rel)
+}
+
+fn rename_synthetic_root_ue4ss_wrapper(
+    staging: SecureDirectory,
+    current: &str,
+    previous: &str,
+) -> crate::Result<SecureDirectory> {
+    if !crate::is_safe_mod_name(current) || !crate::is_safe_mod_name(previous) {
+        return Err(ModError::Other(format!(
+            "cannot preserve unsafe synthetic root UE4SS wrapper: {current:?} -> {previous:?}"
+        )));
+    }
+    if current == previous {
+        return Ok(staging);
+    }
+
+    let current_identity = match staging.open_child(
+        std::ffi::OsStr::new(current),
+        "synthetic root UE4SS wrapper selected for preservation",
+    )? {
+        SecureNode::Directory(directory) => directory.identity(),
+        SecureNode::File(file) => {
+            return Err(ModError::Other(format!(
+                "synthetic root UE4SS wrapper is not a directory: {}",
+                file.path().display()
+            )))
+        }
+    };
+    match staging.open_optional_child(
+        std::ffi::OsStr::new(previous),
+        "synthetic root UE4SS wrapper destination",
+    )? {
+        Some(SecureNode::Directory(directory)) if directory.identity() == current_identity => {
+            // This is proof from the filesystem, rather than the deliberately conservative
+            // portable-name key, that the prior public rel resolves to the current wrapper.
+            return Ok(staging);
+        }
+        Some(node) => {
+            return Err(ModError::Other(format!(
+                "cannot preserve synthetic root UE4SS wrapper because a different destination exists: {}",
+                match node {
+                    SecureNode::Directory(directory) => directory.path().display().to_string(),
+                    SecureNode::File(file) => file.path().display().to_string(),
+                }
+            )));
+        }
+        None => {}
+    }
+
+    #[cfg(unix)]
+    staging.rename_child_to(
+        std::ffi::OsStr::new(current),
+        &staging,
+        std::ffi::OsStr::new(previous),
+        "preserving synthetic root UE4SS wrapper",
+    )?;
+    #[cfg(unix)]
+    return Ok(staging);
+
+    #[cfg(not(unix))]
+    {
+        // SecureDirectory intentionally denies DELETE sharing on Windows. Close the staging root
+        // handle for this internal child rename, then bind the same root identity again before
+        // hashing or publication. Cooperative manager processes cannot reach this unique dot
+        // staging tree; a hostile same-user pathname substitution is outside the documented lock
+        // boundary and is still detected by the identity comparison.
+        let expected_root = staging.identity();
+        let staging_path = staging.path().to_path_buf();
+        drop(staging);
+        std::fs::rename(staging_path.join(current), staging_path.join(previous))
+            .map_err(crate::io("preserving synthetic root UE4SS wrapper"))?;
+        let reopened = open_directory_nofollow(
+            &staging_path,
+            "reopening staging after preserving synthetic root UE4SS wrapper",
+        )?;
+        if reopened.identity() != expected_root {
+            return Err(ModError::Other(format!(
+                "staging root changed identity while preserving synthetic root UE4SS wrapper: {}",
+                staging_path.display()
+            )));
+        }
+        Ok(reopened)
+    }
 }
 
 /// If a goremod bundle sits BELOW `staging` (its `gore-mod.json` is in a nested wrapper dir like
@@ -7962,6 +8254,122 @@ mod tests {
             .join("main.lua")
             .is_file());
         assert!(entry.join("MyLuaMod").join("enabled.txt").is_file());
+    }
+
+    #[test]
+    fn moved_root_ue4ss_folder_rebinds_without_deployment_churn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let original = tmp.path().join("OriginalLuaName");
+        fs::create_dir_all(original.join("Scripts")).unwrap();
+        fs::write(original.join("Scripts/main.lua"), b"-- stable lua").unwrap();
+        fs::write(original.join("enabled.txt"), b"").unwrap();
+
+        let first = import_detailed(&lib, &original).unwrap();
+        let first_sidecar = read_library_sidecar(&lib, &first.entry.id);
+        let first_fingerprint = first.entry.fingerprint();
+        let moved = tmp.path().join("RenamedLuaSource");
+        fs::rename(&original, &moved).unwrap();
+
+        let rebound = import_detailed(&lib, &moved).unwrap();
+        assert_eq!(rebound.entry.id, first.entry.id);
+        assert_eq!(rebound.matched_by, ImportMatchedBy::Content);
+        assert_eq!(rebound.disposition, ImportDisposition::Updated);
+        assert_eq!(rebound.entry.imported_at, first.entry.imported_at);
+        assert_eq!(rebound.entry.components, first.entry.components);
+        assert_eq!(rebound.entry.fingerprint(), first_fingerprint);
+        assert_eq!(list(&lib).unwrap().len(), 1);
+        let entry = lib.join(&first.entry.id);
+        assert!(entry.join("OriginalLuaName/Scripts/main.lua").is_file());
+        assert!(!entry.join("RenamedLuaSource").exists());
+
+        let rebound_sidecar = read_library_sidecar(&lib, &first.entry.id);
+        let first_identity = first_sidecar.manager.unwrap().import_identity.unwrap();
+        let rebound_identity = rebound_sidecar.manager.unwrap().import_identity.unwrap();
+        assert!(first_identity.synthetic_root_ue4ss_wrapper);
+        assert!(rebound_identity.synthetic_root_ue4ss_wrapper);
+        assert_eq!(first_identity.tree_sha256, rebound_identity.tree_sha256);
+        assert_ne!(first_identity.source_sha256, rebound_identity.source_sha256);
+
+        fs::write(moved.join("Scripts/main.lua"), b"-- changed lua").unwrap();
+        let changed = import_detailed(&lib, &moved).unwrap();
+        assert_eq!(changed.entry.id, first.entry.id);
+        assert_eq!(changed.matched_by, ImportMatchedBy::Source);
+        assert_eq!(changed.disposition, ImportDisposition::Updated);
+        assert_ne!(changed.entry.imported_at, first.entry.imported_at);
+        assert_ne!(changed.entry.fingerprint(), first_fingerprint);
+    }
+
+    #[test]
+    fn moved_root_ue4ss_zip_rebinds_without_deployment_churn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let payload = tmp.path().join("payload");
+        fs::create_dir_all(payload.join("Scripts")).unwrap();
+        fs::write(payload.join("Scripts/main.lua"), b"-- stable zip lua").unwrap();
+        fs::write(payload.join("enabled.txt"), b"").unwrap();
+        let original = tmp.path().join("OriginalZipName.zip");
+        zip_dir_with_prefix(&payload, "", &original);
+
+        let first = import_detailed(&lib, &original).unwrap();
+        let first_fingerprint = first.entry.fingerprint();
+        let moved = tmp.path().join("RenamedZipSource.zip");
+        fs::rename(&original, &moved).unwrap();
+        let rebound = import_detailed(&lib, &moved).unwrap();
+
+        assert_eq!(rebound.entry.id, first.entry.id);
+        assert_eq!(rebound.matched_by, ImportMatchedBy::Content);
+        assert_eq!(rebound.disposition, ImportDisposition::Updated);
+        assert_eq!(rebound.entry.imported_at, first.entry.imported_at);
+        assert_eq!(rebound.entry.components, first.entry.components);
+        assert_eq!(rebound.entry.fingerprint(), first_fingerprint);
+        assert_eq!(list(&lib).unwrap().len(), 1);
+        let entry = lib.join(&first.entry.id);
+        assert!(entry.join("OriginalZipName/Scripts/main.lua").is_file());
+        assert!(!entry.join("RenamedZipSource").exists());
+    }
+
+    #[test]
+    fn synthetic_root_ue4ss_identity_is_separate_from_authored_wrapper_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let root_mod = tmp.path().join("RootLua");
+        fs::create_dir_all(root_mod.join("Scripts")).unwrap();
+        fs::write(root_mod.join("Scripts/main.lua"), b"-- same lua").unwrap();
+
+        let authored_parent = tmp.path().join("AuthoredParent");
+        let authored_wrapper = authored_parent.join(SYNTHETIC_ROOT_UE4SS_HASH_COMPONENT);
+        fs::create_dir_all(authored_wrapper.join("Scripts")).unwrap();
+        fs::write(authored_wrapper.join("Scripts/main.lua"), b"-- same lua").unwrap();
+
+        let synthetic = import_detailed(&lib, &root_mod).unwrap();
+        let authored = import_detailed(&lib, &authored_parent).unwrap();
+        assert_eq!(synthetic.disposition, ImportDisposition::Created);
+        assert_eq!(authored.disposition, ImportDisposition::Created);
+        assert_ne!(synthetic.entry.id, authored.entry.id);
+        assert_eq!(list(&lib).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn root_ue4ss_rebind_does_not_treat_portable_overapproximation_as_path_proof() {
+        assert!(portable_windows_names_equal("ß", "SS"));
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let original = tmp.path().join("ß");
+        fs::create_dir_all(original.join("Scripts")).unwrap();
+        fs::write(original.join("Scripts/main.lua"), b"-- unicode wrapper").unwrap();
+        let first = import_detailed(&lib, &original).unwrap();
+
+        let moved = tmp.path().join("SS");
+        fs::rename(&original, &moved).unwrap();
+        let rebound = import_detailed(&lib, &moved).unwrap();
+        assert_eq!(rebound.entry.id, first.entry.id);
+        assert_eq!(rebound.matched_by, ImportMatchedBy::Content);
+        assert_eq!(rebound.entry.components, first.entry.components);
+        assert!(lib
+            .join(&first.entry.id)
+            .join("ß/Scripts/main.lua")
+            .is_file());
     }
 
     /// [import 10] A source with nothing recognizable in it is an error, not an empty entry.
