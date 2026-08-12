@@ -167,6 +167,39 @@ class AppLocalizationsDe extends AppLocalizations {
   String get statusRecoveryRequired => 'Wiederherstellung erforderlich';
 
   @override
+  String get statusDetailsOwnershipTitle => 'Aufgezeichnete Besitznachweise';
+
+  @override
+  String get statusDetailsOwnershipDescription =>
+      'Pfade aus dem Bereitstellungsprotokoll des Managers. Sie belegen nicht, dass diese Pfade noch existieren.';
+
+  @override
+  String get statusDetailsOwnershipLive => 'Ersetzte Spieldateien';
+
+  @override
+  String get statusDetailsOwnershipBackups => 'Sicherungen der Originaldateien';
+
+  @override
+  String get statusDetailsOwnershipAdditive =>
+      'Hinzugefügte Pak- und Containerdateien';
+
+  @override
+  String get statusDetailsOwnershipUe4ss => 'UE4SS-Mod-Verzeichnisse';
+
+  @override
+  String get statusDetailsOwnershipRecovery =>
+      'Wiederherstellungsdateien und Ablagen';
+
+  @override
+  String get statusDetailsOwnershipEmpty =>
+      'Keine Pfade in dieser Gruppe aufgezeichnet.';
+
+  @override
+  String statusDetailsOwnershipShown(int shown, int total) {
+    return '$shown von $total aufgezeichneten Pfaden angezeigt.';
+  }
+
+  @override
   String get appTitle => 'GORE Mod Manager';
 
   @override

@@ -1803,10 +1803,11 @@ fn mgr_apply(payload: Value) -> Value {
     }
 }
 
-/// `{game_root, library_dir?, loadout_path?}` → `{ok, status:ManagerStatus}` — paired Store
-/// overrides; diff deployed vs
+/// `{game_root, library_dir?, loadout_path?}` → `{ok, status:{state,...,manager_owned?}}` — paired
+/// Store overrides; diff deployed vs
 /// target loadout. `library_dir` lets status fingerprint each enabled mod's current content so a
-/// same-id re-import (update) is reported as changes-pending rather than in-sync.
+/// same-id re-import (update) is reported as changes-pending rather than in-sync. The optional
+/// bounded `manager_owned` display projection comes from that same validated record snapshot.
 fn mgr_status(payload: Value) -> Value {
     let Some(game_root) = payload.get("game_root").and_then(Value::as_str) else {
         return err("BAD_REQUEST", "missing 'game_root'");
@@ -1819,9 +1820,9 @@ fn mgr_status(payload: Value) -> Value {
         Ok(store) => store,
         Err(e) => return err("STATUS_FAILED", e.to_string()),
     };
-    match store.status(std::path::Path::new(game_root)) {
-        Ok(status) => {
-            json!({"ok": true, "status": serde_json::to_value(&status).unwrap_or(Value::Null)})
+    match store.status_report(std::path::Path::new(game_root)) {
+        Ok(report) => {
+            json!({"ok": true, "status": serde_json::to_value(&report).unwrap_or(Value::Null)})
         }
         Err(e) => err("STATUS_FAILED", e.to_string()),
     }
@@ -3521,6 +3522,41 @@ mod tests {
         );
         assert_eq!(v["ok"], true, "resp: {v}");
         assert_eq!(v["status"]["state"], "nothing_deployed");
+        assert!(v["status"].get("manager_owned").is_none(), "resp: {v}");
+    }
+
+    #[test]
+    fn mgr_status_manager_recovery_has_recorded_ownership_evidence() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game = tmp.path().join("game");
+        std::fs::create_dir_all(&game).unwrap();
+        let lib = tmp.path().join("library");
+        let lo = tmp.path().join("loadout.json");
+        std::fs::write(
+            game.join("gore-mod.deployed.json"),
+            br#"{"mod_name":"manager","ue4ss_mod_dir":null,"backups":[],"owner":"manager","phase":"recovery_required"}"#,
+        )
+        .unwrap();
+
+        let value = mgr_call(
+            "mgr_status",
+            json!({
+                "game_root": game.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(value["ok"], true, "resp: {value}");
+        assert_eq!(value["status"]["state"], "recovery_required");
+        assert_eq!(value["status"]["manager_owned"]["recovery"]["total"], 1);
+        assert_eq!(
+            value["status"]["manager_owned"]["recovery"]["items"],
+            json!([std::fs::canonicalize(&game)
+                .unwrap()
+                .join("gore-mod.deployed.json")
+                .display()
+                .to_string()])
+        );
     }
 
     /// After importing + enabling a mod and applying it, `mgr_status` against the SAME library
@@ -3582,6 +3618,31 @@ mod tests {
         );
         assert_eq!(st["ok"], true, "status resp: {st}");
         assert_eq!(st["status"]["state"], "in_sync", "resp: {st}");
+        let owned = &st["status"]["manager_owned"];
+        assert!(owned.is_object(), "status resp: {st}");
+        for group in ["live", "backups", "additive", "ue4ss", "recovery"] {
+            assert!(owned[group]["items"].is_array(), "group {group}: {st}");
+            assert!(owned[group]["total"].is_u64(), "group {group}: {st}");
+            assert!(
+                owned[group]["truncated"].is_boolean(),
+                "group {group}: {st}"
+            );
+        }
+        assert_eq!(owned["ue4ss"]["total"], 1, "status resp: {st}");
+        assert_eq!(owned["recovery"]["total"], 1, "status resp: {st}");
+        assert_eq!(
+            owned["recovery"]["items"],
+            json!([std::fs::canonicalize(&game)
+                .unwrap()
+                .join("gore-mod.deployed.json")
+                .display()
+                .to_string()]),
+            "status resp: {st}"
+        );
+        let wire = serde_json::to_string(owned).unwrap();
+        assert!(!wire.contains("sha256"));
+        assert!(!wire.contains("fingerprint"));
+        assert!(!wire.contains("mutation.lock"));
     }
 
     #[test]
@@ -3615,5 +3676,19 @@ mod tests {
         assert_eq!(v["error"]["code"], "STUDIO_DEPLOY_ACTIVE");
         // The message carries just the blocking studio mod's name.
         assert_eq!(v["error"]["message"], "SoloMod");
+
+        let status = mgr_call(
+            "mgr_status",
+            json!({
+                "game_root": game.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        assert_eq!(status["status"]["state"], "studio_deploy_active");
+        assert!(
+            status["status"].get("manager_owned").is_none(),
+            "resp: {status}"
+        );
     }
 }

@@ -169,6 +169,38 @@ class AppLocalizationsIt extends AppLocalizations {
   String get statusRecoveryRequired => 'Ripristino necessario';
 
   @override
+  String get statusDetailsOwnershipTitle => 'Prove di proprietà registrate';
+
+  @override
+  String get statusDetailsOwnershipDescription =>
+      'Percorsi registrati nel record di distribuzione del gestore. Non provano che tali percorsi esistano ancora.';
+
+  @override
+  String get statusDetailsOwnershipLive => 'File di gioco sostituiti';
+
+  @override
+  String get statusDetailsOwnershipBackups => 'Backup originali';
+
+  @override
+  String get statusDetailsOwnershipAdditive =>
+      'File pak e contenitori aggiunti';
+
+  @override
+  String get statusDetailsOwnershipUe4ss => 'Cartelle mod UE4SS';
+
+  @override
+  String get statusDetailsOwnershipRecovery => 'File e posizioni di recupero';
+
+  @override
+  String get statusDetailsOwnershipEmpty =>
+      'Nessun percorso registrato in questo gruppo.';
+
+  @override
+  String statusDetailsOwnershipShown(int shown, int total) {
+    return 'Visualizzati $shown di $total percorsi registrati.';
+  }
+
+  @override
   String get appTitle => 'GORE Mod Manager';
 
   @override

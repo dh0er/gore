@@ -115,6 +115,28 @@ Map<String, Object?> _libraryListResponse() => {
   },
 };
 
+Map<String, Object?> _ownedGroup(
+  List<Object?> items, {
+  int? total,
+  bool? truncated,
+}) => {
+  'items': items,
+  'total': total ?? items.length,
+  'truncated': truncated ?? false,
+};
+
+Map<String, Object?> _managerOwnedWire() => {
+  'live': _ownedGroup(['C:/game/G1R/Story/VoiceOver/a.zip']),
+  'backups': _ownedGroup(['C:/game/G1R/Story/VoiceOver/a.zip.gore-bak']),
+  'additive': _ownedGroup(['C:/game/G1R/Content/Paks/~mods/a_P.pak']),
+  'ue4ss': _ownedGroup(['C:/game/G1R/Binaries/Win64/ue4ss/Mods/A']),
+  'recovery': _ownedGroup(
+    ['C:/game/gore-mod.deployed.json'],
+    total: 2,
+    truncated: true,
+  ),
+};
+
 void main() {
   group('canonical native response decoding', () {
     test('retains one compact exact object', () {
@@ -344,7 +366,102 @@ void main() {
       final s = await parse({'state': 'recovery_required'});
       expect(s, isA<ManagerStatusRecoveryRequired>());
       expect(s.state, 'recovery_required');
+      expect(s.managerOwned, isNull);
     });
+
+    test('parses all five bounded manager-owned groups additively', () async {
+      final s = await parse({
+        'state': 'recovery_required',
+        'manager_owned': _managerOwnedWire(),
+      });
+      expect(s, isA<ManagerStatusRecoveryRequired>());
+      final owned = s.managerOwned!;
+      expect(owned.live.items, ['C:/game/G1R/Story/VoiceOver/a.zip']);
+      expect(owned.backups.total, 1);
+      expect(owned.additive.truncated, isFalse);
+      expect(owned.ue4ss.items, hasLength(1));
+      expect(owned.recovery.items, ['C:/game/gore-mod.deployed.json']);
+      expect(owned.recovery.total, 2);
+      expect(owned.recovery.truncated, isTrue);
+    });
+
+    test(
+      'malformed ownership detail is hidden without losing base status',
+      () async {
+        final malformed = <Object?>[
+          'not-an-object',
+          {..._managerOwnedWire()}..remove('live'),
+          {
+            ..._managerOwnedWire(),
+            'live': _ownedGroup([7]),
+          },
+          {
+            ..._managerOwnedWire(),
+            'live': _ownedGroup(List<Object?>.filled(129, 'C:/x')),
+          },
+          {
+            ..._managerOwnedWire(),
+            'live': _ownedGroup([List.filled(4097, 'x').join()]),
+          },
+          {
+            ..._managerOwnedWire(),
+            'live': _ownedGroup([
+              for (var i = 0; i < 17; i++) '$i${List.filled(4094, 'x').join()}',
+            ]),
+          },
+          {..._managerOwnedWire(), 'live': _ownedGroup([], total: -1)},
+          {
+            ..._managerOwnedWire(),
+            'live': _ownedGroup(['C:/x'], total: 0),
+          },
+          {
+            ..._managerOwnedWire(),
+            'live': _ownedGroup([], total: 1, truncated: false),
+          },
+        ];
+
+        for (final managerOwned in malformed) {
+          final s = await parse({
+            'state': 'in_sync',
+            'loadout': <Object?>[],
+            'manager_owned': managerOwned,
+          });
+          expect(s, isA<ManagerStatusInSync>());
+          expect(s.managerOwned, isNull, reason: '$managerOwned');
+        }
+      },
+    );
+
+    test('extra ownership fields remain forward compatible', () async {
+      final s = await parse({
+        'state': 'in_sync',
+        'loadout': <Object?>[],
+        'manager_owned': {
+          ..._managerOwnedWire(),
+          'future_group': _ownedGroup([]),
+          'live': {..._ownedGroup([]), 'future_fact': 7},
+        },
+      });
+      expect(s.managerOwned, isNotNull);
+      expect(s.managerOwned!.live.total, 0);
+    });
+
+    test(
+      'Nothing, Studio, and future states never adopt ownership detail',
+      () async {
+        for (final state in [
+          'nothing_deployed',
+          'studio_deploy_active',
+          'future_state',
+        ]) {
+          final s = await parse({
+            'state': state,
+            'manager_owned': _managerOwnedWire(),
+          });
+          expect(s.managerOwned, isNull, reason: state);
+        }
+      },
+    );
 
     test('parses in_sync with loadout (wire shape: entry ARRAY)', () async {
       final s = await parse({

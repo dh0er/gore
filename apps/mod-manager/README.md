@@ -33,6 +33,11 @@ portable builds are deliberately updater-free.
 - **Apply** declaratively: full-recompute the modded state from a pristine base
   and deploy the whole enabled set (backups first), or **undeploy all** to
   restore.
+- **Inspect recorded ownership evidence** in deployment details for an exact
+  Manager-owned record: replaced files, pristine backups, additive containers,
+  UE4SS directories, and recovery paths. These bounded, selectable paths are
+  record evidence only; they do not claim that a path still exists or grant a
+  cleanup action.
 - **Take over** a Mod Studio test-deploy so both tools do not fight over the
   install.
 

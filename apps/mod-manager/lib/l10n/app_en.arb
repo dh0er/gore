@@ -68,6 +68,25 @@
   "recoveryAction": "Recover",
   "recoveryRequiredConfirm": "Recover the interrupted deployment and remove any partially deployed files?",
   "statusRecoveryRequired": "Recovery required",
+  "statusDetailsOwnershipTitle": "Recorded ownership evidence",
+  "statusDetailsOwnershipDescription": "Paths recorded in the Manager deploy record. They do not prove that those paths still exist.",
+  "statusDetailsOwnershipLive": "Replaced game files",
+  "statusDetailsOwnershipBackups": "Pristine backups",
+  "statusDetailsOwnershipAdditive": "Added pak and container files",
+  "statusDetailsOwnershipUe4ss": "UE4SS mod directories",
+  "statusDetailsOwnershipRecovery": "Recovery files and holders",
+  "statusDetailsOwnershipEmpty": "No paths recorded in this group.",
+  "statusDetailsOwnershipShown": "{shown} of {total} recorded paths shown.",
+  "@statusDetailsOwnershipShown": {
+    "placeholders": {
+      "shown": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
   "appTitle": "GORE Mod Manager",
   "tabMods": "Mods",
   "tabSettings": "Settings",

@@ -166,6 +166,36 @@ class AppLocalizationsEn extends AppLocalizations {
   String get statusRecoveryRequired => 'Recovery required';
 
   @override
+  String get statusDetailsOwnershipTitle => 'Recorded ownership evidence';
+
+  @override
+  String get statusDetailsOwnershipDescription =>
+      'Paths recorded in the Manager deploy record. They do not prove that those paths still exist.';
+
+  @override
+  String get statusDetailsOwnershipLive => 'Replaced game files';
+
+  @override
+  String get statusDetailsOwnershipBackups => 'Pristine backups';
+
+  @override
+  String get statusDetailsOwnershipAdditive => 'Added pak and container files';
+
+  @override
+  String get statusDetailsOwnershipUe4ss => 'UE4SS mod directories';
+
+  @override
+  String get statusDetailsOwnershipRecovery => 'Recovery files and holders';
+
+  @override
+  String get statusDetailsOwnershipEmpty => 'No paths recorded in this group.';
+
+  @override
+  String statusDetailsOwnershipShown(int shown, int total) {
+    return '$shown of $total recorded paths shown.';
+  }
+
+  @override
   String get appTitle => 'GORE Mod Manager';
 
   @override

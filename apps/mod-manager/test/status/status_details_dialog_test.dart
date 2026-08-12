@@ -37,6 +37,31 @@ StatusState _state(
   studioActive: status['state'] == 'studio_deploy_active',
 );
 
+Map<String, Object?> _ownedGroup(
+  List<String> items, {
+  int? total,
+  bool? truncated,
+}) => {
+  'items': items,
+  'total': total ?? items.length,
+  'truncated': truncated ?? (total != null && total > items.length),
+};
+
+Map<String, Object?> _ownedEvidence({
+  List<String> live = const [],
+  List<String> backups = const [],
+  List<String> additive = const [],
+  List<String> ue4ss = const [],
+  List<String> recovery = const [],
+  int? recoveryTotal,
+}) => {
+  'live': _ownedGroup(live),
+  'backups': _ownedGroup(backups),
+  'additive': _ownedGroup(additive),
+  'ue4ss': _ownedGroup(ue4ss),
+  'recovery': _ownedGroup(recovery, total: recoveryTotal),
+};
+
 class _DialogHarness extends StatelessWidget {
   const _DialogHarness({
     required this.state,
@@ -190,6 +215,149 @@ void main() {
   );
 
   testWidgets(
+    'recorded ownership evidence is collapsed, complete, selectable, and sanitized',
+    (tester) async {
+      await _open(
+        tester,
+        _state({
+          'state': 'in_sync',
+          'loadout': <Object?>[],
+          'manager_owned': _ownedEvidence(
+            live: ['C:/game/G1R/safe\u202eevil\u0007.bin'],
+            backups: ['C:/game/G1R/original.bin.gore-bak'],
+            recovery: ['C:/game/gore-mod.deployed.json'],
+            recoveryTotal: 3,
+          ),
+        }),
+      );
+
+      expect(find.text('Recorded ownership evidence'), findsOneWidget);
+      expect(find.text('C:/game/G1R/safe evil .bin'), findsNothing);
+      expect(find.textContaining('\u202e'), findsNothing);
+
+      await tester.tap(
+        find.byKey(const ValueKey('status-details-manager-owned')),
+      );
+      await tester.pumpAndSettle();
+
+      for (final heading in [
+        'Replaced game files',
+        'Pristine backups',
+        'Added pak and container files',
+        'UE4SS mod directories',
+        'Recovery files and holders',
+      ]) {
+        expect(find.text(heading), findsOneWidget);
+      }
+      expect(find.text('C:/game/G1R/safe evil .bin'), findsOneWidget);
+      expect(find.text('C:/game/G1R/original.bin.gore-bak'), findsOneWidget);
+      expect(find.text('C:/game/gore-mod.deployed.json'), findsOneWidget);
+      expect(find.text('No paths recorded in this group.'), findsNWidgets(2));
+      expect(find.text('1 of 3 recorded paths shown.'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('status-details-owned-live-0')),
+          matching: find.byType(SelectionArea),
+        ),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'fully hidden ownership group reports truncation without claiming empty',
+    (tester) async {
+      await _open(
+        tester,
+        _state({
+          'state': 'in_sync',
+          'loadout': <Object?>[],
+          'manager_owned': _ownedEvidence(
+            recovery: ['\u202e'],
+            recoveryTotal: 2,
+          ),
+        }),
+      );
+
+      await tester.tap(
+        find.byKey(const ValueKey('status-details-manager-owned')),
+      );
+      await tester.pumpAndSettle();
+
+      final recovery = find.byKey(
+        const ValueKey('status-details-group-owned-recovery'),
+      );
+      expect(
+        find.descendant(
+          of: recovery,
+          matching: find.text('No paths recorded in this group.'),
+        ),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: recovery,
+          matching: find.text('0 of 2 recorded paths shown.'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('\u202e'), findsNothing);
+    },
+  );
+
+  testWidgets('unauthorized states ignore even syntactically valid evidence', (
+    tester,
+  ) async {
+    for (final status in [
+      {
+        'state': 'nothing_deployed',
+        'manager_owned': _ownedEvidence(live: ['C:/must-not-show']),
+      },
+      {
+        'state': 'studio_deploy_active',
+        'mod_name': 'Studio',
+        'manager_owned': _ownedEvidence(live: ['C:/must-not-show']),
+      },
+      {
+        'state': 'future_state',
+        'manager_owned': _ownedEvidence(live: ['C:/must-not-show']),
+      },
+    ]) {
+      await _open(tester, _state(status), applyEnabled: false);
+      expect(
+        find.byKey(const ValueKey('status-details-manager-owned')),
+        findsNothing,
+      );
+      expect(find.text('C:/must-not-show'), findsNothing);
+      await tester.tap(
+        find.byKey(const ValueKey('status-details-action-close')),
+      );
+      await tester.pumpAndSettle();
+    }
+  });
+
+  test('ownership copy is generated for all supported locales', () async {
+    for (final locale in AppLocalizations.supportedLocales) {
+      final l10n = await AppLocalizations.delegate.load(locale);
+      expect(
+        [
+          l10n.statusDetailsOwnershipTitle,
+          l10n.statusDetailsOwnershipDescription,
+          l10n.statusDetailsOwnershipLive,
+          l10n.statusDetailsOwnershipBackups,
+          l10n.statusDetailsOwnershipAdditive,
+          l10n.statusDetailsOwnershipUe4ss,
+          l10n.statusDetailsOwnershipRecovery,
+          l10n.statusDetailsOwnershipEmpty,
+          l10n.statusDetailsOwnershipShown(1, 2),
+        ].every((value) => value.trim().isNotEmpty),
+        isTrue,
+        reason: locale.toLanguageTag(),
+      );
+    }
+  });
+
+  testWidgets(
     'changes pending compares deployed and target and preserves disabled Apply semantics',
     (tester) async {
       await _open(
@@ -296,7 +464,12 @@ void main() {
     StatusDetailsResult? result;
     await tester.pumpWidget(
       _DialogHarness(
-        state: _state({'state': 'recovery_required'}),
+        state: _state({
+          'state': 'recovery_required',
+          'manager_owned': _ownedEvidence(
+            recovery: ['C:/game/gore-mod.deployed.json'],
+          ),
+        }),
         currentRoot: _root,
         applyEnabled: false,
         operationsBusy: false,
@@ -305,6 +478,10 @@ void main() {
     );
     await tester.tap(find.byKey(const ValueKey('open-status-dialog')));
     await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('status-details-manager-owned')),
+      findsOneWidget,
+    );
     await tester.tap(
       find.byKey(const ValueKey('status-details-action-recover')),
     );
@@ -426,7 +603,11 @@ void main() {
     await _open(
       tester,
       _state(
-        {'state': 'in_sync', 'loadout': <Object?>[]},
+        {
+          'state': 'in_sync',
+          'loadout': <Object?>[],
+          'manager_owned': _ownedEvidence(live: ['C:/old-root-owned.bin']),
+        },
         error: 'old-root native detail',
         report: const ApplyReportView(
           applied: ['Old root mod'],
@@ -440,6 +621,8 @@ void main() {
     expect(find.text('old-root native detail'), findsNothing);
     expect(find.text('Old root mod'), findsNothing);
     expect(find.text('Old root warning'), findsNothing);
+    expect(find.text('Recorded ownership evidence'), findsNothing);
+    expect(find.text('C:/old-root-owned.bin'), findsNothing);
     expect(
       find.byKey(const ValueKey('status-details-action-refresh')),
       findsOneWidget,
@@ -591,5 +774,51 @@ void main() {
       find.byKey(const ValueKey('status-details-action-reapply')).hitTestable(),
       findsOneWidget,
     );
+  });
+
+  testWidgets('128 recorded paths stay lazy at compact 200 percent text', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(700, 460);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final paths = [
+      for (var i = 0; i < 128; i++) 'C:/game/G1R/Content/owned-$i.bin',
+    ];
+
+    await _open(
+      tester,
+      _state({
+        'state': 'in_sync',
+        'loadout': <Object?>[],
+        'manager_owned': _ownedEvidence(live: paths),
+      }),
+      textScaler: const TextScaler.linear(2),
+    );
+    final expansion = find.byKey(
+      const ValueKey('status-details-manager-owned'),
+    );
+    await tester.ensureVisible(expansion);
+    await tester.tap(expansion);
+    await tester.pumpAndSettle();
+
+    final listFinder = find.byKey(
+      const ValueKey('status-details-list-owned-live'),
+    );
+    final list = tester.widget<ListView>(listFinder);
+    final delegate = list.childrenDelegate as SliverChildBuilderDelegate;
+    expect(delegate.estimatedChildCount, 128);
+    final builtRows = find.byWidgetPredicate((widget) {
+      final key = widget.key;
+      return key is ValueKey<String> &&
+          key.value.startsWith('status-details-owned-live-');
+    });
+    expect(builtRows.evaluate().length, lessThan(100));
+    expect(
+      find.byKey(const ValueKey('status-details-action-close')).hitTestable(),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
   });
 }

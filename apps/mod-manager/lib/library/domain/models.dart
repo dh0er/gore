@@ -7,6 +7,12 @@
 /// not model every field, the unparsed JSON is kept in `raw`.
 library;
 
+import 'dart:convert';
+
+const _maxManagerOwnedItems = 128;
+const _maxManagerOwnedSourceBytes = 64 * 1024;
+const _maxManagerOwnedItemBytes = 4 * 1024;
+
 String? _optString(Object? value) =>
     value is String && value.isNotEmpty ? value : null;
 
@@ -33,6 +39,62 @@ LoadoutView? _loadoutOrNull(Object? value) {
     return LoadoutView.fromJson(value.cast<String, Object?>());
   }
   return null;
+}
+
+ManagerOwnedPathGroupView? _managerOwnedGroupOrNull(Object? value) {
+  if (value is! Map) return null;
+  final rawItems = value['items'];
+  final total = value['total'];
+  final truncated = value['truncated'];
+  if (rawItems is! List ||
+      rawItems.length > _maxManagerOwnedItems ||
+      rawItems.any((item) => item is! String) ||
+      total is! int ||
+      total < rawItems.length ||
+      truncated is! bool ||
+      truncated != (rawItems.length < total)) {
+    return null;
+  }
+  final items = rawItems.cast<String>();
+  var sourceBytes = 0;
+  try {
+    for (final item in items) {
+      final itemBytes = utf8.encode(item).length;
+      if (itemBytes > _maxManagerOwnedItemBytes) return null;
+      sourceBytes += itemBytes;
+      if (sourceBytes > _maxManagerOwnedSourceBytes) return null;
+    }
+  } on FormatException {
+    return null;
+  }
+  return ManagerOwnedPathGroupView(
+    items: List.unmodifiable(items),
+    total: total,
+    truncated: truncated,
+  );
+}
+
+ManagerOwnedDeploymentView? _managerOwnedOrNull(Object? value) {
+  if (value is! Map) return null;
+  final live = _managerOwnedGroupOrNull(value['live']);
+  final backups = _managerOwnedGroupOrNull(value['backups']);
+  final additive = _managerOwnedGroupOrNull(value['additive']);
+  final ue4ss = _managerOwnedGroupOrNull(value['ue4ss']);
+  final recovery = _managerOwnedGroupOrNull(value['recovery']);
+  if (live == null ||
+      backups == null ||
+      additive == null ||
+      ue4ss == null ||
+      recovery == null) {
+    return null;
+  }
+  return ManagerOwnedDeploymentView(
+    live: live,
+    backups: backups,
+    additive: additive,
+    ue4ss: ue4ss,
+    recovery: recovery,
+  );
 }
 
 /// Library metadata for one installed mod (`ModEntryMeta` on the Rust side).
@@ -312,6 +374,37 @@ class ApplyReportView {
   final List<String> warnings;
 }
 
+/// One bounded group of paths recorded as Manager-owned deployment evidence.
+/// Paths are display-only and do not assert that the named object still exists.
+class ManagerOwnedPathGroupView {
+  const ManagerOwnedPathGroupView({
+    required this.items,
+    required this.total,
+    required this.truncated,
+  });
+
+  final List<String> items;
+  final int total;
+  final bool truncated;
+}
+
+/// The five fixed path groups projected from one validated Manager deploy record.
+class ManagerOwnedDeploymentView {
+  const ManagerOwnedDeploymentView({
+    required this.live,
+    required this.backups,
+    required this.additive,
+    required this.ue4ss,
+    required this.recovery,
+  });
+
+  final ManagerOwnedPathGroupView live;
+  final ManagerOwnedPathGroupView backups;
+  final ManagerOwnedPathGroupView additive;
+  final ManagerOwnedPathGroupView ue4ss;
+  final ManagerOwnedPathGroupView recovery;
+}
+
 /// Deployment status of the game install (`mgr_status`). Sealed hierarchy —
 /// switch on the subtype. Unknown / future states parse as
 /// [ManagerStatusUnknown] so a newer DLL never breaks status display; each
@@ -323,7 +416,7 @@ sealed class ManagerStatusView {
   factory ManagerStatusView.fromJson(Map<String, Object?> json) {
     return switch (json['state']) {
       'nothing_deployed' => ManagerStatusNothingDeployed(json),
-      'recovery_required' => ManagerStatusRecoveryRequired(json),
+      'recovery_required' => ManagerStatusRecoveryRequired.fromJson(json),
       'studio_deploy_active' => ManagerStatusStudioDeployActive(json),
       'in_sync' => ManagerStatusInSync(json),
       'changes_pending' => ManagerStatusChangesPending(json),
@@ -337,6 +430,11 @@ sealed class ManagerStatusView {
 
   /// The raw state tag.
   String get state;
+
+  /// Optional display-only paths from an exact Manager-owned record. Unknown,
+  /// Nothing, and Studio states never adopt this field even if malformed or
+  /// future wire data includes it.
+  ManagerOwnedDeploymentView? get managerOwned => null;
 }
 
 /// No manager deployment exists in the game install.
@@ -350,7 +448,13 @@ class ManagerStatusNothingDeployed extends ManagerStatusView {
 /// An interrupted deployment must be recovered through undeploy before any new
 /// deployment is safe.
 class ManagerStatusRecoveryRequired extends ManagerStatusView {
-  const ManagerStatusRecoveryRequired(super.raw);
+  const ManagerStatusRecoveryRequired(super.raw) : managerOwned = null;
+
+  ManagerStatusRecoveryRequired.fromJson(super.raw)
+    : managerOwned = _managerOwnedOrNull(raw['manager_owned']);
+
+  @override
+  final ManagerOwnedDeploymentView? managerOwned;
 
   @override
   String get state => 'recovery_required';
@@ -371,10 +475,15 @@ class ManagerStatusStudioDeployActive extends ManagerStatusView {
 
 /// The deployed state matches the current loadout.
 class ManagerStatusInSync extends ManagerStatusView {
-  ManagerStatusInSync(super.raw) : loadout = _loadoutOrNull(raw['loadout']);
+  ManagerStatusInSync(super.raw)
+    : loadout = _loadoutOrNull(raw['loadout']),
+      managerOwned = _managerOwnedOrNull(raw['manager_owned']);
 
   /// The deployed loadout (null when the DLL sent an unexpected shape).
   final LoadoutView? loadout;
+
+  @override
+  final ManagerOwnedDeploymentView? managerOwned;
 
   @override
   String get state => 'in_sync';
@@ -384,10 +493,14 @@ class ManagerStatusInSync extends ManagerStatusView {
 class ManagerStatusChangesPending extends ManagerStatusView {
   ManagerStatusChangesPending(super.raw)
     : deployed = _loadoutOrNull(raw['deployed']),
-      target = _loadoutOrNull(raw['target']);
+      target = _loadoutOrNull(raw['target']),
+      managerOwned = _managerOwnedOrNull(raw['manager_owned']);
 
   final LoadoutView? deployed;
   final LoadoutView? target;
+
+  @override
+  final ManagerOwnedDeploymentView? managerOwned;
 
   @override
   String get state => 'changes_pending';
@@ -395,11 +508,16 @@ class ManagerStatusChangesPending extends ManagerStatusView {
 
 /// A game update overwrote deployed files; a re-apply is needed.
 class ManagerStatusGameUpdated extends ManagerStatusView {
-  ManagerStatusGameUpdated(super.raw) : drifted = _stringList(raw['drifted']);
+  ManagerStatusGameUpdated(super.raw)
+    : drifted = _stringList(raw['drifted']),
+      managerOwned = _managerOwnedOrNull(raw['manager_owned']);
 
   /// Game-relative paths whose on-disk content drifted from what the manager
   /// deployed (empty when the DLL reported drift another way — see [raw]).
   final List<String> drifted;
+
+  @override
+  final ManagerOwnedDeploymentView? managerOwned;
 
   @override
   String get state => 'game_updated';

@@ -20,7 +20,7 @@
 //! reads each enabled mod's library sidecar to fingerprint it; it never writes.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -38,6 +38,9 @@ const MAX_PREFLIGHT_STATUS_HASH_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 const MAX_PREFLIGHT_STATUS_HASH_ENTRIES: u64 = 250_000;
 const MAX_PREFLIGHT_STATUS_TREE_ENTRIES: u64 = 250_000;
 const MAX_PREFLIGHT_STATUS_PATH_ENTRIES: u64 = 250_000;
+const MAX_OWNED_PATH_ITEMS: usize = 128;
+const MAX_OWNED_PATH_BYTES: usize = 64 * 1024;
+const MAX_OWNED_PATH_ITEM_BYTES: usize = 4 * 1024;
 
 /// The manager's deployment state relative to a target loadout. `#[serde(tag = "state")]` so the
 /// UI can switch on a single discriminant field.
@@ -61,6 +64,132 @@ pub enum ManagerStatus {
     /// integrity verify). `drifted` lists those live or backup paths, sorted. The deployment is
     /// stale; re-applying rebuilds against the refreshed game files.
     GameUpdated { drifted: Vec<String> },
+}
+
+/// Display-only ownership evidence from the same validated deploy-record snapshot as
+/// [`ManagerStatus`]. This is deliberately separate from the state enum so existing Rust callers
+/// keep exhaustive-match compatibility while additive wire consumers can inspect recorded paths.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ManagerStatusReport {
+    #[serde(flatten)]
+    pub status: ManagerStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manager_owned: Option<ManagerOwnedDeployment>,
+}
+
+/// The five bounded classes of paths an exact Manager-owned deploy record says it owns.
+/// They are historical record evidence only: no member claims that a path currently exists.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ManagerOwnedDeployment {
+    pub live: ManagerOwnedPathGroup,
+    pub backups: ManagerOwnedPathGroup,
+    pub additive: ManagerOwnedPathGroup,
+    pub ue4ss: ManagerOwnedPathGroup,
+    pub recovery: ManagerOwnedPathGroup,
+}
+
+/// One stable, per-platform-path-key deduplicated and bounded display group.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ManagerOwnedPathGroup {
+    pub items: Vec<String>,
+    /// Unique candidates before the item, aggregate-byte, and per-item display caps.
+    pub total: usize,
+    pub truncated: bool,
+}
+
+fn manager_owned_path_group(paths: impl IntoIterator<Item = String>) -> ManagerOwnedPathGroup {
+    // A BTreeMap both gives stable platform-key order and retains at most one spelling per path.
+    // If a record contains aliases for one key, choose the lexically first spelling so the result
+    // is independent of source-field order.
+    let mut unique = BTreeMap::<String, String>::new();
+    for path in paths {
+        let key = crate::record_path_key(Path::new(&path));
+        unique
+            .entry(key)
+            .and_modify(|current| {
+                if path < *current {
+                    *current = path.clone();
+                }
+            })
+            .or_insert(path);
+    }
+
+    let total = unique.len();
+    let mut items = Vec::new();
+    let mut source_bytes = 0usize;
+    for path in unique.into_values() {
+        let path_bytes = path.len();
+        if path_bytes > MAX_OWNED_PATH_ITEM_BYTES
+            || items.len() == MAX_OWNED_PATH_ITEMS
+            || source_bytes.saturating_add(path_bytes) > MAX_OWNED_PATH_BYTES
+        {
+            continue;
+        }
+        source_bytes += path_bytes;
+        items.push(path);
+    }
+    ManagerOwnedPathGroup {
+        truncated: items.len() < total,
+        items,
+        total,
+    }
+}
+
+fn manager_owned_deployment(
+    game_root: &Path,
+    record: &crate::DeployRecord,
+) -> Option<ManagerOwnedDeployment> {
+    if record.owner != "manager" {
+        return None;
+    }
+
+    let live = manager_owned_path_group(record.backups.iter().map(|(live, _, _)| live.clone()));
+    let backups =
+        manager_owned_path_group(record.backups.iter().map(|(_, backup, _)| backup.clone()));
+    let additive = manager_owned_path_group(
+        record
+            .texture_triplets
+            .iter()
+            .chain(record.managed_paks.iter())
+            .cloned(),
+    );
+    let ue4ss = manager_owned_path_group(
+        record
+            .ue4ss_mod_dir
+            .iter()
+            .chain(record.ue4ss_mod_dirs.iter())
+            .chain(record.stale_ue4ss_dirs.iter())
+            .cloned(),
+    );
+
+    let mut recovery = vec![crate::deploy_record_path(game_root).display().to_string()];
+    for (source, holder) in &record.ue4ss_cleanup_claims {
+        recovery.push(source.clone());
+        recovery.push(holder.clone());
+    }
+    for (source, claim) in &record.file_cleanup_claims {
+        recovery.push(source.clone());
+        recovery.push(claim.holder.clone());
+        recovery.push(
+            PathBuf::from(&claim.holder)
+                .join("claimed")
+                .display()
+                .to_string(),
+        );
+        recovery.extend(claim.restore_from.iter().cloned());
+    }
+    recovery.extend(record.trusted_ue4ss_tombstones.iter().cloned());
+    recovery.extend(record.trusted_file_tombstones.iter().cloned());
+    recovery.extend(record.recovery_file_hashes.keys().cloned());
+    recovery.extend(record.recovery_tree_fingerprints.keys().cloned());
+
+    Some(ManagerOwnedDeployment {
+        live,
+        backups,
+        additive,
+        ue4ss,
+        recovery: manager_owned_path_group(recovery),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -379,7 +508,23 @@ pub fn status(
     library_dir: &Path,
     target: &Loadout,
 ) -> crate::Result<ManagerStatus> {
-    status_with_failure_policy(
+    Ok(status_report_with_failure_policy(
+        game_root,
+        library_dir,
+        target,
+        InspectionFailurePolicy::TreatAsDrift,
+    )?
+    .status)
+}
+
+/// The same authoritative status plus optional bounded display-only ownership evidence.
+/// `manager_owned` is absent unless the validated record's exact owner is `manager`.
+pub fn status_report(
+    game_root: &Path,
+    library_dir: &Path,
+    target: &Loadout,
+) -> crate::Result<ManagerStatusReport> {
+    status_report_with_failure_policy(
         game_root,
         library_dir,
         target,
@@ -394,28 +539,33 @@ pub(super) fn status_for_preflight(
     library_dir: &Path,
     target: &Loadout,
 ) -> crate::Result<ManagerStatus> {
-    status_with_failure_policy(
+    Ok(status_report_with_failure_policy(
         game_root,
         library_dir,
         target,
         InspectionFailurePolicy::Preserve,
-    )
+    )?
+    .status)
 }
 
-fn status_with_failure_policy(
+fn status_report_with_failure_policy(
     game_root: &Path,
     library_dir: &Path,
     target: &Loadout,
     failure_policy: InspectionFailurePolicy,
-) -> crate::Result<ManagerStatus> {
+) -> crate::Result<ManagerStatusReport> {
     // Match deploy/undeploy's record location logic so status reads the SAME record they wrote,
     // regardless of whether the caller passed the install dir or its `G1R` child, or a relative
     // path from a different cwd.
     let game_root = crate::abs_root(game_root);
     let Some(stored) = crate::read_record(&game_root)? else {
-        return Ok(ManagerStatus::NothingDeployed);
+        return Ok(ManagerStatusReport {
+            status: ManagerStatus::NothingDeployed,
+            manager_owned: None,
+        });
     };
     let record = stored.record;
+    let manager_owned = manager_owned_deployment(&game_root, &record);
 
     let recovery_required = record.phase == crate::DeployPhase::RecoveryRequired
         || !record.file_cleanup_claims.is_empty()
@@ -424,14 +574,20 @@ fn status_with_failure_policy(
         crate::validate_record_identities(&record)?;
     }
     if recovery_required {
-        return Ok(ManagerStatus::RecoveryRequired);
+        return Ok(ManagerStatusReport {
+            status: ManagerStatus::RecoveryRequired,
+            manager_owned,
+        });
     }
 
     // A studio (non-manager) deployment is off-limits to the manager: it doesn't own it and can't
     // meaningfully diff a single hand-built bundle against a loadout.
     if record.owner != "manager" {
-        return Ok(ManagerStatus::StudioDeployActive {
-            mod_name: record.mod_name,
+        return Ok(ManagerStatusReport {
+            status: ManagerStatus::StudioDeployActive {
+                mod_name: record.mod_name,
+            },
+            manager_owned: None,
         });
     }
 
@@ -587,7 +743,10 @@ fn status_with_failure_policy(
     if !drifted.is_empty() {
         drifted.sort();
         drifted.dedup();
-        return Ok(ManagerStatus::GameUpdated { drifted });
+        return Ok(ManagerStatusReport {
+            status: ManagerStatus::GameUpdated { drifted },
+            manager_owned,
+        });
     }
 
     // Compare the deployed snapshot against the target's ENABLED entries only, order-sensitively
@@ -600,9 +759,12 @@ fn status_with_failure_policy(
         .cloned()
         .collect();
     if record.loadout != target_enabled {
-        return Ok(ManagerStatus::ChangesPending {
-            deployed: record.loadout,
-            target: target_enabled,
+        return Ok(ManagerStatusReport {
+            status: ManagerStatus::ChangesPending {
+                deployed: record.loadout,
+                target: target_enabled,
+            },
+            manager_owned,
         });
     }
 
@@ -616,9 +778,12 @@ fn status_with_failure_policy(
     let library = match LibraryRoot::open(library_dir) {
         Ok(library) => library,
         Err(_) => {
-            return Ok(ManagerStatus::ChangesPending {
-                deployed: record.loadout,
-                target: target_enabled,
+            return Ok(ManagerStatusReport {
+                status: ManagerStatus::ChangesPending {
+                    deployed: record.loadout,
+                    target: target_enabled,
+                },
+                manager_owned,
             });
         }
     };
@@ -629,14 +794,20 @@ fn status_with_failure_policy(
         &record.deployed_fingerprints,
         &mut remaining_meta_bytes,
     ) {
-        return Ok(ManagerStatus::ChangesPending {
-            deployed: record.loadout,
-            target: target_enabled,
+        return Ok(ManagerStatusReport {
+            status: ManagerStatus::ChangesPending {
+                deployed: record.loadout,
+                target: target_enabled,
+            },
+            manager_owned,
         });
     }
 
-    Ok(ManagerStatus::InSync {
-        loadout: record.loadout,
+    Ok(ManagerStatusReport {
+        status: ManagerStatus::InSync {
+            loadout: record.loadout,
+        },
+        manager_owned,
     })
 }
 
@@ -686,8 +857,8 @@ mod tests {
     use super::*;
     use crate::canonical_tempfile as tempfile;
     use crate::mgr::model::{ComponentInfo, ModEntryMeta, ModKind, META_FILE};
-    use crate::{record_path, DeployPhase, DeployRecord};
-    use std::collections::BTreeMap;
+    use crate::{record_path, DeployPhase, DeployRecord, FileCleanupClaim};
+    use std::collections::{BTreeMap, BTreeSet};
 
     #[cfg(unix)]
     fn make_dir_link(target: &Path, link: &Path) -> bool {
@@ -721,6 +892,141 @@ mod tests {
     fn write_record(game: &Path, rec: &DeployRecord) {
         std::fs::create_dir_all(game).unwrap();
         std::fs::write(record_path(game), serde_json::to_vec(rec).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn manager_owned_path_group_deduplicates_and_applies_each_display_cap() {
+        let stable_group = manager_owned_path_group([
+            "C:/game/z.bin".to_owned(),
+            "C:/game/a.bin".to_owned(),
+            "C:/game/m.bin".to_owned(),
+            "C:/game/a.bin".to_owned(),
+        ]);
+        assert_eq!(
+            stable_group.items,
+            vec![
+                "C:/game/a.bin".to_owned(),
+                "C:/game/m.bin".to_owned(),
+                "C:/game/z.bin".to_owned(),
+            ]
+        );
+        assert_eq!(stable_group.total, 3);
+        assert!(!stable_group.truncated);
+
+        #[cfg(windows)]
+        {
+            let aliases = manager_owned_path_group([
+                r"C:\Game\G1R\Content\A.bin".to_owned(),
+                "c:/game/g1r/content/a.bin".to_owned(),
+            ]);
+            assert_eq!(aliases.total, 1);
+            assert_eq!(aliases.items, vec![r"C:\Game\G1R\Content\A.bin"]);
+        }
+
+        let count_group = manager_owned_path_group(
+            (0..130)
+                .map(|index| format!("C:/game/G1R/Content/path-{index:03}.bin"))
+                .chain(std::iter::once(
+                    "C:/game/G1R/Content/path-000.bin".to_owned(),
+                )),
+        );
+        assert_eq!(count_group.total, 130);
+        assert_eq!(count_group.items.len(), MAX_OWNED_PATH_ITEMS);
+        assert!(count_group.truncated);
+
+        let exact_4096 = "a".repeat(MAX_OWNED_PATH_ITEM_BYTES);
+        let overlong = "b".repeat(MAX_OWNED_PATH_ITEM_BYTES + 1);
+        let item_group = manager_owned_path_group([exact_4096.clone(), overlong]);
+        assert_eq!(item_group.total, 2);
+        assert_eq!(item_group.items, vec![exact_4096]);
+        assert!(item_group.truncated);
+
+        let byte_group = manager_owned_path_group((0..17).map(|index| {
+            let prefix = format!("{index:02}");
+            format!(
+                "{prefix}{}",
+                "x".repeat(MAX_OWNED_PATH_ITEM_BYTES - prefix.len())
+            )
+        }));
+        assert_eq!(byte_group.total, 17);
+        assert_eq!(byte_group.items.len(), 16);
+        assert_eq!(
+            byte_group.items.iter().map(String::len).sum::<usize>(),
+            MAX_OWNED_PATH_BYTES
+        );
+        assert!(byte_group.truncated);
+
+        let unicode_group = manager_owned_path_group([
+            "é".repeat(MAX_OWNED_PATH_ITEM_BYTES / 2),
+            "ê".repeat(MAX_OWNED_PATH_ITEM_BYTES / 2 + 1),
+        ]);
+        assert_eq!(unicode_group.total, 2);
+        assert_eq!(unicode_group.items.len(), 1);
+        assert_eq!(unicode_group.items[0].len(), MAX_OWNED_PATH_ITEM_BYTES);
+        assert!(unicode_group.truncated);
+    }
+
+    #[test]
+    fn manager_owned_builder_maps_only_recorded_path_evidence() {
+        let game = Path::new("C:/game");
+        let ue4ss_source = "C:/game/G1R/Binaries/Win64/ue4ss/Mods/Old".to_owned();
+        let ue4ss_holder = "C:/game/G1R/Binaries/Win64/ue4ss/.gore-ue4ss-delete-old".to_owned();
+        let file_source = "C:/game/G1R/Content/Paks/~mods/gm000_A_P.pak".to_owned();
+        let file_holder = "C:/game/.gore-mod-cleanup-a".to_owned();
+        let restore_source = "C:/game/G1R/Story/VoiceOver/a.zip.gore-bak".to_owned();
+        let ue4ss_tombstone = "C:/game/G1R/Binaries/Win64/ue4ss/.gore-ue4ss-delete-tomb".to_owned();
+        let file_tombstone = "C:/game/.gore-mod-cleanup-tomb".to_owned();
+        let recovery_file = "C:/game/G1R/Story/VoiceOver/a.zip".to_owned();
+        let recovery_tree = "C:/game/G1R/Binaries/Win64/ue4ss/Mods/A".to_owned();
+        let record = DeployRecord {
+            owner: "manager".into(),
+            ue4ss_cleanup_claims: BTreeMap::from([(ue4ss_source.clone(), ue4ss_holder.clone())]),
+            file_cleanup_claims: BTreeMap::from([(
+                file_source.clone(),
+                FileCleanupClaim {
+                    holder: file_holder.clone(),
+                    expected_hashes: vec!["sha256:private-file-identity".into()],
+                    restore_from: Some(restore_source.clone()),
+                    restore_hash: Some("sha256:private-restore-identity".into()),
+                },
+            )]),
+            trusted_ue4ss_tombstones: vec![ue4ss_tombstone.clone()],
+            trusted_file_tombstones: vec![file_tombstone.clone()],
+            recovery_file_hashes: BTreeMap::from([(
+                recovery_file.clone(),
+                vec!["private-file-identity".into()],
+            )]),
+            recovery_tree_fingerprints: BTreeMap::from([(
+                recovery_tree.clone(),
+                vec!["private-tree-identity".into()],
+            )]),
+            ..Default::default()
+        };
+
+        let owned = manager_owned_deployment(game, &record).unwrap();
+        let actual: BTreeSet<_> = owned.recovery.items.iter().cloned().collect();
+        let expected = BTreeSet::from([
+            crate::deploy_record_path(game).display().to_string(),
+            ue4ss_source,
+            ue4ss_holder,
+            file_source,
+            file_holder.clone(),
+            PathBuf::from(file_holder)
+                .join("claimed")
+                .display()
+                .to_string(),
+            restore_source,
+            ue4ss_tombstone,
+            file_tombstone,
+            recovery_file,
+            recovery_tree,
+        ]);
+        assert_eq!(actual, expected);
+        assert_eq!(owned.recovery.total, expected.len());
+        let wire = serde_json::to_string(&owned).unwrap();
+        assert!(!wire.contains("private-"));
+        assert!(!wire.contains("lock"));
+        assert!(!wire.contains("exists"));
     }
 
     /// Build a `ModEntryMeta` for library id `id` carrying `components`. `imported_at` is a
@@ -772,6 +1078,10 @@ mod tests {
             status(&game, &lib, &Loadout::default()).unwrap(),
             ManagerStatus::NothingDeployed
         );
+        let wire =
+            serde_json::to_value(status_report(&game, &lib, &Loadout::default()).unwrap()).unwrap();
+        assert_eq!(wire["state"], "nothing_deployed");
+        assert!(wire.get("manager_owned").is_none());
     }
 
     #[test]
@@ -809,6 +1119,40 @@ mod tests {
             status(&game, &lib, &Loadout::default()).unwrap(),
             ManagerStatus::RecoveryRequired
         );
+        let report = status_report(&game, &lib, &Loadout::default()).unwrap();
+        let owned = report.manager_owned.unwrap();
+        assert_eq!(owned.recovery.total, 1);
+        assert_eq!(
+            owned.recovery.items,
+            vec![record_path(&crate::abs_root(&game)).display().to_string()]
+        );
+    }
+
+    #[test]
+    fn non_manager_recovery_does_not_publish_manager_owned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game = tmp.path().join("game");
+        let lib = tmp.path().join("lib");
+        for owner in ["", "Manager", "manager "] {
+            write_record(
+                &game,
+                &DeployRecord {
+                    mod_name: "Studio recovery".into(),
+                    owner: owner.into(),
+                    phase: DeployPhase::RecoveryRequired,
+                    ..Default::default()
+                },
+            );
+
+            let wire =
+                serde_json::to_value(status_report(&game, &lib, &Loadout::default()).unwrap())
+                    .unwrap();
+            assert_eq!(wire["state"], "recovery_required", "owner={owner:?}");
+            assert!(
+                wire.get("manager_owned").is_none(),
+                "owner={owner:?}: {wire}"
+            );
+        }
     }
 
     #[test]
@@ -890,6 +1234,62 @@ mod tests {
                 mod_name: "SoloMod".into()
             }
         );
+        let wire =
+            serde_json::to_value(status_report(&game, &lib, &Loadout::default()).unwrap()).unwrap();
+        assert_eq!(wire["state"], "studio_deploy_active");
+        assert!(wire.get("manager_owned").is_none());
+    }
+
+    #[test]
+    fn manager_status_report_groups_exact_record_path_sources() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game = tmp.path().join("game");
+        let lib = tmp.path().join("lib");
+        let live = game.join("G1R/Story/VoiceOver/live.zip");
+        let backup = crate::bak_path(&live);
+        let hash_only = game.join("G1R/Story/VoiceOver/hash-only.zip");
+        let additive = game.join("G1R/Content/Paks/~mods/gm000_A_P.pak");
+        let ue4ss = game.join("G1R/Binaries/Win64/ue4ss/Mods/A");
+        let stale = game.join("G1R/Binaries/Win64/ue4ss/.gore-ue4ss-delete-a");
+        write_record(
+            &game,
+            &DeployRecord {
+                owner: "manager".into(),
+                backups: vec![(
+                    live.display().to_string(),
+                    backup.display().to_string(),
+                    true,
+                )],
+                deployed_hashes: BTreeMap::from([(
+                    hash_only.display().to_string(),
+                    "0000000000000000".into(),
+                )]),
+                texture_triplets: vec![additive.display().to_string()],
+                managed_paks: vec![additive.display().to_string()],
+                ue4ss_mod_dir: Some(ue4ss.display().to_string()),
+                ue4ss_mod_dirs: vec![ue4ss.display().to_string()],
+                stale_ue4ss_dirs: vec![stale.display().to_string()],
+                ..Default::default()
+            },
+        );
+
+        let report = status_report(&game, &lib, &Loadout::default()).unwrap();
+        assert!(matches!(report.status, ManagerStatus::GameUpdated { .. }));
+        let owned = report.manager_owned.unwrap();
+        assert_eq!(owned.live.items, vec![live.display().to_string()]);
+        assert_eq!(owned.backups.items, vec![backup.display().to_string()]);
+        assert_eq!(owned.additive.items, vec![additive.display().to_string()]);
+        assert_eq!(owned.additive.total, 1);
+        assert_eq!(owned.ue4ss.total, 2);
+        assert_eq!(
+            owned.ue4ss.items.into_iter().collect::<BTreeSet<_>>(),
+            BTreeSet::from([ue4ss.display().to_string(), stale.display().to_string()])
+        );
+        assert_eq!(
+            owned.recovery.items,
+            vec![record_path(&crate::abs_root(&game)).display().to_string()]
+        );
+        assert!(!owned.live.items.contains(&hash_only.display().to_string()));
     }
 
     #[test]
