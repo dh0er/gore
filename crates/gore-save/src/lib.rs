@@ -382,8 +382,23 @@ pub fn execute_json(input: &str) -> String {
             let response = json!({ "ok": true, "data": data }).to_string();
             // Only successes are cached: a failure is usually transient (a file
             // being written, a codec hiccup) and must stay retryable.
+            //
+            // The command re-read the files itself, so it may have worked from
+            // bytes that arrived AFTER the fingerprint was taken — the game
+            // saving over the slot, a cloud sync, a restore. Storing that answer
+            // under the earlier fingerprint would not merely be stale for a
+            // moment: it would bind an answer to a content hash it does not
+            // describe, and every later read of those earlier bytes would be
+            // served the wrong answer for as long as the entry lives. So keep a
+            // response only when its inputs held still for the whole command.
+            //
+            // A cache HIT needs no such re-check: matching the fingerprint means
+            // the files hold byte-identical content to what the entry was built
+            // from, whatever has happened in between.
             if let Some(key) = cache_key {
-                store_cached_response(key, &response);
+                if read_response_cache_key(input).is_some_and(|current| current == key) {
+                    store_cached_response(key, &response);
+                }
             }
             response
         }
