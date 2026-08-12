@@ -740,7 +740,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // the first NPC panel a roster fetched seconds earlier; letting the panel
     // fill it on first use keeps it derived from the file as of that moment,
     // and the paging it repeats is answered from the warm core.
-    await step(() => _fetchAllNpcActors(path, dropMemoOnError: false));
+    await step(
+      () => _fetchAllNpcActors(
+        path,
+        dropMemoOnError: false,
+        superseded: superseded,
+      ),
+    );
     await step(
       () => loadKnowledgeEntries(
         const Actor.player().uniqueName,
@@ -755,10 +761,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
       await step(() => loadMemoryEvents(heroId, limit: EditorPageSize.detail));
     }
     await step(
-      () => _prefetchAllPages((offset) async {
+      () => _prefetchAllPages(superseded, (offset) async {
         final page = await loadProgressionQuests(
           offset: offset,
           limit: EditorPageSize.fullList,
+          path: path,
         );
         return (total: page.total, count: page.quests.length);
       }),
@@ -766,7 +773,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     await step(loadGlossary);
     await step(loadProgressionTutorials);
     await step(
-      () => _prefetchAllPages((offset) async {
+      () => _prefetchAllPages(superseded, (offset) async {
         final page = await loadStoryState(
           includeUnset: true,
           offset: offset,
@@ -3103,12 +3110,17 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }
   }
 
+  /// [path] lets a multi-page caller pin every page to the save its walk began
+  /// against, so a selection change midway cannot make a later offset — derived
+  /// from the previous file's total — query a different file. Defaults to the
+  /// current selection, which is what the panel asks against.
   Future<ProgressionQuestPage> loadProgressionQuests({
     String query = '',
     int offset = 0,
     int limit = 100,
     String? state,
     String? group,
+    String? path,
   }) async {
     String? error;
     final data = await _queryProgression({
@@ -3118,7 +3130,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       'limit': limit,
       if (state != null && state.isNotEmpty) 'state': state,
       if (group != null && group.isNotEmpty) 'group': group,
-    }, onError: (message) => error = message);
+    }, path: path, onError: (message) => error = message);
     if (data == null) return ProgressionQuestPage(error: error);
     return ProgressionQuestPage.fromJson(data);
   }
@@ -3450,11 +3462,18 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// page's `total` and item count. The offsets mirror the panels' arithmetic —
   /// items collected so far — because a different offset warms a request they
   /// never make. A save inside the clamp costs exactly one request, as before.
+  ///
+  /// [superseded] is checked before every page, not just before the walk: the
+  /// offsets and total belong to the file the walk began against, so once
+  /// something else takes over, every further page would occupy the core queue
+  /// ahead of the user's own request to warm an offset nothing will ask for.
+  /// Each page must also be pinned to that file for the same reason.
   Future<void> _prefetchAllPages(
+    bool Function() superseded,
     Future<({int total, int count})> Function(int offset) page,
   ) async {
     var offset = 0;
-    while (true) {
+    while (!superseded()) {
       final result = await page(offset);
       offset += result.count;
       // An empty page also covers the failure case, where the loader reports a
@@ -3475,14 +3494,21 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// stay cached, so it clears the memo slot the future was stored in. The
   /// background warm-up passes false — it has no slot to clear, and clearing the
   /// memo behind a real load in flight would be wrong.
+  ///
+  /// [superseded] likewise belongs to the warm-up: it abandons the walk when
+  /// something else takes the editor, rather than keeping the core queue busy
+  /// ahead of the user's own request. A real load passes none — a panel that
+  /// asked for the roster needs all of it, not a prefix.
   Future<NpcActorsPage> _fetchAllNpcActors(
     String? pinnedPath, {
     required bool dropMemoOnError,
+    bool Function()? superseded,
   }) async {
     final npcs = <NpcActor>[];
     var offset = 0;
     var total = 0;
     while (true) {
+      if (superseded?.call() ?? false) break;
       final page = await loadNpcActors(
         offset: offset,
         limit: 1000,

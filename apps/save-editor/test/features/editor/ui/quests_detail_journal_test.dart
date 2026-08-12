@@ -84,6 +84,7 @@ class _QuestJournalNotifier extends EditorNotifier {
     String? group,
     int offset = 0,
     int limit = 100,
+    String? path,
   }) async => ProgressionQuestPage(
     quests: _quests,
     total: _quests.length,

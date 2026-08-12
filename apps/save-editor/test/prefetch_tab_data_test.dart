@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
@@ -21,6 +23,10 @@ class _RecordingCore implements GoresaveCoreService {
   /// `query_progression` section to the total it reports, for the sections a
   /// panel pages through. Absent sections answer with an empty payload.
   final Map<String, int> pagedSectionTotals;
+
+  /// Called as each request is recorded, so a test can disturb the editor from
+  /// inside a walk rather than having to time it from outside.
+  void Function(String command, Map<String, Object?> payload)? onRequest;
 
   _RecordingCore({
     this.delay = Duration.zero,
@@ -50,6 +56,7 @@ class _RecordingCore implements GoresaveCoreService {
     Map<String, Object?> payload = const {},
   }) async {
     requests.add((command: command, payload: Map<String, Object?>.from(payload)));
+    onRequest?.call(command, payload);
     final wait = command == slowCommand ? _slowDelay : delay;
     if (wait > Duration.zero) await Future<void>.delayed(wait);
     switch (command) {
@@ -318,6 +325,49 @@ void main() {
     expect(offsetsFor('quests'), [0, 1000, 2000]);
     // Exactly one full page: the panel stops after it, so the warm-up must too.
     expect(offsetsFor('story'), [0]);
+  });
+
+  test('a paged walk stops when something else takes the editor', () async {
+    // The offsets and total a walk carries belong to the file it began against.
+    // Once something else takes over, every further page would sit in the core
+    // queue ahead of the user's own request to warm an offset nothing will ask
+    // for — and, unpinned, would ask it of a different file.
+    // Twenty pages' worth, so a walk that ignores supersede is unmistakable.
+    final core = _RecordingCore(
+      pagedSectionTotals: const {'quests': 20000},
+    );
+    final notifier = await _loadedEditor(core);
+
+    // Disturb the editor from INSIDE the walk, on its first page — timing it
+    // from outside would land before the walk even starts.
+    var disturbed = false;
+    core.onRequest = (command, payload) {
+      if (disturbed) return;
+      if (command != 'query_progression' || payload['section'] != 'quests') {
+        return;
+      }
+      disturbed = true;
+      unawaited(notifier.refreshBackups());
+    };
+
+    notifier.prefetchTabData();
+    await _settledPrefetch(notifier);
+    core.onRequest = null;
+
+    final offsets = [
+      for (final request in core.requests)
+        if (request.command == 'query_progression' &&
+            request.payload['section'] == 'quests')
+          request.payload['offset'] as int,
+    ];
+    // The superseded walk must abandon its remaining pages. The restart then
+    // walks all twenty, so the count lands near twenty rather than near forty.
+    expect(offsets.length, lessThan(30), reason: 'a superseded walk kept paging');
+    // Every page it did ask for names the file the walk began against.
+    for (final request in core.requests) {
+      if (request.command != 'query_progression') continue;
+      expect(request.payload['path'], r'C:\tmp\saves\G1R-001.sav');
+    }
   });
 
   test('prefetch runs once per inspection', () async {
