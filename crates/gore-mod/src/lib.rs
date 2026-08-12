@@ -11847,7 +11847,9 @@ mod tests {
                 .unwrap_err()
                 .to_string();
             assert!(
-                error.contains("symbolic-link") || error.contains("reparse"),
+                error.contains("symbolic-link")
+                    || error.contains("symbolic link")
+                    || error.contains("reparse"),
                 "unexpected error: {error}"
             );
             assert!(!real_parent.join("must-not-exist").exists());

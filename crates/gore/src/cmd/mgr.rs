@@ -134,9 +134,10 @@ pub fn run(action: MgrAction) -> Result<()> {
             let lib = library_of(library);
             let ld_path = loadout_of(loadout);
 
-            let entry = import::import(&lib, &path)
+            let outcome = import::import_detailed(&lib, &path)
                 .map_err(|e| anyhow::anyhow!("{e}"))
                 .with_context(|| format!("importing {}", path.display()))?;
+            let entry = &outcome.entry;
 
             // Also register the new mod in the loadout (disabled) so `enable`
             // can find it. Skip if an entry with this id already exists (re-import
@@ -150,7 +151,14 @@ pub fn run(action: MgrAction) -> Result<()> {
                 loadout::save(&ld_path, &ld).map_err(|e| anyhow::anyhow!("{e}"))?;
             }
 
-            println!("imported {} ({}) [{:?}]", entry.id, entry.name, entry.kind);
+            println!(
+                "imported {} ({}) [{:?}] disposition={} matched_by={}",
+                entry.id,
+                entry.name,
+                entry.kind,
+                outcome.disposition.as_str(),
+                outcome.matched_by.as_str()
+            );
             Ok(())
         }
 

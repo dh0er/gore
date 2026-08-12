@@ -1698,6 +1698,36 @@ mod tests {
     }
 
     #[test]
+    fn status_ignores_malformed_future_manager_private_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let game = tmp.path().join("game");
+        let lib = tmp.path().join("lib");
+        let public = lib_meta_with("mod-a", "same");
+        let fp = write_lib_meta(&lib, &public);
+        let sidecar = lib.join("mod-a").join(META_FILE);
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&sidecar).unwrap()).unwrap();
+        value["_manager"] = serde_json::json!({"future_private_format": 2});
+        std::fs::write(&sidecar, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+        let deployed = vec![le("mod-a", true)];
+        write_record(
+            &game,
+            &DeployRecord {
+                mod_name: "manager".into(),
+                owner: "manager".into(),
+                loadout: deployed.clone(),
+                deployed_fingerprints: BTreeMap::from([("mod-a".to_string(), fp)]),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            status(&game, &lib, &loadout(&[("mod-a", true)])).unwrap(),
+            ManagerStatus::InSync { loadout: deployed }
+        );
+    }
+
+    #[test]
     fn fingerprint_pass_has_an_aggregate_budget_and_deduplicates_ids() {
         let tmp = tempfile::tempdir().unwrap();
         let lib = tmp.path().join("lib");
