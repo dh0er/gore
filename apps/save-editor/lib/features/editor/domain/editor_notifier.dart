@@ -674,11 +674,20 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (_prefetchRunning) return;
     if (identical(_prefetchedFor, inspection)) return;
     _prefetchRunning = true;
-    prefetchInFlight = _prefetchTabData(
-      path,
-      inspection,
-      _loadSeq,
-    ).whenComplete(() => _prefetchRunning = false);
+    prefetchInFlight = _prefetchTabData(path, inspection, _loadSeq).whenComplete(
+      () {
+        _prefetchRunning = false;
+        // A run that was cut short cannot simply wait for the next state
+        // change: a step already in flight keeps this flag up past the moment
+        // the interrupting operation clears the loading flag, so the state
+        // change that would have restarted the warm-up bounces off the guard
+        // above and never comes again. Re-arm here instead. This cannot spin —
+        // a fresh run takes the current load sequence, so it can only be cut
+        // short by a NEW interruption, and the guards decide whether it may
+        // start at all.
+        if (!identical(_prefetchedFor, inspection)) prefetchTabData();
+      },
+    );
   }
 
   /// Warm every tab's query for [inspection], in reachability order.

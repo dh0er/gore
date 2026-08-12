@@ -13,7 +13,12 @@ class _RecordingCore implements GoresaveCoreService {
   /// and observe what the prefetch does while a request is outstanding.
   final Duration delay;
 
-  _RecordingCore({this.delay = Duration.zero});
+  /// One command held far longer than the rest, so a test can arrange for a
+  /// warm-up step to still be in flight when something else finishes.
+  final String? slowCommand;
+  static const _slowDelay = Duration(milliseconds: 120);
+
+  _RecordingCore({this.delay = Duration.zero, this.slowCommand});
 
   List<String> get commands => [for (final r in requests) r.command];
 
@@ -37,7 +42,8 @@ class _RecordingCore implements GoresaveCoreService {
     Map<String, Object?> payload = const {},
   }) async {
     requests.add((command: command, payload: Map<String, Object?>.from(payload)));
-    if (delay > Duration.zero) await Future<void>.delayed(delay);
+    final wait = command == slowCommand ? _slowDelay : delay;
+    if (wait > Duration.zero) await Future<void>.delayed(wait);
     switch (command) {
       case 'scan_save_dir':
         return {
@@ -98,6 +104,18 @@ class _RecordingCore implements GoresaveCoreService {
         return {'ok': true, 'data': <String, Object?>{}};
     }
   }
+}
+
+/// Wait until no warm-up is left running. A run that was cut short re-arms
+/// itself, which replaces `prefetchInFlight`, so awaiting it once is not enough.
+Future<void> _settledPrefetch(EditorNotifier notifier) async {
+  for (var i = 0; i < 20; i++) {
+    final inFlight = notifier.prefetchInFlight;
+    await inFlight;
+    await pumpEventQueue();
+    if (identical(notifier.prefetchInFlight, inFlight)) return;
+  }
+  fail('the warm-up never settled');
 }
 
 Future<EditorNotifier> _loadedEditor(_RecordingCore core) async {
@@ -266,44 +284,44 @@ void main() {
     expect(core.commands.length, first, reason: 'prefetch repeated itself');
   });
 
-  test('an interrupted warm-up is picked up again, not written off', () async {
+  test('an interrupted warm-up restarts itself', () async {
     // Something else taking the editor mid-warm-up — a backup rename bumps the
     // load sequence, a codec check raises the loading flag — makes the
-    // remaining steps skip. The inspection must NOT count as warmed then, or
-    // the tabs those steps would have covered load the slow way for the rest of
-    // the session.
-    final core = _RecordingCore();
+    // remaining steps skip. The warm-up has to come back on its own: a step
+    // still in flight holds the run open past the moment that operation clears
+    // the loading flag, so the state change that would have restarted it
+    // bounces off the one-run-at-a-time guard and never comes again.
+    // The first warm-up step outlives the interruption, which is what puts the
+    // state change that would restart the warm-up before the run has ended.
+    final core = _RecordingCore(slowCommand: 'search_typed_properties');
     final notifier = await _loadedEditor(core);
 
-    // Stand in for that interruption: the warm-up runs against a load sequence
-    // that has already moved on, so every step skips.
-    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
-    await pumpEventQueue();
-    core.requests.clear();
+    // The editor page's own wiring, so the restart cannot be attributed to a
+    // trigger this test made by hand.
+    final removeListener = notifier.addListener(
+      (_) => notifier.prefetchTabData(),
+      fireImmediately: false,
+    );
     notifier.prefetchTabData();
-    final interrupted = notifier.prefetchInFlight;
+    // Interrupt it: refreshBackups bumps the load sequence without producing a
+    // new inspection, so the remaining steps skip. It finishes — and clears the
+    // loading flag — while the first warm-up step is still outstanding.
     await notifier.refreshBackups();
-    await interrupted;
+    await _settledPrefetch(notifier);
+    removeListener();
 
-    final afterInterruption = core.commands
-        .where((command) => command != 'list_backups')
-        .length;
-
-    // The next state change must start the sequence over rather than skip it.
-    notifier.prefetchTabData();
-    await notifier.prefetchInFlight;
-
+    // No further trigger of any kind — the warm-up must have re-armed itself.
     expect(
-      core.commands.where((command) => command != 'list_backups').length,
-      greaterThan(afterInterruption),
+      core.commands,
+      contains('private.characters.list'),
       reason: 'the interrupted warm-up was never resumed',
     );
-    expect(core.commands, contains('private.characters.list'));
+    expect(core.commands, contains('query_progression'));
 
-    // And once it does complete, it is retired: no third run.
+    // And once it does complete, it is retired: another trigger adds nothing.
     final settled = core.commands.length;
     notifier.prefetchTabData();
-    await notifier.prefetchInFlight;
+    await _settledPrefetch(notifier);
     expect(core.commands.length, settled);
   });
 
