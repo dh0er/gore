@@ -16,7 +16,7 @@ import 'package:goresave/providers/data_providers.dart';
 
 import '../domain/editor_notifier.dart';
 import '../domain/hero_attributes.dart'
-    show AttributeLabelResolver, TypedValueEdit;
+    show AttributeLabelResolver, TypedValueEdit, heroHiddenAttributeIds;
 
 /// Reverse a stored per-NPC attribute registry entry back into the panel's
 /// [NpcTypedEdit] drafts so [NpcAttributesPanel] can resume from them on a
@@ -400,6 +400,12 @@ class _PrivatePlayerAttributesEditor extends StatelessWidget {
             final compact = constraints.maxWidth < 620;
             return Column(
               children: player.attributes
+                  // The typed view hides the attributes the game re-derives
+                  // from a learned skill; this fallback shows the same hero, so
+                  // it must hide them too. The core's summary carries
+                  // MagicianLevel, which would otherwise reappear here as a
+                  // second, ineffective "Magic Circle" beside the skill's own.
+                  .where((a) => !heroHiddenAttributeIds.contains(a.id))
                   .map(
                     (attribute) => _PrivatePlayerAttributeRow(
                       attribute: attribute,
