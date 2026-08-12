@@ -23,7 +23,9 @@
 //! [`gore_loc::loc_store::status`] (what `gore loc status` prints). A doctor that disagreed with
 //! the commands it diagnoses would be worse than no doctor at all.
 //!
-//! Nothing in this module writes, creates, or removes anything.
+//! Nothing in this module writes, creates, or removes anything. Deployment inspection joins an
+//! already-established Windows Library lock (or the Unix directory-inode lock), but deliberately
+//! never creates/acquires the Store sentinel and never repairs the loadout.
 
 use anyhow::Result;
 use serde::Serialize;
@@ -106,9 +108,17 @@ struct Check {
 }
 
 impl Check {
-    fn new(id: &'static str, title: &'static str, verdict: Verdict, detail: impl Into<String>) -> Self {
+    fn new(
+        id: &'static str,
+        title: &'static str,
+        verdict: Verdict,
+        detail: impl Into<String>,
+    ) -> Self {
         let detail = detail.into();
-        debug_assert!(is_prose(&detail), "detail must be one unpadded line: {detail:?}");
+        debug_assert!(
+            is_prose(&detail),
+            "detail must be one unpadded line: {detail:?}"
+        );
         Self {
             id,
             title,
@@ -172,8 +182,7 @@ impl Report {
         // Notes as well as problems, which the first version of this missed — and a Note is where
         // the next one turned up, one round later. `Skipped` is exempt: it says a check could not
         // run, and the reason it could not is reported by whichever check established that.
-        let owes_a_fix =
-            |check: &Check| matches!(check.verdict, Verdict::Problem | Verdict::Note);
+        let owes_a_fix = |check: &Check| matches!(check.verdict, Verdict::Problem | Verdict::Note);
         debug_assert!(
             checks
                 .iter()
@@ -225,7 +234,11 @@ fn collect(explicit: Option<&Path>) -> Report {
     let source = game_path_source(explicit.is_some(), cfg.game_path.as_deref());
     let resolved = gore_loc::config::game_root(explicit.map(Path::to_path_buf)).ok();
 
-    let mut checks = vec![check_game_path(explicit, cfg.game_path.as_deref(), resolved.as_deref())];
+    let mut checks = vec![check_game_path(
+        explicit,
+        cfg.game_path.as_deref(),
+        resolved.as_deref(),
+    )];
 
     // A root that resolved to nothing on disk is no more inspectable than one that did not
     // resolve, and running the rest against it would restate the same single cause as four more
@@ -246,10 +259,13 @@ fn collect(explicit: Option<&Path>) -> Report {
             // that was right all along.
             for (id, title) in SKIPPED_WITHOUT_INSTALL {
                 checks.push(
-                    Check::new(id, title, Verdict::Skipped, format!("could not be read: {error}"))
-                        .with_fix(
-                            "run the same command from a shell that can read the install",
-                        ),
+                    Check::new(
+                        id,
+                        title,
+                        Verdict::Skipped,
+                        format!("could not be read: {error}"),
+                    )
+                    .with_fix("run the same command from a shell that can read the install"),
                 );
             }
             return Report::new(resolved.as_deref(), source, checks);
@@ -279,7 +295,8 @@ fn collect(explicit: Option<&Path>) -> Report {
     // game files are still modified.
     // The backups the deployment claims, so a leftover from an unrelated in-place edit stays
     // visible instead of being absorbed into "this is what a deployment looks like".
-    let owned_backups = gore_mod::deployed_backup_paths(&gp.root).map_err(|error| error.to_string());
+    let owned_backups =
+        gore_mod::deployed_backup_paths(&gp.root).map_err(|error| error.to_string());
 
     checks.push(check_install(&gp));
     checks.push(check_ue4ss(&gp));
@@ -446,12 +463,16 @@ fn check_game_path(
                 // Nothing about this reads like a moved install, and the two usual causes below
                 // would send somebody looking for a drive that is mounted and a game that never
                 // moved.
-                Occupant::Obstruction => "the configured path resolves to something that is not a \
+                Occupant::Obstruction => {
+                    "the configured path resolves to something that is not a \
                                           directory, so no part of the install can be under it. \
                                           Point the config at the install with 'gore config set \
-                                          game-path <path>'",
-                _ => "the path resolved but there is no directory there — the game moved, or the \
-                      drive is not mounted. Set it again with 'gore config set game-path <path>'",
+                                          game-path <path>'"
+                }
+                _ => {
+                    "the path resolved but there is no directory there — the game moved, or the \
+                      drive is not mounted. Set it again with 'gore config set game-path <path>'"
+                }
             });
         }
         // The configured path is right and something is stopping this process from reading it.
@@ -462,7 +483,10 @@ fn check_game_path(
                 "game_path",
                 "game path",
                 Verdict::Problem,
-                format!("{} (source: {source}) could not be read: {error}", root.display()),
+                format!(
+                    "{} (source: {source}) could not be read: {error}",
+                    root.display()
+                ),
             )
             .with_items(items)
             .with_fix(
@@ -645,18 +669,17 @@ fn check_ue4ss(gp: &GamePaths) -> Check {
         }
         Err(error) => return unreadable(error),
     };
-    let mods_present = match occupant(mods, Wanted::Folder) {
-        Ok(Occupant::Wanted) => true,
-        Ok(Occupant::Absent) => false,
-        Ok(Occupant::Obstruction) => {
-            return obstructed(
+    let mods_present =
+        match occupant(mods, Wanted::Folder) {
+            Ok(Occupant::Wanted) => true,
+            Ok(Occupant::Absent) => false,
+            Ok(Occupant::Obstruction) => return obstructed(
                 mods,
                 Wanted::Folder,
                 "'gore mod deploy' and 'gore gen -o <mods dir>' both create that folder, and they",
-            )
-        }
-        Err(error) => return unreadable(error),
-    };
+            ),
+            Err(error) => return unreadable(error),
+        };
     // UE4SS.dll is the payload; something has to load it. The game imports a proxy DLL, and the one
     // this toolkit knows is `dwmapi.dll` beside the executable — `gore-as` moves that exact file
     // aside for a regen, so its name is not a guess. Without it the payload sits there unloaded and
@@ -1121,6 +1144,40 @@ fn deployment_without_a_loadout(
          command reads it first",
         loadout_path.display()
     );
+    deployment_without_authoritative_target(
+        gp,
+        library,
+        items,
+        "the manager loadout could not be read",
+        "the manager loadout is unreadable",
+        broken,
+    )
+}
+
+/// Preserve the record-only status ladder when strict Library state prevents an authoritative
+/// target projection, without misdiagnosing a valid loadout or recommending destructive repair.
+fn deployment_without_a_library_projection(
+    gp: &GamePaths,
+    library: &Path,
+    items: Vec<String>,
+    error: impl std::fmt::Display,
+) -> Check {
+    let unavailable = format!("the manager library could not be inspected safely: {error}");
+    let fix = format!(
+        "{unavailable}. Resolve the reported library uncertainty, then rerun 'gore doctor'; do \
+         not delete or repair the loadout based on this result"
+    );
+    deployment_without_authoritative_target(gp, library, items, &unavailable, &unavailable, fix)
+}
+
+fn deployment_without_authoritative_target(
+    gp: &GamePaths,
+    library: &Path,
+    items: Vec<String>,
+    unavailable: &str,
+    deployed_unavailable: &str,
+    fix: String,
+) -> Check {
     // An empty target is safe for exactly the record-only rungs, and its answer is ignored for
     // every other one.
     let record_only = gore_mod::mgr::status::status(&gp.root, library, &Default::default());
@@ -1134,16 +1191,16 @@ fn deployment_without_a_loadout(
         .with_items(items)
         .with_fix(format!(
             "run 'gore mgr reset' (or 'gore mod undeploy') to restore the game before deploying \
-             anything else. Separately: {broken}"
+             anything else. Separately: {fix}"
         )),
         Ok(ManagerStatus::StudioDeployActive { mod_name }) => Check::new(
             "deployment",
             "deployment",
             Verdict::Problem,
-            format!("one bundle is deployed: {mod_name}; the manager loadout is unreadable"),
+            format!("one bundle is deployed: {mod_name}; {deployed_unavailable}"),
         )
         .with_items(items)
-        .with_fix(broken),
+        .with_fix(fix),
         // Rung 4, and the ladder's own words for it are "stale regardless of the loadout" — it is
         // decided by verifying the recorded files, not by any diff against a target. It is also
         // literally the case this whole report exists for: deploy said yes and the game shows
@@ -1162,7 +1219,7 @@ fn deployment_without_a_loadout(
         .with_fix(format!(
             "this is the case where the tool reported success and the game shows nothing. Run \
              'gore mgr apply' (or re-deploy the bundle) to rebuild against the refreshed files. \
-             Separately: {broken}"
+             Separately: {fix}"
         )),
         // Two failures, and the deploy record is the one that stops things working. Reporting only
         // the loadout named the lesser of them and left the other out of the report entirely.
@@ -1173,17 +1230,14 @@ fn deployment_without_a_loadout(
             format!("the deploy record could not be read: {error}"),
         )
         .with_items(items)
-        .with_fix(format!("{broken}. The deploy record is the more urgent of the two")),
+        .with_fix(format!(
+            "{fix}. The deploy record is the more urgent of the two"
+        )),
         // What is left is `NothingDeployed`, `InSync` and `ChangesPending`. The last two ARE the
         // diff against the loadout that could not be read, so there is nothing to say about them.
-        Ok(_) => Check::new(
-            "deployment",
-            "deployment",
-            Verdict::Problem,
-            "the manager loadout could not be read",
-        )
-        .with_items(items)
-        .with_fix(broken),
+        Ok(_) => Check::new("deployment", "deployment", Verdict::Problem, unavailable)
+            .with_items(items)
+            .with_fix(fix),
     }
 }
 
@@ -1202,12 +1256,18 @@ fn check_deployment(gp: &GamePaths, library: &Path, loadout_path: &Path) -> Chec
         format!("loadout: {}", loadout_path.display()),
     ];
 
-    let target = match gore_mod::mgr::loadout::load(loadout_path) {
-        Ok(loadout) => loadout,
-        Err(error) => return deployment_without_a_loadout(gp, library, items, loadout_path, error),
+    let target = match gore_mod::mgr::store::StoreSnapshot::inspect_read_only(library, loadout_path)
+    {
+        Ok(target) => target,
+        Err(gore_mod::mgr::store::StoreInspectionError::Loadout(error)) => {
+            return deployment_without_a_loadout(gp, library, items, loadout_path, error);
+        }
+        Err(gore_mod::mgr::store::StoreInspectionError::Library(error)) => {
+            return deployment_without_a_library_projection(gp, library, items, error);
+        }
     };
 
-    match gore_mod::mgr::status::status(&gp.root, library, &target) {
+    match target.status(&gp.root) {
         Ok(ManagerStatus::NothingDeployed) => Check::new(
             "deployment",
             "deployment",
@@ -1273,7 +1333,10 @@ fn check_deployment(gp: &GamePaths, library: &Path, loadout_path: &Path) -> Chec
         ),
         // A Problem with no fix is half a report, and this type's own contract says so: what was
         // looked at, what was found, and what to do about it.
-        Err(error) => Check::new(
+        Err(gore_mod::mgr::store::StoreInspectionStatusError::Library(error)) => {
+            deployment_without_a_library_projection(gp, library, items, error)
+        }
+        Err(gore_mod::mgr::store::StoreInspectionStatusError::Status(error)) => Check::new(
             "deployment",
             "deployment",
             Verdict::Problem,
@@ -1548,7 +1611,11 @@ fn check_leftovers(
     let (scan, scan_error) = match find_backups(gp) {
         Ok(scan) => (scan, None),
         Err(error) => (
-            BackupScan { found: Vec::new(), occupied: Vec::new(), complete: false },
+            BackupScan {
+                found: Vec::new(),
+                occupied: Vec::new(),
+                complete: false,
+            },
             Some(error),
         ),
     };
@@ -1999,7 +2066,10 @@ fn check_loc_catalog(
     );
     let items = vec![
         format!("catalog: {}", meta.catalog_path),
-        format!("source:  {} ({} bytes)", meta.source_path, meta.source_bytes),
+        format!(
+            "source:  {} ({} bytes)",
+            meta.source_path, meta.source_bytes
+        ),
     ];
 
     let Some(installed) = installed else {
@@ -2195,9 +2265,7 @@ fn check_loc_catalog(
                  unchanged. Run 'gore loc extract' so the shared catalog describes the text that \
                  is installed",
             ),
-            Written::NoTimestamp => {
-                inconclusive("this filesystem reported no modification time")
-            }
+            Written::NoTimestamp => inconclusive("this filesystem reported no modification time"),
             Written::SameSecond => inconclusive(
                 "it was last written in the same second the extraction recorded, and the record \
                  keeps whole seconds only",
@@ -2303,7 +2371,11 @@ fn find_backups(gp: &GamePaths) -> Result<BackupScan, String> {
     found.dedup();
     occupied.sort();
     occupied.dedup();
-    Ok(BackupScan { found, occupied, complete })
+    Ok(BackupScan {
+        found,
+        occupied,
+        complete,
+    })
 }
 
 /// Sort one entry by the rule `gore_mod`'s backup step applies, and say whether it took it.
@@ -2381,7 +2453,8 @@ fn find_backups_under(
             return Ok(false);
         }
         *budget -= 1;
-        let entry = entry.map_err(|error| format!("{} could not be read: {error}", dir.display()))?;
+        let entry =
+            entry.map_err(|error| format!("{} could not be read: {error}", dir.display()))?;
         let path = entry.path();
         // `symlink_metadata`, not `metadata`: a junction pointing back up its own tree would
         // otherwise be followed until the budget ran out, and the honest answer for a link is that
@@ -2438,8 +2511,8 @@ fn mods_entries(dir: &Path) -> Result<Vec<ModsEntry>, String> {
     };
     let mut found = Vec::new();
     for entry in entries {
-        let entry = entry
-            .map_err(|error| format!("{} could not be read: {error}", dir.display()))?;
+        let entry =
+            entry.map_err(|error| format!("{} could not be read: {error}", dir.display()))?;
         found.push(ModsEntry {
             name: entry.file_name().to_string_lossy().into_owned(),
             is_file: present(&entry.path())?.is_some_and(|metadata| metadata.is_file()),
@@ -2456,15 +2529,14 @@ fn file_names(dir: &Path) -> Result<Vec<String>, String> {
     };
     let mut names = Vec::new();
     for entry in entries {
-        let entry = entry
-            .map_err(|error| format!("{} could not be read: {error}", dir.display()))?;
+        let entry =
+            entry.map_err(|error| format!("{} could not be read: {error}", dir.display()))?;
         if present(&entry.path())?.is_some_and(|metadata| metadata.is_file()) {
             names.push(entry.file_name().to_string_lossy().into_owned());
         }
     }
     Ok(names)
 }
-
 
 /// Windows path identity is case-insensitive, which is the same reason `semantic_install_root`
 /// compares its `G1R` component with `eq_ignore_ascii_case`. Not canonicalized: that would
@@ -2552,7 +2624,7 @@ fn print_report(report: &Report) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gore_modgen::gen::{gen_lua, MetaConfig, OverridesConfig, OverrideValue, SingleOverride};
+    use gore_modgen::gen::{gen_lua, MetaConfig, OverrideValue, OverridesConfig, SingleOverride};
 
     /// A GamePaths for a fixture tree, built the way every command builds it.
     fn paths(root: &Path) -> GamePaths {
@@ -2578,6 +2650,44 @@ mod tests {
         .unwrap();
     }
 
+    fn manager_meta(id: &str) -> gore_mod::mgr::ModEntryMeta {
+        gore_mod::mgr::ModEntryMeta {
+            id: id.into(),
+            kind: gore_mod::mgr::ModKind::ForeignPak,
+            name: id.into(),
+            version: String::new(),
+            author: String::new(),
+            imported_at: "2026-01-01T00:00:00Z".into(),
+            source: String::new(),
+            components: Vec::new(),
+        }
+    }
+
+    fn write_manager_entry(library: &Path, id: &str) -> gore_mod::mgr::ModEntryMeta {
+        let meta = manager_meta(id);
+        let entry = library.join(id);
+        std::fs::create_dir_all(&entry).unwrap();
+        std::fs::write(
+            entry.join(gore_mod::mgr::model::META_FILE),
+            serde_json::to_vec(&meta).unwrap(),
+        )
+        .unwrap();
+        meta
+    }
+
+    fn prepare_existing_read_only_library_lock(library: &Path) {
+        #[cfg(windows)]
+        std::fs::write(library.join(".gore-manager-library.lock"), b"").unwrap();
+        #[cfg(not(windows))]
+        let _ = library;
+    }
+
+    fn write_deploy_record(root: &Path, record: &gore_mod::DeployRecord) {
+        let path = gore_mod::deploy_record_path(root);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_vec(record).unwrap()).unwrap();
+    }
+
     #[test]
     fn a_broken_config_is_told_apart_from_an_absent_one() {
         // `config::load` returns the default for all three, so a corrupt file reads as "nothing
@@ -2585,7 +2695,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         let absent = read_config_file(&dir.path().join("config.json"));
-        assert!(matches!(absent, ConfigFile::Absent), "a missing file is not a fault");
+        assert!(
+            matches!(absent, ConfigFile::Absent),
+            "a missing file is not a fault"
+        );
 
         let good = dir.path().join("good.json");
         // Forward slashes: a Windows path in JSON needs its backslashes escaped, and a fixture
@@ -2770,7 +2883,11 @@ mod tests {
 
         let listing = check_ue4ss_mods(&gp);
         assert_eq!(listing.verdict, Verdict::Problem, "{}", listing.detail);
-        assert!(listing.detail.contains("is not a folder"), "{}", listing.detail);
+        assert!(
+            listing.detail.contains("is not a folder"),
+            "{}",
+            listing.detail
+        );
 
         // The control. With every path the right kind, none of the above fires.
         std::fs::remove_file(&gp.ue4ss_mods).unwrap();
@@ -2843,7 +2960,10 @@ mod tests {
         let check = check_ue4ss_mods(&gp);
         assert_eq!(check.verdict, Verdict::Problem);
         let fix = check.fix.unwrap();
-        assert!(fix.contains("OldBalance") && fix.contains("NewBalance"), "{fix}");
+        assert!(
+            fix.contains("OldBalance") && fix.contains("NewBalance"),
+            "{fix}"
+        );
     }
 
     #[test]
@@ -2981,7 +3101,11 @@ mod tests {
             },
             overrides: Vec::new(),
         });
-        assert!(lua.starts_with(GENERATED_MARKER), "{}", &lua[..40.min(lua.len())]);
+        assert!(
+            lua.starts_with(GENERATED_MARKER),
+            "{}",
+            &lua[..40.min(lua.len())]
+        );
     }
 
     #[test]
@@ -3013,7 +3137,11 @@ mod tests {
         std::fs::remove_dir_all(root.join("G1R").join("Script")).unwrap();
         let check = check_install(&paths(root));
         assert_eq!(check.verdict, Verdict::Problem);
-        assert!(check.detail.starts_with("install is incomplete"), "{}", check.detail);
+        assert!(
+            check.detail.starts_with("install is incomplete"),
+            "{}",
+            check.detail
+        );
     }
 
     /// No deploy record at all: every backup found is a leftover.
@@ -3068,7 +3196,11 @@ mod tests {
         let check = check_leftovers(&paths(root), &probe(root, false), &nothing_deployed());
         assert_eq!(check.verdict, Verdict::Problem);
         assert!(check.detail.contains("refuse to start"), "{}", check.detail);
-        assert!(check.detail.contains("could not be read"), "{}", check.detail);
+        assert!(
+            check.detail.contains("could not be read"),
+            "{}",
+            check.detail
+        );
         assert!(check.fix.unwrap().contains("gore mod undeploy"));
         assert!(check
             .items
@@ -3089,10 +3221,10 @@ mod tests {
         make_install(root);
         std::fs::write(root.join(".gore-install-mutation.lock"), b"{}").unwrap();
 
-        let probe = gore_as::compile::probe_install_compile_state_with_stated_game_process(
-            root,
-            || Err("the process list could not be read".into()),
-        );
+        let probe =
+            gore_as::compile::probe_install_compile_state_with_stated_game_process(root, || {
+                Err("the process list could not be read".into())
+            });
         assert_eq!(
             probe.disposition,
             InstallCompileStateDisposition::InspectionFailed
@@ -3123,18 +3255,28 @@ mod tests {
         assert_eq!(orphaned.verdict, Verdict::Note);
         assert!(orphaned.fix.unwrap().contains("gore audio restore"));
 
-        let claimed =
-            check_leftovers(&paths(root), &probe(root, false), &deployment_owns(&[&backup]));
+        let claimed = check_leftovers(
+            &paths(root),
+            &probe(root, false),
+            &deployment_owns(&[&backup]),
+        );
         assert_eq!(claimed.verdict, Verdict::Ok);
         assert!(claimed.fix.is_none());
 
         // And the case the old `bool` could not see: a deployment IS active, but this backup is
         // not one of its own — an in-place `gore audio replace` beside a UE4SS-only bundle.
         let elsewhere = root.join("G1R").join("Script").join("other.gore-bak");
-        let unrelated =
-            check_leftovers(&paths(root), &probe(root, false), &deployment_owns(&[&elsewhere]));
+        let unrelated = check_leftovers(
+            &paths(root),
+            &probe(root, false),
+            &deployment_owns(&[&elsewhere]),
+        );
         assert_eq!(unrelated.verdict, Verdict::Note, "{}", unrelated.detail);
-        assert!(unrelated.detail.contains("no deployment claims"), "{}", unrelated.detail);
+        assert!(
+            unrelated.detail.contains("no deployment claims"),
+            "{}",
+            unrelated.detail
+        );
     }
 
     #[test]
@@ -3158,7 +3300,10 @@ mod tests {
         let check = check_leftovers(&paths(root), &probe(root, false), &nothing_deployed());
         assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
         assert!(
-            check.items.iter().any(|item| item.contains("Normal.PNG.gore-bak")),
+            check
+                .items
+                .iter()
+                .any(|item| item.contains("Normal.PNG.gore-bak")),
             "{:?}",
             check.items
         );
@@ -3180,13 +3325,19 @@ mod tests {
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(check.detail.contains("not a file"), "{}", check.detail);
         assert!(
-            check.items.iter().any(|item| item.contains("SFX.bank.gore-bak")),
+            check
+                .items
+                .iter()
+                .any(|item| item.contains("SFX.bank.gore-bak")),
             "{:?}",
             check.items
         );
         let fix = check.fix.unwrap();
         assert!(fix.contains("Remove or rename"), "{fix}");
-        assert!(!fix.contains("gore audio restore"), "nothing restores from a directory: {fix}");
+        assert!(
+            !fix.contains("gore audio restore"),
+            "nothing restores from a directory: {fix}"
+        );
 
         // Windows folds case, so `SFX.bank.GORE-BAK` IS the file the backup step writes as
         // `SFX.bank.gore-bak` — the next operation consumes or collides with it, and a
@@ -3195,7 +3346,10 @@ mod tests {
         std::fs::write(banks.join("Music.bank.GORE-BAK"), b"pristine").unwrap();
         let check = check_leftovers(&paths(root), &probe(root, false), &nothing_deployed());
         assert!(
-            check.items.iter().any(|item| item.contains("Music.bank.GORE-BAK")),
+            check
+                .items
+                .iter()
+                .any(|item| item.contains("Music.bank.GORE-BAK")),
             "{:?}",
             check.items
         );
@@ -3214,7 +3368,10 @@ mod tests {
             let check = check_leftovers(&paths(root), &probe(root, false), &nothing_deployed());
             assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
             assert!(
-                check.items.iter().any(|item| item.contains("SFX.bank.gore-bak")),
+                check
+                    .items
+                    .iter()
+                    .any(|item| item.contains("SFX.bank.gore-bak")),
                 "{:?}",
                 check.items
             );
@@ -3230,7 +3387,10 @@ mod tests {
             let check = check_leftovers(&paths(root), &probe(root, false), &nothing_deployed());
             assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
             assert!(
-                check.items.iter().any(|item| item.contains("Normal.PNG.gore-bak")),
+                check
+                    .items
+                    .iter()
+                    .any(|item| item.contains("Normal.PNG.gore-bak")),
                 "{:?}",
                 check.items
             );
@@ -3345,7 +3505,10 @@ mod tests {
         let digest = std::fs::read(source)
             .ok()
             .map(|bytes| gore_loc::loc_store::sha256_hex(&bytes));
-        LocMeta { source_sha256: digest, ..meta(source, bytes) }
+        LocMeta {
+            source_sha256: digest,
+            ..meta(source, bytes)
+        }
     }
 
     #[test]
@@ -3387,7 +3550,10 @@ mod tests {
         std::fs::write(&cache, vec![0u8; 2048]).unwrap();
 
         let recorded = meta_with_identity(&cache, 2048);
-        assert!(recorded.source_sha256.is_some(), "the fixture must record one");
+        assert!(
+            recorded.source_sha256.is_some(),
+            "the fixture must record one"
+        );
 
         let unchanged = loc_check(
             Some(recorded.clone()),
@@ -3414,7 +3580,11 @@ mod tests {
             cache.parent().unwrap(),
         );
         assert_eq!(rewritten.verdict, Verdict::Problem, "{}", rewritten.detail);
-        assert!(rewritten.detail.contains("same length"), "{}", rewritten.detail);
+        assert!(
+            rewritten.detail.contains("same length"),
+            "{}",
+            rewritten.detail
+        );
     }
 
     #[test]
@@ -3585,18 +3755,33 @@ mod tests {
         let root = dir.path();
         make_install(root);
         let gp = paths(root);
-        assert_eq!(check_install(&gp).verdict, Verdict::Ok, "the fixture starts healthy");
+        assert_eq!(
+            check_install(&gp).verdict,
+            Verdict::Ok,
+            "the fixture starts healthy"
+        );
 
         // A directory where the executable belongs: the arm that reads "this is not the game".
         std::fs::remove_file(&gp.executable).unwrap();
         std::fs::create_dir_all(&gp.executable).unwrap();
         let check = check_install(&gp);
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
-        assert!(check.detail.contains("occupied by something else"), "{}", check.detail);
-        assert!(check.items.iter().any(|item| item.contains("not a file")), "{:?}", check.items);
+        assert!(
+            check.detail.contains("occupied by something else"),
+            "{}",
+            check.detail
+        );
+        assert!(
+            check.items.iter().any(|item| item.contains("not a file")),
+            "{:?}",
+            check.items
+        );
         let fix = check.fix.unwrap();
         assert!(fix.contains("Remove or rename"), "{fix}");
-        assert!(!fix.contains("gore config set game-path"), "the path is right: {fix}");
+        assert!(
+            !fix.contains("gore config set game-path"),
+            "the path is right: {fix}"
+        );
         std::fs::remove_dir(&gp.executable).unwrap();
         std::fs::write(&gp.executable, b"exe").unwrap();
 
@@ -3606,7 +3791,11 @@ mod tests {
         std::fs::write(&cache, b"not a folder").unwrap();
         let check = check_install(&gp);
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
-        assert!(check.items.iter().any(|item| item.contains("not a folder")), "{:?}", check.items);
+        assert!(
+            check.items.iter().any(|item| item.contains("not a folder")),
+            "{:?}",
+            check.items
+        );
         assert!(!check.fix.unwrap().contains("verify the game files"));
 
         // The control: genuinely absent keeps the sentence and the remedy it had.
@@ -3637,11 +3826,17 @@ mod tests {
             "and while creating the folder over it really does fail"
         );
 
-        assert!(matches!(occupant(&dangling, Wanted::Folder), Ok(Occupant::Obstruction)));
+        assert!(matches!(
+            occupant(&dangling, Wanted::Folder),
+            Ok(Occupant::Obstruction)
+        ));
 
         // The control: a name nothing holds is still absent.
         let free = dir.path().join("nothing-here");
-        assert!(matches!(occupant(&free, Wanted::Folder), Ok(Occupant::Absent)));
+        assert!(matches!(
+            occupant(&free, Wanted::Folder),
+            Ok(Occupant::Absent)
+        ));
     }
 
     /// A symlink at `link` pointing at a FILE. Separate from the directory helper because
@@ -3694,7 +3889,9 @@ mod tests {
         std::fs::write(&file, b"x").unwrap();
 
         assert!(present(&file).unwrap().is_some_and(|m| m.is_file()));
-        assert!(present(&dir.path().join("not-there.txt")).unwrap().is_none());
+        assert!(present(&dir.path().join("not-there.txt"))
+            .unwrap()
+            .is_none());
         assert!(present(dir.path()).unwrap().is_some_and(|m| m.is_dir()));
     }
 
@@ -3714,7 +3911,11 @@ mod tests {
             cache.parent().unwrap(),
         );
         assert_eq!(check.verdict, Verdict::Problem);
-        assert!(check.detail.contains("the catalog itself is gone"), "{}", check.detail);
+        assert!(
+            check.detail.contains("the catalog itself is gone"),
+            "{}",
+            check.detail
+        );
         assert!(check.fix.unwrap().contains("gore loc extract"));
     }
 
@@ -3730,9 +3931,18 @@ mod tests {
         let broken = dir.path().join("loc_catalog.json");
         std::fs::write(&broken, br#"{"itfo_apple":{"german":"Apf"#).unwrap();
 
-        let check = loc_check(Some(meta_with_identity(&cache, 2048)), &broken, Some(&cache), cache.parent().unwrap());
+        let check = loc_check(
+            Some(meta_with_identity(&cache, 2048)),
+            &broken,
+            Some(&cache),
+            cache.parent().unwrap(),
+        );
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
-        assert!(check.detail.contains("cannot be loaded"), "{}", check.detail);
+        assert!(
+            check.detail.contains("cannot be loaded"),
+            "{}",
+            check.detail
+        );
         assert!(check.fix.unwrap().contains("gore loc extract"));
     }
 
@@ -3748,10 +3958,18 @@ mod tests {
         let catalog = dir.path().join("loc_catalog.json");
         std::fs::write(&catalog, br#"{"itfo_apple":{"german":42}}"#).unwrap();
 
-        let check =
-            loc_check(Some(meta_with_identity(&cache, 2048)), &catalog, Some(&cache), cache.parent().unwrap());
+        let check = loc_check(
+            Some(meta_with_identity(&cache, 2048)),
+            &catalog,
+            Some(&cache),
+            cache.parent().unwrap(),
+        );
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
-        assert!(check.detail.contains("cannot be loaded"), "{}", check.detail);
+        assert!(
+            check.detail.contains("cannot be loaded"),
+            "{}",
+            check.detail
+        );
     }
 
     #[test]
@@ -3764,8 +3982,12 @@ mod tests {
         let catalog = dir.path().join("loc_catalog.json");
         std::fs::write(&catalog, br#"{"a":{"german":"x"},"b":{"german":"y"}}"#).unwrap();
 
-        let check =
-            loc_check(Some(meta_with_identity(&cache, 2048)), &catalog, Some(&cache), cache.parent().unwrap());
+        let check = loc_check(
+            Some(meta_with_identity(&cache, 2048)),
+            &catalog,
+            Some(&cache),
+            cache.parent().unwrap(),
+        );
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(check.detail.contains("holds 2 ids"), "{}", check.detail);
     }
@@ -3799,7 +4021,13 @@ mod tests {
         let sidecar = dir.path().join("loc_meta.json");
         std::fs::create_dir_all(&sidecar).unwrap();
 
-        let check = check_loc_catalog(None, &catalog, &sidecar, Some(&cache), cache.parent().unwrap());
+        let check = check_loc_catalog(
+            None,
+            &catalog,
+            &sidecar,
+            Some(&cache),
+            cache.parent().unwrap(),
+        );
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(check.detail.contains("loc_meta.json"), "{}", check.detail);
         assert!(check.detail.contains("is not a file"), "{}", check.detail);
@@ -3810,7 +4038,13 @@ mod tests {
         // The control: with nothing at that path the catalog is still reported as usable, so the
         // branch is answering the obstruction and not every absent sidecar.
         std::fs::remove_dir(&sidecar).unwrap();
-        let check = check_loc_catalog(None, &catalog, &sidecar, Some(&cache), cache.parent().unwrap());
+        let check = check_loc_catalog(
+            None,
+            &catalog,
+            &sidecar,
+            Some(&cache),
+            cache.parent().unwrap(),
+        );
         assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
         assert!(check.fix.unwrap().contains("usable as it is"));
     }
@@ -3830,13 +4064,21 @@ mod tests {
         for meta in [None, Some(meta_with_identity(&cache, 2048))] {
             let described = meta.is_some();
             let check = loc_check(meta, &catalog, Some(&cache), cache.parent().unwrap());
-            assert_eq!(check.verdict, Verdict::Problem, "sidecar={described}: {}", check.detail);
+            assert_eq!(
+                check.verdict,
+                Verdict::Problem,
+                "sidecar={described}: {}",
+                check.detail
+            );
             assert!(
                 check.detail.contains("is not a file"),
                 "sidecar={described}: {}",
                 check.detail
             );
-            assert!(check.fix.unwrap().contains("Remove or rename"), "sidecar={described}");
+            assert!(
+                check.fix.unwrap().contains("Remove or rename"),
+                "sidecar={described}"
+            );
         }
     }
 
@@ -3850,7 +4092,11 @@ mod tests {
 
         let check = loc_check(None, &catalog, None, dir.path());
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
-        assert!(check.detail.contains("cannot be loaded"), "{}", check.detail);
+        assert!(
+            check.detail.contains("cannot be loaded"),
+            "{}",
+            check.detail
+        );
     }
 
     #[test]
@@ -3906,7 +4152,11 @@ mod tests {
             &occupied,
         );
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
-        assert!(check.detail.contains("could not be listed"), "{}", check.detail);
+        assert!(
+            check.detail.contains("could not be listed"),
+            "{}",
+            check.detail
+        );
         assert!(check.fix.unwrap().contains("shell that can read"));
 
         // The control: a folder that genuinely is not there stays the note it was, so the branch
@@ -3919,7 +4169,11 @@ mod tests {
             &absent,
         );
         assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
-        assert!(check.detail.contains("no AlkimiaLocalization"), "{}", check.detail);
+        assert!(
+            check.detail.contains("no AlkimiaLocalization"),
+            "{}",
+            check.detail
+        );
     }
 
     #[test]
@@ -4011,7 +4265,10 @@ mod tests {
         let check = check_mods_folder(&gp);
         assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
         assert!(
-            check.items.iter().any(|i| i.contains("zzz_Half_P.utoc") && i.contains("not mounted")),
+            check
+                .items
+                .iter()
+                .any(|i| i.contains("zzz_Half_P.utoc") && i.contains("not mounted")),
             "{:?}",
             check.items
         );
@@ -4069,7 +4326,13 @@ mod tests {
         let gp = paths(root);
         let mods = gore_tex::container::mods_dir(&gp.root);
         std::fs::create_dir_all(&mods).unwrap();
-        for name in ["zzz_A_P.utoc", "zzz_A_P.ucas", "zzz_B_P.utoc", "zzz_B_P.ucas", "zzz_C_P.pak"] {
+        for name in [
+            "zzz_A_P.utoc",
+            "zzz_A_P.ucas",
+            "zzz_B_P.utoc",
+            "zzz_B_P.ucas",
+            "zzz_C_P.pak",
+        ] {
             std::fs::write(mods.join(name), b"x").unwrap();
         }
 
@@ -4090,7 +4353,10 @@ mod tests {
         let check = check_mods_folder(&gp);
         assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
         assert!(
-            check.items.iter().any(|item| item.contains("not the same container")),
+            check
+                .items
+                .iter()
+                .any(|item| item.contains("not the same container")),
             "{:?}",
             check.items
         );
@@ -4124,7 +4390,10 @@ mod tests {
         let check = check_mods_folder(&gp);
         assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
         assert!(
-            check.items.iter().any(|item| item.contains("triplet of three")),
+            check
+                .items
+                .iter()
+                .any(|item| item.contains("triplet of three")),
             "{:?}",
             check.items
         );
@@ -4154,7 +4423,10 @@ mod tests {
         let check = check_mods_folder(&gp);
         assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
         assert!(
-            check.items.iter().any(|item| item.contains("not a usable deploy record")),
+            check
+                .items
+                .iter()
+                .any(|item| item.contains("not a usable deploy record")),
             "{:?}",
             check.items
         );
@@ -4203,7 +4475,10 @@ mod tests {
         let check = check_mods_folder(&gp);
         assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
         assert!(
-            check.items.iter().any(|item| item.contains("not this folder's")),
+            check
+                .items
+                .iter()
+                .any(|item| item.contains("not this folder's")),
             "{:?}",
             check.items
         );
@@ -4285,7 +4560,10 @@ mod tests {
         let check = check_mods_folder(&gp);
         assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
         assert!(
-            check.items.iter().any(|item| item.contains("which is not here")),
+            check
+                .items
+                .iter()
+                .any(|item| item.contains("which is not here")),
             "{:?}",
             check.items
         );
@@ -4338,7 +4616,12 @@ mod tests {
         Report::new(
             None,
             "config",
-            vec![Check::new("ue4ss", "UE4SS", Verdict::Problem, "not installed")],
+            vec![Check::new(
+                "ue4ss",
+                "UE4SS",
+                Verdict::Problem,
+                "not installed",
+            )],
         );
     }
 
@@ -4350,7 +4633,12 @@ mod tests {
         Report::new(
             None,
             "config",
-            vec![Check::new("loc_catalog", "loc catalog", Verdict::Note, "could not be read")],
+            vec![Check::new(
+                "loc_catalog",
+                "loc catalog",
+                Verdict::Note,
+                "could not be read",
+            )],
         );
     }
 
@@ -4372,7 +4660,9 @@ mod tests {
         );
         assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
         assert!(
-            check.fix.is_some_and(|fix| fix.contains("gore mod undeploy")),
+            check
+                .fix
+                .is_some_and(|fix| fix.contains("gore mod undeploy")),
             "a Problem must say what to do next"
         );
     }
@@ -4393,7 +4683,10 @@ mod tests {
         let check = check_mods_folder(&gp);
         assert_eq!(check.verdict, Verdict::Note, "{}", check.detail);
         assert!(
-            check.items.iter().any(|item| item.contains(".tmp") && item.contains("not mounted")),
+            check
+                .items
+                .iter()
+                .any(|item| item.contains(".tmp") && item.contains("not mounted")),
             "{:?}",
             check.items
         );
@@ -4416,7 +4709,10 @@ mod tests {
         assert!(check.detail.contains("dwmapi.dll"), "{}", check.detail);
         let fix = check.fix.unwrap();
         assert!(fix.contains("dwmapi.dll"), "{fix}");
-        assert!(fix.contains("gore mod deploy"), "both findings are named: {fix}");
+        assert!(
+            fix.contains("gore mod deploy"),
+            "both findings are named: {fix}"
+        );
     }
 
     #[test]
@@ -4429,9 +4725,217 @@ mod tests {
 
         let check = check_deployment(&paths(root), &library, &loadout);
         assert_eq!(check.verdict, Verdict::Ok);
-        assert!(check.detail.contains("nothing is deployed"), "{}", check.detail);
+        assert!(
+            check.detail.contains("nothing is deployed"),
+            "{}",
+            check.detail
+        );
         // A reader who wants to look for themselves gets the three paths involved.
         assert_eq!(check.items.len(), 3);
+        assert!(!library.exists());
+        assert!(!loadout.exists());
+        assert!(!dir.path().join(".gore-manager-library.lock").exists());
+        assert!(!library.join(".gore-manager-library.lock").exists());
+    }
+
+    #[test]
+    fn deployment_uses_strict_reconciled_projection_without_repairing_or_creating_store_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("game");
+        make_install(&root);
+        let library = dir.path().join("library");
+        let loadout = dir.path().join("loadout.json");
+        let canonical_id = "CaseID";
+        let meta = write_manager_entry(&library, canonical_id);
+        write_manager_entry(&library, "disabled-b");
+        prepare_existing_read_only_library_lock(&library);
+        let configured_id = if cfg!(windows) {
+            "caseid"
+        } else {
+            canonical_id
+        };
+        std::fs::write(
+            &loadout,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "format": 1,
+                "entries": [
+                    {"id": configured_id, "enabled": true},
+                    {"id": "stale", "enabled": true},
+                    {"id": configured_id, "enabled": false}
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let before = std::fs::read(&loadout).unwrap();
+        let mut record = gore_mod::DeployRecord {
+            owner: "manager".into(),
+            mod_name: "manager".into(),
+            loadout: vec![gore_mod::mgr::LoadoutEntry {
+                id: canonical_id.into(),
+                enabled: true,
+            }],
+            ..Default::default()
+        };
+        record
+            .deployed_fingerprints
+            .insert(canonical_id.into(), meta.fingerprint());
+        write_deploy_record(&root, &record);
+
+        let check = check_deployment(&paths(&root), &library, &loadout);
+        assert_eq!(check.verdict, Verdict::Ok, "{}", check.detail);
+        assert!(check.detail.contains("in sync"), "{}", check.detail);
+        assert_eq!(std::fs::read(&loadout).unwrap(), before);
+        assert!(!dir.path().join(".gore-manager-library.lock").exists());
+        assert!(!std::fs::read_dir(dir.path()).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains("pending")));
+    }
+
+    #[test]
+    fn corrupt_loadout_keeps_record_only_recovery_priority_and_creates_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("game");
+        make_install(&root);
+        let library = dir.path().join("library");
+        let loadout = dir.path().join("loadout.json");
+        let bytes = br#"{"format":0,"entries":[]}"#;
+        std::fs::write(&loadout, bytes).unwrap();
+        let record = gore_mod::DeployRecord {
+            owner: "manager".into(),
+            mod_name: "manager".into(),
+            phase: gore_mod::DeployPhase::RecoveryRequired,
+            ..Default::default()
+        };
+        write_deploy_record(&root, &record);
+
+        let check = check_deployment(&paths(&root), &library, &loadout);
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("interrupted"), "{}", check.detail);
+        assert!(check
+            .fix
+            .as_deref()
+            .is_some_and(|fix| fix.contains("loadout") && fix.contains("format 0")));
+        assert_eq!(std::fs::read(&loadout).unwrap(), bytes);
+        assert!(!library.exists());
+        assert!(!dir.path().join(".gore-manager-library.lock").exists());
+    }
+
+    #[test]
+    fn missing_library_with_persisted_intent_is_library_uncertainty_without_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("game");
+        make_install(&root);
+        let library = dir.path().join("missing-library");
+        let store = dir.path().join("store");
+        let loadout = store.join("loadout.json");
+        std::fs::create_dir(&store).unwrap();
+        let bytes = br#"{"format":1,"entries":[{"id":"still-wanted","enabled":true}]}"#;
+        std::fs::write(&loadout, bytes).unwrap();
+
+        let check = check_deployment(&paths(&root), &library, &loadout);
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("library"), "{}", check.detail);
+        assert!(
+            !check.detail.contains("loadout could not be read"),
+            "{}",
+            check.detail
+        );
+        let fix = check.fix.expect("missing Library must be actionable");
+        assert!(fix.contains("library uncertainty"), "{fix}");
+        assert!(fix.contains("do not delete or repair the loadout"), "{fix}");
+        assert!(!fix.contains("Delete or repair"), "{fix}");
+        assert_eq!(std::fs::read(&loadout).unwrap(), bytes);
+        assert!(!library.exists());
+        assert!(!store.join(".gore-manager-library.lock").exists());
+        assert!(!library.join(".gore-manager-library.lock").exists());
+        assert!(!std::fs::read_dir(&store).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains("pending")));
+    }
+
+    #[test]
+    fn recovery_priority_names_missing_library_uncertainty_without_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("game");
+        make_install(&root);
+        let library = dir.path().join("missing-library");
+        let store = dir.path().join("store");
+        let loadout = store.join("loadout.json");
+        std::fs::create_dir(&store).unwrap();
+        let bytes = br#"{"format":1,"entries":[{"id":"still-wanted","enabled":true}]}"#;
+        std::fs::write(&loadout, bytes).unwrap();
+        write_deploy_record(
+            &root,
+            &gore_mod::DeployRecord {
+                owner: "manager".into(),
+                mod_name: "manager".into(),
+                phase: gore_mod::DeployPhase::RecoveryRequired,
+                ..Default::default()
+            },
+        );
+
+        let check = check_deployment(&paths(&root), &library, &loadout);
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("interrupted"), "{}", check.detail);
+        let fix = check
+            .fix
+            .expect("recovery plus Library uncertainty must be actionable");
+        assert!(fix.contains("gore mgr reset"), "{fix}");
+        assert!(fix.contains("library uncertainty"), "{fix}");
+        assert!(fix.contains("do not delete or repair the loadout"), "{fix}");
+        assert!(!fix.contains("Delete or repair"), "{fix}");
+        assert_eq!(std::fs::read(&loadout).unwrap(), bytes);
+        assert!(!library.exists());
+        assert!(!store.join(".gore-manager-library.lock").exists());
+        assert!(!library.join(".gore-manager-library.lock").exists());
+        assert!(!std::fs::read_dir(&store).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains("pending")));
+    }
+
+    #[test]
+    fn uncertain_library_is_not_misreported_as_a_corrupt_loadout_or_repaired() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("game");
+        make_install(&root);
+        let library = dir.path().join("library");
+        let loadout = dir.path().join("loadout.json");
+        write_manager_entry(&library, "a");
+        prepare_existing_read_only_library_lock(&library);
+        let loadout_bytes = br#"{"format":1,"entries":[{"id":"a","enabled":true}]}"#;
+        std::fs::write(&loadout, loadout_bytes).unwrap();
+        let transaction = library.join(".replacing-doctor-test");
+        std::fs::create_dir(&transaction).unwrap();
+        let evidence = transaction.join("evidence");
+        std::fs::write(&evidence, b"keep").unwrap();
+
+        let check = check_deployment(&paths(&root), &library, &loadout);
+        assert_eq!(check.verdict, Verdict::Problem, "{}", check.detail);
+        assert!(check.detail.contains("library"), "{}", check.detail);
+        let fix = check
+            .fix
+            .expect("strict Library refusal must be actionable");
+        assert!(fix.contains("library uncertainty"), "{fix}");
+        assert!(fix.contains("do not delete or repair the loadout"), "{fix}");
+        assert!(!fix.contains("Delete or repair"), "{fix}");
+        assert_eq!(std::fs::read(&loadout).unwrap(), loadout_bytes);
+        assert_eq!(std::fs::read(&evidence).unwrap(), b"keep");
+        assert!(transaction.is_dir());
+        assert!(!dir.path().join(".gore-manager-library.lock").exists());
+        assert!(!std::fs::read_dir(dir.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("pending")
+        }));
     }
 
     #[test]

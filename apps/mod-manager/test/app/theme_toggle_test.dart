@@ -7,6 +7,7 @@ import 'package:gore_manager/core/core_service.dart';
 import 'package:gore_manager/core/providers.dart';
 import 'package:gore_manager/home_page.dart';
 import 'package:gore_manager/l10n/app_localizations.dart';
+import 'package:gore_manager/library/domain/library_notifier.dart';
 
 /// A settings store that starts light and records every write so the test can
 /// assert the theme-mode toggle both flips the provider and persists.
@@ -52,11 +53,16 @@ Widget _app(FakeGoreCoreFfiService fake, _RecordingSettingsStore store) {
 }
 
 void main() {
-  testWidgets('the app-bar theme toggle flips and persists themeModeProvider',
-      (tester) async {
+  testWidgets('the app-bar theme toggle flips and persists themeModeProvider', (
+    tester,
+  ) async {
     final fake = FakeGoreCoreFfiService(
       responses: {
-        'mgr_library_list': {'ok': true, 'mods': [], 'loadout': {'entries': []}},
+        'mgr_library_list': {
+          'ok': true,
+          'mods': [],
+          'loadout': {'format': 1, 'entries': []},
+        },
         'mgr_analyze': {'ok': true, 'conflicts': []},
         'mgr_status': {
           'ok': true,
@@ -73,6 +79,8 @@ void main() {
     );
     // Default theme mode is light; the toggle shows the "go dark" icon.
     expect(container.read(themeModeProvider), ThemeMode.light);
+    expect(container.read(libraryProvider).authoritative, isTrue);
+    expect(container.read(libraryProvider).error, isNull);
     expect(find.byIcon(Icons.dark_mode), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.dark_mode));
@@ -94,7 +102,11 @@ void main() {
   testWidgets('the app-bar info button opens the about dialog', (tester) async {
     final fake = FakeGoreCoreFfiService(
       responses: {
-        'mgr_library_list': {'ok': true, 'mods': [], 'loadout': {'entries': []}},
+        'mgr_library_list': {
+          'ok': true,
+          'mods': [],
+          'loadout': {'format': 1, 'entries': []},
+        },
         'mgr_analyze': {'ok': true, 'conflicts': []},
         'mgr_status': {
           'ok': true,
@@ -107,6 +119,11 @@ void main() {
     await tester.pumpAndSettle();
 
     final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(HomePage)),
+    );
+    expect(container.read(libraryProvider).authoritative, isTrue);
+    expect(container.read(libraryProvider).error, isNull);
     // Before tapping, only the app-bar title carries the product name.
     expect(find.text('GORE Mod Manager'), findsOneWidget);
 

@@ -34,16 +34,51 @@ class MgrFfi {
   /// The mod library plus the current loadout order.
   Future<(List<ModEntryMetaView>, LoadoutView)> libraryList() async {
     final r = await _call('mgr_library_list', const {});
-    final mods = [
-      for (final m in _maps(r['mods'])) ModEntryMetaView.fromJson(m),
-    ];
-    final loadout = r['loadout'];
-    return (
-      mods,
-      loadout is Map
-          ? LoadoutView.fromJson(loadout.cast<String, Object?>())
-          : const LoadoutView(),
-    );
+    final rawMods = r['mods'];
+    final rawLoadout = r['loadout'];
+    if (rawMods is! List || rawLoadout is! Map) {
+      throw MgrFfiException('mgr_library_list: malformed store snapshot');
+    }
+    final mods = <ModEntryMetaView>[];
+    final modIds = <String>{};
+    for (final raw in rawMods) {
+      if (raw is! Map ||
+          raw['id'] is! String ||
+          raw['kind'] is! String ||
+          raw['name'] is! String ||
+          raw['components'] is! List ||
+          (raw['components']! as List).any(
+            (component) => component is! Map || component['type'] is! String,
+          )) {
+        throw MgrFfiException('mgr_library_list: malformed library entry');
+      }
+      final parsed = raw.cast<String, Object?>();
+      final id = parsed['id']! as String;
+      if (id.isEmpty || !modIds.add(id)) {
+        throw MgrFfiException('mgr_library_list: invalid library id set');
+      }
+      mods.add(ModEntryMetaView.fromJson(parsed));
+    }
+    final loadoutMap = rawLoadout.cast<String, Object?>();
+    final format = loadoutMap['format'];
+    if (format is! int || format != 1 || loadoutMap['entries'] is! List) {
+      throw MgrFfiException('mgr_library_list: malformed loadout');
+    }
+    final entries = loadoutMap['entries']! as List;
+    final loadoutIds = <String>{};
+    for (final raw in entries) {
+      if (raw is! Map ||
+          raw['id'] is! String ||
+          (raw['id']! as String).isEmpty ||
+          raw['enabled'] is! bool ||
+          !loadoutIds.add(raw['id']! as String)) {
+        throw MgrFfiException('mgr_library_list: malformed loadout entry');
+      }
+    }
+    if (loadoutIds.length != modIds.length || !loadoutIds.containsAll(modIds)) {
+      throw MgrFfiException('mgr_library_list: inconsistent store snapshot');
+    }
+    return (mods, LoadoutView.fromJson(loadoutMap));
   }
 
   /// Import a mod file/folder into the library; returns its library entry.

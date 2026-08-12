@@ -74,6 +74,7 @@ class _HomeCore implements GoreCoreFfiService {
           'ok': true,
           'mods': mods,
           'loadout': {
+            'format': 1,
             'entries': [
               {'id': 'a', 'enabled': true},
               {'id': 'b', 'enabled': true},

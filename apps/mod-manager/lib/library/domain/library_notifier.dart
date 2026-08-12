@@ -7,9 +7,9 @@ import 'models.dart';
 /// The mod library plus its loadout, as shown in the Mods tab.
 ///
 /// Immutable; every mutation returns a fresh instance via [copyWith]. The
-/// [loadout] is always reconciled against [mods] (see
-/// [LibraryNotifier.refresh]) so the UI can trust that every library mod has
-/// exactly one loadout entry and vice versa.
+/// Native returns [mods] and [loadout] from one locked, reconciled store
+/// snapshot, so the UI can trust that every library mod has exactly one
+/// loadout entry and vice versa.
 class LibraryState {
   const LibraryState({
     this.mods = const [],
@@ -29,8 +29,8 @@ class LibraryState {
   /// starts.
   final String? error;
 
-  /// True only after the native library and persisted loadout were read and
-  /// reconciled successfully. Mutations and Apply stay fail-closed otherwise.
+  /// True only after Native returned one locked, reconciled library/loadout
+  /// snapshot. Mutations and Apply stay fail-closed otherwise.
   final bool authoritative;
 
   LibraryState copyWith({
@@ -70,11 +70,8 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
 
   final MgrFfi _mgr;
 
-  /// Reload the library and loadout, reconciling the two so that:
-  ///  * every library mod id appears exactly once in the loadout,
-  ///  * ids present in the loadout but no longer in the library are dropped,
-  ///  * library ids missing from the loadout are appended at the end,
-  ///    disabled, preserving the stored order for the rest.
+  /// Reload the authoritative library and loadout snapshot. Reconciliation and
+  /// any necessary persistence happen inside Native under the store lock.
   Future<void> refresh() async {
     await _runRefresh();
   }
@@ -132,24 +129,12 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
   /// Refresh without its own busy/error framing — for use inside another
   /// mutation/refresh lane so the whole operation is one busy span.
   ///
-  /// Reconciling only fixes the *in-memory* loadout; the on-disk loadout that
-  /// `mgr_apply`/`mgr_status` read is untouched. So when reconciliation
-  /// actually changed something (a stale entry dropped, a new library mod
-  /// appended), persist the result via `mgr_set_loadout` so the on-disk
-  /// loadout matches what the UI shows. The delta check makes this idempotent:
-  /// a loadout that already agrees with the library persists nothing, so the
-  /// follow-up refresh after a persist can't loop.
+  /// This read lane never writes a loadout back. Native owns the locked
+  /// reconciliation transaction; a Dart read-then-write would race CLI or
+  /// another Manager process.
   Future<void> _refreshInline() async {
     final (mods, loadout) = await _mgr.libraryList();
-    final reconciled = _reconcile(mods, loadout);
-    if (!_sameEntries(loadout.entries, reconciled.entries)) {
-      await _mgr.setLoadout(reconciled);
-    }
-    state = state.copyWith(
-      mods: mods,
-      loadout: reconciled,
-      authoritative: true,
-    );
+    state = state.copyWith(mods: mods, loadout: loadout, authoritative: true);
   }
 
   /// Explicit read lane. It remains available while state is unknown because
@@ -208,38 +193,6 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     MgrFfiException() => error.message,
     _ => error.toString(),
   };
-
-  /// True when two loadout entry lists carry the same ids, enabled flags, and
-  /// order — the delta gate for persisting a reconciled loadout.
-  static bool _sameEntries(List<LoadoutEntryView> a, List<LoadoutEntryView> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i].id != b[i].id || a[i].enabled != b[i].enabled) return false;
-    }
-    return true;
-  }
-
-  /// See [refresh] for the reconciliation contract.
-  static LoadoutView _reconcile(
-    List<ModEntryMetaView> mods,
-    LoadoutView loadout,
-  ) {
-    final known = {for (final m in mods) m.id};
-    final seen = <String>{};
-    final kept = <LoadoutEntryView>[
-      for (final e in loadout.entries)
-        if (known.contains(e.id) && seen.add(e.id)) e,
-    ];
-    // Append any library mods that had no loadout entry, disabled, in library
-    // order.
-    for (final m in mods) {
-      if (!seen.contains(m.id)) {
-        kept.add(LoadoutEntryView(id: m.id, enabled: false));
-        seen.add(m.id);
-      }
-    }
-    return LoadoutView(format: loadout.format, entries: kept);
-  }
 }
 
 /// The library + loadout, kicked off with an initial refresh.

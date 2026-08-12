@@ -14,11 +14,11 @@ use std::path::PathBuf;
 
 use gore_mod::mgr::{
     self,
-    analyze::{analyze, Conflict, Severity},
-    apply::{apply_loadout, undeploy_all},
+    analyze::{Conflict, Severity},
+    apply::undeploy_all,
     import,
-    loadout::{self, Loadout, LoadoutEntry},
-    status::{status, ManagerStatus},
+    status::ManagerStatus,
+    store::StoreSnapshot,
 };
 
 #[derive(Subcommand)]
@@ -138,18 +138,17 @@ pub fn run(action: MgrAction) -> Result<()> {
                 .map_err(|e| anyhow::anyhow!("{e}"))
                 .with_context(|| format!("importing {}", path.display()))?;
             let entry = &outcome.entry;
-
-            // Also register the new mod in the loadout (disabled) so `enable`
-            // can find it. Skip if an entry with this id already exists (re-import
-            // / update): keep its current enabled state and position.
-            let mut ld = loadout::load(&ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
-            if !ld.entries.iter().any(|e| e.id == entry.id) {
-                ld.entries.push(LoadoutEntry {
-                    id: entry.id.clone(),
-                    enabled: false,
-                });
-                loadout::save(&ld_path, &ld).map_err(|e| anyhow::anyhow!("{e}"))?;
-            }
+            // Library publication and loadout registration are deliberately two commits. Import
+            // has released its Library lock before Store acquires its canonical root set and repairs any
+            // valid partial publication. A loadout error leaves the imported library entry intact.
+            StoreSnapshot::open(&lib, &ld_path)
+                .map_err(|e| anyhow::anyhow!("{e}"))
+                .with_context(|| {
+                    format!(
+                        "imported {:?} into the library but failed to reconcile the loadout",
+                        entry.id
+                    )
+                })?;
 
             println!(
                 "imported {} ({}) [{:?}] disposition={} matched_by={}",
@@ -166,8 +165,9 @@ pub fn run(action: MgrAction) -> Result<()> {
             let lib = library_of(library);
             let ld_path = loadout_of(loadout);
 
-            let ld = loadout::load(&ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
-            let mods = import::list(&lib).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let store = StoreSnapshot::open(&lib, &ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let ld = store.loadout();
+            let mods = store.mods();
 
             // One row per loadout entry (in loadout order), joined to its metadata
             // by id; library mods not in the loadout are appended after.
@@ -192,7 +192,7 @@ pub fn run(action: MgrAction) -> Result<()> {
                 );
                 shown.push(&e.id);
             }
-            for m in &mods {
+            for m in mods {
                 if shown.iter().any(|id| *id == m.id) {
                     continue;
                 }
@@ -216,40 +216,60 @@ pub fn run(action: MgrAction) -> Result<()> {
             let ld_path = loadout_of(loadout);
 
             let removed = import::remove(&lib, &id).map_err(|e| anyhow::anyhow!("{e}"))?;
-
-            // Drop it from the loadout too so a stale entry doesn't linger.
-            let mut ld = loadout::load(&ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
-            let before = ld.entries.len();
-            ld.entries.retain(|e| e.id != id);
-            if ld.entries.len() != before {
-                loadout::save(&ld_path, &ld).map_err(|e| anyhow::anyhow!("{e}"))?;
-            }
+            StoreSnapshot::open(&lib, &ld_path)
+                .map_err(|e| anyhow::anyhow!("{e}"))
+                .with_context(|| {
+                    format!("removed {id:?} from the library but failed to reconcile the loadout")
+                })?;
 
             println!("removed {id}: {removed}");
             Ok(())
         }
 
-        MgrAction::Enable { id, loadout, .. } => set_enabled(&id, true, loadout),
-        MgrAction::Disable { id, loadout, .. } => set_enabled(&id, false, loadout),
+        MgrAction::Enable {
+            id,
+            library,
+            loadout,
+        } => set_enabled(&id, true, library, loadout),
+        MgrAction::Disable {
+            id,
+            library,
+            loadout,
+        } => set_enabled(&id, false, library, loadout),
 
         MgrAction::Order {
-            id, pos, loadout, ..
+            id,
+            pos,
+            library,
+            loadout,
         } => {
+            let lib = library_of(library);
             let ld_path = loadout_of(loadout);
-            let mut ld = loadout::load(&ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let mut store =
+                StoreSnapshot::open(&lib, &ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let mut to = 0;
+            store
+                .update_loadout(|ld| {
+                    let from = ld
+                        .entries
+                        .iter()
+                        .position(|entry| entry.id == id)
+                        .ok_or_else(|| {
+                            gore_mod::ModError::Other(format!("no loadout entry with id {id:?}"))
+                        })?;
+                    to = pos.min(ld.entries.len() - 1);
+                    let entry = ld.entries.remove(from);
+                    ld.entries.insert(to, entry);
+                    Ok(())
+                })
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-            let from = ld
+            let order: Vec<&str> = store
+                .loadout()
                 .entries
                 .iter()
-                .position(|e| e.id == id)
-                .ok_or_else(|| anyhow::anyhow!("no loadout entry with id {id:?}"))?;
-            // Clamp to the last slot (len-1); entries is non-empty since `from` exists.
-            let to = pos.min(ld.entries.len() - 1);
-            let entry = ld.entries.remove(from);
-            ld.entries.insert(to, entry);
-            loadout::save(&ld_path, &ld).map_err(|e| anyhow::anyhow!("{e}"))?;
-
-            let order: Vec<&str> = ld.entries.iter().map(|e| e.id.as_str()).collect();
+                .map(|e| e.id.as_str())
+                .collect();
             println!("moved {id} to position {to}; order: {}", order.join(" -> "));
             Ok(())
         }
@@ -258,10 +278,8 @@ pub fn run(action: MgrAction) -> Result<()> {
             let lib = library_of(library);
             let ld_path = loadout_of(loadout);
 
-            let mods = import::list(&lib).map_err(|e| anyhow::anyhow!("{e}"))?;
-            let ld = loadout::load(&ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
-            let refs: Vec<&_> = mods.iter().collect();
-            let conflicts = analyze(&refs, &ld);
+            let store = StoreSnapshot::open(&lib, &ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let conflicts = store.analyze();
 
             if conflicts.is_empty() {
                 println!("no conflicts");
@@ -282,8 +300,8 @@ pub fn run(action: MgrAction) -> Result<()> {
             let lib = library_of(library);
             let ld_path = loadout_of(loadout);
 
-            let ld = loadout::load(&ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
-            let report = match apply_loadout(&game, &lib, &ld) {
+            let store = StoreSnapshot::open(&lib, &ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let report = match store.apply(&game) {
                 Ok(r) => r,
                 Err(e) => {
                     let msg = e.to_string();
@@ -323,8 +341,8 @@ pub fn run(action: MgrAction) -> Result<()> {
             let game = gore_loc::config::game_root(game)?;
             let lib = library_of(library);
             let ld_path = loadout_of(loadout);
-            let ld = loadout::load(&ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
-            let st = status(&game, &lib, &ld).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let store = StoreSnapshot::open(&lib, &ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let st = store.status(&game).map_err(|e| anyhow::anyhow!("{e}"))?;
             println!("{}", describe_status(&st));
             Ok(())
         }
@@ -359,17 +377,31 @@ fn format_conflict(conflict: &Conflict) -> String {
 }
 
 /// Set the `enabled` flag of loadout entry `id`; error if it isn't in the loadout.
-/// (`--library` is accepted for a uniform CLI surface but isn't needed here.)
-fn set_enabled(id: &str, enabled: bool, loadout: Option<PathBuf>) -> Result<()> {
+/// The selected library is part of the same strict Store snapshot and must be forwarded.
+fn set_enabled(
+    id: &str,
+    enabled: bool,
+    library: Option<PathBuf>,
+    loadout: Option<PathBuf>,
+) -> Result<()> {
+    let lib = library_of(library);
     let ld_path = loadout_of(loadout);
-    let mut ld: Loadout = loadout::load(&ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let entry = ld
-        .entries
-        .iter_mut()
-        .find(|e| e.id == id)
-        .ok_or_else(|| anyhow::anyhow!("no loadout entry with id {id:?} (import it first)"))?;
-    entry.enabled = enabled;
-    loadout::save(&ld_path, &ld).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let mut store = StoreSnapshot::open(&lib, &ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
+    store
+        .update_loadout(|loadout| {
+            let entry = loadout
+                .entries
+                .iter_mut()
+                .find(|entry| entry.id == id)
+                .ok_or_else(|| {
+                    gore_mod::ModError::Other(format!(
+                        "no loadout entry with id {id:?} (import it first)"
+                    ))
+                })?;
+            entry.enabled = enabled;
+            Ok(())
+        })
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     println!("{id}: {}", if enabled { "enabled" } else { "disabled" });
     Ok(())
 }

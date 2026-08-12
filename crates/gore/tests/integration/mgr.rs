@@ -149,6 +149,25 @@ fn mgr_import_keeps_prefix_and_reports_structured_success_outcome() {
     assert!(moved.contains("matched_by=content"), "{moved}");
 }
 
+#[test]
+fn mgr_accepts_child_loadout_path_relative_to_the_process_cwd() {
+    let tmp = TempDir::new().unwrap();
+    Command::cargo_bin("gore")
+        .unwrap()
+        .current_dir(tmp.path())
+        .args([
+            "mgr",
+            "list",
+            "--library",
+            "library",
+            "--loadout",
+            "loadout.json",
+        ])
+        .assert()
+        .success();
+    assert!(tmp.path().join("library").is_dir());
+}
+
 /// The whole loadout lifecycle with NO real game deploy. This is the always-run gate.
 #[test]
 fn mgr_import_list_enable_disable_order_analyze_status_reset() {
@@ -189,7 +208,15 @@ fn mgr_import_list_enable_disable_order_analyze_status_reset() {
     for id in [&id_a, &id_b] {
         Command::cargo_bin("gore")
             .unwrap()
-            .args(["mgr", "enable", id, "--loadout", loadout.to_str().unwrap()])
+            .args([
+                "mgr",
+                "enable",
+                id,
+                "--library",
+                lib.to_str().unwrap(),
+                "--loadout",
+                loadout.to_str().unwrap(),
+            ])
             .assert()
             .success()
             .stdout(predicates::str::contains("enabled"));
@@ -235,6 +262,8 @@ fn mgr_import_list_enable_disable_order_analyze_status_reset() {
             "mgr",
             "disable",
             &id_b,
+            "--library",
+            lib.to_str().unwrap(),
             "--loadout",
             loadout.to_str().unwrap(),
         ])
@@ -264,6 +293,8 @@ fn mgr_import_list_enable_disable_order_analyze_status_reset() {
             "order",
             &id_b,
             "0",
+            "--library",
+            lib.to_str().unwrap(),
             "--loadout",
             loadout.to_str().unwrap(),
         ])
@@ -282,6 +313,8 @@ fn mgr_import_list_enable_disable_order_analyze_status_reset() {
             "status",
             "--game",
             game.to_str().unwrap(),
+            "--library",
+            lib.to_str().unwrap(),
             "--loadout",
             loadout.to_str().unwrap(),
         ])
@@ -334,6 +367,7 @@ fn mgr_import_list_enable_disable_order_analyze_status_reset() {
 #[test]
 fn mgr_enable_unknown_id_errors() {
     let tmp = TempDir::new().unwrap();
+    let library = tmp.path().join("library");
     let loadout = tmp.path().join("loadout.json");
     Command::cargo_bin("gore")
         .unwrap()
@@ -341,6 +375,8 @@ fn mgr_enable_unknown_id_errors() {
             "mgr",
             "enable",
             "does-not-exist",
+            "--library",
+            library.to_str().unwrap(),
             "--loadout",
             loadout.to_str().unwrap(),
         ])
@@ -376,7 +412,15 @@ fn mgr_pak_file_patch_reorders_and_resets_in_a_temp_game() {
     for id in [&alpha, &bravo] {
         Command::cargo_bin("gore")
             .unwrap()
-            .args(["mgr", "enable", id, "--loadout", loadout.to_str().unwrap()])
+            .args([
+                "mgr",
+                "enable",
+                id,
+                "--library",
+                lib.to_str().unwrap(),
+                "--loadout",
+                loadout.to_str().unwrap(),
+            ])
             .assert()
             .success();
     }
@@ -464,6 +508,8 @@ fn mgr_pak_file_patch_reorders_and_resets_in_a_temp_game() {
             "order",
             &bravo,
             "0",
+            "--library",
+            lib.to_str().unwrap(),
             "--loadout",
             loadout.to_str().unwrap(),
         ])
@@ -566,7 +612,15 @@ fn mgr_apply_on_temp_game() {
     let id = import(&lib, &loadout, &bundle);
     Command::cargo_bin("gore")
         .unwrap()
-        .args(["mgr", "enable", &id, "--loadout", loadout.to_str().unwrap()])
+        .args([
+            "mgr",
+            "enable",
+            &id,
+            "--library",
+            lib.to_str().unwrap(),
+            "--loadout",
+            loadout.to_str().unwrap(),
+        ])
         .assert()
         .success();
 

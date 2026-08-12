@@ -54,14 +54,14 @@ pub(crate) struct LibrarySidecar {
 }
 
 #[cfg(windows)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct FileIdentity {
     volume: u64,
     id: [u8; 16],
 }
 
 #[cfg(unix)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(crate) struct FileIdentity {
     device: u64,
     inode: u64,
@@ -157,26 +157,60 @@ pub(crate) struct LibraryIdentityInspection {
     pub(crate) sidecar_sha256: String,
 }
 
-/// Crash-released operating-system lock for one canonical manager-library inode. Windows locks a
-/// persistent direct-child file; Unix locks the already-opened directory descriptor itself, whose
-/// inode cannot be substituted by unlinking a lock-file name. The retained root is the sole Unix
-/// namespace authority for the mutation lane.
+/// The one non-reentrant in-process Manager lane. Every Store and standalone Library/Identity
+/// transaction takes this guard before preparing or waiting on any kernel root lock.
+static MANAGER_PROCESS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub(crate) type ManagerProcessGuard = std::sync::MutexGuard<'static, ()>;
+
+pub(crate) fn manager_process_lock() -> ManagerProcessGuard {
+    MANAGER_PROCESS_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// One prepared canonical Manager root, opened and identity-bound but not yet kernel-locked.
+/// Composite Store transactions sort these by physical identity before acquiring either lock.
 #[derive(Debug)]
-pub(crate) struct LibraryMutationFileGuard {
+pub(crate) struct PreparedManagerRootLock {
     #[cfg(windows)]
-    _file: std::fs::File,
+    root: SecureDirectory,
+    #[cfg(unix)]
+    root: SecureDirectory,
+    #[cfg(windows)]
+    create_lock_file: bool,
+}
+
+impl PreparedManagerRootLock {
+    pub(crate) fn identity(&self) -> FileIdentity {
+        self.root.identity()
+    }
+
+}
+
+/// Crash-released operating-system lock for one canonical Manager root. Windows locks the
+/// persistent `.gore-manager-library.lock` direct child for both Store and Library roots. Unix
+/// flocks the already-opened directory descriptor itself. Retained handles plus named-path
+/// revalidation prevent a prepared alias from being redirected while a waiter blocks.
+#[derive(Debug)]
+pub(crate) struct ManagerRootLock {
+    #[cfg(windows)]
+    sentinel: std::fs::File,
+    #[cfg(windows)]
+    sentinel_identity: FileIdentity,
+    #[cfg(windows)]
+    sentinel_path: PathBuf,
     #[cfg(windows)]
     root: RenameDirectoryGuard,
     #[cfg(unix)]
     root: SecureDirectory,
 }
 
-impl LibraryMutationFileGuard {
+impl ManagerRootLock {
     pub(crate) fn path(&self) -> &Path {
         self.root.path()
     }
 
-    #[cfg(any(not(unix), test))]
     pub(crate) fn identity(&self) -> FileIdentity {
         self.root.identity()
     }
@@ -186,6 +220,11 @@ impl LibraryMutationFileGuard {
         LibraryRoot {
             directory: self.root.clone(),
         }
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn directory_file(&self) -> &std::fs::File {
+        &self.root.anchor.file
     }
 }
 
@@ -288,10 +327,58 @@ impl SecureFile {
         }
         Ok(())
     }
+
+    /// Read this already-opened, no-follow file under a hard ceiling and prove that its opened
+    /// identity, revision and length stayed stable for the complete read.
+    pub(crate) fn read_all_bounded(
+        &mut self,
+        label: &str,
+        limit: u64,
+    ) -> crate::Result<Vec<u8>> {
+        let expected = self.len;
+        if expected > limit {
+            return Err(crate::ModError::Other(format!(
+                "{label} exceeds the {limit}-byte limit: {}",
+                self.final_path.display()
+            )));
+        }
+        let capacity = usize::try_from(expected).map_err(|_| {
+            crate::ModError::Other(format!(
+                "{label} is too large for this process address space: {}",
+                self.final_path.display()
+            ))
+        })?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(capacity).map_err(|_| {
+            crate::ModError::Other(format!(
+                "could not reserve {expected} bytes for {label}: {}",
+                self.final_path.display()
+            ))
+        })?;
+        self.file
+            .by_ref()
+            .take(limit.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(crate::io(&format!(
+                "reading {label} {}",
+                self.final_path.display()
+            )))?;
+        if bytes.len() as u64 > limit || bytes.len() as u64 != expected {
+            return Err(crate::ModError::Other(format!(
+                "{label} changed or exceeded its bound while being read: {}",
+                self.final_path.display()
+            )));
+        }
+        self.verify_len(expected, label)?;
+        Ok(bytes)
+    }
 }
 
 #[cfg(windows)]
-fn identity_from_open_file(file: &std::fs::File, label: &str) -> crate::Result<FileIdentity> {
+pub(crate) fn identity_from_open_file(
+    file: &std::fs::File,
+    label: &str,
+) -> crate::Result<FileIdentity> {
     use std::os::windows::io::AsRawHandle as _;
     use windows_sys::Win32::Storage::FileSystem::{
         FileIdInfo, GetFileInformationByHandleEx, FILE_ID_INFO,
@@ -344,7 +431,10 @@ fn revision_from_open_file(file: &std::fs::File, label: &str) -> crate::Result<F
 }
 
 #[cfg(unix)]
-fn identity_from_open_file(file: &std::fs::File, label: &str) -> crate::Result<FileIdentity> {
+pub(crate) fn identity_from_open_file(
+    file: &std::fs::File,
+    label: &str,
+) -> crate::Result<FileIdentity> {
     use std::os::unix::fs::MetadataExt as _;
     let metadata = file
         .metadata()
@@ -925,26 +1015,6 @@ fn fstat_retry(fd: libc::c_int) -> std::io::Result<libc::stat> {
     }
 }
 
-#[cfg(unix)]
-fn fstatat_retry(
-    directory_fd: libc::c_int,
-    name: &std::ffi::CStr,
-    flags: libc::c_int,
-) -> std::io::Result<libc::stat> {
-    loop {
-        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-        // SAFETY: both the retained descriptor/name and writable result pointer are valid.
-        if unsafe { libc::fstatat(directory_fd, name.as_ptr(), stat.as_mut_ptr(), flags) } == 0 {
-            // SAFETY: successful `fstatat` initialized the structure.
-            return Ok(unsafe { stat.assume_init() });
-        }
-        let error = std::io::Error::last_os_error();
-        if error.kind() != std::io::ErrorKind::Interrupted {
-            return Err(error);
-        }
-    }
-}
-
 #[cfg(windows)]
 fn create_child_directory_new(
     parent: &DirectoryAnchor,
@@ -1173,7 +1243,7 @@ fn open_directory_rename_compatible(
 }
 
 pub(crate) fn open_directory_nofollow(path: &Path, label: &str) -> crate::Result<SecureDirectory> {
-    let opened = open_absolute_node(path, label)?;
+    let opened = open_absolute_directory(path, label)?;
     if !opened.metadata.is_dir() {
         return Err(crate::ModError::Other(format!(
             "{label} is not a real directory: {}",
@@ -1187,6 +1257,43 @@ pub(crate) fn open_directory_nofollow(path: &Path, label: &str) -> crate::Result
             identity: opened.identity,
         }),
         parents: Vec::new(),
+    })
+}
+
+#[cfg(not(unix))]
+fn open_absolute_directory(path: &Path, label: &str) -> crate::Result<OpenedNode> {
+    open_absolute_node(path, label)
+}
+
+#[cfg(unix)]
+fn open_absolute_directory(path: &Path, label: &str) -> crate::Result<OpenedNode> {
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+    use std::os::unix::io::AsRawFd as _;
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(crate::io(&format!(
+            "opening {label} with O_DIRECTORY|O_NOFOLLOW {}",
+            path.display()
+        )))?;
+    let metadata = file
+        .metadata()
+        .map_err(crate::io(&format!("reading opened {label} metadata")))?;
+    let identity = FileIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    };
+    let fd_path = PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
+    let final_path = std::fs::read_link(&fd_path)
+        .or_else(|_| std::fs::canonicalize(path))
+        .map_err(crate::io(&format!("resolving opened {label} handle path")))?;
+    Ok(OpenedNode {
+        file,
+        final_path,
+        identity,
+        metadata,
     })
 }
 
@@ -1600,26 +1707,50 @@ fn secure_directory_enumeration_path(anchor: &DirectoryAnchor) -> crate::Result<
     ))
 }
 
-#[cfg(windows)]
-const LIBRARY_MUTATION_LOCK_FILE: &str = ".gore-manager-library.lock";
+pub(crate) const MANAGER_ROOT_LOCK_FILE: &str = ".gore-manager-library.lock";
+
+#[cfg(test)]
+const MANAGER_FIRST_ROOT_MARKER_ENV: &str = "GORE_TEST_MANAGER_FIRST_ROOT_MARKER";
+#[cfg(test)]
+const MANAGER_FIRST_ROOT_HOLD_MS_ENV: &str = "GORE_TEST_MANAGER_FIRST_ROOT_HOLD_MS";
+
+#[cfg(test)]
+fn run_manager_first_root_lock_hook() -> crate::Result<()> {
+    if let Some(marker) = std::env::var_os(MANAGER_FIRST_ROOT_MARKER_ENV) {
+        std::fs::write(marker, b"locked")
+            .map_err(crate::io("writing first Manager-root lock marker"))?;
+    }
+    if let Ok(raw) = std::env::var(MANAGER_FIRST_ROOT_HOLD_MS_ENV) {
+        let milliseconds = raw.parse::<u64>().map_err(|error| {
+            crate::ModError::Other(format!(
+                "invalid {MANAGER_FIRST_ROOT_HOLD_MS_ENV} value {raw:?}: {error}"
+            ))
+        })?;
+        std::thread::sleep(std::time::Duration::from_millis(milliseconds));
+    }
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn run_manager_first_root_lock_hook() -> crate::Result<()> {
+    Ok(())
+}
 
 #[cfg(windows)]
-fn acquire_library_mutation_file_lock(
-    library: SecureDirectory,
-) -> crate::Result<LibraryMutationFileGuard> {
+fn open_manager_root_sentinel(
+    root: &SecureDirectory,
+    create: bool,
+) -> crate::Result<OpenedNode> {
     use std::os::windows::fs::OpenOptionsExt as _;
-    use std::os::windows::io::AsRawHandle as _;
     use windows_sys::Win32::Storage::FileSystem::{
-        LockFileEx, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
-        LOCKFILE_EXCLUSIVE_LOCK,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
-    use windows_sys::Win32::System::IO::OVERLAPPED;
 
-    let path = library.path().join(LIBRARY_MUTATION_LOCK_FILE);
+    let path = root.path().join(MANAGER_ROOT_LOCK_FILE);
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .create(true)
+        .create(create)
         // Cooperative processes must be able to open the same persistent file while another owns
         // its kernel byte lock. DELETE sharing is intentionally excluded for ordinary Win32
         // namespace operations. This is coordination, not a security boundary against a same-user
@@ -1627,30 +1758,80 @@ fn acquire_library_mutation_file_lock(
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(&path)
-        .map_err(crate::io(
-            "opening persistent manager-library mutation lock",
-        ))?;
-    let opened = finish_opened_windows_node(&path, "manager-library mutation lock", file)?;
-    if !opened.metadata.is_file()
-        || !handle_path_is_direct_child(library.path(), &opened.final_path)
-    {
+        .map_err(crate::io("opening persistent Manager-root lock"))?;
+    let opened = finish_opened_windows_node(&path, "Manager-root lock", file)?;
+    if !opened.metadata.is_file() || !handle_path_is_direct_child(root.path(), &opened.final_path) {
         return Err(crate::ModError::Other(format!(
-            "manager-library mutation lock is not a regular direct child: {}",
+            "Manager-root lock is not a regular direct child: {}",
             opened.final_path.display()
         )));
     }
+    Ok(opened)
+}
 
-    // A waiter must not retain the no-DELETE traversal handle while blocking: on Windows that
-    // would prevent the current lock owner from renaming library children. Preserve the exact root
-    // identity with a rename-compatible handle before entering LockFileEx instead.
-    let root = library.into_rename_guard("manager library mutation root")?;
+#[cfg(windows)]
+fn prepare_manager_root_lock(
+    root: SecureDirectory,
+    create_lock_file: bool,
+) -> crate::Result<PreparedManagerRootLock> {
+    // Keep preparation read-only. Composite callers compare every opened root identity before
+    // creating either persistent sentinel, so an invalid same-root configuration leaves no lock
+    // artifact behind.
+    Ok(PreparedManagerRootLock {
+        root,
+        create_lock_file,
+    })
+}
 
+#[cfg(unix)]
+fn prepare_manager_root_lock(
+    root: SecureDirectory,
+    _create_lock_file: bool,
+) -> crate::Result<PreparedManagerRootLock> {
+    Ok(PreparedManagerRootLock { root })
+}
+
+#[cfg(not(any(windows, unix)))]
+fn prepare_manager_root_lock(
+    _root: SecureDirectory,
+    _create_lock_file: bool,
+) -> crate::Result<PreparedManagerRootLock> {
+    Err(crate::ModError::Other(
+        "Manager-root locking is unsupported on this platform".into(),
+    ))
+}
+
+pub(crate) fn prepare_existing_manager_root_lock(
+    path: &Path,
+    label: &str,
+    create_lock_file: bool,
+) -> crate::Result<PreparedManagerRootLock> {
+    prepare_manager_root_lock(
+        open_directory_nofollow(path, label)?,
+        create_lock_file,
+    )
+}
+
+#[cfg(windows)]
+fn acquire_prepared_manager_root(
+    prepared: PreparedManagerRootLock,
+) -> crate::Result<ManagerRootLock> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{LockFileEx, LOCKFILE_EXCLUSIVE_LOCK};
+    use windows_sys::Win32::System::IO::OVERLAPPED;
+
+    let sentinel = open_manager_root_sentinel(&prepared.root, prepared.create_lock_file)?;
+    // A waiter must not retain the no-DELETE traversal handle while blocking: that would prevent
+    // the current owner from renaming root children. The sentinel remains identity-bound.
+    let root = prepared
+        .root
+        .into_rename_guard("Manager mutation root")?;
     let mut overlapped = OVERLAPPED::default();
-    // SAFETY: `opened.file` remains alive in the returned guard. This is a synchronous blocking
+    // SAFETY: `sentinel.file` remains alive in the returned guard. This is synchronous
     // one-byte lock at offset zero, and `overlapped` is valid for the duration of the call.
     let locked = unsafe {
         LockFileEx(
-            opened.file.as_raw_handle(),
+            sentinel.file.as_raw_handle(),
             LOCKFILE_EXCLUSIVE_LOCK,
             0,
             1,
@@ -1659,35 +1840,34 @@ fn acquire_library_mutation_file_lock(
         )
     };
     if locked == 0 {
-        return Err(crate::io(
-            "locking persistent manager-library mutation lock",
-        )(std::io::Error::last_os_error()));
-    }
-    if identity_from_open_file(&opened.file, "manager-library mutation lock")? != opened.identity {
-        return Err(crate::ModError::Other(
-            "manager-library mutation lock changed filesystem identity while locking".into(),
+        return Err(crate::io("locking persistent Manager-root lock")(
+            std::io::Error::last_os_error(),
         ));
     }
-    Ok(LibraryMutationFileGuard {
-        _file: opened.file,
+    let lock = ManagerRootLock {
+        sentinel: sentinel.file,
+        sentinel_identity: sentinel.identity,
+        sentinel_path: sentinel.final_path,
         root,
-    })
+    };
+    lock.revalidate_named()?;
+    Ok(lock)
 }
 
 #[cfg(unix)]
-fn acquire_library_mutation_file_lock(
-    library: SecureDirectory,
-) -> crate::Result<LibraryMutationFileGuard> {
+fn acquire_prepared_manager_root(
+    prepared: PreparedManagerRootLock,
+) -> crate::Result<ManagerRootLock> {
     use std::os::unix::io::AsRawFd as _;
 
-    let fd = library.anchor.file.as_raw_fd();
+    let fd = prepared.root.anchor.file.as_raw_fd();
     let before = fstat_retry(fd).map_err(crate::io(
-        "reading manager-library directory identity before locking",
+        "reading Manager-root directory identity before locking",
     ))?;
     if before.st_mode & libc::S_IFMT != libc::S_IFDIR {
         return Err(crate::ModError::Other(format!(
-            "manager-library mutation authority is not a directory: {}",
-            library.path().display()
+            "Manager-root mutation authority is not a directory: {}",
+            prepared.root.path().display()
         )));
     }
 
@@ -1701,41 +1881,120 @@ fn acquire_library_mutation_file_lock(
         let error = std::io::Error::last_os_error();
         if error.kind() != std::io::ErrorKind::Interrupted {
             return Err(crate::io(
-                "locking manager-library directory mutation authority",
+                "locking Manager-root directory mutation authority",
             )(error));
         }
     }
-
-    let after = fstat_retry(fd).map_err(crate::io(
-        "revalidating locked manager-library directory identity",
-    ))?;
-    let dot = std::ffi::CString::new(".").expect("literal contains no NUL");
-    let named = fstatat_retry(fd, &dot, libc::AT_SYMLINK_NOFOLLOW).map_err(crate::io(
-        "revalidating locked manager-library directory through fstatat",
-    ))?;
-    if before.st_dev != after.st_dev
-        || before.st_ino != after.st_ino
-        || after.st_dev != named.st_dev
-        || after.st_ino != named.st_ino
-        || after.st_mode & libc::S_IFMT != libc::S_IFDIR
-        || named.st_mode & libc::S_IFMT != libc::S_IFDIR
-    {
-        return Err(crate::ModError::Other(format!(
-            "manager-library directory identity changed or became unsafe while waiting for its inode lock: {}",
-            library.path().display()
-        )));
-    }
-
-    Ok(LibraryMutationFileGuard { root: library })
+    let lock = ManagerRootLock {
+        root: prepared.root,
+    };
+    lock.revalidate_named()?;
+    Ok(lock)
 }
 
 #[cfg(not(any(windows, unix)))]
-fn acquire_library_mutation_file_lock(
-    _library: SecureDirectory,
-) -> crate::Result<LibraryMutationFileGuard> {
+fn acquire_prepared_manager_root(
+    _prepared: PreparedManagerRootLock,
+) -> crate::Result<ManagerRootLock> {
     Err(crate::ModError::Other(
-        "manager-library cross-process locking is unsupported on this platform".into(),
+        "Manager-root cross-process locking is unsupported on this platform".into(),
     ))
+}
+
+impl ManagerRootLock {
+    /// Reopen the canonical named root (and Windows sentinel) and require that both still identify
+    /// the retained objects. This is called after every blocking acquire and again after the full
+    /// composite set is owned.
+    pub(crate) fn revalidate_named(&self) -> crate::Result<()> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt as _;
+            use windows_sys::Win32::Storage::FileSystem::{
+                FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
+            };
+
+            if identity_from_open_file(&self.sentinel, "retained Manager-root lock")?
+                != self.sentinel_identity
+            {
+                return Err(crate::ModError::Other(
+                    "retained Manager-root sentinel changed filesystem identity".into(),
+                ));
+            }
+            let named_root = open_directory_rename_compatible(
+                self.root.path(),
+                "named Manager mutation root",
+            )?;
+            if named_root.identity() != self.root.identity() {
+                return Err(crate::ModError::Other(format!(
+                    "Manager root changed named filesystem identity while locking: {}",
+                    self.root.path().display()
+                )));
+            }
+            let named_file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(&self.sentinel_path)
+                .map_err(crate::io("reopening named Manager-root lock"))?;
+            let named = finish_opened_windows_node(
+                &self.sentinel_path,
+                "named Manager-root lock",
+                named_file,
+            )?;
+            if named.identity != self.sentinel_identity
+                || !handle_path_is_direct_child(self.root.path(), &named.final_path)
+            {
+                return Err(crate::ModError::Other(format!(
+                    "Manager-root sentinel changed named filesystem identity: {}",
+                    self.sentinel_path.display()
+                )));
+            }
+        }
+
+        #[cfg(unix)]
+        {
+            let retained = identity_from_open_file(
+                &self.root.anchor.file,
+                "retained Manager mutation root",
+            )?;
+            let named = open_directory_nofollow(self.root.path(), "named Manager mutation root")?;
+            if retained != self.root.identity() || named.identity() != self.root.identity() {
+                return Err(crate::ModError::Other(format!(
+                    "Manager root changed named filesystem identity while locking: {}",
+                    self.root.path().display()
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Acquire a complete root set in one global physical order. Equal roots are an invalid Manager
+/// configuration, not a deduplication opportunity: a loadout file is not a Library entry.
+pub(crate) fn acquire_manager_root_locks(
+    mut prepared: Vec<PreparedManagerRootLock>,
+) -> crate::Result<Vec<ManagerRootLock>> {
+    prepared.sort_by_key(PreparedManagerRootLock::identity);
+    if prepared
+        .windows(2)
+        .any(|pair| pair[0].identity() == pair[1].identity())
+    {
+        return Err(crate::ModError::Other(
+            "manager loadout parent and library root must be different directories".into(),
+        ));
+    }
+    let mut locked = Vec::with_capacity(prepared.len());
+    for root in prepared {
+        locked.push(acquire_prepared_manager_root(root)?);
+        if locked.len() == 1 {
+            run_manager_first_root_lock_hook()?;
+        }
+    }
+    for root in &locked {
+        root.revalidate_named()?;
+    }
+    Ok(locked)
 }
 
 /// Canonical manager-library root used to prove that entry and payload paths stay inside the
@@ -1766,7 +2025,6 @@ impl LibraryRoot {
         Ok(Self { directory })
     }
 
-    #[cfg(any(not(unix), test))]
     pub(crate) fn identity(&self) -> FileIdentity {
         self.directory.identity()
     }
@@ -1776,12 +2034,27 @@ impl LibraryRoot {
         &self.directory
     }
 
-    /// Acquire the per-library kernel lock. Canonical aliases converge on the same Windows lock
-    /// file or Unix directory inode. Windows additionally retains FileIdInfo for immediate
-    /// pathname revalidation; this is cooperative-process coordination, not hostile same-user
-    /// access control.
-    pub(crate) fn acquire_mutation_lock(self) -> crate::Result<LibraryMutationFileGuard> {
-        acquire_library_mutation_file_lock(self.directory)
+    /// Prepare this root for canonical-order acquisition. This does not wait on a kernel lock.
+    pub(crate) fn prepare_mutation_lock(
+        self,
+        create_lock_file: bool,
+    ) -> crate::Result<PreparedManagerRootLock> {
+        prepare_manager_root_lock(self.directory, create_lock_file)
+    }
+
+    /// Standalone Library/Identity transaction using the same universal root protocol as Store.
+    pub(crate) fn acquire_mutation_lock(self) -> crate::Result<ManagerRootLock> {
+        let prepared = self.prepare_mutation_lock(true)?;
+        acquire_manager_root_locks(vec![prepared]).map(|mut roots| roots.remove(0))
+    }
+
+    /// Read-only callers may join an already-established Windows mutation lane but must not
+    /// create its persistent sentinel. Unix uses the same retained directory-inode flock.
+    pub(crate) fn acquire_existing_mutation_lock(
+        self,
+    ) -> crate::Result<ManagerRootLock> {
+        let prepared = self.prepare_mutation_lock(false)?;
+        acquire_manager_root_locks(vec![prepared]).map(|mut roots| roots.remove(0))
     }
 
     /// Resolve `id` as one real, direct library child. A safe lexical component is necessary but
@@ -2674,6 +2947,21 @@ pub enum RawTarget {
 mod tests {
     use super::*;
     use std::io::Write as _;
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_nofollow_uses_directory_only_open_semantics() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("not-a-directory");
+        std::fs::write(&file, b"bytes").unwrap();
+        let error = open_directory_nofollow(&file, "test Manager root")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("O_DIRECTORY") || error.contains("Not a directory"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn footprint_coverage_matrix_is_conservative_and_derived() {

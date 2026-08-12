@@ -35,7 +35,13 @@ impl Default for Loadout {
 impl Loadout {
     /// Validate every persisted id, including disabled slots. Disabled entries are still saved and
     /// may later be enabled, so they must never carry an absolute/traversing library path.
-    pub(crate) fn validate(&self) -> crate::Result<()> {
+    pub fn validate(&self) -> crate::Result<()> {
+        if self.format != 1 {
+            return Err(crate::ModError::Other(format!(
+                "loadout format {} is not supported by this tool (expected format 1)",
+                self.format
+            )));
+        }
         let mut enabled_entries = 0usize;
         for (index, entry) in self.entries.iter().enumerate() {
             super::model::validate_library_id(&entry.id).map_err(|error| {
@@ -68,20 +74,7 @@ pub struct LoadoutEntry {
 /// manager works before anything was ever saved.
 pub fn load(path: &Path) -> crate::Result<Loadout> {
     match std::fs::read(path) {
-        Ok(bytes) => {
-            let parsed: Loadout = serde_json::from_slice(&bytes)?;
-            // A newer tool may have written a schema this build can't interpret; refuse rather
-            // than silently mis-reading (serde tolerates unknown fields, so a bumped format is
-            // the only signal that fields we can't see were dropped).
-            if parsed.format > 1 {
-                return Err(crate::ModError::Other(format!(
-                    "loadout format {} is newer than this tool supports",
-                    parsed.format
-                )));
-            }
-            parsed.validate()?;
-            Ok(parsed)
-        }
+        Ok(bytes) => parse_bytes(&bytes),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Loadout::default()),
         Err(e) => Err(crate::io(&format!("reading loadout {}", path.display()))(e)),
     }
@@ -90,12 +83,24 @@ pub fn load(path: &Path) -> crate::Result<Loadout> {
 /// Persist `loadout` at `path`, creating parent dirs; atomic so a crash mid-save can't
 /// truncate the previous loadout.
 pub fn save(path: &Path, loadout: &Loadout) -> crate::Result<()> {
-    loadout.validate()?;
+    let bytes = serialized_bytes(loadout)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(crate::io("creating loadout dir"))?;
     }
-    let bytes = serde_json::to_vec_pretty(loadout)?;
     crate::atomic_write(path, &bytes)
+}
+
+pub(crate) fn parse_bytes(bytes: &[u8]) -> crate::Result<Loadout> {
+    let parsed: Loadout = serde_json::from_slice(bytes)?;
+    // Only the current wire format is authoritative. Refuse both older and newer explicit
+    // versions rather than interpreting a shape whose semantics this build does not own.
+    parsed.validate()?;
+    Ok(parsed)
+}
+
+pub(crate) fn serialized_bytes(loadout: &Loadout) -> crate::Result<Vec<u8>> {
+    loadout.validate()?;
+    serde_json::to_vec_pretty(loadout).map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -167,15 +172,18 @@ mod tests {
     }
 
     #[test]
-    fn loadout_load_rejects_newer_format() {
+    fn loadout_load_rejects_every_explicit_non_current_format() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("loadout.json");
-        std::fs::write(&path, br#"{"format": 2, "entries": []}"#).unwrap();
-        let err = load(&path).unwrap_err();
-        assert!(
-            err.to_string().contains("newer than this tool supports"),
-            "got: {err}"
-        );
+        for format in [0, 2] {
+            std::fs::write(
+                &path,
+                serde_json::json!({"format": format, "entries": []}).to_string(),
+            )
+            .unwrap();
+            let err = load(&path).unwrap_err();
+            assert!(err.to_string().contains("expected format 1"), "got: {err}");
+        }
     }
 
     #[test]
