@@ -199,19 +199,22 @@ void main() {
     );
   });
 
-  test('prefetch makes the core hold this save before anything else', () async {
+  test('prefetch rebuilds the core-held tree after the tabs, not before', () async {
     // Everything reading private data shares the core's single decoded payload
     // and parsed tree, and the per-NPC panels are far too numerous to warm one
-    // by one. Returning to a save opened earlier serves its inspection from the
-    // core's cache without reseeding those, so the warm-up has to say so
-    // explicitly — and first, since every step after it benefits.
+    // by one — so the warm-up asks for the tree explicitly. It has to come
+    // LAST: the case where rebuilding it is expensive (returning to a save
+    // opened earlier) is exactly the case where every tab query is already a
+    // cached answer, and putting the rebuild first would hold the core queue in
+    // front of a click that should return in milliseconds.
     final core = _RecordingCore();
     final notifier = await _loadedEditor(core);
 
     notifier.prefetchTabData();
     await _settledPrefetch(notifier);
 
-    expect(core.commands.first, 'warm_save');
+    expect(core.commands.last, 'warm_save');
+    expect(core.commands.where((c) => c == 'warm_save'), hasLength(1));
     expect(core.payloadFor('warm_save'), {'path': r'C:\tmp\saves\G1R-001.sav'});
   });
 

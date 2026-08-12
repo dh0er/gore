@@ -727,18 +727,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
       }
     }
 
-    // First, because everything that reads private data depends on it and the
-    // per-NPC panels cannot be warmed one by one — there are far too many.
-    // Loading a save normally leaves the core holding its decoded payload and
-    // parsed tree, but returning to a save opened earlier does not: the
-    // inspection comes back from the core's cache while the tree it holds still
-    // belongs to whichever save was opened in between, and the first NPC the
-    // user clicks would pay the decode and parse. Cheap when the core already
-    // holds this save, which is the usual case.
-    await step(() => _warmPrivateTree(path));
-
-    // Then, ordered by how soon the user can reach the data: the Overview tab
-    // is already on screen, Characters is one click away, then World, then the
+    // Ordered by how soon the user can reach the data: the Overview tab is
+    // already on screen, Characters is one click away, then World, then the
     // property browser.
     await step(loadGameTime);
     // Also settles the hero GlobalId that the player's Events sub-tab needs.
@@ -804,6 +794,18 @@ class EditorNotifier extends StateNotifier<EditorState> {
 
     // (see `_prefetchAllPages` for why the two full-list sections above walk
     // their pages instead of warming the first one.)
+
+    // Last, and deliberately so. Everything reading private data shares the
+    // core's single decoded payload and parsed tree, and the per-NPC panels are
+    // far too numerous to warm one by one — so the tree itself has to be warmed.
+    // Loading a save normally leaves the core holding it already, making this a
+    // few milliseconds; the case that costs is returning to a save opened
+    // earlier, where the core holds whichever save came in between. But that is
+    // exactly the case where every step above is a cached answer, and this one
+    // would hold the queue for a second in front of them. So warm the tabs the
+    // user can click first, and rebuild the tree behind them, in time for the
+    // first NPC they open.
+    await step(() => _warmPrivateTree(path));
 
     // Only a run that warmed everything retires this inspection. Anything less
     // leaves the marker unset so the next state change picks the sequence up
