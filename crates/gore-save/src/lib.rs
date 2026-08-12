@@ -462,6 +462,29 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 "activeProfileId": summary.active_profile_id,
             }))
         }
+        // Make this save the one the decoded-payload and parsed-root caches
+        // hold, decoding and parsing it if they hold another.
+        //
+        // Those caches keep a single save each — a decoded payload and its tree
+        // run to hundreds of megabytes, so holding two is not free. Everything
+        // that reads private data shares them, and `inspect_save` normally
+        // seeds them on the way past. It does not when its own response comes
+        // from the response cache, which is exactly what happens on returning to
+        // a save opened earlier: the inspection is served in milliseconds while
+        // the caches still hold whichever save was opened in between, and the
+        // first read that needs the tree — a per-NPC detail, which is too
+        // numerous to warm one by one — pays the decode and parse in front of
+        // the user. Calling this during the background warm-up moves that cost
+        // off the click. Cheap when the caches already hold this save.
+        //
+        // Deliberately NOT response-cached: a cached "ready" would skip the very
+        // seeding that is the point of the call.
+        "warm_save" => {
+            let path = required_path(&payload)?;
+            let kraken_backend = codec_backend::KrakenBackend::default();
+            decode_private_root_cached(&path, &kraken_backend)?;
+            Ok(json!({ "warmed": true }))
+        }
         "inspect_save" => {
             let path = required_path(&payload)?;
             let include_private = payload

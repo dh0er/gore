@@ -199,6 +199,22 @@ void main() {
     );
   });
 
+  test('prefetch makes the core hold this save before anything else', () async {
+    // Everything reading private data shares the core's single decoded payload
+    // and parsed tree, and the per-NPC panels are far too numerous to warm one
+    // by one. Returning to a save opened earlier serves its inspection from the
+    // core's cache without reseeding those, so the warm-up has to say so
+    // explicitly — and first, since every step after it benefits.
+    final core = _RecordingCore();
+    final notifier = await _loadedEditor(core);
+
+    notifier.prefetchTabData();
+    await _settledPrefetch(notifier);
+
+    expect(core.commands.first, 'warm_save');
+    expect(core.payloadFor('warm_save'), {'path': r'C:\tmp\saves\G1R-001.sav'});
+  });
+
   test('prefetch asks for the page sizes the panels ask for', () async {
     final core = _RecordingCore();
     final notifier = await _loadedEditor(core);

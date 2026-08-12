@@ -727,8 +727,18 @@ class EditorNotifier extends StateNotifier<EditorState> {
       }
     }
 
-    // Ordered by how soon the user can reach the data: the Overview tab is
-    // already on screen, Characters is one click away, then World, then the
+    // First, because everything that reads private data depends on it and the
+    // per-NPC panels cannot be warmed one by one — there are far too many.
+    // Loading a save normally leaves the core holding its decoded payload and
+    // parsed tree, but returning to a save opened earlier does not: the
+    // inspection comes back from the core's cache while the tree it holds still
+    // belongs to whichever save was opened in between, and the first NPC the
+    // user clicks would pay the decode and parse. Cheap when the core already
+    // holds this save, which is the usual case.
+    await step(() => _warmPrivateTree(path));
+
+    // Then, ordered by how soon the user can reach the data: the Overview tab
+    // is already on screen, Characters is one click away, then World, then the
     // property browser.
     await step(loadGameTime);
     // Also settles the hero GlobalId that the player's Events sub-tab needs.
@@ -3447,6 +3457,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
     _allNpcActorsFuture = future;
     _allNpcActorsFor = inspection;
     return future;
+  }
+
+  /// Ask the core to make [path]'s decoded payload and parsed tree the ones it
+  /// holds. Returns nothing: the point is the state it leaves behind, which
+  /// every later private read shares.
+  Future<void> _warmPrivateTree(String path) async {
+    await _execute('warm_save', payload: {'path': path});
   }
 
   /// Warm every page a full-list panel will ask for.
