@@ -281,6 +281,12 @@ fn import_detailed_with_limits(
     reroot_nested_bundle(&staging)?;
 
     let (manifest, mut components) = detect(&staging, limits)?;
+    if manifest.is_some() {
+        // A root GORE bundle can also carry `Scripts/main.lua`. The temporary UE4SS wrapper lets
+        // rerooting find its manifest, but the hoisted result is a bundle again, not a synthetic
+        // foreign-UE4SS layout. Its exact rooted tree therefore remains its content identity.
+        synthetic_root_ue4ss_wrapper = None;
+    }
     if components.is_empty() {
         return Err(ModError::Other(format!(
             "nothing importable recognized in {}",
@@ -7152,6 +7158,42 @@ mod tests {
         assert!(entry.join("gore-mod.json").is_file());
         assert!(entry.join("loc").join("edits.json").is_file());
         assert_eq!(list(&lib).unwrap(), vec![meta]);
+    }
+
+    #[test]
+    fn root_goremod_with_scripts_main_clears_synthetic_wrapper_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let bundle = mk_mixed_file_bundle(&tmp.path().join("source"), "RootScriptBundle");
+        fs::create_dir_all(bundle.join("Scripts")).unwrap();
+        fs::write(
+            bundle.join("Scripts/main.lua"),
+            b"-- bundle-owned root script",
+        )
+        .unwrap();
+
+        let first = import_detailed(&lib, &bundle).unwrap();
+        assert_eq!(first.entry.kind, ModKind::Goremod);
+        assert!(first.entry.components.iter().all(|component| matches!(
+            component,
+            ComponentInfo::FilePatch { .. } | ComponentInfo::PakFilePatch { .. }
+        )));
+        let entry = lib.join(&first.entry.id);
+        assert!(entry.join("gore-mod.json").is_file());
+        assert!(entry.join("Scripts/main.lua").is_file());
+        assert!(!entry.join("RootScriptBundle").exists());
+        let identity = read_library_sidecar(&lib, &first.entry.id)
+            .manager
+            .and_then(|manager| manager.import_identity)
+            .unwrap();
+        assert!(!identity.synthetic_root_ue4ss_wrapper);
+
+        let second = import_detailed(&lib, &bundle).unwrap();
+        assert_eq!(second.disposition, ImportDisposition::Unchanged);
+        assert_eq!(second.entry.id, first.entry.id);
+        assert_eq!(second.entry.imported_at, first.entry.imported_at);
+        assert_eq!(second.entry.fingerprint(), first.entry.fingerprint());
+        assert_no_import_residue(&lib);
     }
 
     #[test]
