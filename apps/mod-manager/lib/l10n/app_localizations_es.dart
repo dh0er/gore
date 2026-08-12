@@ -293,6 +293,10 @@ class AppLocalizationsEs extends AppLocalizations {
       'No se pudo completar la importación. Fuentes compatibles: carpetas, ZIP, archivos *_P.pak sueltos, conjuntos .utoc/.ucas completos (con .pak opcional), .lcache, .bank y PrecompiledScript*.Cache. Extrae primero los archivos .7z o .rar y después importa la carpeta. La fuente puede no ser compatible, estar dañada o incompleta. Es posible que el mod ya se haya añadido o actualizado; actualiza y comprueba la biblioteca antes de volver a intentarlo.';
 
   @override
+  String get importPickerFailed =>
+      'No se pudo abrir el selector de archivos o carpetas. No se inició ninguna importación. Inténtalo de nuevo.';
+
+  @override
   String get importOutcomeUnknown =>
       'No se pudo verificar el resultado de la importación. Selecciona Actualizar para comprobar la biblioteca.';
 

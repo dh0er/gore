@@ -131,17 +131,20 @@ class _Picker implements ImportSourcePicker {
   _Picker(
     Iterable<String?> folderPaths, {
     Iterable<String?> filePaths = const [],
+    this.folderError,
   }) : _folderPaths = List<String?>.from(folderPaths),
        _filePaths = List<String?>.from(filePaths);
 
   final List<String?> _folderPaths;
   final List<String?> _filePaths;
+  final Object? folderError;
   int folderCalls = 0;
   int fileCalls = 0;
 
   @override
   Future<String?> pickFolder() async {
     folderCalls++;
+    if (folderError case final error?) throw error;
     return _folderPaths.isEmpty ? null : _folderPaths.removeAt(0);
   }
 
@@ -276,6 +279,7 @@ void main() {
           l10n.importRefusalDuplicateAmbiguous,
           l10n.importRefusalIdentityConflict,
           l10n.importFailed,
+          l10n.importPickerFailed,
           l10n.importOutcomeUnknown,
         ];
         expect(values.every((value) => value.trim().isNotEmpty), isTrue);
@@ -522,6 +526,30 @@ void main() {
     expect(find.byType(SnackBar), findsNothing);
     expect(importButton.focusNode!.hasFocus, isTrue);
   });
+
+  testWidgets(
+    'picker failure says no import started and calls no Native import',
+    (tester) async {
+      final core = _ImportCore(initialMods: [_entry('alpha', 'Alpha')]);
+      final picker = _Picker(
+        const [],
+        folderError: StateError('platform picker unavailable'),
+      );
+      await tester.pumpWidget(_home(core, picker));
+      await tester.pumpAndSettle();
+
+      await _chooseFolder(tester);
+
+      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+      expect(find.text(l10n.importPickerFailed), findsOneWidget);
+      expect(find.text(l10n.importFailed), findsNothing);
+      expect(core.calls.where((call) => call.command == 'mgr_import'), isEmpty);
+      expect(core.mods.single['id'], 'alpha');
+      expect(find.textContaining('platform picker unavailable'), findsNothing);
+      expect(_snackLiveRegions(), findsOneWidget);
+      _expectFeedbackDoesNotOwnFocus();
+    },
+  );
 
   for (final source in const [
     (extension: '7z', path: 'D:/picked/unsupported.7z'),

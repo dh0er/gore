@@ -295,6 +295,10 @@ class AppLocalizationsFr extends AppLocalizations {
       'L’importation n’a pas pu être terminée. Sources prises en charge : dossiers, ZIP, fichiers *_P.pak autonomes, ensembles .utoc/.ucas complets (.pak facultatif), .lcache, .bank et PrecompiledScript*.Cache. Extrayez d’abord les archives .7z ou .rar, puis importez le dossier. La source peut être non prise en charge, endommagée ou incomplète. Le mod a peut-être déjà été ajouté ou mis à jour ; actualisez et vérifiez la bibliothèque avant de réessayer.';
 
   @override
+  String get importPickerFailed =>
+      'Le sélecteur de fichiers ou de dossiers n’a pas pu être ouvert. Aucune importation n’a été lancée. Réessayez.';
+
+  @override
   String get importOutcomeUnknown =>
       'Le résultat de l’importation n’a pas pu être vérifié. Sélectionnez Actualiser pour vérifier la bibliothèque.';
 

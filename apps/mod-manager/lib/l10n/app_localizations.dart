@@ -584,6 +584,12 @@ abstract class AppLocalizations {
   /// **'The import could not be completed. Supported sources: folders, ZIP, loose *_P.pak files, complete .utoc/.ucas sets (optional .pak), .lcache, .bank, and PrecompiledScript*.Cache. Extract .7z or .rar first, then import the folder. The source may be unsupported, corrupt, or incomplete. The mod may already have been added or updated; refresh and check the library before trying again.'**
   String get importFailed;
 
+  /// No description provided for @importPickerFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The file or folder picker could not be opened. No import was started. Try again.'**
+  String get importPickerFailed;
+
   /// No description provided for @importOutcomeUnknown.
   ///
   /// In en, this message translates to:

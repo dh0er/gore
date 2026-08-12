@@ -297,6 +297,10 @@ class AppLocalizationsPt extends AppLocalizations {
       'Não foi possível concluir a importação. Fontes suportadas: pastas, ZIP, ficheiros *_P.pak autónomos, conjuntos .utoc/.ucas completos (.pak opcional), .lcache, .bank e PrecompiledScript*.Cache. Extraia primeiro os ficheiros .7z ou .rar e depois importe a pasta. A fonte poderá não ser suportada, estar danificada ou incompleta. O mod poderá já ter sido adicionado ou atualizado; atualize e verifique a biblioteca antes de tentar novamente.';
 
   @override
+  String get importPickerFailed =>
+      'Não foi possível abrir o seletor de ficheiros ou pastas. Nenhuma importação foi iniciada. Tente novamente.';
+
+  @override
   String get importOutcomeUnknown =>
       'Não foi possível verificar o resultado da importação. Selecione Atualizar para verificar a biblioteca.';
 
@@ -811,6 +815,10 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   @override
   String get importFailed =>
       'Não foi possível concluir a importação. Fontes compatíveis: pastas, ZIP, arquivos *_P.pak avulsos, conjuntos .utoc/.ucas completos (.pak opcional), .lcache, .bank e PrecompiledScript*.Cache. Extraia primeiro os arquivos .7z ou .rar e depois importe a pasta. A fonte pode não ser compatível, estar corrompida ou incompleta. O mod talvez já tenha sido adicionado ou atualizado; atualize e verifique a biblioteca antes de tentar novamente.';
+
+  @override
+  String get importPickerFailed =>
+      'Não foi possível abrir o seletor de arquivos ou pastas. Nenhuma importação foi iniciada. Tente novamente.';
 
   @override
   String get importOutcomeUnknown =>

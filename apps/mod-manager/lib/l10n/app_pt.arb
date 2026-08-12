@@ -78,6 +78,7 @@
   "importRefusalDuplicateAmbiguous": "Esta importação corresponde a mais do que uma entrada da biblioteca. Reveja ou remova as entradas duplicadas e tente novamente.",
   "importRefusalIdentityConflict": "A origem da importação e o respetivo conteúdo correspondem a entradas diferentes da biblioteca. Reveja ou remova as entradas em conflito e tente novamente.",
   "importFailed": "Não foi possível concluir a importação. Fontes suportadas: pastas, ZIP, ficheiros *_P.pak autónomos, conjuntos .utoc/.ucas completos (.pak opcional), .lcache, .bank e PrecompiledScript*.Cache. Extraia primeiro os ficheiros .7z ou .rar e depois importe a pasta. A fonte poderá não ser suportada, estar danificada ou incompleta. O mod poderá já ter sido adicionado ou atualizado; atualize e verifique a biblioteca antes de tentar novamente.",
+  "importPickerFailed": "Não foi possível abrir o seletor de ficheiros ou pastas. Nenhuma importação foi iniciada. Tente novamente.",
   "importOutcomeUnknown": "Não foi possível verificar o resultado da importação. Selecione Atualizar para verificar a biblioteca.",
   "applyTooltip": "Aplicar a configuração ao jogo",
   "undeployAllAction": "Remover tudo",

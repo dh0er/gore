@@ -78,6 +78,7 @@
   "importRefusalDuplicateAmbiguous": "Dieser Import stimmt mit mehreren Bibliothekseinträgen überein. Überprüfe oder entferne die Duplikate und versuche es erneut.",
   "importRefusalIdentityConflict": "Die Importquelle und der Inhalt stimmen mit unterschiedlichen Bibliothekseinträgen überein. Überprüfe oder entferne die betroffenen Einträge und versuche es erneut.",
   "importFailed": "Der Import konnte nicht abgeschlossen werden. Unterstützte Quellen: Ordner, ZIP, lose *_P.pak-Dateien, vollständige .utoc/.ucas-Dateisätze (optional .pak), .lcache, .bank und PrecompiledScript*.Cache. Entpacke .7z oder .rar zuerst und importiere dann den Ordner. Die Quelle wird möglicherweise nicht unterstützt, ist beschädigt oder unvollständig. Der Mod wurde möglicherweise bereits hinzugefügt oder aktualisiert; aktualisiere und überprüfe die Bibliothek, bevor du es erneut versuchst.",
+  "importPickerFailed": "Die Datei- oder Ordnerauswahl konnte nicht geöffnet werden. Es wurde kein Import gestartet. Versuche es erneut.",
   "importOutcomeUnknown": "Das Importergebnis konnte nicht überprüft werden. Wähle „Aktualisieren“, um die Bibliothek zu prüfen.",
   "applyTooltip": "Ladeliste auf das Spiel anwenden",
   "undeployAllAction": "Alle Bereitstellungen aufheben",

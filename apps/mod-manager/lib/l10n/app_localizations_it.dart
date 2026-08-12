@@ -294,6 +294,10 @@ class AppLocalizationsIt extends AppLocalizations {
       'Non è stato possibile completare l’importazione. Sorgenti supportate: cartelle, ZIP, file *_P.pak autonomi, set .utoc/.ucas completi (.pak facoltativo), .lcache, .bank e PrecompiledScript*.Cache. Estrai prima gli archivi .7z o .rar, quindi importa la cartella. La sorgente potrebbe non essere supportata, essere danneggiata o incompleta. Il mod potrebbe essere già stato aggiunto o aggiornato; aggiorna e controlla la libreria prima di riprovare.';
 
   @override
+  String get importPickerFailed =>
+      'Non è stato possibile aprire il selettore di file o cartelle. Non è stata avviata alcuna importazione. Riprova.';
+
+  @override
   String get importOutcomeUnknown =>
       'Non è stato possibile verificare il risultato dell’importazione. Seleziona Aggiorna per controllare la libreria.';
 

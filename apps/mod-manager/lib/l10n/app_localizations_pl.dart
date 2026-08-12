@@ -292,6 +292,10 @@ class AppLocalizationsPl extends AppLocalizations {
       'Nie udało się ukończyć importu. Obsługiwane źródła: foldery, ZIP, samodzielne pliki *_P.pak, kompletne zestawy .utoc/.ucas (opcjonalnie .pak), .lcache, .bank i PrecompiledScript*.Cache. Najpierw rozpakuj archiwum .7z lub .rar, a następnie zaimportuj folder. Źródło może być nieobsługiwane, uszkodzone lub niekompletne. Mod mógł już zostać dodany lub zaktualizowany; odśwież i sprawdź bibliotekę przed kolejną próbą.';
 
   @override
+  String get importPickerFailed =>
+      'Nie udało się otworzyć selektora pliku lub folderu. Import nie został rozpoczęty. Spróbuj ponownie.';
+
+  @override
   String get importOutcomeUnknown =>
       'Nie udało się zweryfikować wyniku importu. Wybierz Odśwież, aby sprawdzić bibliotekę.';
 

@@ -289,6 +289,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'The import could not be completed. Supported sources: folders, ZIP, loose *_P.pak files, complete .utoc/.ucas sets (optional .pak), .lcache, .bank, and PrecompiledScript*.Cache. Extract .7z or .rar first, then import the folder. The source may be unsupported, corrupt, or incomplete. The mod may already have been added or updated; refresh and check the library before trying again.';
 
   @override
+  String get importPickerFailed =>
+      'The file or folder picker could not be opened. No import was started. Try again.';
+
+  @override
   String get importOutcomeUnknown =>
       'The import result could not be verified. Choose Refresh to check the library.';
 

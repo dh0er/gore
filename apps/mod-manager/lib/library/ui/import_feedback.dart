@@ -47,14 +47,16 @@ void showImportFailureFeedback(
   LibraryState library,
 ) {
   final l10n = AppLocalizations.of(context);
-  final message = !library.authoritative
-      ? l10n.importOutcomeUnknown
-      : switch (error.code) {
-          'IMPORT_INVALID_RESPONSE' => l10n.importOutcomeUnknown,
-          'IMPORT_DUPLICATE_AMBIGUOUS' => l10n.importRefusalDuplicateAmbiguous,
-          'IMPORT_IDENTITY_CONFLICT' => l10n.importRefusalIdentityConflict,
-          _ => l10n.importFailed,
-        };
+  final message = switch (error.code) {
+    // Picker failures happen before Native receives an import request, so they
+    // must never imply a bad source or possible library publication.
+    'IMPORT_PICKER_FAILED' => l10n.importPickerFailed,
+    _ when !library.authoritative => l10n.importOutcomeUnknown,
+    'IMPORT_INVALID_RESPONSE' => l10n.importOutcomeUnknown,
+    'IMPORT_DUPLICATE_AMBIGUOUS' => l10n.importRefusalDuplicateAmbiguous,
+    'IMPORT_IDENTITY_CONFLICT' => l10n.importRefusalIdentityConflict,
+    _ => l10n.importFailed,
+  };
   _showImportSnackBar(
     context,
     message: message,

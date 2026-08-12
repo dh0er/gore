@@ -280,6 +280,10 @@ class AppLocalizationsJa extends AppLocalizations {
       'インポートを完了できませんでした。対応するソースは、フォルダー、ZIP、単体の *_P.pak、完全な .utoc/.ucas セット（.pak は任意）、.lcache、.bank、PrecompiledScript*.Cache です。.7z または .rar は先に展開し、そのフォルダーをインポートしてください。ソースは未対応、破損、または不完全な可能性があります。Mod はすでに追加または更新されている可能性があります。ライブラリを更新して確認してから、もう一度お試しください。';
 
   @override
+  String get importPickerFailed =>
+      'ファイルまたはフォルダーの選択画面を開けませんでした。インポートは開始されていません。もう一度お試しください。';
+
+  @override
   String get importOutcomeUnknown =>
       'インポート結果を確認できませんでした。［更新］を選択してライブラリを確認してください。';
 

@@ -294,6 +294,10 @@ class AppLocalizationsDe extends AppLocalizations {
       'Der Import konnte nicht abgeschlossen werden. Unterstützte Quellen: Ordner, ZIP, lose *_P.pak-Dateien, vollständige .utoc/.ucas-Dateisätze (optional .pak), .lcache, .bank und PrecompiledScript*.Cache. Entpacke .7z oder .rar zuerst und importiere dann den Ordner. Die Quelle wird möglicherweise nicht unterstützt, ist beschädigt oder unvollständig. Der Mod wurde möglicherweise bereits hinzugefügt oder aktualisiert; aktualisiere und überprüfe die Bibliothek, bevor du es erneut versuchst.';
 
   @override
+  String get importPickerFailed =>
+      'Die Datei- oder Ordnerauswahl konnte nicht geöffnet werden. Es wurde kein Import gestartet. Versuche es erneut.';
+
+  @override
   String get importOutcomeUnknown =>
       'Das Importergebnis konnte nicht überprüft werden. Wähle „Aktualisieren“, um die Bibliothek zu prüfen.';
 

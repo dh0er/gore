@@ -274,6 +274,9 @@ class AppLocalizationsZh extends AppLocalizations {
       '无法完成导入。支持的来源：文件夹、ZIP、独立的 *_P.pak、完整的 .utoc/.ucas 组合（.pak 可选）、.lcache、.bank 和 PrecompiledScript*.Cache。请先解压 .7z 或 .rar，再导入文件夹。来源可能不受支持、已损坏或不完整。模组可能已被添加或更新；请刷新并检查库状态，然后重试。';
 
   @override
+  String get importPickerFailed => '无法打开文件或文件夹选择器。导入尚未开始。请重试。';
+
+  @override
   String get importOutcomeUnknown => '无法验证导入结果。请选择“刷新”以检查库状态。';
 
   @override
@@ -753,6 +756,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   @override
   String get importFailed =>
       '无法完成导入。支持的来源：文件夹、ZIP、独立的 *_P.pak、完整的 .utoc/.ucas 组合（.pak 可选）、.lcache、.bank 和 PrecompiledScript*.Cache。请先解压 .7z 或 .rar，再导入文件夹。来源可能不受支持、已损坏或不完整。模组可能已被添加或更新；请刷新并检查库状态，然后重试。';
+
+  @override
+  String get importPickerFailed => '无法打开文件或文件夹选择器。导入尚未开始。请重试。';
 
   @override
   String get importOutcomeUnknown => '无法验证导入结果。请选择“刷新”以检查库状态。';
