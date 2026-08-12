@@ -1813,25 +1813,38 @@ pub(crate) fn prepare_existing_manager_root_lock(
 }
 
 #[cfg(windows)]
-fn acquire_prepared_manager_root(
+#[derive(Debug)]
+struct PreparedWindowsManagerRootAcquire {
+    sentinel: OpenedNode,
+    root: RenameDirectoryGuard,
+}
+
+#[cfg(windows)]
+fn prepare_windows_manager_root_acquire(
     prepared: PreparedManagerRootLock,
+) -> crate::Result<PreparedWindowsManagerRootAcquire> {
+    let sentinel = open_manager_root_sentinel(&prepared.root, prepared.create_lock_file)?;
+    // Convert every root before any thread or process can block on a sentinel lock. Otherwise a
+    // waiter that blocks on the physically first root still retains the later Store root without
+    // DELETE sharing and prevents the current owner from atomically replacing loadout.json.
+    let root = prepared.root.into_rename_guard("Manager mutation root")?;
+    Ok(PreparedWindowsManagerRootAcquire { sentinel, root })
+}
+
+#[cfg(windows)]
+fn acquire_prepared_windows_manager_root(
+    prepared: PreparedWindowsManagerRootAcquire,
 ) -> crate::Result<ManagerRootLock> {
     use std::os::windows::io::AsRawHandle as _;
     use windows_sys::Win32::Storage::FileSystem::{LockFileEx, LOCKFILE_EXCLUSIVE_LOCK};
     use windows_sys::Win32::System::IO::OVERLAPPED;
 
-    let sentinel = open_manager_root_sentinel(&prepared.root, prepared.create_lock_file)?;
-    // A waiter must not retain the no-DELETE traversal handle while blocking: that would prevent
-    // the current owner from renaming root children. The sentinel remains identity-bound.
-    let root = prepared
-        .root
-        .into_rename_guard("Manager mutation root")?;
     let mut overlapped = OVERLAPPED::default();
     // SAFETY: `sentinel.file` remains alive in the returned guard. This is synchronous
     // one-byte lock at offset zero, and `overlapped` is valid for the duration of the call.
     let locked = unsafe {
         LockFileEx(
-            sentinel.file.as_raw_handle(),
+            prepared.sentinel.file.as_raw_handle(),
             LOCKFILE_EXCLUSIVE_LOCK,
             0,
             1,
@@ -1845,10 +1858,10 @@ fn acquire_prepared_manager_root(
         ));
     }
     let lock = ManagerRootLock {
-        sentinel: sentinel.file,
-        sentinel_identity: sentinel.identity,
-        sentinel_path: sentinel.final_path,
-        root,
+        sentinel: prepared.sentinel.file,
+        sentinel_identity: prepared.sentinel.identity,
+        sentinel_path: prepared.sentinel.final_path,
+        root: prepared.root,
     };
     lock.revalidate_named()?;
     Ok(lock)
@@ -1984,13 +1997,35 @@ pub(crate) fn acquire_manager_root_locks(
             "manager loadout parent and library root must be different directories".into(),
         ));
     }
-    let mut locked = Vec::with_capacity(prepared.len());
-    for root in prepared {
-        locked.push(acquire_prepared_manager_root(root)?);
-        if locked.len() == 1 {
-            run_manager_first_root_lock_hook()?;
+    #[cfg(windows)]
+    let locked = {
+        // Preparation is deliberately completed for the whole ordered set before the first
+        // blocking LockFileEx. Every retained directory handle is therefore rename-compatible
+        // while another process owns either root.
+        let prepared = prepared
+            .into_iter()
+            .map(prepare_windows_manager_root_acquire)
+            .collect::<crate::Result<Vec<_>>>()?;
+        let mut locked = Vec::with_capacity(prepared.len());
+        for root in prepared {
+            locked.push(acquire_prepared_windows_manager_root(root)?);
+            if locked.len() == 1 {
+                run_manager_first_root_lock_hook()?;
+            }
         }
-    }
+        locked
+    };
+    #[cfg(not(windows))]
+    let locked = {
+        let mut locked = Vec::with_capacity(prepared.len());
+        for root in prepared {
+            locked.push(acquire_prepared_manager_root(root)?);
+            if locked.len() == 1 {
+                run_manager_first_root_lock_hook()?;
+            }
+        }
+        locked
+    };
     for root in &locked {
         root.revalidate_named()?;
     }

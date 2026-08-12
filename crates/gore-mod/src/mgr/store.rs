@@ -1641,17 +1641,39 @@ mod tests {
     #[test]
     fn cross_process_rmw_preserves_independent_existing_slot_edits() {
         let temp = tempfile::tempdir().unwrap();
-        let library = temp.path().join("library");
-        let loadout = temp.path().join("loadout.json");
+        let root_a = temp.path().join("root-a");
+        let root_b = temp.path().join("root-b");
+        fs::create_dir(&root_a).unwrap();
+        fs::create_dir(&root_b).unwrap();
+        #[cfg(windows)]
+        let (library, store_parent) = {
+            let identity_a =
+                prepare_existing_manager_root_lock(&root_a, "RMW regression root A", false)
+                    .unwrap()
+                    .identity();
+            let identity_b =
+                prepare_existing_manager_root_lock(&root_b, "RMW regression root B", false)
+                    .unwrap()
+                    .identity();
+            if identity_a < identity_b {
+                (root_a, root_b)
+            } else {
+                (root_b, root_a)
+            }
+        };
+        #[cfg(not(windows))]
+        let (library, store_parent) = (root_a, root_b);
+        let loadout = store_parent.join("loadout.json");
         write_entry(&library, "a");
         write_entry(&library, "b");
         write_loadout(&loadout, &[("a", false), ("b", false)]);
         let marker_a = temp.path().join("rmw-a");
         let marker_b = temp.path().join("rmw-b");
-        let first = spawn_store_child(&library, &loadout, &marker_a, 200, "enable", Some("a"));
+        let first = spawn_store_child(&library, &loadout, &marker_a, 1_000, "enable", Some("a"));
+        wait_for_path(&marker_a);
         let second = spawn_store_child(&library, &loadout, &marker_b, 0, "enable", Some("b"));
         for child in [first, second] {
-            let output = child.wait_with_output().unwrap();
+            let output = child_output_bounded(child, std::time::Duration::from_secs(10));
             assert!(
                 output.status.success(),
                 "child failed: {}",
