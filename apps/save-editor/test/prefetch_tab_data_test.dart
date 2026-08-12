@@ -18,7 +18,15 @@ class _RecordingCore implements GoresaveCoreService {
   final String? slowCommand;
   static const _slowDelay = Duration(milliseconds: 120);
 
-  _RecordingCore({this.delay = Duration.zero, this.slowCommand});
+  /// `query_progression` section to the total it reports, for the sections a
+  /// panel pages through. Absent sections answer with an empty payload.
+  final Map<String, int> pagedSectionTotals;
+
+  _RecordingCore({
+    this.delay = Duration.zero,
+    this.slowCommand,
+    this.pagedSectionTotals = const {},
+  });
 
   List<String> get commands => [for (final r in requests) r.command];
 
@@ -88,6 +96,25 @@ class _RecordingCore implements GoresaveCoreService {
             'path': payload['path'],
             'backups': <Object?>[],
             'companionBackups': <Object?>[],
+          },
+        };
+      case 'query_progression':
+        // Sections the panels fetch whole report a total past one page, so the
+        // warm-up has to walk them the way the panel will.
+        final section = payload['section'];
+        final total = pagedSectionTotals[section];
+        if (total == null) return {'ok': true, 'data': <String, Object?>{}};
+        final offset = (payload['offset'] as int?) ?? 0;
+        final limit = (payload['limit'] as int?) ?? 0;
+        final count = (total - offset).clamp(0, limit);
+        final rows = List.generate(count, (i) => <String, Object?>{});
+        return {
+          'ok': true,
+          'data': {
+            'total': total,
+            'offset': offset,
+            'limit': limit,
+            if (section == 'quests') 'quests': rows else 'values': rows,
           },
         };
       case 'private.characters.list':
@@ -265,6 +292,32 @@ void main() {
     final afterPanel = core.commandCount('private.npc.list');
     await notifier.loadAllNpcActors();
     expect(core.commandCount('private.npc.list'), afterPanel);
+  });
+
+  test('prefetch walks every page of a section the panel fetches whole', () async {
+    // Quests and story state are fetched whole and filtered client-side, in
+    // pages the core clamps to 1000. A save past that clamp would otherwise
+    // open those tabs on a cold traversal for every page after the first —
+    // with the panel's spinner up.
+    final core = _RecordingCore(
+      pagedSectionTotals: const {'quests': 2300, 'story': 1000},
+    );
+    final notifier = await _loadedEditor(core);
+
+    notifier.prefetchTabData();
+    await _settledPrefetch(notifier);
+
+    List<int> offsetsFor(String section) => [
+      for (final request in core.requests)
+        if (request.command == 'query_progression' &&
+            request.payload['section'] == section)
+          request.payload['offset'] as int,
+    ];
+
+    // 2300 over pages of 1000: the panel asks at 0, 1000, 2000 and stops.
+    expect(offsetsFor('quests'), [0, 1000, 2000]);
+    // Exactly one full page: the panel stops after it, so the warm-up must too.
+    expect(offsetsFor('story'), [0]);
   });
 
   test('prefetch runs once per inspection', () async {

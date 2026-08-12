@@ -754,15 +754,27 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (heroId != null) {
       await step(() => loadMemoryEvents(heroId, limit: EditorPageSize.detail));
     }
-    await step(() => loadProgressionQuests(limit: EditorPageSize.fullList));
+    await step(
+      () => _prefetchAllPages((offset) async {
+        final page = await loadProgressionQuests(
+          offset: offset,
+          limit: EditorPageSize.fullList,
+        );
+        return (total: page.total, count: page.quests.length);
+      }),
+    );
     await step(loadGlossary);
     await step(loadProgressionTutorials);
     await step(
-      () => loadStoryState(
-        includeUnset: true,
-        limit: EditorPageSize.fullList,
-        path: inspectionPath,
-      ),
+      () => _prefetchAllPages((offset) async {
+        final page = await loadStoryState(
+          includeUnset: true,
+          offset: offset,
+          limit: EditorPageSize.fullList,
+          path: inspectionPath,
+        );
+        return (total: page.total, count: page.values.length);
+      }),
     );
     await step(loadFactions);
     await step(
@@ -772,6 +784,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
         includeNodes: true,
       ),
     );
+
+    // (see `_prefetchAllPages` for why the two full-list sections above walk
+    // their pages instead of warming the first one.)
 
     // Only a run that warmed everything retires this inspection. Anything less
     // leaves the marker unset so the next state change picks the sequence up
@@ -3420,6 +3435,32 @@ class EditorNotifier extends StateNotifier<EditorState> {
     _allNpcActorsFuture = future;
     _allNpcActorsFor = inspection;
     return future;
+  }
+
+  /// Warm every page a full-list panel will ask for.
+  ///
+  /// The quest and story panels fetch their section whole and filter it in the
+  /// client, walking pages of [EditorPageSize.fullList] until they have `total`.
+  /// The core clamps a page to 1000 and caches one response per exact request,
+  /// so warming only the first page leaves a save that has outgrown that clamp
+  /// to load its remaining pages cold on the tab's first visit — with the
+  /// panel's spinner up, which is the wait this warm-up exists to remove.
+  ///
+  /// [page] must issue the panel's own request for an offset and report that
+  /// page's `total` and item count. The offsets mirror the panels' arithmetic —
+  /// items collected so far — because a different offset warms a request they
+  /// never make. A save inside the clamp costs exactly one request, as before.
+  Future<void> _prefetchAllPages(
+    Future<({int total, int count})> Function(int offset) page,
+  ) async {
+    var offset = 0;
+    while (true) {
+      final result = await page(offset);
+      offset += result.count;
+      // An empty page also covers the failure case, where the loader reports a
+      // zero total: never loop on a stuck or erroring section.
+      if (result.count == 0 || offset >= result.total) break;
+    }
   }
 
   /// Page the full NPC roster out of the core, without touching the memo.
