@@ -823,20 +823,58 @@ fn is_scalar(value: &PropertyValue) -> bool {
     )
 }
 
-/// Whether `name` occurs exactly once in `props`. Property lists are almost
-/// always short, so a linear scan beats building a whole `HashMap` per list —
-/// and the walk builds one per list, once per node in the tree.
-fn occurs_once(props: &[Property], name: &str) -> bool {
-    let mut seen = 0usize;
-    for property in props {
-        if property.name == name {
-            seen += 1;
-            if seen > 1 {
-                return false;
+/// Answers "does this name occur exactly once among its siblings?" for every
+/// property in one list.
+///
+/// A path segment is only addressable when its name is unique among its
+/// siblings, so the walk asks this once per property, for every list in the
+/// tree. Both shapes matter:
+///
+/// * Property lists are almost always a handful of entries, where scanning the
+///   list beats building a `HashMap` the walk would then throw away — and it
+///   builds one per node, so that allocation is not free.
+/// * A list with many distinct names would make that scan quadratic, and a
+///   single long list is enough to stall a whole search. Past a threshold the
+///   names are counted once and shared.
+enum SiblingNames<'a> {
+    /// Short list: scanned on demand, nothing allocated.
+    Scan,
+    Counted(HashMap<&'a str, usize>),
+}
+
+impl<'a> SiblingNames<'a> {
+    /// Above this, counting once and sharing beats rescanning per property.
+    /// Below it, a scan is a few comparisons against a cache-hot slice.
+    const COUNT_ABOVE: usize = 32;
+
+    fn of(props: &'a [Property]) -> Self {
+        if props.len() <= Self::COUNT_ABOVE {
+            return Self::Scan;
+        }
+        let mut counts = HashMap::<&str, usize>::with_capacity(props.len());
+        for property in props {
+            *counts.entry(property.name.as_str()).or_default() += 1;
+        }
+        Self::Counted(counts)
+    }
+
+    fn occurs_once(&self, props: &[Property], name: &str) -> bool {
+        match self {
+            Self::Counted(counts) => counts.get(name).copied() == Some(1),
+            Self::Scan => {
+                let mut seen = 0usize;
+                for property in props {
+                    if property.name == name {
+                        seen += 1;
+                        if seen > 1 {
+                            return false;
+                        }
+                    }
+                }
+                seen == 1
             }
         }
     }
-    seen == 1
 }
 
 fn walk_search<'a>(
@@ -845,9 +883,10 @@ fn walk_search<'a>(
     ancestors_addressable: bool,
     ctx: &mut SearchCtx,
 ) {
+    let siblings = SiblingNames::of(props);
     for p in props {
         let mark = path.push(Cow::Borrowed(p.name.as_str()), true);
-        let addressable = ancestors_addressable && occurs_once(props, &p.name);
+        let addressable = ancestors_addressable && siblings.occurs_once(props, &p.name);
 
         // Leaf value?
         if is_scalar(&p.value) {
@@ -4354,6 +4393,40 @@ mod tests {
         let (hits, total) = search_properties(&parsed, "ΟΣΤΟΥΝ", 0, 100);
         assert_eq!(total, 1);
         assert_eq!(hits[0].display, "ΟΣΤΟΥΝ");
+    }
+
+    /// A path segment is addressable only when its name is unique among its
+    /// siblings, and the walk asks that for every property in every list. Both
+    /// sides of the size threshold must give the same answer, or a long list
+    /// would quietly report its properties as uneditable — or worse, report a
+    /// duplicated name as editable and let a write resolve to the wrong one.
+    #[test]
+    fn sibling_uniqueness_agrees_across_the_size_threshold() {
+        for count in [
+            3usize,
+            SiblingNames::COUNT_ABOVE,
+            SiblingNames::COUNT_ABOVE + 1,
+            200,
+        ] {
+            let mut props = Vec::new();
+            for index in 0..count {
+                props.extend_from_slice(&int_property(&format!("m_Unique{index}"), 1));
+            }
+            // One name appearing twice, whatever the list length.
+            props.extend_from_slice(&int_property("m_Twice", 1));
+            props.extend_from_slice(&int_property("m_Twice", 2));
+            let payload = root("/Script/Test.Save", &props);
+            let parsed = parse_private_root(&payload).unwrap();
+
+            let (hits, total) = search_properties(&parsed, "m_", 0, 10000);
+            assert_eq!(total, count + 2, "list of {count} lost properties");
+
+            let unique = hits.iter().find(|h| h.display == "m_Unique0").unwrap();
+            assert!(unique.editable, "unique name not addressable at {count}");
+            for hit in hits.iter().filter(|h| h.display == "m_Twice") {
+                assert!(!hit.editable, "duplicated name addressable at {count}");
+            }
+        }
     }
 
     #[test]

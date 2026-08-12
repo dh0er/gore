@@ -5530,6 +5530,20 @@ struct CachedResponseEntry {
     response: String,
 }
 
+impl CachedResponseEntry {
+    /// Everything this entry keeps alive, not just the answer. The request is
+    /// held verbatim as part of the key, and a request carries caller-supplied
+    /// text — a property-browser query, say — with no bound of its own. Counting
+    /// only responses would let a handful of large requests hold many times the
+    /// budget below.
+    fn footprint(&self) -> usize {
+        self.key.request.len()
+            + self.key.fingerprint.len()
+            + self.path.as_os_str().len()
+            + self.response.len()
+    }
+}
+
 /// Bounded so a long session cannot grow without limit. A whole save's worth of
 /// editor queries is around fifteen entries and well under a megabyte, so these
 /// hold several saves at once — switching back and forth stays free — while
@@ -5612,10 +5626,10 @@ fn store_cached_response(key: ResponseCacheKey, response: &str) {
     });
     // Oldest first: within one save every entry is wanted, so evicting by age
     // drops the save the user has moved away from rather than the current one.
-    let mut bytes: usize = guard.iter().map(|entry| entry.response.len()).sum();
+    let mut bytes: usize = guard.iter().map(CachedResponseEntry::footprint).sum();
     while guard.len() > RESPONSE_CACHE_MAX_ENTRIES || bytes > RESPONSE_CACHE_MAX_BYTES {
         let evicted = guard.remove(0);
-        bytes -= evicted.response.len();
+        bytes -= evicted.footprint();
     }
 }
 
