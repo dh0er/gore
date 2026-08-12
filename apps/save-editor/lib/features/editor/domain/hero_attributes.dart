@@ -54,7 +54,6 @@ const heroCoreAttributeOrder = [
   'Level',
   'Experience',
   'SkillPoints',
-  'MagicianLevel',
 ];
 
 // The per-weapon critical-hit values used to have their own "Kampffertigkeiten"
@@ -67,11 +66,22 @@ const heroCombatAttributes = <String>[];
 /// Attribute ids hidden from the curated hero/NPC attribute view (the game
 /// derives these from the learned skills, so editing them by hand is
 /// misleading). They remain reachable in the All-data property browser.
+///
+/// Each one is the attribute a `GE_Skill_*` class raises, and the game
+/// re-derives it from that class when the savegame is loaded: a save edited so
+/// that only the Magic Circle CLASS said circle 6 — while MagicianLevel still
+/// said -1 — let the hero use a circle 4 rune in game, and rune usability is
+/// stated against MagicianLevel. So the value written here never survives the
+/// load, and the skill's own control (Talente) is the only one that works.
 const heroHiddenAttributeIds = <String>{
   'Critical_Fists',
   'Critical_OneHand',
   'Critical_TwoHand',
   'Critical_Orc',
+  // Magic Circle. Its label collided with the Talente row's, so the Attribute
+  // tab showed two identical "Magischer Kreis" controls, only one of which did
+  // anything.
+  'MagicianLevel',
 };
 
 const heroResistanceAttributes = [

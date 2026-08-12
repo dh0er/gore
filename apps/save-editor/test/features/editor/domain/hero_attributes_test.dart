@@ -88,8 +88,30 @@ void main() {
     expect(heroAttributeGroup('Critical_OneHand'), HeroAttributeGroup.advanced);
     expect(heroAttributeGroup('Resistance_Fire'), HeroAttributeGroup.resistances);
     expect(heroAttributeGroup('PickPocketing'), HeroAttributeGroup.thieving);
+    expect(heroAttributeGroup('MagicianLevel'), HeroAttributeGroup.advanced);
     expect(heroAttributeGroup('Swampweed'), HeroAttributeGroup.advanced);
     expect(heroAttributeGroup('SomeFutureAttribute'), HeroAttributeGroup.advanced);
+  });
+
+  test('drops attributes the game derives from a learned skill', () {
+    // The game re-derives each of these from the skill's GameplayEffect class
+    // when the save is loaded, so a hand-edited value never survives — proven in
+    // game for the Magic Circle: a save whose class said circle 6 while
+    // MagicianLevel still said -1 let the hero use a circle 4 rune. Offering
+    // them here would be a control that silently does nothing, and MagicianLevel
+    // carried the same label as the Talente row on top of that.
+    final attributes = parseHeroAttributes([
+      _heroHit('/Script/G1R.AttributeSet_Mana', 'MagicianLevel', 'BaseValue', '0'),
+      _heroHit('/Script/G1R.AttributeSet_Mana', 'MagicianLevel', 'CurrentValue', '6'),
+      _heroHit('/Script/G1R.AttributeSet_Strength', 'Critical_OneHand', 'BaseValue', '0'),
+      _heroHit('/Script/G1R.AttributeSet_Strength', 'Critical_Fists', 'BaseValue', '0'),
+      _heroHit('/Script/G1R.AttributeSet_Strength', 'Critical_TwoHand', 'BaseValue', '0'),
+      _heroHit('/Script/G1R.AttributeSet_Strength', 'Critical_Orc', 'BaseValue', '0'),
+      _heroHit('/Script/G1R.AttributeSet_Mana', 'MaxMana', 'BaseValue', '35'),
+    ]);
+
+    // Only the one attribute the game does NOT derive from a skill survives.
+    expect(attributes.map((a) => a.id), ['MaxMana']);
   });
 
   test('sorts core attributes in display order before unknown ones', () {

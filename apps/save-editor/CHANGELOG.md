@@ -22,6 +22,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The attribute list offered a second "Magic Circle", identically named to the
+  one under Skills but without any effect in the game. It is gone; the circle is
+  set under Skills.
 - Version 1.2.1 said an NPC's position cannot be changed because the game
   restores it from the level. That was wrong.
 - Removing an item from a list and then editing another item in the same list
