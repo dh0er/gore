@@ -700,7 +700,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
     await step(loadAllCharacters);
     await step(loadHeroAttributes);
     await step(loadSkills);
-    await step(loadAllNpcActors);
+    // Warms the CORE's cache without filling the Dart-side NPC memo. That memo
+    // is pinned to one inspection by design, so pre-filling it here would hand
+    // the first NPC panel a roster fetched seconds earlier; letting the panel
+    // fill it on first use keeps it derived from the file as of that moment,
+    // and the paging it repeats is answered from the warm core.
+    await step(() => _fetchAllNpcActors(path, dropMemoOnError: false));
     await step(
       () => loadKnowledgeEntries(
         const Actor.player().uniqueName,
@@ -3369,38 +3374,49 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (cached != null && identical(_allNpcActorsFor, inspection)) {
       return cached;
     }
-    final future = () async {
-      // The core clamps `private.npc.list` `limit` to 1000, but real saves have
-      // ~1484+ NPCs — a single request would silently drop everyone past the
-      // first page. PAGE through with an increasing offset, accumulating until
-      // we have `total`, then return one combined page. The decode is cached
-      // per-inspection in the core, so follow-up pages are cheap.
-      final npcs = <NpcActor>[];
-      var offset = 0;
-      var total = 0;
-      while (true) {
-        final page = await loadNpcActors(
-          offset: offset,
-          limit: 1000,
-          path: pinnedPath,
-        );
-        // Don't cache an error result — let the next call retry.
-        if (page.error != null) {
-          _invalidateNpcCache();
-          return page;
-        }
-        npcs.addAll(page.npcs);
-        total = page.total;
-        offset += page.npcs.length;
-        // Stop once we've collected every NPC, or the core returns an empty
-        // page (defensive: never loop forever on a stuck/empty response).
-        if (page.npcs.isEmpty || offset >= total) break;
-      }
-      return NpcActorsPage(npcs: npcs, total: total, offset: 0, limit: total);
-    }();
+    final future = _fetchAllNpcActors(pinnedPath, dropMemoOnError: true);
     _allNpcActorsFuture = future;
     _allNpcActorsFor = inspection;
     return future;
+  }
+
+  /// Page the full NPC roster out of the core, without touching the memo.
+  ///
+  /// The core clamps `private.npc.list` `limit` to 1000, but real saves hold
+  /// ~1484+ NPCs — a single request would silently drop everyone past the first
+  /// page. Pages are accumulated until `total` is reached and returned as one.
+  /// [pinnedPath] fixes the file for the WHOLE fetch, so a save switch midway
+  /// cannot merge pages from two different files into one list.
+  ///
+  /// [dropMemoOnError] belongs to the memoizing caller: a failed load must not
+  /// stay cached, so it clears the memo slot the future was stored in. The
+  /// background warm-up passes false — it has no slot to clear, and clearing the
+  /// memo behind a real load in flight would be wrong.
+  Future<NpcActorsPage> _fetchAllNpcActors(
+    String? pinnedPath, {
+    required bool dropMemoOnError,
+  }) async {
+    final npcs = <NpcActor>[];
+    var offset = 0;
+    var total = 0;
+    while (true) {
+      final page = await loadNpcActors(
+        offset: offset,
+        limit: 1000,
+        path: pinnedPath,
+      );
+      if (page.error != null) {
+        if (dropMemoOnError) _invalidateNpcCache();
+        return page;
+      }
+      npcs.addAll(page.npcs);
+      total = page.total;
+      offset += page.npcs.length;
+      // Stop once we've collected every NPC, or the core returns an empty page
+      // (defensive: never loop forever on a stuck/empty response).
+      if (page.npcs.isEmpty || offset >= total) break;
+    }
+    return NpcActorsPage(npcs: npcs, total: total, offset: 0, limit: total);
   }
 
   /// Load every attribute of a single NPC (by GlobalId) from the core

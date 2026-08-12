@@ -17,6 +17,9 @@ class _RecordingCore implements GoresaveCoreService {
 
   List<String> get commands => [for (final r in requests) r.command];
 
+  int commandCount(String command) =>
+      requests.where((request) => request.command == command).length;
+
   Map<String, Object?>? payloadFor(String command) => requests
       .where((request) => request.command == command)
       .map((request) => request.payload)
@@ -213,6 +216,37 @@ void main() {
     );
     expect(core.commands, contains('private.skills.list'));
     expect(core.commands, contains('query_progression'));
+  });
+
+  test('prefetch warms the core without filling the NPC memo', () async {
+    // `loadAllNpcActors` memoizes its roster for the lifetime of one inspection.
+    // The warm-up must not be what fills that memo: it runs seconds before the
+    // user opens an NPC panel, and a save replaced in between (the game, a cloud
+    // sync) would leave the panel showing a roster fetched from bytes that are
+    // no longer on disk. Warm the core instead, and let the panel's own call
+    // populate the memo from the file as of that moment.
+    final core = _RecordingCore();
+    final notifier = await _loadedEditor(core);
+
+    notifier.prefetchTabData();
+    await notifier.prefetchInFlight;
+
+    final warmed = core.commandCount('private.npc.list');
+    expect(warmed, greaterThan(0), reason: 'the NPC roster was not warmed');
+
+    // The panel's own call still goes to the core — proof the memo was empty —
+    // and is answered from the warm cache.
+    await notifier.loadAllNpcActors();
+    expect(
+      core.commandCount('private.npc.list'),
+      greaterThan(warmed),
+      reason: 'the warm-up pre-filled the NPC memo',
+    );
+
+    // And it is a real memo from then on: a second call adds no request.
+    final afterPanel = core.commandCount('private.npc.list');
+    await notifier.loadAllNpcActors();
+    expect(core.commandCount('private.npc.list'), afterPanel);
   });
 
   test('prefetch runs once per inspection', () async {
