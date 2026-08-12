@@ -703,11 +703,23 @@ impl<'a> SearchPath<'a> {
         }
         self.display.push_str(&segment);
         // Lower-casing per segment rather than per leaf is what makes the match
-        // cheap. It agrees with lower-casing the joined path: every segment is
-        // followed by a separator or the end of the string, so no character sits
-        // in a different word-final position in one form than in the other.
-        self.lower
-            .extend(segment.chars().flat_map(char::to_lowercase));
+        // cheap. It must still agree with the query terms, which went through
+        // `str::to_lowercase` — and that applies context-sensitive mappings a
+        // char-by-char pass cannot: a word-final Σ becomes ς, never σ.
+        //
+        // Segment boundaries do not disturb those mappings here, because a
+        // segment is only ever followed by ` › `, `[`, `{`, or the end of the
+        // path — never by another cased letter — so a character that is
+        // word-final within its segment is word-final in the joined path too.
+        if segment.is_ascii() {
+            // The overwhelming majority, and free of context-sensitive
+            // mappings: lower-case in place instead of allocating per property.
+            let start = self.lower.len();
+            self.lower.push_str(&segment);
+            self.lower[start..].make_ascii_lowercase();
+        } else {
+            self.lower.push_str(&segment.to_lowercase());
+        }
         self.segments.push(segment);
         mark
     }
@@ -4318,6 +4330,30 @@ mod tests {
                 "is_scalar disagrees with scalar_display for {value:?}"
             );
         }
+    }
+
+    /// The search lower-cases the display path as it is built, one segment at a
+    /// time, and matches query terms that went through `str::to_lowercase`. The
+    /// two have to agree — and they only do if the segments are lower-cased the
+    /// same way. A word-final Σ is the case that tells them apart:
+    /// `str::to_lowercase` maps it to ς, while a char-by-char mapping always
+    /// yields σ, so an upper-case query would silently miss its own property.
+    #[test]
+    fn search_matches_a_word_final_sigma() {
+        let mut props = int_property("ΟΣ", 7);
+        props.extend_from_slice(&int_property("ΟΣΤΟΥΝ", 8));
+        let payload = root("/Script/Test.Save", &props);
+        let parsed = parse_private_root(&payload).unwrap();
+
+        // Final position: the query normalizes to "ος", so the path must too.
+        let (hits, total) = search_properties(&parsed, "ΟΣ", 0, 100);
+        assert_eq!(total, 1, "an upper-case query missed its own property");
+        assert_eq!(hits[0].display, "ΟΣ");
+
+        // Non-final position keeps the ordinary σ, and still matches.
+        let (hits, total) = search_properties(&parsed, "ΟΣΤΟΥΝ", 0, 100);
+        assert_eq!(total, 1);
+        assert_eq!(hits[0].display, "ΟΣΤΟΥΝ");
     }
 
     #[test]
