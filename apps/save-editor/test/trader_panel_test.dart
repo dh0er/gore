@@ -119,6 +119,20 @@ void main() {
       expect(result.forUniqueName('NC_ORG_Wolf_855'), isNull);
     });
 
+    test('a name matches case-insensitively, the way the core joins it', () {
+      // A character's unique name is the stored knowledge key where one exists,
+      // and that key's casing can differ from the trader row's. The core badges
+      // the merchant through a lowercase match, so an exact compare here would
+      // badge him and then deny it.
+      final result = TradersResult.fromJson({
+        'traders': [
+          {'index': 4, 'uniqueName': 'OC_STT_Dexter_329', 'ore': 55},
+        ],
+      });
+      expect(result.forUniqueName('oc_stt_dexter_329')?.index, 4);
+      expect(result.forUniqueName('OC_stt_Dexter_329')?.index, 4);
+    });
+
     test('a missing ore line reads as null, not zero', () {
       // Riordian stocks goods but carries no ore key. Showing 0 would claim he
       // is broke; null says the record has no such line at all.
@@ -188,6 +202,12 @@ void main() {
   });
 
   group('Handel tab', () {
+    // The ore card, addressed through its own title: the first Card on the page
+    // is the price note, and the first TextField is the character search.
+    final oreCard = find.ancestor(
+      of: find.text('Ore (purchasing power)'),
+      matching: find.byType(Card),
+    );
     Future<void> pumpApp(
       WidgetTester tester,
       GoresaveCoreService core, {
@@ -490,6 +510,61 @@ void main() {
         fieldTexts().where((t) => t == '1'),
         isEmpty,
         reason: 'the sword count must not survive the category switch',
+      );
+    });
+
+    testWidgets('the ore line can be dropped, not just counted down', (
+      tester,
+    ) async {
+      // A merchant with no ore line is a state the game itself produces, and
+      // setStock refuses 0 — so without a delete on the ore card there would be
+      // no way to ask for it at all.
+      await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(Scaffold).first),
+      );
+      await tester.tap(
+        find.descendant(of: oreCard, matching: find.byIcon(Icons.delete_outline)),
+      );
+      await tester.pumpAndSettle();
+
+      final queued = container.read(editorProvider).pendingEdits.values
+          .expand((p) => p.edits)
+          .where((e) => e['path'] == 'private.traders.removeItem')
+          .toList();
+      expect(queued, hasLength(1));
+      expect((queued.single['value'] as Map)['path'], kTraderOrePath);
+      // And it is announced the way every other queued removal is.
+      expect(find.byType(PendingStructuralRow), findsOneWidget);
+    });
+
+    testWidgets('a count beyond the i32 the core stores is refused', (
+      tester,
+    ) async {
+      await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+
+      final field = find.descendant(of: oreCard, matching: find.byType(TextField));
+      await tester.enterText(field, '2147483648');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+
+      // Rejected in place: the field snaps back and nothing is queued, rather
+      // than the save failing later on the core's bound.
+      expect(tester.widget<TextField>(field).controller?.text, '55');
+      expect(
+        ProviderScope.containerOf(tester.element(find.byType(Scaffold).first))
+            .read(editorProvider)
+            .pendingEdits,
+        isEmpty,
       );
     });
 

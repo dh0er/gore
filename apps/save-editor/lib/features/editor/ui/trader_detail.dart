@@ -203,8 +203,11 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
             _OreCard(
               detail: detail,
               editable: canSet,
+              canRemove: canRemove,
+              removalPending: removals.contains(kTraderOrePath),
               onChanged: (value) => _queueSet(_map, kTraderOrePath, value),
               onRevert: () => _revert(_map, kTraderOrePath),
+              onRemove: () => _queueRemove(_map, kTraderOrePath),
               pending: _pendingCountFor(_map, kTraderOrePath),
             ),
           ],
@@ -372,15 +375,24 @@ class _OreCard extends ConsumerWidget {
   const _OreCard({
     required this.detail,
     required this.editable,
+    required this.canRemove,
+    required this.removalPending,
     required this.onChanged,
     required this.onRevert,
+    required this.onRemove,
     required this.pending,
   });
 
   final TraderDetail detail;
   final bool editable;
+
+  /// Whether the ore line may be dropped entirely. A merchant without one is a
+  /// state the game itself produces, so the card has to offer it.
+  final bool canRemove;
+  final bool removalPending;
   final void Function(int) onChanged;
   final VoidCallback onRevert;
+  final VoidCallback onRemove;
   final int? pending;
 
   @override
@@ -412,17 +424,26 @@ class _OreCard extends ConsumerWidget {
               // No ore line at all is a real state and NOT the same as zero, so
               // say so instead of showing a 0 the save does not contain.
               Text(l10n.traderNoOre, style: theme.textTheme.bodyMedium)
-            else
+            else ...[
               SizedBox(
                 width: 140,
                 child: _CountField(
                   value: ore,
                   pending: pending,
-                  enabled: editable,
+                  // While a removal is queued the number is on its way out;
+                  // editing it would queue a count for a line about to go.
+                  enabled: editable && !removalPending,
                   onChanged: onChanged,
                   onRevert: onRevert,
                 ),
               ),
+              if (canRemove)
+                IconButton(
+                  tooltip: l10n.traderRemoveItem,
+                  icon: const Icon(Icons.delete_outline, size: 20),
+                  onPressed: removalPending ? null : onRemove,
+                ),
+            ],
           ],
         ),
       ),
@@ -844,9 +865,13 @@ class _CountFieldState extends State<_CountField> {
     super.dispose();
   }
 
+  /// The core stores a count as an `i32`, so anything larger is refused at save
+  /// time. The add-item dialog already caps at the same value.
+  static const int _maxCount = 2147483647; // i32::MAX
+
   void _submit(String raw) {
     final parsed = int.tryParse(raw.trim());
-    if (parsed == null || parsed < 1) {
+    if (parsed == null || parsed < 1 || parsed > _maxCount) {
       _controller.text = '${widget.pending ?? widget.value}';
       return;
     }

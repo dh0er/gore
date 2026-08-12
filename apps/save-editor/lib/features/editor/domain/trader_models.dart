@@ -189,8 +189,13 @@ class TradersResult {
   /// The record for an NPC, or null when he is not a merchant. Placeholder rows
   /// belong to no NPC and are deliberately not matched.
   TraderSummary? forUniqueName(String uniqueName) {
+    // Case-insensitively, the way the core joins these names: a character's
+    // unique name is the stored knowledge key where one exists, whose casing can
+    // differ from the trader row's. An exact compare would leave a character the
+    // list badges as a merchant reading "does not trade".
+    final wanted = uniqueName.toLowerCase();
     for (final t in traders) {
-      if (!t.placeholder && t.uniqueName == uniqueName) return t;
+      if (!t.placeholder && t.uniqueName.toLowerCase() == wanted) return t;
     }
     return null;
   }
