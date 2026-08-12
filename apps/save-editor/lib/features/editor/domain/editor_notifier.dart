@@ -623,9 +623,20 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// starts.
   Future<void> _coreQueue = Future<void>.value();
 
-  /// The inspection the background prefetch last ran for, so re-entering the
+  /// The inspection the background prefetch warmed IN FULL, so re-entering the
   /// editor for an unchanged save does not queue the same warm-up twice.
+  ///
+  /// Set only once every step has run. A warm-up that was cut short — the user
+  /// renamed a backup, ran a codec check — leaves this null so the next state
+  /// change starts it again; the steps that did complete are answered from the
+  /// core's cache, so a restart re-walks them for a few milliseconds.
   SaveInspection? _prefetchedFor;
+
+  /// Whether a warm-up is running right now. [_prefetchedFor] cannot serve as
+  /// this flag any more (it is only set at the end), and the warm-up itself
+  /// changes editor state — the character index settles the hero id — so
+  /// without this a state change mid-warm-up would start a second one.
+  bool _prefetchRunning = false;
 
   /// The in-flight prefetch, exposed so a test can await the warm-up instead of
   /// racing it. Production fires and forgets.
@@ -660,31 +671,46 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // Wait instead: clearing the loading flag is itself a state change, so the
     // page calls this again, and that call starts the warm-up for real.
     if (state.isLoading) return;
+    if (_prefetchRunning) return;
     if (identical(_prefetchedFor, inspection)) return;
-    _prefetchedFor = inspection;
-    prefetchInFlight = _prefetchTabData(path, inspection.path, _loadSeq);
+    _prefetchRunning = true;
+    prefetchInFlight = _prefetchTabData(
+      path,
+      inspection,
+      _loadSeq,
+    ).whenComplete(() => _prefetchRunning = false);
   }
 
-  /// [inspectionPath] is the path as the INSPECTION spells it, which is what the
-  /// story panel pins its pages to; passing the selection's spelling instead
-  /// would warm a request the panel never makes.
+  /// Warm every tab's query for [inspection], in reachability order.
+  ///
+  /// Steps are skipped, never queued, while something else holds the editor:
+  /// a warm-up that queued behind the user's own request would be the very
+  /// stall it exists to remove. A skipped step is not lost — the inspection is
+  /// then not marked warmed, so the next state change runs the sequence again
+  /// and the steps that did complete come back from the core's cache.
   Future<void> _prefetchTabData(
     String path,
-    String? inspectionPath,
+    SaveInspection inspection,
     int seq,
   ) async {
-    // A newer load (or a write) has taken over: its own prefetch will run, and
-    // continuing here would only make the user's request wait behind ours. A
-    // disposed notifier stops it too — the editor is gone, and touching `state`
-    // after teardown throws.
+    // The story panel pins its pages to the path as the INSPECTION spells it;
+    // the selection's spelling would warm a request the panel never makes.
+    final inspectionPath = inspection.path;
+    // A newer load (or a write) has taken over: continuing would only make the
+    // user's request wait behind ours. A disposed notifier stops it too — the
+    // editor is gone, and touching `state` after teardown throws.
     bool superseded() =>
         !mounted ||
         seq != _loadSeq ||
         state.selectedPath != path ||
         state.isLoading;
 
+    var complete = true;
     Future<void> step(Future<Object?> Function() load) async {
-      if (superseded()) return;
+      if (superseded()) {
+        complete = false;
+        return;
+      }
       try {
         await load();
       } catch (_) {
@@ -737,6 +763,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
         includeNodes: true,
       ),
     );
+
+    // Only a run that warmed everything retires this inspection. Anything less
+    // leaves the marker unset so the next state change picks the sequence up
+    // again — otherwise a warm-up interrupted by, say, a backup rename would
+    // leave the tabs it never reached loading the slow way for the rest of the
+    // session.
+    if (complete && mounted) _prefetchedFor = inspection;
   }
 
   bool get coreAvailable => _core.isAvailable;

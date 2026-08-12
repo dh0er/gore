@@ -266,6 +266,47 @@ void main() {
     expect(core.commands.length, first, reason: 'prefetch repeated itself');
   });
 
+  test('an interrupted warm-up is picked up again, not written off', () async {
+    // Something else taking the editor mid-warm-up — a backup rename bumps the
+    // load sequence, a codec check raises the loading flag — makes the
+    // remaining steps skip. The inspection must NOT count as warmed then, or
+    // the tabs those steps would have covered load the slow way for the rest of
+    // the session.
+    final core = _RecordingCore();
+    final notifier = await _loadedEditor(core);
+
+    // Stand in for that interruption: the warm-up runs against a load sequence
+    // that has already moved on, so every step skips.
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    await pumpEventQueue();
+    core.requests.clear();
+    notifier.prefetchTabData();
+    final interrupted = notifier.prefetchInFlight;
+    await notifier.refreshBackups();
+    await interrupted;
+
+    final afterInterruption = core.commands
+        .where((command) => command != 'list_backups')
+        .length;
+
+    // The next state change must start the sequence over rather than skip it.
+    notifier.prefetchTabData();
+    await notifier.prefetchInFlight;
+
+    expect(
+      core.commands.where((command) => command != 'list_backups').length,
+      greaterThan(afterInterruption),
+      reason: 'the interrupted warm-up was never resumed',
+    );
+    expect(core.commands, contains('private.characters.list'));
+
+    // And once it does complete, it is retired: no third run.
+    final settled = core.commands.length;
+    notifier.prefetchTabData();
+    await notifier.prefetchInFlight;
+    expect(core.commands.length, settled);
+  });
+
   test('a fresh inspection prefetches again', () async {
     final core = _RecordingCore();
     final notifier = await _loadedEditor(core);
