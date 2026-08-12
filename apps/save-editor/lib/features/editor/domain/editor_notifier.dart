@@ -653,6 +653,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final inspection = state.inspection;
     final path = state.selectedPath;
     if (inspection == null || path == null) return;
+    // The inspection lands BEFORE its load finishes — `_inspect` still has the
+    // backup list to fetch — and every warm-up step bails out while a load is in
+    // flight. Claiming the inspection here would therefore burn it on a warm-up
+    // that does nothing, and the identity check below would refuse to try again.
+    // Wait instead: clearing the loading flag is itself a state change, so the
+    // page calls this again, and that call starts the warm-up for real.
+    if (state.isLoading) return;
     if (identical(_prefetchedFor, inspection)) return;
     _prefetchedFor = inspection;
     prefetchInFlight = _prefetchTabData(path, inspection.path, _loadSeq);

@@ -183,6 +183,38 @@ void main() {
     expect(browse.payload.containsKey('editable'), isFalse);
   });
 
+  test('opening a save warms its tabs, driven only by state changes', () async {
+    // The page does not call this at a chosen moment — it calls it on every
+    // state change. The FIRST change it sees is the inspection landing, which
+    // happens while `_inspect` is still fetching the backup list, so the editor
+    // is still loading and no warm-up can run yet. That moment must not consume
+    // the one trigger this inspection gets, or the call that arrives once
+    // loading ends finds the inspection already claimed, skips it, and no tab is
+    // ever warmed.
+    final core = _RecordingCore();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await pumpEventQueue();
+    core.requests.clear();
+
+    // Exactly what the editor page subscribes with.
+    final removeListener = notifier.addListener(
+      (_) => notifier.prefetchTabData(),
+      fireImmediately: false,
+    );
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    await pumpEventQueue();
+    await notifier.prefetchInFlight;
+    removeListener();
+
+    expect(
+      core.commands,
+      contains('private.characters.list'),
+      reason: 'opening the save warmed nothing',
+    );
+    expect(core.commands, contains('private.skills.list'));
+    expect(core.commands, contains('query_progression'));
+  });
+
   test('prefetch runs once per inspection', () async {
     final core = _RecordingCore();
     final notifier = await _loadedEditor(core);

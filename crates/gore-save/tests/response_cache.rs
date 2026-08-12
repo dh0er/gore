@@ -159,6 +159,78 @@ fn an_external_replacement_is_not_served_from_cache() {
     );
 }
 
+/// `private.npc.position` reports the recorded placement undo, which lives in a
+/// sidecar next to the save rather than inside it. The sidecar can change while
+/// the save bytes stay exactly as they were — restoring a backup puts back
+/// byte-identical bytes alongside that backup's placement notes — so the cache
+/// key has to cover it.
+#[test]
+fn a_changed_placement_note_is_not_served_from_cache() {
+    let Some((_dir, path)) = temp_copy("G1R-cache-placement.sav") else {
+        return;
+    };
+    let save = std::path::Path::new(&path);
+
+    // Any NPC the save actually knows about.
+    let listed = exec(json!({
+        "command": "private.npc.list",
+        "payload": { "path": path, "offset": 0, "limit": 1 },
+    }));
+    let Some(npc) = listed["npcs"]
+        .as_array()
+        .and_then(|npcs| npcs.first())
+        .and_then(|npc| npc["id"].as_str())
+        .map(str::to_owned)
+    else {
+        eprintln!("save lists no NPCs; skipping");
+        return;
+    };
+
+    let position = json!({
+        "command": "private.npc.position",
+        "payload": { "path": path, "id": npc },
+    });
+    assert!(
+        exec(position.clone())["undo"].is_null(),
+        "the fixture already carries a placement note for {npc}",
+    );
+
+    // Record a note. Only the sidecar changes; the save file is untouched.
+    let before = std::fs::read(save).expect("read save");
+    gore_save::placement::record(
+        save,
+        &[(
+            npc.clone(),
+            gore_save::placement::PlacementNote {
+                original_location: [1.0, 2.0, 3.0],
+                original_routine_class: None,
+                original_rotation: None,
+                written_location: [4.0, 5.0, 6.0],
+                written_rotation: None,
+                written_routine_class: None,
+            },
+        )],
+    )
+    .expect("record placement note");
+    assert_eq!(
+        std::fs::read(save).expect("re-read save"),
+        before,
+        "recording a note must not touch the save",
+    );
+
+    assert!(
+        !exec(position.clone())["undo"].is_null(),
+        "private.npc.position served its pre-note answer from cache",
+    );
+
+    // And back the other way: dropping the note must surface again.
+    gore_save::placement::clear(save, std::slice::from_ref(&npc)).expect("clear placement note");
+    assert!(
+        exec(position)["undo"].is_null(),
+        "private.npc.position served the removed note from cache",
+    );
+}
+
 /// `list_backups` describes a directory, not the save, so it must not be cached:
 /// removing a backup changes the answer while the save file is untouched.
 #[test]

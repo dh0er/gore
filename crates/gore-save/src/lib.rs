@@ -5512,6 +5512,31 @@ const RESPONSE_CACHE_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 static RESPONSE_CACHE: Mutex<Vec<CachedResponseEntry>> = Mutex::new(Vec::new());
 
+/// The files besides the save itself that a command's answer is read from.
+///
+/// A response is only safe to memoize under a fingerprint that covers everything
+/// it was built from. These two commands each reach for one sidecar file that
+/// can change while the save bytes stay exactly as they were — a profile
+/// reassignment, or a backup restore that puts back byte-identical save bytes
+/// alongside a different placement note. Fingerprinting the sidecar makes that a
+/// miss instead of a stale hit.
+///
+/// A missing sidecar contributes nothing, which is correct: "absent" and
+/// "absent" fingerprint alike, and a sidecar that appears changes the answer and
+/// the fingerprint together.
+fn response_companion_files(command: &str, save_path: &Path) -> Vec<PathBuf> {
+    match command {
+        // Reports which profile owns the slot, from the folder's profile file.
+        "inspect_save" => save_path
+            .parent()
+            .map(|dir| vec![dir.join("PersistentDataList.sav")])
+            .unwrap_or_default(),
+        // Reports the recorded placement undo, from the placement notes.
+        "private.npc.position" => vec![placement::notes_path(save_path)],
+        _ => Vec::new(),
+    }
+}
+
 /// Build the cache identity for a request, or `None` when the command is not
 /// cacheable, carries no save path, or its file cannot be read.
 fn read_response_cache_key(input: &str) -> Option<ResponseCacheKey> {
@@ -5522,15 +5547,8 @@ fn read_response_cache_key(input: &str) -> Option<ResponseCacheKey> {
     }
     let path = Path::new(value.get("payload")?.get("path")?.as_str()?);
     let mut fingerprint = sha1_hex(&fs::read(path).ok()?);
-    // `inspect_save` also reports which profile owns the slot, and that lives in
-    // a sibling file rather than in the save. Fold it into the fingerprint so
-    // assigning a save to another profile is a miss, not a stale hit.
-    if command == "inspect_save" {
-        if let Some(bytes) = path
-            .parent()
-            .map(|dir| dir.join("PersistentDataList.sav"))
-            .and_then(|companion| fs::read(companion).ok())
-        {
+    for companion in response_companion_files(command, path) {
+        if let Ok(bytes) = fs::read(companion) {
             fingerprint.push_str(&sha1_hex(&bytes));
         }
     }
