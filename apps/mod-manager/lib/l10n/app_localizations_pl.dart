@@ -252,6 +252,50 @@ class AppLocalizationsPl extends AppLocalizations {
   String get importFile => 'Importuj plik…';
 
   @override
+  String importOutcomeCreated(String name) {
+    return 'Dodano „$name” do biblioteki.';
+  }
+
+  @override
+  String importOutcomeUpdated(String name) {
+    return 'Zaktualizowano „$name” w bibliotece.';
+  }
+
+  @override
+  String importOutcomeUnchanged(String name) {
+    return '„$name” jest już w bibliotece.';
+  }
+
+  @override
+  String importOutcomeMatchedBy(String method) {
+    String _temp0 = intl.Intl.selectLogic(method, {
+      'none': 'Nie dopasowano żadnego istniejącego wpisu w bibliotece.',
+      'source': 'Dopasowano na podstawie tego samego źródła importu.',
+      'content':
+          'Dopasowano na podstawie zawartości, której identyczność została potwierdzona.',
+      'entry_id': 'Dopasowano na podstawie identyfikatora moda.',
+      'other': 'Szczegóły dopasowania są niedostępne.',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get importRefusalDuplicateAmbiguous =>
+      'Ten import pasuje do więcej niż jednego wpisu w bibliotece. Sprawdź lub usuń duplikaty, a następnie spróbuj ponownie.';
+
+  @override
+  String get importRefusalIdentityConflict =>
+      'Źródło importu i jego zawartość pasują do różnych wpisów w bibliotece. Sprawdź lub usuń wpisy powodujące konflikt, a następnie spróbuj ponownie.';
+
+  @override
+  String get importFailed =>
+      'Nie udało się ukończyć importu. Obsługiwane źródła: foldery, ZIP, samodzielne pliki *_P.pak, kompletne zestawy .utoc/.ucas (opcjonalnie .pak), .lcache, .bank i PrecompiledScript*.Cache. Najpierw rozpakuj archiwum .7z lub .rar, a następnie zaimportuj folder. Źródło może być nieobsługiwane, uszkodzone lub niekompletne. Mod mógł już zostać dodany lub zaktualizowany; odśwież i sprawdź bibliotekę przed kolejną próbą.';
+
+  @override
+  String get importOutcomeUnknown =>
+      'Nie udało się zweryfikować wyniku importu. Wybierz Odśwież, aby sprawdzić bibliotekę.';
+
+  @override
   String get applyTooltip => 'Zastosuj zestaw modów do gry';
 
   @override

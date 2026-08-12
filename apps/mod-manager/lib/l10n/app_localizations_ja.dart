@@ -241,6 +241,49 @@ class AppLocalizationsJa extends AppLocalizations {
   String get importFile => 'ファイルをインポート…';
 
   @override
+  String importOutcomeCreated(String name) {
+    return '「$name」をライブラリに追加しました。';
+  }
+
+  @override
+  String importOutcomeUpdated(String name) {
+    return 'ライブラリ内の「$name」を更新しました。';
+  }
+
+  @override
+  String importOutcomeUnchanged(String name) {
+    return '「$name」はすでにライブラリにあります。';
+  }
+
+  @override
+  String importOutcomeMatchedBy(String method) {
+    String _temp0 = intl.Intl.selectLogic(method, {
+      'none': '既存のライブラリエントリとの一致はありません。',
+      'source': '同じインポート元に基づく一致です。',
+      'content': '同一であることが確認されたコンテンツに基づく一致です。',
+      'entry_id': 'Mod ID に基づく一致です。',
+      'other': '一致方法の詳細を確認できません。',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get importRefusalDuplicateAmbiguous =>
+      'このインポートは複数のライブラリエントリに一致します。重複を確認するか削除してから、もう一度お試しください。';
+
+  @override
+  String get importRefusalIdentityConflict =>
+      'インポート元とそのコンテンツが、ライブラリ内の別々のエントリに一致しています。競合するエントリを確認するか削除してから、もう一度お試しください。';
+
+  @override
+  String get importFailed =>
+      'インポートを完了できませんでした。対応するソースは、フォルダー、ZIP、単体の *_P.pak、完全な .utoc/.ucas セット（.pak は任意）、.lcache、.bank、PrecompiledScript*.Cache です。.7z または .rar は先に展開し、そのフォルダーをインポートしてください。ソースは未対応、破損、または不完全な可能性があります。Mod はすでに追加または更新されている可能性があります。ライブラリを更新して確認してから、もう一度お試しください。';
+
+  @override
+  String get importOutcomeUnknown =>
+      'インポート結果を確認できませんでした。［更新］を選択してライブラリを確認してください。';
+
+  @override
   String get applyTooltip => 'ロードアウトをゲームに適用';
 
   @override

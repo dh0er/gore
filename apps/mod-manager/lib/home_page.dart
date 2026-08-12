@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -10,11 +9,14 @@ import 'app/ui/about_dialog.dart';
 import 'app/ui/window_chrome.dart';
 import 'conflicts/ui/conflict_panel.dart';
 import 'core/diagnostic_text.dart';
+import 'core/mgr_ffi.dart';
 import 'l10n/app_localizations.dart';
 import 'library/domain/conflicts_provider.dart';
 import 'library/domain/library_notifier.dart';
 import 'library/domain/models.dart';
 import 'library/ui/detail_panel.dart';
+import 'library/ui/import_feedback.dart';
+import 'library/ui/import_source_picker.dart';
 import 'library/ui/mod_list.dart';
 import 'preflight/domain/models.dart';
 import 'preflight/domain/preflight_notifier.dart';
@@ -37,7 +39,12 @@ bool _preflightFindingUsesRetry(PreflightCheckView finding) =>
 /// Home: a Mods tab (library list + detail + conflicts, with an import/apply
 /// action bar) and the unchanged Settings tab.
 class HomePage extends ConsumerStatefulWidget {
-  const HomePage({super.key});
+  const HomePage({
+    super.key,
+    this.importSourcePicker = const FileSelectorImportSourcePicker(),
+  });
+
+  final ImportSourcePicker importSourcePicker;
 
   @override
   ConsumerState<HomePage> createState() => _HomePageState();
@@ -61,6 +68,8 @@ class _HomePageState extends ConsumerState<HomePage> {
   );
   ({FocusNode node, String? removedModId})? _pendingFocus;
   int _pendingFocusGeneration = 0;
+  int _selectionGeneration = 0;
+  bool _importRequestActive = false;
   ({String root, int generation})? _preflightRetryFocusRequest;
 
   String? get _gameRoot => gameRootFromExe(ref.read(gameExePathProvider));
@@ -139,6 +148,86 @@ class _HomePageState extends ConsumerState<HomePage> {
         root != null && _preflightRetryFocusNode.hasFocus
         ? (root: root, generation: generation)
         : null;
+  }
+
+  bool get _importAuthorityAvailable {
+    final library = ref.read(libraryProvider);
+    return !library.busy &&
+        library.authoritative &&
+        !ref.read(statusProvider).busy &&
+        !ref.read(preflightProvider).busy &&
+        !ref.read(conflictsProvider).isLoading;
+  }
+
+  bool get _canStartImport =>
+      !_importRequestActive && _importAuthorityAvailable;
+
+  Future<void> _importFolder() =>
+      _pickAndImport(() => widget.importSourcePicker.pickFolder());
+
+  Future<void> _importFile() => _pickAndImport(
+    () => widget.importSourcePicker.pickFile(
+      dialogLabel: AppLocalizations.of(context).actionImport,
+    ),
+  );
+
+  Future<void> _pickAndImport(Future<String?> Function() pick) async {
+    if (!_canStartImport) return;
+    final selectionTicket = _selectionGeneration;
+    setState(() => _importRequestActive = true);
+    try {
+      String? path;
+      try {
+        path = await pick();
+      } catch (error) {
+        if (!mounted) return;
+        showImportFailureFeedback(
+          context,
+          MgrFfiException(
+            'import picker: $error',
+            code: 'IMPORT_PICKER_FAILED',
+          ),
+          ref.read(libraryProvider),
+        );
+        return;
+      }
+      if (!mounted ||
+          path == null ||
+          path.trim().isEmpty ||
+          !_importAuthorityAvailable) {
+        return;
+      }
+
+      MgrImportOutcome? outcome;
+      try {
+        outcome = await ref.read(libraryProvider.notifier).import(path);
+      } on MgrFfiException catch (error) {
+        if (!mounted) return;
+        final library = ref.read(libraryProvider);
+        showImportFailureFeedback(context, error, library);
+        return;
+      } catch (error) {
+        if (!mounted) return;
+        final library = ref.read(libraryProvider);
+        showImportFailureFeedback(
+          context,
+          MgrFfiException('$error', code: 'IMPORT_UNKNOWN_FAILURE'),
+          library,
+        );
+        return;
+      }
+      if (!mounted || outcome == null) return;
+
+      final library = ref.read(libraryProvider);
+      if (selectionTicket == _selectionGeneration &&
+          library.authoritative &&
+          library.modById(outcome.entry.id) != null) {
+        ref.read(selectedModProvider.notifier).state = outcome.entry.id;
+      }
+      showImportSuccessFeedback(context, outcome);
+    } finally {
+      if (mounted) setState(() => _importRequestActive = false);
+    }
   }
 
   void _settlePreflightRetryFocus(
@@ -257,6 +346,7 @@ class _HomePageState extends ConsumerState<HomePage> {
       _refreshPreflightWhenIdle();
     });
     ref.listen<String?>(selectedModProvider, (previous, next) {
+      _selectionGeneration++;
       final pending = _pendingFocus;
       if (pending?.removedModId != null &&
           next != null &&
@@ -365,6 +455,9 @@ class _HomePageState extends ConsumerState<HomePage> {
                 children: [
                   _ModsTab(
                     importFocusNode: _importFocusNode,
+                    importFolder: _importFolder,
+                    importFile: _importFile,
+                    importRequestActive: _importRequestActive,
                     libraryRefreshFocusNode: _libraryRefreshFocusNode,
                     statusDetailsFocusNode: _statusDetailsFocusNode,
                     settingsGamePathFocusNode: _settingsGamePathFocusNode,
@@ -389,6 +482,9 @@ class _HomePageState extends ConsumerState<HomePage> {
 class _ModsTab extends ConsumerWidget {
   const _ModsTab({
     required this.importFocusNode,
+    required this.importFolder,
+    required this.importFile,
+    required this.importRequestActive,
     required this.libraryRefreshFocusNode,
     required this.statusDetailsFocusNode,
     required this.settingsGamePathFocusNode,
@@ -400,6 +496,9 @@ class _ModsTab extends ConsumerWidget {
   });
 
   final FocusNode importFocusNode;
+  final Future<void> Function() importFolder;
+  final Future<void> Function() importFile;
+  final bool importRequestActive;
   final FocusNode libraryRefreshFocusNode;
   final FocusNode statusDetailsFocusNode;
   final FocusNode settingsGamePathFocusNode;
@@ -411,38 +510,6 @@ class _ModsTab extends ConsumerWidget {
 
   String? _gameRoot(WidgetRef ref) =>
       gameRootFromExe(ref.read(gameExePathProvider));
-
-  Future<void> _importFolder(WidgetRef ref) async {
-    final path = await getDirectoryPath();
-    final library = ref.read(libraryProvider);
-    if (path == null ||
-        library.busy ||
-        !library.authoritative ||
-        ref.read(statusProvider).busy ||
-        ref.read(preflightProvider).busy ||
-        ref.read(conflictsProvider).isLoading) {
-      return;
-    }
-    await ref.read(libraryProvider.notifier).import(path);
-  }
-
-  Future<void> _importFile(WidgetRef ref, AppLocalizations l10n) async {
-    final group = XTypeGroup(
-      label: l10n.actionImport,
-      extensions: const ['zip', 'pak', 'utoc', 'lcache', 'bank', 'Cache'],
-    );
-    final file = await openFile(acceptedTypeGroups: [group]);
-    final library = ref.read(libraryProvider);
-    if (file == null ||
-        library.busy ||
-        !library.authoritative ||
-        ref.read(statusProvider).busy ||
-        ref.read(preflightProvider).busy ||
-        ref.read(conflictsProvider).isLoading) {
-      return;
-    }
-    await ref.read(libraryProvider.notifier).import(file.path);
-  }
 
   Future<void> _apply(
     BuildContext context,
@@ -713,7 +780,8 @@ class _ModsTab extends ConsumerWidget {
     final conflictCount = conflicts.value?.length ?? 0;
     final operationsBusy =
         library.busy || status.busy || preflight.busy || conflicts.isLoading;
-    final libraryMutationsBlocked = operationsBusy || !library.authoritative;
+    final libraryMutationsBlocked =
+        importRequestActive || operationsBusy || !library.authoritative;
     final compactConflictPanel =
         media.size.height < 560 &&
         (media.size.width < 784 || media.textScaler.scale(1) > 1.35);
@@ -754,15 +822,19 @@ class _ModsTab extends ConsumerWidget {
       ),
       menuChildren: [
         MenuItemButton(
+          key: const ValueKey('import-folder-action'),
           leadingIcon: const Icon(Icons.folder_open),
-          onPressed: libraryMutationsBlocked ? null : () => _importFolder(ref),
+          onPressed: libraryMutationsBlocked
+              ? null
+              : () => unawaited(importFolder()),
           child: Text(l10n.importFolder),
         ),
         MenuItemButton(
+          key: const ValueKey('import-file-action'),
           leadingIcon: const Icon(Icons.insert_drive_file_outlined),
           onPressed: libraryMutationsBlocked
               ? null
-              : () => _importFile(ref, l10n),
+              : () => unawaited(importFile()),
           child: Text(l10n.importFile),
         ),
       ],
@@ -1230,11 +1302,12 @@ class _InfoBanner extends ConsumerWidget {
       );
     }
     if (library.error != null) {
+      final error = _boundedDiagnostic(library.error!);
       children.add(
         _line(
           theme,
           Icons.error_outline,
-          library.error!,
+          error,
           theme.colorScheme.error,
           action: TextButton.icon(
             key: const ValueKey('library-refresh-action'),
@@ -1375,6 +1448,14 @@ class _InfoBanner extends ConsumerWidget {
     final value = bounded.value;
     if (value == null) return friendly;
     return '$friendly $value${bounded.truncated ? '…' : ''}';
+  }
+
+  String _boundedDiagnostic(String raw) {
+    final bounded = boundedDiagnosticText(raw, 512);
+    return switch (bounded.value) {
+      final value? => '$value${bounded.truncated ? '…' : ''}',
+      null => '—',
+    };
   }
 
   Widget _line(

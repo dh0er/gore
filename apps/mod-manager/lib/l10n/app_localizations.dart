@@ -542,6 +542,54 @@ abstract class AppLocalizations {
   /// **'Import file…'**
   String get importFile;
 
+  /// No description provided for @importOutcomeCreated.
+  ///
+  /// In en, this message translates to:
+  /// **'Added “{name}” to the library.'**
+  String importOutcomeCreated(String name);
+
+  /// No description provided for @importOutcomeUpdated.
+  ///
+  /// In en, this message translates to:
+  /// **'Updated “{name}” in the library.'**
+  String importOutcomeUpdated(String name);
+
+  /// No description provided for @importOutcomeUnchanged.
+  ///
+  /// In en, this message translates to:
+  /// **'“{name}” is already in the library.'**
+  String importOutcomeUnchanged(String name);
+
+  /// No description provided for @importOutcomeMatchedBy.
+  ///
+  /// In en, this message translates to:
+  /// **'{method, select, none {No existing library entry was matched.} source {Matched by the same import source.} content {Matched by verified identical content.} entry_id {Matched by mod ID.} other {Match details are unavailable.}}'**
+  String importOutcomeMatchedBy(String method);
+
+  /// No description provided for @importRefusalDuplicateAmbiguous.
+  ///
+  /// In en, this message translates to:
+  /// **'This import matches more than one library entry. Review or remove the duplicates, then try again.'**
+  String get importRefusalDuplicateAmbiguous;
+
+  /// No description provided for @importRefusalIdentityConflict.
+  ///
+  /// In en, this message translates to:
+  /// **'The import source and its content match different library entries. Review or remove the conflicting entries, then try again.'**
+  String get importRefusalIdentityConflict;
+
+  /// No description provided for @importFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The import could not be completed. Supported sources: folders, ZIP, loose *_P.pak files, complete .utoc/.ucas sets (optional .pak), .lcache, .bank, and PrecompiledScript*.Cache. Extract .7z or .rar first, then import the folder. The source may be unsupported, corrupt, or incomplete. The mod may already have been added or updated; refresh and check the library before trying again.'**
+  String get importFailed;
+
+  /// No description provided for @importOutcomeUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'The import result could not be verified. Choose Refresh to check the library.'**
+  String get importOutcomeUnknown;
+
   /// No description provided for @applyTooltip.
   ///
   /// In en, this message translates to:

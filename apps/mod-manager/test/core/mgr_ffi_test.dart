@@ -747,32 +747,229 @@ void main() {
   });
 
   group('MgrFfi remaining commands', () {
-    test('import returns the new entry', () async {
+    Map<String, Object?> importSuccess({
+      required String disposition,
+      required String matchedBy,
+    }) => {
+      'ok': true,
+      'entry': {
+        'id': 'mod-c',
+        'kind': 'foreign_pak',
+        'name': 'loose_P',
+        'components': [
+          {
+            'type': 'loose_pak',
+            'rel': 'paks/loose_P.pak',
+            'targets': ['G1R/Content/Paks/~mods/loose_P.pak'],
+            'coverage': 'exact',
+          },
+        ],
+      },
+      'disposition': disposition,
+      'matched_by': matchedBy,
+    };
+
+    test('import parses all three dispositions', () async {
+      for (final (wire, match, expected) in [
+        ('created', 'none', MgrImportDisposition.created),
+        ('updated', 'source', MgrImportDisposition.updated),
+        ('unchanged', 'content', MgrImportDisposition.unchanged),
+      ]) {
+        final fake = FakeGoreCoreFfiService(
+          responses: {
+            'mgr_import': importSuccess(disposition: wire, matchedBy: match),
+          },
+        );
+        final outcome = await MgrFfi(fake).import('D:/downloads/loose_P.pak');
+        expect(outcome.disposition, expected);
+        expect(outcome.entry.id, 'mod-c');
+        expect(outcome.entry.kind, 'foreign_pak');
+        expect(
+          outcome.entry.components.single.coverage,
+          FootprintCoverage.exact,
+        );
+      }
+    });
+
+    test('import parses all four verified match methods', () async {
+      for (final (wire, disposition, expected) in [
+        ('none', 'created', MgrImportMatchedBy.none),
+        ('source', 'updated', MgrImportMatchedBy.source),
+        ('content', 'updated', MgrImportMatchedBy.content),
+        ('entry_id', 'updated', MgrImportMatchedBy.entryId),
+      ]) {
+        final fake = FakeGoreCoreFfiService(
+          responses: {
+            'mgr_import': importSuccess(
+              disposition: disposition,
+              matchedBy: wire,
+            ),
+          },
+        );
+        final outcome = await MgrFfi(fake).import('D:/downloads/mod.zip');
+        expect(outcome.matchedBy, expected);
+        expect(outcome.matchedBy.wireName, wire);
+        expect(fake.calls.single.payload, {'path': 'D:/downloads/mod.zip'});
+      }
+    });
+
+    test('import rejects missing, future, or inconsistent outcomes', () async {
+      for (final response in [
+        importSuccess(disposition: 'future', matchedBy: 'none'),
+        importSuccess(disposition: 'created', matchedBy: 'future'),
+        importSuccess(disposition: 'created', matchedBy: 'source'),
+        importSuccess(disposition: 'updated', matchedBy: 'none'),
+        importSuccess(disposition: 'unchanged', matchedBy: 'none'),
+        {
+          'ok': true,
+          'entry': {
+            'id': 'mod-c',
+            'kind': 'foreign_pak',
+            'name': 'loose_P',
+            'components': const [],
+          },
+        },
+      ]) {
+        await expectLater(
+          MgrFfi(
+            FakeGoreCoreFfiService(responses: {'mgr_import': response}),
+          ).import('D:/downloads/mod.zip'),
+          throwsA(
+            isA<MgrFfiException>().having(
+              (error) => error.code,
+              'code',
+              'IMPORT_INVALID_RESPONSE',
+            ),
+          ),
+        );
+      }
+    });
+
+    test('duplicate refusal exposes bounded typed candidates', () async {
       final fake = FakeGoreCoreFfiService(
         responses: {
           'mgr_import': {
-            'ok': true,
-            'entry': {
-              'id': 'mod-c',
-              'kind': 'foreign_pak',
-              'name': 'loose_P',
-              'components': [
-                {
-                  'type': 'loose_pak',
-                  'rel': 'paks/loose_P.pak',
-                  'targets': ['G1R/Content/Paks/~mods/loose_P.pak'],
-                  'coverage': 'exact',
-                },
-              ],
+            'ok': false,
+            'error': {
+              'code': 'IMPORT_DUPLICATE_AMBIGUOUS',
+              'message': 'verified duplicate',
+              'details': {
+                'candidate_ids': ['alpha', 'beta'],
+              },
             },
           },
         },
       );
-      final entry = await MgrFfi(fake).import('D:/downloads/loose_P.pak');
-      expect(entry.id, 'mod-c');
-      expect(entry.kind, 'foreign_pak');
-      expect(entry.components.single.coverage, FootprintCoverage.exact);
-      expect(fake.calls.single.payload, {'path': 'D:/downloads/loose_P.pak'});
+
+      await expectLater(
+        MgrFfi(fake).import('D:/downloads/mod.zip'),
+        throwsA(
+          isA<MgrFfiException>()
+              .having(
+                (error) => error.code,
+                'code',
+                'IMPORT_DUPLICATE_AMBIGUOUS',
+              )
+              .having(
+                (error) => (error.details as MgrImportDuplicateAmbiguousDetails)
+                    .candidates
+                    .map((candidate) => candidate.id),
+                'candidate ids',
+                ['alpha', 'beta'],
+              ),
+        ),
+      );
+    });
+
+    test(
+      'identity refusal exposes candidate match roles without parsing text',
+      () async {
+        final fake = FakeGoreCoreFfiService(
+          responses: {
+            'mgr_import': {
+              'ok': false,
+              'error': {
+                'code': 'IMPORT_IDENTITY_CONFLICT',
+                'message': 'opaque prose that names nothing useful',
+                'details': {
+                  'candidates': [
+                    {
+                      'id': 'alpha',
+                      'matched_by': ['entry_id', 'source'],
+                    },
+                    {
+                      'id': 'beta',
+                      'matched_by': ['content'],
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        );
+
+        try {
+          await MgrFfi(fake).import('D:/downloads/mod.zip');
+          fail('expected typed refusal');
+        } on MgrFfiException catch (error) {
+          expect(error.code, 'IMPORT_IDENTITY_CONFLICT');
+          final details = error.details as MgrImportIdentityConflictDetails;
+          expect(details.candidates.map((candidate) => candidate.id), [
+            'alpha',
+            'beta',
+          ]);
+          expect(details.candidates.first.matchedBy, [
+            MgrImportMatchedBy.entryId,
+            MgrImportMatchedBy.source,
+          ]);
+          expect(details.candidates.last.matchedBy, [
+            MgrImportMatchedBy.content,
+          ]);
+        }
+      },
+    );
+
+    test('malformed or oversized refusal candidates are not exposed', () async {
+      for (final details in [
+        {
+          'candidate_ids': ['alpha', 'beta', 'gamma'],
+        },
+        {
+          'candidate_ids': [List.filled(257, 'x').join()],
+        },
+        {
+          'candidates': [
+            {
+              'id': 'alpha',
+              'matched_by': ['none'],
+            },
+          ],
+        },
+      ]) {
+        final code = details.containsKey('candidate_ids')
+            ? 'IMPORT_DUPLICATE_AMBIGUOUS'
+            : 'IMPORT_IDENTITY_CONFLICT';
+        try {
+          await MgrFfi(
+            FakeGoreCoreFfiService(
+              responses: {
+                'mgr_import': {
+                  'ok': false,
+                  'error': {
+                    'code': code,
+                    'message': 'refused',
+                    'details': details,
+                  },
+                },
+              },
+            ),
+          ).import('D:/downloads/mod.zip');
+          fail('expected refusal');
+        } on MgrFfiException catch (error) {
+          expect(error.code, code);
+          expect(error.details, isNull);
+        }
+      }
     });
 
     test('remove/undeployAll report whether anything happened', () async {

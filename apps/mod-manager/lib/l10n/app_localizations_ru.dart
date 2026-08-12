@@ -252,6 +252,50 @@ class AppLocalizationsRu extends AppLocalizations {
   String get importFile => 'Импортировать файл…';
 
   @override
+  String importOutcomeCreated(String name) {
+    return 'Мод «$name» добавлен в библиотеку.';
+  }
+
+  @override
+  String importOutcomeUpdated(String name) {
+    return 'Мод «$name» обновлён в библиотеке.';
+  }
+
+  @override
+  String importOutcomeUnchanged(String name) {
+    return 'Мод «$name» уже есть в библиотеке.';
+  }
+
+  @override
+  String importOutcomeMatchedBy(String method) {
+    String _temp0 = intl.Intl.selectLogic(method, {
+      'none': 'Совпадений с существующими записями библиотеки нет.',
+      'source': 'Совпадение по тому же источнику импорта.',
+      'content':
+          'Совпадение по содержимому, идентичность которого подтверждена.',
+      'entry_id': 'Совпадение по идентификатору мода.',
+      'other': 'Сведения о совпадении недоступны.',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get importRefusalDuplicateAmbiguous =>
+      'Этот импорт соответствует нескольким записям библиотеки. Проверьте или удалите дубликаты и повторите попытку.';
+
+  @override
+  String get importRefusalIdentityConflict =>
+      'Источник импорта и его содержимое соответствуют разным записям библиотеки. Проверьте или удалите конфликтующие записи и повторите попытку.';
+
+  @override
+  String get importFailed =>
+      'Не удалось завершить импорт. Поддерживаемые источники: папки, ZIP, отдельные файлы *_P.pak, полные наборы .utoc/.ucas (необязательный .pak), .lcache, .bank и PrecompiledScript*.Cache. Сначала распакуйте архив .7z или .rar, затем импортируйте папку. Источник может не поддерживаться, быть повреждённым или неполным. Возможно, мод уже добавлен или обновлён; обновите и проверьте библиотеку перед повторной попыткой.';
+
+  @override
+  String get importOutcomeUnknown =>
+      'Не удалось проверить результат импорта. Нажмите «Обновить», чтобы проверить библиотеку.';
+
+  @override
   String get applyTooltip => 'Применить набор модов к игре';
 
   @override

@@ -254,6 +254,50 @@ class AppLocalizationsDe extends AppLocalizations {
   String get importFile => 'Datei importieren…';
 
   @override
+  String importOutcomeCreated(String name) {
+    return '„$name“ wurde zur Bibliothek hinzugefügt.';
+  }
+
+  @override
+  String importOutcomeUpdated(String name) {
+    return '„$name“ wurde in der Bibliothek aktualisiert.';
+  }
+
+  @override
+  String importOutcomeUnchanged(String name) {
+    return '„$name“ ist bereits in der Bibliothek vorhanden.';
+  }
+
+  @override
+  String importOutcomeMatchedBy(String method) {
+    String _temp0 = intl.Intl.selectLogic(method, {
+      'none':
+          'Es gab keine Übereinstimmung mit einem vorhandenen Bibliothekseintrag.',
+      'source': 'Übereinstimmung anhand derselben Importquelle.',
+      'content': 'Übereinstimmung anhand nachweislich identischer Inhalte.',
+      'entry_id': 'Übereinstimmung anhand der Mod-ID.',
+      'other': 'Details zur Übereinstimmung sind nicht verfügbar.',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get importRefusalDuplicateAmbiguous =>
+      'Dieser Import stimmt mit mehreren Bibliothekseinträgen überein. Überprüfe oder entferne die Duplikate und versuche es erneut.';
+
+  @override
+  String get importRefusalIdentityConflict =>
+      'Die Importquelle und der Inhalt stimmen mit unterschiedlichen Bibliothekseinträgen überein. Überprüfe oder entferne die betroffenen Einträge und versuche es erneut.';
+
+  @override
+  String get importFailed =>
+      'Der Import konnte nicht abgeschlossen werden. Unterstützte Quellen: Ordner, ZIP, lose *_P.pak-Dateien, vollständige .utoc/.ucas-Dateisätze (optional .pak), .lcache, .bank und PrecompiledScript*.Cache. Entpacke .7z oder .rar zuerst und importiere dann den Ordner. Die Quelle wird möglicherweise nicht unterstützt, ist beschädigt oder unvollständig. Der Mod wurde möglicherweise bereits hinzugefügt oder aktualisiert; aktualisiere und überprüfe die Bibliothek, bevor du es erneut versuchst.';
+
+  @override
+  String get importOutcomeUnknown =>
+      'Das Importergebnis konnte nicht überprüft werden. Wähle „Aktualisieren“, um die Bibliothek zu prüfen.';
+
+  @override
   String get applyTooltip => 'Ladeliste auf das Spiel anwenden';
 
   @override

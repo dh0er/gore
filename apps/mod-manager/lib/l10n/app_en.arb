@@ -105,6 +105,34 @@
   "commonOk": "OK",
   "importFolder": "Import folder…",
   "importFile": "Import file…",
+  "importOutcomeCreated": "Added “{name}” to the library.",
+  "@importOutcomeCreated": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
+  },
+  "importOutcomeUpdated": "Updated “{name}” in the library.",
+  "@importOutcomeUpdated": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
+  },
+  "importOutcomeUnchanged": "“{name}” is already in the library.",
+  "@importOutcomeUnchanged": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
+  },
+  "importOutcomeMatchedBy": "{method, select, none {No existing library entry was matched.} source {Matched by the same import source.} content {Matched by verified identical content.} entry_id {Matched by mod ID.} other {Match details are unavailable.}}",
+  "@importOutcomeMatchedBy": {
+    "placeholders": {
+      "method": { "type": "String" }
+    }
+  },
+  "importRefusalDuplicateAmbiguous": "This import matches more than one library entry. Review or remove the duplicates, then try again.",
+  "importRefusalIdentityConflict": "The import source and its content match different library entries. Review or remove the conflicting entries, then try again.",
+  "importFailed": "The import could not be completed. Supported sources: folders, ZIP, loose *_P.pak files, complete .utoc/.ucas sets (optional .pak), .lcache, .bank, and PrecompiledScript*.Cache. Extract .7z or .rar first, then import the folder. The source may be unsupported, corrupt, or incomplete. The mod may already have been added or updated; refresh and check the library before trying again.",
+  "importOutcomeUnknown": "The import result could not be verified. Choose Refresh to check the library.",
   "applyTooltip": "Apply the loadout to the game",
   "undeployAllAction": "Undeploy all",
   "undeployAllConfirm": "Remove everything the manager deployed from the game?",

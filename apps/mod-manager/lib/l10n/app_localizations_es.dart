@@ -254,6 +254,49 @@ class AppLocalizationsEs extends AppLocalizations {
   String get importFile => 'Importar archivo…';
 
   @override
+  String importOutcomeCreated(String name) {
+    return 'Se añadió «$name» a la biblioteca.';
+  }
+
+  @override
+  String importOutcomeUpdated(String name) {
+    return 'Se actualizó «$name» en la biblioteca.';
+  }
+
+  @override
+  String importOutcomeUnchanged(String name) {
+    return '«$name» ya está en la biblioteca.';
+  }
+
+  @override
+  String importOutcomeMatchedBy(String method) {
+    String _temp0 = intl.Intl.selectLogic(method, {
+      'none': 'No hubo coincidencias con entradas existentes de la biblioteca.',
+      'source': 'Coincidencia por la misma fuente de importación.',
+      'content': 'Coincidencia por contenido idéntico verificado.',
+      'entry_id': 'Coincidencia por el ID del mod.',
+      'other': 'Los detalles de la coincidencia no están disponibles.',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get importRefusalDuplicateAmbiguous =>
+      'Esta importación coincide con varias entradas de la biblioteca. Revisa o elimina los duplicados y vuelve a intentarlo.';
+
+  @override
+  String get importRefusalIdentityConflict =>
+      'La fuente de importación y su contenido coinciden con distintas entradas de la biblioteca. Revisa o elimina las entradas en conflicto y vuelve a intentarlo.';
+
+  @override
+  String get importFailed =>
+      'No se pudo completar la importación. Fuentes compatibles: carpetas, ZIP, archivos *_P.pak sueltos, conjuntos .utoc/.ucas completos (con .pak opcional), .lcache, .bank y PrecompiledScript*.Cache. Extrae primero los archivos .7z o .rar y después importa la carpeta. La fuente puede no ser compatible, estar dañada o incompleta. Es posible que el mod ya se haya añadido o actualizado; actualiza y comprueba la biblioteca antes de volver a intentarlo.';
+
+  @override
+  String get importOutcomeUnknown =>
+      'No se pudo verificar el resultado de la importación. Selecciona Actualizar para comprobar la biblioteca.';
+
+  @override
   String get applyTooltip => 'Aplicar la configuración al juego';
 
   @override
