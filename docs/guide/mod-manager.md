@@ -100,6 +100,45 @@ error; callers must refresh the authoritative library/loadout state. The
 library lock does not claim a joint transaction or cross-process atomicity for
 the loadout. Identity refusals happen before publication and loadout activation.
 
+All authoritative Manager reads and loadout edits use one native Store
+snapshot. It locks the loadout store before the library, validates every
+non-dot library entry, and refuses uncertainty instead of silently presenting a
+partial library. A valid loadout is reconciled to that snapshot: the first
+known occurrence keeps its order and enabled state, duplicates and stale ids
+are removed, and newly published ids are appended disabled in stable id order.
+Corrupt, oversized, symlinked, or future-format loadouts are refused and left
+untouched. Reconciliation writes only when those canonical bytes actually
+change.
+
+`gore doctor` remains advisory and read-only. Its deployment check takes only
+the existing Library coordination lane, reads the loadout through the same
+bounded no-follow stability checks, and applies the same strict reconciliation
+in memory. It never creates the Store lock, repairs the loadout, or recovers a
+library transaction. On Windows it joins an existing persistent Library lock
+file but does not create one; missing coordination or recovery evidence is
+reported without changing it. Cooperative Store writers include that same
+Library root in their canonical physical lock set before they read or save, so
+the Library guard keeps Doctor's projection stable while status consumes it.
+
+Manager root locks coordinate GORE processes and are released by the kernel
+after a crash. Store opens both the canonical loadout parent and Library root,
+rejects one directory serving both roles, sorts their physical identities, and
+locks in that global order. Unix locks each retained directory inode and
+performs load/save relative to the Store handle; Windows uses the persistent
+`.gore-manager-library.lock` direct child for every Manager root. Both platforms
+revalidate retained and named root identities after acquisition. This is
+cooperative serialization on a local filesystem, not an access-control boundary
+against unrelated processes. Import and remove first
+finish their separately locked library publication, release that lock, and then
+take the Store snapshot for reconciliation; they intentionally remain two
+explicit commits.
+
+The app consumes this native snapshot directly and does not write it back while
+refreshing. An explicit full-loadout replacement is serialized, but concurrent
+full replacements of existing slots remain last-writer-wins. Reconciliation
+still preserves every id currently present in the library; this compatibility
+API does not claim CAS semantics or zero lost UI intent.
+
 ### GORE bundle format gate
 
 Recognizing a root `gore-mod.json` commits import to the closed

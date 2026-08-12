@@ -14,6 +14,7 @@ pub mod model;
 pub mod paths;
 pub mod preflight;
 pub mod status;
+pub mod store;
 
 pub use loadout::{Loadout, LoadoutEntry};
 pub use model::*;

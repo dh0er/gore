@@ -9136,7 +9136,7 @@ pub(crate) fn fail_next_atomic_write(path: &Path) {
 }
 
 #[cfg(test)]
-fn take_injected_atomic_write_failure(path: &Path) -> bool {
+pub(crate) fn take_injected_atomic_write_failure(path: &Path) -> bool {
     FAIL_ATOMIC_WRITE.with(|slot| {
         let matches = slot
             .borrow()

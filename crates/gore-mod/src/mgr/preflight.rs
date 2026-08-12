@@ -3094,6 +3094,9 @@ mod tests {
     fn preflight_never_reconciles_replacing_artifacts() {
         let install = install_fixture();
         let library = install.path().join("library");
+        let loadout = install.path().join("loadout.json");
+        let store_lock = install.path().join(".gore-manager-library.lock");
+        let library_lock = library.join(".gore-manager-library.lock");
         let replacing = library.join(".replacing-preserve-me");
         fs::create_dir_all(&replacing).unwrap();
         let evidence = replacing.join("bytes.bin");
@@ -3103,7 +3106,7 @@ mod tests {
         let _ = run_with(
             install.path(),
             &library,
-            &install.path().join("loadout.json"),
+            &loadout,
             |_, _, _| Ok(ManagerStatus::NothingDeployed),
             |_| safe_probe(),
             |_| Ok(false),
@@ -3111,5 +3114,14 @@ mod tests {
 
         assert!(replacing.is_dir());
         assert_eq!(fs::read(&evidence).unwrap(), before);
+        assert!(!loadout.exists(), "preflight must not create a loadout");
+        assert!(
+            !store_lock.exists(),
+            "preflight must not acquire or create the Windows Store lock artifact"
+        );
+        assert!(
+            !library_lock.exists(),
+            "preflight must not acquire or create the Windows Library lock artifact"
+        );
     }
 }

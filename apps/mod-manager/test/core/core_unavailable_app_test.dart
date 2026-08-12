@@ -138,7 +138,7 @@ void main() {
       reason: CoreBootstrapFailureReason.protocolAbiMismatch,
       candidatePath: r'C:\app\gore_ffi.dll',
       observedTransportAbi: 2,
-      observedProtocolAbi: 2,
+      observedProtocolAbi: 3,
       coreVersion: '9.0.0',
       detail:
           'unsafe\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e'

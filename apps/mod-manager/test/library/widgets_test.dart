@@ -157,7 +157,6 @@ class _RemoveCore implements GoreCoreFfiService {
         'loadout': {
           'format': 1,
           'entries': [
-            if (partialFailure) {'id': 'mod-a', 'enabled': true},
             {'id': 'mod-b', 'enabled': true},
           ],
         },

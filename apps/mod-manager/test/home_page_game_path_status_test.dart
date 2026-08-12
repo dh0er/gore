@@ -104,7 +104,7 @@ class _StatefulFake implements GoreCoreFfiService {
         return {
           'ok': true,
           'mods': _mods,
-          'loadout': {'entries': _loadout},
+          'loadout': {'format': 1, 'entries': _loadout},
         };
       case 'mgr_set_loadout':
         final lo = payload['loadout'] as Map<String, Object?>?;
@@ -202,7 +202,7 @@ void main() {
         'mgr_library_list': {
           'ok': true,
           'mods': [],
-          'loadout': {'entries': []},
+          'loadout': {'format': 1, 'entries': []},
         },
         'mgr_analyze': {'ok': true, 'conflicts': []},
         'mgr_status': {

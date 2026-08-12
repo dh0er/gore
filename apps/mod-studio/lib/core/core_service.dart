@@ -24,7 +24,7 @@ typedef GoreCoreExecuteV2 =
 typedef _FreeV2Native = Void Function(Pointer<Void>);
 typedef GoreCoreFreeV2 = void Function(Pointer<Void>);
 
-const goreCoreAbi = 1;
+const goreCoreAbi = 2;
 const goreCoreTransportAbiV2 = 2;
 const goreCoreTransportMaxRequestBytes = 64 * 1024 * 1024;
 const goreCoreTransportMaxResponseBytes = 64 * 1024 * 1024;
@@ -163,7 +163,7 @@ class GoreCoreInfo {
     requiredStudioCoreCommands.where((command) => !commands.contains(command)),
   );
 
-  /// Strictly parses the stable ABI-1 response. Bounds are deliberately small because this runs
+  /// Strictly parses the current protocol response. Bounds are deliberately small because this runs
   /// synchronously during startup, before a native library is trusted for normal work.
   factory GoreCoreInfo.parseResponse(String response) {
     if (response.length > _maxCoreInfoResponseBytes ||

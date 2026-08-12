@@ -239,7 +239,7 @@ mod tests {
         assert_eq!(out.len, bytes.len());
         let response = value(&bytes);
         assert_eq!(response["ok"], true);
-        assert_eq!(response["abi"], 1);
+        assert_eq!(response["abi"], crate::CORE_PROTOCOL_ABI);
         unsafe { free(out) };
     }
 

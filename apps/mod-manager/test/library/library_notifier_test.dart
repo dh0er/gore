@@ -15,7 +15,12 @@ Map<String, Object?> _libraryList({
     'ok': true,
     'mods': [
       for (final id in ids)
-        {'id': id, 'kind': 'goremod', 'name': id.toUpperCase()},
+        {
+          'id': id,
+          'kind': 'goremod',
+          'name': id.toUpperCase(),
+          'components': const [],
+        },
     ],
     'loadout': {
       'format': 1,
@@ -125,18 +130,16 @@ Future<LibraryNotifier> _settled(FakeGoreCoreFfiService fake) async {
 }
 
 void main() {
-  group('LibraryNotifier.refresh reconciliation', () {
+  group('LibraryNotifier native-authoritative refresh', () {
     test(
-      'new library mod missing from loadout is appended disabled at end',
+      'uses the reconciled native snapshot without writing it back',
       () async {
-        // Loadout only knows mod-a; library has mod-a and a brand-new mod-b.
         final fake = FakeGoreCoreFfiService(
           responses: {
             'mgr_library_list': _libraryList(
-              loadout: [('mod-a', true)],
+              loadout: [('mod-a', true), ('mod-b', false)],
               mods: ['mod-a', 'mod-b'],
             ),
-            // Reconcile appends mod-b, so the notifier persists the result.
             'mgr_set_loadout': {'ok': true},
           },
         );
@@ -148,18 +151,20 @@ void main() {
         expect(entries[1].enabled, isFalse);
         expect(n.state.error, isNull);
         expect(n.state.busy, isFalse);
+        expect(
+          fake.calls.where((call) => call.command == 'mgr_set_loadout'),
+          isEmpty,
+        );
       },
     );
 
-    test('loadout entry for a vanished mod is dropped', () async {
-      // Loadout references mod-x which is no longer in the library.
+    test('accepts a native snapshot with a stale id already removed', () async {
       final fake = FakeGoreCoreFfiService(
         responses: {
           'mgr_library_list': _libraryList(
-            loadout: [('mod-a', true), ('mod-x', true)],
+            loadout: [('mod-a', true)],
             mods: ['mod-a'],
           ),
-          // Reconcile drops the vanished mod-x, so the result is persisted.
           'mgr_set_loadout': {'ok': true},
         },
       );
@@ -167,37 +172,27 @@ void main() {
       expect(n.state.loadout.entries.map((e) => e.id), ['mod-a']);
     });
 
-    test('a reconcile delta is persisted back via mgr_set_loadout', () async {
-      // On-disk loadout has a stale entry (mod-x, gone from the library) and
-      // is missing a present library mod (mod-b). Reconciliation drops mod-x
-      // and appends mod-b disabled; that reconciled loadout must be written
-      // back so the on-disk loadout matches the UI.
-      final fake = FakeGoreCoreFfiService(
-        responses: {
-          'mgr_library_list': _libraryList(
-            loadout: [('mod-a', true), ('mod-x', true)],
-            mods: ['mod-a', 'mod-b'],
-          ),
-          'mgr_set_loadout': {'ok': true},
-        },
-      );
-      final n = await _settled(fake);
+    test(
+      'refresh is read-only even when mgr_set_loadout is available',
+      () async {
+        final fake = FakeGoreCoreFfiService(
+          responses: {
+            'mgr_library_list': _libraryList(
+              loadout: [('mod-a', true), ('mod-b', false)],
+              mods: ['mod-a', 'mod-b'],
+            ),
+            'mgr_set_loadout': {'ok': true},
+          },
+        );
+        final n = await _settled(fake);
 
-      final setCall = fake.calls.firstWhere(
-        (c) => c.command == 'mgr_set_loadout',
-      );
-      expect(setCall.payload, {
-        'loadout': {
-          'format': 1,
-          'entries': [
-            {'id': 'mod-a', 'enabled': true},
-            {'id': 'mod-b', 'enabled': false},
-          ],
-        },
-      });
-      // The in-memory loadout matches what was persisted.
-      expect(n.state.loadout.entries.map((e) => e.id), ['mod-a', 'mod-b']);
-    });
+        expect(
+          fake.calls.where((c) => c.command == 'mgr_set_loadout'),
+          isEmpty,
+        );
+        expect(n.state.loadout.entries.map((e) => e.id), ['mod-a', 'mod-b']);
+      },
+    );
 
     test(
       'an already-consistent loadout is not re-persisted (no loop)',
@@ -320,10 +315,9 @@ void main() {
             'entry': {'id': 'mod-new', 'kind': 'foreign_pak', 'name': 'New'},
           },
           'mgr_library_list': _libraryList(
-            loadout: [('mod-a', true)],
+            loadout: [('mod-a', true), ('mod-new', false)],
             mods: ['mod-a', 'mod-new'],
           ),
-          // The post-import refresh appends mod-new, so it is persisted.
           'mgr_set_loadout': {'ok': true},
         },
       );
@@ -429,6 +423,27 @@ void main() {
   });
 
   group('LibraryNotifier errors', () {
+    test(
+      'a malformed native snapshot revokes authority and clears stale data',
+      () async {
+        final fake = FakeGoreCoreFfiService(
+          responses: {
+            'mgr_library_list': {
+              'ok': true,
+              'mods': [42],
+              'loadout': const {'format': 1, 'entries': []},
+            },
+          },
+        );
+        final n = LibraryNotifier(MgrFfi(fake));
+        await n.refresh();
+        expect(n.state.authoritative, isFalse);
+        expect(n.state.mods, isEmpty);
+        expect(n.state.loadout.entries, isEmpty);
+        expect(n.state.error, contains('malformed'));
+      },
+    );
+
     test('an FFI error lands in state.error and clears busy', () async {
       final fake = FakeGoreCoreFfiService(
         responses: {

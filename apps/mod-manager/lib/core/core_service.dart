@@ -26,7 +26,7 @@ typedef _FreeV2Native = Void Function(Pointer<Void>);
 typedef _FreeV2Dart = void Function(Pointer<Void>);
 
 const _transportAbiV2 = 2;
-const _protocolAbi = 1;
+const _protocolAbi = 2;
 const _maxRequestBytes = 64 * 1024 * 1024;
 const _maxResponseBytes = 64 * 1024 * 1024;
 const _maxCoreInfoBytes = 64 * 1024;

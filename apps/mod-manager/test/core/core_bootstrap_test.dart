@@ -30,7 +30,7 @@ class _Probe implements CoreBootstrapProbe {
 }
 
 String _coreInfo({
-  int abi = 1,
+  int abi = 2,
   Object? commands,
   String version = '0.1.0',
   Map<String, Object?> extra = const {},
@@ -181,7 +181,7 @@ void main() {
 
     final olderProtocol = _Probe(
       states: {'old.dll': CoreCandidateState.present},
-      inspections: {'old.dll': _currentEvidence(coreInfo: _coreInfo(abi: 0))},
+      inspections: {'old.dll': _currentEvidence(coreInfo: _coreInfo(abi: 1))},
     );
     final protocol = _blocked(
       inspectCoreCandidates(
@@ -190,7 +190,7 @@ void main() {
       ),
     );
     expect(protocol.reason, CoreBootstrapFailureReason.protocolAbiMismatch);
-    expect(protocol.observedProtocolAbi, 0);
+    expect(protocol.observedProtocolAbi, 1);
     expect(
       protocol.compatibilityDirection,
       CoreCompatibilityDirection.coreTooOld,

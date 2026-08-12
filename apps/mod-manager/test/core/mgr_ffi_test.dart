@@ -219,6 +219,46 @@ void main() {
       expect(loadout.entries[1].enabled, isFalse);
     });
 
+    test('malformed native store snapshots fail closed', () async {
+      final malformed = <Map<String, Object?>>[
+        {
+          'ok': true,
+          'mods': 7,
+          'loadout': const {'format': 1, 'entries': []},
+        },
+        {'ok': true, 'mods': const [], 'loadout': null},
+        {
+          'ok': true,
+          'mods': const [42],
+          'loadout': const {'format': 1, 'entries': []},
+        },
+        {
+          'ok': true,
+          'mods': const [],
+          'loadout': const {'format': 1.0, 'entries': []},
+        },
+        {
+          'ok': true,
+          'mods': const [],
+          'loadout': const {
+            'format': 1,
+            'entries': [
+              {'id': 'mod-a', 'enabled': 'yes'},
+            ],
+          },
+        },
+      ];
+      for (final response in malformed) {
+        final fake = FakeGoreCoreFfiService(
+          responses: {'mgr_library_list': response},
+        );
+        await expectLater(
+          MgrFfi(fake).libraryList(),
+          throwsA(isA<MgrFfiException>()),
+        );
+      }
+    });
+
     test(
       'older DLL coverage is inferred conservatively from component facts',
       () {

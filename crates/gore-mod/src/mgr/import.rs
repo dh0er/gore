@@ -14,10 +14,11 @@ use sha2::{Digest as _, Sha256};
 #[cfg(not(unix))]
 use super::model::metadata_is_link;
 use super::model::{
-    open_directory_nofollow, open_file_nofollow, ComponentInfo, FileIdentity, FileRevision,
-    ImportIdentityMeta, LibraryEntry, LibraryMutationFileGuard, LibraryRoot, LibrarySidecar,
-    ManagerPrivateMeta, MetaReadFailure, ModEntryMeta, ModKind, RawTarget, SecureDirectory,
-    SecureFile, SecureNode, META_FILE,
+    manager_process_lock, open_directory_nofollow, open_file_nofollow, ComponentInfo, FileIdentity,
+    FileRevision, ImportIdentityMeta, LibraryEntry, LibraryRoot, LibrarySidecar,
+    ManagerPrivateMeta, ManagerProcessGuard, ManagerRootLock, MetaReadFailure, ModEntryMeta,
+    ModKind, PreparedManagerRootLock, RawTarget, SecureDirectory, SecureFile, SecureNode,
+    META_FILE,
 };
 use crate::{Component, ModError, ModManifest, ScriptEntry, VoicePatchManifest};
 
@@ -169,13 +170,6 @@ const MAX_IDENTITY_REFUSAL_IDS: usize = 2;
 const LIBRARY_LOCK_MARKER_ENV: &str = "GORE_TEST_LIBRARY_LOCK_MARKER";
 #[cfg(test)]
 const LIBRARY_LOCK_HOLD_MS_ENV: &str = "GORE_TEST_LIBRARY_LOCK_HOLD_MS";
-
-/// The local mutex establishes one acquisition order inside this process. Windows then owns a
-/// persistent lock-file byte range; Unix flocks the retained canonical library-directory inode.
-/// Together they protect cooperative GORE recovery, identity decisions, sidecar writes,
-/// publication, list recovery, and removal. Untrusted source materialization stays outside the
-/// lane.
-static LIBRARY_MUTATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Import `source` (a folder, `.zip` archive, or single recognized game file) into the library
 /// at `library_dir`, returning the entry metadata that was also written as its sidecar.
@@ -332,6 +326,10 @@ fn import_detailed_with_limits(
         guard.0 = None;
         bound?
     };
+    // Testable post-acquire namespace race: cleanup authority is already rebound to the retained
+    // Library inode before the named path is allowed to fail closed.
+    run_library_root_swap_hook(library_lock.path());
+    library_lock.os.revalidate_named()?;
     let canonical_library_dir = library_lock.path().to_path_buf();
     recover_interrupted_replacements_locked(&library_lock)?;
     let mut staged_hashes = hash_secure_import_tree_hashes_inner(
@@ -2458,8 +2456,8 @@ fn remove_replacement_file_if_present(path: &Path, label: &str) -> crate::Result
 }
 
 struct LibraryMutationGuard {
-    os: LibraryMutationFileGuard,
-    _process: std::sync::MutexGuard<'static, ()>,
+    os: ManagerRootLock,
+    _process: ManagerProcessGuard,
 }
 
 impl LibraryMutationGuard {
@@ -2488,13 +2486,33 @@ impl LibraryMutationGuard {
 }
 
 fn library_mutation_lock(library_dir: &Path) -> crate::Result<LibraryMutationGuard> {
-    let process = LIBRARY_MUTATION_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    library_mutation_lock_excluding(library_dir, None)
+}
+
+fn library_mutation_lock_excluding(
+    library_dir: &Path,
+    forbidden_identity: Option<super::model::FileIdentity>,
+) -> crate::Result<LibraryMutationGuard> {
+    let process = manager_process_lock();
     let library = LibraryRoot::open(library_dir)?;
+    if forbidden_identity.is_some_and(|identity| library.identity() == identity) {
+        return Err(ModError::Other(format!(
+            "manager library must not be the manager loadout parent directory: {}",
+            library_dir.display()
+        )));
+    }
     let os = library.acquire_mutation_lock()?;
-    run_library_root_swap_hook(os.path());
     run_library_lock_acquired_hook()?;
+    Ok(LibraryMutationGuard {
+        os,
+        _process: process,
+    })
+}
+
+fn existing_library_read_lock(library_dir: &Path) -> crate::Result<LibraryMutationGuard> {
+    let process = manager_process_lock();
+    let library = LibraryRoot::open(library_dir)?;
+    let os = library.acquire_existing_mutation_lock()?;
     Ok(LibraryMutationGuard {
         os,
         _process: process,
@@ -4010,8 +4028,123 @@ pub(crate) fn recover_library_for_read(library_dir: &Path) -> crate::Result<()> 
     recover_interrupted_replacements_locked(&library_lock)
 }
 
+/// A recovery-complete, strict library read held under the library mutation lock. Store consumers
+/// keep this guard alive until analyze/apply/status has finished consuming the corresponding
+/// loadout, so a cooperative import cannot replace payload bytes between reconciliation and use.
+pub(crate) struct StrictLibrarySnapshot {
+    _lock: Option<LibraryMutationGuard>,
+    _process_only: Option<ManagerProcessGuard>,
+    present: bool,
+    path: PathBuf,
+    mods: Vec<ModEntryMeta>,
+}
+
+impl StrictLibrarySnapshot {
+    pub(crate) fn prepare(library_dir: &Path) -> crate::Result<PreparedManagerRootLock> {
+        std::fs::create_dir_all(library_dir).map_err(crate::io("creating library dir"))?;
+        let root = LibraryRoot::open(library_dir)?;
+        root.prepare_mutation_lock(true)
+    }
+
+    pub(crate) fn from_prelocked(
+        process: ManagerProcessGuard,
+        lock: ManagerRootLock,
+    ) -> crate::Result<Self> {
+        let lock = LibraryMutationGuard {
+            os: lock,
+            _process: process,
+        };
+        recover_interrupted_replacements_locked(&lock)?;
+        Self::from_locked(lock, false)
+    }
+
+    /// Strict advisory snapshot for Doctor. It takes only the Library lane, performs no recovery,
+    /// and never creates a missing library. Store writers cannot save while this guard is held
+    /// because their canonical composite transaction includes this same Library-root lock.
+    pub(crate) fn inspect_read_only(library_dir: &Path) -> crate::Result<Self> {
+        if metadata_if_present(library_dir)?.is_some() {
+            return Self::from_locked(existing_library_read_lock(library_dir)?, true);
+        }
+        let process = manager_process_lock();
+        if metadata_if_present(library_dir)?.is_some() {
+            drop(process);
+            return Self::from_locked(existing_library_read_lock(library_dir)?, true);
+        }
+        Ok(Self {
+            _lock: None,
+            _process_only: Some(process),
+            present: false,
+            path: library_dir.to_path_buf(),
+            mods: Vec::new(),
+        })
+    }
+
+    fn from_locked(lock: LibraryMutationGuard, read_only: bool) -> crate::Result<Self> {
+        let path = lock.path().to_path_buf();
+        let library = lock.open_library()?;
+        let mut mods = Vec::new();
+        for result in library.read_dir()? {
+            let entry = result.map_err(crate::io("enumerating manager library"))?;
+            let file_name = entry.file_name();
+            if read_only && file_name.to_string_lossy().starts_with(REPLACEMENT_PREFIX) {
+                return Err(ModError::Other(format!(
+                    "manager replacement transaction requires recovery; read-only inspection left it untouched: {}",
+                    entry.path().display()
+                )));
+            }
+            // Dot children are Manager-owned locks, staging and recovery artifacts. Recovery above
+            // has already rejected any uncertain replacement transaction.
+            if file_name.to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let id = file_name.to_str().ok_or_else(|| {
+                ModError::Other(format!(
+                    "library entry id is not valid Unicode: {}",
+                    entry.path().display()
+                ))
+            })?;
+            mods.push(library.entry(id)?.read_meta()?);
+        }
+        mods.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
+        drop(library);
+        Ok(Self {
+            _lock: Some(lock),
+            _process_only: None,
+            present: true,
+            path,
+            mods,
+        })
+    }
+
+    pub(crate) fn mods(&self) -> &[ModEntryMeta] {
+        &self.mods
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Whether this read-only snapshot observed no Library root. Keep this explicit rather than
+    /// inferring presence from guard layout: an absent root deliberately retains only the global
+    /// process guard and has no cross-process kernel object it could acquire without creating one.
+    pub(crate) fn is_missing(&self) -> bool {
+        !self.present
+    }
+
+    pub(crate) fn verify_read_only_stable(&self) -> crate::Result<()> {
+        if self._lock.is_none() && metadata_if_present(&self.path)?.is_some() {
+            return Err(ModError::Other(format!(
+                "manager library appeared during read-only inspection: {}",
+                self.path.display()
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// All library entries, sorted by name. Entries with an unreadable/corrupt sidecar are skipped
-/// (with a note on stderr), a missing library dir is an empty library.
+/// (with a note on stderr), a missing library dir is an empty library. This legacy lenient view is
+/// retained for non-store callers; authoritative Manager store routes use [`StrictLibrarySnapshot`].
 pub fn list(library_dir: &Path) -> crate::Result<Vec<ModEntryMeta>> {
     if metadata_if_present(library_dir)?.is_none() {
         return Ok(Vec::new());
@@ -9202,28 +9335,38 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn unix_root_swap_never_redirects_import_into_the_unlocked_replacement_path() {
+    fn unix_root_swap_is_refused_without_redirecting_or_changing_evidence() {
         let tmp = tempfile::tempdir().unwrap();
         let configured = tmp.path().join("library");
         let retained = tmp.path().join("retained-library");
         let source = tmp.path().join("root-swap_P.pak");
+        fs::create_dir(&configured).unwrap();
+        fs::write(configured.join(".evidence"), b"retained").unwrap();
         fs::write(&source, b"root swap bytes").unwrap();
         let configured_for_hook = configured.clone();
         let retained_for_hook = retained.clone();
         inject_library_root_swap(move |_locked_path| {
             fs::rename(&configured_for_hook, &retained_for_hook).unwrap();
             fs::create_dir(&configured_for_hook).unwrap();
+            fs::write(configured_for_hook.join(".evidence"), b"decoy").unwrap();
         });
 
-        let outcome = import_detailed(&configured, &source).unwrap();
-        assert!(retained.join(&outcome.entry.id).is_dir());
-        assert_eq!(fs::read_dir(&configured).unwrap().count(), 0);
-        assert!(!configured.join(&outcome.entry.id).exists());
+        let error = import_detailed(&configured, &source)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("named filesystem identity"), "{error}");
+        assert_eq!(fs::read(retained.join(".evidence")).unwrap(), b"retained");
+        assert_eq!(fs::read(configured.join(".evidence")).unwrap(), b"decoy");
+        assert!(fs::read_dir(&retained)
+            .unwrap()
+            .filter_map(Result::ok)
+            .all(|entry| { !entry.file_name().to_string_lossy().starts_with(".staging-") }));
+        assert_eq!(fs::read_dir(&configured).unwrap().count(), 1);
     }
 
     #[cfg(unix)]
     #[test]
-    fn unix_root_swap_failure_cleans_staging_through_the_retained_inode() {
+    fn unix_root_swap_refusal_cleans_staging_through_the_retained_inode() {
         let tmp = tempfile::tempdir().unwrap();
         let configured = tmp.path().join("library");
         let retained = tmp.path().join("retained-library");
@@ -9235,14 +9378,10 @@ mod tests {
             fs::rename(&configured_for_hook, &retained_for_hook).unwrap();
             fs::create_dir(&configured_for_hook).unwrap();
         });
-        inject_prepublish_failure(ModError::Other(
-            "injected failure after retained-root binding".into(),
-        ));
-
         let error = import_detailed(&configured, &source)
             .unwrap_err()
             .to_string();
-        assert!(error.contains("injected failure"), "{error}");
+        assert!(error.contains("named filesystem identity"), "{error}");
         assert_eq!(fs::read_dir(&configured).unwrap().count(), 0);
         assert!(
             fs::read_dir(&retained)

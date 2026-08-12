@@ -508,7 +508,18 @@ pub fn apply_loadout(
     library_dir: &Path,
     loadout: &Loadout,
 ) -> crate::Result<ApplyReport> {
-    apply_loadout_with_limits(game_root, library_dir, loadout, DEFAULT_APPLY_LIMITS)
+    apply_loadout_with_limits(game_root, library_dir, loadout, DEFAULT_APPLY_LIMITS, false)
+}
+
+/// Store routes have already completed replacement recovery while holding the library mutation
+/// lock, which they retain through this call. Keeping this entry point crate-private prevents an
+/// unlocked caller from accidentally bypassing recovery.
+pub(crate) fn apply_loadout_after_store_snapshot(
+    game_root: &Path,
+    library_dir: &Path,
+    loadout: &Loadout,
+) -> crate::Result<ApplyReport> {
+    apply_loadout_with_limits(game_root, library_dir, loadout, DEFAULT_APPLY_LIMITS, true)
 }
 
 fn apply_loadout_with_limits(
@@ -516,6 +527,7 @@ fn apply_loadout_with_limits(
     library_dir: &Path,
     loadout: &Loadout,
     limits: ApplyLimits,
+    library_recovery_is_held: bool,
 ) -> crate::Result<ApplyReport> {
     // Absolutize like deploy()/undeploy() so every derived + persisted path is absolute. This MUST
     // happen before reading the record: deploy/undeploy/status all key the record off `abs_root`, so
@@ -547,7 +559,7 @@ fn apply_loadout_with_limits(
     // Loadouts are persisted input. Validate ALL slots (including disabled ones) before the empty
     // branch can undeploy an active manager deployment.
     loadout.validate()?;
-    if loadout.entries.iter().any(|entry| entry.enabled) {
+    if loadout.entries.iter().any(|entry| entry.enabled) && !library_recovery_is_held {
         super::import::recover_library_for_read(library_dir)?;
     }
 
@@ -2156,6 +2168,7 @@ mod tests {
                 max_manifest_bytes: 4,
                 ..DEFAULT_APPLY_LIMITS
             },
+            false,
         )
         .unwrap_err()
         .to_string();
@@ -2183,6 +2196,7 @@ mod tests {
                 max_wav_bytes: 4,
                 ..DEFAULT_APPLY_LIMITS
             },
+            false,
         )
         .unwrap_err()
         .to_string();
@@ -2211,6 +2225,7 @@ mod tests {
                 max_mini_bytes: 4,
                 ..DEFAULT_APPLY_LIMITS
             },
+            false,
         )
         .unwrap_err()
         .to_string();
@@ -2239,6 +2254,7 @@ mod tests {
                 max_raw_file_bytes: 4,
                 ..DEFAULT_APPLY_LIMITS
             },
+            false,
         )
         .unwrap_err()
         .to_string();
@@ -2268,6 +2284,7 @@ mod tests {
                 max_raw_total_bytes: 7,
                 ..DEFAULT_APPLY_LIMITS
             },
+            false,
         )
         .unwrap_err()
         .to_string();
@@ -2296,6 +2313,7 @@ mod tests {
                 max_additive_file_bytes: 4,
                 ..DEFAULT_APPLY_LIMITS
             },
+            false,
         )
         .unwrap_err()
         .to_string();
@@ -2318,6 +2336,7 @@ mod tests {
                 max_additive_total_bytes: 7,
                 ..DEFAULT_APPLY_LIMITS
             },
+            false,
         )
         .unwrap_err()
         .to_string();
@@ -3373,6 +3392,7 @@ mod tests {
                 max_loose_file_bytes: 4,
                 ..DEFAULT_APPLY_LIMITS
             },
+            false,
         )
         .unwrap_err()
         .to_string();
