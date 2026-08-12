@@ -628,6 +628,7 @@ class _StockSection extends ConsumerWidget {
                         padding: const EdgeInsets.symmetric(vertical: 4),
                         itemCount: rows.length,
                         itemBuilder: (context, index) => _StockRow(
+                          key: ValueKey(rows[index].path),
                           item: rows[index],
                           map: map,
                           canSet: canSet,
@@ -724,6 +725,7 @@ class _PendingLineRow extends ConsumerWidget {
 
 class _StockRow extends ConsumerWidget {
   const _StockRow({
+    super.key,
     required this.item,
     required this.map,
     required this.canSet,
@@ -827,9 +829,11 @@ class _CountFieldState extends State<_CountField> {
   void didUpdateWidget(covariant _CountField oldWidget) {
     super.didUpdateWidget(oldWidget);
     final shown = widget.pending ?? widget.value;
+    final inputsChanged =
+        oldWidget.pending != widget.pending || oldWidget.value != widget.value;
     // Only overwrite when the field is not the thing that produced the change,
     // otherwise typing fights the controller.
-    if (oldWidget.pending != widget.pending && '$shown' != _controller.text) {
+    if (inputsChanged && '$shown' != _controller.text) {
       _controller.text = '$shown';
     }
   }
@@ -842,7 +846,7 @@ class _CountFieldState extends State<_CountField> {
 
   void _submit(String raw) {
     final parsed = int.tryParse(raw.trim());
-    if (parsed == null || parsed < 0) {
+    if (parsed == null || parsed < 1) {
       _controller.text = '${widget.pending ?? widget.value}';
       return;
     }

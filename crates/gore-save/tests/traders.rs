@@ -332,6 +332,33 @@ fn add_item_refuses_a_class_the_game_does_not_know() {
 }
 
 #[test]
+fn set_stock_rejects_a_zero_count() {
+    // A sold-out line is deleted from the map, never held at zero, so setting a
+    // count to 0 would write a record the game never produces. The refusal names
+    // removeItem so the caller knows what to send instead.
+    let path = start_save("setzero");
+    let out = out_path("setzero");
+    let data = list(&path);
+    let (index, _) = stocked_trader(&data);
+
+    let err = exec_err(json!({
+        "command": "write_save",
+        "payload": {
+            "path": path,
+            "outputPath": out,
+            "backup": false,
+            "edits": [
+                { "path": "private.traders.setStock",
+                  "value": { "index": index, "path": ORE, "count": 0 } },
+            ]
+        }
+    }));
+    assert!(err.contains("positive i32"), "{err}");
+    assert!(err.contains("removeItem"), "{err}");
+    assert!(!std::path::Path::new(&out).exists());
+}
+
+#[test]
 fn add_item_rejects_a_zero_count() {
     // Sold-out lines are deleted, never left at zero, so a zero-count insert
     // would write a state the game never produces.

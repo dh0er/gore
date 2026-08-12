@@ -347,6 +347,14 @@ pub struct SetStockEdit {
 /// different command — silently creating the entry here would hide that
 /// difference behind a write that cannot actually do it.
 pub fn apply_set_stock(payload: &mut [u8], edit: &SetStockEdit) -> Result<(), CoreError> {
+    // Zero is not a count the game writes: it deletes the line instead. Refuse
+    // it here as well as at the request boundary, since this is public.
+    if edit.count < 1 {
+        return Err(CoreError::InvalidRequest(format!(
+            "stock count must be positive; remove {} instead of setting it to {}",
+            edit.path, edit.count
+        )));
+    }
     let root = crate::properties::parse_private_root(payload)?;
     let (generic_path, _) = crate::factions::find_generic_instanced(&root, GAME_STATE_KEY)
         .ok_or_else(|| {
@@ -803,6 +811,28 @@ mod tests {
         }
         assert_eq!(ore_at(&payload, a), Some(1));
         assert_eq!(ore_at(&payload, b), Some(999));
+    }
+
+    #[test]
+    fn set_stock_refuses_a_zero_count() {
+        // The map holds no zero-valued entry in any shipped or played save, so
+        // writing one would invent a state the game never produces. Dropping the
+        // line is what "he no longer offers this" actually looks like.
+        let mut payload = real_payload();
+        let index = first_ore_trader(&payload);
+        let before = payload.clone();
+        let err = apply_set_stock(
+            &mut payload,
+            &SetStockEdit {
+                index,
+                map: StockMap::Current,
+                path: ORE_PATH.to_string(),
+                count: 0,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, CoreError::InvalidRequest(m) if m.contains("positive")));
+        assert_eq!(payload, before);
     }
 
     #[test]

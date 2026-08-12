@@ -459,6 +459,40 @@ void main() {
       expect(bread, lessThan(zucchini));
     });
 
+    testWidgets('a count field never keeps the previous line value', (
+      tester,
+    ) async {
+      // Regression: the field only refreshed on a pending change, and rows had
+      // no key — so switching category reused one line's field State for the
+      // next, showing a stale count that a submit would then write to the wrong
+      // item.
+      await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+
+      List<String> fieldTexts() => tester
+          .widgetList<TextField>(find.byType(TextField))
+          .map((f) => f.controller?.text ?? '')
+          .toList();
+
+      // Melee holds one sword, count 1. The ore card's own field shows 55.
+      await tester.tap(find.text('Melee weapons (1)'));
+      await tester.pumpAndSettle();
+      expect(fieldTexts(), containsAll(<String>['55', '1']));
+
+      // Ammunition holds one arrow stack of 18 at the same list position.
+      await tester.tap(find.text('Ammunition (1)'));
+      await tester.pumpAndSettle();
+      expect(fieldTexts(), containsAll(<String>['55', '18']));
+      expect(
+        fieldTexts().where((t) => t == '1'),
+        isEmpty,
+        reason: 'the sword count must not survive the category switch',
+      );
+    });
+
     testWidgets('a merchant shows his ore and both stock sections', (
       tester,
     ) async {

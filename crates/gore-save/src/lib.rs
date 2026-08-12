@@ -9688,11 +9688,14 @@ fn parse_private_traders_set_stock_edit(edit: &Edit) -> Result<traders::SetStock
             "private.traders.setStock requires integer value.count".to_string(),
         )
     })?;
-    // Sold-out lines are deleted, never negative, so a negative count would be a
-    // state the game never writes.
-    if !(0..=i32::MAX as i64).contains(&count) {
+    // A sold-out line is DELETED from the map, never left at zero — 604 stock
+    // entries across a played save hold no zero and no negative. Writing one
+    // would put the record in a state the game never produces, so a caller who
+    // means "he no longer offers this" has to say so with removeItem.
+    if !(1..=i32::MAX as i64).contains(&count) {
         return Err(CoreError::InvalidRequest(
-            "private.traders.setStock value.count must fit a non-negative i32".to_string(),
+            "private.traders.setStock value.count must be a positive i32;              drop the line with private.traders.removeItem instead of setting it to 0"
+                .to_string(),
         ));
     }
     let map = match value.get("map").and_then(Value::as_str) {
