@@ -257,6 +257,54 @@ class AppLocalizationsPt extends AppLocalizations {
   String get importFile => 'Importar ficheiro…';
 
   @override
+  String importOutcomeCreated(String name) {
+    return '«$name» foi adicionado à biblioteca.';
+  }
+
+  @override
+  String importOutcomeUpdated(String name) {
+    return '«$name» foi atualizado na biblioteca.';
+  }
+
+  @override
+  String importOutcomeUnchanged(String name) {
+    return '«$name» já se encontra na biblioteca.';
+  }
+
+  @override
+  String importOutcomeMatchedBy(String method) {
+    String _temp0 = intl.Intl.selectLogic(method, {
+      'none':
+          'Não houve correspondência com nenhuma entrada existente da biblioteca.',
+      'source': 'Correspondência com a mesma origem de importação.',
+      'content': 'Correspondência com conteúdo idêntico verificado.',
+      'entry_id': 'Correspondência com o ID do mod.',
+      'other': 'Os detalhes da correspondência não estão disponíveis.',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get importRefusalDuplicateAmbiguous =>
+      'Esta importação corresponde a mais do que uma entrada da biblioteca. Reveja ou remova as entradas duplicadas e tente novamente.';
+
+  @override
+  String get importRefusalIdentityConflict =>
+      'A origem da importação e o respetivo conteúdo correspondem a entradas diferentes da biblioteca. Reveja ou remova as entradas em conflito e tente novamente.';
+
+  @override
+  String get importFailed =>
+      'Não foi possível concluir a importação. Fontes suportadas: pastas, ZIP, ficheiros *_P.pak autónomos, conjuntos .utoc/.ucas completos (.pak opcional), .lcache, .bank e PrecompiledScript*.Cache. Extraia primeiro os ficheiros .7z ou .rar e depois importe a pasta. A fonte poderá não ser suportada, estar danificada ou incompleta. O mod poderá já ter sido adicionado ou atualizado; atualize e verifique a biblioteca antes de tentar novamente.';
+
+  @override
+  String get importPickerFailed =>
+      'Não foi possível abrir o seletor de ficheiros ou pastas. Nenhuma importação foi iniciada. Tente novamente.';
+
+  @override
+  String get importOutcomeUnknown =>
+      'Não foi possível verificar o resultado da importação. Selecione Atualizar para verificar a biblioteca.';
+
+  @override
   String get applyTooltip => 'Aplicar a configuração ao jogo';
 
   @override
@@ -727,6 +775,54 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get importFile => 'Importar arquivo…';
+
+  @override
+  String importOutcomeCreated(String name) {
+    return '“$name” foi adicionado à biblioteca.';
+  }
+
+  @override
+  String importOutcomeUpdated(String name) {
+    return '“$name” foi atualizado na biblioteca.';
+  }
+
+  @override
+  String importOutcomeUnchanged(String name) {
+    return '“$name” já está na biblioteca.';
+  }
+
+  @override
+  String importOutcomeMatchedBy(String method) {
+    String _temp0 = intl.Intl.selectLogic(method, {
+      'none':
+          'Não houve correspondência com nenhuma entrada existente da biblioteca.',
+      'source': 'Correspondência com a mesma origem de importação.',
+      'content': 'Correspondência com conteúdo idêntico verificado.',
+      'entry_id': 'Correspondência com o ID do mod.',
+      'other': 'Os detalhes da correspondência não estão disponíveis.',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get importRefusalDuplicateAmbiguous =>
+      'Esta importação corresponde a mais de uma entrada da biblioteca. Revise ou remova as entradas duplicadas e tente novamente.';
+
+  @override
+  String get importRefusalIdentityConflict =>
+      'A origem da importação e o conteúdo correspondem a entradas diferentes da biblioteca. Revise ou remova as entradas em conflito e tente novamente.';
+
+  @override
+  String get importFailed =>
+      'Não foi possível concluir a importação. Fontes compatíveis: pastas, ZIP, arquivos *_P.pak avulsos, conjuntos .utoc/.ucas completos (.pak opcional), .lcache, .bank e PrecompiledScript*.Cache. Extraia primeiro os arquivos .7z ou .rar e depois importe a pasta. A fonte pode não ser compatível, estar corrompida ou incompleta. O mod talvez já tenha sido adicionado ou atualizado; atualize e verifique a biblioteca antes de tentar novamente.';
+
+  @override
+  String get importPickerFailed =>
+      'Não foi possível abrir o seletor de arquivos ou pastas. Nenhuma importação foi iniciada. Tente novamente.';
+
+  @override
+  String get importOutcomeUnknown =>
+      'Não foi possível verificar o resultado da importação. Selecione Atualizar para verificar a biblioteca.';
 
   @override
   String get applyTooltip => 'Aplicar a configuração ao jogo';

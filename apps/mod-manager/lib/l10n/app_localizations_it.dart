@@ -255,6 +255,53 @@ class AppLocalizationsIt extends AppLocalizations {
   String get importFile => 'Importa file…';
 
   @override
+  String importOutcomeCreated(String name) {
+    return 'Il mod «$name» è stato aggiunto alla libreria.';
+  }
+
+  @override
+  String importOutcomeUpdated(String name) {
+    return 'Il mod «$name» è stato aggiornato nella libreria.';
+  }
+
+  @override
+  String importOutcomeUnchanged(String name) {
+    return 'Il mod «$name» è già nella libreria.';
+  }
+
+  @override
+  String importOutcomeMatchedBy(String method) {
+    String _temp0 = intl.Intl.selectLogic(method, {
+      'none': 'Nessuna corrispondenza con le voci esistenti della libreria.',
+      'source': 'Corrispondenza con la stessa origine di importazione.',
+      'content': 'Corrispondenza con contenuti identici verificati.',
+      'entry_id': 'Corrispondenza con l’ID del mod.',
+      'other': 'I dettagli della corrispondenza non sono disponibili.',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get importRefusalDuplicateAmbiguous =>
+      'Questa importazione corrisponde a più di una voce della libreria. Controlla o rimuovi i duplicati, quindi riprova.';
+
+  @override
+  String get importRefusalIdentityConflict =>
+      'L’origine dell’importazione e il suo contenuto corrispondono a voci diverse della libreria. Controlla o rimuovi le voci in conflitto, quindi riprova.';
+
+  @override
+  String get importFailed =>
+      'Non è stato possibile completare l’importazione. Sorgenti supportate: cartelle, ZIP, file *_P.pak autonomi, set .utoc/.ucas completi (.pak facoltativo), .lcache, .bank e PrecompiledScript*.Cache. Estrai prima gli archivi .7z o .rar, quindi importa la cartella. La sorgente potrebbe non essere supportata, essere danneggiata o incompleta. Il mod potrebbe essere già stato aggiunto o aggiornato; aggiorna e controlla la libreria prima di riprovare.';
+
+  @override
+  String get importPickerFailed =>
+      'Non è stato possibile aprire il selettore di file o cartelle. Non è stata avviata alcuna importazione. Riprova.';
+
+  @override
+  String get importOutcomeUnknown =>
+      'Non è stato possibile verificare il risultato dell’importazione. Seleziona Aggiorna per controllare la libreria.';
+
+  @override
   String get applyTooltip => 'Applica la configurazione al gioco';
 
   @override

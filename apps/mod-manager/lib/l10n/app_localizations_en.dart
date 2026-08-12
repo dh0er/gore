@@ -250,6 +250,53 @@ class AppLocalizationsEn extends AppLocalizations {
   String get importFile => 'Import file…';
 
   @override
+  String importOutcomeCreated(String name) {
+    return 'Added “$name” to the library.';
+  }
+
+  @override
+  String importOutcomeUpdated(String name) {
+    return 'Updated “$name” in the library.';
+  }
+
+  @override
+  String importOutcomeUnchanged(String name) {
+    return '“$name” is already in the library.';
+  }
+
+  @override
+  String importOutcomeMatchedBy(String method) {
+    String _temp0 = intl.Intl.selectLogic(method, {
+      'none': 'No existing library entry was matched.',
+      'source': 'Matched by the same import source.',
+      'content': 'Matched by verified identical content.',
+      'entry_id': 'Matched by mod ID.',
+      'other': 'Match details are unavailable.',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get importRefusalDuplicateAmbiguous =>
+      'This import matches more than one library entry. Review or remove the duplicates, then try again.';
+
+  @override
+  String get importRefusalIdentityConflict =>
+      'The import source and its content match different library entries. Review or remove the conflicting entries, then try again.';
+
+  @override
+  String get importFailed =>
+      'The import could not be completed. Supported sources: folders, ZIP, loose *_P.pak files, complete .utoc/.ucas sets (optional .pak), .lcache, .bank, and PrecompiledScript*.Cache. Extract .7z or .rar first, then import the folder. The source may be unsupported, corrupt, or incomplete. The mod may already have been added or updated; refresh and check the library before trying again.';
+
+  @override
+  String get importPickerFailed =>
+      'The file or folder picker could not be opened. No import was started. Try again.';
+
+  @override
+  String get importOutcomeUnknown =>
+      'The import result could not be verified. Choose Refresh to check the library.';
+
+  @override
   String get applyTooltip => 'Apply the loadout to the game';
 
   @override

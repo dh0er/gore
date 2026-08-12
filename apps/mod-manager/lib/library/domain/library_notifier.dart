@@ -76,11 +76,70 @@ class LibraryNotifier extends StateNotifier<LibraryState> {
     await _runRefresh();
   }
 
-  /// Import a mod from [path] into the library, then refresh.
-  Future<void> import(String path) async {
-    await _runMutation(() async {
-      await _mgr.import(path);
-    });
+  /// Import a mod from [path], then reload Native's authoritative Store
+  /// snapshot. A native outcome is returned only when that reload succeeds and
+  /// contains the same entry id. Failures are rethrown only after the reload
+  /// attempt and state publication have settled, so UI callers can present the
+  /// typed FFI error without racing stale library data.
+  Future<MgrImportOutcome?> import(String path) async {
+    if (state.busy || !state.authoritative) return null;
+    state = state.copyWith(busy: true, clearError: true);
+
+    MgrImportOutcome? nativeOutcome;
+    Object? operationError;
+    StackTrace? operationStack;
+    try {
+      nativeOutcome = await _mgr.import(path);
+    } catch (error, stack) {
+      operationError = error;
+      operationStack = stack;
+    }
+
+    Object? reloadError;
+    StackTrace? reloadStack;
+    try {
+      await _refreshInline();
+    } catch (error, stack) {
+      reloadError = error;
+      reloadStack = stack;
+      _markUnknown();
+    }
+
+    // A failed reload dominates any operation result because the UI cannot
+    // safely classify or select anything until authoritative state returns.
+    // When reload succeeds, keep operation failures out of LibraryState: the
+    // caller owns their localized import feedback and no raw native banner may
+    // race it into the page.
+    Object? visibleError = reloadError ?? operationError;
+    StackTrace? visibleStack = reloadError != null
+        ? reloadStack
+        : operationStack;
+    MgrImportOutcome? authoritativeOutcome;
+    if (visibleError == null && nativeOutcome != null) {
+      final authoritativeEntry = state.modById(nativeOutcome.entry.id);
+      if (authoritativeEntry == null) {
+        visibleError = MgrFfiException(
+          'mgr_import: imported entry is absent from the authoritative snapshot',
+          code: 'IMPORT_INVALID_RESPONSE',
+        );
+        visibleStack = StackTrace.current;
+      } else {
+        authoritativeOutcome = nativeOutcome.withEntry(authoritativeEntry);
+      }
+    }
+
+    if (reloadError != null) {
+      state = state.copyWith(error: _errorMessage(reloadError));
+    }
+    state = state.copyWith(busy: false);
+
+    if (visibleError != null) {
+      Error.throwWithStackTrace(
+        visibleError,
+        visibleStack ?? StackTrace.current,
+      );
+    }
+    return authoritativeOutcome;
   }
 
   /// Remove the mod [id] from the library, then refresh.

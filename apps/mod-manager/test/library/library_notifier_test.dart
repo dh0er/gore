@@ -77,7 +77,12 @@ class _BlockingRemoveCore implements GoreCoreFfiService {
 /// failed to exercise the fail-closed boundary.
 class _PartialImportCore implements GoreCoreFfiService {
   bool imported = false;
+  bool failImport = true;
   bool failReload = false;
+  bool omitImportedFromReload = false;
+  bool blockReload = false;
+  final reloadStarted = Completer<void>();
+  final releaseReload = Completer<void>();
   final List<({String command, Map<String, Object?> payload})> calls = [];
 
   @override
@@ -95,6 +100,19 @@ class _PartialImportCore implements GoreCoreFfiService {
     switch (command) {
       case 'mgr_import':
         imported = true;
+        if (!failImport) {
+          return {
+            'ok': true,
+            'entry': {
+              'id': 'mod-new',
+              'kind': 'foreign_pak',
+              'name': 'Wire Name',
+              'components': const [],
+            },
+            'disposition': 'created',
+            'matched_by': 'none',
+          };
+        }
         return {
           'ok': false,
           'error': {'code': 'IO', 'message': 'loadout follow-up failed'},
@@ -105,8 +123,12 @@ class _PartialImportCore implements GoreCoreFfiService {
           'error': {'code': 'IO', 'message': 'reload failed'},
         };
       case 'mgr_library_list':
+        if (imported && blockReload) {
+          if (!reloadStarted.isCompleted) reloadStarted.complete();
+          await releaseReload.future;
+        }
         return _libraryList(
-          loadout: imported
+          loadout: imported && !omitImportedFromReload
               ? [('mod-a', true), ('mod-new', false)]
               : [('mod-a', true)],
         );
@@ -312,7 +334,14 @@ void main() {
         responses: {
           'mgr_import': {
             'ok': true,
-            'entry': {'id': 'mod-new', 'kind': 'foreign_pak', 'name': 'New'},
+            'entry': {
+              'id': 'mod-new',
+              'kind': 'foreign_pak',
+              'name': 'Wire New',
+              'components': const [],
+            },
+            'disposition': 'created',
+            'matched_by': 'none',
           },
           'mgr_library_list': _libraryList(
             loadout: [('mod-a', true), ('mod-new', false)],
@@ -324,13 +353,17 @@ void main() {
       final n = await _settled(fake);
       fake.calls.clear();
 
-      await n.import('D:/downloads/new.pak');
+      final outcome = await n.import('D:/downloads/new.pak');
 
       expect(fake.calls[0].command, 'mgr_import');
       expect(fake.calls[0].payload, {'path': 'D:/downloads/new.pak'});
       // Followed by a refresh that surfaces the new mod, appended disabled.
       expect(fake.calls.any((c) => c.command == 'mgr_library_list'), isTrue);
       expect(n.state.mods.map((m) => m.id), contains('mod-new'));
+      expect(outcome, isNotNull);
+      expect(outcome!.entry.name, 'MOD-NEW');
+      expect(outcome.disposition, MgrImportDisposition.created);
+      expect(outcome.matchedBy, MgrImportMatchedBy.none);
       final newEntry = n.state.loadout.entries.firstWhere(
         (e) => e.id == 'mod-new',
       );
@@ -344,11 +377,16 @@ void main() {
         final notifier = LibraryNotifier(MgrFfi(core));
         await notifier.refresh();
 
-        await notifier.import('D:/downloads/new.pak');
+        await expectLater(
+          notifier.import('D:/downloads/new.pak'),
+          throwsA(
+            isA<MgrFfiException>().having((error) => error.code, 'code', 'IO'),
+          ),
+        );
 
         expect(notifier.state.authoritative, isTrue);
         expect(notifier.state.mods.map((mod) => mod.id), contains('mod-new'));
-        expect(notifier.state.error, contains('loadout follow-up failed'));
+        expect(notifier.state.error, isNull);
         expect(
           core.calls.where((call) => call.command == 'mgr_library_list'),
           hasLength(2),
@@ -364,12 +402,23 @@ void main() {
         await notifier.refresh();
         core.failReload = true;
 
-        await notifier.import('D:/downloads/new.pak');
+        await expectLater(
+          notifier.import('D:/downloads/new.pak'),
+          throwsA(
+            isA<MgrFfiException>()
+                .having((error) => error.code, 'code', 'IO')
+                .having(
+                  (error) => error.message,
+                  'message',
+                  contains('reload failed'),
+                ),
+          ),
+        );
 
         expect(notifier.state.authoritative, isFalse);
         expect(notifier.state.mods, isEmpty);
         expect(notifier.state.loadout.entries, isEmpty);
-        expect(notifier.state.error, contains('loadout follow-up failed'));
+        expect(notifier.state.error, contains('reload failed'));
 
         final callsBeforeBlockedToggle = core.calls.length;
         await notifier.toggle('mod-a');
@@ -379,6 +428,83 @@ void main() {
         await notifier.refresh();
         expect(notifier.state.authoritative, isTrue);
         expect(notifier.state.mods.map((mod) => mod.id), contains('mod-new'));
+        expect(notifier.state.error, isNull);
+      },
+    );
+
+    test(
+      'successful native import returns no outcome when reload fails',
+      () async {
+        final core = _PartialImportCore()..failImport = false;
+        final notifier = LibraryNotifier(MgrFfi(core));
+        await notifier.refresh();
+        core.failReload = true;
+
+        await expectLater(
+          notifier.import('D:/downloads/new.pak'),
+          throwsA(
+            isA<MgrFfiException>().having(
+              (error) => error.message,
+              'message',
+              contains('reload failed'),
+            ),
+          ),
+        );
+
+        expect(notifier.state.authoritative, isFalse);
+        expect(notifier.state.mods, isEmpty);
+        expect(notifier.state.error, contains('reload failed'));
+      },
+    );
+
+    test('does not complete the outcome before authoritative reload', () async {
+      final core = _PartialImportCore()
+        ..failImport = false
+        ..blockReload = true;
+      final notifier = LibraryNotifier(MgrFfi(core));
+      await notifier.refresh();
+
+      var completed = false;
+      final importing = notifier.import('D:/downloads/new.pak').then((outcome) {
+        completed = true;
+        return outcome;
+      });
+      await core.reloadStarted.future;
+      await Future<void>.delayed(Duration.zero);
+      expect(completed, isFalse);
+      expect(notifier.state.busy, isTrue);
+
+      core.releaseReload.complete();
+      final outcome = await importing;
+      expect(completed, isTrue);
+      expect(outcome?.entry.id, 'mod-new');
+      expect(outcome?.entry.name, 'MOD-NEW');
+      expect(notifier.state.authoritative, isTrue);
+      expect(notifier.state.busy, isFalse);
+    });
+
+    test(
+      'missing imported id in the reloaded snapshot is not success',
+      () async {
+        final core = _PartialImportCore()
+          ..failImport = false
+          ..omitImportedFromReload = true;
+        final notifier = LibraryNotifier(MgrFfi(core));
+        await notifier.refresh();
+
+        await expectLater(
+          notifier.import('D:/downloads/new.pak'),
+          throwsA(
+            isA<MgrFfiException>().having(
+              (error) => error.code,
+              'code',
+              'IMPORT_INVALID_RESPONSE',
+            ),
+          ),
+        );
+
+        expect(notifier.state.authoritative, isTrue);
+        expect(notifier.state.modById('mod-new'), isNull);
         expect(notifier.state.error, isNull);
       },
     );

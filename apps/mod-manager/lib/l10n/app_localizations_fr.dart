@@ -255,6 +255,54 @@ class AppLocalizationsFr extends AppLocalizations {
   String get importFile => 'Importer un fichier…';
 
   @override
+  String importOutcomeCreated(String name) {
+    return '« $name » a été ajouté à la bibliothèque.';
+  }
+
+  @override
+  String importOutcomeUpdated(String name) {
+    return '« $name » a été mis à jour dans la bibliothèque.';
+  }
+
+  @override
+  String importOutcomeUnchanged(String name) {
+    return '« $name » se trouve déjà dans la bibliothèque.';
+  }
+
+  @override
+  String importOutcomeMatchedBy(String method) {
+    String _temp0 = intl.Intl.selectLogic(method, {
+      'none':
+          'Aucune correspondance avec une entrée existante de la bibliothèque.',
+      'source': 'Correspondance avec la même source d’importation.',
+      'content': 'Correspondance avec un contenu identique vérifié.',
+      'entry_id': 'Correspondance avec l’ID du mod.',
+      'other': 'Les détails de la correspondance ne sont pas disponibles.',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get importRefusalDuplicateAmbiguous =>
+      'Cette importation correspond à plusieurs entrées de la bibliothèque. Vérifiez ou supprimez les doublons, puis réessayez.';
+
+  @override
+  String get importRefusalIdentityConflict =>
+      'La source d’importation et son contenu correspondent à des entrées différentes de la bibliothèque. Vérifiez ou supprimez les entrées en conflit, puis réessayez.';
+
+  @override
+  String get importFailed =>
+      'L’importation n’a pas pu être terminée. Sources prises en charge : dossiers, ZIP, fichiers *_P.pak autonomes, ensembles .utoc/.ucas complets (.pak facultatif), .lcache, .bank et PrecompiledScript*.Cache. Extrayez d’abord les archives .7z ou .rar, puis importez le dossier. La source peut être non prise en charge, endommagée ou incomplète. Le mod a peut-être déjà été ajouté ou mis à jour ; actualisez et vérifiez la bibliothèque avant de réessayer.';
+
+  @override
+  String get importPickerFailed =>
+      'Le sélecteur de fichiers ou de dossiers n’a pas pu être ouvert. Aucune importation n’a été lancée. Réessayez.';
+
+  @override
+  String get importOutcomeUnknown =>
+      'Le résultat de l’importation n’a pas pu être vérifié. Sélectionnez Actualiser pour vérifier la bibliothèque.';
+
+  @override
   String get applyTooltip => 'Appliquer la configuration au jeu';
 
   @override
