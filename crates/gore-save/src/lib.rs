@@ -389,12 +389,24 @@ pub fn execute_json(input: &str) -> String {
             // under the earlier fingerprint would not merely be stale for a
             // moment: it would bind an answer to a content hash it does not
             // describe, and every later read of those earlier bytes would be
-            // served the wrong answer for as long as the entry lives. So keep a
-            // response only when its inputs held still for the whole command.
+            // served the wrong answer for as long as the entry lives. Re-derive
+            // the fingerprint and keep the response only if it still matches.
             //
-            // A cache HIT needs no such re-check: matching the fingerprint means
-            // the files hold byte-identical content to what the entry was built
-            // from, whatever has happened in between.
+            // Be precise about what that does and does not establish. Equal
+            // fingerprints before and after do not PROVE the files held still:
+            // a replacement to other bytes and back again inside the command
+            // would pass. Closing that would mean handing the command the bytes
+            // this key was taken from instead of letting it read for itself —
+            // a change to how every read command receives its save, not to this
+            // check. What is left needs a replacement landing in the moment
+            // between these two reads AND the original bytes returning before
+            // the command ends, both from outside the editor: a write or a
+            // restore performed HERE drops this save's entries outright (see
+            // `invalidate_decoded_payload_cache`).
+            //
+            // A cache HIT needs no re-check at all: matching the fingerprint
+            // means the files hold byte-identical content to what the entry was
+            // built from, whatever has happened in between.
             if let Some(key) = cache_key {
                 if read_response_cache_key(input).is_some_and(|current| current == key) {
                     store_cached_response(key, &response);
