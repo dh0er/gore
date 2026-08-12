@@ -3,10 +3,10 @@
 //! a **loadout** (which mods are enabled, in mount order), conflict analysis, and
 //! composing the enabled set into ONE deployment against the game.
 //!
-//! Every subcommand resolves its `--library` / `--loadout` overrides against the
-//! shared per-user defaults (`gore_mod::mgr::paths`), so with no flags every tool
-//! sees the same state. Engine errors (`gore_mod::ModError`) are wrapped into
-//! `anyhow` here.
+//! Every subcommand uses either the shared per-user Store or one explicit
+//! `--library` / `--loadout` pair. Requiring both overrides prevents a custom
+//! loadout from being reconciled against an unrelated library. Engine errors
+//! (`gore_mod::ModError`) are wrapped into `anyhow` here.
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
@@ -114,14 +114,16 @@ pub enum MgrAction {
     },
 }
 
-/// Resolve the library dir: the `--library` override or the shared default.
-fn library_of(arg: Option<PathBuf>) -> PathBuf {
-    arg.unwrap_or_else(mgr::paths::library_dir)
-}
-
-/// Resolve the loadout path: the `--loadout` override or the shared default.
-fn loadout_of(arg: Option<PathBuf>) -> PathBuf {
-    arg.unwrap_or_else(mgr::paths::loadout_path)
+/// Resolve one complete Store identity. A lone override cannot identify which Library and Loadout
+/// belong together, and opening that mixed pair could destructively reconcile the wrong file.
+fn store_paths(library: Option<PathBuf>, loadout: Option<PathBuf>) -> Result<(PathBuf, PathBuf)> {
+    match (library, loadout) {
+        (None, None) => Ok((mgr::paths::library_dir(), mgr::paths::loadout_path())),
+        (Some(library), Some(loadout)) => Ok((library, loadout)),
+        _ => anyhow::bail!(
+            "--library and --loadout overrides must be supplied together so they identify one manager store"
+        ),
+    }
 }
 
 pub fn run(action: MgrAction) -> Result<()> {
@@ -131,8 +133,7 @@ pub fn run(action: MgrAction) -> Result<()> {
             library,
             loadout,
         } => {
-            let lib = library_of(library);
-            let ld_path = loadout_of(loadout);
+            let (lib, ld_path) = store_paths(library, loadout)?;
 
             let outcome = import::import_detailed(&lib, &path)
                 .map_err(|e| anyhow::anyhow!("{e}"))
@@ -162,8 +163,7 @@ pub fn run(action: MgrAction) -> Result<()> {
         }
 
         MgrAction::List { library, loadout } => {
-            let lib = library_of(library);
-            let ld_path = loadout_of(loadout);
+            let (lib, ld_path) = store_paths(library, loadout)?;
 
             let store = StoreSnapshot::open(&lib, &ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
             let ld = store.loadout();
@@ -212,8 +212,7 @@ pub fn run(action: MgrAction) -> Result<()> {
             library,
             loadout,
         } => {
-            let lib = library_of(library);
-            let ld_path = loadout_of(loadout);
+            let (lib, ld_path) = store_paths(library, loadout)?;
 
             let removed = import::remove(&lib, &id).map_err(|e| anyhow::anyhow!("{e}"))?;
             StoreSnapshot::open(&lib, &ld_path)
@@ -243,8 +242,7 @@ pub fn run(action: MgrAction) -> Result<()> {
             library,
             loadout,
         } => {
-            let lib = library_of(library);
-            let ld_path = loadout_of(loadout);
+            let (lib, ld_path) = store_paths(library, loadout)?;
             let mut store =
                 StoreSnapshot::open(&lib, &ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
             let mut to = 0;
@@ -275,8 +273,7 @@ pub fn run(action: MgrAction) -> Result<()> {
         }
 
         MgrAction::Analyze { library, loadout } => {
-            let lib = library_of(library);
-            let ld_path = loadout_of(loadout);
+            let (lib, ld_path) = store_paths(library, loadout)?;
 
             let store = StoreSnapshot::open(&lib, &ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
             let conflicts = store.analyze();
@@ -297,8 +294,7 @@ pub fn run(action: MgrAction) -> Result<()> {
             loadout,
         } => {
             let game = gore_loc::config::game_root(game)?;
-            let lib = library_of(library);
-            let ld_path = loadout_of(loadout);
+            let (lib, ld_path) = store_paths(library, loadout)?;
 
             let store = StoreSnapshot::open(&lib, &ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
             let report = match store.apply(&game) {
@@ -339,8 +335,7 @@ pub fn run(action: MgrAction) -> Result<()> {
             loadout,
         } => {
             let game = gore_loc::config::game_root(game)?;
-            let lib = library_of(library);
-            let ld_path = loadout_of(loadout);
+            let (lib, ld_path) = store_paths(library, loadout)?;
             let store = StoreSnapshot::open(&lib, &ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
             let st = store.status(&game).map_err(|e| anyhow::anyhow!("{e}"))?;
             println!("{}", describe_status(&st));
@@ -384,8 +379,7 @@ fn set_enabled(
     library: Option<PathBuf>,
     loadout: Option<PathBuf>,
 ) -> Result<()> {
-    let lib = library_of(library);
-    let ld_path = loadout_of(loadout);
+    let (lib, ld_path) = store_paths(library, loadout)?;
     let mut store = StoreSnapshot::open(&lib, &ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
     store
         .update_loadout(|loadout| {
@@ -439,6 +433,20 @@ fn describe_status(st: &ManagerStatus) -> String {
 mod tests {
     use super::*;
     use gore_mod::mgr::analyze::ConflictKind;
+
+    #[test]
+    fn custom_store_overrides_must_be_paired() {
+        assert!(store_paths(Some(PathBuf::from("library")), None).is_err());
+        assert!(store_paths(None, Some(PathBuf::from("loadout.json"))).is_err());
+        assert_eq!(
+            store_paths(
+                Some(PathBuf::from("library")),
+                Some(PathBuf::from("loadout.json")),
+            )
+            .unwrap(),
+            (PathBuf::from("library"), PathBuf::from("loadout.json")),
+        );
+    }
 
     fn conflict(severity: Severity) -> Conflict {
         Conflict {

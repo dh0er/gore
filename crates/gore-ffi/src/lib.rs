@@ -188,8 +188,8 @@
 //! - `script_compile_install_state_v1` is a bounded, strictly read-only native preflight for the
 //!   shipping-game process and every known compile/recovery artifact. It returns display-only
 //!   paths and never creates, removes, renames, repairs, launches, or writes anything.
-//! - `mgr_preflight_v1` accepts one explicit game root plus optional native Manager path
-//!   overrides and returns seven fixed-order, bounded first-run findings. It never falls back to
+//! - `mgr_preflight_v1` accepts one explicit game root plus an optional paired native Manager
+//!   Store override and returns seven fixed-order, bounded first-run findings. It never falls back to
 //!   config/Steam discovery, reconciles imports, probes by writing, repairs recovery state, or
 //!   claims that Apply is ready; all returned paths are display-only evidence.
 //! - `authoring_store_inspect_revision3_installed_dataasset_v1` accepts only one exact managed
@@ -1517,23 +1517,41 @@ fn mod_undeploy(payload: Value) -> Value {
 }
 
 // ── mod-manager (`mgr_*`) commands ─────────────────────────────────────────────
-// Every mgr command accepts OPTIONAL `library_dir` / `loadout_path` string overrides so tests
-// (and callers wanting an isolated store) can point at temp dirs; when absent the shared
-// per-user layout from `gore_mod::mgr::paths` is used, so every gore tool sees one library.
-
-/// The library dir to use: `payload.library_dir` if given, else the shared default.
-fn mgr_library_dir(payload: &Value) -> PathBuf {
-    match payload.get("library_dir").and_then(Value::as_str) {
-        Some(p) => PathBuf::from(p),
-        None => gore_mod::mgr::paths::library_dir(),
+// Store-backed mgr commands use either the shared Store or one explicit `library_dir` /
+// `loadout_path` pair. A lone override cannot identify which two roots belong together and could
+// otherwise reconcile a custom file against unrelated shared state.
+fn mgr_store_paths_from_options(
+    library: Option<&str>,
+    loadout: Option<&str>,
+) -> Result<(PathBuf, PathBuf), String> {
+    match (library, loadout) {
+        (None, None) => Ok((
+            gore_mod::mgr::paths::library_dir(),
+            gore_mod::mgr::paths::loadout_path(),
+        )),
+        (Some(library), Some(loadout)) => {
+            Ok((PathBuf::from(library), PathBuf::from(loadout)))
+        }
+        _ => Err(
+            "library_dir and loadout_path overrides must be supplied together so they identify one manager store"
+                .to_string(),
+        ),
     }
 }
 
-/// The loadout file to use: `payload.loadout_path` if given, else the shared default.
-fn mgr_loadout_path(payload: &Value) -> PathBuf {
-    match payload.get("loadout_path").and_then(Value::as_str) {
-        Some(p) => PathBuf::from(p),
-        None => gore_mod::mgr::paths::loadout_path(),
+fn mgr_store_paths(payload: &Value) -> Result<(PathBuf, PathBuf), String> {
+    let path = |key: &str| match payload.get(key) {
+        None => Ok(None),
+        Some(Value::String(path)) => Ok(Some(path.as_str())),
+        Some(_) => Err(format!("'{key}' must be a string")),
+    };
+    mgr_store_paths_from_options(path("library_dir")?, path("loadout_path")?)
+}
+
+fn mgr_store_paths_or_error(payload: &Value) -> Result<(PathBuf, PathBuf), Value> {
+    match mgr_store_paths(payload) {
+        Ok(paths) => Ok(paths),
+        Err(message) => Err(err("BAD_REQUEST", message)),
     }
 }
 
@@ -1572,11 +1590,14 @@ fn mgr_entry_wire_value(entry: &gore_mod::mgr::ModEntryMeta) -> Value {
     value
 }
 
-/// `{library_dir?, loadout_path?}` → `{ok, mods:[ModEntryMeta], loadout:Loadout}`. Raw library +
+/// `{library_dir?, loadout_path?}` → `{ok, mods:[ModEntryMeta], loadout:Loadout}`. Overrides are a
+/// pair. Raw library +
 /// loadout from one strict, natively reconciled Store snapshot.
 fn mgr_library_list(payload: Value) -> Value {
-    let lib = mgr_library_dir(&payload);
-    let lo_path = mgr_loadout_path(&payload);
+    let (lib, lo_path) = match mgr_store_paths_or_error(&payload) {
+        Ok(paths) => paths,
+        Err(error) => return error,
+    };
     let store = match gore_mod::mgr::store::StoreSnapshot::open(&lib, &lo_path) {
         Ok(store) => store,
         Err(e) => return err("IO", e.to_string()),
@@ -1588,7 +1609,7 @@ fn mgr_library_list(payload: Value) -> Value {
     })
 }
 
-/// `{path, library_dir?, loadout_path?}` →
+/// `{path, library_dir?, loadout_path?}` → (Store overrides are a pair)
 /// `{ok, entry:ModEntryMeta, disposition, matched_by}` — import a source into the
 /// library AND register it in the loadout (disabled) if not already present. Mirrors
 /// `gore mgr import`: without this, a GUI-imported mod is invisible to apply/status/analyze (which
@@ -1597,7 +1618,10 @@ fn mgr_import(payload: Value) -> Value {
     let Some(path) = payload.get("path").and_then(Value::as_str) else {
         return err("BAD_REQUEST", "missing 'path'");
     };
-    let lib = mgr_library_dir(&payload);
+    let (lib, lo_path) = match mgr_store_paths_or_error(&payload) {
+        Ok(paths) => paths,
+        Err(error) => return error,
+    };
     let outcome = match gore_mod::mgr::import::import_detailed(&lib, std::path::Path::new(path)) {
         Ok(outcome) => outcome,
         Err(error @ gore_mod::mgr::import::ImportError::DuplicateAmbiguous { .. }) => {
@@ -1622,7 +1646,6 @@ fn mgr_import(payload: Value) -> Value {
     let entry = &outcome.entry;
     // Library publication and loadout registration remain two explicit commits. Import has
     // released Library before Store acquires its canonical composite roots and reconciles state.
-    let lo_path = mgr_loadout_path(&payload);
     // Surface a loadout read/write failure instead of returning ok: apply/status/analyze read the
     // on-disk loadout, so a swallowed error here would leave the imported mod invisible to them. A
     // missing loadout file loads as an empty default (not an error), so first-time imports still
@@ -1644,17 +1667,20 @@ fn mgr_import(payload: Value) -> Value {
     })
 }
 
-/// `{id, library_dir?}` → `{ok, removed:bool}` — delete a library entry (absent id → removed:false).
+/// `{id, library_dir?, loadout_path?}` → `{ok, removed:bool}` — delete a library entry and its
+/// paired loadout slot (absent id → removed:false).
 fn mgr_remove(payload: Value) -> Value {
     let Some(id) = payload.get("id").and_then(Value::as_str) else {
         return err("BAD_REQUEST", "missing 'id'");
     };
-    let lib = mgr_library_dir(&payload);
+    let (lib, lo_path) = match mgr_store_paths_or_error(&payload) {
+        Ok(paths) => paths,
+        Err(error) => return error,
+    };
     let removed = match gore_mod::mgr::import::remove(&lib, id) {
         Ok(removed) => removed,
         Err(e) => return err("BAD_REQUEST", e.to_string()),
     };
-    let lo_path = mgr_loadout_path(&payload);
     if let Err(e) = gore_mod::mgr::store::StoreSnapshot::open(&lib, &lo_path) {
         return err(
             "IO",
@@ -1664,7 +1690,8 @@ fn mgr_remove(payload: Value) -> Value {
     json!({"ok": true, "removed": removed})
 }
 
-/// `{loadout:Loadout, loadout_path?}` → `{ok}` — persist the loadout.
+/// `{loadout:Loadout, library_dir?, loadout_path?}` → `{ok}` — persist the loadout; Store path
+/// overrides are a pair.
 const MAX_MGR_SET_LOADOUT_REQUEST_BYTES: usize = 1024 * 1024 + 64 * 1024;
 
 #[derive(serde::Deserialize)]
@@ -1713,16 +1740,13 @@ fn mgr_set_loadout_raw(input: &str) -> Value {
     if encoded_loadout.len() > 1024 * 1024 {
         return err("BAD_REQUEST", "loadout exceeds its 1048576-byte limit");
     }
-    let lib = request
-        .payload
-        .library_dir
-        .map(PathBuf::from)
-        .unwrap_or_else(gore_mod::mgr::paths::library_dir);
-    let lo_path = request
-        .payload
-        .loadout_path
-        .map(PathBuf::from)
-        .unwrap_or_else(gore_mod::mgr::paths::loadout_path);
+    let (lib, lo_path) = match mgr_store_paths_from_options(
+        request.payload.library_dir.as_deref(),
+        request.payload.loadout_path.as_deref(),
+    ) {
+        Ok(paths) => paths,
+        Err(message) => return err("BAD_REQUEST", message),
+    };
     match gore_mod::mgr::store::StoreSnapshot::open(&lib, &lo_path) {
         Ok(mut store) => match store.replace_loadout(request.payload.loadout) {
             Ok(()) => json!({"ok": true}),
@@ -1732,11 +1756,14 @@ fn mgr_set_loadout_raw(input: &str) -> Value {
     }
 }
 
-/// `{library_dir?, loadout_path?}` → `{ok, conflicts:[Conflict]}` — pure conflict analysis of the
+/// `{library_dir?, loadout_path?}` → `{ok, conflicts:[Conflict]}` — paired Store overrides; pure
+/// conflict analysis of the
 /// enabled loadout against the library.
 fn mgr_analyze(payload: Value) -> Value {
-    let lib = mgr_library_dir(&payload);
-    let lo_path = mgr_loadout_path(&payload);
+    let (lib, lo_path) = match mgr_store_paths_or_error(&payload) {
+        Ok(paths) => paths,
+        Err(error) => return error,
+    };
     let store = match gore_mod::mgr::store::StoreSnapshot::open(&lib, &lo_path) {
         Ok(store) => store,
         Err(e) => return err("ANALYZE_FAILED", e.to_string()),
@@ -1745,14 +1772,17 @@ fn mgr_analyze(payload: Value) -> Value {
     json!({"ok": true, "conflicts": serde_json::to_value(&conflicts).unwrap_or(Value::Null)})
 }
 
-/// `{game_root, library_dir?, loadout_path?}` → `{ok, report:ApplyReport}` — realize the enabled
+/// `{game_root, library_dir?, loadout_path?}` → `{ok, report:ApplyReport}` — paired Store overrides;
+/// realize the enabled
 /// loadout into one manager deployment. A studio deploy in the way maps to STUDIO_DEPLOY_ACTIVE.
 fn mgr_apply(payload: Value) -> Value {
     let Some(game_root) = payload.get("game_root").and_then(Value::as_str) else {
         return err("BAD_REQUEST", "missing 'game_root'");
     };
-    let lib = mgr_library_dir(&payload);
-    let lo_path = mgr_loadout_path(&payload);
+    let (lib, lo_path) = match mgr_store_paths_or_error(&payload) {
+        Ok(paths) => paths,
+        Err(error) => return error,
+    };
     let store = match gore_mod::mgr::store::StoreSnapshot::open(&lib, &lo_path) {
         Ok(store) => store,
         Err(e) => return err("APPLY_FAILED", e.to_string()),
@@ -1773,15 +1803,18 @@ fn mgr_apply(payload: Value) -> Value {
     }
 }
 
-/// `{game_root, library_dir?, loadout_path?}` → `{ok, status:ManagerStatus}` — diff deployed vs
+/// `{game_root, library_dir?, loadout_path?}` → `{ok, status:ManagerStatus}` — paired Store
+/// overrides; diff deployed vs
 /// target loadout. `library_dir` lets status fingerprint each enabled mod's current content so a
 /// same-id re-import (update) is reported as changes-pending rather than in-sync.
 fn mgr_status(payload: Value) -> Value {
     let Some(game_root) = payload.get("game_root").and_then(Value::as_str) else {
         return err("BAD_REQUEST", "missing 'game_root'");
     };
-    let lib = mgr_library_dir(&payload);
-    let lo_path = mgr_loadout_path(&payload);
+    let (lib, lo_path) = match mgr_store_paths_or_error(&payload) {
+        Ok(paths) => paths,
+        Err(error) => return error,
+    };
     let store = match gore_mod::mgr::store::StoreSnapshot::open(&lib, &lo_path) {
         Ok(store) => store,
         Err(e) => return err("STATUS_FAILED", e.to_string()),
@@ -2582,6 +2615,152 @@ mod tests {
         // A missing loadout file is the fresh default (format 1, no entries).
         assert_eq!(v["loadout"]["format"], 1);
         assert_eq!(v["loadout"]["entries"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn mgr_store_path_overrides_must_be_paired() {
+        let default = mgr_store_paths_from_options(None, None).unwrap();
+        assert_eq!(default.0, gore_mod::mgr::paths::library_dir());
+        assert_eq!(default.1, gore_mod::mgr::paths::loadout_path());
+        assert!(mgr_store_paths_from_options(Some("library"), None).is_err());
+        assert!(mgr_store_paths_from_options(None, Some("loadout.json")).is_err());
+        assert_eq!(
+            mgr_store_paths_from_options(Some("library"), Some("loadout.json")).unwrap(),
+            (PathBuf::from("library"), PathBuf::from("loadout.json")),
+        );
+
+        let malformed = mgr_library_list(json!({
+            "library_dir": 7,
+            "loadout_path": "loadout.json",
+        }));
+        assert_eq!(malformed["error"]["code"], "BAD_REQUEST");
+
+        let temp = tempfile::tempdir().unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("tests::mgr_unpaired_store_override_worker")
+            .arg("--ignored")
+            .arg("--nocapture")
+            .env("GORE_FFI_UNPAIRED_STORE_ROOT", temp.path())
+            .env("LOCALAPPDATA", temp.path().join("data"))
+            .env("APPDATA", temp.path().join("data"))
+            .env("XDG_DATA_HOME", temp.path().join("data"))
+            .env("HOME", temp.path().join("home"))
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    #[test]
+    #[ignore = "worker process with isolated shared Manager paths"]
+    fn mgr_unpaired_store_override_worker() {
+        let root = PathBuf::from(std::env::var_os("GORE_FFI_UNPAIRED_STORE_ROOT").unwrap());
+        let default_library = gore_mod::mgr::paths::library_dir();
+        let default_loadout = gore_mod::mgr::paths::loadout_path();
+        let custom_library = root.join("custom-library");
+        let custom_loadout = root.join("custom-loadout.json");
+
+        write_mgr_library_entry(&default_library, "default-mod");
+        write_mgr_library_entry(&custom_library, "custom-mod");
+        let default_loadout_bytes =
+            br#"{"format":1,"entries":[{"id":"default-mod","enabled":true}]}"#;
+        let custom_loadout_bytes =
+            br#"{"format":1,"entries":[{"id":"custom-mod","enabled":true}]}"#;
+        std::fs::create_dir_all(default_loadout.parent().unwrap()).unwrap();
+        std::fs::write(&default_loadout, default_loadout_bytes).unwrap();
+        std::fs::write(&custom_loadout, custom_loadout_bytes).unwrap();
+
+        let default_library_before = mgr_visible_library_snapshot(&default_library);
+        let custom_library_before = mgr_visible_library_snapshot(&custom_library);
+        let replacement = json!({"format":1,"entries":[]});
+        for payload in [
+            json!({
+                "library_dir": custom_library,
+                "loadout": replacement,
+            }),
+            json!({
+                "loadout_path": custom_loadout,
+                "loadout": replacement,
+            }),
+        ] {
+            let request = json!({"command":"mgr_set_loadout", "payload":payload});
+            let response: Value =
+                serde_json::from_str(&execute_json(&request.to_string())).unwrap();
+            assert_eq!(response["error"]["code"], "BAD_REQUEST", "{response}");
+            assert!(response["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("must be supplied together"));
+            assert_eq!(
+                std::fs::read(&default_loadout).unwrap(),
+                default_loadout_bytes
+            );
+            assert_eq!(
+                std::fs::read(&custom_loadout).unwrap(),
+                custom_loadout_bytes
+            );
+            assert_eq!(
+                mgr_visible_library_snapshot(&default_library),
+                default_library_before
+            );
+            assert_eq!(
+                mgr_visible_library_snapshot(&custom_library),
+                custom_library_before
+            );
+        }
+
+        let missing_source = root.join("missing.pak");
+        let import = mgr_import(json!({
+            "path": missing_source,
+            "library_dir": custom_library,
+        }));
+        assert_eq!(import["error"]["code"], "BAD_REQUEST", "{import}");
+
+        let remove = mgr_remove(json!({
+            "id": "custom-mod",
+            "library_dir": custom_library,
+        }));
+        assert_eq!(remove["error"]["code"], "BAD_REQUEST", "{remove}");
+        assert_eq!(
+            mgr_visible_library_snapshot(&custom_library),
+            custom_library_before
+        );
+        assert_eq!(
+            std::fs::read(&default_loadout).unwrap(),
+            default_loadout_bytes
+        );
+        assert_eq!(
+            std::fs::read(&custom_loadout).unwrap(),
+            custom_loadout_bytes
+        );
+
+        let preflight = crate::mgr_preflight::mgr_preflight_v1_raw(
+            &json!({
+                "command":"mgr_preflight_v1",
+                "payload":{
+                    "game_root":root.join("game"),
+                    "loadout_path":custom_loadout,
+                }
+            })
+            .to_string(),
+        );
+        assert_eq!(
+            preflight["error"]["code"], "MGR_PREFLIGHT_BAD_REQUEST",
+            "{preflight}"
+        );
+        assert!(preflight["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("must be supplied together"));
+
+        for root in [
+            default_library,
+            custom_library,
+            default_loadout.parent().unwrap().to_path_buf(),
+            custom_loadout.parent().unwrap().to_path_buf(),
+        ] {
+            assert!(!root.join(".gore-manager-library.lock").exists());
+        }
     }
 
     #[test]

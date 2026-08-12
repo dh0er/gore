@@ -1,6 +1,6 @@
 //! Strict raw FFI adapter for Mod Manager V1's read-only first-run evidence.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use gore_mod::mgr::preflight::ManagerPreflightV1;
 use serde::Deserialize;
@@ -38,14 +38,13 @@ pub(super) fn mgr_preflight_v1_raw(input: &str) -> Value {
         Ok(payload) => payload,
         Err(message) => return err("MGR_PREFLIGHT_BAD_REQUEST", message),
     };
-    let library_dir = payload
-        .library_dir
-        .map(PathBuf::from)
-        .unwrap_or_else(gore_mod::mgr::paths::library_dir);
-    let loadout_path = payload
-        .loadout_path
-        .map(PathBuf::from)
-        .unwrap_or_else(gore_mod::mgr::paths::loadout_path);
+    let (library_dir, loadout_path) = match crate::mgr_store_paths_from_options(
+        payload.library_dir.as_deref(),
+        payload.loadout_path.as_deref(),
+    ) {
+        Ok(paths) => paths,
+        Err(message) => return err("MGR_PREFLIGHT_BAD_REQUEST", message),
+    };
     let preflight = run_preflight(Path::new(&payload.game_root), &library_dir, &loadout_path);
     bounded_response(preflight)
 }
@@ -188,6 +187,41 @@ mod tests {
         let missing = mgr_preflight_v1_raw(&format!(r#"{{"command":"{COMMAND}","payload":{{}}}}"#));
         assert_eq!(missing["ok"], false);
         assert_eq!(missing["error"]["code"], "MGR_PREFLIGHT_BAD_REQUEST");
+    }
+
+    #[test]
+    fn manager_store_path_overrides_must_be_paired() {
+        for payload in [
+            json!({"game_root":"C:/game", "library_dir":"C:/library"}),
+            json!({"game_root":"C:/game", "loadout_path":"C:/loadout.json"}),
+        ] {
+            let parsed =
+                parse_request(&json!({"command":COMMAND, "payload":payload}).to_string()).unwrap();
+            let error = crate::mgr_store_paths_from_options(
+                parsed.library_dir.as_deref(),
+                parsed.loadout_path.as_deref(),
+            )
+            .unwrap_err();
+            assert!(error.contains("must be supplied together"), "{error}");
+        }
+
+        let parsed = parse_request(
+            &json!({
+                "command":COMMAND,
+                "payload":{
+                    "game_root":"C:/game",
+                    "library_dir":"C:/library",
+                    "loadout_path":"C:/loadout.json"
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(crate::mgr_store_paths_from_options(
+            parsed.library_dir.as_deref(),
+            parsed.loadout_path.as_deref(),
+        )
+        .is_ok());
     }
 
     #[test]

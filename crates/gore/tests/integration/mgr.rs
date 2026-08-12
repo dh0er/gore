@@ -168,6 +168,38 @@ fn mgr_accepts_child_loadout_path_relative_to_the_process_cwd() {
     assert!(tmp.path().join("library").is_dir());
 }
 
+#[test]
+fn mgr_rejects_unpaired_loadout_override_before_reconciliation() {
+    let tmp = TempDir::new().unwrap();
+    let data = tmp.path().join("data");
+    let default_library = data.join("gore/mod-manager/library");
+    std::fs::create_dir_all(&default_library).unwrap();
+    let loadout = tmp.path().join("custom-loadout.json");
+    let bytes = br#"{"format":1,"entries":[{"id":"custom","enabled":true}]}"#;
+    std::fs::write(&loadout, bytes).unwrap();
+
+    for args in [
+        vec!["mgr", "enable", "custom", "--loadout"],
+        vec!["mgr", "disable", "custom", "--loadout"],
+        vec!["mgr", "order", "custom", "0", "--loadout"],
+    ] {
+        Command::cargo_bin("gore")
+            .unwrap()
+            .env("LOCALAPPDATA", &data)
+            .env("APPDATA", &data)
+            .env("XDG_DATA_HOME", &data)
+            .args(args)
+            .arg(&loadout)
+            .assert()
+            .failure()
+            .stderr(predicates::str::contains(
+                "--library and --loadout overrides must be supplied together",
+            ));
+        assert_eq!(std::fs::read(&loadout).unwrap(), bytes);
+        assert_eq!(std::fs::read_dir(&default_library).unwrap().count(), 0);
+    }
+}
+
 /// The whole loadout lifecycle with NO real game deploy. This is the always-run gate.
 #[test]
 fn mgr_import_list_enable_disable_order_analyze_status_reset() {
