@@ -4190,6 +4190,11 @@ bool _mayInvalidateOrdinals(Map<String, Object?> edit) {
     'private.npc.setRelationship',
     'private.glossary.setSegment',
     'private.skills.set',
+    // Splice an entry into or out of a trader's stock map, which changes how
+    // many entries it holds. private.traders.setStock is absent: it overwrites a
+    // bare i32 in place.
+    'private.traders.addItem',
+    'private.traders.removeItem',
     storyStateApplyPath,
   }.contains(path);
 }
@@ -4222,6 +4227,13 @@ bool _carriesCallerOrdinal(Map<String, Object?> edit) {
   }
   if (path == 'private.inventory.removeItem') {
     return (value is Map ? value['slotId'] : null) != null;
+  }
+  if (path == 'private.traders.setStock' ||
+      path == 'private.traders.addItem' ||
+      path == 'private.traders.removeItem') {
+    // Every trader edit addresses its row by an index into the trader array that
+    // the user's view supplied.
+    return true;
   }
   return false;
 }

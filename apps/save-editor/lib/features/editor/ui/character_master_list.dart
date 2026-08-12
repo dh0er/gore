@@ -526,7 +526,8 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
   }
 
   /// Compact trailing badges for an actor row: a book when it has captured
-  /// knowledge, a history glyph when it has recorded events. No inventory badge.
+  /// knowledge, a history glyph when it has recorded events, a storefront when
+  /// he runs a shop. No inventory badge — nearly every actor has one.
   Widget? _aspectBadges(
     CharacterRow row,
     ColorScheme scheme,
@@ -546,6 +547,15 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
         Tooltip(
           message: l10n.sectionEvents,
           child: Icon(Icons.history, size: 18, color: scheme.onSurfaceVariant),
+        ),
+      if (row.isTrader)
+        Tooltip(
+          message: l10n.tabTrade,
+          child: Icon(
+            Icons.storefront_outlined,
+            size: 18,
+            color: scheme.onSurfaceVariant,
+          ),
         ),
     ];
     if (badges.isEmpty) return null;

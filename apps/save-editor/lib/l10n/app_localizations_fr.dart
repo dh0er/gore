@@ -445,7 +445,7 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get traderOreHint =>
-      'Le minerai est la monnaie de la colonie. Ce qu\'un marchand possède est ce avec quoi il peut vous payer.';
+      'La valeur en jeu diffère : au chargement, le jeu ajoute ce qui s\'est accumulé depuis son dernier échange — il vend ses surplus et se réapprovisionne. Ce nombre est le point de départ, pas ce qu\'affiche l\'écran de commerce.';
 
   @override
   String get traderPriceWarning =>
@@ -456,12 +456,6 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get traderRemoveItem => 'Retirer la ligne';
-
-  @override
-  String get traderNeverTraded => 'jamais commercé ici';
-
-  @override
-  String get traderTraded => 'déjà commercé ici';
 
   @override
   String get traderReadOnlyCore =>

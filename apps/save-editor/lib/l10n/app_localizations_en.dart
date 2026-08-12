@@ -441,7 +441,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get traderOreHint =>
-      'Ore is the colony\'s currency. The amount a merchant holds is what he can pay you with.';
+      'The in-game figure differs: on load the game adds what accrued since his last trade — he sells surplus goods and restocks from it. This number is the starting point, not what the trade screen shows.';
 
   @override
   String get traderPriceWarning =>
@@ -452,12 +452,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get traderRemoveItem => 'Remove line';
-
-  @override
-  String get traderNeverTraded => 'never traded here';
-
-  @override
-  String get traderTraded => 'already traded here';
 
   @override
   String get traderReadOnlyCore => 'This core build can only read trader data.';

@@ -433,7 +433,8 @@ class AppLocalizationsJa extends AppLocalizations {
   String get traderStockBaseHint => '商人が補充する基準。ストーリーの進行とともに増えるため、初期状態ではありません。';
 
   @override
-  String get traderOreHint => '鉱石はコロニーの通貨です。商人が持っている量が、あなたに支払える額です。';
+  String get traderOreHint =>
+      'ゲーム内の数値は異なります。読み込み時に、前回の取引以降に生じた分が加算されます（余剰品を売り、その分で補充します）。この数値は開始値であり、取引画面に表示される額ではありません。';
 
   @override
   String get traderPriceWarning =>
@@ -444,12 +445,6 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get traderRemoveItem => '行を削除';
-
-  @override
-  String get traderNeverTraded => 'ここで取引したことがない';
-
-  @override
-  String get traderTraded => 'ここで取引済み';
 
   @override
   String get traderReadOnlyCore => 'このコアは商人データの読み取りのみ可能です。';

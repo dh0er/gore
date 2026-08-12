@@ -445,7 +445,7 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get traderOreHint =>
-      'Руда — валюта колонии. Сколько её у торговца, тем он и может вам заплатить.';
+      'В игре число другое: при загрузке игра добавляет накопившееся с его последней торговли — он продаёт излишки и пополняет запасы. Это число — отправная точка, а не сумма в окне торговли.';
 
   @override
   String get traderPriceWarning =>
@@ -456,12 +456,6 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get traderRemoveItem => 'Удалить строку';
-
-  @override
-  String get traderNeverTraded => 'здесь ещё не торговали';
-
-  @override
-  String get traderTraded => 'здесь уже торговали';
 
   @override
   String get traderReadOnlyCore =>

@@ -443,7 +443,7 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get traderOreHint =>
-      'Il minerale è la valuta della colonia. Quello che un mercante possiede è ciò con cui può pagarti.';
+      'Il valore nel gioco è diverso: al caricamento il gioco aggiunge quanto maturato dall\'ultimo scambio — vende le eccedenze e si rifornisce. Questo numero è il punto di partenza, non quello mostrato nella schermata di commercio.';
 
   @override
   String get traderPriceWarning =>
@@ -454,12 +454,6 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get traderRemoveItem => 'Rimuovi riga';
-
-  @override
-  String get traderNeverTraded => 'mai commerciato qui';
-
-  @override
-  String get traderTraded => 'già commerciato qui';
 
   @override
   String get traderReadOnlyCore =>

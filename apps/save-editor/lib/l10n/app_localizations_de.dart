@@ -442,7 +442,7 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get traderOreHint =>
-      'Erz ist die Währung der Kolonie. Was ein Händler davon hat, ist das, womit er dich bezahlen kann.';
+      'Der Wert im Spiel weicht ab: beim Laden rechnet das Spiel dazu, was seit seinem letzten Handel angefallen ist — er verkauft Überschussware und füllt davon auf. Diese Zahl ist der Ausgangswert, nicht der Betrag im Handelsmenü.';
 
   @override
   String get traderPriceWarning =>
@@ -453,12 +453,6 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get traderRemoveItem => 'Zeile entfernen';
-
-  @override
-  String get traderNeverTraded => 'hier noch nie gehandelt';
-
-  @override
-  String get traderTraded => 'hier schon gehandelt';
 
   @override
   String get traderReadOnlyCore => 'Dieser Core kann Händlerdaten nur lesen.';

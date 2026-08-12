@@ -192,6 +192,9 @@ pub struct CharacterSummary {
     pub has_inventory: bool,
     pub has_knowledge: bool,
     pub has_events: bool,
+    /// The character owns a row in the global trader array, i.e. he runs a shop.
+    /// Joined here so the master list can badge merchants without a second query.
+    pub is_trader: bool,
 }
 
 /// The character's UniqueName key: the GlobalId prefix before the first `-`, in
@@ -639,6 +642,17 @@ fn personal_relationships_by_id(root: &RootObject) -> HashMap<String, PersonalRe
 /// (a knowledge UniqueName with no matching actor charKey). The join is the
 /// proven prefix rule ([`char_key`]).
 pub fn list_characters(root: &RootObject) -> Result<Vec<CharacterSummary>, CoreError> {
+    // Merchants, by unique name. A save with no trader array at all is not a
+    // reason to fail the whole character list, so an error here means "nobody
+    // trades" rather than "no characters".
+    let traders: HashSet<String> = crate::traders::list_traders(root)
+        .map(|rows| {
+            rows.into_iter()
+                .filter(|t| !t.placeholder)
+                .map(|t| t.unique_name.to_ascii_lowercase())
+                .collect()
+        })
+        .unwrap_or_default();
     // Knowledge keys in ORIGINAL case, indexed by lowercased form for the join.
     let knowledge_orig = map_keys(root, "CharacterKnowledgeByUniqueName");
     let knowledge_by_lower: HashMap<String, String> = knowledge_orig
@@ -671,6 +685,7 @@ pub fn list_characters(root: &RootObject) -> Result<Vec<CharacterSummary>, CoreE
             has_inventory: inventory.contains(&id_lower),
             has_knowledge,
             has_events: events.contains(&id_lower),
+            is_trader: traders.contains(&lk),
         });
     }
     // Knowledge-only orphans (original case), no matching actor charKey.
@@ -688,6 +703,8 @@ pub fn list_characters(root: &RootObject) -> Result<Vec<CharacterSummary>, CoreE
             has_inventory: false,
             has_knowledge: true,
             has_events: false,
+            // An orphan has no actor, so it can own no shop.
+            is_trader: false,
         });
     }
     Ok(out)

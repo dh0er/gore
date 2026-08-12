@@ -881,7 +881,7 @@ abstract class AppLocalizations {
   /// No description provided for @traderOreHint.
   ///
   /// In en, this message translates to:
-  /// **'Ore is the colony\'s currency. The amount a merchant holds is what he can pay you with.'**
+  /// **'The in-game figure differs: on load the game adds what accrued since his last trade — he sells surplus goods and restocks from it. This number is the starting point, not what the trade screen shows.'**
   String get traderOreHint;
 
   /// No description provided for @traderPriceWarning.
@@ -901,18 +901,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Remove line'**
   String get traderRemoveItem;
-
-  /// No description provided for @traderNeverTraded.
-  ///
-  /// In en, this message translates to:
-  /// **'never traded here'**
-  String get traderNeverTraded;
-
-  /// No description provided for @traderTraded.
-  ///
-  /// In en, this message translates to:
-  /// **'already traded here'**
-  String get traderTraded;
 
   /// No description provided for @traderReadOnlyCore.
   ///

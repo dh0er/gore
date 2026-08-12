@@ -428,7 +428,8 @@ class AppLocalizationsZh extends AppLocalizations {
   String get traderStockBaseHint => '商人补货的基准。会随剧情推进而增长，因此不是初始状态。';
 
   @override
-  String get traderOreHint => '矿石是殖民地的货币。商人持有的数量决定了他能付给你多少。';
+  String get traderOreHint =>
+      '游戏内的数值会不同：载入时游戏会加上自他上次交易以来累积的部分——他会卖掉多余货物并以此补货。这个数字是起点，而非交易界面显示的金额。';
 
   @override
   String get traderPriceWarning => '价格会随商人的库存量和持有矿石而变化，因此修改这些数字也可能改变他的开价。';
@@ -438,12 +439,6 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get traderRemoveItem => '移除条目';
-
-  @override
-  String get traderNeverTraded => '尚未在此交易';
-
-  @override
-  String get traderTraded => '已在此交易过';
 
   @override
   String get traderReadOnlyCore => '此核心版本只能读取商人数据。';
@@ -3171,7 +3166,8 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get traderStockBaseHint => '商人补货的基准。会随剧情推进而增长，因此不是初始状态。';
 
   @override
-  String get traderOreHint => '矿石是殖民地的货币。商人持有的数量决定了他能付给你多少。';
+  String get traderOreHint =>
+      '游戏内的数值会不同：载入时游戏会加上自他上次交易以来累积的部分——他会卖掉多余货物并以此补货。这个数字是起点，而非交易界面显示的金额。';
 
   @override
   String get traderPriceWarning => '价格会随商人的库存量和持有矿石而变化，因此修改这些数字也可能改变他的开价。';
@@ -3181,12 +3177,6 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get traderRemoveItem => '移除条目';
-
-  @override
-  String get traderNeverTraded => '尚未在此交易';
-
-  @override
-  String get traderTraded => '已在此交易过';
 
   @override
   String get traderReadOnlyCore => '此核心版本只能读取商人数据。';

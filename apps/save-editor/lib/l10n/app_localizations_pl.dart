@@ -444,7 +444,7 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get traderOreHint =>
-      'Ruda jest walutą kolonii. To, ile kupiec jej ma, jest tym, czym może ci zapłacić.';
+      'Wartość w grze się różni: przy wczytaniu gra dolicza to, co narosło od jego ostatniego handlu — sprzedaje nadwyżki i z tego uzupełnia zapasy. Ta liczba to punkt wyjścia, a nie kwota z ekranu handlu.';
 
   @override
   String get traderPriceWarning =>
@@ -455,12 +455,6 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get traderRemoveItem => 'Usuń pozycję';
-
-  @override
-  String get traderNeverTraded => 'nigdy tu nie handlowano';
-
-  @override
-  String get traderTraded => 'już tu handlowano';
 
   @override
   String get traderReadOnlyCore =>

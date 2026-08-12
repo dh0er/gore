@@ -2,10 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/features/editor/domain/trader_models.dart';
+import 'package:goresave/features/editor/ui/pending_structural_row.dart';
+import 'package:goresave/loc/loc_catalog_provider.dart';
 import 'package:goresave/providers/data_providers.dart';
+
+import 'support/ui_settings_test_store.dart';
 
 /// The Handel (trade) sub-tab. A merchant's shop is NOT his inventory: it lives
 /// in a global array addressed by index, and his ore inside that shop is what he
@@ -183,7 +188,12 @@ void main() {
   });
 
   group('Handel tab', () {
-    Future<void> pumpApp(WidgetTester tester, GoresaveCoreService core) async {
+    Future<void> pumpApp(
+      WidgetTester tester,
+      GoresaveCoreService core, {
+      bool showObjectIds = false,
+      Map<String, Map<String, String>>? locCatalog,
+    }) async {
       await tester.binding.setSurfaceSize(const Size(1400, 1000));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pumpWidget(
@@ -193,6 +203,11 @@ void main() {
             editorSettingsStoreProvider.overrideWithValue(
               const NoopEditorSettingsStore(),
             ),
+            uiSettingsStoreProvider.overrideWithValue(
+              TestUiSettingsStore(showObjectIds: showObjectIds),
+            ),
+            if (locCatalog != null)
+              locCatalogProvider.overrideWith((ref) async => locCatalog),
           ],
           child: const GoresaveApp(),
         ),
@@ -216,6 +231,232 @@ void main() {
         core.requests.where((r) => r.command == 'private.traders.detail'),
         isEmpty,
       );
+    });
+
+    testWidgets('a queued addition is visible before the save', (tester) async {
+      // Regression: a new line has no counterpart in the loaded stock, so
+      // without rendering the queued edit it stayed invisible until the next
+      // save — unlike the inventory, which shows its queued additions.
+      final core = _TraderCoreService(playerIsTrader: true);
+      await pumpApp(tester, core);
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.add_circle_outline), findsNothing);
+      expect(find.text('ItFo_Cheese'), findsNothing);
+
+      // Queue the add the way the panel does, then let it rebuild.
+      final notifier = ProviderScope.containerOf(
+        tester.element(find.byType(Scaffold).first),
+      ).read(editorProvider.notifier);
+      notifier.setTraderStockEdit(
+        const TraderStockEdit(
+          kind: TraderEditKind.addItem,
+          index: 7,
+          map: TraderStockMap.current,
+          path: '/Script/Angelscript.ItFo_Cheese',
+          count: 9,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Shown as a banner BESIDE the list, the way the inventory shows its own
+      // queued additions — not as a row among the saved lines, which would
+      // claim a state the save does not have.
+      expect(find.byType(PendingStructuralRow), findsOneWidget);
+      expect(find.text('ItFo_Cheese'), findsOneWidget);
+      expect(find.text('×9 — pending add (not yet saved)'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
+
+      // Cancelling it takes the banner away again.
+      await tester.tap(find.descendant(
+        of: find.byType(PendingStructuralRow),
+        matching: find.byIcon(Icons.close),
+      ));
+      await tester.pumpAndSettle();
+      expect(find.byType(PendingStructuralRow), findsNothing);
+      expect(find.text('ItFo_Cheese'), findsNothing);
+    });
+
+    testWidgets('a save re-reads the stock instead of showing stale rows', (
+      tester,
+    ) async {
+      // Regression: the tab is kept alive, and the panel only reloaded when the
+      // merchant or the save path changed — neither of which a save does. The
+      // reload key carries the inspection so a save re-reads.
+      final core = _TraderCoreService(playerIsTrader: true);
+      await pumpApp(tester, core);
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+
+      final before = core.requests
+          .where((r) => r.command == 'private.traders.detail')
+          .length;
+      expect(before, greaterThan(0));
+
+      // Queue something, save, and let the trailing refresh run.
+      final notifier = ProviderScope.containerOf(
+        tester.element(find.byType(Scaffold).first),
+      ).read(editorProvider.notifier);
+      notifier.setTraderStockEdit(
+        const TraderStockEdit(
+          kind: TraderEditKind.setStock,
+          index: 7,
+          map: TraderStockMap.current,
+          path: kTraderOrePath,
+          count: 4242,
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Save (1)'));
+      await tester.pumpAndSettle();
+
+      expect(
+        core.requests.where((r) => r.command == 'write_save'),
+        isNotEmpty,
+        reason: 'the save must actually go out',
+      );
+      expect(
+        core.requests.where((r) => r.command == 'private.traders.detail').length,
+        greaterThan(before),
+        reason: 'the panel must re-read after the save',
+      );
+    });
+
+    testWidgets('two additions are split into separate writes', (tester) async {
+      // Regression: an insert changes how many entries a map holds, and every
+      // trader edit is addressed by an index — so the core refuses two of them
+      // in one write. The app has to split them itself; when its classification
+      // did not mirror the core's, saving an addition to the restock baseline
+      // beside one to the live stock failed outright.
+      final core = _TraderCoreService(playerIsTrader: true);
+      await pumpApp(tester, core);
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+
+      final notifier = ProviderScope.containerOf(
+        tester.element(find.byType(Scaffold).first),
+      ).read(editorProvider.notifier);
+      for (final map in TraderStockMap.values) {
+        notifier.setTraderStockEdit(
+          TraderStockEdit(
+            kind: TraderEditKind.addItem,
+            index: 7,
+            map: map,
+            path: '/Script/Angelscript.ItFo_Cheese',
+            count: 2,
+          ),
+        );
+      }
+      await tester.pumpAndSettle();
+      // Only the selected map is on screen, so only its banner shows — but both
+      // edits are queued and both must reach the core.
+      expect(find.byType(PendingStructuralRow), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Save (2)'));
+      await tester.pumpAndSettle();
+
+      final writes = core.requests
+          .where((r) => r.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(2), reason: 'one write per insert');
+      for (final w in writes) {
+        expect((w.payload['edits'] as List), hasLength(1));
+      }
+    });
+
+    testWidgets('a queued addition prints its class path only when ids are on', (
+      tester,
+    ) async {
+      Future<void> queueAdd(WidgetTester tester) async {
+        await tester.tap(find.widgetWithText(Tab, 'Characters'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.widgetWithText(Tab, 'Trade'));
+        await tester.pumpAndSettle();
+        ProviderScope.containerOf(tester.element(find.byType(Scaffold).first))
+            .read(editorProvider.notifier)
+            .setTraderStockEdit(
+              const TraderStockEdit(
+                kind: TraderEditKind.addItem,
+                index: 7,
+                map: TraderStockMap.current,
+                path: '/Script/Angelscript.ItFo_Cheese',
+                count: 1,
+              ),
+            );
+        await tester.pumpAndSettle();
+      }
+
+      await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
+      await queueAdd(tester);
+      expect(find.text('/Script/Angelscript.ItFo_Cheese'), findsNothing);
+
+      await pumpApp(
+        tester,
+        _TraderCoreService(playerIsTrader: true),
+        showObjectIds: true,
+      );
+      await queueAdd(tester);
+      expect(find.text('/Script/Angelscript.ItFo_Cheese'), findsOneWidget);
+    });
+
+    testWidgets('stock is grouped by category and the sidebar filters it', (
+      tester,
+    ) async {
+      await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+
+      // One sidebar entry per populated category, counted. Ore is not among
+      // them: in the live stock it has its own card, so it leaves the list.
+      expect(find.text('Melee weapons (1)'), findsOneWidget);
+      expect(find.text('Ammunition (1)'), findsOneWidget);
+      expect(find.text('Food & potions (2)'), findsOneWidget);
+      expect(find.textContaining('Miscellaneous'), findsNothing);
+
+      // The list shows the selected category only — melee comes first.
+      expect(find.text('ItMw_1H_Sword_01'), findsOneWidget);
+      expect(find.text('ItFo_Loaf'), findsNothing);
+
+      await tester.tap(find.text('Food & potions (2)'));
+      await tester.pumpAndSettle();
+      expect(find.text('ItFo_Loaf'), findsOneWidget);
+      expect(find.text('ItFo_Apple'), findsOneWidget);
+      expect(find.text('ItMw_1H_Sword_01'), findsNothing);
+    });
+
+    testWidgets('a category sorts by the localized name, not the class id', (
+      tester,
+    ) async {
+      // By class id ItFo_Apple leads ItFo_Loaf; by name "Brot" leads "Apfel"
+      // — this is the order the user reads, so it is the order that counts.
+      await pumpApp(
+        tester,
+        _TraderCoreService(playerIsTrader: true),
+        // The real loader lowercases its keys; the override supplies them so.
+        locCatalog: const {
+          'itfo_apple': {'english': 'Zucchini'},
+          'itfo_loaf': {'english': 'Bread'},
+        },
+      );
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Food & potions (2)'));
+      await tester.pumpAndSettle();
+
+      final bread = tester.getTopLeft(find.text('Bread')).dy;
+      final zucchini = tester.getTopLeft(find.text('Zucchini')).dy;
+      expect(bread, lessThan(zucchini));
     });
 
     testWidgets('a merchant shows his ore and both stock sections', (
@@ -391,6 +632,24 @@ class _TraderCoreService implements GoresaveCoreService {
                 'path': '/Script/Angelscript.ItFo_Loaf',
                 'id': 'ItFo_Loaf',
                 'count': 3,
+                'unknownItem': false,
+              },
+              {
+                'path': '/Script/Angelscript.ItFo_Apple',
+                'id': 'ItFo_Apple',
+                'count': 7,
+                'unknownItem': false,
+              },
+              {
+                'path': '/Script/Angelscript.ItMw_1H_Sword_01',
+                'id': 'ItMw_1H_Sword_01',
+                'count': 1,
+                'unknownItem': false,
+              },
+              {
+                'path': '/Script/Angelscript.ItAm_Arrow',
+                'id': 'ItAm_Arrow',
+                'count': 18,
                 'unknownItem': false,
               },
             ],

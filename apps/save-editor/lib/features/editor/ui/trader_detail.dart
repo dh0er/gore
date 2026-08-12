@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
+import 'package:goresave/features/editor/domain/item_categories.dart';
 import 'package:goresave/features/editor/domain/trader_models.dart';
 import 'package:goresave/features/editor/ui/add_inventory_item_dialog.dart';
+import 'package:goresave/features/editor/ui/pending_structural_row.dart';
+import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
 import 'package:goresave/providers/data_providers.dart';
@@ -25,6 +29,7 @@ class TraderPanel extends ConsumerStatefulWidget {
     required this.notifier,
     required this.actor,
     required this.editable,
+    required this.reloadKey,
   });
 
   final SaveInspection inspection;
@@ -34,6 +39,12 @@ class TraderPanel extends ConsumerStatefulWidget {
   /// Same save-wide gate the other editing panes take
   /// (`privateEditable && privateTypedVerified && codecCompressReady`).
   final bool editable;
+
+  /// Changes when the panel must re-read from disk: a different merchant, or the
+  /// same one after a save re-inspected the file. Without the inspection in here
+  /// a save would leave the panel showing the pre-save stock — the tab is kept
+  /// alive across switches, so nothing else would ever trigger the reload.
+  final Object reloadKey;
 
   @override
   ConsumerState<TraderPanel> createState() => _TraderPanelState();
@@ -45,9 +56,19 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
   String? _error;
   bool _loading = true;
 
-  /// Which save and actor the currently held data belongs to, so a reload that
-  /// lands after the user moved on is discarded instead of shown.
-  String? _loadedFor;
+  /// Guards against a slow reload landing after a newer one: only the newest
+  /// epoch may write to the state.
+  int _epoch = 0;
+
+  /// Which of the two stock maps is on screen. They hold the same kind of data
+  /// and are edited the same way, so showing both at once only invited the
+  /// question which one the ore field belonged to.
+  TraderStockMap _map = TraderStockMap.current;
+
+  /// Which category the sidebar has selected. Null until the first build picks
+  /// one, and reset whenever the selection no longer has any lines — switching
+  /// maps can empty it.
+  ItemCategory? _category;
 
   @override
   void initState() {
@@ -58,23 +79,18 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
   @override
   void didUpdateWidget(covariant TraderPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.actor.uniqueName != widget.actor.uniqueName ||
-        oldWidget.notifier.selectedPath != widget.notifier.selectedPath) {
-      _load();
-    }
+    if (widget.reloadKey != oldWidget.reloadKey) _load();
   }
 
-  String get _token => '${widget.notifier.selectedPath}|${widget.actor.uniqueName}';
-
   Future<void> _load() async {
-    final token = _token;
+    final epoch = ++_epoch;
     setState(() {
       _loading = true;
       _error = null;
       _detail = null;
     });
     final list = await widget.notifier.loadTraders();
-    if (!mounted || _token != token) return;
+    if (!mounted || epoch != _epoch) return;
     if (list.error != null) {
       setState(() {
         _loading = false;
@@ -90,18 +106,16 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
         _loading = false;
         _list = list;
         _detail = null;
-        _loadedFor = token;
       });
       return;
     }
     final detail = await widget.notifier.loadTraderDetail(row.index);
-    if (!mounted || _token != token) return;
+    if (!mounted || epoch != _epoch) return;
     setState(() {
       _loading = false;
       _list = list;
       _error = detail.error;
       _detail = detail.detail;
-      _loadedFor = token;
     });
   }
 
@@ -124,7 +138,7 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
       );
     }
     final detail = _detail;
-    if (detail == null || _loadedFor != _token) {
+    if (detail == null) {
       return _Message(
         icon: Icons.storefront_outlined,
         title: l10n.tabTrade,
@@ -137,73 +151,90 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
     final canAdd = widget.editable && (list?.canAddItem ?? false);
     final canRemove = widget.editable && (list?.canRemoveItem ?? false);
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-      children: [
-        _OreCard(
-          detail: detail,
-          editable: canSet,
-          onChanged: (value) => _queueSet(TraderStockMap.current, kTraderOrePath, value),
-          onRevert: () => _revert(TraderStockMap.current, kTraderOrePath),
-          pending: _pendingCountFor(TraderStockMap.current, kTraderOrePath),
-        ),
-        const SizedBox(height: 12),
-        Card(
-          margin: EdgeInsets.zero,
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(Icons.info_outline, size: 18, color: theme.colorScheme.primary),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    l10n.traderPriceWarning,
-                    style: theme.textTheme.bodySmall,
-                  ),
+    // The live stock gets the ore its own card, because that number is the
+    // merchant's purchasing power and not just another line. The restock
+    // baseline has no such meaning, so there its ore stays an ordinary row.
+    final showOreCard = _map == TraderStockMap.current;
+    final removals = _pendingRemovals(_map);
+    final rows = [
+      for (final item in detail.stock(_map))
+        if (!(showOreCard && item.isOre) && !removals.contains(item.path)) item,
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // First, because it qualifies every number below it — the ore as much
+          // as the stock counts.
+          _NoteCard(text: l10n.traderPriceWarning),
+          if (widget.editable && !(list?.canSetStock ?? false)) ...[
+            const SizedBox(height: 12),
+            Text(l10n.traderReadOnlyCore, style: theme.textTheme.bodySmall),
+          ],
+          const SizedBox(height: 16),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: SegmentedButton<TraderStockMap>(
+              segments: [
+                ButtonSegment(
+                  value: TraderStockMap.current,
+                  icon: const Icon(Icons.storefront_outlined),
+                  label: Text(l10n.traderStockCurrent),
+                ),
+                ButtonSegment(
+                  value: TraderStockMap.base,
+                  icon: const Icon(Icons.inventory_outlined),
+                  label: Text(l10n.traderStockBase),
                 ),
               ],
+              selected: {_map},
+              onSelectionChanged: (selection) =>
+                  setState(() => _map = selection.first),
             ),
           ),
-        ),
-        if (widget.editable && !(list?.canSetStock ?? false)) ...[
-          const SizedBox(height: 12),
-          Text(l10n.traderReadOnlyCore, style: theme.textTheme.bodySmall),
+          if (_map == TraderStockMap.base) ...[
+            const SizedBox(height: 8),
+            Text(l10n.traderStockBaseHint, style: theme.textTheme.bodySmall),
+          ],
+          if (showOreCard) ...[
+            const SizedBox(height: 16),
+            _OreCard(
+              detail: detail,
+              editable: canSet,
+              onChanged: (value) => _queueSet(_map, kTraderOrePath, value),
+              onRevert: () => _revert(_map, kTraderOrePath),
+              pending: _pendingCountFor(_map, kTraderOrePath),
+            ),
+          ],
+          const SizedBox(height: 16),
+          Expanded(
+            child: _StockSection(
+              map: _map,
+              items: rows,
+              lineCount: detail.stock(_map).length,
+              pendingAdds: _pendingAdds(_map),
+              pendingRemovals: [
+                for (final item in detail.stock(_map))
+                  if (removals.contains(item.path)) item,
+              ],
+              canSet: canSet,
+              canAdd: canAdd,
+              canRemove: canRemove,
+              selectedCategory: _category,
+              onSelectCategory: (category) =>
+                  setState(() => _category = category),
+              pendingOf: _pendingCountFor,
+              onChanged: _queueSet,
+              onRevert: _revert,
+              onRemove: _queueRemove,
+              onRevertAdd: _revertAdd,
+              onAdd: () => _addItem(_map, detail),
+            ),
+          ),
         ],
-        const SizedBox(height: 16),
-        _StockSection(
-          title: l10n.traderStockCurrent,
-          hint: null,
-          map: TraderStockMap.current,
-          items: detail.items,
-          canSet: canSet,
-          canAdd: canAdd,
-          canRemove: canRemove,
-          pendingOf: _pendingCountFor,
-          isRemovalPending: _isRemovalPending,
-          onChanged: _queueSet,
-          onRevert: _revert,
-          onRemove: _queueRemove,
-          onAdd: () => _addItem(TraderStockMap.current, detail),
-        ),
-        const SizedBox(height: 24),
-        _StockSection(
-          title: l10n.traderStockBase,
-          hint: l10n.traderStockBaseHint,
-          map: TraderStockMap.base,
-          items: detail.defaultItems,
-          canSet: canSet,
-          canAdd: canAdd,
-          canRemove: canRemove,
-          pendingOf: _pendingCountFor,
-          isRemovalPending: _isRemovalPending,
-          onChanged: _queueSet,
-          onRevert: _revert,
-          onRemove: _queueRemove,
-          onAdd: () => _addItem(TraderStockMap.base, detail),
-        ),
-      ],
+      ),
     );
   }
 
@@ -235,10 +266,62 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
     return null;
   }
 
-  bool _isRemovalPending(TraderStockMap map, String path) {
-    final key = _edit(TraderEditKind.removeItem, map, path).pendingKey;
-    final pending = ref.read(editorProvider).pendingEdits[key];
-    return pending?.edits.firstOrNull?['path'] == 'private.traders.removeItem';
+  bool _isRemovalPending(TraderStockMap map, String path) =>
+      _pendingRemovals(map).contains(path);
+
+  /// Item paths queued for removal. They are taken OUT of the list and shown as
+  /// a banner above it instead: a struck-through row still reads as something
+  /// the save contains, and after the write it will not.
+  Set<String> _pendingRemovals(TraderStockMap map) {
+    final prefix = 'traders:$_index:${map.wire}:';
+    final out = <String>{};
+    ref.read(editorProvider).pendingEdits.forEach((key, pending) {
+      if (!key.startsWith(prefix)) return;
+      final edit = pending.edits.firstOrNull;
+      if (edit?['path'] != 'private.traders.removeItem') return;
+      final value = edit?['value'];
+      if (value is Map && value['path'] is String) {
+        out.add(value['path'] as String);
+      }
+    });
+    return out;
+  }
+
+  /// Lines queued for insertion but not saved yet.
+  ///
+  /// A new line has no counterpart in the loaded stock, so it would otherwise be
+  /// invisible until the next save — the inventory shows its queued additions
+  /// the same way. Read out of the notifier rather than a local list so a tab
+  /// switch (which keeps this panel alive but rebuilds it) cannot lose them.
+  List<TraderItem> _pendingAdds(TraderStockMap map) {
+    final prefix = 'traders:$_index:${map.wire}:';
+    final out = <TraderItem>[];
+    ref.read(editorProvider).pendingEdits.forEach((key, pending) {
+      if (!key.startsWith(prefix)) return;
+      final edit = pending.edits.firstOrNull;
+      if (edit?['path'] != 'private.traders.addItem') return;
+      final value = edit?['value'];
+      if (value is! Map) return;
+      final path = value['path'] as String? ?? '';
+      if (path.isEmpty) return;
+      out.add(
+        TraderItem(
+          path: path,
+          id: path.split('.').last,
+          count: (value['count'] as num?)?.toInt() ?? 0,
+          unknownItem: false,
+        ),
+      );
+    });
+    out.sort((a, b) => a.id.compareTo(b.id));
+    return out;
+  }
+
+  void _revertAdd(TraderStockMap map, String path) {
+    widget.notifier.clearTraderStockEdit(
+      _edit(TraderEditKind.addItem, map, path),
+    );
+    setState(() {});
   }
 
   void _queueSet(TraderStockMap map, String path, int count) {
@@ -321,15 +404,6 @@ class _OreCard extends ConsumerWidget {
                   Text(l10n.traderOre, style: theme.textTheme.titleMedium),
                   const SizedBox(height: 4),
                   Text(l10n.traderOreHint, style: theme.textTheme.bodySmall),
-                  const SizedBox(height: 4),
-                  Text(
-                    detail.summary.traded
-                        ? l10n.traderTraded
-                        : l10n.traderNeverTraded,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.outline,
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -356,62 +430,119 @@ class _OreCard extends ConsumerWidget {
   }
 }
 
-class _StockSection extends StatelessWidget {
-  const _StockSection({
-    required this.title,
-    required this.hint,
-    required this.map,
-    required this.items,
-    required this.canSet,
-    required this.canAdd,
-    required this.canRemove,
-    required this.pendingOf,
-    required this.isRemovalPending,
-    required this.onChanged,
-    required this.onRevert,
-    required this.onRemove,
-    required this.onAdd,
-  });
+class _NoteCard extends StatelessWidget {
+  const _NoteCard({required this.text});
 
-  final String title;
-  final String? hint;
-  final TraderStockMap map;
-  final List<TraderItem> items;
-  final bool canSet;
-  final bool canAdd;
-  final bool canRemove;
-  final int? Function(TraderStockMap, String) pendingOf;
-  final bool Function(TraderStockMap, String) isRemovalPending;
-  final void Function(TraderStockMap, String, int) onChanged;
-  final void Function(TraderStockMap, String) onRevert;
-  final void Function(TraderStockMap, String) onRemove;
-  final VoidCallback onAdd;
+  final String text;
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              Icons.info_outline,
+              size: 18,
+              color: theme.colorScheme.primary,
+            ),
+            const SizedBox(width: 8),
+            Expanded(child: Text(text, style: theme.textTheme.bodySmall)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StockSection extends ConsumerWidget {
+  const _StockSection({
+    required this.map,
+    required this.items,
+    required this.lineCount,
+    required this.pendingAdds,
+    required this.pendingRemovals,
+    required this.canSet,
+    required this.canAdd,
+    required this.canRemove,
+    required this.selectedCategory,
+    required this.onSelectCategory,
+    required this.pendingOf,
+    required this.onChanged,
+    required this.onRevert,
+    required this.onRemove,
+    required this.onRevertAdd,
+    required this.onAdd,
+  });
+
+  /// Below this width the sidebar would leave the list unusably narrow, so the
+  /// categories collapse into one flat list instead. Same threshold the
+  /// inventory browser uses.
+  static const double _compactBelow = 600;
+
+  final TraderStockMap map;
+
+  /// The rows to draw: saved lines minus the ones queued for removal, and minus
+  /// the ore when it has its own card.
+  final List<TraderItem> items;
+
+  /// How many lines the map holds on disk. The header states this rather than
+  /// [items].length, which no longer counts the rows filtered out of the view.
+  final int lineCount;
+  final List<TraderItem> pendingAdds;
+  final List<TraderItem> pendingRemovals;
+  final bool canSet;
+  final bool canAdd;
+  final bool canRemove;
+  final ItemCategory? selectedCategory;
+  final void Function(ItemCategory) onSelectCategory;
+  final int? Function(TraderStockMap, String) pendingOf;
+  final void Function(TraderStockMap, String, int) onChanged;
+  final void Function(TraderStockMap, String) onRevert;
+  final void Function(TraderStockMap, String) onRemove;
+  final void Function(TraderStockMap, String) onRevertAdd;
+  final VoidCallback onAdd;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
+    // Sort by the name the user actually reads, the way the inventory does.
+    // `.value` (not `.asData?.value`) so a background catalog refresh keeps the
+    // previous order instead of briefly re-sorting by raw class id.
+    final lang = ref.watch(currentGameLangProvider);
+    final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
+    String nameOf(TraderItem item) =>
+        localizedGameName(locCatalog, lang, item.id) ?? item.id;
+    final groups = _grouped(items, displayNameOf: nameOf);
+    // Hold the chosen category while it still has lines; otherwise fall back to
+    // the first one so the list is never blank next to a populated sidebar.
+    final selected = groups.any((g) => g.category == selectedCategory)
+        ? selectedCategory
+        : (groups.isEmpty ? null : groups.first.category);
+    final shown = groups
+            .where((g) => g.category == selected)
+            .firstOrNull
+            ?.items ??
+        const <TraderItem>[];
+    final nothingToShow =
+        items.isEmpty && pendingAdds.isEmpty && pendingRemovals.isEmpty;
+
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Row(
           children: [
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: theme.textTheme.titleMedium),
-                  Text(
-                    l10n.traderStockLineCount(items.length),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.outline,
-                    ),
-                  ),
-                  if (hint != null) ...[
-                    const SizedBox(height: 4),
-                    Text(hint!, style: theme.textTheme.bodySmall),
-                  ],
-                ],
+              child: Text(
+                l10n.traderStockLineCount(lineCount),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
               ),
             ),
             if (canAdd)
@@ -422,33 +553,171 @@ class _StockSection extends StatelessWidget {
               ),
           ],
         ),
+        // Queued changes sit ABOVE the list: they are what the next save will
+        // do, while the list below is what the save holds right now.
+        for (final item in pendingAdds) ...[
+          const SizedBox(height: 8),
+          _PendingLineRow(
+            item: item,
+            tone: PendingTone.add,
+            onCancel: () => onRevertAdd(map, item.path),
+          ),
+        ],
+        for (final item in pendingRemovals) ...[
+          const SizedBox(height: 8),
+          _PendingLineRow(
+            item: item,
+            tone: PendingTone.remove,
+            onCancel: () => onRemove(map, item.path),
+          ),
+        ],
         const SizedBox(height: 8),
-        if (items.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Text(l10n.traderEmptyStock, style: theme.textTheme.bodyMedium),
+        if (nothingToShow)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              l10n.traderEmptyStock,
+              style: theme.textTheme.bodyMedium,
+            ),
           )
         else
-          Card(
-            margin: EdgeInsets.zero,
-            child: Column(
-              children: [
-                for (final item in items)
-                  _StockRow(
-                    item: item,
-                    map: map,
-                    canSet: canSet,
-                    canRemove: canRemove,
-                    pending: pendingOf(map, item.path),
-                    removalPending: isRemovalPending(map, item.path),
-                    onChanged: (v) => onChanged(map, item.path, v),
-                    onRevert: () => onRevert(map, item.path),
-                    onRemove: () => onRemove(map, item.path),
-                  ),
-              ],
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final compact = constraints.maxWidth < _compactBelow;
+                final rows = compact ? items : shown;
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (!compact) ...[
+                      SizedBox(
+                        width: 200,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.surfaceContainerLow,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: SingleChildScrollView(
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            child: Column(
+                              children: [
+                                for (final group in groups)
+                                  SidebarTile(
+                                    icon: iconForItemCategory(group.category),
+                                    label: l10n.categoryWithCount(
+                                      localizedItemCategoryLabel(
+                                        l10n,
+                                        group.category,
+                                      ),
+                                      group.items.length,
+                                    ),
+                                    selected: group.category == selected,
+                                    onTap: () => onSelectCategory(
+                                      group.category,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                    ],
+                    Expanded(
+                      child: ListView.builder(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        itemCount: rows.length,
+                        itemBuilder: (context, index) => _StockRow(
+                          item: rows[index],
+                          map: map,
+                          canSet: canSet,
+                          canRemove: canRemove,
+                          pending: pendingOf(map, rows[index].path),
+                          onChanged: (v) =>
+                              onChanged(map, rows[index].path, v),
+                          onRevert: () => onRevert(map, rows[index].path),
+                          onRemove: () => onRemove(map, rows[index].path),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
             ),
           ),
       ],
+    );
+  }
+}
+
+/// One category's lines, in [ItemCategory] declaration order.
+class _StockGroup {
+  const _StockGroup({required this.category, required this.items});
+
+  final ItemCategory category;
+  final List<TraderItem> items;
+}
+
+/// Group a stock map the way the inventory groups its own items — same
+/// classifier, so a sword lands under Melee weapons in both places, and the same
+/// sort: case-insensitively by the localized name the user reads, with the class
+/// id as a stable tiebreak.
+List<_StockGroup> _grouped(
+  List<TraderItem> items, {
+  required String Function(TraderItem item) displayNameOf,
+}) {
+  final byCategory = <ItemCategory, List<TraderItem>>{};
+  for (final item in items) {
+    byCategory.putIfAbsent(itemCategoryFromId(item.id), () => []).add(item);
+  }
+  int compare(TraderItem a, TraderItem b) {
+    final byName = displayNameOf(
+      a,
+    ).toLowerCase().compareTo(displayNameOf(b).toLowerCase());
+    return byName != 0 ? byName : a.id.compareTo(b.id);
+  }
+
+  return [
+    for (final category in ItemCategory.values)
+      if (byCategory.containsKey(category))
+        _StockGroup(
+          category: category,
+          items: byCategory[category]!..sort(compare),
+        ),
+  ];
+}
+
+/// A queued change, shown above the list rather than inside it. An insertion
+/// has no row yet, and a removal's row is about to stop existing — drawing
+/// either among the saved lines would claim a state the save does not have.
+class _PendingLineRow extends ConsumerWidget {
+  const _PendingLineRow({
+    required this.item,
+    required this.tone,
+    required this.onCancel,
+  });
+
+  final TraderItem item;
+  final PendingTone tone;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = AppLocalizations.of(context);
+    final lang = ref.watch(currentGameLangProvider);
+    final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
+    final showObjectIds = ref.watch(showObjectIdsProvider);
+    final isAdd = tone == PendingTone.add;
+    return PendingStructuralRow(
+      tone: tone,
+      icon: isAdd ? Icons.add_circle_outline : Icons.delete_outline,
+      title: localizedGameName(locCatalog, lang, item.id) ?? item.id,
+      subtitle: isAdd
+          ? l10n.pendingAddSubtitle(item.count)
+          : l10n.pendingRemovalSubtitle,
+      technicalId: showObjectIds ? item.path : null,
+      cancelTooltip: isAdd ? l10n.cancelPendingAdd : l10n.cancelPendingRemoval,
+      onCancel: onCancel,
     );
   }
 }
@@ -460,7 +729,6 @@ class _StockRow extends ConsumerWidget {
     required this.canSet,
     required this.canRemove,
     required this.pending,
-    required this.removalPending,
     required this.onChanged,
     required this.onRevert,
     required this.onRemove,
@@ -471,7 +739,6 @@ class _StockRow extends ConsumerWidget {
   final bool canSet;
   final bool canRemove;
   final int? pending;
-  final bool removalPending;
   final void Function(int) onChanged;
   final VoidCallback onRevert;
   final VoidCallback onRemove;
@@ -485,25 +752,24 @@ class _StockRow extends ConsumerWidget {
     // catalog instead of briefly dropping every row back to its raw class id.
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
     final label = localizedGameName(locCatalog, lang, item.id) ?? item.id;
+    final showObjectIds = ref.watch(showObjectIdsProvider);
+    // The id repeats the title whenever no localized name exists, so drop it
+    // then rather than printing the same string twice.
+    final id = showObjectIds && label != item.id ? item.id : null;
+    final subtitle = [
+      ?id,
+      if (item.unknownItem) l10n.traderUnknownItem,
+    ].join(' · ');
 
     return ListTile(
       dense: true,
       leading: item.isOre
           ? Icon(Icons.savings_outlined, color: theme.colorScheme.primary)
           : const Icon(Icons.inventory_2_outlined),
-      title: Text(
-        label,
-        style: removalPending
-            ? theme.textTheme.bodyMedium?.copyWith(
-                decoration: TextDecoration.lineThrough,
-                color: theme.colorScheme.outline,
-              )
-            : null,
-      ),
-      subtitle: Text(
-        item.unknownItem ? '${item.id} · ${l10n.traderUnknownItem}' : item.id,
-        style: theme.textTheme.bodySmall,
-      ),
+      title: Text(label),
+      subtitle: subtitle.isEmpty
+          ? null
+          : Text(subtitle, style: theme.textTheme.bodySmall),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -514,7 +780,7 @@ class _StockRow extends ConsumerWidget {
               pending: pending,
               // An unknown class is shown but never edited: we cannot vouch for
               // what the game does with a line it does not recognise.
-              enabled: canSet && !removalPending && !item.unknownItem,
+              enabled: canSet && !item.unknownItem,
               onChanged: onChanged,
               onRevert: onRevert,
             ),
@@ -522,10 +788,7 @@ class _StockRow extends ConsumerWidget {
           if (canRemove)
             IconButton(
               tooltip: l10n.traderRemoveItem,
-              icon: Icon(
-                removalPending ? Icons.undo : Icons.delete_outline,
-                size: 20,
-              ),
+              icon: const Icon(Icons.delete_outline, size: 20),
               onPressed: onRemove,
             ),
         ],

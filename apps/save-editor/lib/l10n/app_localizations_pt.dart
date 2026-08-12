@@ -443,7 +443,7 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get traderOreHint =>
-      'O minério é a moeda da colónia. O que um mercador tem é aquilo com que te pode pagar.';
+      'O valor no jogo difere: ao carregar, o jogo soma o que se acumulou desde a última troca — ele vende excedentes e repõe com isso. Este número é o ponto de partida, não o que o ecrã de comércio mostra.';
 
   @override
   String get traderPriceWarning =>
@@ -454,12 +454,6 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get traderRemoveItem => 'Remover linha';
-
-  @override
-  String get traderNeverTraded => 'nunca negociaste aqui';
-
-  @override
-  String get traderTraded => 'já negociaste aqui';
 
   @override
   String get traderReadOnlyCore =>
@@ -3288,7 +3282,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get traderOreHint =>
-      'O minério é a moeda da colônia. O que um mercador tem é aquilo com que ele pode te pagar.';
+      'O valor no jogo difere: ao carregar, o jogo soma o que se acumulou desde a última troca — ele vende excedentes e repõe com isso. Este número é o ponto de partida, não o que a tela de comércio mostra.';
 
   @override
   String get traderPriceWarning =>
@@ -3299,12 +3293,6 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get traderRemoveItem => 'Remover linha';
-
-  @override
-  String get traderNeverTraded => 'nunca negociou aqui';
-
-  @override
-  String get traderTraded => 'já negociou aqui';
 
   @override
   String get traderReadOnlyCore =>

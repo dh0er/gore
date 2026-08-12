@@ -118,6 +118,10 @@ class CharactersTab extends ConsumerWidget {
             notifier: notifier,
             actor: selected,
             editable: progressionEditable,
+            // Carries the inspection, not just the actor: a save re-inspects the
+            // file, and without that the kept-alive panel would keep showing the
+            // pre-save stock.
+            reloadKey: (inspection, selected.uniqueName),
           );
 
     // Position: the player's transform editor (its only home — it used to sit
@@ -242,16 +246,16 @@ class CharactersTab extends ConsumerWidget {
                       text: l10n.tabInventory,
                     ),
                     Tab(
+                      icon: const Icon(Icons.storefront_outlined),
+                      text: l10n.tabTrade,
+                    ),
+                    Tab(
                       icon: const Icon(Icons.school_outlined),
                       text: l10n.dialogKnowledge,
                     ),
                     Tab(
                       icon: const Icon(Icons.history_outlined),
                       text: l10n.sectionEvents,
-                    ),
-                    Tab(
-                      icon: const Icon(Icons.storefront_outlined),
-                      text: l10n.tabTrade,
                     ),
                     Tab(
                       icon: const Icon(Icons.place_outlined),
@@ -264,9 +268,9 @@ class CharactersTab extends ConsumerWidget {
                     children: [
                       _KeepAliveTab(child: attributeBody),
                       _KeepAliveTab(child: inventoryBody),
+                      _KeepAliveTab(child: tradeBody),
                       _KeepAliveTab(child: knowledgeBody),
                       _KeepAliveTab(child: eventsBody),
-                      _KeepAliveTab(child: tradeBody),
                       _KeepAliveTab(child: positionBody),
                     ],
                   ),
