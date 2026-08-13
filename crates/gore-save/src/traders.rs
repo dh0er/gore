@@ -79,12 +79,15 @@ pub struct TraderSummary {
     pub generated_event_count: usize,
     /// `true` for the unnamed sentinel rows, which belong to no NPC.
     pub placeholder: bool,
-    /// Both stock maps are actually present on the record.
+    /// Both stock maps are present AND shaped the way every applier assumes:
+    /// an object-path key and a bare `i32` value.
     ///
-    /// An omitted map reads as an empty one, which would look editable and then
-    /// fail at save time: the structural appliers resolve the property and
-    /// cannot create it. Every shipped save carries both on all 31 rows, so
-    /// this is a guard against a shape we have not seen, not a known state.
+    /// An omitted map reads as an empty one, and an EMPTY map of some other
+    /// shape has no entries to give that shape away — either would look
+    /// editable and then fail at save time, since the appliers resolve the
+    /// property, encode an object key and patch four bytes. Every shipped save
+    /// carries both maps in that shape on all 31 rows, so this guards a shape
+    /// we have not seen rather than a known state.
     pub stock_maps_present: bool,
 }
 
@@ -142,6 +145,26 @@ fn element_props(element: &PropertyValue) -> Option<&[Property]> {
 
 fn member<'a>(props: &'a [Property], name: &str) -> Option<&'a PropertyValue> {
     props.iter().find(|p| p.name == name).map(|p| &p.value)
+}
+
+fn property<'a>(props: &'a [Property], name: &str) -> Option<&'a Property> {
+    props.iter().find(|p| p.name == name)
+}
+
+/// Whether a stock map is there and carries the key/value types every applier
+/// assumes. Checked on the DESCRIPTOR, because an empty map has no entry to
+/// check and `read_stock` can only see the entries.
+fn stock_map_is_writable(props: &[Property], name: &str) -> bool {
+    let Some(property) = property(props, name) else {
+        return false;
+    };
+    if property.type_name != "MapProperty" {
+        return false;
+    }
+    match property.descriptor.map.as_deref() {
+        Some((key, value)) => key.type_name == "ObjectProperty" && value.type_name == "IntProperty",
+        None => false,
+    }
 }
 
 /// Read one stock map, verifying its descriptor as it goes.
@@ -225,8 +248,8 @@ fn summarize(
     };
     let summary = TraderSummary {
         index,
-        stock_maps_present: member(props, "m_Items").is_some()
-            && member(props, "m_DefaultItems").is_some(),
+        stock_maps_present: stock_map_is_writable(props, "m_Items")
+            && stock_map_is_writable(props, "m_DefaultItems"),
         placeholder: unique_name == PLACEHOLDER_NAME,
         unique_name,
         item_count: items.len(),
@@ -633,6 +656,23 @@ mod tests {
         }
     }
 
+    /// A stock map property with the real key/value descriptor, since the
+    /// writability check reads the descriptor rather than the entries.
+    fn stock_prop(name: &str, pairs: &[(&str, i32)]) -> Property {
+        let inner = |type_name: &str| crate::properties::InnerDescriptor {
+            type_name: type_name.to_string().into(),
+            struct_type: None,
+            enum_type: None,
+        };
+        let mut p = prop(name, stock(pairs));
+        p.type_name = "MapProperty".to_string().into();
+        p.descriptor.map = Some(Box::new((
+            inner("ObjectProperty"),
+            inner("IntProperty"),
+        )));
+        p
+    }
+
     fn stock(pairs: &[(&str, i32)]) -> PropertyValue {
         PropertyValue::Map {
             num_to_remove: 0,
@@ -651,8 +691,8 @@ mod tests {
     fn trader(name: &str, items: &[(&str, i32)], seconds: f64) -> PropertyValue {
         PropertyValue::Struct(StructValue::Properties(vec![
             prop("m_TradersUniqueName", PropertyValue::Name(name.to_string())),
-            prop("m_Items", stock(items)),
-            prop("m_DefaultItems", stock(items)),
+            stock_prop("m_Items", items),
+            stock_prop("m_DefaultItems", items),
             prop(
                 "m_GeneratedEvents",
                 PropertyValue::Array {
@@ -721,6 +761,18 @@ mod tests {
         )]));
         let list = list_traders(&root_with(vec![bare])).expect("list");
         assert!(!list[0].stock_maps_present);
+
+        // A map of the wrong shape is just as unusable, and an EMPTY one gives
+        // that away only through its descriptor.
+        let mut wrong = prop("m_Items", stock(&[]));
+        wrong.type_name = "MapProperty".to_string().into();
+        wrong.descriptor.map = None;
+        let odd = PropertyValue::Struct(StructValue::Properties(vec![
+            prop("m_TradersUniqueName", PropertyValue::Name("X".to_string())),
+            wrong,
+            stock_prop("m_DefaultItems", &[]),
+        ]));
+        assert!(!list_traders(&root_with(vec![odd])).expect("list")[0].stock_maps_present);
 
         let whole = root_with(vec![trader("OC_STT_Fisk_311", &[(ORE_PATH, 3)], 1.0)]);
         assert!(list_traders(&whole).expect("list")[0].stock_maps_present);
@@ -966,6 +1018,8 @@ mod tests {
         let root = crate::properties::parse_private_root(&payload).expect("parse");
         let list = list_traders(&root).expect("list");
         assert_eq!(list.len(), 31, "every shipped save carries 31 trader rows");
+        // Every shipped row carries both maps in the shape the appliers assume.
+        assert!(list.iter().all(|t| t.stock_maps_present));
         assert_eq!(
             list.iter().filter(|t| t.placeholder).count(),
             2,
