@@ -8,6 +8,7 @@ import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import 'support/ui_settings_test_store.dart';
+import 'support/detail_tabs.dart';
 
 /// Regression for Codex (P2): an NPC MainContainer with two stacks that share
 /// the SAME item id/path but differ by slotId/count. The count editors must be
@@ -49,7 +50,7 @@ void main() {
 
     await tester.tap(find.widgetWithText(Tab, 'Characters'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(Tab, 'Inventory'));
+    await tester.tap(detailTab('Inventory'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Lizard-A'));
     await tester.pumpAndSettle();
@@ -86,7 +87,7 @@ void main() {
 
     await tester.tap(find.widgetWithText(Tab, 'Characters'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(Tab, 'Inventory'));
+    await tester.tap(detailTab('Inventory'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Lizard-A'));
     await tester.pumpAndSettle();
@@ -120,7 +121,7 @@ void main() {
       }
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Inventory'));
+      await tester.tap(detailTab('Inventory'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Lizard-A'));
       await tester.pumpAndSettle();

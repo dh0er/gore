@@ -33,6 +33,24 @@ import '../domain/editor_notifier.dart';
 /// `Padding(EdgeInsets.fromLTRB(20, 8, 20, 20))` → one `Card` →
 /// `Padding(EdgeInsets.all(16))` → content. Card titles are intentionally absent
 /// because the sub-tab labels already name the views.
+/// Width one labelled sub-tab needs: `kTabLabelPadding` on both sides plus room
+/// for the longest of the six labels across the shipped languages.
+const double _labelledDetailTabWidth = 132;
+
+/// Whether a detail tab bar [width] pixels wide can carry labels rather than
+/// bare icons. Public so the breakpoint is testable without a window.
+bool detailTabsCanCarryLabels(double width) =>
+    width >= 6 * _labelledDetailTabWidth;
+
+/// One sub-tab: icon and label where they fit, otherwise the icon alone with
+/// the label as its tooltip.
+Tab _detailTab(IconData icon, String label, bool labelled) => Tab(
+  icon: labelled
+      ? Icon(icon)
+      : Tooltip(message: label, child: Icon(icon)),
+  text: labelled ? label : null,
+);
+
 class CharactersTab extends ConsumerWidget {
   const CharactersTab({
     super.key,
@@ -229,33 +247,36 @@ class CharactersTab extends ConsumerWidget {
                   key: ValueKey('actor-header-tab-gap'),
                   height: 12,
                 ),
-                TabBar(
-                  tabs: [
-                    Tab(
-                      icon: const Icon(Icons.person_outline),
-                      text: l10n.tabAttribute,
-                    ),
-                    Tab(
-                      icon: const Icon(Icons.inventory_2_outlined),
-                      text: l10n.tabInventory,
-                    ),
-                    Tab(
-                      icon: const Icon(Icons.storefront_outlined),
-                      text: l10n.tabTrade,
-                    ),
-                    Tab(
-                      icon: const Icon(Icons.school_outlined),
-                      text: l10n.dialogKnowledge,
-                    ),
-                    Tab(
-                      icon: const Icon(Icons.history_outlined),
-                      text: l10n.sectionEvents,
-                    ),
-                    Tab(
-                      icon: const Icon(Icons.place_outlined),
-                      text: l10n.heroTransform,
-                    ),
-                  ],
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    // A non-scrollable bar splits its width evenly, so six
+                    // tabs each get a sixth of the detail pane — well under a
+                    // label's width until the window is very wide, and the
+                    // labels then clip rather than shrink. Below that the tabs
+                    // carry their icon alone and name themselves on hover, so
+                    // all six stay visible instead of hiding behind a scroll.
+                    final labelled = detailTabsCanCarryLabels(
+                      constraints.maxWidth,
+                    );
+                    return TabBar(
+                      tabs: [
+                        _detailTab(Icons.person_outline, l10n.tabAttribute, labelled),
+                        _detailTab(
+                          Icons.inventory_2_outlined,
+                          l10n.tabInventory,
+                          labelled,
+                        ),
+                        _detailTab(Icons.storefront_outlined, l10n.tabTrade, labelled),
+                        _detailTab(
+                          Icons.school_outlined,
+                          l10n.dialogKnowledge,
+                          labelled,
+                        ),
+                        _detailTab(Icons.history_outlined, l10n.sectionEvents, labelled),
+                        _detailTab(Icons.place_outlined, l10n.heroTransform, labelled),
+                      ],
+                    );
+                  },
                 ),
                 Expanded(
                   child: TabBarView(

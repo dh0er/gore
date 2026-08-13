@@ -9,6 +9,7 @@ import 'package:goresave/loc/loc_catalog_provider.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import 'support/ui_settings_test_store.dart';
+import 'support/detail_tabs.dart';
 
 /// The queued add/remove cards used to name the item from its class id alone
 /// ("2H Sword Heavy 02"), while the picker that produced it and the inventory
@@ -52,7 +53,7 @@ void main() {
   Future<void> openNpcInventory(WidgetTester tester) async {
     await tester.tap(find.widgetWithText(Tab, 'Characters'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(Tab, 'Inventory'));
+    await tester.tap(detailTab('Inventory'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Lizard-A'));
     await tester.pumpAndSettle();

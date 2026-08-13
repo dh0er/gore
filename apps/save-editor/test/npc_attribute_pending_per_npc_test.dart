@@ -8,6 +8,7 @@ import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import 'support/ui_settings_test_store.dart';
+import 'support/detail_tabs.dart';
 
 /// Regression test for the phantom cross-NPC edit bug: NPC attribute pending
 /// edits must be keyed PER-NPC (`npc.attributes:$id`) so that editing NPC-A,
@@ -45,7 +46,7 @@ void main() {
       // sub-tab (which hosts the NPC editor).
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Attributes'));
+      await tester.tap(detailTab('Attributes'));
       await tester.pumpAndSettle();
 
       // Select NPC-A from the shared master list and edit its Health base. With
@@ -126,7 +127,7 @@ void main() {
 
     await tester.tap(find.widgetWithText(Tab, 'Characters'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(Tab, 'Attributes'));
+    await tester.tap(detailTab('Attributes'));
     await tester.pumpAndSettle();
 
     // Edit NPC-A (1 pending), then visit NPC-B but make NO edit.

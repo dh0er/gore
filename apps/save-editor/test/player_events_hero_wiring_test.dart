@@ -10,6 +10,7 @@ import 'package:goresave/features/editor/ui/actor_detail_header.dart';
 import 'package:goresave/features/editor/ui/character_master_list.dart';
 import 'package:goresave/features/editor/ui/characters_tab.dart';
 import 'package:goresave/providers/data_providers.dart';
+import 'support/detail_tabs.dart';
 
 /// The player's memory events live under the save's own "Hero" ACTOR GlobalId.
 /// The Charaktere master list hides that actor row (the pinned Player row
@@ -69,7 +70,7 @@ void main() {
     );
 
     for (final tab in ['Inventory', 'Dialog Knowledge', 'Events']) {
-      await tester.tap(find.widgetWithText(Tab, tab));
+      await tester.tap(detailTab(tab));
       await tester.pumpAndSettle();
       expect(header, findsOneWidget);
       expect(
@@ -105,7 +106,7 @@ void main() {
       );
 
       // The Player is selected by default — open the Events sub-tab.
-      await tester.tap(find.widgetWithText(Tab, 'Events'));
+      await tester.tap(detailTab('Events'));
       await tester.pumpAndSettle();
 
       // The events detail queried the events for the HERO actor's GlobalId
@@ -143,7 +144,7 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
       await tester.pump(const Duration(milliseconds: 400));
-      await tester.tap(find.widgetWithText(Tab, 'Events'));
+      await tester.tap(detailTab('Events'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
       await tester.pump(const Duration(milliseconds: 400));
@@ -200,7 +201,7 @@ void main() {
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
-      await tester.tap(find.widgetWithText(Tab, 'Events'));
+      await tester.tap(detailTab('Events'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
 
@@ -248,7 +249,7 @@ void main() {
       await tester.tap(find.text('Ghostvoice'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.widgetWithText(Tab, 'Events'));
+      await tester.tap(detailTab('Events'));
       await tester.pumpAndSettle();
 
       // The Ereignisse pane shows the same clean no-actor empty state

@@ -15,6 +15,8 @@ import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import 'support/ui_settings_test_store.dart';
+import 'support/detail_tabs.dart';
+import 'package:goresave/features/editor/ui/characters_tab.dart';
 
 /// The Handel (trade) sub-tab. A merchant's shop is NOT his inventory: it lives
 /// in a global array addressed by index, and his ore inside that shop is what he
@@ -368,7 +370,7 @@ void main() {
       await pumpApp(tester, core);
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       expect(find.text('This character does not trade.'), findsOneWidget);
@@ -387,7 +389,7 @@ void main() {
       await pumpApp(tester, core);
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       expect(find.byIcon(Icons.add_circle_outline), findsNothing);
@@ -436,7 +438,7 @@ void main() {
       await pumpApp(tester, core);
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       final before = core.requests
@@ -483,7 +485,7 @@ void main() {
       await pumpApp(tester, core);
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       final notifier = ProviderScope.containerOf(
@@ -523,7 +525,7 @@ void main() {
       Future<void> queueAdd(WidgetTester tester) async {
         await tester.tap(find.widgetWithText(Tab, 'Characters'));
         await tester.pumpAndSettle();
-        await tester.tap(find.widgetWithText(Tab, 'Trade'));
+        await tester.tap(detailTab('Trade'));
         await tester.pumpAndSettle();
         ProviderScope.containerOf(tester.element(find.byType(Scaffold).first))
             .read(editorProvider.notifier)
@@ -558,7 +560,7 @@ void main() {
       await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       // One sidebar entry per populated category, counted. Ore is not among
@@ -595,7 +597,7 @@ void main() {
       );
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Food & potions (2)'));
       await tester.pumpAndSettle();
@@ -615,7 +617,7 @@ void main() {
       await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       List<String> fieldTexts() => tester
@@ -648,7 +650,7 @@ void main() {
       await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       final container = ProviderScope.containerOf(
@@ -675,7 +677,7 @@ void main() {
       await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       final field = find.descendant(of: oreCard, matching: find.byType(TextField));
@@ -706,7 +708,7 @@ void main() {
       );
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       expect(find.textContaining('per-difficulty stock'), findsOneWidget);
@@ -727,7 +729,7 @@ void main() {
       await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       final notifier = ProviderScope.containerOf(
@@ -766,7 +768,7 @@ void main() {
       );
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       final notifier = ProviderScope.containerOf(
@@ -818,7 +820,7 @@ void main() {
       await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       final field = find.descendant(of: oreCard, matching: find.byType(TextField));
@@ -851,7 +853,7 @@ void main() {
       await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       final field = find.descendant(of: oreCard, matching: find.byType(TextField));
@@ -881,7 +883,7 @@ void main() {
       await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       final field = find.descendant(of: oreCard, matching: find.byType(TextField));
@@ -917,7 +919,7 @@ void main() {
       await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Food & potions (2)'));
       await tester.pumpAndSettle();
@@ -971,7 +973,7 @@ void main() {
       await pumpApp(tester, core);
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       final notifier = ProviderScope.containerOf(
@@ -1012,7 +1014,7 @@ void main() {
       await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       final field = find.descendant(of: oreCard, matching: find.byType(TextField));
@@ -1044,7 +1046,7 @@ void main() {
       );
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       expect(
@@ -1065,7 +1067,7 @@ void main() {
       await pumpApp(tester, _TraderCoreService(playerIsTrader: true, oreOnly: true));
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       expect(find.text('Nothing in stock.'), findsNothing);
@@ -1087,7 +1089,7 @@ void main() {
       );
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       expect(find.widgetWithText(OutlinedButton, 'Add item'), findsOneWidget);
@@ -1104,9 +1106,43 @@ void main() {
       );
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
       expect(find.textContaining('can only read trader data'), findsOneWidget);
+    });
+
+    testWidgets('a detail pane too narrow for labels shows bare icons', (
+      tester,
+    ) async {
+      // Trade made six icon-and-label tabs out of five. A non-scrollable bar
+      // splits its width evenly, and the detail pane is a fraction of the
+      // window, so each tab gets far less than a label needs and the labels
+      // clip. Below the breakpoint they carry the icon alone.
+      await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+
+      // The top-level bar also has six tabs, so pick the one carrying Trade.
+      final bar = find.ancestor(
+        of: detailTab('Trade'),
+        matching: find.byType(TabBar),
+      );
+      final detail = tester.widget<TabBar>(bar);
+      expect(detailTabsCanCarryLabels(tester.getSize(bar).width), isFalse);
+      expect(
+        detail.tabs.whereType<Tab>().map((t) => t.text),
+        everyElement(isNull),
+        reason: 'no label to clip',
+      );
+      // And each one still says what it is.
+      expect(detailTab('Trade'), findsOneWidget);
+      expect(detailTab('Dialog Knowledge'), findsOneWidget);
+    });
+
+    test('the tab bar takes labels once every tab has room for one', () {
+      // 132px is kTabLabelPadding either side plus the longest shipped label.
+      expect(detailTabsCanCarryLabels(6 * 132), isTrue);
+      expect(detailTabsCanCarryLabels(6 * 132 - 1), isFalse);
     });
 
     testWidgets('a merchant shows his ore and both stock sections', (
@@ -1116,7 +1152,7 @@ void main() {
       await pumpApp(tester, core);
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.tap(detailTab('Trade'));
       await tester.pumpAndSettle();
 
       expect(find.text('Ore (purchasing power)'), findsOneWidget);

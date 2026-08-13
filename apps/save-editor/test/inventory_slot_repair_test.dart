@@ -9,6 +9,7 @@ import 'package:goresave/features/editor/ui/slot_repair_banner.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import 'support/ui_settings_test_store.dart';
+import 'support/detail_tabs.dart';
 
 /// A savegame an older build damaged — slots whose id no longer matches their
 /// position — must be called out, and the repair must reach the core as
@@ -37,7 +38,7 @@ void main() {
   Future<void> openPlayerInventory(WidgetTester tester) async {
     await tester.tap(find.widgetWithText(Tab, 'Characters'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(Tab, 'Inventory'));
+    await tester.tap(detailTab('Inventory'));
     await tester.pumpAndSettle();
   }
 

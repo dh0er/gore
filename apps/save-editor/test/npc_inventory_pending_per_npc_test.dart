@@ -8,6 +8,7 @@ import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import 'support/ui_settings_test_store.dart';
+import 'support/detail_tabs.dart';
 
 /// Regression test mirroring `npc_attribute_pending_per_npc_test.dart` for the
 /// Inventory tab: NPC inventory pending edits must be keyed PER-NPC
@@ -44,7 +45,7 @@ void main() {
       // Open the Charaktere tab (shared master list) then its Inventar sub-tab.
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Inventory'));
+      await tester.tap(detailTab('Inventory'));
       await tester.pumpAndSettle();
 
       // Select NPC-A and bump its single item's count.
@@ -106,7 +107,7 @@ void main() {
 
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Inventory'));
+      await tester.tap(detailTab('Inventory'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Lizard-B'));
       await tester.pumpAndSettle();
@@ -114,7 +115,7 @@ void main() {
       // The Attribute sub-tab reads the SAME shared selectedActor — switching to
       // it (no re-select) loads Lizard-B's NPC attributes (the fake returns
       // Lizard-B's attribute row), proving selection is shared across sub-tabs.
-      await tester.tap(find.widgetWithText(Tab, 'Attributes'));
+      await tester.tap(detailTab('Attributes'));
       await tester.pumpAndSettle();
       final attrReq = core.requests.lastWhere(
         (r) => r.command == 'private.npc.attributes',

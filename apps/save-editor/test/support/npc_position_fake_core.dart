@@ -9,6 +9,7 @@ import 'package:goresave/features/editor/domain/location_catalog.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import 'ui_settings_test_store.dart';
+import 'detail_tabs.dart';
 
 /// Shared scaffolding for the NPC position widget tests: a fake core that
 /// answers everything the editor shell needs (one save slot, decoded + typed-OK
@@ -379,7 +380,7 @@ Future<void> pickLocationSpot(
 Future<void> openPositionTab(WidgetTester tester) async {
   await tester.tap(find.widgetWithText(Tab, 'Characters'));
   await tester.pumpAndSettle();
-  await tester.tap(find.widgetWithText(Tab, 'Position'));
+  await tester.tap(detailTab('Position'));
   await tester.pumpAndSettle();
 }
 

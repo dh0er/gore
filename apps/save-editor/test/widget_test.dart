@@ -10,6 +10,7 @@ import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import 'support/ui_settings_test_store.dart';
+import 'support/detail_tabs.dart';
 
 void main() {
   testWidgets('renders editor shell with fake save data', (tester) async {
@@ -114,7 +115,7 @@ void main() {
     // by default in the shared master list, so the player attribute view shows.
     await tester.tap(find.widgetWithText(Tab, 'Characters'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(Tab, 'Attributes'));
+    await tester.tap(detailTab('Attributes'));
     await tester.pumpAndSettle();
 
     // Player summary card and name editor fields are deleted.
@@ -163,7 +164,7 @@ void main() {
     // sub-tab (its only home; two copies would both drive the one 'transform'
     // pending key). It renders there regardless of privateTypedVerified, so
     // this legacy fixture still reaches it.
-    await tester.tap(find.widgetWithText(Tab, 'Position'));
+    await tester.tap(detailTab('Position'));
     await tester.pumpAndSettle();
     expect(find.widgetWithText(TextField, 'Location X'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'Location Y'), findsOneWidget);
@@ -214,7 +215,7 @@ void main() {
     // Still inside the Charaktere tab from the Attributes navigation above, so
     // switching to the Inventar sub-tab needs no Characters prefix. The shared
     // Player selection carries over, so the player inventory shows.
-    await tester.tap(find.widgetWithText(Tab, 'Inventory'));
+    await tester.tap(detailTab('Inventory'));
     await tester.pumpAndSettle();
 
     // Stacks are grouped by category in a sidebar; Food is selected first
@@ -755,7 +756,7 @@ void main() {
     // Inventory is now a sub-tab inside the Charaktere (Characters) tab.
     await tester.tap(find.widgetWithText(Tab, 'Characters'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(Tab, 'Inventory'));
+    await tester.tap(detailTab('Inventory'));
     await tester.pumpAndSettle();
 
     // Food is the first category, so the non-removable Cheese stack is visible.
