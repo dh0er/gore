@@ -412,6 +412,75 @@ class AppLocalizationsJa extends AppLocalizations {
   String get tabInventory => 'インベントリ';
 
   @override
+  String get tabTrade => '取引';
+
+  @override
+  String get traderNotAMerchant => 'このキャラクターは取引をしません。';
+
+  @override
+  String get traderRetry => '再試行';
+
+  @override
+  String get traderAmbiguousName =>
+      '同じ名前の商人レコードが複数あるため、どの店がこのキャラクターのものか判別できません。誤って別の店を変更しないよう、編集は無効です。';
+
+  @override
+  String get traderOre => '鉱石（購買力）';
+
+  @override
+  String get traderNoOre => '鉱石なし';
+
+  @override
+  String get traderStockCurrent => '在庫';
+
+  @override
+  String get traderStockBase => '補充の基準';
+
+  @override
+  String get traderStockBaseHint => '商人が補充する基準。ストーリーの進行とともに増えるため、初期状態ではありません。';
+
+  @override
+  String get traderOreHint =>
+      'ゲーム内の数値は異なります。読み込み時に、前回の取引以降に生じた分が加算されます（余剰品を売り、その分で補充します）。この数値は開始値であり、取引画面に表示される額ではありません。';
+
+  @override
+  String get traderPriceWarning =>
+      '価格は商人の在庫量と保有鉱石に反応します。これらの数値を変えると、提示価格も動くことがあります。';
+
+  @override
+  String get traderAddItem => 'アイテムを追加';
+
+  @override
+  String get traderRemoveItem => '行を削除';
+
+  @override
+  String get traderReadOnlyCore => 'このコアは商人データの読み取りのみ可能です。';
+
+  @override
+  String get traderDifficultyStockUnsupported =>
+      'この商人は難易度ごとの在庫を持っており、エディタはそれを扱えません。変更は成功したように見えても、その追加在庫はそのまま残るため、ここでの編集は無効です。';
+
+  @override
+  String get traderRecordIncomplete =>
+      'この商人の在庫リストが存在しないか、エディタが対応しておらず書き込めない形式です。保存時に失敗しないよう、ここでの編集は無効です。';
+
+  @override
+  String get traderEmptyStock => '在庫がありません。';
+
+  @override
+  String get traderUnknownItem => 'アイテムカタログにありません';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return '商人データの読み込みに失敗しました: $details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count 行';
+  }
+
+  @override
   String get tabWorld => 'ワールド';
 
   @override
@@ -2661,6 +2730,10 @@ class AppLocalizationsJa extends AppLocalizations {
   @override
   String get editorInventorySlotEditConflict =>
       'インベントリスロットへの直接編集と、スロットごと扱う操作（修復・追加・削除）が同時に予約されています。後者が前者を上書きします。どちらかを取り消してから保存し直してください。';
+
+  @override
+  String get editorTraderArrayConflict =>
+      '取引の変更が、商人配列への直接編集と一緒に予約されています。その編集は取引の変更が参照する行番号を振り直すため、どちらかが別の商人に当たります。片方を取り消してから保存してください。';
 
   @override
   String get backupFactFile => 'ファイル';

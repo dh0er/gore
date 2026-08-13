@@ -407,6 +407,73 @@ class AppLocalizationsZh extends AppLocalizations {
   String get tabInventory => '物品栏';
 
   @override
+  String get tabTrade => '交易';
+
+  @override
+  String get traderNotAMerchant => '该角色不进行交易。';
+
+  @override
+  String get traderRetry => '重试';
+
+  @override
+  String get traderAmbiguousName => '有多条商人记录使用这个名字，无法判断哪家店属于该角色。已禁用编辑，以免改错。';
+
+  @override
+  String get traderOre => '矿石（购买力）';
+
+  @override
+  String get traderNoOre => '无矿石';
+
+  @override
+  String get traderStockCurrent => '库存';
+
+  @override
+  String get traderStockBase => '补货基准';
+
+  @override
+  String get traderStockBaseHint => '商人补货的基准。会随剧情推进而增长，因此不是初始状态。';
+
+  @override
+  String get traderOreHint =>
+      '游戏内的数值会不同：载入时游戏会加上自他上次交易以来累积的部分——他会卖掉多余货物并以此补货。这个数字是起点，而非交易界面显示的金额。';
+
+  @override
+  String get traderPriceWarning => '价格会随商人的库存量和持有矿石而变化，因此修改这些数字也可能改变他的开价。';
+
+  @override
+  String get traderAddItem => '添加物品';
+
+  @override
+  String get traderRemoveItem => '移除条目';
+
+  @override
+  String get traderReadOnlyCore => '此核心版本只能读取商人数据。';
+
+  @override
+  String get traderDifficultyStockUnsupported =>
+      '该商人拥有按难度区分的库存，编辑器并未建模。此处已禁用编辑，因为修改看似成功，却会让这部分额外库存原封不动。';
+
+  @override
+  String get traderRecordIncomplete =>
+      '该商人的库存清单缺失，或其结构编辑器不支持、无法写入。此处已禁用编辑，以免修改在保存时失败。';
+
+  @override
+  String get traderEmptyStock => '没有库存。';
+
+  @override
+  String get traderUnknownItem => '不在物品目录中';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return '商人数据加载失败：$details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count 条';
+  }
+
+  @override
   String get tabWorld => '世界';
 
   @override
@@ -2632,6 +2699,10 @@ class AppLocalizationsZh extends AppLocalizations {
       '对物品栏槽位的直接编辑与占用整个槽位的操作（修复、添加或删除）同时在待保存列表中。后者会覆盖前者 — 请撤销其中一项后再保存。';
 
   @override
+  String get editorTraderArrayConflict =>
+      '一项交易修改与对商人数组的直接编辑一同排队。该编辑会重新编号交易修改所依据的行，因此两者之一会落到错误的商人身上——撤销其中一项后再保存。';
+
+  @override
   String get backupFactFile => '文件';
 
   @override
@@ -3090,6 +3161,73 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get tabInventory => '物品栏';
+
+  @override
+  String get tabTrade => '交易';
+
+  @override
+  String get traderNotAMerchant => '该角色不进行交易。';
+
+  @override
+  String get traderRetry => '重试';
+
+  @override
+  String get traderAmbiguousName => '有多条商人记录使用这个名字，无法判断哪家店属于该角色。已禁用编辑，以免改错。';
+
+  @override
+  String get traderOre => '矿石（购买力）';
+
+  @override
+  String get traderNoOre => '无矿石';
+
+  @override
+  String get traderStockCurrent => '库存';
+
+  @override
+  String get traderStockBase => '补货基准';
+
+  @override
+  String get traderStockBaseHint => '商人补货的基准。会随剧情推进而增长，因此不是初始状态。';
+
+  @override
+  String get traderOreHint =>
+      '游戏内的数值会不同：载入时游戏会加上自他上次交易以来累积的部分——他会卖掉多余货物并以此补货。这个数字是起点，而非交易界面显示的金额。';
+
+  @override
+  String get traderPriceWarning => '价格会随商人的库存量和持有矿石而变化，因此修改这些数字也可能改变他的开价。';
+
+  @override
+  String get traderAddItem => '添加物品';
+
+  @override
+  String get traderRemoveItem => '移除条目';
+
+  @override
+  String get traderReadOnlyCore => '此核心版本只能读取商人数据。';
+
+  @override
+  String get traderDifficultyStockUnsupported =>
+      '该商人拥有按难度区分的库存，编辑器并未建模。此处已禁用编辑，因为修改看似成功，却会让这部分额外库存原封不动。';
+
+  @override
+  String get traderRecordIncomplete =>
+      '该商人的库存清单缺失，或其结构编辑器不支持、无法写入。此处已禁用编辑，以免修改在保存时失败。';
+
+  @override
+  String get traderEmptyStock => '没有库存。';
+
+  @override
+  String get traderUnknownItem => '不在物品目录中';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return '商人数据加载失败：$details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count 条';
+  }
 
   @override
   String get tabWorld => '世界';
@@ -5315,6 +5453,10 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   @override
   String get editorInventorySlotEditConflict =>
       '对物品栏槽位的直接编辑与占用整个槽位的操作（修复、添加或删除）同时在待保存列表中。后者会覆盖前者 — 请撤销其中一项后再保存。';
+
+  @override
+  String get editorTraderArrayConflict =>
+      '一项交易修改与对商人数组的直接编辑一同排队。该编辑会重新编号交易修改所依据的行，因此两者之一会落到错误的商人身上——撤销其中一项后再保存。';
 
   @override
   String get backupFactFile => '文件';

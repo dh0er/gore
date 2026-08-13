@@ -422,6 +422,77 @@ class AppLocalizationsRu extends AppLocalizations {
   String get tabInventory => 'Инвентарь';
 
   @override
+  String get tabTrade => 'Торговля';
+
+  @override
+  String get traderNotAMerchant => 'Этот персонаж не торгует.';
+
+  @override
+  String get traderRetry => 'Повторить';
+
+  @override
+  String get traderAmbiguousName =>
+      'Это имя носит несколько записей торговцев, поэтому нельзя определить, чья это лавка. Правка отключена, чтобы не изменить чужую.';
+
+  @override
+  String get traderOre => 'Руда (покупательная способность)';
+
+  @override
+  String get traderNoOre => 'нет руды';
+
+  @override
+  String get traderStockCurrent => 'Запас';
+
+  @override
+  String get traderStockBase => 'База пополнения';
+
+  @override
+  String get traderStockBaseHint =>
+      'То, к чему торговец пополняет запасы. Растёт по ходу сюжета, поэтому это не исходное состояние.';
+
+  @override
+  String get traderOreHint =>
+      'В игре число другое: при загрузке игра добавляет накопившееся с его последней торговли — он продаёт излишки и пополняет запасы. Это число — отправная точка, а не сумма в окне торговли.';
+
+  @override
+  String get traderPriceWarning =>
+      'Цены зависят от того, сколько у торговца товара и руды, поэтому изменение этих чисел может сдвинуть и его расценки.';
+
+  @override
+  String get traderAddItem => 'Добавить предмет';
+
+  @override
+  String get traderRemoveItem => 'Удалить строку';
+
+  @override
+  String get traderReadOnlyCore =>
+      'Эта сборка ядра может только читать данные торговцев.';
+
+  @override
+  String get traderDifficultyStockUnsupported =>
+      'У этого торговца есть запас по уровню сложности, который редактор не моделирует. Правка здесь отключена: изменение выглядело бы успешным, но этот дополнительный запас остался бы нетронутым.';
+
+  @override
+  String get traderRecordIncomplete =>
+      'Списков товара этого торговца нет, либо они в форме, которую редактор не поддерживает и не может записать. Правка отключена, чтобы изменение не сорвалось при сохранении.';
+
+  @override
+  String get traderEmptyStock => 'Товара нет.';
+
+  @override
+  String get traderUnknownItem => 'нет в каталоге предметов';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return 'Не удалось загрузить торговцев: $details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count строк';
+  }
+
+  @override
   String get tabWorld => 'Мир';
 
   @override
@@ -2736,6 +2807,10 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get editorInventorySlotEditConflict =>
       'В очереди одновременно прямое изменение слота инвентаря и операция, занимающая слоты целиком (восстановление, добавление или удаление). Вторая перезапишет первую — отмените одно из них и сохраните снова.';
+
+  @override
+  String get editorTraderArrayConflict =>
+      'Изменение торговли стоит в очереди вместе с прямой правкой массива торговцев. Она перенумеровывает строки, по которым адресуется изменение торговли, поэтому одно из двух попадёт не в того торговца — отмените одно и сохраните снова.';
 
   @override
   String get backupFactFile => 'Файл';

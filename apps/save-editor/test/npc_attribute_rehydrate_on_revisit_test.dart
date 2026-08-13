@@ -8,6 +8,7 @@ import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import 'support/ui_settings_test_store.dart';
+import 'support/detail_tabs.dart';
 
 /// Regression test for Bug #8: switching away from an NPC whose attribute draft
 /// is queued and returning must REHYDRATE the panel's local field state from the
@@ -45,7 +46,7 @@ void main() {
 
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Attributes'));
+      await tester.tap(detailTab('Attributes'));
       await tester.pumpAndSettle();
 
       // NPC-A exposes Health + Strength (both in Main stats). Edit Health base.

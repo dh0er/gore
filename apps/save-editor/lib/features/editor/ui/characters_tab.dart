@@ -7,6 +7,7 @@ import 'package:goresave/features/editor/ui/attribute_detail.dart';
 import 'package:goresave/features/editor/ui/character_master_list.dart';
 import 'package:goresave/features/editor/ui/inventory_detail.dart';
 import 'package:goresave/features/editor/ui/position_detail.dart';
+import 'package:goresave/features/editor/ui/trader_detail.dart';
 import 'package:goresave/features/editor/ui/progression_panel.dart'
     show KnowledgeDetail, EventsDetail;
 import 'package:goresave/l10n/app_localizations.dart';
@@ -32,6 +33,29 @@ import '../domain/editor_notifier.dart';
 /// `Padding(EdgeInsets.fromLTRB(20, 8, 20, 20))` → one `Card` →
 /// `Padding(EdgeInsets.all(16))` → content. Card titles are intentionally absent
 /// because the sub-tab labels already name the views.
+/// Width one labelled sub-tab needs: `kTabLabelPadding` on both sides plus room
+/// for the longest of the six labels across the shipped languages.
+const double _labelledDetailTabWidth = 132;
+
+/// Whether a detail tab bar [width] pixels wide can carry labels rather than
+/// bare icons. Public so the breakpoint is testable without a window.
+bool detailTabsCanCarryLabels(double width) =>
+    width >= 6 * _labelledDetailTabWidth;
+
+/// One sub-tab: icon and label where they fit, otherwise the icon alone with
+/// the label as its tooltip.
+///
+/// The icon-only form names itself twice over. A [Tooltip] alone puts the name
+/// in the node's `tooltip`, which platforms surface as help text rather than as
+/// the control's name, so the tab would read out as "Tab 3 of 6" — the
+/// [Icon.semanticLabel] is what puts the name where a labelled tab has it.
+Tab _detailTab(IconData icon, String label, bool labelled) => Tab(
+  icon: labelled
+      ? Icon(icon)
+      : Tooltip(message: label, child: Icon(icon, semanticLabel: label)),
+  text: labelled ? label : null,
+);
+
 class CharactersTab extends ConsumerWidget {
   const CharactersTab({
     super.key,
@@ -101,6 +125,21 @@ class CharactersTab extends ConsumerWidget {
             canCompress: inventoryCanCompress,
             showActorHeader: false,
           );
+
+    // Handel: a merchant's shop, which is NOT his inventory — it lives in a
+    // global array keyed by uniqueName alone. An orphan therefore gets it too:
+    // the record does not depend on a spawned actor, and the panel already
+    // shows a clean non-merchant state when no row matches the name.
+    final Widget tradeBody = TraderPanel(
+      inspection: inspection,
+      notifier: notifier,
+      actor: selected,
+      editable: progressionEditable,
+      // Carries the inspection, not just the actor: a save re-inspects the
+      // file, and without that the kept-alive panel would keep showing the
+      // pre-save stock.
+      reloadKey: (inspection, selected.uniqueName),
+    );
 
     // Position: the player's transform editor (its only home — it used to sit
     // in the Attribute tab's HeroStatsCard sidebar) and, for an NPC, the saved
@@ -200,7 +239,7 @@ class CharactersTab extends ConsumerWidget {
         const VerticalDivider(width: 1),
         Expanded(
           child: DefaultTabController(
-            length: 5,
+            length: 6,
             child: Column(
               children: [
                 ActorDetailHeader(
@@ -213,35 +252,43 @@ class CharactersTab extends ConsumerWidget {
                   key: ValueKey('actor-header-tab-gap'),
                   height: 12,
                 ),
-                TabBar(
-                  tabs: [
-                    Tab(
-                      icon: const Icon(Icons.person_outline),
-                      text: l10n.tabAttribute,
-                    ),
-                    Tab(
-                      icon: const Icon(Icons.inventory_2_outlined),
-                      text: l10n.tabInventory,
-                    ),
-                    Tab(
-                      icon: const Icon(Icons.school_outlined),
-                      text: l10n.dialogKnowledge,
-                    ),
-                    Tab(
-                      icon: const Icon(Icons.history_outlined),
-                      text: l10n.sectionEvents,
-                    ),
-                    Tab(
-                      icon: const Icon(Icons.place_outlined),
-                      text: l10n.heroTransform,
-                    ),
-                  ],
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    // A non-scrollable bar splits its width evenly, so six
+                    // tabs each get a sixth of the detail pane — well under a
+                    // label's width until the window is very wide, and the
+                    // labels then clip rather than shrink. Below that the tabs
+                    // carry their icon alone and name themselves on hover, so
+                    // all six stay visible instead of hiding behind a scroll.
+                    final labelled = detailTabsCanCarryLabels(
+                      constraints.maxWidth,
+                    );
+                    return TabBar(
+                      tabs: [
+                        _detailTab(Icons.person_outline, l10n.tabAttribute, labelled),
+                        _detailTab(
+                          Icons.inventory_2_outlined,
+                          l10n.tabInventory,
+                          labelled,
+                        ),
+                        _detailTab(Icons.storefront_outlined, l10n.tabTrade, labelled),
+                        _detailTab(
+                          Icons.school_outlined,
+                          l10n.dialogKnowledge,
+                          labelled,
+                        ),
+                        _detailTab(Icons.history_outlined, l10n.sectionEvents, labelled),
+                        _detailTab(Icons.place_outlined, l10n.heroTransform, labelled),
+                      ],
+                    );
+                  },
                 ),
                 Expanded(
                   child: TabBarView(
                     children: [
                       _KeepAliveTab(child: attributeBody),
                       _KeepAliveTab(child: inventoryBody),
+                      _KeepAliveTab(child: tradeBody),
                       _KeepAliveTab(child: knowledgeBody),
                       _KeepAliveTab(child: eventsBody),
                       _KeepAliveTab(child: positionBody),

@@ -420,6 +420,77 @@ class AppLocalizationsEs extends AppLocalizations {
   String get tabInventory => 'Inventario';
 
   @override
+  String get tabTrade => 'Comercio';
+
+  @override
+  String get traderNotAMerchant => 'Este personaje no comercia.';
+
+  @override
+  String get traderRetry => 'Reintentar';
+
+  @override
+  String get traderAmbiguousName =>
+      'Más de un registro de mercader lleva este nombre, así que el editor no puede saber qué tienda pertenece a este personaje. La edición está desactivada en vez de arriesgarse a cambiar la equivocada.';
+
+  @override
+  String get traderOre => 'Mineral (poder de compra)';
+
+  @override
+  String get traderNoOre => 'sin mineral';
+
+  @override
+  String get traderStockCurrent => 'Existencias';
+
+  @override
+  String get traderStockBase => 'Base de reposición';
+
+  @override
+  String get traderStockBaseHint =>
+      'Aquello a lo que el mercader repone. Crece con el progreso de la historia, así que no es un estado original.';
+
+  @override
+  String get traderOreHint =>
+      'La cifra en el juego difiere: al cargar, el juego suma lo acumulado desde su último intercambio — vende excedentes y repone con ello. Este número es el punto de partida, no lo que muestra la pantalla de comercio.';
+
+  @override
+  String get traderPriceWarning =>
+      'Los precios reaccionan a cuánto tiene en existencias un mercader y cuánto mineral posee, así que cambiar estas cifras también puede mover lo que cobra.';
+
+  @override
+  String get traderAddItem => 'Añadir objeto';
+
+  @override
+  String get traderRemoveItem => 'Quitar línea';
+
+  @override
+  String get traderReadOnlyCore =>
+      'Esta versión del núcleo solo puede leer los datos del mercader.';
+
+  @override
+  String get traderDifficultyStockUnsupported =>
+      'Este mercader tiene existencias por dificultad, que el editor no modela. La edición está desactivada aquí, porque un cambio parecería correcto mientras deja intactas esas existencias adicionales.';
+
+  @override
+  String get traderRecordIncomplete =>
+      'Las listas de existencias de este mercader faltan, o tienen una forma que el editor no admite ni puede escribir. La edición está desactivada aquí para que un cambio no falle al guardar.';
+
+  @override
+  String get traderEmptyStock => 'Sin existencias.';
+
+  @override
+  String get traderUnknownItem => 'no está en el catálogo de objetos';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return 'Error al cargar los mercaderes: $details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count líneas';
+  }
+
+  @override
   String get tabWorld => 'Mundo';
 
   @override
@@ -2725,6 +2796,10 @@ class AppLocalizationsEs extends AppLocalizations {
   @override
   String get editorInventorySlotEditConflict =>
       'Hay en cola una edición directa de una ranura de inventario junto con una operación que ocupa ranuras enteras (reparar, añadir o eliminar). La segunda sobrescribiría la primera: revierte una de las dos y vuelve a guardar.';
+
+  @override
+  String get editorTraderArrayConflict =>
+      'Un cambio de comercio está en cola junto con una edición directa del array de mercaderes. Esa edición renumera las filas por las que se direcciona un cambio de comercio, así que uno de los dos caería en el mercader equivocado — revierte uno y vuelve a guardar.';
 
   @override
   String get backupFactFile => 'Archivo';

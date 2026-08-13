@@ -9,6 +9,7 @@ class CharacterRow {
     required this.hasInventory,
     required this.hasKnowledge,
     required this.hasEvents,
+    this.isTrader = false,
   });
 
   factory CharacterRow.fromJson(Map<String, Object?> json) {
@@ -19,6 +20,7 @@ class CharacterRow {
       hasInventory: json['hasInventory'] == true,
       hasKnowledge: json['hasKnowledge'] == true,
       hasEvents: json['hasEvents'] == true,
+      isTrader: json['isTrader'] == true,
     );
   }
 
@@ -28,6 +30,9 @@ class CharacterRow {
   final bool hasInventory;
   final bool hasKnowledge;
   final bool hasEvents;
+
+  /// The character runs a shop — he owns a row in the global trader array.
+  final bool isTrader;
 
   bool get isOrphan => globalId == null;
 }

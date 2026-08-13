@@ -6,6 +6,7 @@ import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/item_categories.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/ui/actor_detail_header.dart';
+import 'package:goresave/features/editor/ui/pending_structural_row.dart';
 import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/features/editor/ui/slot_repair_banner.dart';
 import 'package:goresave/l10n/app_localizations.dart';
@@ -909,8 +910,8 @@ class _PrivateInventorySummaryCardState
               ),
             for (final add in _pendingAdds) ...[
               const SizedBox(height: 12),
-              _PendingStructuralRow(
-                tone: _PendingTone.add,
+              PendingStructuralRow(
+                tone: PendingTone.add,
                 icon: Icons.add_circle_outline,
                 title: pendingNameOf(add.path),
                 subtitle: l10n.pendingAddSubtitle(add.count),
@@ -924,8 +925,8 @@ class _PrivateInventorySummaryCardState
             ],
             if (hasPendingRemove) ...[
               const SizedBox(height: 12),
-              _PendingStructuralRow(
-                tone: _PendingTone.remove,
+              PendingStructuralRow(
+                tone: PendingTone.remove,
                 icon: Icons.delete_outline,
                 title: pendingNameOf(
                   _pendingRemovePath!,
@@ -943,8 +944,8 @@ class _PrivateInventorySummaryCardState
             ],
             if (hasPendingReset) ...[
               const SizedBox(height: 12),
-              _PendingStructuralRow(
-                tone: _PendingTone.remove,
+              PendingStructuralRow(
+                tone: PendingTone.remove,
                 icon: Icons.settings_backup_restore,
                 title: l10n.pendingResetTitle,
                 subtitle: l10n.pendingResetSubtitle(
@@ -1405,8 +1406,6 @@ class _PrivateInventorySummaryCardState
 
 /// Tone of a pending structural-edit card: an add (primary) or a remove
 /// (error).
-enum _PendingTone { add, remove }
-
 /// A human-readable id fragment derived from an item asset path.
 String _itemDisplayFromPath(String path) =>
     path.contains('.') ? path.split('.').last : path.split('/').last;
@@ -1442,75 +1441,6 @@ String _upgradeTier(AppLocalizations l10n, String value) {
 /// (add or remove) awaiting save. Mirrors how a not-yet-saved item is
 /// represented for both directions: the affected item is not shown inline, only
 /// here, with a cancel button.
-class _PendingStructuralRow extends StatelessWidget {
-  const _PendingStructuralRow({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.onCancel,
-    required this.cancelTooltip,
-    required this.tone,
-    this.technicalId,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final VoidCallback onCancel;
-  final String cancelTooltip;
-  final _PendingTone tone;
-  final String? technicalId;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final isAdd = tone == _PendingTone.add;
-    final bg = isAdd ? scheme.primaryContainer : scheme.errorContainer;
-    final fg = isAdd ? scheme.onPrimaryContainer : scheme.onErrorContainer;
-    final accent = isAdd ? scheme.primary : scheme.error;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: accent.withValues(alpha: 0.4)),
-      ),
-      child: ListTile(
-        dense: true,
-        leading: Icon(icon, color: accent),
-        title: Text(
-          title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(color: fg),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(subtitle, style: TextStyle(color: fg.withValues(alpha: 0.8))),
-            if (technicalId?.trim().isNotEmpty == true)
-              Text(
-                technicalId!,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: fg.withValues(alpha: 0.72),
-                  fontFamily: 'Consolas',
-                  fontSize: 11,
-                ),
-              ),
-          ],
-        ),
-        trailing: IconButton(
-          icon: const Icon(Icons.close),
-          tooltip: cancelTooltip,
-          onPressed: onCancel,
-        ),
-      ),
-    );
-  }
-}
-
 class _InventoryItemCountEditor extends StatefulWidget {
   const _InventoryItemCountEditor({
     super.key,

@@ -418,6 +418,76 @@ class AppLocalizationsEn extends AppLocalizations {
   String get tabInventory => 'Inventory';
 
   @override
+  String get tabTrade => 'Trade';
+
+  @override
+  String get traderNotAMerchant => 'This character does not trade.';
+
+  @override
+  String get traderRetry => 'Try again';
+
+  @override
+  String get traderAmbiguousName =>
+      'More than one trader record carries this name, so the editor cannot tell which shop belongs to this character. Editing is disabled rather than risk changing the wrong one.';
+
+  @override
+  String get traderOre => 'Ore (purchasing power)';
+
+  @override
+  String get traderNoOre => 'no ore';
+
+  @override
+  String get traderStockCurrent => 'Stock';
+
+  @override
+  String get traderStockBase => 'Restock baseline';
+
+  @override
+  String get traderStockBaseHint =>
+      'What the merchant restocks back toward. It grows with story progress, so it is not a vanilla snapshot.';
+
+  @override
+  String get traderOreHint =>
+      'The in-game figure differs: on load the game adds what accrued since his last trade — he sells surplus goods and restocks from it. This number is the starting point, not what the trade screen shows.';
+
+  @override
+  String get traderPriceWarning =>
+      'Prices react to how much a merchant stocks and how much ore he holds, so changing these numbers can also move what he charges.';
+
+  @override
+  String get traderAddItem => 'Add item';
+
+  @override
+  String get traderRemoveItem => 'Remove line';
+
+  @override
+  String get traderReadOnlyCore => 'This core build can only read trader data.';
+
+  @override
+  String get traderDifficultyStockUnsupported =>
+      'This merchant carries per-difficulty stock, which the editor does not model. Editing is disabled here, because a change would look successful while leaving that extra stock untouched.';
+
+  @override
+  String get traderRecordIncomplete =>
+      'This merchant\'s stock lists are missing, or in a shape the editor does not support and cannot write. Editing is disabled here so a change cannot fail at save time.';
+
+  @override
+  String get traderEmptyStock => 'Nothing in stock.';
+
+  @override
+  String get traderUnknownItem => 'not in the item catalog';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return 'Trader load failed: $details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count lines';
+  }
+
+  @override
   String get tabWorld => 'World';
 
   @override
@@ -2711,6 +2781,10 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get editorInventorySlotEditConflict =>
       'A direct edit of an inventory slot is queued together with a change that claims whole slots (repair, add or remove). The second would overwrite the first — revert one of them, then save again.';
+
+  @override
+  String get editorTraderArrayConflict =>
+      'A trade change is queued together with a direct edit of the trader array. That edit renumbers the rows a trade change is addressed by, so one of the two would land on the wrong merchant — revert one of them, then save again.';
 
   @override
   String get backupFactFile => 'File';

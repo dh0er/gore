@@ -419,6 +419,76 @@ class AppLocalizationsDe extends AppLocalizations {
   String get tabInventory => 'Inventar';
 
   @override
+  String get tabTrade => 'Handel';
+
+  @override
+  String get traderNotAMerchant => 'Diese Person handelt nicht.';
+
+  @override
+  String get traderRetry => 'Erneut versuchen';
+
+  @override
+  String get traderAmbiguousName =>
+      'Mehrere Händlereinträge tragen diesen Namen, deshalb lässt sich nicht sagen, welcher Laden zu dieser Person gehört. Bearbeiten ist gesperrt, statt womöglich den falschen zu ändern.';
+
+  @override
+  String get traderOre => 'Erz (Kaufkraft)';
+
+  @override
+  String get traderNoOre => 'kein Erz';
+
+  @override
+  String get traderStockCurrent => 'Bestand';
+
+  @override
+  String get traderStockBase => 'Nachschub-Basis';
+
+  @override
+  String get traderStockBaseHint =>
+      'Worauf der Händler wieder auffüllt. Wächst mit dem Story-Fortschritt, ist also kein Vanilla-Stand.';
+
+  @override
+  String get traderOreHint =>
+      'Der Wert im Spiel weicht ab: beim Laden rechnet das Spiel dazu, was seit seinem letzten Handel angefallen ist — er verkauft Überschussware und füllt davon auf. Diese Zahl ist der Ausgangswert, nicht der Betrag im Handelsmenü.';
+
+  @override
+  String get traderPriceWarning =>
+      'Preise reagieren darauf, wie viel ein Händler auf Lager hat und wie viel Erz er besitzt — diese Zahlen zu ändern kann also auch seine Preise verschieben.';
+
+  @override
+  String get traderAddItem => 'Item hinzufügen';
+
+  @override
+  String get traderRemoveItem => 'Zeile entfernen';
+
+  @override
+  String get traderReadOnlyCore => 'Dieser Core kann Händlerdaten nur lesen.';
+
+  @override
+  String get traderDifficultyStockUnsupported =>
+      'Dieser Händler führt Bestand je Schwierigkeitsgrad, den der Editor nicht abbildet. Bearbeiten ist deshalb gesperrt — eine Änderung sähe erfolgreich aus, ließe diesen zusätzlichen Bestand aber unangetastet.';
+
+  @override
+  String get traderRecordIncomplete =>
+      'Die Bestandslisten dieses Händlers fehlen oder haben eine Form, die der Editor nicht unterstützt und nicht schreiben kann. Bearbeiten ist deshalb gesperrt, damit eine Änderung nicht erst beim Speichern scheitert.';
+
+  @override
+  String get traderEmptyStock => 'Nichts auf Lager.';
+
+  @override
+  String get traderUnknownItem => 'nicht im Item-Katalog';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return 'Die Händlerdaten konnten nicht geladen werden: $details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count Zeilen';
+  }
+
+  @override
   String get tabWorld => 'Welt';
 
   @override
@@ -2727,6 +2797,10 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String get editorInventorySlotEditConflict =>
       'Eine direkte Änderung an einem Inventar-Slot ist zusammen mit einer Änderung vorgemerkt, die ganze Slots beansprucht (Reparatur, Hinzufügen oder Entfernen). Die zweite würde die erste überschreiben — eine von beiden zurücknehmen, dann erneut speichern.';
+
+  @override
+  String get editorTraderArrayConflict =>
+      'Eine Handelsänderung ist zusammen mit einer direkten Änderung am Händler-Array vorgemerkt. Diese nummeriert die Zeilen um, über die eine Handelsänderung adressiert wird — eine von beiden träfe den falschen Händler. Eine zurücknehmen, dann erneut speichern.';
 
   @override
   String get backupFactFile => 'Datei';

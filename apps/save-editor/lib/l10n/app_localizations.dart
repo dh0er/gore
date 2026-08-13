@@ -836,6 +836,126 @@ abstract class AppLocalizations {
   /// **'Inventory'**
   String get tabInventory;
 
+  /// No description provided for @tabTrade.
+  ///
+  /// In en, this message translates to:
+  /// **'Trade'**
+  String get tabTrade;
+
+  /// No description provided for @traderNotAMerchant.
+  ///
+  /// In en, this message translates to:
+  /// **'This character does not trade.'**
+  String get traderNotAMerchant;
+
+  /// No description provided for @traderRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Try again'**
+  String get traderRetry;
+
+  /// No description provided for @traderAmbiguousName.
+  ///
+  /// In en, this message translates to:
+  /// **'More than one trader record carries this name, so the editor cannot tell which shop belongs to this character. Editing is disabled rather than risk changing the wrong one.'**
+  String get traderAmbiguousName;
+
+  /// No description provided for @traderOre.
+  ///
+  /// In en, this message translates to:
+  /// **'Ore (purchasing power)'**
+  String get traderOre;
+
+  /// No description provided for @traderNoOre.
+  ///
+  /// In en, this message translates to:
+  /// **'no ore'**
+  String get traderNoOre;
+
+  /// No description provided for @traderStockCurrent.
+  ///
+  /// In en, this message translates to:
+  /// **'Stock'**
+  String get traderStockCurrent;
+
+  /// No description provided for @traderStockBase.
+  ///
+  /// In en, this message translates to:
+  /// **'Restock baseline'**
+  String get traderStockBase;
+
+  /// No description provided for @traderStockBaseHint.
+  ///
+  /// In en, this message translates to:
+  /// **'What the merchant restocks back toward. It grows with story progress, so it is not a vanilla snapshot.'**
+  String get traderStockBaseHint;
+
+  /// No description provided for @traderOreHint.
+  ///
+  /// In en, this message translates to:
+  /// **'The in-game figure differs: on load the game adds what accrued since his last trade — he sells surplus goods and restocks from it. This number is the starting point, not what the trade screen shows.'**
+  String get traderOreHint;
+
+  /// No description provided for @traderPriceWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Prices react to how much a merchant stocks and how much ore he holds, so changing these numbers can also move what he charges.'**
+  String get traderPriceWarning;
+
+  /// No description provided for @traderAddItem.
+  ///
+  /// In en, this message translates to:
+  /// **'Add item'**
+  String get traderAddItem;
+
+  /// No description provided for @traderRemoveItem.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove line'**
+  String get traderRemoveItem;
+
+  /// No description provided for @traderReadOnlyCore.
+  ///
+  /// In en, this message translates to:
+  /// **'This core build can only read trader data.'**
+  String get traderReadOnlyCore;
+
+  /// No description provided for @traderDifficultyStockUnsupported.
+  ///
+  /// In en, this message translates to:
+  /// **'This merchant carries per-difficulty stock, which the editor does not model. Editing is disabled here, because a change would look successful while leaving that extra stock untouched.'**
+  String get traderDifficultyStockUnsupported;
+
+  /// No description provided for @traderRecordIncomplete.
+  ///
+  /// In en, this message translates to:
+  /// **'This merchant\'s stock lists are missing, or in a shape the editor does not support and cannot write. Editing is disabled here so a change cannot fail at save time.'**
+  String get traderRecordIncomplete;
+
+  /// No description provided for @traderEmptyStock.
+  ///
+  /// In en, this message translates to:
+  /// **'Nothing in stock.'**
+  String get traderEmptyStock;
+
+  /// No description provided for @traderUnknownItem.
+  ///
+  /// In en, this message translates to:
+  /// **'not in the item catalog'**
+  String get traderUnknownItem;
+
+  /// No description provided for @editorTradersLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Trader load failed: {details}'**
+  String editorTradersLoadFailed(String details);
+
+  /// No description provided for @traderStockLineCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} lines'**
+  String traderStockLineCount(int count);
+
   /// No description provided for @tabWorld.
   ///
   /// In en, this message translates to:
@@ -4175,6 +4295,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'A direct edit of an inventory slot is queued together with a change that claims whole slots (repair, add or remove). The second would overwrite the first — revert one of them, then save again.'**
   String get editorInventorySlotEditConflict;
+
+  /// No description provided for @editorTraderArrayConflict.
+  ///
+  /// In en, this message translates to:
+  /// **'A trade change is queued together with a direct edit of the trader array. That edit renumbers the rows a trade change is addressed by, so one of the two would land on the wrong merchant — revert one of them, then save again.'**
+  String get editorTraderArrayConflict;
 
   /// No description provided for @backupFactFile.
   ///

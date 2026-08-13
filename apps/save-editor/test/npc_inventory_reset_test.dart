@@ -6,6 +6,7 @@ import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/providers/data_providers.dart';
+import 'support/detail_tabs.dart';
 
 /// Task 15: proves the "Reset inventory" button (Task 14) queues a single
 /// `private.inventory.reset` pending edit under the player's `'inventory'`
@@ -38,7 +39,7 @@ void main() {
     // with no further selection needed.
     await tester.tap(find.widgetWithText(Tab, 'Characters'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(Tab, 'Inventory'));
+    await tester.tap(detailTab('Inventory'));
     await tester.pumpAndSettle();
   }
 

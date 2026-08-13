@@ -8,6 +8,7 @@ import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import 'support/ui_settings_test_store.dart';
+import 'support/detail_tabs.dart';
 
 /// Regression test for Bug #7: switching away from an edited NPC inventory and
 /// returning must REHYDRATE the card from the queued per-NPC draft. Editing a
@@ -43,7 +44,7 @@ void main() {
 
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Inventory'));
+      await tester.tap(detailTab('Inventory'));
       await tester.pumpAndSettle();
 
       // NPC-A has two items. Edit the FIRST item's count.

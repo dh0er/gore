@@ -420,6 +420,77 @@ class AppLocalizationsPt extends AppLocalizations {
   String get tabInventory => 'Inventário';
 
   @override
+  String get tabTrade => 'Comércio';
+
+  @override
+  String get traderNotAMerchant => 'Esta personagem não comercia.';
+
+  @override
+  String get traderRetry => 'Tentar novamente';
+
+  @override
+  String get traderAmbiguousName =>
+      'Mais do que um registo de mercador tem este nome, por isso não é possível saber que loja pertence a esta personagem. A edição está desativada em vez de arriscar mudar a errada.';
+
+  @override
+  String get traderOre => 'Minério (poder de compra)';
+
+  @override
+  String get traderNoOre => 'sem minério';
+
+  @override
+  String get traderStockCurrent => 'Estoque';
+
+  @override
+  String get traderStockBase => 'Base de reposição';
+
+  @override
+  String get traderStockBaseHint =>
+      'Aquilo que o mercador repõe. Cresce com o progresso da história, por isso não é um estado original.';
+
+  @override
+  String get traderOreHint =>
+      'O valor no jogo difere: ao carregar, o jogo soma o que se acumulou desde a última troca — ele vende excedentes e repõe com isso. Este número é o ponto de partida, não o que o ecrã de comércio mostra.';
+
+  @override
+  String get traderPriceWarning =>
+      'Os preços reagem ao que o mercador tem em estoque e ao minério que possui, por isso mudar estes números também pode alterar o que ele cobra.';
+
+  @override
+  String get traderAddItem => 'Adicionar item';
+
+  @override
+  String get traderRemoveItem => 'Remover linha';
+
+  @override
+  String get traderReadOnlyCore =>
+      'Esta versão do núcleo só consegue ler os dados dos mercadores.';
+
+  @override
+  String get traderDifficultyStockUnsupported =>
+      'Este mercador tem existências por dificuldade, que o editor não modela. A edição está desativada aqui, porque uma alteração pareceria bem-sucedida deixando essas existências intactas.';
+
+  @override
+  String get traderRecordIncomplete =>
+      'As listas de existências deste mercador não existem, ou têm uma forma que o editor não suporta nem consegue gravar. A edição está desativada aqui para que uma alteração não falhe ao gravar.';
+
+  @override
+  String get traderEmptyStock => 'Nada em estoque.';
+
+  @override
+  String get traderUnknownItem => 'não está no catálogo de itens';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return 'Falha ao carregar mercadores: $details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count linhas';
+  }
+
+  @override
   String get tabWorld => 'Mundo';
 
   @override
@@ -2728,6 +2799,10 @@ class AppLocalizationsPt extends AppLocalizations {
       'Uma edição direta de um espaço de inventário está na fila junto com uma operação que ocupa espaços inteiros (reparo, adição ou remoção). A segunda sobrescreveria a primeira — reverta uma delas e salve novamente.';
 
   @override
+  String get editorTraderArrayConflict =>
+      'Uma alteração de comércio está em fila junto com uma edição direta da matriz de mercadores. Essa edição renumera as linhas pelas quais uma alteração de comércio é endereçada, por isso uma das duas cairia no mercador errado — reverte uma e grava de novo.';
+
+  @override
   String get backupFactFile => 'Arquivo';
 
   @override
@@ -3201,6 +3276,77 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get tabInventory => 'Inventário';
+
+  @override
+  String get tabTrade => 'Comércio';
+
+  @override
+  String get traderNotAMerchant => 'Este personagem não comercia.';
+
+  @override
+  String get traderRetry => 'Tentar novamente';
+
+  @override
+  String get traderAmbiguousName =>
+      'Mais de um registro de mercador tem este nome, por isso não é possível saber qual loja pertence a este personagem. A edição está desativada em vez de arriscar mudar a errada.';
+
+  @override
+  String get traderOre => 'Minério (poder de compra)';
+
+  @override
+  String get traderNoOre => 'sem minério';
+
+  @override
+  String get traderStockCurrent => 'Estoque';
+
+  @override
+  String get traderStockBase => 'Base de reposição';
+
+  @override
+  String get traderStockBaseHint =>
+      'Aquilo que o mercador repõe. Cresce com o progresso da história, por isso não é um estado original.';
+
+  @override
+  String get traderOreHint =>
+      'O valor no jogo difere: ao carregar, o jogo soma o que se acumulou desde a última troca — ele vende excedentes e repõe com isso. Este número é o ponto de partida, não o que a tela de comércio mostra.';
+
+  @override
+  String get traderPriceWarning =>
+      'Os preços reagem ao que o mercador tem em estoque e ao minério que possui, por isso mudar esses números também pode alterar o que ele cobra.';
+
+  @override
+  String get traderAddItem => 'Adicionar item';
+
+  @override
+  String get traderRemoveItem => 'Remover linha';
+
+  @override
+  String get traderReadOnlyCore =>
+      'Esta versão do núcleo só consegue ler os dados dos mercadores.';
+
+  @override
+  String get traderDifficultyStockUnsupported =>
+      'Este mercador tem estoque por dificuldade, que o editor não modela. A edição está desativada aqui, porque uma alteração pareceria bem-sucedida deixando esse estoque intacto.';
+
+  @override
+  String get traderRecordIncomplete =>
+      'As listas de estoque deste mercador não existem, ou têm uma forma que o editor não suporta nem consegue gravar. A edição está desativada aqui para que uma alteração não falhe ao salvar.';
+
+  @override
+  String get traderEmptyStock => 'Nada em estoque.';
+
+  @override
+  String get traderUnknownItem => 'não está no catálogo de itens';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return 'Falha ao carregar mercadores: $details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count linhas';
+  }
 
   @override
   String get tabWorld => 'Mundo';
@@ -5508,6 +5654,10 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   @override
   String get editorInventorySlotEditConflict =>
       'Uma edição direta de um espaço de inventário está na fila junto com uma operação que ocupa espaços inteiros (reparo, adição ou remoção). A segunda sobrescreveria a primeira — reverta uma delas e salve novamente.';
+
+  @override
+  String get editorTraderArrayConflict =>
+      'Uma alteração de comércio está na fila junto com uma edição direta do array de mercadores. Essa edição renumera as linhas pelas quais uma alteração de comércio é endereçada, então uma das duas cairia no mercador errado — reverta uma e salve de novo.';
 
   @override
   String get backupFactFile => 'Arquivo';

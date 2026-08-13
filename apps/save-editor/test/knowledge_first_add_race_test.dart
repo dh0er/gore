@@ -5,6 +5,7 @@ import 'package:goresave/features/app/ui/goresave_app.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/providers/data_providers.dart';
+import 'support/detail_tabs.dart';
 
 /// Regression test for first knowledge adds. A missing character knowledge-map
 /// entry must not trigger a preparatory write; one value-addressed pending edit
@@ -39,7 +40,7 @@ void main() {
     // Player is selected by default; open the Wissen sub-tab. The Hero has
     // no knowledge entry yet (benign "has no knowledge entry" core error),
     // so the add affordance is enabled in the no-knowledge-yet state.
-    await tester.tap(find.widgetWithText(Tab, 'Dialog Knowledge'));
+    await tester.tap(detailTab('Dialog Knowledge'));
     await tester.pumpAndSettle();
 
     await tester.enterText(
@@ -87,7 +88,7 @@ void main() {
 
     await tester.tap(find.widgetWithText(Tab, 'Characters'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(Tab, 'Dialog Knowledge'));
+    await tester.tap(detailTab('Dialog Knowledge'));
     await tester.pumpAndSettle();
 
     final badges = <String, String>{

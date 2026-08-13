@@ -17,6 +17,7 @@ import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/domain/progression_models.dart';
 import 'package:goresave/features/editor/domain/skills_models.dart';
 import 'package:goresave/features/editor/domain/story_state_models.dart';
+import 'package:goresave/features/editor/domain/trader_models.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/l10n/app_localizations_en.dart';
 import 'package:goresave/utils/default_paths.dart';
@@ -1279,6 +1280,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
       'private.glossary.setSegment',
       'private.npc.revive',
       'private.npc.setRelationship',
+      // Both splice a trader's stock map, which shifts every later byte offset
+      // and renumbers the map's entry indices. private.traders.setStock is
+      // deliberately absent: it overwrites a bare i32 in place, so it batches.
+      'private.traders.addItem',
+      'private.traders.removeItem',
       storyStateApplyPath,
     };
     // A skill edit can learn/unlearn — splicing the hero's ActiveEffects array —
@@ -1415,6 +1421,16 @@ class EditorNotifier extends StateNotifier<EditorState> {
               allEdits.any((k) => isInventorySlotIdTypedEdit(k.edit));
     if (conflicts) {
       state = state.copyWith(error: _l10n.editorInventorySlotEditConflict);
+      return false;
+    }
+    // A trade change and a raw array operation on the trader array cannot be
+    // rescued by putting them in different writes: the trade change's row index
+    // came from a list read before either ran, so whichever goes second
+    // resolves it against a layout the first moved. The core refuses the pair
+    // inside one write; splitting them here would slip past that and report
+    // both as committed, so refuse before building the worklist.
+    if (traderArrayConflict(allEdits.map((k) => k.edit).toList()) != null) {
+      state = state.copyWith(error: _l10n.editorTraderArrayConflict);
       return false;
     }
     final fixedBatch = allEdits
@@ -2799,6 +2815,77 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }
   }
 
+  /// Load every merchant's shop record (`private.traders.list`).
+  ///
+  /// Returns a result carrying an inline [TradersResult.error] instead of
+  /// throwing, and reports which trader commands this core build offers so the
+  /// panel degrades to read-only against an older core rather than sending a
+  /// command that does not exist.
+  Future<TradersResult> loadTraders() async {
+    final path = state.selectedPath;
+    if (path == null) {
+      return TradersResult(error: _l10n.editorNoSaveSelected);
+    }
+    try {
+      final response = await _execute(
+        'private.traders.list',
+        payload: {'path': path},
+      );
+      if (response['ok'] != true) {
+        return TradersResult(
+          error: _l10n.editorTradersLoadFailed(_errorDetails(response)),
+        );
+      }
+      return TradersResult.fromJson(
+        (response['data'] as Map).cast<String, Object?>(),
+      );
+    } catch (error) {
+      return TradersResult(error: _l10n.editorTradersLoadFailed('$error'));
+    }
+  }
+
+  /// Load one merchant's full record by its `m_Traders` index.
+  ///
+  /// The index, not the name, is the address: two shipped rows are named `None`
+  /// and the core refuses to guess between them.
+  Future<TraderDetailResult> loadTraderDetail(int index) async {
+    final path = state.selectedPath;
+    if (path == null) {
+      return TraderDetailResult(error: _l10n.editorNoSaveSelected);
+    }
+    try {
+      final response = await _execute(
+        'private.traders.detail',
+        payload: {'path': path, 'index': index},
+      );
+      if (response['ok'] != true) {
+        return TraderDetailResult(
+          error: _l10n.editorTradersLoadFailed(_errorDetails(response)),
+        );
+      }
+      return TraderDetailResult(
+        detail: TraderDetail.fromJson(
+          (response['data'] as Map).cast<String, Object?>(),
+        ),
+      );
+    } catch (error) {
+      return TraderDetailResult(error: _l10n.editorTradersLoadFailed('$error'));
+    }
+  }
+
+  /// Queue one trader stock change. Re-editing the same line replaces its
+  /// pending edit rather than stacking a second one.
+  void setTraderStockEdit(TraderStockEdit edit) {
+    setPendingEdit(
+      edit.pendingKey,
+      PendingSaveEdit(edits: [edit.toEdit()]),
+    );
+  }
+
+  /// Drop a queued trader change (the user reverted the field).
+  void clearTraderStockEdit(TraderStockEdit edit) =>
+      clearPendingEdit(edit.pendingKey);
+
   /// Run one progression section query. Returns the raw data map, or null
   /// with [onError] called, so each typed loader below can build its own page
   /// object with an inline error.
@@ -4053,10 +4140,55 @@ bool structuredEditRewrites(
     // container in the save, so it is not scoped to one actor.
     case 'private.inventory.repairSlots':
       return _pathWritesASlotId(typedPath);
+    // A trader edit is addressed by its row's position in m_Traders, and a raw
+    // array operation ON that array renumbers the rows. Splitting the two into
+    // separate writes does not rescue them: the index came from a list read
+    // BEFORE either ran, so whichever goes second resolves it against a layout
+    // the first moved. The pair is refused whichever way round it comes.
+    case 'private.traders.setStock':
+    case 'private.traders.addItem':
+    case 'private.traders.removeItem':
+      return _pathTargetsTheTraderArray(typedPath);
     default:
       return false;
   }
 }
+
+/// The first pair of pending edits where a trade change meets a raw array
+/// operation on the trader array, or null when there is none.
+///
+/// Separate from the packer's boundary test: this pair is not made safe by a
+/// split, so it has to abort the save rather than start a new sub-write.
+@visibleForTesting
+(Map<String, Object?>, Map<String, Object?>)? traderArrayConflict(
+  List<Map<String, Object?>> edits,
+) {
+  const traderOps = {
+    'private.traders.setStock',
+    'private.traders.addItem',
+    'private.traders.removeItem',
+  };
+  const arrayOps = {'private.typed.arrayRemove', 'private.typed.arrayDuplicate'};
+  for (final edit in edits) {
+    if (!traderOps.contains(edit['path'])) continue;
+    for (final other in edits) {
+      // Only an array operation ON the array renumbers its rows. An edit that
+      // merely runs THROUGH it — a value under one row, or a container inside
+      // one — moves nothing, and refusing those would block safe pairs.
+      if (!arrayOps.contains(other['path'])) continue;
+      final path = _rawTypedEditPath(other);
+      if (path != null && _pathTargetsTheTraderArray(path)) {
+        return (edit, other);
+      }
+    }
+  }
+  return null;
+}
+
+/// Whether a raw typed path addresses the trader ARRAY itself rather than
+/// something inside one of its rows.
+bool _pathTargetsTheTraderArray(List<Object?> path) =>
+    path.isNotEmpty && path.last == 'm_Traders';
 
 /// Whether [left] and [right] address the same target in the sense above, in
 /// EITHER direction — the pair test the packer uses. The core's rule is
@@ -4113,6 +4245,11 @@ bool _mayInvalidateOrdinals(Map<String, Object?> edit) {
     'private.npc.setRelationship',
     'private.glossary.setSegment',
     'private.skills.set',
+    // Splice an entry into or out of a trader's stock map, which changes how
+    // many entries it holds. private.traders.setStock is absent: it overwrites a
+    // bare i32 in place.
+    'private.traders.addItem',
+    'private.traders.removeItem',
     storyStateApplyPath,
   }.contains(path);
 }
@@ -4145,6 +4282,13 @@ bool _carriesCallerOrdinal(Map<String, Object?> edit) {
   }
   if (path == 'private.inventory.removeItem') {
     return (value is Map ? value['slotId'] : null) != null;
+  }
+  if (path == 'private.traders.setStock' ||
+      path == 'private.traders.addItem' ||
+      path == 'private.traders.removeItem') {
+    // Every trader edit addresses its row by an index into the trader array that
+    // the user's view supplied.
+    return true;
   }
   return false;
 }

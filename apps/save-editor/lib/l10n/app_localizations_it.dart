@@ -420,6 +420,77 @@ class AppLocalizationsIt extends AppLocalizations {
   String get tabInventory => 'Inventario';
 
   @override
+  String get tabTrade => 'Commercio';
+
+  @override
+  String get traderNotAMerchant => 'Questo personaggio non commercia.';
+
+  @override
+  String get traderRetry => 'Riprova';
+
+  @override
+  String get traderAmbiguousName =>
+      'Più record di mercante portano questo nome, quindi non si può dire quale negozio appartenga a questo personaggio. La modifica è disattivata invece di rischiare di cambiare quello sbagliato.';
+
+  @override
+  String get traderOre => 'Minerale (potere d\'acquisto)';
+
+  @override
+  String get traderNoOre => 'nessun minerale';
+
+  @override
+  String get traderStockCurrent => 'Scorte';
+
+  @override
+  String get traderStockBase => 'Base di rifornimento';
+
+  @override
+  String get traderStockBaseHint =>
+      'Ciò verso cui il mercante si rifornisce. Cresce con la storia, quindi non è uno stato originale.';
+
+  @override
+  String get traderOreHint =>
+      'Il valore nel gioco è diverso: al caricamento il gioco aggiunge quanto maturato dall\'ultimo scambio — vende le eccedenze e si rifornisce. Questo numero è il punto di partenza, non quello mostrato nella schermata di commercio.';
+
+  @override
+  String get traderPriceWarning =>
+      'I prezzi reagiscono a quanto un mercante ha in magazzino e a quanto minerale possiede, quindi cambiare questi numeri può spostare anche quanto chiede.';
+
+  @override
+  String get traderAddItem => 'Aggiungi oggetto';
+
+  @override
+  String get traderRemoveItem => 'Rimuovi riga';
+
+  @override
+  String get traderReadOnlyCore =>
+      'Questa build del core può solo leggere i dati dei mercanti.';
+
+  @override
+  String get traderDifficultyStockUnsupported =>
+      'Questo mercante ha scorte per difficoltà, che l\'editor non modella. La modifica è disattivata qui, perché sembrerebbe riuscita lasciando però intatte quelle scorte aggiuntive.';
+
+  @override
+  String get traderRecordIncomplete =>
+      'Gli elenchi di scorte di questo mercante mancano, o hanno una forma che l\'editor non supporta e non può scrivere. La modifica è disattivata qui perché un cambiamento non fallisca al salvataggio.';
+
+  @override
+  String get traderEmptyStock => 'Niente in magazzino.';
+
+  @override
+  String get traderUnknownItem => 'non presente nel catalogo oggetti';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return 'Caricamento dei mercanti non riuscito: $details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count righe';
+  }
+
+  @override
   String get tabWorld => 'Mondo';
 
   @override
@@ -2731,6 +2802,10 @@ class AppLocalizationsIt extends AppLocalizations {
   @override
   String get editorInventorySlotEditConflict =>
       'Una modifica diretta a uno slot dell’inventario è in coda insieme a un’operazione che occupa slot interi (riparazione, aggiunta o rimozione). La seconda sovrascriverebbe la prima: annullane una, poi salva di nuovo.';
+
+  @override
+  String get editorTraderArrayConflict =>
+      'Una modifica di commercio è in coda insieme a una modifica diretta dell\'array dei mercanti. Quella rinumera le righe con cui una modifica di commercio è indirizzata, quindi una delle due finirebbe sul mercante sbagliato — annullane una e salva di nuovo.';
 
   @override
   String get backupFactFile => 'File';

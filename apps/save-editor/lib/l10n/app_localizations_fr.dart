@@ -422,6 +422,77 @@ class AppLocalizationsFr extends AppLocalizations {
   String get tabInventory => 'Inventaire';
 
   @override
+  String get tabTrade => 'Commerce';
+
+  @override
+  String get traderNotAMerchant => 'Ce personnage ne fait pas de commerce.';
+
+  @override
+  String get traderRetry => 'Réessayer';
+
+  @override
+  String get traderAmbiguousName =>
+      'Plusieurs fiches de marchand portent ce nom : impossible de dire quelle boutique appartient à ce personnage. L\'édition est désactivée plutôt que de risquer de modifier la mauvaise.';
+
+  @override
+  String get traderOre => 'Minerai (pouvoir d\'achat)';
+
+  @override
+  String get traderNoOre => 'aucun minerai';
+
+  @override
+  String get traderStockCurrent => 'Stock';
+
+  @override
+  String get traderStockBase => 'Base de réapprovisionnement';
+
+  @override
+  String get traderStockBaseHint =>
+      'Ce vers quoi le marchand se réapprovisionne. Cela augmente avec l\'histoire, ce n\'est donc pas un état d\'origine.';
+
+  @override
+  String get traderOreHint =>
+      'La valeur en jeu diffère : au chargement, le jeu ajoute ce qui s\'est accumulé depuis son dernier échange — il vend ses surplus et se réapprovisionne. Ce nombre est le point de départ, pas ce qu\'affiche l\'écran de commerce.';
+
+  @override
+  String get traderPriceWarning =>
+      'Les prix réagissent au stock du marchand et au minerai qu\'il détient : modifier ces nombres peut donc aussi changer ses tarifs.';
+
+  @override
+  String get traderAddItem => 'Ajouter un objet';
+
+  @override
+  String get traderRemoveItem => 'Retirer la ligne';
+
+  @override
+  String get traderReadOnlyCore =>
+      'Cette version du cœur ne peut que lire les données des marchands.';
+
+  @override
+  String get traderDifficultyStockUnsupported =>
+      'Ce marchand possède un stock par difficulté, que l\'éditeur ne modélise pas. L\'édition est désactivée ici, car une modification semblerait réussie tout en laissant ce stock supplémentaire intact.';
+
+  @override
+  String get traderRecordIncomplete =>
+      'Les listes de stock de ce marchand sont absentes, ou d\'une forme que l\'éditeur ne prend pas en charge et ne peut pas écrire. L\'édition est désactivée ici pour qu\'une modification n\'échoue pas à l\'enregistrement.';
+
+  @override
+  String get traderEmptyStock => 'Rien en stock.';
+
+  @override
+  String get traderUnknownItem => 'absent du catalogue d\'objets';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return 'Échec du chargement des marchands : $details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count lignes';
+  }
+
+  @override
   String get tabWorld => 'Monde';
 
   @override
@@ -2741,6 +2812,10 @@ class AppLocalizationsFr extends AppLocalizations {
   @override
   String get editorInventorySlotEditConflict =>
       'Une modification directe d’un emplacement d’inventaire est en attente en même temps qu’une opération qui s’approprie des emplacements entiers (réparation, ajout ou suppression). La seconde écraserait la première — annulez l’une des deux, puis enregistrez de nouveau.';
+
+  @override
+  String get editorTraderArrayConflict =>
+      'Une modification de commerce est en attente avec une édition directe du tableau des marchands. Celle-ci renumérote les lignes par lesquelles une modification de commerce est adressée : l\'une des deux toucherait le mauvais marchand — annulez-en une, puis enregistrez.';
 
   @override
   String get backupFactFile => 'Fichier';

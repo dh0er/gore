@@ -421,6 +421,77 @@ class AppLocalizationsPl extends AppLocalizations {
   String get tabInventory => 'Ekwipunek';
 
   @override
+  String get tabTrade => 'Handel';
+
+  @override
+  String get traderNotAMerchant => 'Ta postać nie handluje.';
+
+  @override
+  String get traderRetry => 'Spróbuj ponownie';
+
+  @override
+  String get traderAmbiguousName =>
+      'Kilka rekordów kupca nosi tę nazwę, więc nie da się ustalić, który sklep należy do tej postaci. Edycja jest wyłączona, zamiast ryzykować zmianę niewłaściwego.';
+
+  @override
+  String get traderOre => 'Ruda (siła nabywcza)';
+
+  @override
+  String get traderNoOre => 'brak rudy';
+
+  @override
+  String get traderStockCurrent => 'Zapas';
+
+  @override
+  String get traderStockBase => 'Baza uzupełniania';
+
+  @override
+  String get traderStockBaseHint =>
+      'To, do czego kupiec uzupełnia zapasy. Rośnie wraz z fabułą, więc nie jest stanem pierwotnym.';
+
+  @override
+  String get traderOreHint =>
+      'Wartość w grze się różni: przy wczytaniu gra dolicza to, co narosło od jego ostatniego handlu — sprzedaje nadwyżki i z tego uzupełnia zapasy. Ta liczba to punkt wyjścia, a nie kwota z ekranu handlu.';
+
+  @override
+  String get traderPriceWarning =>
+      'Ceny reagują na to, ile kupiec ma na stanie i ile ma rudy, więc zmiana tych liczb może też zmienić jego stawki.';
+
+  @override
+  String get traderAddItem => 'Dodaj przedmiot';
+
+  @override
+  String get traderRemoveItem => 'Usuń pozycję';
+
+  @override
+  String get traderReadOnlyCore =>
+      'Ta wersja rdzenia może tylko odczytywać dane kupców.';
+
+  @override
+  String get traderDifficultyStockUnsupported =>
+      'Ten kupiec ma zapasy zależne od poziomu trudności, których edytor nie odwzorowuje. Edycja jest tu wyłączona, bo zmiana wyglądałaby na udaną, zostawiając te dodatkowe zapasy nietknięte.';
+
+  @override
+  String get traderRecordIncomplete =>
+      'Listy zapasów tego kupca nie istnieją albo mają postać, której edytor nie obsługuje i nie potrafi zapisać. Edycja jest wyłączona, aby zmiana nie zawiodła przy zapisie.';
+
+  @override
+  String get traderEmptyStock => 'Brak zapasów.';
+
+  @override
+  String get traderUnknownItem => 'brak w katalogu przedmiotów';
+
+  @override
+  String editorTradersLoadFailed(String details) {
+    return 'Nie udało się wczytać kupców: $details';
+  }
+
+  @override
+  String traderStockLineCount(int count) {
+    return '$count pozycji';
+  }
+
+  @override
   String get tabWorld => 'Świat';
 
   @override
@@ -2743,6 +2814,10 @@ class AppLocalizationsPl extends AppLocalizations {
   @override
   String get editorInventorySlotEditConflict =>
       'W kolejce jest bezpośrednia zmiana slotu ekwipunku razem z operacją zajmującą całe sloty (naprawa, dodanie lub usunięcie). Druga nadpisałaby pierwszą — cofnij jedną z nich i zapisz ponownie.';
+
+  @override
+  String get editorTraderArrayConflict =>
+      'Zmiana handlu jest w kolejce razem z bezpośrednią edycją tablicy kupców. Ta edycja przenumerowuje wiersze, po których adresowana jest zmiana handlu, więc jedna z nich trafiłaby w niewłaściwego kupca — cofnij jedną i zapisz ponownie.';
 
   @override
   String get backupFactFile => 'Plik';
