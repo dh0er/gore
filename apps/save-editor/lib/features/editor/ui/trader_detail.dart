@@ -1037,6 +1037,10 @@ class _CountFieldState extends State<_CountField> {
   /// Shown under the field while the typed value cannot be queued.
   String? _error;
 
+  /// Whether the user is in this field. While they are, its text belongs to
+  /// them: every sync below is a reaction to a change they just made.
+  final FocusNode _focus = FocusNode();
+
   late final TextEditingController _controller = TextEditingController(
     text: '${widget.pending ?? widget.value}',
   );
@@ -1044,6 +1048,10 @@ class _CountFieldState extends State<_CountField> {
   @override
   void didUpdateWidget(covariant _CountField oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // Never while the user is typing: backspacing through a queued count clears
+    // the pending value, and restoring the saved one here put it straight back
+    // under their cursor — leaving no way to empty the field and start over.
+    if (_focus.hasFocus) return;
     final shown = widget.pending ?? widget.value;
     final inputsChanged =
         oldWidget.pending != widget.pending || oldWidget.value != widget.value;
@@ -1057,6 +1065,7 @@ class _CountFieldState extends State<_CountField> {
   @override
   void dispose() {
     _controller.dispose();
+    _focus.dispose();
     super.dispose();
   }
 
@@ -1105,6 +1114,7 @@ class _CountFieldState extends State<_CountField> {
     final dirty = widget.pending != null && widget.pending != widget.value;
     return TextField(
       controller: _controller,
+      focusNode: _focus,
       enabled: widget.enabled,
       keyboardType: TextInputType.number,
       inputFormatters: [FilteringTextInputFormatter.digitsOnly],

@@ -738,6 +738,36 @@ void main() {
       );
     });
 
+    testWidgets('clearing an edited count leaves the field empty', (
+      tester,
+    ) async {
+      // Backspacing through a queued count clears the pending value, and the
+      // sync used to restore the saved one straight back under the cursor — so
+      // the field could never be emptied to type a fresh number.
+      await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+
+      final field = find.descendant(of: oreCard, matching: find.byType(TextField));
+      await tester.tap(field);
+      await tester.pump();
+      await tester.enterText(field, '12');
+      await tester.pump();
+      await tester.enterText(field, '');
+      await tester.pump();
+
+      expect(tester.widget<TextField>(field).controller?.text, isEmpty);
+      // And an empty field queues nothing rather than a zero.
+      expect(
+        ProviderScope.containerOf(tester.element(find.byType(Scaffold).first))
+            .read(editorProvider)
+            .pendingEdits,
+        isEmpty,
+      );
+    });
+
     testWidgets('a merchant shows his ore and both stock sections', (
       tester,
     ) async {
