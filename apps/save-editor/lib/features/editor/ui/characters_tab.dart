@@ -104,25 +104,19 @@ class CharactersTab extends ConsumerWidget {
           );
 
     // Handel: a merchant's shop, which is NOT his inventory — it lives in a
-    // global array keyed by uniqueName. Orphans have no such record, and the
-    // panel itself shows the same empty state for any non-merchant, so it only
-    // needs the orphan guard the other actor-backed panes take.
-    final Widget tradeBody = isOrphan
-        ? _MessagePane(
-            icon: Icons.storefront_outlined,
-            title: l10n.tabTrade,
-            body: l10n.characterNoActorBody,
-          )
-        : TraderPanel(
-            inspection: inspection,
-            notifier: notifier,
-            actor: selected,
-            editable: progressionEditable,
-            // Carries the inspection, not just the actor: a save re-inspects the
-            // file, and without that the kept-alive panel would keep showing the
-            // pre-save stock.
-            reloadKey: (inspection, selected.uniqueName),
-          );
+    // global array keyed by uniqueName alone. An orphan therefore gets it too:
+    // the record does not depend on a spawned actor, and the panel already
+    // shows a clean non-merchant state when no row matches the name.
+    final Widget tradeBody = TraderPanel(
+      inspection: inspection,
+      notifier: notifier,
+      actor: selected,
+      editable: progressionEditable,
+      // Carries the inspection, not just the actor: a save re-inspects the
+      // file, and without that the kept-alive panel would keep showing the
+      // pre-save stock.
+      reloadKey: (inspection, selected.uniqueName),
+    );
 
     // Position: the player's transform editor (its only home — it used to sit
     // in the Attribute tab's HeroStatsCard sidebar) and, for an NPC, the saved

@@ -695,6 +695,7 @@ pub fn list_characters(root: &RootObject) -> Result<Vec<CharacterSummary>, CoreE
         .collect();
     orphans.sort();
     for key in orphans {
+        let is_trader = traders.contains(&key.to_ascii_lowercase());
         out.push(CharacterSummary {
             global_id: None,
             unique_name: key,
@@ -702,9 +703,10 @@ pub fn list_characters(root: &RootObject) -> Result<Vec<CharacterSummary>, CoreE
             personal_relationship: None,
             has_inventory: false,
             has_knowledge: true,
+            // A trader row is keyed by name alone, so a knowledge-only row can
+            // own one even with no actor behind it.
+            is_trader,
             has_events: false,
-            // An orphan has no actor, so it can own no shop.
-            is_trader: false,
         });
     }
     Ok(out)
