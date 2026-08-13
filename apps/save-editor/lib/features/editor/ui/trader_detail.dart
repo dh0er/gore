@@ -689,8 +689,11 @@ class _StockSection extends ConsumerWidget {
     final shown =
         groups.where((g) => g.category == selected).firstOrNull?.items ??
         const <TraderItem>[];
-    final nothingToShow =
-        items.isEmpty && pendingAdds.isEmpty && pendingRemovals.isEmpty;
+    // "Nothing in stock" means the MAP is empty, not the filtered view: the ore
+    // is pulled out of the live stock into its own card, so a merchant holding
+    // only ore has a line and a purse on screen and must not be told otherwise.
+    final mapIsEmpty =
+        lineCount == 0 && pendingAdds.isEmpty && pendingRemovals.isEmpty;
 
     return LayoutBuilder(
       builder: (context, pane) => Column(
@@ -748,7 +751,7 @@ class _StockSection extends ConsumerWidget {
               ),
             ),
           const SizedBox(height: 8),
-          if (nothingToShow)
+          if (mapIsEmpty)
             Align(
               alignment: Alignment.centerLeft,
               child: Text(
@@ -756,6 +759,10 @@ class _StockSection extends ConsumerWidget {
                 style: theme.textTheme.bodyMedium,
               ),
             )
+          else if (items.isEmpty)
+            // Nothing left to browse — every line this view would show sits in
+            // the ore card or in the banners above.
+            const SizedBox.shrink()
           else
             Expanded(
               child: LayoutBuilder(

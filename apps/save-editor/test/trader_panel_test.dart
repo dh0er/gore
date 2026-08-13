@@ -1055,6 +1055,24 @@ void main() {
       expect(find.byIcon(Icons.delete_outline), findsNothing);
     });
 
+    testWidgets('a merchant holding only ore is not called empty', (
+      tester,
+    ) async {
+      // The ore is lifted out of the live stock into its own card, so the
+      // filtered list is empty while the map is not. Reading "nothing in stock"
+      // off the filtered list contradicted both the line count and the purse
+      // shown right above it.
+      await pumpApp(tester, _TraderCoreService(playerIsTrader: true, oreOnly: true));
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Nothing in stock.'), findsNothing);
+      expect(find.text('1 lines'), findsOneWidget);
+      expect(find.text('Ore (purchasing power)'), findsOneWidget);
+    });
+
     testWidgets('a merchant shows his ore and both stock sections', (
       tester,
     ) async {
@@ -1093,7 +1111,12 @@ class _TraderCoreService implements GoresaveCoreService {
     this.hasItemsByDifficulty = false,
     this.orphanMerchant = false,
     this.stockMapsPresent = true,
+    this.oreOnly = false,
   });
+
+  /// A merchant holding nothing but his ore: the live stock has one line, and
+  /// it is the one the ore card takes out of the list.
+  final bool oreOnly;
 
   /// A record missing one of its stock lists. No shipped save has one, which is
   /// why the fixture has to fake it.
@@ -1242,6 +1265,7 @@ class _TraderCoreService implements GoresaveCoreService {
                 'count': 55,
                 'unknownItem': false,
               },
+              if (!oreOnly) ...[
               {
                 'path': '/Script/Angelscript.ItFo_Loaf',
                 'id': 'ItFo_Loaf',
@@ -1266,6 +1290,7 @@ class _TraderCoreService implements GoresaveCoreService {
                 'count': 18,
                 'unknownItem': false,
               },
+              ],
             ],
             'defaultItems': [
               {
