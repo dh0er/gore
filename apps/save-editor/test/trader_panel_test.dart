@@ -1139,6 +1139,21 @@ void main() {
       expect(detailTab('Dialog Knowledge'), findsOneWidget);
     });
 
+    testWidgets('an icon-only tab still names itself to a screen reader', (
+      tester,
+    ) async {
+      // A Tooltip alone lands the name in the node's `tooltip`, which platforms
+      // surface as help text; the tab itself then reads out as "Tab 3 of 6".
+      final handle = tester.ensureSemantics();
+      await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+
+      final node = tester.getSemantics(detailTab('Trade'));
+      expect(node.label, contains('Trade'));
+      handle.dispose();
+    });
+
     test('the tab bar takes labels once every tab has room for one', () {
       // 132px is kTabLabelPadding either side plus the longest shipped label.
       expect(detailTabsCanCarryLabels(6 * 132), isTrue);

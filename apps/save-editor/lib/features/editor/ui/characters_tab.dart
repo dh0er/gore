@@ -44,10 +44,15 @@ bool detailTabsCanCarryLabels(double width) =>
 
 /// One sub-tab: icon and label where they fit, otherwise the icon alone with
 /// the label as its tooltip.
+///
+/// The icon-only form names itself twice over. A [Tooltip] alone puts the name
+/// in the node's `tooltip`, which platforms surface as help text rather than as
+/// the control's name, so the tab would read out as "Tab 3 of 6" — the
+/// [Icon.semanticLabel] is what puts the name where a labelled tab has it.
 Tab _detailTab(IconData icon, String label, bool labelled) => Tab(
   icon: labelled
       ? Icon(icon)
-      : Tooltip(message: label, child: Icon(icon)),
+      : Tooltip(message: label, child: Icon(icon, semanticLabel: label)),
   text: labelled ? label : null,
 );
 
