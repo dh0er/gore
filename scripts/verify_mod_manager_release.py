@@ -414,8 +414,8 @@ def _check_inno_metadata(
     # leaves the unused suffix as ASCII spaces and canonicalizes every `(C)`
     # sequence to the real copyright symbol. Accept only that documented
     # representation; application metadata remains exact.
-    normalized = {field: value.rstrip(" ") for field, value in info.items()}
-    return _check_metadata(normalized, expected, label)
+    padded = {field: value + " " * 7 for field, value in expected.items()}
+    return _check_metadata(info, padded, label)
 
 
 def _zip_contract(

@@ -123,7 +123,7 @@ Source: "..\\..\\..\\THIRD_PARTY_LICENSES.md"; DestDir: "{app}"; Flags: ignoreve
 
     def metadata(self, path: Path) -> dict[str, str]:
         if path.name == self.installer.name:
-            return _installer_metadata(path.name)
+            return _inno_installer_metadata(path.name)
         return _app_metadata()
 
     def _portable_entries(self) -> list[tuple[str, bytes | None]]:
@@ -430,6 +430,9 @@ class ModManagerReleaseContractTest(unittest.TestCase):
         )
 
         for label, field, value in (
+            ("missing padding", "CompanyName", "dh0er"),
+            ("short padding", "CompanyName", "dh0er "),
+            ("long padding", "ProductName", "GORE Mod Manager        "),
             ("non-space suffix", "CompanyName", "dh0er X"),
             ("internal mismatch", "ProductName", "GORE  Mod Manager   "),
             (
