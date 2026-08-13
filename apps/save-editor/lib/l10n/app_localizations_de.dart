@@ -2792,6 +2792,10 @@ class AppLocalizationsDe extends AppLocalizations {
       'Eine direkte Änderung an einem Inventar-Slot ist zusammen mit einer Änderung vorgemerkt, die ganze Slots beansprucht (Reparatur, Hinzufügen oder Entfernen). Die zweite würde die erste überschreiben — eine von beiden zurücknehmen, dann erneut speichern.';
 
   @override
+  String get editorTraderArrayConflict =>
+      'Eine Handelsänderung ist zusammen mit einer direkten Änderung am Händler-Array vorgemerkt. Diese nummeriert die Zeilen um, über die eine Handelsänderung adressiert wird — eine von beiden träfe den falschen Händler. Eine zurücknehmen, dann erneut speichern.';
+
+  @override
   String get backupFactFile => 'Datei';
 
   @override

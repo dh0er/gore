@@ -2791,6 +2791,10 @@ class AppLocalizationsEs extends AppLocalizations {
       'Hay en cola una edición directa de una ranura de inventario junto con una operación que ocupa ranuras enteras (reparar, añadir o eliminar). La segunda sobrescribiría la primera: revierte una de las dos y vuelve a guardar.';
 
   @override
+  String get editorTraderArrayConflict =>
+      'Un cambio de comercio está en cola junto con una edición directa del array de mercaderes. Esa edición renumera las filas por las que se direcciona un cambio de comercio, así que uno de los dos caería en el mercader equivocado — revierte uno y vuelve a guardar.';
+
+  @override
   String get backupFactFile => 'Archivo';
 
   @override

@@ -715,6 +715,7 @@
   "slotRepairAction": "修复",
   "slotRepairDiscard": "放弃",
   "editorInventorySlotEditConflict": "对物品栏槽位的直接编辑与占用整个槽位的操作（修复、添加或删除）同时在待保存列表中。后者会覆盖前者 — 请撤销其中一项后再保存。",
+  "editorTraderArrayConflict": "一项交易修改与对商人数组的直接编辑一同排队。该编辑会重新编号交易修改所依据的行，因此两者之一会落到错误的商人身上——撤销其中一项后再保存。",
   "backupFactFile": "文件",
   "renameBackupTooltip": "为此备份命名",
   "renameBackupTitle": "备份名称",

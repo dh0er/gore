@@ -708,6 +708,7 @@
   "slotRepairAction": "Reparar",
   "slotRepairDiscard": "Descartar",
   "editorInventorySlotEditConflict": "Hay en cola una edición directa de una ranura de inventario junto con una operación que ocupa ranuras enteras (reparar, añadir o eliminar). La segunda sobrescribiría la primera: revierte una de las dos y vuelve a guardar.",
+  "editorTraderArrayConflict": "Un cambio de comercio está en cola junto con una edición directa del array de mercaderes. Esa edición renumera las filas por las que se direcciona un cambio de comercio, así que uno de los dos caería en el mercader equivocado — revierte uno y vuelve a guardar.",
   "backupFactFile": "Archivo",
   "renameBackupTooltip": "Poner nombre a esta copia",
   "renameBackupTitle": "Nombrar copia de seguridad",

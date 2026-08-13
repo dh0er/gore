@@ -2809,6 +2809,10 @@ class AppLocalizationsPl extends AppLocalizations {
       'W kolejce jest bezpośrednia zmiana slotu ekwipunku razem z operacją zajmującą całe sloty (naprawa, dodanie lub usunięcie). Druga nadpisałaby pierwszą — cofnij jedną z nich i zapisz ponownie.';
 
   @override
+  String get editorTraderArrayConflict =>
+      'Zmiana handlu jest w kolejce razem z bezpośrednią edycją tablicy kupców. Ta edycja przenumerowuje wiersze, po których adresowana jest zmiana handlu, więc jedna z nich trafiłaby w niewłaściwego kupca — cofnij jedną i zapisz ponownie.';
+
+  @override
   String get backupFactFile => 'Plik';
 
   @override

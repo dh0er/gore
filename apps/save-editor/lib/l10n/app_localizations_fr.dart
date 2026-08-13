@@ -2807,6 +2807,10 @@ class AppLocalizationsFr extends AppLocalizations {
       'Une modification directe d’un emplacement d’inventaire est en attente en même temps qu’une opération qui s’approprie des emplacements entiers (réparation, ajout ou suppression). La seconde écraserait la première — annulez l’une des deux, puis enregistrez de nouveau.';
 
   @override
+  String get editorTraderArrayConflict =>
+      'Une modification de commerce est en attente avec une édition directe du tableau des marchands. Celle-ci renumérote les lignes par lesquelles une modification de commerce est adressée : l\'une des deux toucherait le mauvais marchand — annulez-en une, puis enregistrez.';
+
+  @override
   String get backupFactFile => 'Fichier';
 
   @override

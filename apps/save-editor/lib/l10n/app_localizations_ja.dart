@@ -2725,6 +2725,10 @@ class AppLocalizationsJa extends AppLocalizations {
       'インベントリスロットへの直接編集と、スロットごと扱う操作（修復・追加・削除）が同時に予約されています。後者が前者を上書きします。どちらかを取り消してから保存し直してください。';
 
   @override
+  String get editorTraderArrayConflict =>
+      '取引の変更が、商人配列への直接編集と一緒に予約されています。その編集は取引の変更が参照する行番号を振り直すため、どちらかが別の商人に当たります。片方を取り消してから保存してください。';
+
+  @override
   String get backupFactFile => 'ファイル';
 
   @override

@@ -2792,6 +2792,10 @@ class AppLocalizationsPt extends AppLocalizations {
       'Uma edição direta de um espaço de inventário está na fila junto com uma operação que ocupa espaços inteiros (reparo, adição ou remoção). A segunda sobrescreveria a primeira — reverta uma delas e salve novamente.';
 
   @override
+  String get editorTraderArrayConflict =>
+      'Uma alteração de comércio está em fila junto com uma edição direta da matriz de mercadores. Essa edição renumera as linhas pelas quais uma alteração de comércio é endereçada, por isso uma das duas cairia no mercador errado — reverte uma e grava de novo.';
+
+  @override
   String get backupFactFile => 'Arquivo';
 
   @override
@@ -5636,6 +5640,10 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   @override
   String get editorInventorySlotEditConflict =>
       'Uma edição direta de um espaço de inventário está na fila junto com uma operação que ocupa espaços inteiros (reparo, adição ou remoção). A segunda sobrescreveria a primeira — reverta uma delas e salve novamente.';
+
+  @override
+  String get editorTraderArrayConflict =>
+      'Uma alteração de comércio está na fila junto com uma edição direta do array de mercadores. Essa edição renumera as linhas pelas quais uma alteração de comércio é endereçada, então uma das duas cairia no mercador errado — reverta uma e salve de novo.';
 
   @override
   String get backupFactFile => 'Arquivo';

@@ -1423,6 +1423,16 @@ class EditorNotifier extends StateNotifier<EditorState> {
       state = state.copyWith(error: _l10n.editorInventorySlotEditConflict);
       return false;
     }
+    // A trade change and a raw array operation on the trader array cannot be
+    // rescued by putting them in different writes: the trade change's row index
+    // came from a list read before either ran, so whichever goes second
+    // resolves it against a layout the first moved. The core refuses the pair
+    // inside one write; splitting them here would slip past that and report
+    // both as committed, so refuse before building the worklist.
+    if (traderArrayConflict(allEdits.map((k) => k.edit).toList()) != null) {
+      state = state.copyWith(error: _l10n.editorTraderArrayConflict);
+      return false;
+    }
     final fixedBatch = allEdits
         .where(
           (k) =>
@@ -4142,6 +4152,32 @@ bool structuredEditRewrites(
     default:
       return false;
   }
+}
+
+/// The first pair of pending edits where a trade change meets a raw array
+/// operation on the trader array, or null when there is none.
+///
+/// Separate from the packer's boundary test: this pair is not made safe by a
+/// split, so it has to abort the save rather than start a new sub-write.
+@visibleForTesting
+(Map<String, Object?>, Map<String, Object?>)? traderArrayConflict(
+  List<Map<String, Object?>> edits,
+) {
+  const traderOps = {
+    'private.traders.setStock',
+    'private.traders.addItem',
+    'private.traders.removeItem',
+  };
+  for (final edit in edits) {
+    if (!traderOps.contains(edit['path'])) continue;
+    for (final other in edits) {
+      final path = _rawTypedEditPath(other);
+      if (path != null && _pathHasName(path, 'm_Traders')) {
+        return (edit, other);
+      }
+    }
+  }
+  return null;
 }
 
 /// Whether [left] and [right] address the same target in the sense above, in

@@ -5,6 +5,7 @@ import 'package:goresave/features/app/ui/goresave_app.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
+import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/domain/trader_models.dart';
 import 'package:goresave/features/editor/ui/character_master_list.dart';
 import 'package:goresave/features/editor/ui/pending_structural_row.dart';
@@ -20,6 +21,15 @@ import 'support/ui_settings_test_store.dart';
 /// can pay with. These tests pin the three things that are easy to get wrong —
 /// index (not name) addressing, "no ore line" being distinct from zero, and a
 /// structural add/remove being kept out of the batched edits.
+/// A raw All-Data array removal aimed at the trader array itself.
+Map<String, Object?> arrayRemoveOnTraders() => {
+  'path': 'private.typed.arrayRemove',
+  'value': {
+    'path': ['m_GenericData', '{GameStateDataBase}', 'm_Traders'],
+    'index': 0,
+  },
+};
+
 void main() {
   group('trader edit encoding', () {
     test('setStock sends the map and count, addressed by index', () {
@@ -224,15 +234,6 @@ void main() {
   });
 
   group('trader edit conflicts', () {
-    // The app mirrors the core's order-independent rule so it refuses the pair
-    // instead of splitting it into writes that are no safer.
-    Map<String, Object?> arrayRemoveOnTraders() => {
-      'path': 'private.typed.arrayRemove',
-      'value': {
-        'path': ['m_GenericData', '{GameStateDataBase}', 'm_Traders'],
-        'index': 0,
-      },
-    };
 
     test('a trader edit and an m_Traders splice conflict either way', () {
       const traderEdit = TraderStockEdit(
@@ -246,6 +247,21 @@ void main() {
       final splice = arrayRemoveOnTraders();
       expect(editsRewriteSameTarget(splice, trader), isTrue);
       expect(editsRewriteSameTarget(trader, splice), isTrue);
+    });
+
+    test('the conflict is detected as a pair, in either order', () {
+      final trader = const TraderStockEdit(
+        kind: TraderEditKind.setStock,
+        index: 7,
+        map: TraderStockMap.current,
+        path: kTraderOrePath,
+        count: 5,
+      ).toEdit();
+      final splice = arrayRemoveOnTraders();
+      expect(traderArrayConflict([trader, splice]), isNotNull);
+      expect(traderArrayConflict([splice, trader]), isNotNull);
+      expect(traderArrayConflict([trader]), isNull);
+      expect(traderArrayConflict([splice]), isNull);
     });
 
     test('an unrelated array splice does not conflict', () {
@@ -899,6 +915,48 @@ void main() {
             .controller
             ?.text,
         '9',
+      );
+    });
+
+    testWidgets('the save aborts rather than splitting a trader/array pair', (
+      tester,
+    ) async {
+      // Splitting them into two writes would slip past the core's refusal —
+      // each write is fine on its own — and report both as committed while the
+      // array operation renumbers the row the trade change was addressed by.
+      final core = _TraderCoreService(playerIsTrader: true);
+      await pumpApp(tester, core);
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+
+      final notifier = ProviderScope.containerOf(
+        tester.element(find.byType(Scaffold).first),
+      ).read(editorProvider.notifier);
+      notifier.setTraderStockEdit(
+        const TraderStockEdit(
+          kind: TraderEditKind.setStock,
+          index: 7,
+          map: TraderStockMap.current,
+          path: kTraderOrePath,
+          count: 5,
+        ),
+      );
+      notifier.setPendingEdit(
+        'all-data:m_Traders',
+        PendingSaveEdit(edits: [arrayRemoveOnTraders()]),
+      );
+      await tester.pumpAndSettle();
+
+      final saved = await notifier.saveAllPending();
+      await tester.pumpAndSettle();
+
+      expect(saved, isFalse);
+      expect(
+        core.requests.where((r) => r.command == 'write_save'),
+        isEmpty,
+        reason: 'nothing may reach the save while the pair is queued',
       );
     });
 

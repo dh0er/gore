@@ -2776,6 +2776,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'A direct edit of an inventory slot is queued together with a change that claims whole slots (repair, add or remove). The second would overwrite the first — revert one of them, then save again.';
 
   @override
+  String get editorTraderArrayConflict =>
+      'A trade change is queued together with a direct edit of the trader array. That edit renumbers the rows a trade change is addressed by, so one of the two would land on the wrong merchant — revert one of them, then save again.';
+
+  @override
   String get backupFactFile => 'File';
 
   @override

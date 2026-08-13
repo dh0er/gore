@@ -708,6 +708,7 @@
   "slotRepairAction": "Ripara",
   "slotRepairDiscard": "Annulla",
   "editorInventorySlotEditConflict": "Una modifica diretta a uno slot dell’inventario è in coda insieme a un’operazione che occupa slot interi (riparazione, aggiunta o rimozione). La seconda sovrascriverebbe la prima: annullane una, poi salva di nuovo.",
+  "editorTraderArrayConflict": "Una modifica di commercio è in coda insieme a una modifica diretta dell'array dei mercanti. Quella rinumera le righe con cui una modifica di commercio è indirizzata, quindi una delle due finirebbe sul mercante sbagliato — annullane una e salva di nuovo.",
   "backupFactFile": "File",
   "renameBackupTooltip": "Assegna un nome a questo backup",
   "renameBackupTitle": "Assegna un nome al backup",
