@@ -54,6 +54,16 @@ UninstallDisplayIcon={app}\gore_manager.exe
 WizardStyle=modern
 SetupIconFile=..\windows\runner\resources\app_icon.ico
 LicenseFile=..\..\..\LICENSE
+#ifdef GORE_SIGNED_INSTALLER
+; build.py defines this uniquely named /S tool only when GORE_SIGN=1.
+; Inno signs both Setup and the embedded uninstaller with the same command.
+#ifndef GORE_SIGNED_UNINSTALLER_DIR
+  #error "Pass /DGORE_SIGNED_UNINSTALLER_DIR=<temporary path>"
+#endif
+SignTool=gore_mod_manager_ats_b7e4d2c95a184f6b
+SignedUninstaller=yes
+SignedUninstallerDir={#GORE_SIGNED_UNINSTALLER_DIR}
+#endif
 
 [UninstallDelete]
 ; Active settings live under the shared gore umbrella

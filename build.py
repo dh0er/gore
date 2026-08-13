@@ -43,9 +43,9 @@ Code signing (Azure Trusted / Artifact Signing):
         TRUSTED_SIGNING_ENDPOINT  TRUSTED_SIGNING_ACCOUNT  TRUSTED_SIGNING_PROFILE
         AZURE_TENANT_ID  AZURE_CLIENT_ID  AZURE_CLIENT_SECRET   (service principal)
     With GORE_SIGN=1 a missing var hard-fails rather than silently shipping
-    unsigned. GORE_SIGN_NO_PROXY=1 makes the signtool call alone bypass the
-    system proxy, for machines whose PAC routes AAD login through a tunnel that
-    may be down (the rest of the build keeps the system proxy).
+    unsigned. GORE_SIGN_NO_PROXY=1 makes only the signing subprocess tree
+    (direct signtool, or ISCC and its signtool child) bypass the system proxy,
+    for machines whose PAC routes AAD login through a tunnel that may be down.
 """
 
 from __future__ import annotations
@@ -139,6 +139,11 @@ PROJECTS: dict[str, dict] = {
         "tag_prefix": "gore-mod-manager",
         "changelog": "CHANGELOG.md",
         "installer": "installer/setup.iss",
+        # Let Inno sign both Setup and its embedded uninstaller in signed builds.
+        # This globally unique name is deliberately not a generic `byparam`
+        # alias: Inno's /S command can otherwise be reused by injected script
+        # content with attacker-controlled parameters.
+        "inno_sign_tool": "gore_mod_manager_ats_b7e4d2c95a184f6b",
         "exe": "gore_manager.exe",  # CMake BINARY_NAME
         "core_crate": "gore-ffi",  # shares the mod-studio FFI crate
         "core_dll": "gore_ffi",  # dll gore_ffi.dll (cargo underscores it)
@@ -274,9 +279,9 @@ def _signing_config() -> dict[str, str] | None:
 # A corporate PAC may route login.microsoftonline.com through a local tunnel; when
 # that tunnel is down, token acquisition dies with "No connection could be made
 # because the target machine actively refused it (localhost:9000)" and signing
-# fails even though the network is fine. These overrides are handed to the signtool
-# child process alone, so the rest of the build (Flutter, cargo, pub) keeps using
-# the system proxy untouched.
+# fails even though the network is fine. These overrides are handed only to the
+# process that owns signing (direct signtool, or ISCC and its signtool child), so
+# the rest of the build (Flutter, cargo, pub) keeps the system proxy untouched.
 #
 # .NET only builds its proxy from the environment when a proxy is actually set
 # there, and only then honours NO_PROXY -- hence the deliberately dead dummy
@@ -292,7 +297,7 @@ _SIGN_NO_PROXY = (
 def _sign_proxy_overrides() -> dict[str, str]:
     if os.environ.get("GORE_SIGN_NO_PROXY") != "1":
         return {}
-    print("signing: bypassing the system proxy for signtool (GORE_SIGN_NO_PROXY=1)")
+    print("signing: bypassing the system proxy (GORE_SIGN_NO_PROXY=1)")
     return {
         "HTTP_PROXY": "http://127.0.0.1:9",
         "HTTPS_PROXY": "http://127.0.0.1:9",
@@ -378,16 +383,52 @@ def sign_paths(paths: list[Path], dry: bool) -> None:
     try:
         run(
             f"code-sign {len(pe)} file(s)",
-            [
-                signtool, "sign", "/v", "/fd", "SHA256",
-                "/tr", TS_TIMESTAMP, "/td", "SHA256",
-                "/dlib", dlib, "/dmdf", meta,
-                *pe,
-            ],
+            _trusted_signing_args(signtool, dlib, meta, pe),
             extra_env=_sign_proxy_overrides(),
         )
     finally:
         meta.unlink(missing_ok=True)
+
+
+def _trusted_signing_args(
+    signtool: Path, dlib: Path, metadata: Path, paths: list[Path | str]
+) -> list[Path | str]:
+    """Build the one Azure Trusted Signing command used by direct and Inno signing."""
+    return [
+        signtool,
+        "sign",
+        "/v",
+        "/fd",
+        "SHA256",
+        "/tr",
+        TS_TIMESTAMP,
+        "/td",
+        "SHA256",
+        "/dlib",
+        dlib,
+        "/dmdf",
+        metadata,
+        *paths,
+    ]
+
+
+def _inno_quote_sign_arg(value: Path | str) -> str:
+    """Quote a fixed SignTool argument using Inno's command-line placeholders."""
+    raw = str(value)
+    if '"' in raw or "\r" in raw or "\n" in raw:
+        raise SystemExit(f"invalid character in Inno SignTool argument: {raw!r}")
+    return f"$q{raw.replace('$', '$$')}$q"
+
+
+def _inno_trusted_signing_command(
+    signtool: Path, dlib: Path, metadata: Path
+) -> str:
+    """Render Trusted Signing for ISCC /S; Inno replaces $f with its target."""
+    args = _trusted_signing_args(signtool, dlib, metadata, ["$f"])
+    return " ".join(
+        _inno_quote_sign_arg(arg) if isinstance(arg, Path) else str(arg)
+        for arg in args
+    )
 
 
 def sign_dir(
@@ -1237,25 +1278,53 @@ def installer_project(project: str, dry: bool) -> Path | None:
     # dist_project signed the staging copy for the zip; the installer packages
     # from the Release dir, so sign those PE files too before Inno bundles them.
     _sign_and_stage_app_local_runtime(project, rel, dry=dry)
-    run(
-        f"installer {project}",
-        [
-            ISCC,
-            "/Qp",
-            f"/DAppVersion={version}",
-            f"/DSourceDir={rel}",
-            f"/DOutputDir={dist}",
-            # Passed in rather than hardcoded per .iss, so the produced file name
-            # and the path this function returns cannot drift apart.
-            f"/DOutputBaseName={installer_basename(project, version)}",
-            iss,
-        ],
-        dry=dry,
-    )
+    base_args: list[Path | str] = [
+        ISCC,
+        "/Qp",
+        f"/DAppVersion={version}",
+        f"/DSourceDir={rel}",
+        f"/DOutputDir={dist}",
+        # Passed in rather than hardcoded per .iss, so the produced file name
+        # and the path this function returns cannot drift apart.
+        f"/DOutputBaseName={installer_basename(project, version)}",
+    ]
+
+    inno_tool = cfg.get("inno_sign_tool")
+    signing_cfg = _signing_config() if inno_tool is not None else None
+    inno_signs_installer = inno_tool is not None and signing_cfg is not None
+    if inno_signs_installer and dry:
+        print("[dry-run] would configure Inno to sign Setup and Uninstall")
+        run(f"installer {project}", [*base_args, iss], dry=True)
+    elif inno_signs_installer:
+        assert signing_cfg is not None
+        dlib = _ensure_dlib()
+        signtool = _find_signtool()
+        meta = _write_metadata(signing_cfg)
+        try:
+            with tempfile.TemporaryDirectory(prefix="gore-inno-uninstaller-") as cache:
+                sign_command = _inno_trusted_signing_command(signtool, dlib, meta)
+                run(
+                    f"installer {project}",
+                    [
+                        *base_args,
+                        f"/S{inno_tool}={sign_command}",
+                        "/DGORE_SIGNED_INSTALLER=1",
+                        f"/DGORE_SIGNED_UNINSTALLER_DIR={cache}",
+                        iss,
+                    ],
+                    dry=False,
+                    extra_env=_sign_proxy_overrides(),
+                )
+        finally:
+            meta.unlink(missing_ok=True)
+    else:
+        run(f"installer {project}", [*base_args, iss], dry=dry)
     out = dist / f"{installer_basename(project, version)}.exe"
-    # Sign the installer itself. Must happen before the CI appcast step computes
-    # its DSA signature over the final shipped bytes.
-    sign_paths([out], dry=dry)
+    if inno_tool is None:
+        # Products without integrated Inno signing retain the existing outer
+        # Setup signing path. Manager's signed path was already signed by Inno;
+        # signing it again here would append a redundant Authenticode signature.
+        sign_paths([out], dry=dry)
     print(f"installer: {out}")
     return out
 

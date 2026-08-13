@@ -97,6 +97,31 @@ EXPECTED_INSTALLER_FILES = (
     'Source: "..\\..\\..\\LICENSE"; DestDir: "{app}"; Flags: ignoreversion',
     'Source: "..\\..\\..\\THIRD_PARTY_LICENSES.md"; DestDir: "{app}"; Flags: ignoreversion',
 )
+EXPECTED_INNO_SIGNING_BLOCK = (
+    "#ifdef GORE_SIGNED_INSTALLER",
+    "#ifndef GORE_SIGNED_UNINSTALLER_DIR",
+    '#error "Pass /DGORE_SIGNED_UNINSTALLER_DIR=<temporary path>"',
+    "#endif",
+    "SignTool=gore_mod_manager_ats_b7e4d2c95a184f6b",
+    "SignedUninstaller=yes",
+    "SignedUninstallerDir={#GORE_SIGNED_UNINSTALLER_DIR}",
+    "#endif",
+)
+EXPECTED_INSTALLER_PREPROCESSOR = (
+    "#ifndef AppVersion",
+    '#error "Pass /DAppVersion=x.y.z"',
+    "#endif",
+    "#ifndef SourceDir",
+    '#error "Pass /DSourceDir=<path to flutter Release dir>"',
+    "#endif",
+    "#ifndef OutputDir",
+    '#error "Pass /DOutputDir=<path for installer exe>"',
+    "#endif",
+    "#ifndef OutputBaseName",
+    '#error "Pass /DOutputBaseName=<installer file stem>"',
+    "#endif",
+    *(line for line in EXPECTED_INNO_SIGNING_BLOCK if line.startswith("#")),
+)
 
 THIRD_PARTY_NOTICE_FILES = ("about.hbs", "THIRD_PARTY_LICENSES.md")
 WINSPARKLE_NOTICE_START = "### WinSparkle 0.8.1 updater"
@@ -603,19 +628,55 @@ def _installer_recipe_contract(setup: Path, version: str, installer_name: str) -
         return [f"{label}: cannot read {setup}: {error}"]
 
     problems: list[str] = []
+    semantic_lines = tuple(
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and not line.strip().startswith(";")
+    )
+    signing_blocks = sum(
+        semantic_lines[index : index + len(EXPECTED_INNO_SIGNING_BLOCK)]
+        == EXPECTED_INNO_SIGNING_BLOCK
+        for index in range(len(semantic_lines) - len(EXPECTED_INNO_SIGNING_BLOCK) + 1)
+    )
+    if signing_blocks != 1:
+        problems.append(
+            f"{label}: conditional Inno signing block count is {signing_blocks}; expected 1"
+        )
+    preprocessor_lines = tuple(
+        line.strip() for line in text.splitlines() if line.strip().startswith("#")
+    )
+    if preprocessor_lines != EXPECTED_INSTALLER_PREPROCESSOR:
+        problems.append(
+            f"{label}: preprocessor contract changed: {preprocessor_lines!r}"
+        )
     files = tuple(_section_lines(text, "Files"))
     if files != EXPECTED_INSTALLER_FILES:
         problems.append(f"{label}: [Files] contract changed: {files!r}")
 
-    settings: dict[str, str] = {}
-    for line in _section_lines(text, "Setup"):
+    setup_lines = tuple(_section_lines(text, "Setup"))
+    preprocessor_lines = tuple(line for line in setup_lines if line.startswith("#"))
+    expected_preprocessor_lines = tuple(
+        line for line in EXPECTED_INNO_SIGNING_BLOCK if line.startswith("#")
+    )
+    if preprocessor_lines != expected_preprocessor_lines:
+        problems.append(
+            f"{label}: [Setup] preprocessor contract changed: {preprocessor_lines!r}"
+        )
+
+    settings: dict[str, tuple[str, str]] = {}
+    for line in setup_lines:
+        if line.startswith("#"):
+            continue
         if "=" not in line:
             problems.append(f"{label}: malformed [Setup] directive: {line}")
             continue
-        key, value = line.split("=", 1)
-        if key in settings:
+        raw_key, raw_value = line.split("=", 1)
+        key = raw_key.strip()
+        canonical = key.casefold()
+        if canonical in settings:
             problems.append(f"{label}: duplicate [Setup] directive: {key}")
-        settings[key] = value
+            continue
+        settings[canonical] = (raw_key, raw_value)
     expected_settings = {
         "AppVersion": "{#AppVersion}",
         "OutputBaseFilename": "{#OutputBaseName}",
@@ -631,10 +692,14 @@ def _installer_recipe_contract(setup: Path, version: str, installer_name: str) -
         "VersionInfoProductVersion": "{#AppVersion}.0",
         "VersionInfoTextVersion": "{#AppVersion}",
         "VersionInfoVersion": "{#AppVersion}.0",
+        "SignTool": "gore_mod_manager_ats_b7e4d2c95a184f6b",
+        "SignedUninstaller": "yes",
+        "SignedUninstallerDir": "{#GORE_SIGNED_UNINSTALLER_DIR}",
     }
     for key, value in expected_settings.items():
-        if settings.get(key) != value:
-            problems.append(f"{label}: {key}={settings.get(key)!r}; expected {value!r}")
+        actual = settings.get(key.casefold())
+        if actual != (key, value):
+            problems.append(f"{label}: {key}={actual!r}; expected {(key, value)!r}")
 
     expected_installer = f"gore-mod-manager-{version}-setup.exe"
     if installer_name != expected_installer:
