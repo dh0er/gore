@@ -9320,15 +9320,24 @@ fn structured_edit_target(edit: &PrivateEdit) -> Option<(&'static str, String)> 
                 glossary.segment_asset.as_str(),
             ]),
         )),
-        // Declarative: it sets one stock line to one count. Two of them naming the
-        // same line would silently discard one. addItem/removeItem are deliberately
-        // absent — they ADD to or drop from the map, and two of them name two
-        // different lines, which is what a batch is for.
+        // Both are declarative about ONE line: a count it shall hold, or that it
+        // shall not exist. Sharing the key makes the same-target rule reject the
+        // pair — a set followed by a removal applied the count and then deleted
+        // the line it lived in, reporting both as applied. Two different lines
+        // still carry two keys, so unrelated edits keep batching. addItem is
+        // deliberately absent: it ADDS to the map, which is what a batch is for.
         PrivateEdit::TraderSetStock(stock) => Some((
             "stock line of that trader",
             key([
                 &format!("{}\u{1e}{}", stock.index, stock.map.property_name()),
                 stock.path.as_str(),
+            ]),
+        )),
+        PrivateEdit::TraderRemoveItem(line) => Some((
+            "stock line of that trader",
+            key([
+                &format!("{}\u{1e}{}", line.index, line.map.property_name()),
+                line.path.as_str(),
             ]),
         )),
         _ => None,

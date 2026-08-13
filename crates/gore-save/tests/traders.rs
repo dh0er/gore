@@ -377,6 +377,64 @@ fn an_edit_inside_a_trader_row_is_not_a_renumbering_splice() {
 }
 
 #[test]
+fn a_set_and_a_removal_of_one_line_are_refused_together() {
+    // The set would apply and the removal would then delete the line it lives
+    // in, with the write reporting both as applied.
+    let path = start_save("setremove");
+    let out = out_path("setremove");
+    let data = list(&path);
+    let (index, _) = stocked_trader(&data);
+
+    let err = exec_err(json!({
+        "command": "write_save",
+        "payload": {
+            "path": path, "outputPath": out, "backup": false,
+            "edits": [
+                { "path": "private.traders.setStock",
+                  "value": { "index": index, "path": ORE, "count": 9 } },
+                { "path": "private.traders.removeItem",
+                  "value": { "index": index, "path": ORE } },
+            ]
+        }
+    }));
+    assert!(err.contains("stock line of that trader"), "{err}");
+    assert!(!std::path::Path::new(&out).exists());
+}
+
+#[test]
+fn a_set_and_a_removal_of_different_lines_still_batch() {
+    // Only the SAME line collides; unrelated lines are what a batch is for.
+    let path = start_save("setremove_other");
+    let out = out_path("setremove_other");
+    let data = list(&path);
+    let (index, _) = stocked_trader(&data);
+    let other = detail(&path, index)["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["path"] != json!(ORE))
+        .expect("something besides ore")["path"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    write(
+        &path,
+        &out,
+        json!([
+            { "path": "private.traders.setStock",
+              "value": { "index": index, "path": ORE, "count": 9 } },
+            { "path": "private.traders.removeItem",
+              "value": { "index": index, "path": &other } },
+        ]),
+    );
+
+    let after = detail(&out, index);
+    assert_eq!(item_count(&after, ORE), Some(9));
+    assert_eq!(item_count(&after, &other), None);
+}
+
+#[test]
 fn add_item_refuses_a_class_the_game_does_not_know() {
     let path = start_save("badclass");
     let out = out_path("badclass");
