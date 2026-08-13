@@ -425,6 +425,10 @@ class AppLocalizationsDe extends AppLocalizations {
   String get traderNotAMerchant => 'Diese Person handelt nicht.';
 
   @override
+  String get traderAmbiguousName =>
+      'Mehrere Händlereinträge tragen diesen Namen, deshalb lässt sich nicht sagen, welcher Laden zu dieser Person gehört. Bearbeiten ist gesperrt, statt womöglich den falschen zu ändern.';
+
+  @override
   String get traderOre => 'Erz (Kaufkraft)';
 
   @override

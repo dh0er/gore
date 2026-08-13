@@ -426,6 +426,10 @@ class AppLocalizationsPt extends AppLocalizations {
   String get traderNotAMerchant => 'Esta personagem não comercia.';
 
   @override
+  String get traderAmbiguousName =>
+      'Mais do que um registo de mercador tem este nome, por isso não é possível saber que loja pertence a esta personagem. A edição está desativada em vez de arriscar mudar a errada.';
+
+  @override
   String get traderOre => 'Minério (poder de compra)';
 
   @override
@@ -3267,6 +3271,10 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get traderNotAMerchant => 'Este personagem não comercia.';
+
+  @override
+  String get traderAmbiguousName =>
+      'Mais de um registro de mercador tem este nome, por isso não é possível saber qual loja pertence a este personagem. A edição está desativada em vez de arriscar mudar a errada.';
 
   @override
   String get traderOre => 'Minério (poder de compra)';

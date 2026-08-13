@@ -137,6 +137,7 @@
   "tabInventory": "Inventory",
   "tabTrade": "Trade",
   "traderNotAMerchant": "This character does not trade.",
+  "traderAmbiguousName": "More than one trader record carries this name, so the editor cannot tell which shop belongs to this character. Editing is disabled rather than risk changing the wrong one.",
   "traderOre": "Ore (purchasing power)",
   "traderNoOre": "no ore",
   "traderStockCurrent": "Stock",

@@ -131,6 +131,7 @@
   "tabInventory": "インベントリ",
   "tabTrade": "取引",
   "traderNotAMerchant": "このキャラクターは取引をしません。",
+  "traderAmbiguousName": "同じ名前の商人レコードが複数あるため、どの店がこのキャラクターのものか判別できません。誤って別の店を変更しないよう、編集は無効です。",
   "traderOre": "鉱石（購買力）",
   "traderNoOre": "鉱石なし",
   "traderStockCurrent": "在庫",

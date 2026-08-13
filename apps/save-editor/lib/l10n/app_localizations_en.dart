@@ -424,6 +424,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get traderNotAMerchant => 'This character does not trade.';
 
   @override
+  String get traderAmbiguousName =>
+      'More than one trader record carries this name, so the editor cannot tell which shop belongs to this character. Editing is disabled rather than risk changing the wrong one.';
+
+  @override
   String get traderOre => 'Ore (purchasing power)';
 
   @override

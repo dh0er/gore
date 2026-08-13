@@ -64,6 +64,10 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
   TradersResult? _list;
   TraderDetail? _detail;
   String? _error;
+
+  /// Several trader records carry this character's name, so none of them may be
+  /// edited: the index an edit is addressed by would be a guess.
+  bool _ambiguous = false;
   bool _loading = true;
 
   /// Guards against a slow reload landing after a newer one: only the newest
@@ -98,6 +102,7 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
       _loading = true;
       _error = null;
       _detail = null;
+      _ambiguous = false;
     });
     final list = await widget.notifier.loadTraders();
     if (!mounted || epoch != _epoch) return;
@@ -111,11 +116,13 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
     }
     final row = list.forUniqueName(widget.actor.uniqueName);
     if (row == null) {
-      // Not a merchant. A clean empty state, not an error.
+      // Either not a merchant, or a name several records carry — which is not
+      // the same thing and must not read as one.
       setState(() {
         _loading = false;
         _list = list;
         _detail = null;
+        _ambiguous = list.isAmbiguous(widget.actor.uniqueName);
       });
       return;
     }
@@ -150,9 +157,11 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
     final detail = _detail;
     if (detail == null) {
       return _Message(
-        icon: Icons.storefront_outlined,
+        icon: _ambiguous
+            ? Icons.warning_amber_outlined
+            : Icons.storefront_outlined,
         title: l10n.tabTrade,
-        body: l10n.traderNotAMerchant,
+        body: _ambiguous ? l10n.traderAmbiguousName : l10n.traderNotAMerchant,
       );
     }
 
@@ -969,7 +978,10 @@ class _StockRow extends ConsumerWidget {
                 : Text(subtitle, style: theme.textTheme.bodySmall),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
-              children: [SizedBox(width: 130, child: field), ?delete],
+              children: [
+                SizedBox(width: 130, child: field),
+                ?delete,
+              ],
             ),
           );
         }
@@ -986,7 +998,12 @@ class _StockRow extends ConsumerWidget {
                 ],
               ),
               const SizedBox(height: 8),
-              Row(children: [Expanded(child: field), ?delete]),
+              Row(
+                children: [
+                  Expanded(child: field),
+                  ?delete,
+                ],
+              ),
             ],
           ),
         );

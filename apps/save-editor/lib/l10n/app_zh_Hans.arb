@@ -131,6 +131,7 @@
   "tabInventory": "物品栏",
   "tabTrade": "交易",
   "traderNotAMerchant": "该角色不进行交易。",
+  "traderAmbiguousName": "有多条商人记录使用这个名字，无法判断哪家店属于该角色。已禁用编辑，以免改错。",
   "traderOre": "矿石（购买力）",
   "traderNoOre": "无矿石",
   "traderStockCurrent": "库存",

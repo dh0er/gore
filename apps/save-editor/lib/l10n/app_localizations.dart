@@ -848,6 +848,12 @@ abstract class AppLocalizations {
   /// **'This character does not trade.'**
   String get traderNotAMerchant;
 
+  /// No description provided for @traderAmbiguousName.
+  ///
+  /// In en, this message translates to:
+  /// **'More than one trader record carries this name, so the editor cannot tell which shop belongs to this character. Editing is disabled rather than risk changing the wrong one.'**
+  String get traderAmbiguousName;
+
   /// No description provided for @traderOre.
   ///
   /// In en, this message translates to:

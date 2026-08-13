@@ -428,6 +428,10 @@ class AppLocalizationsRu extends AppLocalizations {
   String get traderNotAMerchant => 'Этот персонаж не торгует.';
 
   @override
+  String get traderAmbiguousName =>
+      'Это имя носит несколько записей торговцев, поэтому нельзя определить, чья это лавка. Правка отключена, чтобы не изменить чужую.';
+
+  @override
   String get traderOre => 'Руда (покупательная способность)';
 
   @override

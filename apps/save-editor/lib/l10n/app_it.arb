@@ -131,6 +131,7 @@
   "tabInventory": "Inventario",
   "tabTrade": "Commercio",
   "traderNotAMerchant": "Questo personaggio non commercia.",
+  "traderAmbiguousName": "Più record di mercante portano questo nome, quindi non si può dire quale negozio appartenga a questo personaggio. La modifica è disattivata invece di rischiare di cambiare quello sbagliato.",
   "traderOre": "Minerale (potere d'acquisto)",
   "traderNoOre": "nessun minerale",
   "traderStockCurrent": "Scorte",

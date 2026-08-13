@@ -186,19 +186,37 @@ class TradersResult {
   bool get canAddItem => writable.contains('private.traders.addItem');
   bool get canRemoveItem => writable.contains('private.traders.removeItem');
 
-  /// The record for an NPC, or null when he is not a merchant. Placeholder rows
-  /// belong to no NPC and are deliberately not matched.
-  TraderSummary? forUniqueName(String uniqueName) {
-    // Case-insensitively, the way the core joins these names: a character's
-    // unique name is the stored knowledge key where one exists, whose casing can
-    // differ from the trader row's. An exact compare would leave a character the
-    // list badges as a merchant reading "does not trade".
+  /// Every non-placeholder record carrying [uniqueName].
+  ///
+  /// Case-insensitively, the way the core joins these names: a character's
+  /// unique name is the stored knowledge key where one exists, whose casing can
+  /// differ from the trader row's. An exact compare would leave a character the
+  /// list badges as a merchant reading "does not trade".
+  ///
+  /// Placeholder rows belong to no NPC and are deliberately not matched.
+  List<TraderSummary> allForUniqueName(String uniqueName) {
     final wanted = uniqueName.toLowerCase();
-    for (final t in traders) {
-      if (!t.placeholder && t.uniqueName.toLowerCase() == wanted) return t;
-    }
-    return null;
+    return [
+      for (final t in traders)
+        if (!t.placeholder && t.uniqueName.toLowerCase() == wanted) t,
+    ];
   }
+
+  /// The record for an NPC, or null when he is not a merchant OR when the name
+  /// is ambiguous.
+  ///
+  /// Ambiguity is not resolved by taking the first hit: the index this returns
+  /// is what every edit is addressed by, so guessing would edit an arbitrary
+  /// shop. The core refuses the same case; [isAmbiguous] tells the two apart so
+  /// the panel can say which one it is.
+  TraderSummary? forUniqueName(String uniqueName) {
+    final matches = allForUniqueName(uniqueName);
+    return matches.length == 1 ? matches.first : null;
+  }
+
+  /// More than one record carries this name, so no edit may be addressed by it.
+  bool isAmbiguous(String uniqueName) =>
+      allForUniqueName(uniqueName).length > 1;
 }
 
 /// Result of `private.traders.detail`.

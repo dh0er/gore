@@ -428,6 +428,10 @@ class AppLocalizationsFr extends AppLocalizations {
   String get traderNotAMerchant => 'Ce personnage ne fait pas de commerce.';
 
   @override
+  String get traderAmbiguousName =>
+      'Plusieurs fiches de marchand portent ce nom : impossible de dire quelle boutique appartient à ce personnage. L\'édition est désactivée plutôt que de risquer de modifier la mauvaise.';
+
+  @override
   String get traderOre => 'Minerai (pouvoir d\'achat)';
 
   @override

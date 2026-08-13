@@ -133,6 +133,25 @@ void main() {
       });
       expect(result.forUniqueName('oc_stt_dexter_329')?.index, 4);
       expect(result.forUniqueName('OC_stt_Dexter_329')?.index, 4);
+      expect(result.isAmbiguous('OC_STT_Dexter_329'), isFalse);
+    });
+
+    test('two rows sharing a name are refused, not guessed between', () {
+      // The index this returns is what every edit is addressed by, so picking
+      // the first hit would edit an arbitrary shop. The core refuses the same
+      // case.
+      final result = TradersResult.fromJson({
+        'traders': [
+          {'index': 4, 'uniqueName': 'OC_STT_Dexter_329', 'ore': 55},
+          {'index': 9, 'uniqueName': 'oc_stt_dexter_329', 'ore': 12},
+        ],
+      });
+      expect(result.forUniqueName('OC_STT_Dexter_329'), isNull);
+      expect(result.isAmbiguous('OC_STT_Dexter_329'), isTrue);
+      expect(result.allForUniqueName('OC_STT_Dexter_329'), hasLength(2));
+      // A name nobody carries is absent, not ambiguous — the panel says
+      // different things about the two.
+      expect(result.isAmbiguous('NC_ORG_Wolf_855'), isFalse);
     });
 
     test('a missing ore line reads as null, not zero', () {
