@@ -368,8 +368,52 @@ impl<'a> Reader<'a> {
 }
 
 pub fn execute_json(input: &str) -> String {
+    // A read command is a pure function of the files it reads, so an identical
+    // request against unchanged files can be answered from the last response.
+    // This is what makes re-opening a save, or returning to a tab, free.
+    let cache_key = read_response_cache_key(input);
+    if let Some(key) = &cache_key {
+        if let Some(hit) = cached_response(key) {
+            return hit;
+        }
+    }
     match execute_json_inner(input) {
-        Ok(data) => json!({ "ok": true, "data": data }).to_string(),
+        Ok(data) => {
+            let response = json!({ "ok": true, "data": data }).to_string();
+            // Only successes are cached: a failure is usually transient (a file
+            // being written, a codec hiccup) and must stay retryable.
+            //
+            // The command re-read the files itself, so it may have worked from
+            // bytes that arrived AFTER the fingerprint was taken — the game
+            // saving over the slot, a cloud sync, a restore. Storing that answer
+            // under the earlier fingerprint would not merely be stale for a
+            // moment: it would bind an answer to a content hash it does not
+            // describe, and every later read of those earlier bytes would be
+            // served the wrong answer for as long as the entry lives. Re-derive
+            // the fingerprint and keep the response only if it still matches.
+            //
+            // Be precise about what that does and does not establish. Equal
+            // fingerprints before and after do not PROVE the files held still:
+            // a replacement to other bytes and back again inside the command
+            // would pass. Closing that would mean handing the command the bytes
+            // this key was taken from instead of letting it read for itself —
+            // a change to how every read command receives its save, not to this
+            // check. What is left needs a replacement landing in the moment
+            // between these two reads AND the original bytes returning before
+            // the command ends, both from outside the editor: a write or a
+            // restore performed HERE drops this save's entries outright (see
+            // `invalidate_decoded_payload_cache`).
+            //
+            // A cache HIT needs no re-check at all: matching the fingerprint
+            // means the files hold byte-identical content to what the entry was
+            // built from, whatever has happened in between.
+            if let Some(key) = cache_key {
+                if read_response_cache_key(input).is_some_and(|current| current == key) {
+                    store_cached_response(key, &response);
+                }
+            }
+            response
+        }
         Err(err) => {
             let code = match &err {
                 CoreError::InvalidRequest(_) => "INVALID_REQUEST",
@@ -417,6 +461,29 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 "profiles": summary.profiles,
                 "activeProfileId": summary.active_profile_id,
             }))
+        }
+        // Make this save the one the decoded-payload and parsed-root caches
+        // hold, decoding and parsing it if they hold another.
+        //
+        // Those caches keep a single save each — a decoded payload and its tree
+        // run to hundreds of megabytes, so holding two is not free. Everything
+        // that reads private data shares them, and `inspect_save` normally
+        // seeds them on the way past. It does not when its own response comes
+        // from the response cache, which is exactly what happens on returning to
+        // a save opened earlier: the inspection is served in milliseconds while
+        // the caches still hold whichever save was opened in between, and the
+        // first read that needs the tree — a per-NPC detail, which is too
+        // numerous to warm one by one — pays the decode and parse in front of
+        // the user. Calling this during the background warm-up moves that cost
+        // off the click. Cheap when the caches already hold this save.
+        //
+        // Deliberately NOT response-cached: a cached "ready" would skip the very
+        // seeding that is the point of the call.
+        "warm_save" => {
+            let path = required_path(&payload)?;
+            let kraken_backend = codec_backend::KrakenBackend::default();
+            decode_private_root_cached(&path, &kraken_backend)?;
+            Ok(json!({ "warmed": true }))
         }
         "inspect_save" => {
             let path = required_path(&payload)?;
@@ -1909,6 +1976,24 @@ fn rename_backup(save_path: &Path, backup_path: &Path, name: &str) -> Result<Val
     }))
 }
 
+/// How many backup files the listings read at once.
+///
+/// Each reader holds one whole file while it hashes and inspects it — the
+/// listing never decompresses, so that is the file as it sits on disk — which
+/// makes this number, not the core count, the peak memory of a listing.
+///
+/// Reading backups is disk-bound, so the curve flattens early. Measured against
+/// a folder of 147 backups, serial took 130 ms:
+///
+/// ```text
+///  2 workers   99 ms      8 workers   60 ms
+///  4 workers   70 ms     12 workers   62 ms
+/// ```
+///
+/// Past eight there is nothing left to win, and every further reader is another
+/// whole file held in memory for it.
+const BACKUP_READ_WORKERS: usize = 8;
+
 pub fn list_save_backups(path: &Path) -> Result<Vec<BackupListItem>, CoreError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     if !parent.exists() {
@@ -1952,40 +2037,15 @@ pub fn list_save_backups(path: &Path) -> Result<Vec<BackupListItem>, CoreError> 
         }
     }
 
-    for (backup_path, file_name) in candidates {
-        let data = fs::read(&backup_path)?;
-        let metadata = fs::metadata(&backup_path)?;
-        let created_epoch = parse_backup_epoch(&file_name, &prefix);
-        let (status, player_save_name, slot_name) =
-            match inspect_bytes(&data, Some(&backup_path), false) {
-                Ok(info) => {
-                    let public = info.get("public").cloned().unwrap_or_else(|| json!({}));
-                    (
-                        "ok".to_string(),
-                        public
-                            .get("playerSaveName")
-                            .and_then(Value::as_str)
-                            .map(ToOwned::to_owned),
-                        public
-                            .get("slotName")
-                            .and_then(Value::as_str)
-                            .map(ToOwned::to_owned),
-                    )
-                }
-                Err(err) => (err.to_string(), None, None),
-            };
-        backups.push(BackupListItem {
-            path: backup_path.display().to_string(),
-            name: names.get(&file_name).cloned(),
-            file_name,
-            file_size: metadata.len(),
-            sha1: sha1_hex(&data),
-            created_epoch,
-            status,
-            player_save_name,
-            slot_name,
-            scope: "save".to_string(),
-        });
+    // Every candidate is read whole and hashed whole. A save folder that has
+    // been backed up for a while holds dozens of multi-megabyte files, and this
+    // listing sits in the load path — so read them side by side rather than one
+    // after another. Order is preserved, and a read error still aborts the whole
+    // listing exactly as a serial loop would.
+    for item in par_map(candidates, BACKUP_READ_WORKERS, |candidate| {
+        describe_save_backup(candidate, &prefix, &names)
+    }) {
+        backups.push(item?);
     }
     backups.sort_by(|a, b| {
         b.created_epoch
@@ -1993,6 +2053,48 @@ pub fn list_save_backups(path: &Path) -> Result<Vec<BackupListItem>, CoreError> 
             .then_with(|| b.file_name.cmp(&a.file_name))
     });
     Ok(backups)
+}
+
+/// Read one save backup and describe it for the listing. Split out of
+/// [`list_save_backups`] so the candidates can be described in parallel.
+fn describe_save_backup(
+    (backup_path, file_name): (PathBuf, String),
+    prefix: &str,
+    names: &HashMap<String, String>,
+) -> Result<BackupListItem, CoreError> {
+    let data = fs::read(&backup_path)?;
+    let metadata = fs::metadata(&backup_path)?;
+    let created_epoch = parse_backup_epoch(&file_name, prefix);
+    let (status, player_save_name, slot_name) =
+        match inspect_bytes(&data, Some(&backup_path), false) {
+            Ok(info) => {
+                let public = info.get("public").cloned().unwrap_or_else(|| json!({}));
+                (
+                    "ok".to_string(),
+                    public
+                        .get("playerSaveName")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    public
+                        .get("slotName")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                )
+            }
+            Err(err) => (err.to_string(), None, None),
+        };
+    Ok(BackupListItem {
+        path: backup_path.display().to_string(),
+        name: names.get(&file_name).cloned(),
+        file_name,
+        file_size: metadata.len(),
+        sha1: sha1_hex(&data),
+        created_epoch,
+        status,
+        player_save_name,
+        slot_name,
+        scope: "save".to_string(),
+    })
 }
 
 fn list_persistent_data_list_backups_for_save(
@@ -2044,48 +2146,12 @@ fn list_persistent_data_list_backups_for_save(
         }
     }
 
-    for (backup_path, file_name) in candidates {
-        let data = fs::read(&backup_path)?;
-        let metadata = fs::metadata(&backup_path)?;
-        let created_epoch = parse_backup_epoch(&file_name, &prefix);
-        let (status, player_save_name, slot_name) =
-            match inspect_bytes(&data, Some(&backup_path), false) {
-                Ok(_) => {
-                    let persistent_slots = parse_persistent_slot_metadata(&data);
-                    let slot_meta = persistent_slots.get(slot);
-                    let player_save_name = slot_meta.and_then(|m| m.player_save_name.clone());
-                    let slot_name = slot_meta
-                        .and_then(|m| m.slot_name.clone())
-                        .unwrap_or_else(|| slot.to_string());
-                    // inspect_bytes' GVAS branch only checks the magic and scans
-                    // strings, so require a STRICT profile parse before reporting
-                    // a restorable "ok": a truncated/manual backup that still
-                    // contains the slot strings must not enable the Restore
-                    // action (which would overwrite the live profile with corrupt
-                    // bytes). Metadata is still surfaced for display.
-                    let status = if parse_profile_file(&data).is_err() {
-                        "invalid PersistentDataList structure".to_string()
-                    } else if slot_meta.is_none() {
-                        "selected slot metadata missing".to_string()
-                    } else {
-                        "ok".to_string()
-                    };
-                    (status, player_save_name, Some(slot_name))
-                }
-                Err(err) => (err.to_string(), None, Some(slot.to_string())),
-            };
-        backups.push(BackupListItem {
-            path: backup_path.display().to_string(),
-            name: names.get(&file_name).cloned(),
-            file_name,
-            file_size: metadata.len(),
-            sha1: sha1_hex(&data),
-            created_epoch,
-            status,
-            player_save_name,
-            slot_name,
-            scope: "persistent_data_list".to_string(),
-        });
+    // Read and parse the profile backups side by side, as the save backups above
+    // are: each one is read whole, hashed whole, and strictly profile-parsed.
+    for item in par_map(candidates, BACKUP_READ_WORKERS, |candidate| {
+        describe_profile_backup(candidate, &prefix, &names, slot)
+    }) {
+        backups.push(item?);
     }
     backups.sort_by(|a, b| {
         b.created_epoch
@@ -2093,6 +2159,59 @@ fn list_persistent_data_list_backups_for_save(
             .then_with(|| b.file_name.cmp(&a.file_name))
     });
     Ok(backups)
+}
+
+/// Read one PersistentDataList backup and describe it for the listing, from the
+/// point of view of the save slot `slot`. Split out of
+/// [`list_persistent_data_list_backups_for_save`] so the candidates can be
+/// described in parallel.
+fn describe_profile_backup(
+    (backup_path, file_name): (PathBuf, String),
+    prefix: &str,
+    names: &HashMap<String, String>,
+    slot: &str,
+) -> Result<BackupListItem, CoreError> {
+    let data = fs::read(&backup_path)?;
+    let metadata = fs::metadata(&backup_path)?;
+    let created_epoch = parse_backup_epoch(&file_name, prefix);
+    let (status, player_save_name, slot_name) =
+        match inspect_bytes(&data, Some(&backup_path), false) {
+            Ok(_) => {
+                let persistent_slots = parse_persistent_slot_metadata(&data);
+                let slot_meta = persistent_slots.get(slot);
+                let player_save_name = slot_meta.and_then(|m| m.player_save_name.clone());
+                let slot_name = slot_meta
+                    .and_then(|m| m.slot_name.clone())
+                    .unwrap_or_else(|| slot.to_string());
+                // inspect_bytes' GVAS branch only checks the magic and scans
+                // strings, so require a STRICT profile parse before reporting
+                // a restorable "ok": a truncated/manual backup that still
+                // contains the slot strings must not enable the Restore
+                // action (which would overwrite the live profile with corrupt
+                // bytes). Metadata is still surfaced for display.
+                let status = if parse_profile_file(&data).is_err() {
+                    "invalid PersistentDataList structure".to_string()
+                } else if slot_meta.is_none() {
+                    "selected slot metadata missing".to_string()
+                } else {
+                    "ok".to_string()
+                };
+                (status, player_save_name, Some(slot_name))
+            }
+            Err(err) => (err.to_string(), None, Some(slot.to_string())),
+        };
+    Ok(BackupListItem {
+        path: backup_path.display().to_string(),
+        name: names.get(&file_name).cloned(),
+        file_name,
+        file_size: metadata.len(),
+        sha1: sha1_hex(&data),
+        created_epoch,
+        status,
+        player_save_name,
+        slot_name,
+        scope: "persistent_data_list".to_string(),
+    })
 }
 
 fn restore_backup(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
@@ -4756,6 +4875,65 @@ fn extract_script_paths(data: &[u8]) -> Vec<String> {
         .collect()
 }
 
+/// Wait for one scoped summary thread. A panic inside a summary is re-raised on
+/// the caller's thread instead of being turned into a default value, so a bug in
+/// one traversal can never quietly become an empty block in the response.
+fn join<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
+    handle
+        .join()
+        .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+}
+
+/// Apply `work` to every item across scoped threads, returning the results in
+/// the original order. For independent per-item work that is heavy enough to be
+/// worth splitting — reading and hashing a folder full of save backups, say.
+///
+/// Items are handed out in contiguous chunks, one chunk per thread, bounded by
+/// both [`max_workers`](par_map) and the machine's parallelism, so a folder with
+/// hundreds of entries does not spawn hundreds of threads.
+///
+/// `max_workers` is the caller's, because the right bound depends on what a
+/// worker holds rather than on how many cores are idle. A worker that keeps a
+/// whole file in memory sets the peak footprint at workers × file size, and
+/// splitting disk-bound work past a handful of readers buys nothing to pay for
+/// that.
+fn par_map<T, R>(items: Vec<T>, max_workers: usize, work: impl Fn(T) -> R + Sync) -> Vec<R>
+where
+    T: Send,
+    R: Send,
+{
+    let threads = std::thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(4)
+        .min(max_workers)
+        .min(items.len());
+    if threads <= 1 {
+        return items.into_iter().map(work).collect();
+    }
+    let total = items.len();
+    let chunk = total.div_ceil(threads);
+    // Owned chunks, so each thread consumes its own items by value.
+    let mut parts: Vec<Vec<T>> = Vec::with_capacity(threads);
+    let mut rest = items;
+    while !rest.is_empty() {
+        let tail = rest.split_off(chunk.min(rest.len()));
+        parts.push(rest);
+        rest = tail;
+    }
+    let mut out = Vec::with_capacity(total);
+    std::thread::scope(|scope| {
+        let work = &work;
+        let handles: Vec<_> = parts
+            .into_iter()
+            .map(|part| scope.spawn(move || part.into_iter().map(work).collect::<Vec<R>>()))
+            .collect();
+        for handle in handles {
+            out.extend(join(handle));
+        }
+    });
+    out
+}
+
 fn inspect_private_payload(
     data: &[u8],
     path: Option<&Path>,
@@ -4778,28 +4956,38 @@ fn inspect_private_payload(
     match decompress_private_payload_with_limit(data, stream, backend, private_chunk_limit) {
         Ok((payload, decoded_chunk_count)) => {
             let preview = decoded_chunk_count < stream.chunk_count;
-            // A full (non-preview) decode here is identical to what the typed
-            // property browser would re-decode on its first search. Seed the
-            // shared cache so the common inspect-then-browse path pays the
-            // ~20s decode only once per save.
-            if !preview {
-                if let Some(p) = path {
-                    store_decoded_payload_cache(p, sha1_hex(data), payload.clone());
+            // Everything below this point is a read-only pass over the same
+            // decoded bytes or the same parsed tree, and there are a dozen of
+            // them: the FString scan, the parse, and then one traversal each for
+            // the inventory, armor, slot-integrity, progression, NPC, faction and
+            // skill blocks. Run serially they added up to seconds of dead time on
+            // every load. They share no state, so they run on scoped threads and
+            // the load costs the longest pass rather than their sum.
+            //
+            // Stage 1: the FString scan and the typed parse both read `payload`
+            // and nothing else, so they overlap with each other.
+            let (refs, typed_result) = std::thread::scope(|scope| {
+                let scan = scope.spawn(|| scan_fstrings(&payload, 0));
+                // A full (non-preview) decode here is identical to what the typed
+                // property browser would re-decode on its first search. Seed the
+                // shared cache so the common inspect-then-browse path pays the
+                // decode only once per save.
+                if !preview {
+                    if let Some(p) = path {
+                        store_decoded_payload_cache(p, sha1_hex(data), payload.clone());
+                    }
                 }
-            }
-            let refs = scan_fstrings(&payload, 0);
-            let strings = refs
-                .iter()
-                .map(|reference| reference.value.clone())
-                .filter(|value| !value.is_empty())
-                .take(200)
-                .collect::<Vec<_>>();
-            let player = summarize_private_player_payload(&payload, &refs);
-            let typed_result: Option<Result<Arc<properties::RootObject>, CoreError>> = if preview {
-                None
-            } else {
-                Some(properties::parse_private_root(&payload).map(Arc::new))
-            };
+                let typed_result: Option<Result<Arc<properties::RootObject>, CoreError>> =
+                    if preview {
+                        None
+                    } else {
+                        Some(properties::parse_private_root(&payload).map(Arc::new))
+                    };
+                // Never swallow a panic into a silently empty ref list — the
+                // summaries below would then report an empty save.
+                let refs = scan.join().unwrap_or_else(|e| std::panic::resume_unwind(e));
+                (refs, typed_result)
+            });
             // Seed the parsed-root cache with the parse we just did for the
             // summary. Without this the FIRST private read command after a load
             // (characters.list / npc.attributes / …) re-parses the whole payload
@@ -4810,71 +4998,94 @@ fn inspect_private_payload(
             if let (Some(p), Some(Ok(root))) = (path, typed_result.as_ref()) {
                 store_parsed_root_cache(p, sha1_hex(data), Arc::clone(root));
             }
-            let main_container = typed_result
+            let typed_parse = summarize_typed_parse_result(&payload, typed_result.as_ref());
+            let typed_ok = typed_parse["status"] == "ok";
+            let root = typed_result
                 .as_ref()
-                .and_then(|r| r.as_ref().ok())
-                .and_then(|r| main_container_summary(r));
-            let armor_slot = typed_result
-                .as_ref()
-                .and_then(|r| r.as_ref().ok())
-                .and_then(|r| armor_slot_summary(r));
-            let misaligned = typed_result
-                .as_ref()
-                .and_then(|r| r.as_ref().ok())
-                .map(|r| misaligned_slot_containers(r))
-                .unwrap_or_default();
-            let inventory = summarize_private_inventory_payload(
-                &payload,
-                &refs,
+                .and_then(|result| result.as_ref().ok())
+                .map(|root| root.as_ref());
+            // Only the blocks that describe game state require a parse that
+            // covered the whole payload; the capability probes below are happy
+            // with any tree that parsed.
+            let verified_root = root.filter(|_| typed_ok);
+
+            // Stage 2: one traversal per summary, all independent.
+            let (
+                strings,
+                player,
+                inventory_scan,
+                main_container,
+                armor_slot,
+                misaligned,
+                hero_has_effects,
+                glossary_writable,
+                story_writable,
+                progression,
+                npc,
+                faction_guilds,
+            ) = std::thread::scope(|scope| {
+                let strings = scope.spawn(|| {
+                    refs.iter()
+                        .map(|reference| reference.value.clone())
+                        .filter(|value| !value.is_empty())
+                        .take(200)
+                        .collect::<Vec<_>>()
+                });
+                let player = scope.spawn(|| summarize_private_player_payload(&payload, &refs));
+                let inventory_scan = scope.spawn(|| scan_private_inventory(&payload, &refs));
+                let main_container = scope.spawn(|| root.and_then(main_container_summary));
+                let armor_slot = scope.spawn(|| root.and_then(armor_slot_summary));
+                let misaligned =
+                    scope.spawn(|| root.map(misaligned_slot_containers).unwrap_or_default());
+                // `private.skills.set` needs the hero's ActiveEffects array as its
+                // edit target; apply_skill_set rejects the write otherwise. Gate
+                // the advertised capability on it so a guaranteed-to-fail op is
+                // never offered (e.g. a fresh save whose hero has no effects yet).
+                let hero_has_effects = scope.spawn(|| {
+                    root.is_some_and(|root| skills::actor_has_active_effects(root, "Hero"))
+                });
+                let glossary_writable =
+                    scope.spawn(|| root.is_some_and(glossary_set_segment_writable));
+                let story_writable = scope.spawn(|| root.is_some_and(story::is_writable));
+                let progression =
+                    scope.spawn(|| summarize_private_progression_overview(verified_root));
+                // NPC capability block: the frontend feature-detects the
+                // "Attribute" tab from this. `hasNpcs` is true only when the typed
+                // parse succeeds and the save's _Attributes map yields at least
+                // one NPC. Attribute editing itself rides on the already-advertised
+                // `private.typed.setValue`; here we surface the two NPC-specific
+                // structural edits.
+                let npc = scope.spawn(|| summarize_private_npc_payload(verified_root));
+                // Faction crime block: per-camp-guild crime counts for the player.
+                // The forgive edit is advertised only when at least one guild has
+                // an unforgiven Hero crime (so write_save never rejects an
+                // advertised op).
+                let faction_guilds = scope.spawn(|| {
+                    verified_root
+                        .map(factions::list_guild_crimes)
+                        .unwrap_or_default()
+                });
+                (
+                    join(strings),
+                    join(player),
+                    join(inventory_scan),
+                    join(main_container),
+                    join(armor_slot),
+                    join(misaligned),
+                    join(hero_has_effects),
+                    join(glossary_writable),
+                    join(story_writable),
+                    join(progression),
+                    join(npc),
+                    join(faction_guilds),
+                )
+            });
+            let inventory = assemble_private_inventory(
+                inventory_scan,
                 main_container.as_ref(),
                 armor_slot.as_ref(),
                 &misaligned,
             );
-            let typed_parse = summarize_typed_parse_result(&payload, typed_result.as_ref());
-            let typed_ok = typed_parse["status"] == "ok";
-            // `private.skills.set` needs the hero's ActiveEffects array as its edit
-            // target; apply_skill_set rejects the write otherwise. Gate the
-            // advertised capability on it so a guaranteed-to-fail op is never
-            // offered (e.g. a fresh save whose hero has no effects yet).
-            let hero_has_effects = typed_result
-                .as_ref()
-                .and_then(|r| r.as_ref().ok())
-                .map(|r| skills::actor_has_active_effects(r, "Hero"))
-                .unwrap_or(false);
-            let glossary_writable = typed_result
-                .as_ref()
-                .and_then(|r| r.as_ref().ok())
-                .map(|r| glossary_set_segment_writable(r))
-                .unwrap_or(false);
-            let progression = summarize_private_progression_overview(
-                typed_result
-                    .as_ref()
-                    .and_then(|r| r.as_ref().ok())
-                    .filter(|_| typed_ok)
-                    .map(|r| r.as_ref()),
-            );
-            // NPC capability block: the frontend feature-detects the "Attribute"
-            // tab from this. `hasNpcs` is true only when the typed parse succeeds
-            // and the save's _Attributes map yields at least one NPC. Attribute
-            // editing itself rides on the already-advertised
-            // `private.typed.setValue`; here we surface the two NPC-specific
-            // structural edits.
-            let npc = summarize_private_npc_payload(
-                typed_result
-                    .as_ref()
-                    .and_then(|r| r.as_ref().ok())
-                    .filter(|_| typed_ok)
-                    .map(|r| r.as_ref()),
-            );
-            // Faction crime block: per-camp-guild crime counts for the player. The
-            // forgive edit is advertised only when at least one guild has an
-            // unforgiven Hero crime (so write_save never rejects an advertised op).
-            let faction_guilds = typed_result
-                .as_ref()
-                .and_then(|r| r.as_ref().ok())
-                .filter(|_| typed_ok)
-                .map(|r| factions::list_guild_crimes(r))
-                .unwrap_or_default();
             let any_unforgiven = faction_guilds.iter().any(|g| g.unforgiven > 0);
             let factions = json!({ "guilds": faction_guilds });
             let mut writable = vec!["private.replaceFString"];
@@ -4893,11 +5104,7 @@ fn inspect_private_payload(
                     // missing map entry and set member atomically.
                     "private.knowledge.setEntry",
                 ]);
-                if typed_result
-                    .as_ref()
-                    .and_then(|result| result.as_ref().ok())
-                    .is_some_and(|root| story::is_writable(root))
-                {
+                if story_writable {
                     writable.push("private.story.apply");
                 }
                 // Hero skill edits (retarget / unlearn / learn a GameplayEffect
@@ -5084,13 +5291,20 @@ fn apply_equipped_and_upgrades(items: &mut [Value], armor_slot: Option<&ArmorSlo
 /// exists so a pathological payload cannot produce unbounded JSON.
 const PLAYER_INVENTORY_ROW_LIMIT: usize = 4096;
 
-fn summarize_private_inventory_payload(
-    payload: &[u8],
-    refs: &[FStringRef],
-    main_container: Option<&MainContainerSummary>,
-    armor_slot: Option<&ArmorSlotSummary>,
-    misaligned: &[(Vec<String>, usize)],
-) -> Value {
+/// The half of the inventory summary that only reads the decoded bytes and the
+/// FString scan. Split out from [`summarize_private_inventory_payload`] so
+/// `inspect_save` can run it beside the typed-tree traversals it does not depend
+/// on, instead of waiting for them.
+struct InventoryScan {
+    script_paths: Vec<String>,
+    properties: Vec<String>,
+    candidates: Vec<String>,
+    items: Vec<Value>,
+    item_stack_count: usize,
+    item_scope: &'static str,
+}
+
+fn scan_private_inventory(payload: &[u8], refs: &[FStringRef]) -> InventoryScan {
     let script_paths = unique_strings(
         refs.iter().map(|r| r.value.as_str()).filter(|value| {
             value.starts_with("/Script/") && contains_any_ci(value, &["inventory", "item"])
@@ -5110,8 +5324,53 @@ fn summarize_private_inventory_payload(
             .filter(|value| looks_inventory_candidate(value)),
         200,
     );
-    let (mut items, item_stack_count, item_scope) =
+    let (items, item_stack_count, item_scope) =
         summarize_private_inventory_items(payload, refs, PLAYER_INVENTORY_ROW_LIMIT);
+    InventoryScan {
+        script_paths,
+        properties,
+        candidates,
+        items,
+        item_stack_count,
+        item_scope,
+    }
+}
+
+/// The two halves back to back, as `inspect_save` composes them. Kept for the
+/// tests that assert on a whole inventory block; the load path runs the halves
+/// separately so the byte scan overlaps the typed-tree traversals.
+#[cfg(test)]
+fn summarize_private_inventory_payload(
+    payload: &[u8],
+    refs: &[FStringRef],
+    main_container: Option<&MainContainerSummary>,
+    armor_slot: Option<&ArmorSlotSummary>,
+    misaligned: &[(Vec<String>, usize)],
+) -> Value {
+    assemble_private_inventory(
+        scan_private_inventory(payload, refs),
+        main_container,
+        armor_slot,
+        misaligned,
+    )
+}
+
+/// Join the byte-level scan with the typed-tree facts that decide what is
+/// editable. Cheap: no traversal of its own.
+fn assemble_private_inventory(
+    scan: InventoryScan,
+    main_container: Option<&MainContainerSummary>,
+    armor_slot: Option<&ArmorSlotSummary>,
+    misaligned: &[(Vec<String>, usize)],
+) -> Value {
+    let InventoryScan {
+        script_paths,
+        properties,
+        candidates,
+        mut items,
+        item_stack_count,
+        item_scope,
+    } = scan;
     // Mark which rows can be deleted. removeItem addresses by path, so only a
     // path that occurs exactly once across the whole inventory is safe — a row
     // sharing its path with another container's stack must not offer delete, or
@@ -5280,6 +5539,156 @@ fn summarize_typed_parse_result(
     }
 }
 
+/// The read commands whose response is fully determined by the files they read,
+/// and which are therefore safe to answer from [`RESPONSE_CACHE`].
+///
+/// Deliberately excluded: `scan_save_dir` and `list_backups` (they describe a
+/// DIRECTORY, whose contents change without any save file changing), `check_codec`
+/// (no file at all, and already instant) and every `loc_*` command (they read the
+/// game installation, not the save).
+const CACHEABLE_READ_COMMANDS: &[&str] = &[
+    "inspect_save",
+    "search_typed_properties",
+    "query_progression",
+    "private.skills.list",
+    "private.npc.list",
+    "private.characters.list",
+    "private.npc.attributes",
+    "private.npc.position",
+    "private.npc.inventory",
+    "private.factions.list",
+];
+
+/// Identity of one cached response: the exact request, plus a content
+/// fingerprint of every file that request's answer depends on. Any edit to the
+/// save — by this editor, the game, or a cloud sync — changes the fingerprint
+/// and misses, so a hit is always a byte-identity match and never a
+/// trust-the-clock guess. Mirrors how the decode caches key themselves.
+#[derive(PartialEq, Eq)]
+struct ResponseCacheKey {
+    request: String,
+    fingerprint: String,
+}
+
+struct CachedResponseEntry {
+    key: ResponseCacheKey,
+    /// Kept alongside the key so a write can drop this save's entries eagerly
+    /// instead of waiting for them to age out.
+    path: PathBuf,
+    response: String,
+}
+
+impl CachedResponseEntry {
+    /// Everything this entry keeps alive, not just the answer. The request is
+    /// held verbatim as part of the key, and a request carries caller-supplied
+    /// text — a property-browser query, say — with no bound of its own. Counting
+    /// only responses would let a handful of large requests hold many times the
+    /// budget below.
+    fn footprint(&self) -> usize {
+        self.key.request.len()
+            + self.key.fingerprint.len()
+            + self.path.as_os_str().len()
+            + self.response.len()
+    }
+}
+
+/// Bounded so a long session cannot grow without limit. A whole save's worth of
+/// editor queries is around fifteen entries and well under a megabyte, so these
+/// hold several saves at once — switching back and forth stays free — while
+/// staying negligible next to the decoded payload the core already keeps.
+const RESPONSE_CACHE_MAX_ENTRIES: usize = 64;
+const RESPONSE_CACHE_MAX_BYTES: usize = 16 * 1024 * 1024;
+
+static RESPONSE_CACHE: Mutex<Vec<CachedResponseEntry>> = Mutex::new(Vec::new());
+
+/// The files besides the save itself that a command's answer is read from.
+///
+/// A response is only safe to memoize under a fingerprint that covers everything
+/// it was built from. These two commands each reach for one sidecar file that
+/// can change while the save bytes stay exactly as they were — a profile
+/// reassignment, or a backup restore that puts back byte-identical save bytes
+/// alongside a different placement note. Fingerprinting the sidecar makes that a
+/// miss instead of a stale hit.
+///
+/// A missing sidecar contributes nothing, which is correct: "absent" and
+/// "absent" fingerprint alike, and a sidecar that appears changes the answer and
+/// the fingerprint together.
+fn response_companion_files(command: &str, save_path: &Path) -> Vec<PathBuf> {
+    match command {
+        // Reports which profile owns the slot, from the folder's profile file.
+        "inspect_save" => save_path
+            .parent()
+            .map(|dir| vec![dir.join("PersistentDataList.sav")])
+            .unwrap_or_default(),
+        // Reports the recorded placement undo, from the placement notes.
+        "private.npc.position" => vec![placement::notes_path(save_path)],
+        _ => Vec::new(),
+    }
+}
+
+/// Build the cache identity for a request, or `None` when the command is not
+/// cacheable, carries no save path, or its file cannot be read.
+fn read_response_cache_key(input: &str) -> Option<ResponseCacheKey> {
+    let value: Value = serde_json::from_str(input).ok()?;
+    let command = value.get("command")?.as_str()?;
+    if !CACHEABLE_READ_COMMANDS.contains(&command) {
+        return None;
+    }
+    let path = Path::new(value.get("payload")?.get("path")?.as_str()?);
+    let mut fingerprint = sha1_hex(&fs::read(path).ok()?);
+    for companion in response_companion_files(command, path) {
+        if let Ok(bytes) = fs::read(companion) {
+            fingerprint.push_str(&sha1_hex(&bytes));
+        }
+    }
+    Some(ResponseCacheKey {
+        request: input.to_string(),
+        fingerprint,
+    })
+}
+
+fn cached_response(key: &ResponseCacheKey) -> Option<String> {
+    let guard = RESPONSE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .iter()
+        .find(|entry| &entry.key == key)
+        .map(|entry| entry.response.clone())
+}
+
+fn store_cached_response(key: ResponseCacheKey, response: &str) {
+    // The key was built from a request that carried a readable `payload.path`,
+    // so this re-read always resolves.
+    let save_path = serde_json::from_str::<Value>(&key.request)
+        .ok()
+        .and_then(|value| Some(PathBuf::from(value.get("payload")?.get("path")?.as_str()?)))
+        .unwrap_or_default();
+    let mut guard = RESPONSE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    // A request that raced another thread to the same answer is already here.
+    if guard.iter().any(|entry| entry.key == key) {
+        return;
+    }
+    guard.push(CachedResponseEntry {
+        key,
+        path: save_path,
+        response: response.to_string(),
+    });
+    // Oldest first: within one save every entry is wanted, so evicting by age
+    // drops the save the user has moved away from rather than the current one.
+    let mut bytes: usize = guard.iter().map(CachedResponseEntry::footprint).sum();
+    while guard.len() > RESPONSE_CACHE_MAX_ENTRIES || bytes > RESPONSE_CACHE_MAX_BYTES {
+        let evicted = guard.remove(0);
+        bytes -= evicted.footprint();
+    }
+}
+
+/// Drop every cached response for `path`. Their fingerprints would miss anyway
+/// once the file changes; this just releases the memory at the moment of the
+/// write instead of leaving it to age out.
+fn invalidate_response_cache(path: &Path) {
+    let mut guard = RESPONSE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    guard.retain(|entry| entry.path != path);
+}
+
 /// In-memory cache of the most recently decoded private payload. Decoding all
 /// chunks costs ~20s, so the typed property browser must not re-decode on every
 /// search/edit. Holds a single entry (the active save), bounded to one payload
@@ -5342,6 +5751,9 @@ fn invalidate_decoded_payload_cache(path: &Path) {
     // The parsed tree is derived from the decoded bytes, so any write that
     // invalidates one must invalidate the other.
     invalidate_parsed_root_cache(path);
+    // Cached responses for this save are keyed by its content and would miss on
+    // their own; drop them here so the memory is released at the write.
+    invalidate_response_cache(path);
 }
 
 /// Search every typed property in the decoded private payload. Powers the
@@ -6020,16 +6432,10 @@ fn skills_list_command(
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .unwrap_or(skills::HERO);
-    let data = fs::read(path)?;
-    if !data.starts_with(b"GSAV") {
-        return Err(CoreError::UnsupportedEdit(
-            "skill queries are only available for GSAV files".to_string(),
-        ));
-    }
-    let parts = split_gsav(&data)?;
-    let stream = parse_compressed_stream(&data, 13 + parts.public_payload.len())?;
-    let decoded = decoded_private_payload_cached(path, &data, &stream, backend)?;
-    let root = properties::parse_private_root(&decoded)?;
+    // Share the parsed tree with every other read command. This used to copy the
+    // whole decoded payload out of the byte cache and re-parse it, so opening the
+    // skills panel cost a full parse (~0.5 s) that the cache already held.
+    let root = decode_private_root_cached(path, backend)?;
     Ok(skills::list_skills(&root, actor))
 }
 
@@ -6195,7 +6601,7 @@ fn decode_private_root_cached(
     let data = fs::read(path)?;
     if !data.starts_with(b"GSAV") {
         return Err(CoreError::UnsupportedEdit(
-            "NPC commands are only available for GSAV files".to_string(),
+            "private reads are only available for GSAV files".to_string(),
         ));
     }
     let save_sha1 = sha1_hex(&data);

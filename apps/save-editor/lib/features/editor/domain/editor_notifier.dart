@@ -26,6 +26,21 @@ import 'package:state_notifier/state_notifier.dart';
 
 const _unchanged = Object();
 
+/// The page sizes the editor's panels ask the core for.
+///
+/// These live here rather than in each panel because the core caches one
+/// response per exact request, and [EditorNotifier.prefetchTabData] warms those
+/// caches by issuing the panels' own queries ahead of time. A panel that quietly
+/// chose its own size would be warmed with an answer it never asks for.
+abstract final class EditorPageSize {
+  /// One screen of rows: knowledge entries, memory events, the property browser.
+  static const detail = 50;
+
+  /// Fetched whole and then filtered/paged in the client: quests, tutorials,
+  /// story state.
+  static const fullList = 1000;
+}
+
 AppLocalizations _defaultEnglishLocalizations() => AppLocalizationsEn();
 
 /// Sorts saves by in-game playtime (highest first). Slots with null playtime
@@ -607,6 +622,198 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// through this queue guarantees one core command finishes before the next
   /// starts.
   Future<void> _coreQueue = Future<void>.value();
+
+  /// The inspection the background prefetch warmed IN FULL, so re-entering the
+  /// editor for an unchanged save does not queue the same warm-up twice.
+  ///
+  /// Set only once every step has run. A warm-up that was cut short — the user
+  /// renamed a backup, ran a codec check — leaves this null so the next state
+  /// change starts it again; the steps that did complete are answered from the
+  /// core's cache, so a restart re-walks them for a few milliseconds.
+  SaveInspection? _prefetchedFor;
+
+  /// Whether a warm-up is running right now. [_prefetchedFor] cannot serve as
+  /// this flag any more (it is only set at the end), and the warm-up itself
+  /// changes editor state — the character index settles the hero id — so
+  /// without this a state change mid-warm-up would start a second one.
+  bool _prefetchRunning = false;
+
+  /// The in-flight prefetch, exposed so a test can await the warm-up instead of
+  /// racing it. Production fires and forgets.
+  @visibleForTesting
+  Future<void>? prefetchInFlight;
+
+  /// Warm the core's caches for every tab of the freshly inspected save.
+  ///
+  /// The core answers a repeated read from a cache keyed by the save's content,
+  /// so running the panels' own queries here turns the first visit to a tab from
+  /// a fresh multi-hundred-millisecond traversal into a cache hit. Nothing here
+  /// touches [EditorState.isLoading] or reports an error: the user is looking at
+  /// the Overview tab while it runs, and a warm-up that fails simply leaves the
+  /// panel to load the normal way.
+  ///
+  /// The queries must match what the panels ask for, argument for argument —
+  /// the cache holds one response per exact request, so a warm-up with a
+  /// different page size would prime an answer nobody asks for. That is why the
+  /// page sizes live in [EditorPageSize] rather than in each panel.
+  void prefetchTabData() {
+    // The page listens for state changes to trigger this, and a change can still
+    // be delivered while the provider is being torn down (a hot restart, the
+    // window closing). Reading `state` then throws.
+    if (!mounted) return;
+    final inspection = state.inspection;
+    final path = state.selectedPath;
+    if (inspection == null || path == null) return;
+    // The inspection lands BEFORE its load finishes — `_inspect` still has the
+    // backup list to fetch — and every warm-up step bails out while a load is in
+    // flight. Claiming the inspection here would therefore burn it on a warm-up
+    // that does nothing, and the identity check below would refuse to try again.
+    // Wait instead: clearing the loading flag is itself a state change, so the
+    // page calls this again, and that call starts the warm-up for real.
+    if (state.isLoading) return;
+    if (_prefetchRunning) return;
+    if (identical(_prefetchedFor, inspection)) return;
+    _prefetchRunning = true;
+    prefetchInFlight = _prefetchTabData(path, inspection, _loadSeq).whenComplete(
+      () {
+        _prefetchRunning = false;
+        // A run that was cut short cannot simply wait for the next state
+        // change: a step already in flight keeps this flag up past the moment
+        // the interrupting operation clears the loading flag, so the state
+        // change that would have restarted the warm-up bounces off the guard
+        // above and never comes again. Re-arm here instead. This cannot spin —
+        // a fresh run takes the current load sequence, so it can only be cut
+        // short by a NEW interruption, and the guards decide whether it may
+        // start at all.
+        if (!identical(_prefetchedFor, inspection)) prefetchTabData();
+      },
+    );
+  }
+
+  /// Warm every tab's query for [inspection], in reachability order.
+  ///
+  /// Steps are skipped, never queued, while something else holds the editor:
+  /// a warm-up that queued behind the user's own request would be the very
+  /// stall it exists to remove. A skipped step is not lost — the inspection is
+  /// then not marked warmed, so the next state change runs the sequence again
+  /// and the steps that did complete come back from the core's cache.
+  Future<void> _prefetchTabData(
+    String path,
+    SaveInspection inspection,
+    int seq,
+  ) async {
+    // The story panel pins its pages to the path as the INSPECTION spells it;
+    // the selection's spelling would warm a request the panel never makes.
+    final inspectionPath = inspection.path;
+    // A newer load (or a write) has taken over: continuing would only make the
+    // user's request wait behind ours. A disposed notifier stops it too — the
+    // editor is gone, and touching `state` after teardown throws.
+    bool superseded() =>
+        !mounted ||
+        seq != _loadSeq ||
+        state.selectedPath != path ||
+        state.isLoading;
+
+    var complete = true;
+    Future<void> step(Future<Object?> Function() load) async {
+      if (superseded()) {
+        complete = false;
+        return;
+      }
+      try {
+        await load();
+      } catch (_) {
+        // A warm-up failure is not the user's problem; the panel will retry.
+      }
+    }
+
+    // Ordered by how soon the user can reach the data: the Overview tab is
+    // already on screen, Characters is one click away, then World, then the
+    // property browser.
+    await step(loadGameTime);
+    // Also settles the hero GlobalId that the player's Events sub-tab needs.
+    await step(loadAllCharacters);
+    await step(loadHeroAttributes);
+    await step(loadSkills);
+    // Warms the CORE's cache without filling the Dart-side NPC memo. That memo
+    // is pinned to one inspection by design, so pre-filling it here would hand
+    // the first NPC panel a roster fetched seconds earlier; letting the panel
+    // fill it on first use keeps it derived from the file as of that moment,
+    // and the paging it repeats is answered from the warm core.
+    await step(
+      () => _fetchAllNpcActors(
+        path,
+        dropMemoOnError: false,
+        superseded: superseded,
+      ),
+    );
+    await step(
+      () => loadKnowledgeEntries(
+        const Actor.player().uniqueName,
+        limit: EditorPageSize.detail,
+      ),
+    );
+    // The player's Events pane keys on the hero id the character index above
+    // settles. Without one there is nothing to warm — and nothing the pane will
+    // ask for either.
+    final heroId = superseded() ? null : state.heroGlobalId;
+    if (heroId != null) {
+      await step(() => loadMemoryEvents(heroId, limit: EditorPageSize.detail));
+    }
+    await step(
+      () => _prefetchAllPages(superseded, (offset) async {
+        final page = await loadProgressionQuests(
+          offset: offset,
+          limit: EditorPageSize.fullList,
+          path: path,
+        );
+        return (total: page.total, count: page.quests.length);
+      }),
+    );
+    await step(loadGlossary);
+    await step(loadProgressionTutorials);
+    await step(
+      () => _prefetchAllPages(superseded, (offset) async {
+        final page = await loadStoryState(
+          includeUnset: true,
+          offset: offset,
+          limit: EditorPageSize.fullList,
+          path: inspectionPath,
+        );
+        return (total: page.total, count: page.values.length);
+      }),
+    );
+    await step(loadFactions);
+    await step(
+      () => searchTypedProperties(
+        '',
+        limit: EditorPageSize.detail,
+        includeNodes: true,
+      ),
+    );
+
+    // (see `_prefetchAllPages` for why the two full-list sections above walk
+    // their pages instead of warming the first one.)
+
+    // Last, and deliberately so. Everything reading private data shares the
+    // core's single decoded payload and parsed tree, and the per-NPC panels are
+    // far too numerous to warm one by one — so the tree itself has to be warmed.
+    // Loading a save normally leaves the core holding it already, making this a
+    // few milliseconds; the case that costs is returning to a save opened
+    // earlier, where the core holds whichever save came in between. But that is
+    // exactly the case where every step above is a cached answer, and this one
+    // would hold the queue for a second in front of them. So warm the tabs the
+    // user can click first, and rebuild the tree behind them, in time for the
+    // first NPC they open.
+    await step(() => _warmPrivateTree(path));
+
+    // Only a run that warmed everything retires this inspection. Anything less
+    // leaves the marker unset so the next state change picks the sequence up
+    // again — otherwise a warm-up interrupted by, say, a backup rename would
+    // leave the tabs it never reached loading the slow way for the rest of the
+    // session.
+    if (complete && mounted) _prefetchedFor = inspection;
+  }
 
   bool get coreAvailable => _core.isAvailable;
   String get coreDescription => _core.description;
@@ -2915,12 +3122,17 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }
   }
 
+  /// [path] lets a multi-page caller pin every page to the save its walk began
+  /// against, so a selection change midway cannot make a later offset — derived
+  /// from the previous file's total — query a different file. Defaults to the
+  /// current selection, which is what the panel asks against.
   Future<ProgressionQuestPage> loadProgressionQuests({
     String query = '',
     int offset = 0,
     int limit = 100,
     String? state,
     String? group,
+    String? path,
   }) async {
     String? error;
     final data = await _queryProgression({
@@ -2930,7 +3142,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       'limit': limit,
       if (state != null && state.isNotEmpty) 'state': state,
       if (group != null && group.isNotEmpty) 'group': group,
-    }, onError: (message) => error = message);
+    }, path: path, onError: (message) => error = message);
     if (data == null) return ProgressionQuestPage(error: error);
     return ProgressionQuestPage.fromJson(data);
   }
@@ -3243,38 +3455,96 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (cached != null && identical(_allNpcActorsFor, inspection)) {
       return cached;
     }
-    final future = () async {
-      // The core clamps `private.npc.list` `limit` to 1000, but real saves have
-      // ~1484+ NPCs — a single request would silently drop everyone past the
-      // first page. PAGE through with an increasing offset, accumulating until
-      // we have `total`, then return one combined page. The decode is cached
-      // per-inspection in the core, so follow-up pages are cheap.
-      final npcs = <NpcActor>[];
-      var offset = 0;
-      var total = 0;
-      while (true) {
-        final page = await loadNpcActors(
-          offset: offset,
-          limit: 1000,
-          path: pinnedPath,
-        );
-        // Don't cache an error result — let the next call retry.
-        if (page.error != null) {
-          _invalidateNpcCache();
-          return page;
-        }
-        npcs.addAll(page.npcs);
-        total = page.total;
-        offset += page.npcs.length;
-        // Stop once we've collected every NPC, or the core returns an empty
-        // page (defensive: never loop forever on a stuck/empty response).
-        if (page.npcs.isEmpty || offset >= total) break;
-      }
-      return NpcActorsPage(npcs: npcs, total: total, offset: 0, limit: total);
-    }();
+    final future = _fetchAllNpcActors(pinnedPath, dropMemoOnError: true);
     _allNpcActorsFuture = future;
     _allNpcActorsFor = inspection;
     return future;
+  }
+
+  /// Ask the core to make [path]'s decoded payload and parsed tree the ones it
+  /// holds. Returns nothing: the point is the state it leaves behind, which
+  /// every later private read shares.
+  Future<void> _warmPrivateTree(String path) async {
+    await _execute('warm_save', payload: {'path': path});
+  }
+
+  /// Warm every page a full-list panel will ask for.
+  ///
+  /// The quest and story panels fetch their section whole and filter it in the
+  /// client, walking pages of [EditorPageSize.fullList] until they have `total`.
+  /// The core clamps a page to 1000 and caches one response per exact request,
+  /// so warming only the first page leaves a save that has outgrown that clamp
+  /// to load its remaining pages cold on the tab's first visit — with the
+  /// panel's spinner up, which is the wait this warm-up exists to remove.
+  ///
+  /// [page] must issue the panel's own request for an offset and report that
+  /// page's `total` and item count. The offsets mirror the panels' arithmetic —
+  /// items collected so far — because a different offset warms a request they
+  /// never make. A save inside the clamp costs exactly one request, as before.
+  ///
+  /// [superseded] is checked before every page, not just before the walk: the
+  /// offsets and total belong to the file the walk began against, so once
+  /// something else takes over, every further page would occupy the core queue
+  /// ahead of the user's own request to warm an offset nothing will ask for.
+  /// Each page must also be pinned to that file for the same reason.
+  Future<void> _prefetchAllPages(
+    bool Function() superseded,
+    Future<({int total, int count})> Function(int offset) page,
+  ) async {
+    var offset = 0;
+    while (!superseded()) {
+      final result = await page(offset);
+      offset += result.count;
+      // An empty page also covers the failure case, where the loader reports a
+      // zero total: never loop on a stuck or erroring section.
+      if (result.count == 0 || offset >= result.total) break;
+    }
+  }
+
+  /// Page the full NPC roster out of the core, without touching the memo.
+  ///
+  /// The core clamps `private.npc.list` `limit` to 1000, but real saves hold
+  /// ~1484+ NPCs — a single request would silently drop everyone past the first
+  /// page. Pages are accumulated until `total` is reached and returned as one.
+  /// [pinnedPath] fixes the file for the WHOLE fetch, so a save switch midway
+  /// cannot merge pages from two different files into one list.
+  ///
+  /// [dropMemoOnError] belongs to the memoizing caller: a failed load must not
+  /// stay cached, so it clears the memo slot the future was stored in. The
+  /// background warm-up passes false — it has no slot to clear, and clearing the
+  /// memo behind a real load in flight would be wrong.
+  ///
+  /// [superseded] likewise belongs to the warm-up: it abandons the walk when
+  /// something else takes the editor, rather than keeping the core queue busy
+  /// ahead of the user's own request. A real load passes none — a panel that
+  /// asked for the roster needs all of it, not a prefix.
+  Future<NpcActorsPage> _fetchAllNpcActors(
+    String? pinnedPath, {
+    required bool dropMemoOnError,
+    bool Function()? superseded,
+  }) async {
+    final npcs = <NpcActor>[];
+    var offset = 0;
+    var total = 0;
+    while (true) {
+      if (superseded?.call() ?? false) break;
+      final page = await loadNpcActors(
+        offset: offset,
+        limit: 1000,
+        path: pinnedPath,
+      );
+      if (page.error != null) {
+        if (dropMemoOnError) _invalidateNpcCache();
+        return page;
+      }
+      npcs.addAll(page.npcs);
+      total = page.total;
+      offset += page.npcs.length;
+      // Stop once we've collected every NPC, or the core returns an empty page
+      // (defensive: never loop forever on a stuck/empty response).
+      if (page.npcs.isEmpty || offset >= total) break;
+    }
+    return NpcActorsPage(npcs: npcs, total: total, offset: 0, limit: total);
   }
 
   /// Load every attribute of a single NPC (by GlobalId) from the core

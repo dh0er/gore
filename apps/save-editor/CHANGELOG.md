@@ -22,6 +22,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Saving is much faster: a save with eight changed values took eleven seconds
   and now takes one.
+- Opening a savegame is about four times faster.
+- Tabs no longer load one by one. Everything they show is fetched in the
+  background as soon as the savegame opens, so switching tabs is immediate.
+- Going back to a savegame, or to a tab already visited, no longer reloads
+  anything.
 
 ### Fixed
 

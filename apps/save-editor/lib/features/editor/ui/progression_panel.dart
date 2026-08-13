@@ -237,7 +237,7 @@ class QuestsDetail extends ConsumerStatefulWidget {
 }
 
 class _QuestsDetailState extends ConsumerState<QuestsDetail> {
-  static const _defaultPageSize = 50;
+  static const _defaultPageSize = EditorPageSize.detail;
 
   final TextEditingController _search = TextEditingController();
   // Full quest list (fetched once with a large limit, no server filters):
@@ -256,7 +256,7 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
   QuestJournalSection? _sectionFilter;
   // The core clamps a query's `limit` to 1000, so the full quest list must be
   // pulled page-by-page rather than in one oversized request.
-  static const _fetchPageLimit = 1000;
+  static const _fetchPageLimit = EditorPageSize.fullList;
 
   @override
   void initState() {
@@ -762,7 +762,7 @@ class KnowledgeDetail extends ConsumerStatefulWidget {
 }
 
 class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
-  static const _defaultPageSize = 50;
+  static const _defaultPageSize = EditorPageSize.detail;
 
   String? _selectedCharacter;
   KnowledgeEntriesPage _entries = const KnowledgeEntriesPage();
@@ -1491,7 +1491,7 @@ class EventsDetail extends ConsumerStatefulWidget {
 }
 
 class _EventsDetailState extends ConsumerState<EventsDetail> {
-  static const _defaultPageSize = 50;
+  static const _defaultPageSize = EditorPageSize.detail;
 
   String? _selectedCharacter;
   MemoryEventsPage _events = const MemoryEventsPage();
