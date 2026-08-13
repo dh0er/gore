@@ -1034,6 +1034,9 @@ class _CountField extends StatefulWidget {
 }
 
 class _CountFieldState extends State<_CountField> {
+  /// Shown under the field while the typed value cannot be queued.
+  String? _error;
+
   late final TextEditingController _controller = TextEditingController(
     text: '${widget.pending ?? widget.value}',
   );
@@ -1061,12 +1064,35 @@ class _CountFieldState extends State<_CountField> {
   /// time. The add-item dialog already caps at the same value.
   static const int _maxCount = 2147483647; // i32::MAX
 
-  void _submit(String raw) {
-    final parsed = int.tryParse(raw.trim());
-    if (parsed == null || parsed < 1 || parsed > _maxCount) {
-      _controller.text = '${widget.pending ?? widget.value}';
+  /// Queue on every keystroke, the way the inventory's count editor does.
+  ///
+  /// Waiting for Enter or a tap outside left a typed amount unregistered: Save
+  /// stayed disabled while it sat in the field, and a rebuild could overwrite
+  /// the text before it was ever queued — so the change simply never happened.
+  /// An invalid entry says so in place and withdraws the queued edit rather
+  /// than snapping the field back under the user's cursor.
+  void _onChanged(String raw) {
+    final l10n = AppLocalizations.of(context);
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) {
+      setState(() => _error = null);
+      widget.onRevert();
       return;
     }
+    final parsed = int.tryParse(trimmed);
+    if (parsed == null || parsed < 1) {
+      // Min 1: a sold-out line is deleted, not held at zero. The delete button
+      // is how a line goes away.
+      setState(() => _error = l10n.min1);
+      widget.onRevert();
+      return;
+    }
+    if (parsed > _maxCount) {
+      setState(() => _error = l10n.countMustBeAtMost(_maxCount));
+      widget.onRevert();
+      return;
+    }
+    setState(() => _error = null);
     if (parsed == widget.value) {
       widget.onRevert();
     } else {
@@ -1086,6 +1112,7 @@ class _CountFieldState extends State<_CountField> {
       decoration: InputDecoration(
         isDense: true,
         border: const OutlineInputBorder(),
+        errorText: _error,
         suffixIcon: dirty
             ? IconButton(
                 icon: const Icon(Icons.undo, size: 16),
@@ -1093,8 +1120,7 @@ class _CountFieldState extends State<_CountField> {
               )
             : null,
       ),
-      onSubmitted: _submit,
-      onTapOutside: (_) => _submit(_controller.text),
+      onChanged: _onChanged,
     );
   }
 }

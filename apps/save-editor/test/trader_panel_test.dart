@@ -576,12 +576,12 @@ void main() {
 
       final field = find.descendant(of: oreCard, matching: find.byType(TextField));
       await tester.enterText(field, '2147483648');
-      await tester.testTextInput.receiveAction(TextInputAction.done);
-      await tester.pumpAndSettle();
+      await tester.pump();
 
-      // Rejected in place: the field snaps back and nothing is queued, rather
-      // than the save failing later on the core's bound.
-      expect(tester.widget<TextField>(field).controller?.text, '55');
+      // Refused in place — an error under the field and nothing queued — rather
+      // than the save failing later on the core's bound. The text stays as
+      // typed: snapping it back under the cursor would fight the typing.
+      expect(find.textContaining('2147483647'), findsOneWidget);
       expect(
         ProviderScope.containerOf(tester.element(find.byType(Scaffold).first))
             .read(editorProvider)
@@ -702,6 +702,39 @@ void main() {
           matching: find.byIcon(Icons.storefront_outlined),
         ),
         findsOneWidget,
+      );
+    });
+
+    testWidgets('typing a count queues it without leaving the field', (
+      tester,
+    ) async {
+      // The field used to queue only on Enter or a tap outside, so a typed
+      // amount left Save disabled and could be overwritten by a rebuild before
+      // it was ever registered. The inventory queues per keystroke; so does this.
+      await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+
+      final field = find.descendant(of: oreCard, matching: find.byType(TextField));
+      await tester.enterText(field, '4242');
+      await tester.pump();
+
+      final pending = ProviderScope.containerOf(
+        tester.element(find.byType(Scaffold).first),
+      ).read(editorProvider).pendingEdits.values.expand((p) => p.edits).toList();
+      expect(pending, hasLength(1));
+      expect((pending.single['value'] as Map)['count'], 4242);
+
+      // Back to the saved value withdraws it again, no Enter needed.
+      await tester.enterText(field, '55');
+      await tester.pump();
+      expect(
+        ProviderScope.containerOf(tester.element(find.byType(Scaffold).first))
+            .read(editorProvider)
+            .pendingEdits,
+        isEmpty,
       );
     });
 
