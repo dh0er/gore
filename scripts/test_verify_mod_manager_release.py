@@ -90,7 +90,20 @@ class _ReleaseFixture:
         self.setup = self.root / "apps" / "mod-manager" / "installer" / "setup.iss"
         self.setup.parent.mkdir(parents=True)
         self.setup.write_text(
-            """[Setup]
+            """#ifndef AppVersion
+#error "Pass /DAppVersion=x.y.z"
+#endif
+#ifndef SourceDir
+#error "Pass /DSourceDir=<path to flutter Release dir>"
+#endif
+#ifndef OutputDir
+#error "Pass /DOutputDir=<path for installer exe>"
+#endif
+#ifndef OutputBaseName
+#error "Pass /DOutputBaseName=<installer file stem>"
+#endif
+
+[Setup]
 AppVersion={#AppVersion}
 OutputBaseFilename={#OutputBaseName}
 ArchitecturesAllowed=x64compatible
@@ -105,6 +118,14 @@ VersionInfoProductTextVersion={#AppVersion}
 VersionInfoProductVersion={#AppVersion}.0
 VersionInfoTextVersion={#AppVersion}
 VersionInfoVersion={#AppVersion}.0
+#ifdef GORE_SIGNED_INSTALLER
+#ifndef GORE_SIGNED_UNINSTALLER_DIR
+#error "Pass /DGORE_SIGNED_UNINSTALLER_DIR=<temporary path>"
+#endif
+SignTool=gore_mod_manager_ats_b7e4d2c95a184f6b
+SignedUninstaller=yes
+SignedUninstallerDir={#GORE_SIGNED_UNINSTALLER_DIR}
+#endif
 
 [Files]
 Source: "{#SourceDir}\\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -393,6 +414,54 @@ class ModManagerReleaseContractTest(unittest.TestCase):
             fixture.root, VERSION, version_info_reader=fixture.metadata
         )
         self.assert_problem(problems, "[Files] contract changed")
+
+        for old, new, expected in (
+            ("SignedUninstaller=yes", "SignedUninstaller=no", "SignedUninstaller"),
+            (
+                "SignedUninstallerDir={#GORE_SIGNED_UNINSTALLER_DIR}",
+                "SignedUninstallerDir={#OutputDir}",
+                "SignedUninstallerDir",
+            ),
+            (
+                "SignTool=gore_mod_manager_ats_b7e4d2c95a184f6b",
+                "SignTool=byparam",
+                "SignTool",
+            ),
+            (
+                "#ifdef GORE_SIGNED_INSTALLER",
+                "; signing condition removed",
+                "conditional Inno signing block",
+            ),
+            (
+                "#ifdef GORE_SIGNED_INSTALLER",
+                "#include attacker.iss\n#ifdef GORE_SIGNED_INSTALLER",
+                "preprocessor contract changed",
+            ),
+            (
+                "[Setup]",
+                "#undef GORE_SIGNED_INSTALLER\n[Setup]",
+                "preprocessor contract changed",
+            ),
+            (
+                "SignedUninstaller=yes",
+                "SignedUninstaller=yes\nsigneduninstaller=yes",
+                "duplicate [Setup] directive",
+            ),
+            (
+                "SignTool=gore_mod_manager_ats_b7e4d2c95a184f6b",
+                "SignTool=gore_mod_manager_ats_b7e4d2c95a184f6b\n"
+                "signtool = gore_mod_manager_ats_b7e4d2c95a184f6b",
+                "duplicate [Setup] directive",
+            ),
+        ):
+            with self.subTest(signing_recipe=old):
+                fixture = self.fixture()
+                text = fixture.setup.read_text(encoding="utf-8")
+                fixture.setup.write_text(text.replace(old, new, 1), encoding="utf-8")
+                problems = verifier.verify_release(
+                    fixture.root, VERSION, version_info_reader=fixture.metadata
+                )
+                self.assert_problem(problems, expected)
 
     def test_version_product_metadata_and_exact_artifact_names_are_required(self) -> None:
         fixture = self.fixture()
