@@ -69,7 +69,7 @@ APP_METADATA = {
 INSTALLER_METADATA = {
     "CompanyName": "dh0er",
     "FileDescription": "GORE Mod Manager Setup",
-    "LegalCopyright": "Copyright (C) 2026 dh0er. All rights reserved.",
+    "LegalCopyright": "Copyright © 2026 dh0er. All rights reserved.",
     "ProductName": "GORE Mod Manager",
 }
 VERSION_FIELDS = (
@@ -407,6 +407,17 @@ def _check_metadata(
     ]
 
 
+def _check_inno_metadata(
+    info: Mapping[str, str], expected: Mapping[str, str], label: str
+) -> list[str]:
+    # Inno Setup updates fixed-size version-resource placeholders in place. It
+    # leaves the unused suffix as ASCII spaces and canonicalizes every `(C)`
+    # sequence to the real copyright symbol. Accept only that documented
+    # representation; application metadata remains exact.
+    normalized = {field: value.rstrip(" ") for field, value in info.items()}
+    return _check_metadata(normalized, expected, label)
+
+
 def _zip_contract(
     root: Path,
     archive: Path,
@@ -693,7 +704,7 @@ def _installer_contract(
                 "OriginalFilename": installer.name,
                 "ProductVersion": version,
             }
-            problems.extend(_check_metadata(info, expected, "installer"))
+            problems.extend(_check_inno_metadata(info, expected, "installer"))
 
     for license_name in ("LICENSE", "THIRD_PARTY_LICENSES.md"):
         license_path = root / license_name

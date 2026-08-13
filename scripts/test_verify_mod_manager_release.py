@@ -47,6 +47,11 @@ def _installer_metadata(name: str) -> dict[str, str]:
     }
 
 
+def _inno_installer_metadata(name: str) -> dict[str, str]:
+    info = _installer_metadata(name)
+    return {field: value + " " * 7 for field, value in info.items()}
+
+
 class _ReleaseFixture:
     def __init__(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -408,6 +413,56 @@ class ModManagerReleaseContractTest(unittest.TestCase):
             fixture.root, VERSION, version_info_reader=fixture.metadata
         )
         self.assert_problem(problems, "unexpected package artifact")
+
+    def test_inno_installer_metadata_accepts_only_canonical_padding(self) -> None:
+        fixture = self.fixture()
+
+        def padded_metadata(path: Path) -> dict[str, str]:
+            if path.name == fixture.installer.name:
+                return _inno_installer_metadata(path.name)
+            return _app_metadata()
+
+        self.assertEqual(
+            verifier.verify_release(
+                fixture.root, VERSION, version_info_reader=padded_metadata
+            ),
+            [],
+        )
+
+        for label, field, value in (
+            ("non-space suffix", "CompanyName", "dh0er X"),
+            ("internal mismatch", "ProductName", "GORE  Mod Manager   "),
+            (
+                "unconverted copyright",
+                "LegalCopyright",
+                "Copyright (C) 2026 dh0er. All rights reserved.   ",
+            ),
+        ):
+            with self.subTest(label=label):
+                def invalid_metadata(path: Path) -> dict[str, str]:
+                    if path.name == fixture.installer.name:
+                        info = _inno_installer_metadata(path.name)
+                        info[field] = value
+                        return info
+                    return _app_metadata()
+
+                problems = verifier.verify_release(
+                    fixture.root, VERSION, version_info_reader=invalid_metadata
+                )
+                self.assert_problem(problems, field)
+
+        def padded_app_metadata(path: Path) -> dict[str, str]:
+            if path.name == fixture.installer.name:
+                return _inno_installer_metadata(path.name)
+            info = _app_metadata()
+            info["CompanyName"] += " "
+            return info
+
+        problems = verifier.verify_release(
+            fixture.root, VERSION, version_info_reader=padded_app_metadata
+        )
+        self.assert_problem(problems, "portable zip app: CompanyName='dh0er '")
+        self.assert_problem(problems, "installer source app: CompanyName='dh0er '")
 
     def test_repository_metadata_and_installer_recipe_are_not_templates(self) -> None:
         runner = (
