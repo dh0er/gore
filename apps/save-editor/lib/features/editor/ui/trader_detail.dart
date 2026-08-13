@@ -687,6 +687,10 @@ class _StockSection extends ConsumerWidget {
     String nameOf(TraderItem item) =>
         localizedGameName(locCatalog, lang, item.id) ?? item.id;
     final groups = _grouped(items, displayNameOf: nameOf);
+    // The compact pane has no sidebar, so it lists every line at once. The core
+    // hands them over in class-id order, which in most languages is not the
+    // order of the names on screen — sort them the way the groups are sorted.
+    final flat = [...items]..sort(_byDisplayName(nameOf));
     // Hold the chosen category while it still has lines; otherwise fall back to
     // the first one so the list is never blank next to a populated sidebar.
     final selected = groups.any((g) => g.category == selectedCategory)
@@ -774,7 +778,7 @@ class _StockSection extends ConsumerWidget {
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final compact = constraints.maxWidth < _compactBelow;
-                  final rows = compact ? items : shown;
+                  final rows = compact ? flat : shown;
                   return Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -853,6 +857,18 @@ class _StockGroup {
   final List<TraderItem> items;
 }
 
+/// Case-insensitively by the localized name the user reads, with the class id
+/// as a stable tiebreak. Shared so the grouped pane and the compact one, which
+/// has no sidebar to group by, agree on an order.
+int Function(TraderItem, TraderItem) _byDisplayName(
+  String Function(TraderItem item) displayNameOf,
+) => (a, b) {
+  final byName = displayNameOf(
+    a,
+  ).toLowerCase().compareTo(displayNameOf(b).toLowerCase());
+  return byName != 0 ? byName : a.id.compareTo(b.id);
+};
+
 /// Group a stock map the way the inventory groups its own items — same
 /// classifier, so a sword lands under Melee weapons in both places, and the same
 /// sort: case-insensitively by the localized name the user reads, with the class
@@ -865,12 +881,7 @@ List<_StockGroup> _grouped(
   for (final item in items) {
     byCategory.putIfAbsent(itemCategoryFromId(item.id), () => []).add(item);
   }
-  int compare(TraderItem a, TraderItem b) {
-    final byName = displayNameOf(
-      a,
-    ).toLowerCase().compareTo(displayNameOf(b).toLowerCase());
-    return byName != 0 ? byName : a.id.compareTo(b.id);
-  }
+  final compare = _byDisplayName(displayNameOf);
 
   return [
     for (final category in ItemCategory.values)

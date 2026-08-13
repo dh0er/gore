@@ -607,6 +607,35 @@ void main() {
       expect(bread, lessThan(zucchini));
     });
 
+    testWidgets('the compact list sorts by localized name as well', (
+      tester,
+    ) async {
+      // Under 600px the pane drops the sidebar and lists every line at once.
+      // That list came straight from the core, which orders by class id, so the
+      // one view without categories to lean on was also the one out of order.
+      await pumpApp(
+        tester,
+        _TraderCoreService(playerIsTrader: true),
+        surface: const Size(1200, 900),
+        locCatalog: const {
+          'itfo_apple': {'english': 'Zucchini'},
+          'itfo_loaf': {'english': 'Bread'},
+          'itmw_1h_sword_01': {'english': 'Axe'},
+        },
+      );
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(detailTab('Trade'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SidebarTile), findsNothing, reason: 'compact pane');
+      final axe = tester.getTopLeft(find.text('Axe')).dy;
+      final bread = tester.getTopLeft(find.text('Bread')).dy;
+      final zucchini = tester.getTopLeft(find.text('Zucchini')).dy;
+      expect(axe, lessThan(bread));
+      expect(bread, lessThan(zucchini));
+    });
+
     testWidgets('a count field never keeps the previous line value', (
       tester,
     ) async {
