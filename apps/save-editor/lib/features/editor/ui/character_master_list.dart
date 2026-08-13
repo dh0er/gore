@@ -502,16 +502,10 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
               style: const TextStyle(fontSize: 11),
             )
           : null,
-      trailing: row.hasKnowledge
-          ? Tooltip(
-              message: l10n.dialogKnowledge,
-              child: Icon(
-                Icons.menu_book_outlined,
-                size: 18,
-                color: scheme.onSurfaceVariant,
-              ),
-            )
-          : null,
+      // The same badges a spawned actor gets. An orphan can own a shop — a
+      // trader row is keyed by name, not by actor — so hand-rolling just the
+      // knowledge icon here would hide the merchants the core does flag.
+      trailing: _aspectBadges(row, scheme, l10n),
       selected: isSelected,
       selectedTileColor: scheme.primaryContainer,
       selectedColor: scheme.primary,

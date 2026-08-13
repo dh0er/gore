@@ -6,6 +6,7 @@ import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/features/editor/domain/trader_models.dart';
+import 'package:goresave/features/editor/ui/character_master_list.dart';
 import 'package:goresave/features/editor/ui/pending_structural_row.dart';
 import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
@@ -663,6 +664,28 @@ void main() {
       expect(tester.takeException(), isNull, reason: 'no RenderFlex overflow');
     });
 
+    testWidgets('a knowledge-only merchant is badged like any other', (
+      tester,
+    ) async {
+      // A trader row is keyed by name, so a row with no spawned actor can own
+      // one. The orphan tile drew its own trailing and showed only the
+      // knowledge icon, hiding exactly the merchants the core had started to
+      // flag.
+      await pumpApp(tester, _TraderCoreService(orphanMerchant: true));
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+
+      // Scoped to the list: the Trade sub-tab carries the same icon, so an
+      // unscoped finder passes with or without the badge.
+      expect(
+        find.descendant(
+          of: find.byType(CharacterMasterList),
+          matching: find.byIcon(Icons.storefront_outlined),
+        ),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('a merchant shows his ore and both stock sections', (
       tester,
     ) async {
@@ -699,7 +722,12 @@ class _TraderCoreService implements GoresaveCoreService {
   _TraderCoreService({
     this.playerIsTrader = false,
     this.hasItemsByDifficulty = false,
+    this.orphanMerchant = false,
   });
+
+  /// A knowledge-only row that owns a trader record. It has no spawned actor,
+  /// which is exactly why it used to be hidden from the trade panel.
+  final bool orphanMerchant;
 
   final bool playerIsTrader;
 
@@ -906,7 +934,23 @@ class _TraderCoreService implements GoresaveCoreService {
       case 'private.characters.list':
         return {
           'ok': true,
-          'data': {'total': 0, 'characters': <Object?>[]},
+          'data': {
+            'total': orphanMerchant ? 1 : 0,
+            'characters': orphanMerchant
+                ? [
+                    {
+                      'globalId': null,
+                      'uniqueName': 'OC_STT_Fisk_311',
+                      'isDead': false,
+                      'personalRelationship': null,
+                      'hasInventory': false,
+                      'hasKnowledge': true,
+                      'hasEvents': false,
+                      'isTrader': true,
+                    },
+                  ]
+                : <Object?>[],
+          },
         };
       case 'write_save':
         return {
