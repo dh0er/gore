@@ -49,7 +49,10 @@ def _installer_metadata(name: str) -> dict[str, str]:
 
 def _inno_installer_metadata(name: str) -> dict[str, str]:
     info = _installer_metadata(name)
-    return {field: value + " " * 7 for field, value in info.items()}
+    return {
+        field: value.ljust(verifier.INNO_INSTALLER_METADATA_WIDTHS[field], " ")
+        for field, value in info.items()
+    }
 
 
 class _ReleaseFixture:
@@ -429,10 +432,46 @@ class ModManagerReleaseContractTest(unittest.TestCase):
             [],
         )
 
+        canonical = _inno_installer_metadata(fixture.installer.name)
+        self.assertEqual(
+            {field: len(value) for field, value in canonical.items()},
+            verifier.INNO_INSTALLER_METADATA_WIDTHS,
+        )
+        self.assertEqual(
+            {
+                field: len(value) - len(value.rstrip(" "))
+                for field, value in canonical.items()
+            },
+            {
+                "CompanyName": 55,
+                "FileDescription": 38,
+                "FileVersion": 15,
+                "LegalCopyright": 56,
+                "OriginalFilename": 18,
+                "ProductName": 44,
+                "ProductVersion": 45,
+            },
+        )
+
+        for field, value in canonical.items():
+            for suffix, invalid_value in (
+                ("missing space", value[:-1]),
+                ("extra space", value + " "),
+            ):
+                with self.subTest(field=field, suffix=suffix):
+                    def invalid_padding(path: Path) -> dict[str, str]:
+                        if path.name == fixture.installer.name:
+                            info = canonical.copy()
+                            info[field] = invalid_value
+                            return info
+                        return _app_metadata()
+
+                    problems = verifier.verify_release(
+                        fixture.root, VERSION, version_info_reader=invalid_padding
+                    )
+                    self.assert_problem(problems, field)
+
         for label, field, value in (
-            ("missing padding", "CompanyName", "dh0er"),
-            ("short padding", "CompanyName", "dh0er "),
-            ("long padding", "ProductName", "GORE Mod Manager        "),
             ("non-space suffix", "CompanyName", "dh0er X"),
             ("internal mismatch", "ProductName", "GORE  Mod Manager   "),
             (
