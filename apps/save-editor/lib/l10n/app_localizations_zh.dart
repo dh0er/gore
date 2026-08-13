@@ -455,7 +455,7 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get traderRecordIncomplete =>
-      '该商人的记录缺少其中一份库存清单，编辑器无法创建。此处已禁用编辑，以免修改在保存时失败。';
+      '该商人的库存清单缺失，或其结构编辑器不支持、无法写入。此处已禁用编辑，以免修改在保存时失败。';
 
   @override
   String get traderEmptyStock => '没有库存。';
@@ -3211,7 +3211,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get traderRecordIncomplete =>
-      '该商人的记录缺少其中一份库存清单，编辑器无法创建。此处已禁用编辑，以免修改在保存时失败。';
+      '该商人的库存清单缺失，或其结构编辑器不支持、无法写入。此处已禁用编辑，以免修改在保存时失败。';
 
   @override
   String get traderEmptyStock => '没有库存。';

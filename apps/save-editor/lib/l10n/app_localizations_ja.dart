@@ -462,7 +462,7 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get traderRecordIncomplete =>
-      'この商人のレコードには在庫リストの一方が欠けており、エディタでは作成できません。保存時に失敗しないよう、ここでの編集は無効です。';
+      'この商人の在庫リストが存在しないか、エディタが対応しておらず書き込めない形式です。保存時に失敗しないよう、ここでの編集は無効です。';
 
   @override
   String get traderEmptyStock => '在庫がありません。';

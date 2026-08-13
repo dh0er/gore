@@ -146,7 +146,7 @@
   "traderRemoveItem": "Zeile entfernen",
   "traderReadOnlyCore": "Dieser Core kann Händlerdaten nur lesen.",
   "traderDifficultyStockUnsupported": "Dieser Händler führt Bestand je Schwierigkeitsgrad, den der Editor nicht abbildet. Bearbeiten ist deshalb gesperrt — eine Änderung sähe erfolgreich aus, ließe diesen zusätzlichen Bestand aber unangetastet.",
-  "traderRecordIncomplete": "Dem Datensatz dieses Händlers fehlt eine seiner Bestandslisten, die der Editor nicht anlegen kann. Bearbeiten ist deshalb gesperrt, damit eine Änderung nicht erst beim Speichern scheitert.",
+  "traderRecordIncomplete": "Die Bestandslisten dieses Händlers fehlen oder haben eine Form, die der Editor nicht unterstützt und nicht schreiben kann. Bearbeiten ist deshalb gesperrt, damit eine Änderung nicht erst beim Speichern scheitert.",
   "traderEmptyStock": "Nichts auf Lager.",
   "traderUnknownItem": "nicht im Item-Katalog",
   "editorTradersLoadFailed": "Die Händlerdaten konnten nicht geladen werden: {details}",

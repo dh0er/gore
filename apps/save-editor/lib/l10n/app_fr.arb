@@ -144,7 +144,7 @@
   "traderRemoveItem": "Retirer la ligne",
   "traderReadOnlyCore": "Cette version du cœur ne peut que lire les données des marchands.",
   "traderDifficultyStockUnsupported": "Ce marchand possède un stock par difficulté, que l'éditeur ne modélise pas. L'édition est désactivée ici, car une modification semblerait réussie tout en laissant ce stock supplémentaire intact.",
-  "traderRecordIncomplete": "La fiche de ce marchand n'a pas l'une de ses listes de stock, que l'éditeur ne peut pas créer. L'édition est désactivée ici pour qu'une modification n'échoue pas à l'enregistrement.",
+  "traderRecordIncomplete": "Les listes de stock de ce marchand sont absentes, ou d'une forme que l'éditeur ne prend pas en charge et ne peut pas écrire. L'édition est désactivée ici pour qu'une modification n'échoue pas à l'enregistrement.",
   "traderEmptyStock": "Rien en stock.",
   "traderUnknownItem": "absent du catalogue d'objets",
   "editorTradersLoadFailed": "Échec du chargement des marchands : {details}",

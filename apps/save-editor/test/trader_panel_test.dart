@@ -1048,7 +1048,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        find.textContaining('missing one of its stock lists'),
+        find.textContaining('does not support and cannot write'),
         findsOneWidget,
       );
       expect(find.widgetWithText(OutlinedButton, 'Add item'), findsNothing);

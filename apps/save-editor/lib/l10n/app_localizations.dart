@@ -929,7 +929,7 @@ abstract class AppLocalizations {
   /// No description provided for @traderRecordIncomplete.
   ///
   /// In en, this message translates to:
-  /// **'This merchant\'s record is missing one of its stock lists, which the editor cannot create. Editing is disabled here so a change cannot fail at save time.'**
+  /// **'This merchant\'s stock lists are missing, or in a shape the editor does not support and cannot write. Editing is disabled here so a change cannot fail at save time.'**
   String get traderRecordIncomplete;
 
   /// No description provided for @traderEmptyStock.

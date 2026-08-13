@@ -144,7 +144,7 @@
   "traderRemoveItem": "Rimuovi riga",
   "traderReadOnlyCore": "Questa build del core può solo leggere i dati dei mercanti.",
   "traderDifficultyStockUnsupported": "Questo mercante ha scorte per difficoltà, che l'editor non modella. La modifica è disattivata qui, perché sembrerebbe riuscita lasciando però intatte quelle scorte aggiuntive.",
-  "traderRecordIncomplete": "Al record di questo mercante manca uno dei suoi elenchi di scorte, che l'editor non può creare. La modifica è disattivata qui perché un cambiamento non fallisca al salvataggio.",
+  "traderRecordIncomplete": "Gli elenchi di scorte di questo mercante mancano, o hanno una forma che l'editor non supporta e non può scrivere. La modifica è disattivata qui perché un cambiamento non fallisca al salvataggio.",
   "traderEmptyStock": "Niente in magazzino.",
   "traderUnknownItem": "non presente nel catalogo oggetti",
   "editorTradersLoadFailed": "Caricamento dei mercanti non riuscito: {details}",

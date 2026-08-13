@@ -150,7 +150,7 @@
   "traderRemoveItem": "Remove line",
   "traderReadOnlyCore": "This core build can only read trader data.",
   "traderDifficultyStockUnsupported": "This merchant carries per-difficulty stock, which the editor does not model. Editing is disabled here, because a change would look successful while leaving that extra stock untouched.",
-  "traderRecordIncomplete": "This merchant's record is missing one of its stock lists, which the editor cannot create. Editing is disabled here so a change cannot fail at save time.",
+  "traderRecordIncomplete": "This merchant's stock lists are missing, or in a shape the editor does not support and cannot write. Editing is disabled here so a change cannot fail at save time.",
   "traderEmptyStock": "Nothing in stock.",
   "traderUnknownItem": "not in the item catalog",
   "editorTradersLoadFailed": "Trader load failed: {details}",

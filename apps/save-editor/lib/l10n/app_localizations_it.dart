@@ -472,7 +472,7 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get traderRecordIncomplete =>
-      'Al record di questo mercante manca uno dei suoi elenchi di scorte, che l\'editor non può creare. La modifica è disattivata qui perché un cambiamento non fallisca al salvataggio.';
+      'Gli elenchi di scorte di questo mercante mancano, o hanno una forma che l\'editor non supporta e non può scrivere. La modifica è disattivata qui perché un cambiamento non fallisca al salvataggio.';
 
   @override
   String get traderEmptyStock => 'Niente in magazzino.';

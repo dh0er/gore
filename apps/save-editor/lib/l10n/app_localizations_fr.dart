@@ -474,7 +474,7 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get traderRecordIncomplete =>
-      'La fiche de ce marchand n\'a pas l\'une de ses listes de stock, que l\'éditeur ne peut pas créer. L\'édition est désactivée ici pour qu\'une modification n\'échoue pas à l\'enregistrement.';
+      'Les listes de stock de ce marchand sont absentes, ou d\'une forme que l\'éditeur ne prend pas en charge et ne peut pas écrire. L\'édition est désactivée ici pour qu\'une modification n\'échoue pas à l\'enregistrement.';
 
   @override
   String get traderEmptyStock => 'Rien en stock.';

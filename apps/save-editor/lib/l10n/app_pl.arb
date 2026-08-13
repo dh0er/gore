@@ -144,7 +144,7 @@
   "traderRemoveItem": "Usuń pozycję",
   "traderReadOnlyCore": "Ta wersja rdzenia może tylko odczytywać dane kupców.",
   "traderDifficultyStockUnsupported": "Ten kupiec ma zapasy zależne od poziomu trudności, których edytor nie odwzorowuje. Edycja jest tu wyłączona, bo zmiana wyglądałaby na udaną, zostawiając te dodatkowe zapasy nietknięte.",
-  "traderRecordIncomplete": "W rekordzie tego kupca brakuje jednej z list zapasów, której edytor nie potrafi utworzyć. Edycja jest wyłączona, aby zmiana nie zawiodła przy zapisie.",
+  "traderRecordIncomplete": "Listy zapasów tego kupca nie istnieją albo mają postać, której edytor nie obsługuje i nie potrafi zapisać. Edycja jest wyłączona, aby zmiana nie zawiodła przy zapisie.",
   "traderEmptyStock": "Brak zapasów.",
   "traderUnknownItem": "brak w katalogu przedmiotów",
   "editorTradersLoadFailed": "Nie udało się wczytać kupców: {details}",

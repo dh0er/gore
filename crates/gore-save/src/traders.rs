@@ -151,9 +151,12 @@ fn property<'a>(props: &'a [Property], name: &str) -> Option<&'a Property> {
     props.iter().find(|p| p.name == name)
 }
 
-/// Whether a stock map is there and carries the key/value types every applier
+/// Whether a stock map is there AND carries the key/value types every applier
 /// assumes. Checked on the DESCRIPTOR, because an empty map has no entry to
 /// check and `read_stock` can only see the entries.
+///
+/// Both failures land on the same flag, so whatever reports it has to describe
+/// both: a record can be missing a map, or carry one the appliers cannot write.
 fn stock_map_is_writable(props: &[Property], name: &str) -> bool {
     let Some(property) = property(props, name) else {
         return false;
