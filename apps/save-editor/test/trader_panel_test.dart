@@ -768,6 +768,37 @@ void main() {
       );
     });
 
+    testWidgets('leaving a cleared count field restores the saved value', (
+      tester,
+    ) async {
+      // The focus guard keeps the sync off while typing, so without a matching
+      // reset on blur an emptied or refused entry stayed on screen afterwards —
+      // with no pending edit and no revert control to explain it.
+      await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+
+      final field = find.descendant(of: oreCard, matching: find.byType(TextField));
+      await tester.tap(field);
+      await tester.pump();
+      await tester.enterText(field, '');
+      await tester.pump();
+      expect(tester.widget<TextField>(field).controller?.text, isEmpty);
+
+      // Focus moves away: the field goes back to what the save holds.
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pumpAndSettle();
+      expect(tester.widget<TextField>(field).controller?.text, '55');
+      expect(
+        ProviderScope.containerOf(tester.element(find.byType(Scaffold).first))
+            .read(editorProvider)
+            .pendingEdits,
+        isEmpty,
+      );
+    });
+
     testWidgets('a merchant shows his ore and both stock sections', (
       tester,
     ) async {

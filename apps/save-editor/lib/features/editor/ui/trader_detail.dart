@@ -1041,6 +1041,25 @@ class _CountFieldState extends State<_CountField> {
   /// them: every sync below is a reaction to a change they just made.
   final FocusNode _focus = FocusNode();
 
+  @override
+  void initState() {
+    super.initState();
+    _focus.addListener(_onFocusChanged);
+  }
+
+  /// Put the field back in step the moment the user leaves it.
+  ///
+  /// While focused the text is theirs and no sync runs, so an emptied or
+  /// refused entry would otherwise stay on screen afterwards — showing nothing,
+  /// or a number the save never took, with no pending edit and no revert
+  /// control to explain it.
+  void _onFocusChanged() {
+    if (_focus.hasFocus) return;
+    final shown = '${widget.pending ?? widget.value}';
+    if (_controller.text != shown) _controller.text = shown;
+    if (_error != null) setState(() => _error = null);
+  }
+
   late final TextEditingController _controller = TextEditingController(
     text: '${widget.pending ?? widget.value}',
   );
@@ -1064,6 +1083,7 @@ class _CountFieldState extends State<_CountField> {
 
   @override
   void dispose() {
+    _focus.removeListener(_onFocusChanged);
     _controller.dispose();
     _focus.dispose();
     super.dispose();
