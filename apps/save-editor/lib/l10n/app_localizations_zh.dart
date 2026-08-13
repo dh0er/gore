@@ -413,6 +413,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get traderNotAMerchant => '该角色不进行交易。';
 
   @override
+  String get traderRetry => '重试';
+
+  @override
   String get traderAmbiguousName => '有多条商人记录使用这个名字，无法判断哪家店属于该角色。已禁用编辑，以免改错。';
 
   @override
@@ -3164,6 +3167,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get traderNotAMerchant => '该角色不进行交易。';
+
+  @override
+  String get traderRetry => '重试';
 
   @override
   String get traderAmbiguousName => '有多条商人记录使用这个名字，无法判断哪家店属于该角色。已禁用编辑，以免改错。';

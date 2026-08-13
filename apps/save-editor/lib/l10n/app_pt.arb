@@ -131,6 +131,7 @@
   "tabInventory": "Inventário",
   "tabTrade": "Comércio",
   "traderNotAMerchant": "Esta personagem não comercia.",
+  "traderRetry": "Tentar novamente",
   "traderAmbiguousName": "Mais do que um registo de mercador tem este nome, por isso não é possível saber que loja pertence a esta personagem. A edição está desativada em vez de arriscar mudar a errada.",
   "traderOre": "Minério (poder de compra)",
   "traderNoOre": "sem minério",

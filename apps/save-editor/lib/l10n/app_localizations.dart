@@ -848,6 +848,12 @@ abstract class AppLocalizations {
   /// **'This character does not trade.'**
   String get traderNotAMerchant;
 
+  /// No description provided for @traderRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Try again'**
+  String get traderRetry;
+
   /// No description provided for @traderAmbiguousName.
   ///
   /// In en, this message translates to:

@@ -1073,6 +1073,42 @@ void main() {
       expect(find.text('Ore (purchasing power)'), findsOneWidget);
     });
 
+    testWidgets('the read-only note waits until nothing at all is writable', (
+      tester,
+    ) async {
+      // A core with no stocked shop drops setStock but still offers addItem, so
+      // announcing "read only" beside a working Add button was simply wrong.
+      await pumpApp(
+        tester,
+        _TraderCoreService(
+          playerIsTrader: true,
+          writable: const ['private.traders.addItem'],
+        ),
+      );
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(OutlinedButton, 'Add item'), findsOneWidget);
+      expect(
+        find.textContaining('can only read trader data'),
+        findsNothing,
+        reason: 'Add works, so this core is not read-only',
+      );
+
+      // With nothing advertised at all, the note is the honest thing to show.
+      await pumpApp(
+        tester,
+        _TraderCoreService(playerIsTrader: true, writable: const []),
+      );
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('can only read trader data'), findsOneWidget);
+    });
+
     testWidgets('a merchant shows his ore and both stock sections', (
       tester,
     ) async {
@@ -1112,7 +1148,12 @@ class _TraderCoreService implements GoresaveCoreService {
     this.orphanMerchant = false,
     this.stockMapsPresent = true,
     this.oreOnly = false,
+    this.writable,
   });
+
+  /// Override the advertised command list. The core drops setStock when no shop
+  /// holds a line, while still offering addItem.
+  final List<String>? writable;
 
   /// A merchant holding nothing but his ore: the live stock has one line, and
   /// it is the one the ore card takes out of the list.
@@ -1235,11 +1276,13 @@ class _TraderCoreService implements GoresaveCoreService {
                 'placeholder': false,
               },
             ],
-            'writable': [
-              'private.traders.addItem',
-              'private.traders.setStock',
-              'private.traders.removeItem',
-            ],
+            'writable':
+                writable ??
+                const [
+                  'private.traders.addItem',
+                  'private.traders.setStock',
+                  'private.traders.removeItem',
+                ],
           },
         };
       case 'private.traders.detail':

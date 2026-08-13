@@ -133,6 +133,7 @@
   "tabInventory": "Inventar",
   "tabTrade": "Handel",
   "traderNotAMerchant": "Diese Person handelt nicht.",
+  "traderRetry": "Erneut versuchen",
   "traderAmbiguousName": "Mehrere Händlereinträge tragen diesen Namen, deshalb lässt sich nicht sagen, welcher Laden zu dieser Person gehört. Bearbeiten ist gesperrt, statt womöglich den falschen zu ändern.",
   "traderOre": "Erz (Kaufkraft)",
   "traderNoOre": "kein Erz",

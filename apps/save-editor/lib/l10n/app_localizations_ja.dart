@@ -418,6 +418,9 @@ class AppLocalizationsJa extends AppLocalizations {
   String get traderNotAMerchant => 'このキャラクターは取引をしません。';
 
   @override
+  String get traderRetry => '再試行';
+
+  @override
   String get traderAmbiguousName =>
       '同じ名前の商人レコードが複数あるため、どの店がこのキャラクターのものか判別できません。誤って別の店を変更しないよう、編集は無効です。';
 

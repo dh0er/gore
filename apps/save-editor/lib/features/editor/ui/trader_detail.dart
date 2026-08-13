@@ -217,9 +217,15 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
                       const SizedBox(height: 12),
                     ],
                     _NoteCard(text: l10n.traderPriceWarning),
+                    // The core drops setStock from `writable` when no shop
+                    // holds a line while still offering addItem, so "read only"
+                    // has to mean none of the three is available — not merely
+                    // that one of them is missing.
                     if (widget.editable &&
                         !unsupported &&
-                        !(list?.canSetStock ?? false)) ...[
+                        !canSet &&
+                        !canAdd &&
+                        !canRemove) ...[
                       const SizedBox(height: 12),
                       Text(
                         l10n.traderReadOnlyCore,
@@ -811,11 +817,11 @@ class _StockSection extends ConsumerWidget {
                           itemCount: rows.length,
                           itemBuilder: (context, index) => _StockRow(
                             // The map belongs in the key: the same item exists in
-                          // both, so keying on the path alone reused one row's
-                          // field across a map switch — and with the focused
-                          // guard skipping the sync, the old count stayed on
-                          // screen while keystrokes went to the other map.
-                          key: ValueKey((map, rows[index].path)),
+                            // both, so keying on the path alone reused one row's
+                            // field across a map switch — and with the focused
+                            // guard skipping the sync, the old count stayed on
+                            // screen while keystrokes went to the other map.
+                            key: ValueKey((map, rows[index].path)),
                             item: rows[index],
                             map: map,
                             canSet: canSet,
@@ -1217,7 +1223,10 @@ class _Message extends StatelessWidget {
             ),
             if (onRetry != null) ...[
               const SizedBox(height: 12),
-              OutlinedButton(onPressed: onRetry, child: const Text('Retry')),
+              OutlinedButton(
+                onPressed: onRetry,
+                child: Text(AppLocalizations.of(context).traderRetry),
+              ),
             ],
           ],
         ),

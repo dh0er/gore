@@ -427,6 +427,9 @@ class AppLocalizationsPl extends AppLocalizations {
   String get traderNotAMerchant => 'Ta postać nie handluje.';
 
   @override
+  String get traderRetry => 'Spróbuj ponownie';
+
+  @override
   String get traderAmbiguousName =>
       'Kilka rekordów kupca nosi tę nazwę, więc nie da się ustalić, który sklep należy do tej postaci. Edycja jest wyłączona, zamiast ryzykować zmianę niewłaściwego.';
 

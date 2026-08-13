@@ -426,6 +426,9 @@ class AppLocalizationsPt extends AppLocalizations {
   String get traderNotAMerchant => 'Esta personagem não comercia.';
 
   @override
+  String get traderRetry => 'Tentar novamente';
+
+  @override
   String get traderAmbiguousName =>
       'Mais do que um registo de mercador tem este nome, por isso não é possível saber que loja pertence a esta personagem. A edição está desativada em vez de arriscar mudar a errada.';
 
@@ -3279,6 +3282,9 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get traderNotAMerchant => 'Este personagem não comercia.';
+
+  @override
+  String get traderRetry => 'Tentar novamente';
 
   @override
   String get traderAmbiguousName =>
