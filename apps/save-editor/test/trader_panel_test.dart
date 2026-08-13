@@ -844,6 +844,64 @@ void main() {
       );
     });
 
+    testWidgets('a row is keyed by map AND path, not path alone', (
+      tester,
+    ) async {
+      // The same item lives in both maps. Keyed on the path alone, one row's
+      // field state carries across a map switch; the count shown then depends
+      // on whether anything happens to resync it, which is not a property to
+      // rely on. Keying by both makes the two rows distinct outright.
+      //
+      // Note the reuse is not reachable by tapping the switch — that moves
+      // focus, and the blur listener resyncs — so this asserts the key rather
+      // than a user-visible symptom.
+      await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Food & potions (2)'));
+      await tester.pumpAndSettle();
+
+      const loaf = '/Script/Angelscript.ItFo_Loaf';
+      expect(
+        find.byKey(const ValueKey((TraderStockMap.current, loaf))),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey((TraderStockMap.base, loaf))),
+        findsNothing,
+      );
+
+      await tester.tap(find.text('Restock baseline'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Food & potions (1)'));
+      await tester.pumpAndSettle();
+
+      // A distinct key, so the row cannot inherit the other map's field state.
+      expect(
+        find.byKey(const ValueKey((TraderStockMap.base, loaf))),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey((TraderStockMap.current, loaf))),
+        findsNothing,
+      );
+      // And it shows the baseline's own count.
+      expect(
+        tester
+            .widget<TextField>(
+              find.descendant(
+                of: find.byKey(const ValueKey((TraderStockMap.base, loaf))),
+                matching: find.byType(TextField),
+              ),
+            )
+            .controller
+            ?.text,
+        '9',
+      );
+    });
+
     testWidgets('a merchant shows his ore and both stock sections', (
       tester,
     ) async {
@@ -1058,9 +1116,11 @@ class _TraderCoreService implements GoresaveCoreService {
                 'unknownItem': false,
               },
               {
+                // Deliberately unlike the live stock's 3: a row reused across
+                // the map switch would keep showing the wrong one.
                 'path': '/Script/Angelscript.ItFo_Loaf',
                 'id': 'ItFo_Loaf',
-                'count': 3,
+                'count': 9,
                 'unknownItem': false,
               },
             ],

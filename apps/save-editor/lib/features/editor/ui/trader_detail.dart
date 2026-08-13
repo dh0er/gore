@@ -798,7 +798,12 @@ class _StockSection extends ConsumerWidget {
                           padding: const EdgeInsets.symmetric(vertical: 4),
                           itemCount: rows.length,
                           itemBuilder: (context, index) => _StockRow(
-                            key: ValueKey(rows[index].path),
+                            // The map belongs in the key: the same item exists in
+                          // both, so keying on the path alone reused one row's
+                          // field across a map switch — and with the focused
+                          // guard skipping the sync, the old count stayed on
+                          // screen while keystrokes went to the other map.
+                          key: ValueKey((map, rows[index].path)),
                             item: rows[index],
                             map: map,
                             canSet: canSet,
