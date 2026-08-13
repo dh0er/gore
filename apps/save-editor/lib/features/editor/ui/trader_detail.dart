@@ -50,6 +50,16 @@ class TraderPanel extends ConsumerStatefulWidget {
   ConsumerState<TraderPanel> createState() => _TraderPanelState();
 }
 
+/// How much of a short pane the panel's fixed head may keep before it scrolls,
+/// so the stock browser below it always gets a usable slice.
+const double _minBrowserHeight = 260;
+
+double _headCap(double available) {
+  if (!available.isFinite) return double.infinity;
+  final cap = available - _minBrowserHeight;
+  return cap > 0 ? cap : 0;
+}
+
 class _TraderPanelState extends ConsumerState<TraderPanel> {
   TradersResult? _list;
   TraderDetail? _detail;
@@ -170,89 +180,111 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // First, because it qualifies every number below it — the ore as much
-          // as the stock counts.
-          if (unsupported) ...[
-            _NoteCard(
-              text: l10n.traderDifficultyStockUnsupported,
-              tone: _NoteTone.warning,
-            ),
-            const SizedBox(height: 12),
-          ],
-          _NoteCard(text: l10n.traderPriceWarning),
-          if (widget.editable &&
-              !unsupported &&
-              !(list?.canSetStock ?? false)) ...[
-            const SizedBox(height: 12),
-            Text(l10n.traderReadOnlyCore, style: theme.textTheme.bodySmall),
-          ],
-          const SizedBox(height: 16),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: SegmentedButton<TraderStockMap>(
-              segments: [
-                ButtonSegment(
-                  value: TraderStockMap.current,
-                  icon: const Icon(Icons.storefront_outlined),
-                  label: Text(l10n.traderStockCurrent),
+      child: LayoutBuilder(
+        builder: (context, pane) => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // The notes, the map switch and the ore card scroll among themselves
+            // once the pane gets short, so they can never squeeze the browser out
+            // of the column — which they did, by 8px, at 620px tall.
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: _headCap(pane.maxHeight)),
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // First, because it qualifies every number below it — the ore as much
+                    // as the stock counts.
+                    if (unsupported) ...[
+                      _NoteCard(
+                        text: l10n.traderDifficultyStockUnsupported,
+                        tone: _NoteTone.warning,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    _NoteCard(text: l10n.traderPriceWarning),
+                    if (widget.editable &&
+                        !unsupported &&
+                        !(list?.canSetStock ?? false)) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        l10n.traderReadOnlyCore,
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: SegmentedButton<TraderStockMap>(
+                        segments: [
+                          ButtonSegment(
+                            value: TraderStockMap.current,
+                            icon: const Icon(Icons.storefront_outlined),
+                            label: Text(l10n.traderStockCurrent),
+                          ),
+                          ButtonSegment(
+                            value: TraderStockMap.base,
+                            icon: const Icon(Icons.inventory_outlined),
+                            label: Text(l10n.traderStockBase),
+                          ),
+                        ],
+                        selected: {_map},
+                        onSelectionChanged: (selection) =>
+                            setState(() => _map = selection.first),
+                      ),
+                    ),
+                    if (_map == TraderStockMap.base) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        l10n.traderStockBaseHint,
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ],
+                    if (showOreCard) ...[
+                      const SizedBox(height: 16),
+                      _OreCard(
+                        detail: detail,
+                        editable: canSet,
+                        canRemove: canRemove,
+                        removalPending: removals.contains(kTraderOrePath),
+                        onChanged: (value) =>
+                            _queueSet(_map, kTraderOrePath, value),
+                        onRevert: () => _revert(_map, kTraderOrePath),
+                        onRemove: () => _queueRemove(_map, kTraderOrePath),
+                        pending: _pendingCountFor(_map, kTraderOrePath),
+                      ),
+                    ],
+                  ],
                 ),
-                ButtonSegment(
-                  value: TraderStockMap.base,
-                  icon: const Icon(Icons.inventory_outlined),
-                  label: Text(l10n.traderStockBase),
-                ),
-              ],
-              selected: {_map},
-              onSelectionChanged: (selection) =>
-                  setState(() => _map = selection.first),
+              ),
             ),
-          ),
-          if (_map == TraderStockMap.base) ...[
-            const SizedBox(height: 8),
-            Text(l10n.traderStockBaseHint, style: theme.textTheme.bodySmall),
-          ],
-          if (showOreCard) ...[
             const SizedBox(height: 16),
-            _OreCard(
-              detail: detail,
-              editable: canSet,
-              canRemove: canRemove,
-              removalPending: removals.contains(kTraderOrePath),
-              onChanged: (value) => _queueSet(_map, kTraderOrePath, value),
-              onRevert: () => _revert(_map, kTraderOrePath),
-              onRemove: () => _queueRemove(_map, kTraderOrePath),
-              pending: _pendingCountFor(_map, kTraderOrePath),
+            Expanded(
+              child: _StockSection(
+                map: _map,
+                items: rows,
+                lineCount: detail.stock(_map).length,
+                pendingAdds: _pendingAdds(_map),
+                pendingRemovals: [
+                  for (final item in detail.stock(_map))
+                    if (removals.contains(item.path)) item,
+                ],
+                canSet: canSet,
+                canAdd: canAdd,
+                canRemove: canRemove,
+                selectedCategory: _category,
+                onSelectCategory: (category) =>
+                    setState(() => _category = category),
+                pendingOf: _pendingCountFor,
+                onChanged: _queueSet,
+                onRevert: _revert,
+                onRemove: _queueRemove,
+                onRevertAdd: _revertAdd,
+                onAdd: () => _addItem(_map, detail),
+              ),
             ),
           ],
-          const SizedBox(height: 16),
-          Expanded(
-            child: _StockSection(
-              map: _map,
-              items: rows,
-              lineCount: detail.stock(_map).length,
-              pendingAdds: _pendingAdds(_map),
-              pendingRemovals: [
-                for (final item in detail.stock(_map))
-                  if (removals.contains(item.path)) item,
-              ],
-              canSet: canSet,
-              canAdd: canAdd,
-              canRemove: canRemove,
-              selectedCategory: _category,
-              onSelectCategory: (category) =>
-                  setState(() => _category = category),
-              pendingOf: _pendingCountFor,
-              onChanged: _queueSet,
-              onRevert: _revert,
-              onRemove: _queueRemove,
-              onRevertAdd: _revertAdd,
-              onAdd: () => _addItem(_map, detail),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -351,7 +383,9 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
   }
 
   void _revert(TraderStockMap map, String path) {
-    widget.notifier.clearTraderStockEdit(_edit(TraderEditKind.setStock, map, path));
+    widget.notifier.clearTraderStockEdit(
+      _edit(TraderEditKind.setStock, map, path),
+    );
     setState(() {});
   }
 
@@ -537,11 +571,32 @@ class _StockSection extends ConsumerWidget {
   /// inventory browser uses.
   static const double _compactBelow = 600;
 
-  /// How much height the queued-change banners may claim before they scroll
-  /// among themselves, so the stock browser stays visible below them. A fixed
-  /// value on purpose: a fraction would need the parent's height, and a
-  /// LayoutBuilder placed directly in a Column is handed an unbounded one.
+  /// The share of the pane the queued-change banners may claim before they
+  /// scroll among themselves, so the stock browser stays visible below them.
+  static const double _pendingMaxFraction = 0.4;
+
+  /// Never more than this, however tall the pane is — past a few banners the
+  /// rest may as well scroll.
   static const double _pendingMaxHeight = 240;
+
+  /// Room the header and a usable slice of the list keep for themselves. On a
+  /// pane too short to grant even that, the banners give way rather than push
+  /// the column past its bounds.
+  static const double _pendingReserve = 140;
+
+  /// The height the banner strip may occupy inside a pane of [available].
+  ///
+  /// Measured against the pane, not against a constant: a fixed cap ignores the
+  /// header above and the list below, so a short window or a large UI scale
+  /// overflowed the column and collapsed the browser to nothing.
+  static double _bannerCap(double available) {
+    if (!available.isFinite) return _pendingMaxHeight;
+    final byFraction = available * _pendingMaxFraction;
+    final byReserve = available - _pendingReserve;
+    final cap = byFraction < byReserve ? byFraction : byReserve;
+    if (cap > _pendingMaxHeight) return _pendingMaxHeight;
+    return cap > 0 ? cap : 0;
+  }
 
   final TraderStockMap map;
 
@@ -583,46 +638,47 @@ class _StockSection extends ConsumerWidget {
     final selected = groups.any((g) => g.category == selectedCategory)
         ? selectedCategory
         : (groups.isEmpty ? null : groups.first.category);
-    final shown = groups
-            .where((g) => g.category == selected)
-            .firstOrNull
-            ?.items ??
+    final shown =
+        groups.where((g) => g.category == selected).firstOrNull?.items ??
         const <TraderItem>[];
     final nothingToShow =
         items.isEmpty && pendingAdds.isEmpty && pendingRemovals.isEmpty;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                l10n.traderStockLineCount(lineCount),
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.outline,
+    return LayoutBuilder(
+      builder: (context, pane) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  l10n.traderStockLineCount(lineCount),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
                 ),
               ),
-            ),
-            if (canAdd)
-              OutlinedButton.icon(
-                icon: const Icon(Icons.add),
-                label: Text(l10n.traderAddItem),
-                onPressed: onAdd,
+              if (canAdd)
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.add),
+                  label: Text(l10n.traderAddItem),
+                  onPressed: onAdd,
+                ),
+            ],
+          ),
+          // Queued changes sit ABOVE the list: they are what the next save will
+          // do, while the list below is what the save holds right now. Bounded and
+          // scrollable, because replacing most of a merchant's stock queues enough
+          // of them to push the browser off screen — and then the very rows that
+          // cancel them become unreachable.
+          if (pendingAdds.isNotEmpty || pendingRemovals.isNotEmpty)
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: _bannerCap(pane.maxHeight),
               ),
-          ],
-        ),
-        // Queued changes sit ABOVE the list: they are what the next save will
-        // do, while the list below is what the save holds right now. Bounded and
-        // scrollable, because replacing most of a merchant's stock queues enough
-        // of them to push the browser off screen — and then the very rows that
-        // cancel them become unreachable.
-        if (pendingAdds.isNotEmpty || pendingRemovals.isNotEmpty)
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: _pendingMaxHeight),
-            child: SingleChildScrollView(
-              child: Column(
-                children: [
+              child: SingleChildScrollView(
+                child: Column(
+                  children: [
                     for (final item in pendingAdds) ...[
                       const SizedBox(height: 8),
                       _PendingLineRow(
@@ -639,86 +695,86 @@ class _StockSection extends ConsumerWidget {
                         onCancel: () => onRemove(map, item.path),
                       ),
                     ],
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
-        const SizedBox(height: 8),
-        if (nothingToShow)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              l10n.traderEmptyStock,
-              style: theme.textTheme.bodyMedium,
-            ),
-          )
-        else
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final compact = constraints.maxWidth < _compactBelow;
-                final rows = compact ? items : shown;
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (!compact) ...[
-                      SizedBox(
-                        width: 200,
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.surfaceContainerLow,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: SingleChildScrollView(
-                            padding: const EdgeInsets.symmetric(vertical: 6),
-                            child: Column(
-                              children: [
-                                for (final group in groups)
-                                  SidebarTile(
-                                    icon: iconForItemCategory(group.category),
-                                    label: l10n.categoryWithCount(
-                                      localizedItemCategoryLabel(
-                                        l10n,
-                                        group.category,
+          const SizedBox(height: 8),
+          if (nothingToShow)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                l10n.traderEmptyStock,
+                style: theme.textTheme.bodyMedium,
+              ),
+            )
+          else
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final compact = constraints.maxWidth < _compactBelow;
+                  final rows = compact ? items : shown;
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (!compact) ...[
+                        SizedBox(
+                          width: 200,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.surfaceContainerLow,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: SingleChildScrollView(
+                              padding: const EdgeInsets.symmetric(vertical: 6),
+                              child: Column(
+                                children: [
+                                  for (final group in groups)
+                                    SidebarTile(
+                                      icon: iconForItemCategory(group.category),
+                                      label: l10n.categoryWithCount(
+                                        localizedItemCategoryLabel(
+                                          l10n,
+                                          group.category,
+                                        ),
+                                        group.items.length,
                                       ),
-                                      group.items.length,
+                                      selected: group.category == selected,
+                                      onTap: () =>
+                                          onSelectCategory(group.category),
                                     ),
-                                    selected: group.category == selected,
-                                    onTap: () => onSelectCategory(
-                                      group.category,
-                                    ),
-                                  ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 16),
-                    ],
-                    Expanded(
-                      child: ListView.builder(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        itemCount: rows.length,
-                        itemBuilder: (context, index) => _StockRow(
-                          key: ValueKey(rows[index].path),
-                          item: rows[index],
-                          map: map,
-                          canSet: canSet,
-                          canRemove: canRemove,
-                          pending: pendingOf(map, rows[index].path),
-                          onChanged: (v) =>
-                              onChanged(map, rows[index].path, v),
-                          onRevert: () => onRevert(map, rows[index].path),
-                          onRemove: () => onRemove(map, rows[index].path),
+                        const SizedBox(width: 16),
+                      ],
+                      Expanded(
+                        child: ListView.builder(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          itemCount: rows.length,
+                          itemBuilder: (context, index) => _StockRow(
+                            key: ValueKey(rows[index].path),
+                            item: rows[index],
+                            map: map,
+                            canSet: canSet,
+                            canRemove: canRemove,
+                            pending: pendingOf(map, rows[index].path),
+                            onChanged: (v) =>
+                                onChanged(map, rows[index].path, v),
+                            onRevert: () => onRevert(map, rows[index].path),
+                            onRemove: () => onRemove(map, rows[index].path),
+                          ),
                         ),
                       ),
-                    ),
-                  ],
-                );
-              },
+                    ],
+                  );
+                },
+              ),
             ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -984,7 +1040,11 @@ class _Message extends StatelessWidget {
             const SizedBox(height: 12),
             Text(title, style: theme.textTheme.titleMedium),
             const SizedBox(height: 8),
-            Text(body, textAlign: TextAlign.center, style: theme.textTheme.bodyMedium),
+            Text(
+              body,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium,
+            ),
             if (onRetry != null) ...[
               const SizedBox(height: 12),
               OutlinedButton(onPressed: onRetry, child: const Text('Retry')),

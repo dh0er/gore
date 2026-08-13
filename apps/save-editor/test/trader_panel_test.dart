@@ -214,8 +214,9 @@ void main() {
       GoresaveCoreService core, {
       bool showObjectIds = false,
       Map<String, Map<String, String>>? locCatalog,
+      Size surface = const Size(1400, 1000),
     }) async {
-      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      await tester.binding.setSurfaceSize(surface);
       addTearDown(() => tester.binding.setSurfaceSize(null));
       await tester.pumpWidget(
         ProviderScope(
@@ -625,6 +626,40 @@ void main() {
       expect(tester.takeException(), isNull, reason: 'no RenderFlex overflow');
       // The stock browser is still there below them.
       expect(find.byType(SidebarTile), findsWidgets);
+    });
+
+    testWidgets('a short pane bounds the banners against its own height', (
+      tester,
+    ) async {
+      // A cap measured against a constant ignores the header above and the list
+      // below: on a short window the column still overflowed and the browser
+      // collapsed to nothing. The cap has to come from the pane.
+      await pumpApp(
+        tester,
+        _TraderCoreService(playerIsTrader: true),
+        surface: const Size(1400, 620),
+      );
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+
+      final notifier = ProviderScope.containerOf(
+        tester.element(find.byType(Scaffold).first),
+      ).read(editorProvider.notifier);
+      for (var i = 0; i < 25; i++) {
+        notifier.setTraderStockEdit(
+          TraderStockEdit(
+            kind: TraderEditKind.addItem,
+            index: 7,
+            map: TraderStockMap.current,
+            path: '/Script/Angelscript.ItFo_Short_$i',
+            count: 1,
+          ),
+        );
+      }
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'no RenderFlex overflow');
     });
 
     testWidgets('a merchant shows his ore and both stock sections', (
