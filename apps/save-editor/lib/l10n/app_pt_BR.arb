@@ -143,6 +143,7 @@
   "traderRemoveItem": "Remover linha",
   "traderReadOnlyCore": "Esta versão do núcleo só consegue ler os dados dos mercadores.",
   "traderDifficultyStockUnsupported": "Este mercador tem estoque por dificuldade, que o editor não modela. A edição está desativada aqui, porque uma alteração pareceria bem-sucedida deixando esse estoque intacto.",
+  "traderRecordIncomplete": "Ao registro deste mercador falta uma de suas listas de estoque, que o editor não consegue criar. A edição está desativada aqui para que uma alteração não falhe ao salvar.",
   "traderEmptyStock": "Nada em estoque.",
   "traderUnknownItem": "não está no catálogo de itens",
   "editorTradersLoadFailed": "Falha ao carregar mercadores: {details}",

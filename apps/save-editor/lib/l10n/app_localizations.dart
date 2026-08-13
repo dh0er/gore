@@ -920,6 +920,12 @@ abstract class AppLocalizations {
   /// **'This merchant carries per-difficulty stock, which the editor does not model. Editing is disabled here, because a change would look successful while leaving that extra stock untouched.'**
   String get traderDifficultyStockUnsupported;
 
+  /// No description provided for @traderRecordIncomplete.
+  ///
+  /// In en, this message translates to:
+  /// **'This merchant\'s record is missing one of its stock lists, which the editor cannot create. Editing is disabled here so a change cannot fail at save time.'**
+  String get traderRecordIncomplete;
+
   /// No description provided for @traderEmptyStock.
   ///
   /// In en, this message translates to:

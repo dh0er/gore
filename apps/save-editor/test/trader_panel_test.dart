@@ -1034,6 +1034,27 @@ void main() {
       );
     });
 
+    testWidgets('a record missing a stock list is read-only', (tester) async {
+      // An omitted map reads as an empty one, so Add looked available and the
+      // save would then fail: the structural appliers resolve the property and
+      // cannot create it.
+      await pumpApp(
+        tester,
+        _TraderCoreService(playerIsTrader: true, stockMapsPresent: false),
+      );
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('missing one of its stock lists'),
+        findsOneWidget,
+      );
+      expect(find.widgetWithText(OutlinedButton, 'Add item'), findsNothing);
+      expect(find.byIcon(Icons.delete_outline), findsNothing);
+    });
+
     testWidgets('a merchant shows his ore and both stock sections', (
       tester,
     ) async {
@@ -1071,7 +1092,12 @@ class _TraderCoreService implements GoresaveCoreService {
     this.playerIsTrader = false,
     this.hasItemsByDifficulty = false,
     this.orphanMerchant = false,
+    this.stockMapsPresent = true,
   });
+
+  /// A record missing one of its stock lists. No shipped save has one, which is
+  /// why the fixture has to fake it.
+  final bool stockMapsPresent;
 
   /// A knowledge-only row that owns a trader record. It has no spawned actor,
   /// which is exactly why it used to be hidden from the trade panel.
@@ -1208,6 +1234,7 @@ class _TraderCoreService implements GoresaveCoreService {
             'traded': true,
             'generatedEventCount': 11,
             'placeholder': false,
+            'stockMapsPresent': stockMapsPresent,
             'items': [
               {
                 'path': kTraderOrePath,

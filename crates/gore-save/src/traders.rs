@@ -79,6 +79,13 @@ pub struct TraderSummary {
     pub generated_event_count: usize,
     /// `true` for the unnamed sentinel rows, which belong to no NPC.
     pub placeholder: bool,
+    /// Both stock maps are actually present on the record.
+    ///
+    /// An omitted map reads as an empty one, which would look editable and then
+    /// fail at save time: the structural appliers resolve the property and
+    /// cannot create it. Every shipped save carries both on all 31 rows, so
+    /// this is a guard against a shape we have not seen, not a known state.
+    pub stock_maps_present: bool,
 }
 
 /// Everything stored for one trader.
@@ -218,6 +225,8 @@ fn summarize(
     };
     let summary = TraderSummary {
         index,
+        stock_maps_present: member(props, "m_Items").is_some()
+            && member(props, "m_DefaultItems").is_some(),
         placeholder: unique_name == PLACEHOLDER_NAME,
         unique_name,
         item_count: items.len(),
@@ -699,6 +708,22 @@ mod tests {
         )]);
         let list = list_traders(&root).expect("list");
         assert_eq!(list[0].ore, Some(50));
+    }
+
+    #[test]
+    fn an_omitted_stock_map_is_reported_as_absent() {
+        // An omitted map parses as an empty one, which would look editable and
+        // then fail at save time — the structural appliers resolve the property
+        // and cannot create it. Shipped saves always carry both.
+        let bare = PropertyValue::Struct(StructValue::Properties(vec![prop(
+            "m_TradersUniqueName",
+            PropertyValue::Name("OC_STT_Dexter_329".to_string()),
+        )]));
+        let list = list_traders(&root_with(vec![bare])).expect("list");
+        assert!(!list[0].stock_maps_present);
+
+        let whole = root_with(vec![trader("OC_STT_Fisk_311", &[(ORE_PATH, 3)], 1.0)]);
+        assert!(list_traders(&whole).expect("list")[0].stock_maps_present);
     }
 
     #[test]

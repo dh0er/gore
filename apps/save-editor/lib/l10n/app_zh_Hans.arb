@@ -143,6 +143,7 @@
   "traderRemoveItem": "移除条目",
   "traderReadOnlyCore": "此核心版本只能读取商人数据。",
   "traderDifficultyStockUnsupported": "该商人拥有按难度区分的库存，编辑器并未建模。此处已禁用编辑，因为修改看似成功，却会让这部分额外库存原封不动。",
+  "traderRecordIncomplete": "该商人的记录缺少其中一份库存清单，编辑器无法创建。此处已禁用编辑，以免修改在保存时失败。",
   "traderEmptyStock": "没有库存。",
   "traderUnknownItem": "不在物品目录中",
   "editorTradersLoadFailed": "商人数据加载失败：{details}",

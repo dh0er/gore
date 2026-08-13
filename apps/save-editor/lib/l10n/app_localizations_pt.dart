@@ -468,6 +468,10 @@ class AppLocalizationsPt extends AppLocalizations {
       'Este mercador tem existências por dificuldade, que o editor não modela. A edição está desativada aqui, porque uma alteração pareceria bem-sucedida deixando essas existências intactas.';
 
   @override
+  String get traderRecordIncomplete =>
+      'Ao registo deste mercador falta uma das suas listas de existências, que o editor não consegue criar. A edição está desativada aqui para que uma alteração não falhe ao gravar.';
+
+  @override
   String get traderEmptyStock => 'Nada em estoque.';
 
   @override
@@ -3317,6 +3321,10 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   @override
   String get traderDifficultyStockUnsupported =>
       'Este mercador tem estoque por dificuldade, que o editor não modela. A edição está desativada aqui, porque uma alteração pareceria bem-sucedida deixando esse estoque intacto.';
+
+  @override
+  String get traderRecordIncomplete =>
+      'Ao registro deste mercador falta uma de suas listas de estoque, que o editor não consegue criar. A edição está desativada aqui para que uma alteração não falhe ao salvar.';
 
   @override
   String get traderEmptyStock => 'Nada em estoque.';

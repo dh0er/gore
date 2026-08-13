@@ -451,6 +451,10 @@ class AppLocalizationsZh extends AppLocalizations {
       '该商人拥有按难度区分的库存，编辑器并未建模。此处已禁用编辑，因为修改看似成功，却会让这部分额外库存原封不动。';
 
   @override
+  String get traderRecordIncomplete =>
+      '该商人的记录缺少其中一份库存清单，编辑器无法创建。此处已禁用编辑，以免修改在保存时失败。';
+
+  @override
   String get traderEmptyStock => '没有库存。';
 
   @override
@@ -3198,6 +3202,10 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   @override
   String get traderDifficultyStockUnsupported =>
       '该商人拥有按难度区分的库存，编辑器并未建模。此处已禁用编辑，因为修改看似成功，却会让这部分额外库存原封不动。';
+
+  @override
+  String get traderRecordIncomplete =>
+      '该商人的记录缺少其中一份库存清单，编辑器无法创建。此处已禁用编辑，以免修改在保存时失败。';
 
   @override
   String get traderEmptyStock => '没有库存。';

@@ -458,6 +458,10 @@ class AppLocalizationsJa extends AppLocalizations {
       'この商人は難易度ごとの在庫を持っており、エディタはそれを扱えません。変更は成功したように見えても、その追加在庫はそのまま残るため、ここでの編集は無効です。';
 
   @override
+  String get traderRecordIncomplete =>
+      'この商人のレコードには在庫リストの一方が欠けており、エディタでは作成できません。保存時に失敗しないよう、ここでの編集は無効です。';
+
+  @override
   String get traderEmptyStock => '在庫がありません。';
 
   @override

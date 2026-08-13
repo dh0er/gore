@@ -143,6 +143,7 @@
   "traderRemoveItem": "行を削除",
   "traderReadOnlyCore": "このコアは商人データの読み取りのみ可能です。",
   "traderDifficultyStockUnsupported": "この商人は難易度ごとの在庫を持っており、エディタはそれを扱えません。変更は成功したように見えても、その追加在庫はそのまま残るため、ここでの編集は無効です。",
+  "traderRecordIncomplete": "この商人のレコードには在庫リストの一方が欠けており、エディタでは作成できません。保存時に失敗しないよう、ここでの編集は無効です。",
   "traderEmptyStock": "在庫がありません。",
   "traderUnknownItem": "アイテムカタログにありません",
   "editorTradersLoadFailed": "商人データの読み込みに失敗しました: {details}",

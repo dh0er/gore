@@ -468,6 +468,10 @@ class AppLocalizationsEs extends AppLocalizations {
       'Este mercader tiene existencias por dificultad, que el editor no modela. La edición está desactivada aquí, porque un cambio parecería correcto mientras deja intactas esas existencias adicionales.';
 
   @override
+  String get traderRecordIncomplete =>
+      'Al registro de este mercader le falta una de sus listas de existencias, que el editor no puede crear. La edición está desactivada aquí para que un cambio no falle al guardar.';
+
+  @override
   String get traderEmptyStock => 'Sin existencias.';
 
   @override

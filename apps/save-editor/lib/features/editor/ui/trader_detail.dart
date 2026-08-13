@@ -169,7 +169,10 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
     // Per-difficulty stock is not modelled, and the edits reach only m_Items and
     // m_DefaultItems. A save that carries it would take an edit, report success,
     // and leave that other stock standing — so nothing here is editable then.
-    final unsupported = detail.hasItemsByDifficulty;
+    // Two shapes the editor cannot honour: per-difficulty stock it does not
+    // model, and a record missing a stock list it cannot create.
+    final incomplete = !detail.summary.stockMapsPresent;
+    final unsupported = detail.hasItemsByDifficulty || incomplete;
     final canSet =
         widget.editable && !unsupported && (list?.canSetStock ?? false);
     final canAdd =
@@ -206,7 +209,9 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
                     // as the stock counts.
                     if (unsupported) ...[
                       _NoteCard(
-                        text: l10n.traderDifficultyStockUnsupported,
+                        text: incomplete
+                            ? l10n.traderRecordIncomplete
+                            : l10n.traderDifficultyStockUnsupported,
                         tone: _NoteTone.warning,
                       ),
                       const SizedBox(height: 12),

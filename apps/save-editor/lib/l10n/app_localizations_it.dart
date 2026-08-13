@@ -468,6 +468,10 @@ class AppLocalizationsIt extends AppLocalizations {
       'Questo mercante ha scorte per difficoltà, che l\'editor non modella. La modifica è disattivata qui, perché sembrerebbe riuscita lasciando però intatte quelle scorte aggiuntive.';
 
   @override
+  String get traderRecordIncomplete =>
+      'Al record di questo mercante manca uno dei suoi elenchi di scorte, che l\'editor non può creare. La modifica è disattivata qui perché un cambiamento non fallisca al salvataggio.';
+
+  @override
   String get traderEmptyStock => 'Niente in magazzino.';
 
   @override

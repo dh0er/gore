@@ -466,6 +466,10 @@ class AppLocalizationsDe extends AppLocalizations {
       'Dieser Händler führt Bestand je Schwierigkeitsgrad, den der Editor nicht abbildet. Bearbeiten ist deshalb gesperrt — eine Änderung sähe erfolgreich aus, ließe diesen zusätzlichen Bestand aber unangetastet.';
 
   @override
+  String get traderRecordIncomplete =>
+      'Dem Datensatz dieses Händlers fehlt eine seiner Bestandslisten, die der Editor nicht anlegen kann. Bearbeiten ist deshalb gesperrt, damit eine Änderung nicht erst beim Speichern scheitert.';
+
+  @override
   String get traderEmptyStock => 'Nichts auf Lager.';
 
   @override

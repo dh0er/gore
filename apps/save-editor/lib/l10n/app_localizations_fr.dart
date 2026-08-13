@@ -470,6 +470,10 @@ class AppLocalizationsFr extends AppLocalizations {
       'Ce marchand possède un stock par difficulté, que l\'éditeur ne modélise pas. L\'édition est désactivée ici, car une modification semblerait réussie tout en laissant ce stock supplémentaire intact.';
 
   @override
+  String get traderRecordIncomplete =>
+      'La fiche de ce marchand n\'a pas l\'une de ses listes de stock, que l\'éditeur ne peut pas créer. L\'édition est désactivée ici pour qu\'une modification n\'échoue pas à l\'enregistrement.';
+
+  @override
   String get traderEmptyStock => 'Rien en stock.';
 
   @override

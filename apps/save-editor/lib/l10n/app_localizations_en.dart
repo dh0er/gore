@@ -465,6 +465,10 @@ class AppLocalizationsEn extends AppLocalizations {
       'This merchant carries per-difficulty stock, which the editor does not model. Editing is disabled here, because a change would look successful while leaving that extra stock untouched.';
 
   @override
+  String get traderRecordIncomplete =>
+      'This merchant\'s record is missing one of its stock lists, which the editor cannot create. Editing is disabled here so a change cannot fail at save time.';
+
+  @override
   String get traderEmptyStock => 'Nothing in stock.';
 
   @override

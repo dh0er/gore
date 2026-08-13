@@ -469,6 +469,10 @@ class AppLocalizationsPl extends AppLocalizations {
       'Ten kupiec ma zapasy zależne od poziomu trudności, których edytor nie odwzorowuje. Edycja jest tu wyłączona, bo zmiana wyglądałaby na udaną, zostawiając te dodatkowe zapasy nietknięte.';
 
   @override
+  String get traderRecordIncomplete =>
+      'W rekordzie tego kupca brakuje jednej z list zapasów, której edytor nie potrafi utworzyć. Edycja jest wyłączona, aby zmiana nie zawiodła przy zapisie.';
+
+  @override
   String get traderEmptyStock => 'Brak zapasów.';
 
   @override

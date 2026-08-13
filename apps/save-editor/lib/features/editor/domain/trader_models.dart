@@ -69,6 +69,7 @@ class TraderSummary {
     required this.traded,
     required this.generatedEventCount,
     required this.placeholder,
+    this.stockMapsPresent = true,
   });
 
   factory TraderSummary.fromJson(Map<String, Object?> json) {
@@ -82,6 +83,8 @@ class TraderSummary {
       traded: json['traded'] as bool? ?? false,
       generatedEventCount: (json['generatedEventCount'] as num?)?.toInt() ?? 0,
       placeholder: json['placeholder'] as bool? ?? false,
+      // Absent on an older core, where the maps were always assumed present.
+      stockMapsPresent: json['stockMapsPresent'] as bool? ?? true,
     );
   }
 
@@ -103,6 +106,11 @@ class TraderSummary {
 
   /// One of the unnamed sentinel rows, which belongs to no NPC.
   final bool placeholder;
+
+  /// Both stock maps are present on the record. An omitted one reads as empty,
+  /// which would look editable and then fail at save time — the structural
+  /// appliers resolve the property and cannot create it.
+  final bool stockMapsPresent;
 }
 
 /// Everything stored for one merchant.
