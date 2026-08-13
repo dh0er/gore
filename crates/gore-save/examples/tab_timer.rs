@@ -74,6 +74,19 @@ fn main() {
             "ALLDATA browse (includeNodes)",
             format!(r#"{{"command":"search_typed_properties","payload":{{"path":{esc},"query":"","offset":0,"limit":50,"includeNodes":true,"source":"private"}}}}"#),
         ),
+        // Trade sub-tab
+        (
+            "TRADE loadTraders",
+            format!(r#"{{"command":"private.traders.list","payload":{{"path":{esc}}}}}"#),
+        ),
+        (
+            "TRADE loadTraderDetail(0)",
+            format!(r#"{{"command":"private.traders.detail","payload":{{"path":{esc},"index":0}}}}"#),
+        ),
+        (
+            "TRADE loadTraderDetail(7)",
+            format!(r#"{{"command":"private.traders.detail","payload":{{"path":{esc},"index":7}}}}"#),
+        ),
         (
             "BACKUPS list_backups",
             format!(r#"{{"command":"list_backups","payload":{{"path":{esc}}}}}"#),
