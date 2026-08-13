@@ -628,16 +628,17 @@ void main() {
       expect(find.byType(SidebarTile), findsWidgets);
     });
 
-    testWidgets('a short pane bounds the banners against its own height', (
+    testWidgets('the smallest supported window bounds the banners', (
       tester,
     ) async {
-      // A cap measured against a constant ignores the header above and the list
-      // below: on a short window the column still overflowed and the browser
-      // collapsed to nothing. The cap has to come from the pane.
+      // 960x600 is the minimum the app itself allows (main.dart), and it is the
+      // size that matters: a cap measured against a constant ignores the header
+      // above and the list below, so the column overflowed and the browser
+      // collapsed to nothing. Testing only a roomy surface hid that.
       await pumpApp(
         tester,
         _TraderCoreService(playerIsTrader: true),
-        surface: const Size(1400, 620),
+        surface: const Size(960, 600),
       );
       await tester.tap(find.widgetWithText(Tab, 'Characters'));
       await tester.pumpAndSettle();

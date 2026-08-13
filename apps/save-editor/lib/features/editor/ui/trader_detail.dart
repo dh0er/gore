@@ -421,6 +421,15 @@ class _TraderPanelState extends ConsumerState<TraderPanel> {
   }
 }
 
+/// Below this width the ore card's field and delete button no longer fit beside
+/// the text, so they move under it.
+const double _oreStackBelow = 320;
+
+/// Below this width a stock row's value no longer fits beside its name, so it
+/// moves under it. A ListTile gives its trailing whatever width it asks for, so
+/// the row has to stop using one.
+const double _rowStackBelow = 300;
+
 class _OreCard extends ConsumerWidget {
   const _OreCard({
     required this.detail,
@@ -450,51 +459,76 @@ class _OreCard extends ConsumerWidget {
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
     final ore = detail.summary.ore;
+    final label = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(l10n.traderOre, style: theme.textTheme.titleMedium),
+        const SizedBox(height: 4),
+        Text(l10n.traderOreHint, style: theme.textTheme.bodySmall),
+      ],
+    );
+    final field = ore == null
+        // No ore line at all is a real state and NOT the same as zero, so say
+        // so instead of showing a 0 the save does not contain.
+        ? Text(l10n.traderNoOre, style: theme.textTheme.bodyMedium)
+        : _CountField(
+            value: ore,
+            pending: pending,
+            // While a removal is queued the number is on its way out; editing
+            // it would queue a count for a line about to go.
+            enabled: editable && !removalPending,
+            onChanged: onChanged,
+            onRevert: onRevert,
+          );
+    final delete = ore != null && canRemove
+        ? IconButton(
+            tooltip: l10n.traderRemoveItem,
+            icon: const Icon(Icons.delete_outline, size: 20),
+            onPressed: removalPending ? null : onRemove,
+          )
+        : null;
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(Icons.savings_outlined, color: theme.colorScheme.primary),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(l10n.traderOre, style: theme.textTheme.titleMedium),
-                  const SizedBox(height: 4),
-                  Text(l10n.traderOreHint, style: theme.textTheme.bodySmall),
+        child: LayoutBuilder(
+          builder: (context, box) {
+            // Field plus delete button need a fixed ~190px. At the smallest
+            // supported window the character list leaves the detail pane
+            // narrower than that, so there they move under the text.
+            final stacked = box.maxWidth < _oreStackBelow;
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.savings_outlined, color: theme.colorScheme.primary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: stacked
+                      ? Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            label,
+                            const SizedBox(height: 12),
+                            // The field takes what is left rather than a fixed
+                            // width: stacked, there may be very little.
+                            Row(
+                              children: [
+                                Expanded(child: field),
+                                ?delete,
+                              ],
+                            ),
+                          ],
+                        )
+                      : label,
+                ),
+                if (!stacked) ...[
+                  const SizedBox(width: 12),
+                  SizedBox(width: 140, child: field),
+                  ?delete,
                 ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            if (ore == null)
-              // No ore line at all is a real state and NOT the same as zero, so
-              // say so instead of showing a 0 the save does not contain.
-              Text(l10n.traderNoOre, style: theme.textTheme.bodyMedium)
-            else ...[
-              SizedBox(
-                width: 140,
-                child: _CountField(
-                  value: ore,
-                  pending: pending,
-                  // While a removal is queued the number is on its way out;
-                  // editing it would queue a count for a line about to go.
-                  enabled: editable && !removalPending,
-                  onChanged: onChanged,
-                  onRevert: onRevert,
-                ),
-              ),
-              if (canRemove)
-                IconButton(
-                  tooltip: l10n.traderRemoveItem,
-                  icon: const Icon(Icons.delete_outline, size: 20),
-                  onPressed: removalPending ? null : onRemove,
-                ),
-            ],
-          ],
+              ],
+            );
+          },
         ),
       ),
     );
@@ -891,38 +925,72 @@ class _StockRow extends ConsumerWidget {
       if (item.unknownItem) l10n.traderUnknownItem,
     ].join(' · ');
 
-    return ListTile(
-      dense: true,
-      leading: item.isOre
-          ? Icon(Icons.savings_outlined, color: theme.colorScheme.primary)
-          : const Icon(Icons.inventory_2_outlined),
-      title: Text(label),
-      subtitle: subtitle.isEmpty
-          ? null
-          : Text(subtitle, style: theme.textTheme.bodySmall),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: 130,
-            child: _CountField(
-              value: item.count,
-              pending: pending,
-              // An unknown class is shown but never edited: we cannot vouch for
-              // what the game does with a line it does not recognise.
-              enabled: canSet && !item.unknownItem,
-              onChanged: onChanged,
-              onRevert: onRevert,
+    final field = _CountField(
+      value: item.count,
+      pending: pending,
+      // An unknown class is shown but never edited: we cannot vouch for what
+      // the game does with a line it does not recognise.
+      enabled: canSet && !item.unknownItem,
+      onChanged: onChanged,
+      onRevert: onRevert,
+    );
+    final delete = canRemove
+        ? IconButton(
+            tooltip: l10n.traderRemoveItem,
+            icon: const Icon(Icons.delete_outline, size: 20),
+            onPressed: onRemove,
+          )
+        : null;
+    final icon = item.isOre
+        ? Icon(Icons.savings_outlined, color: theme.colorScheme.primary)
+        : const Icon(Icons.inventory_2_outlined);
+    final text = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label),
+        if (subtitle.isNotEmpty)
+          Text(subtitle, style: theme.textTheme.bodySmall),
+      ],
+    );
+
+    return LayoutBuilder(
+      builder: (context, box) {
+        // A ListTile keeps its trailing at full width, and the field plus the
+        // delete button want ~180px — more than the whole row gets at the
+        // smallest supported window. There the value moves under the name.
+        if (box.maxWidth >= _rowStackBelow) {
+          return ListTile(
+            dense: true,
+            leading: icon,
+            title: Text(label),
+            subtitle: subtitle.isEmpty
+                ? null
+                : Text(subtitle, style: theme.textTheme.bodySmall),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [SizedBox(width: 130, child: field), ?delete],
             ),
+          );
+        }
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  icon,
+                  const SizedBox(width: 12),
+                  Expanded(child: text),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(children: [Expanded(child: field), ?delete]),
+            ],
           ),
-          if (canRemove)
-            IconButton(
-              tooltip: l10n.traderRemoveItem,
-              icon: const Icon(Icons.delete_outline, size: 20),
-              onPressed: onRemove,
-            ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
