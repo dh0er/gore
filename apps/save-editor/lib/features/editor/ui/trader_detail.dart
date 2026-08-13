@@ -537,6 +537,12 @@ class _StockSection extends ConsumerWidget {
   /// inventory browser uses.
   static const double _compactBelow = 600;
 
+  /// How much height the queued-change banners may claim before they scroll
+  /// among themselves, so the stock browser stays visible below them. A fixed
+  /// value on purpose: a fraction would need the parent's height, and a
+  /// LayoutBuilder placed directly in a Column is handed an unbounded one.
+  static const double _pendingMaxHeight = 240;
+
   final TraderStockMap map;
 
   /// The rows to draw: saved lines minus the ones queued for removal, and minus
@@ -607,23 +613,36 @@ class _StockSection extends ConsumerWidget {
           ],
         ),
         // Queued changes sit ABOVE the list: they are what the next save will
-        // do, while the list below is what the save holds right now.
-        for (final item in pendingAdds) ...[
-          const SizedBox(height: 8),
-          _PendingLineRow(
-            item: item,
-            tone: PendingTone.add,
-            onCancel: () => onRevertAdd(map, item.path),
+        // do, while the list below is what the save holds right now. Bounded and
+        // scrollable, because replacing most of a merchant's stock queues enough
+        // of them to push the browser off screen — and then the very rows that
+        // cancel them become unreachable.
+        if (pendingAdds.isNotEmpty || pendingRemovals.isNotEmpty)
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: _pendingMaxHeight),
+            child: SingleChildScrollView(
+              child: Column(
+                children: [
+                    for (final item in pendingAdds) ...[
+                      const SizedBox(height: 8),
+                      _PendingLineRow(
+                        item: item,
+                        tone: PendingTone.add,
+                        onCancel: () => onRevertAdd(map, item.path),
+                      ),
+                    ],
+                    for (final item in pendingRemovals) ...[
+                      const SizedBox(height: 8),
+                      _PendingLineRow(
+                        item: item,
+                        tone: PendingTone.remove,
+                        onCancel: () => onRemove(map, item.path),
+                      ),
+                    ],
+                ],
+              ),
+            ),
           ),
-        ],
-        for (final item in pendingRemovals) ...[
-          const SizedBox(height: 8),
-          _PendingLineRow(
-            item: item,
-            tone: PendingTone.remove,
-            onCancel: () => onRemove(map, item.path),
-          ),
-        ],
         const SizedBox(height: 8),
         if (nothingToShow)
           Align(

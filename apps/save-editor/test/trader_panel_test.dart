@@ -7,6 +7,7 @@ import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/features/editor/domain/trader_models.dart';
 import 'package:goresave/features/editor/ui/pending_structural_row.dart';
+import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
 import 'package:goresave/providers/data_providers.dart';
 
@@ -590,6 +591,40 @@ void main() {
         find.descendant(of: oreCard, matching: find.byType(TextField)),
       );
       expect(oreField.enabled, isFalse);
+    });
+
+    testWidgets('many queued changes scroll instead of overflowing', (
+      tester,
+    ) async {
+      // Replacing most of a merchant's stock queues enough banners to push the
+      // browser off screen; unbounded, they overflowed and took the cancel
+      // buttons with them.
+      await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+
+      final notifier = ProviderScope.containerOf(
+        tester.element(find.byType(Scaffold).first),
+      ).read(editorProvider.notifier);
+      for (var i = 0; i < 25; i++) {
+        notifier.setTraderStockEdit(
+          TraderStockEdit(
+            kind: TraderEditKind.addItem,
+            index: 7,
+            map: TraderStockMap.current,
+            path: '/Script/Angelscript.ItFo_Filler_$i',
+            count: 1,
+          ),
+        );
+      }
+      await tester.pumpAndSettle();
+
+      expect(find.byType(PendingStructuralRow), findsNWidgets(25));
+      expect(tester.takeException(), isNull, reason: 'no RenderFlex overflow');
+      // The stock browser is still there below them.
+      expect(find.byType(SidebarTile), findsWidgets);
     });
 
     testWidgets('a merchant shows his ore and both stock sections', (
