@@ -1003,6 +1003,37 @@ void main() {
       );
     });
 
+    testWidgets('the in-field undo restores the text while still focused', (
+      tester,
+    ) async {
+      // The sync that would otherwise restore it is off while the field has
+      // focus, so the undo has to put the text back itself — or the discarded
+      // count sits there with nothing queued behind it and Save disabled.
+      await pumpApp(tester, _TraderCoreService(playerIsTrader: true));
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Trade'));
+      await tester.pumpAndSettle();
+
+      final field = find.descendant(of: oreCard, matching: find.byType(TextField));
+      await tester.tap(field);
+      await tester.pump();
+      await tester.enterText(field, '4242');
+      await tester.pump();
+      expect(find.descendant(of: oreCard, matching: find.byIcon(Icons.undo)), findsOneWidget);
+
+      await tester.tap(find.descendant(of: oreCard, matching: find.byIcon(Icons.undo)));
+      await tester.pump();
+
+      expect(tester.widget<TextField>(field).controller?.text, '55');
+      expect(
+        ProviderScope.containerOf(tester.element(find.byType(Scaffold).first))
+            .read(editorProvider)
+            .pendingEdits,
+        isEmpty,
+      );
+    });
+
     testWidgets('a merchant shows his ore and both stock sections', (
       tester,
     ) async {

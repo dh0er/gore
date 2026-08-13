@@ -1058,6 +1058,18 @@ class _CountFieldState extends State<_CountField> {
   /// refused entry would otherwise stay on screen afterwards — showing nothing,
   /// or a number the save never took, with no pending edit and no revert
   /// control to explain it.
+  /// The field's own undo, which has to put the text back itself.
+  ///
+  /// The sync that normally would is deliberately off while the field has
+  /// focus, so without this the discarded count stayed on screen with nothing
+  /// queued behind it — and Save disabled — until the user clicked away.
+  void _undo() {
+    final saved = '${widget.value}';
+    if (_controller.text != saved) _controller.text = saved;
+    if (_error != null) setState(() => _error = null);
+    widget.onRevert();
+  }
+
   void _onFocusChanged() {
     if (_focus.hasFocus) return;
     final shown = '${widget.pending ?? widget.value}';
@@ -1151,7 +1163,7 @@ class _CountFieldState extends State<_CountField> {
         suffixIcon: dirty
             ? IconButton(
                 icon: const Icon(Icons.undo, size: 16),
-                onPressed: widget.onRevert,
+                onPressed: _undo,
               )
             : null,
       ),
