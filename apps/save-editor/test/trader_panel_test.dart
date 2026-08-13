@@ -264,6 +264,49 @@ void main() {
       expect(traderArrayConflict([splice]), isNull);
     });
 
+    test('an edit inside a trader row is not a renumbering splice', () {
+      // Only an array operation ON m_Traders moves its rows. A value under one
+      // row, or a container edit inside one, runs through the array without
+      // touching its length — refusing those would block safe pairs.
+      final trader = const TraderStockEdit(
+        kind: TraderEditKind.setStock,
+        index: 7,
+        map: TraderStockMap.current,
+        path: kTraderOrePath,
+        count: 5,
+      ).toEdit();
+      final insideRow = {
+        'path': 'private.typed.setValue',
+        'value': {
+          'path': [
+            'm_GenericData',
+            '{GameStateDataBase}',
+            'm_Traders',
+            '[7]',
+            'm_TotalSeconds',
+          ],
+          'value': '1.0',
+        },
+      };
+      final containerInsideRow = {
+        'path': 'private.typed.arrayRemove',
+        'value': {
+          'path': [
+            'm_GenericData',
+            '{GameStateDataBase}',
+            'm_Traders',
+            '[7]',
+            'm_GeneratedEvents',
+          ],
+          'index': 0,
+        },
+      };
+      expect(traderArrayConflict([trader, insideRow]), isNull);
+      expect(traderArrayConflict([trader, containerInsideRow]), isNull);
+      expect(editsRewriteSameTarget(insideRow, trader), isFalse);
+      expect(editsRewriteSameTarget(containerInsideRow, trader), isFalse);
+    });
+
     test('an unrelated array splice does not conflict', () {
       const traderEdit = TraderStockEdit(
         kind: TraderEditKind.addItem,

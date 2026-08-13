@@ -4148,7 +4148,7 @@ bool structuredEditRewrites(
     case 'private.traders.setStock':
     case 'private.traders.addItem':
     case 'private.traders.removeItem':
-      return _pathHasName(typedPath, 'm_Traders');
+      return _pathTargetsTheTraderArray(typedPath);
     default:
       return false;
   }
@@ -4168,17 +4168,27 @@ bool structuredEditRewrites(
     'private.traders.addItem',
     'private.traders.removeItem',
   };
+  const arrayOps = {'private.typed.arrayRemove', 'private.typed.arrayDuplicate'};
   for (final edit in edits) {
     if (!traderOps.contains(edit['path'])) continue;
     for (final other in edits) {
+      // Only an array operation ON the array renumbers its rows. An edit that
+      // merely runs THROUGH it — a value under one row, or a container inside
+      // one — moves nothing, and refusing those would block safe pairs.
+      if (!arrayOps.contains(other['path'])) continue;
       final path = _rawTypedEditPath(other);
-      if (path != null && _pathHasName(path, 'm_Traders')) {
+      if (path != null && _pathTargetsTheTraderArray(path)) {
         return (edit, other);
       }
     }
   }
   return null;
 }
+
+/// Whether a raw typed path addresses the trader ARRAY itself rather than
+/// something inside one of its rows.
+bool _pathTargetsTheTraderArray(List<Object?> path) =>
+    path.isNotEmpty && path.last == 'm_Traders';
 
 /// Whether [left] and [right] address the same target in the sense above, in
 /// EITHER direction — the pair test the packer uses. The core's rule is

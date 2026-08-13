@@ -347,6 +347,36 @@ fn a_trader_edit_and_an_m_traders_array_splice_are_refused_together() {
 }
 
 #[test]
+fn an_edit_inside_a_trader_row_is_not_a_renumbering_splice() {
+    // Only an array operation ON m_Traders moves its rows. A value under one row
+    // runs through the array without changing its length, so the pair is safe
+    // and must go through.
+    let path = start_save("insiderow");
+    let out = out_path("insiderow");
+    let data = list(&path);
+    let (index, _) = stocked_trader(&data);
+
+    write(
+        &path,
+        &out,
+        json!([
+            { "path": "private.traders.setStock",
+              "value": { "index": index, "path": ORE, "count": 77 } },
+            { "path": "private.typed.setValue",
+              "value": {
+                  "path": ["m_GenericData", "{GameStateDataBase}", "m_Traders",
+                           format!("[{index}]"), "m_TotalSeconds"],
+                  "value": 12345.5
+              } },
+        ]),
+    );
+
+    let after = detail(&out, index);
+    assert_eq!(item_count(&after, ORE), Some(77));
+    assert_eq!(after["totalSeconds"].as_f64(), Some(12345.5));
+}
+
+#[test]
 fn add_item_refuses_a_class_the_game_does_not_know() {
     let path = start_save("badclass");
     let out = out_path("badclass");

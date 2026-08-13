@@ -9199,6 +9199,16 @@ fn path_enters_map_entry(path: &[properties::PathSeg], map: &str, key: &str) -> 
     }
 }
 
+/// Whether a raw typed path addresses the trader ARRAY itself, which is the only
+/// shape that renumbers its rows.
+///
+/// A path that merely runs THROUGH the array — `m_Traders[7].m_TotalSeconds`, or
+/// a container edit on something inside one row — leaves every row where it is,
+/// and refusing those would block pairs that are perfectly safe.
+fn path_targets_the_trader_array(path: &[properties::PathSeg]) -> bool {
+    matches!(path.last(), Some(properties::PathSeg::Name(name)) if name == "m_Traders")
+}
+
 fn path_has_name(path: &[properties::PathSeg], name: &str) -> bool {
     path.iter()
         .any(|segment| matches!(segment, properties::PathSeg::Name(found) if found == name))
@@ -9387,7 +9397,7 @@ fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) ->
         // the write reports success. Refuse the pair whichever way round.
         PrivateEdit::TraderSetStock(_)
         | PrivateEdit::TraderAddItem(_)
-        | PrivateEdit::TraderRemoveItem(_) => path_has_name(path, "m_Traders"),
+        | PrivateEdit::TraderRemoveItem(_) => path_targets_the_trader_array(path),
         _ => false,
     }
 }
