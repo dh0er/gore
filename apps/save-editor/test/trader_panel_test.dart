@@ -10,6 +10,7 @@ import 'package:goresave/features/editor/ui/character_master_list.dart';
 import 'package:goresave/features/editor/ui/pending_structural_row.dart';
 import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import 'support/ui_settings_test_store.dart';
@@ -219,6 +220,50 @@ void main() {
         ],
       });
       expect(detail.items.single.unknownItem, isTrue);
+    });
+  });
+
+  group('trader edit conflicts', () {
+    // The app mirrors the core's order-independent rule so it refuses the pair
+    // instead of splitting it into writes that are no safer.
+    Map<String, Object?> arrayRemoveOnTraders() => {
+      'path': 'private.typed.arrayRemove',
+      'value': {
+        'path': ['m_GenericData', '{GameStateDataBase}', 'm_Traders'],
+        'index': 0,
+      },
+    };
+
+    test('a trader edit and an m_Traders splice conflict either way', () {
+      const traderEdit = TraderStockEdit(
+        kind: TraderEditKind.setStock,
+        index: 7,
+        map: TraderStockMap.current,
+        path: kTraderOrePath,
+        count: 5,
+      );
+      final trader = traderEdit.toEdit();
+      final splice = arrayRemoveOnTraders();
+      expect(editsRewriteSameTarget(splice, trader), isTrue);
+      expect(editsRewriteSameTarget(trader, splice), isTrue);
+    });
+
+    test('an unrelated array splice does not conflict', () {
+      const traderEdit = TraderStockEdit(
+        kind: TraderEditKind.addItem,
+        index: 7,
+        map: TraderStockMap.current,
+        path: '/Script/Angelscript.ItFo_Cheese',
+        count: 1,
+      );
+      final elsewhere = {
+        'path': 'private.typed.arrayRemove',
+        'value': {
+          'path': ['m_GenericData', '{Story}', 'SomethingElse'],
+          'index': 0,
+        },
+      };
+      expect(editsRewriteSameTarget(elsewhere, traderEdit.toEdit()), isFalse);
     });
   });
 

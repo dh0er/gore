@@ -4130,6 +4130,15 @@ bool structuredEditRewrites(
     // container in the save, so it is not scoped to one actor.
     case 'private.inventory.repairSlots':
       return _pathWritesASlotId(typedPath);
+    // A trader edit is addressed by its row's position in m_Traders, and a raw
+    // array operation ON that array renumbers the rows. Splitting the two into
+    // separate writes does not rescue them: the index came from a list read
+    // BEFORE either ran, so whichever goes second resolves it against a layout
+    // the first moved. The pair is refused whichever way round it comes.
+    case 'private.traders.setStock':
+    case 'private.traders.addItem':
+    case 'private.traders.removeItem':
+      return _pathHasName(typedPath, 'm_Traders');
     default:
       return false;
   }

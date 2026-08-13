@@ -309,6 +309,44 @@ fn the_same_pair_is_accepted_the_other_way_round() {
 }
 
 #[test]
+fn a_trader_edit_and_an_m_traders_array_splice_are_refused_together() {
+    // A trader edit is addressed by its row's position, and an array operation
+    // on m_Traders renumbers the rows — so the pair is unsafe in either order,
+    // and splitting it into two writes would not help: the index came from a
+    // list read before either ran.
+    let path = start_save("arrayconflict");
+    let out = out_path("arrayconflict");
+    let data = list(&path);
+    let (index, _) = stocked_trader(&data);
+    let traders_path = ["m_GenericData", "{GameStateDataBase}", "m_Traders"];
+
+    for edits in [
+        json!([
+            { "path": "private.typed.arrayRemove",
+              "value": { "path": traders_path, "index": 0 } },
+            { "path": "private.traders.setStock",
+              "value": { "index": index, "path": ORE, "count": 5 } },
+        ]),
+        // The reverse order is no safer, so it is refused too.
+        json!([
+            { "path": "private.traders.setStock",
+              "value": { "index": index, "path": ORE, "count": 5 } },
+            { "path": "private.typed.arrayRemove",
+              "value": { "path": traders_path, "index": 0 } },
+        ]),
+    ] {
+        let err = exec_err(json!({
+            "command": "write_save",
+            "payload": {
+                "path": path, "outputPath": out, "backup": false, "edits": edits
+            }
+        }));
+        assert!(err.contains("rewrites"), "{err}");
+        assert!(!std::path::Path::new(&out).exists());
+    }
+}
+
+#[test]
 fn add_item_refuses_a_class_the_game_does_not_know() {
     let path = start_save("badclass");
     let out = out_path("badclass");

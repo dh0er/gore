@@ -9378,6 +9378,16 @@ fn structured_edit_rewrites(edit: &PrivateEdit, path: &[properties::PathSeg]) ->
         // Narrower still: it only rewrites ids, but it does so across every
         // container in the save, so it is not scoped to one actor.
         PrivateEdit::InventoryRepairSlots => path_writes_a_slot_id(path),
+        // A trader edit is addressed by its row's position in m_Traders, and a
+        // raw array operation ON that array renumbers the rows. Splitting the
+        // two into separate writes does not rescue them: the index came from a
+        // list the caller read BEFORE either ran, so whichever goes second
+        // resolves it against a layout the first moved — and if the raw edit
+        // removed that very row, the trader change lands on a neighbour while
+        // the write reports success. Refuse the pair whichever way round.
+        PrivateEdit::TraderSetStock(_)
+        | PrivateEdit::TraderAddItem(_)
+        | PrivateEdit::TraderRemoveItem(_) => path_has_name(path, "m_Traders"),
         _ => false,
     }
 }
