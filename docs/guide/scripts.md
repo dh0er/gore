@@ -172,12 +172,42 @@ gore as splice        vanilla.Cache mini.Cache -o modded.Cache
 gore as extract regen.Cache <Module> -o mini.Cache
 ```
 
+`replace` and `splice` accept only a mini-cache already bound to the exact base
+generation by `compile-module` or `extract-remap`. Raw
+`-as-generate-precompiled-data` output carries a fresh GUID and is refused; remap
+it against the intended pristine base first.
+
 `--allow-new-symbols` is deliberately opt-in. Existing references are still
 mapped back to the vanilla cache; only rows for classes, functions, and names
 that do not exist there are retained, with collision checks before deployment.
 Mod Studio defaults it **on** for a new module and **off** for an edit; an
 existing-module edit can enable it explicitly when it intentionally adds a class
 or function.
+
+The remapped mini-cache is bound to the exact target cache GUID. Apply checks
+that binding again and validates every executable reference and retained symbol
+dependency against the effective base-plus-mini tables before it creates a game
+backup, deploy record, or mutation lock. A mini built for an older game cache is
+therefore refused rather than spliced. After a game update, compile or remap the
+module again against the new pristine `PrecompiledScript_Shipping.Cache`; do not
+reuse the previous mini-cache or copy its old GUID.
+
+These checks depend only on the cache contents, never on where the mod came
+from. A GORE bundle, a community download, and a manually prepared package all
+follow the same path and receive no origin-based exception.
+
+A whole-cache replacement without additional script patches is validated as a
+complete cache and then copied byte-for-byte. Its GUID belongs to that complete
+replacement and does not have to match the currently installed cache. If other
+script patches are layered on top, the replacement becomes their effective base
+and the normal GUID and dependency checks apply before deployment.
+
+Mod Manager plans all enabled script patches together before changing the game,
+so internal number collisions between otherwise independent mods do not depend
+on load order. Patches for different modules are combined. If several entries
+target the same module, the later loadout entry is the displayed and deployed
+winner. A complete raw cache is a base rather than a winner over compatible
+module patches; those patches are applied on top of it in either order.
 
 The `-o` form of `compile` leaves the install exactly as it was, so the live
 `PrecompiledScript_Shipping.Cache` is still the pristine cache these commands

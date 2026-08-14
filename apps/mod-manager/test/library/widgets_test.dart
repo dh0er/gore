@@ -193,6 +193,24 @@ Map<String, Object?> _oneHardConflict() => {
   ],
 };
 
+Map<String, Object?> _hardAndInfoSameRawTarget() => {
+  'ok': true,
+  'conflicts': [
+    {
+      'kind': 'raw_file',
+      'target': 'bank:Voice.bank',
+      'mods': ['mod-a', 'mod-b'],
+      'severity': 'hard',
+    },
+    {
+      'kind': 'raw_file',
+      'target': 'bank:Voice.bank',
+      'mods': ['mod-a', 'mod-b'],
+      'severity': 'info',
+    },
+  ],
+};
+
 /// A shared config, backed by its own temp file, seeded with a fixed exe path
 /// so the game root resolves. Isolated per call so tests don't share state.
 SharedConfig _fixedSharedConfig(String exePath) {
@@ -1027,6 +1045,60 @@ void main() {
     expect(winnerFinder, findsWidgets);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'same raw target keeps hard winner and no-winner info as separate rows',
+    (tester) async {
+      final fake = FakeGoreCoreFfiService(
+        responses: {
+          'mgr_library_list': _libraryList(),
+          'mgr_analyze': _hardAndInfoSameRawTarget(),
+          'mgr_status': {
+            'ok': true,
+            'status': {'state': 'nothing_deployed'},
+          },
+        },
+      );
+      await tester.pumpWidget(_appWith(fake));
+      await tester.pumpAndSettle();
+
+      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+      await tester.tap(find.text(l10n.conflictsTitle(2)).first);
+      await tester.pumpAndSettle();
+
+      final hardRow = find.byWidgetPredicate(
+        (widget) =>
+            widget is ConflictRow &&
+            widget.conflict.kind == 'raw_file' &&
+            widget.conflict.target == 'bank:Voice.bank' &&
+            widget.conflict.severity == 'hard',
+        description: 'hard raw-file conflict row',
+      );
+      final infoRow = find.byWidgetPredicate(
+        (widget) =>
+            widget is ConflictRow &&
+            widget.conflict.kind == 'raw_file' &&
+            widget.conflict.target == 'bank:Voice.bank' &&
+            widget.conflict.severity == 'info',
+        description: 'info raw-file advisory row',
+      );
+      expect(hardRow, findsOneWidget);
+      expect(infoRow, findsOneWidget);
+
+      Finder winnerTextUnder(Finder row) => find.descendant(
+        of: row,
+        matching: find.byWidgetPredicate(
+          (widget) =>
+              widget is RichText &&
+              widget.text.toPlainText().contains(l10n.conflictWinner),
+          description: 'winner-tagged mod chip',
+        ),
+      );
+      expect(winnerTextUnder(hardRow), findsOneWidget);
+      expect(winnerTextUnder(infoRow), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('studio status details open the take-over dialog', (
     tester,

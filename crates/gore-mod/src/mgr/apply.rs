@@ -134,6 +134,43 @@ struct PendingRaw {
     rel: PathBuf,
 }
 
+/// Windows live-file identity for the three raw targets. Bank filenames are case-insensitive, but
+/// the map value retains the actual winning path instead of ever publishing this folded key.
+fn raw_target_identity(target: &RawTarget) -> String {
+    match target {
+        RawTarget::Lcache => "lcache".into(),
+        RawTarget::Bank { name } => format!("bank:{}", crate::windows_file_name_key(name)),
+        RawTarget::ScriptCache => "script_cache".into(),
+    }
+}
+
+/// Resolve a bank spelling to the existing on-disk entry. This keeps case-insensitive Windows
+/// semantics in cross-platform tests and preserves the real path spelling for records/backups.
+fn resolve_bank_target_path(desktop: &Path, name: &str) -> crate::Result<PathBuf> {
+    let exact = desktop.join(name);
+    if exact.is_file() {
+        return Ok(exact);
+    }
+    let folded = crate::windows_file_name_key(name);
+    let mut matched = None;
+    for entry in std::fs::read_dir(desktop).map_err(crate::io(&format!(
+        "reading FMOD bank directory {}",
+        desktop.display()
+    )))? {
+        let entry = entry.map_err(crate::io("reading FMOD bank entry"))?;
+        if crate::windows_file_name_key(&entry.file_name().to_string_lossy()) != folded {
+            continue;
+        }
+        if matched.is_some() {
+            return Err(ModError::Other(format!(
+                "multiple FMOD banks differ only by case for {name:?}"
+            )));
+        }
+        matched = Some(entry.path());
+    }
+    Ok(matched.unwrap_or(exact))
+}
+
 #[derive(Debug, Clone)]
 struct PendingAdditive {
     entry: LibraryEntry,
@@ -331,6 +368,7 @@ fn read_raw_for_patch(
 
 fn snapshot_raw_payload(
     source: &PendingRaw,
+    max_payload_bytes: u64,
     limits: ApplyLimits,
     budget: &mut ApplyBudget,
 ) -> crate::Result<(tempfile::TempPath, u64)> {
@@ -342,7 +380,10 @@ fn snapshot_raw_payload(
     let (candidate, len) = source.entry.snapshot_payload_bounded(
         &source.rel,
         "raw-file payload",
-        limits.max_raw_file_bytes.min(remaining),
+        limits
+            .max_raw_file_bytes
+            .min(max_payload_bytes)
+            .min(remaining),
     )?;
     charge_bytes(
         "manager raw files",
@@ -351,6 +392,83 @@ fn snapshot_raw_payload(
         limits.max_raw_total_bytes,
     )?;
     Ok((candidate, len))
+}
+
+/// Keep the last script entry for each exact manifest module target while preserving the original
+/// order of all winners. `analyze` uses the authored target string as `ScriptModule` identity, so
+/// this intentionally does not case-fold names or infer identity from the mini-cache contents.
+fn retain_last_script_target_winners(
+    scripts: Vec<(String, String, PendingPayload)>,
+) -> crate::Result<Vec<(String, String, PendingPayload)>> {
+    let mut last_by_target = BTreeMap::<String, usize>::new();
+    for (index, (_, module, _)) in scripts.iter().enumerate() {
+        last_by_target.insert(module.clone(), index);
+    }
+
+    let mut winners = Vec::new();
+    winners
+        .try_reserve_exact(last_by_target.len())
+        .map_err(|error| {
+            ModError::Other(format!("cannot reserve winning script entries: {error}"))
+        })?;
+    for (index, script) in scripts.into_iter().enumerate() {
+        if last_by_target.get(&script.1) == Some(&index) {
+            winners.push(script);
+        }
+    }
+    Ok(winners)
+}
+
+fn validate_standalone_script_candidate(
+    candidate: &Path,
+    expected_len: u64,
+    limit: u64,
+) -> crate::Result<()> {
+    use std::io::Read as _;
+
+    if expected_len > limit {
+        return Err(ModError::Other(format!(
+            "standalone script-cache replacement exceeds the {limit} byte validation limit: {expected_len}"
+        )));
+    }
+    let capacity = usize::try_from(expected_len).map_err(|_| {
+        ModError::Other(format!(
+            "standalone script-cache candidate is too large for this platform: {expected_len} bytes"
+        ))
+    })?;
+    let file = std::fs::File::open(candidate).map_err(crate::io(&format!(
+        "opening standalone script-cache candidate {}",
+        candidate.display()
+    )))?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(capacity).map_err(|error| {
+        ModError::Other(format!(
+            "standalone script-cache candidate cannot be buffered for validation ({expected_len} bytes): {error}"
+        ))
+    })?;
+    file.take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(crate::io(&format!(
+            "reading standalone script-cache candidate {}",
+            candidate.display()
+        )))?;
+    let observed = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if observed > limit {
+        return Err(ModError::Other(format!(
+            "standalone script-cache replacement exceeds the {limit} byte validation limit: {observed}"
+        )));
+    }
+    if observed != expected_len {
+        return Err(ModError::Other(format!(
+            "standalone script-cache candidate changed while validating: expected {expected_len} bytes, read {observed}"
+        )));
+    }
+    gore_as::cache::splice::validate_standalone_script_cache(&bytes)
+        .map_err(|error| ModError::Other(format!("validate standalone script cache: {error}")))?;
+    // Publication retains the original disk-backed candidate. Release the bounded validation copy
+    // before hashing or adding that candidate to the deploy plan.
+    drop(bytes);
+    Ok(())
 }
 
 fn snapshot_loose_payload(
@@ -435,7 +553,6 @@ fn stage_generated_output(
         len,
         limits.max_generated_total_bytes,
     )?;
-    let hash = crate::content_hash(&bytes);
     let mut candidate = tempfile::Builder::new()
         .prefix(".gore-manager-generated-")
         .tempfile()
@@ -448,11 +565,8 @@ fn stage_generated_output(
         .as_file()
         .sync_all()
         .map_err(crate::io("syncing generated-output candidate"))?;
-    plan.file_writes.push(crate::DiskWrite {
-        live,
-        candidate: candidate.into_temp_path(),
-        hash,
-    });
+    plan.file_writes
+        .push(crate::DiskWrite::seal(live, candidate.into_temp_path())?);
     Ok(())
 }
 
@@ -613,7 +727,7 @@ fn apply_loadout_with_limits(
         /// Folded language -> (most recent spelling, text).
         values: BTreeMap<String, (String, String)>,
     }
-    let mut rawfile_sources: BTreeMap<PathBuf, PendingRaw> = BTreeMap::new();
+    let mut rawfile_sources: BTreeMap<String, (PathBuf, PendingRaw)> = BTreeMap::new();
     // Keyed by the CASE-FOLDED destination, so loadout order gives later-wins before the plan is
     // built. This is not cosmetic: `first_duplicate_dst` rejects a plan with two writes to one
     // path, and it *resolves* those paths — so on Windows two mods spelling one file differently
@@ -623,7 +737,10 @@ fn apply_loadout_with_limits(
     // recorded.
     let mut loose_files: BTreeMap<String, (PathBuf, PendingPayload)> = BTreeMap::new();
     let mut loc: BTreeMap<String, PendingLoc> = BTreeMap::new();
+    // Bank identity is Windows-case-insensitive; sample identity deliberately remains exact. The
+    // companion map retains the last effective bank spelling for the one generated output path.
     let mut audio: BTreeMap<(String, String), PendingPayload> = BTreeMap::new();
+    let mut audio_bank_spellings: BTreeMap<String, String> = BTreeMap::new();
     let mut scripts: Vec<(String, String, PendingPayload)> = Vec::new();
     let mut voice = crate::PendingVoiceEdits::new();
     let mut voice_order = 0usize;
@@ -750,7 +867,7 @@ fn apply_loadout_with_limits(
                             {
                                 return Err(ModError::Other(format!("unsafe bank name: {name:?}")));
                             }
-                            gp.fmod_desktop.join(name)
+                            resolve_bank_target_path(&gp.fmod_desktop, name)?
                         }
                         RawTarget::ScriptCache => gp.script_cache.clone(),
                     };
@@ -772,11 +889,14 @@ fn apply_loadout_with_limits(
                     // reference for now: patched targets are bounded-read once when decoded;
                     // unpatched whole-file replacements become disk-backed snapshots below.
                     rawfile_sources.insert(
-                        target,
-                        PendingRaw {
-                            entry: l.library_entry.clone(),
-                            rel: PathBuf::from(rel),
-                        },
+                        raw_target_identity(target_file),
+                        (
+                            target,
+                            PendingRaw {
+                                entry: l.library_entry.clone(),
+                                rel: PathBuf::from(rel),
+                            },
+                        ),
                     );
                 }
                 ComponentInfo::LocPatch { rel, .. } => {
@@ -857,10 +977,14 @@ fn apply_loadout_with_limits(
                         {
                             return Err(ModError::Other(format!("unsafe bank name: {bank:?}")));
                         }
+                        let bank_key = crate::windows_file_name_key(&bank);
+                        if !samples.is_empty() {
+                            audio_bank_spellings.insert(bank_key.clone(), bank.clone());
+                        }
                         for (sample, wav_rel) in samples {
                             validate_payload_rel(&wav_rel, "WAV", limits)?;
                             audio.insert(
-                                (bank.clone(), sample),
+                                (bank_key.clone(), sample),
                                 PendingPayload {
                                     entry: l.library_entry.clone(),
                                     rel: PathBuf::from(wav_rel),
@@ -1075,15 +1199,16 @@ fn apply_loadout_with_limits(
     // else the pristine .lcache.
     if !loc.is_empty() {
         if let Some(lcache) = gp.lcache.clone() {
-            let (base, drifted) = match rawfile_sources.remove(&lcache) {
-                Some(source) => {
-                    let drifted = crate::select_pristine_source(&lcache, prior)?.drifted;
-                    (read_raw_for_patch(&source, limits, &mut budget)?, drifted)
-                }
-                // Read pristine from the PRIOR deployment's backup (via `prev`) — the live file is
-                // still the prior-modded one until the deferred undeploy below.
-                None => read_pristine_for_patch(&lcache, prior, limits, &mut budget)?,
-            };
+            let (base, drifted) =
+                match rawfile_sources.remove(&raw_target_identity(&RawTarget::Lcache)) {
+                    Some((_target, source)) => {
+                        let drifted = crate::select_pristine_source(&lcache, prior)?.drifted;
+                        (read_raw_for_patch(&source, limits, &mut budget)?, drifted)
+                    }
+                    // Read pristine from the PRIOR deployment's backup (via `prev`) — the live file is
+                    // still the prior-modded one until the deferred undeploy below.
+                    None => read_pristine_for_patch(&lcache, prior, limits, &mut budget)?,
+                };
             let mut lc = gore_loc::loc::Lcache::decode(&base)?;
             let declared: BTreeMap<String, String> = lc
                 .languages()
@@ -1161,16 +1286,28 @@ fn apply_loadout_with_limits(
         let fmod_key = crate::resolve_fmod_key(&gp);
         // Group (bank,sample)→wav into bank→[(sample,wav)].
         let mut by_bank: BTreeMap<String, Vec<(String, PendingPayload)>> = BTreeMap::new();
-        for ((bank, sample), wav) in &audio {
+        for ((bank_key, sample), wav) in &audio {
             by_bank
-                .entry(bank.clone())
+                .entry(bank_key.clone())
                 .or_default()
                 .push((sample.clone(), wav.clone()));
         }
-        for (bank, samples) in by_bank {
-            let bank_path = gp.fmod_desktop.join(&bank);
-            let (base, drifted) = match rawfile_sources.remove(&bank_path) {
-                Some(source) => {
+        for (bank_key, samples) in by_bank {
+            let bank = audio_bank_spellings.get(&bank_key).ok_or_else(|| {
+                ModError::Other(format!(
+                    "audio bank spelling was not retained for identity {bank_key:?}"
+                ))
+            })?;
+            let raw_target = RawTarget::Bank { name: bank.clone() };
+            let raw_source = rawfile_sources.remove(&raw_target_identity(&raw_target));
+            // A raw winner already resolved the real on-disk spelling while collecting bases.
+            // Otherwise resolve the audio manifest's spelling against the same Windows identity.
+            let bank_path = match &raw_source {
+                Some((target, _)) => target.clone(),
+                None => resolve_bank_target_path(&gp.fmod_desktop, bank)?,
+            };
+            let (base, drifted) = match raw_source {
+                Some((_target, source)) => {
                     let drifted = crate::select_pristine_source(&bank_path, prior)?.drifted;
                     (read_raw_for_patch(&source, limits, &mut budget)?, drifted)
                 }
@@ -1208,22 +1345,31 @@ fn apply_loadout_with_limits(
 
     // scripts → fold add/edit onto the script-cache base (rawfile override or pristine cache).
     if !scripts.is_empty() {
-        let (base, drifted) = match rawfile_sources.remove(&gp.script_cache) {
-            Some(source) => (
-                read_raw_for_patch(&source, limits, &mut budget)?,
-                crate::select_pristine_source(&gp.script_cache, prior)?.drifted,
-            ),
-            None => read_pristine_for_patch(&gp.script_cache, prior, limits, &mut budget)?,
-        };
-        let mut merge_guard = gore_as::cache::splice::SequentialMiniGuard::new(&base)
+        if let Some((op, module, _)) = scripts
+            .iter()
+            .find(|(op, _, _)| op != "add" && op != "edit")
+        {
+            return Err(ModError::Other(format!(
+                "invalid script op {op:?} for module {module:?}"
+            )));
+        }
+        // Conflict analysis and the UI promise exact-target later-wins semantics. Reduce before
+        // inventory, canonicalization, and composition so a shadowed mini cannot still collide in
+        // the global ID plan or attempt a duplicate module splice.
+        scripts = retain_last_script_target_winners(scripts)?;
+        let (base, drifted) =
+            match rawfile_sources.remove(&raw_target_identity(&RawTarget::ScriptCache)) {
+                Some((_target, source)) => (
+                    read_raw_for_patch(&source, limits, &mut budget)?,
+                    crate::select_pristine_source(&gp.script_cache, prior)?.drifted,
+                ),
+                None => read_pristine_for_patch(&gp.script_cache, prior, limits, &mut budget)?,
+            };
+        // Pass 1 inventories the complete loadout while retaining only one source mini at a time.
+        // Canonical assignments therefore depend on the portable-identity union, never mod order.
+        let mut loadout_builder = gore_as::cache::splice::LoadoutScriptIdPlanBuilder::new(&base)
             .map_err(|e| ModError::Other(format!("prepare script composition: {e}")))?;
-        let mut acc = base;
-        for (op, module, mini_payload) in &scripts {
-            if op != "add" && op != "edit" {
-                return Err(ModError::Other(format!(
-                    "invalid script op {op:?} for module {module:?}"
-                )));
-            }
+        for (_, module, mini_payload) in &scripts {
             let mini = read_pending_payload(
                 mini_payload,
                 "script mini-cache payloads",
@@ -1231,13 +1377,69 @@ fn apply_loadout_with_limits(
                 &mut budget.mini_bytes,
                 limits.max_mini_total_bytes,
             )?;
-            let prepared = merge_guard
-                .check_and_record(&mini)
-                .map_err(|e| ModError::Other(format!("compose {module}: {e}")))?;
+            loadout_builder
+                .inspect(&mini)
+                .map_err(|e| ModError::Other(format!("inspect script mini {module}: {e}")))?;
+        }
+        let loadout_plan = loadout_builder
+            .finish()
+            .map_err(|e| ModError::Other(format!("finish script ID plan: {e}")))?;
+
+        // Pass 2 rereads the SHA-bound source minis and immediately seals each canonical result on
+        // private disk. Separate phase budgets preserve the existing 4-GiB logical source envelope
+        // while bounding the additional I/O and temporary footprint to the same amount.
+        let mut rewrite_source_bytes = 0u64;
+        let mut canonical_output_bytes = 0u64;
+        let mut canonical_minis = Vec::new();
+        canonical_minis
+            .try_reserve_exact(scripts.len())
+            .map_err(|error| {
+                ModError::Other(format!(
+                    "cannot reserve canonical script mini candidates: {error}"
+                ))
+            })?;
+        for (_, module, mini_payload) in &scripts {
+            let mini = read_pending_payload(
+                mini_payload,
+                "script mini-cache canonicalization",
+                limits.max_mini_bytes,
+                &mut rewrite_source_bytes,
+                limits.max_mini_total_bytes,
+            )?;
+            let canonical = gore_as::cache::splice::remap_module_to_base_with_loadout_plan(
+                &mini,
+                &base,
+                &loadout_plan,
+            )
+            .map_err(|e| ModError::Other(format!("canonicalize script mini {module}: {e}")))?;
+            canonical_minis.push(crate::seal_script_mini(
+                canonical,
+                limits.max_mini_bytes,
+                &mut canonical_output_bytes,
+                limits.max_mini_total_bytes,
+            )?);
+        }
+        drop(loadout_plan);
+
+        // Pass 3 builds the guard only after the plan's large base context is gone. Reopen, verify,
+        // and compose each tempfile in loadout order; consuming it cleans disk incrementally.
+        let mut merge_guard = gore_as::cache::splice::SequentialMiniGuard::new(&base)
+            .map_err(|e| ModError::Other(format!("prepare script composition: {e}")))?;
+        let mut acc = base;
+        let mut canonical_read_bytes = 0u64;
+        for ((op, module, _), sealed) in scripts.iter().zip(canonical_minis) {
+            let mini = crate::read_sealed_script_mini(
+                &sealed,
+                limits.max_mini_bytes,
+                &mut canonical_read_bytes,
+                limits.max_mini_total_bytes,
+            )?;
             acc = match op.as_str() {
-                "add" => gore_as::cache::splice::splice_auto(&acc, &prepared)
+                "add" => merge_guard
+                    .compose_add(&acc, &mini)
                     .map_err(|e| ModError::Other(format!("splice {module}: {e}")))?,
-                "edit" => gore_as::cache::splice::replace_module(&acc, &prepared, module)
+                "edit" => merge_guard
+                    .compose_edit(&acc, &mini, module)
                     .map_err(|e| ModError::Other(format!("replace {module}: {e}")))?,
                 other => {
                     return Err(ModError::Other(format!(
@@ -1254,24 +1456,29 @@ fn apply_loadout_with_limits(
     }
 
     // Any rawfile whose target was NOT further patched remains a whole-file replacement. Snapshot
-    // it to a verified private temp and publish through DeployPlan's disk-backed write path: even an
-    // 8-GiB raw bank/cache never becomes an archive-sized `Vec`, and an apply error drops every
-    // candidate before the game is touched.
-    for (target, source) in rawfile_sources {
+    // it to a verified private temp and publish through DeployPlan's disk-backed write path. A
+    // standalone script cache is the one content-aware raw target: validate the exact private
+    // candidate within the in-memory patch-base envelope, then release that validation copy before
+    // the original candidate is published. Any error still drops every candidate before the game
+    // is touched.
+    for (_identity, (target, source)) in rawfile_sources {
         let drifted = crate::select_pristine_source(&target, prior)?.drifted;
-        let (candidate, _len) = snapshot_raw_payload(&source, limits, &mut budget)?;
-        let hash = crate::content_hash_file(&candidate).map_err(crate::io(&format!(
-            "hashing raw-file candidate for {}",
-            target.display()
-        )))?;
+        // Script caches are decoded for structural validation, so enforce the in-memory ceiling at
+        // the opened-file metadata gate instead of first copying up to the generic 8-GiB raw limit.
+        let snapshot_limit = if target == gp.script_cache {
+            limits.max_patch_base_bytes
+        } else {
+            limits.max_raw_file_bytes
+        };
+        let (candidate, len) = snapshot_raw_payload(&source, snapshot_limit, limits, &mut budget)?;
+        if target == gp.script_cache {
+            validate_standalone_script_candidate(&candidate, len, limits.max_patch_base_bytes)?;
+        }
         if drifted {
             plan.refresh_baks.push(target.clone());
         }
-        plan.file_writes.push(crate::DiskWrite {
-            live: target,
-            candidate,
-            hash,
-        });
+        plan.file_writes
+            .push(crate::DiskWrite::seal(target, candidate)?);
     }
 
     // Loose files have no patch layer to fold onto them: the winning payload IS the final content.
@@ -1281,18 +1488,11 @@ fn apply_loadout_with_limits(
     for (_folded, (target, source)) in loose_files {
         let drifted = crate::select_pristine_source(&target, prior)?.drifted;
         let candidate = snapshot_loose_payload(&source, limits, &mut budget)?;
-        let hash = crate::content_hash_file(&candidate).map_err(crate::io(&format!(
-            "hashing loose-file candidate for {}",
-            target.display()
-        )))?;
         if drifted {
             plan.refresh_baks.push(target.clone());
         }
-        plan.file_writes.push(crate::DiskWrite {
-            live: target,
-            candidate,
-            hash,
-        });
+        plan.file_writes
+            .push(crate::DiskWrite::seal(target, candidate)?);
     }
 
     crate::prepare_voice_archive_writes(&voice, &gp, prior, &mut plan)?;
@@ -1726,26 +1926,116 @@ mod tests {
     /// One-module allow-new-shaped cache with `STR 0`, private T1â€“T7 rows, and deterministic
     /// synthetic pointer/id keys. This exercises manager composition beyond the original empty
     /// T1â€“T5/T7 fixture that missed real class-module collisions.
-    fn build_script_cache_with_static_name(module: &str, name: &str, seed: i32) -> Vec<u8> {
+    fn probe_data_type(token: i32) -> Vec<u8> {
+        let mut out = vec![0u8; 24]; // six serialized bool words
+        out.extend_from_slice(&0i64.to_le_bytes()); // primitive TypeInfo
+        out.extend_from_slice(&token.to_le_bytes());
+        out
+    }
+
+    fn probe_function(name: &str, bytecode: &[i32], id: i32) -> Vec<u8> {
+        let mut out = as_sia(name);
+        out.extend_from_slice(&as_sia("")); // namespace
+        out.extend_from_slice(&probe_data_type(0x52)); // void return
+        out.extend_from_slice(&0i32.to_le_bytes()); // parameter types
+        out.extend_from_slice(&0i32.to_le_bytes()); // parameter names
+        out.extend_from_slice(&0i32.to_le_bytes()); // parameter flags
+        out.extend_from_slice(&0i32.to_le_bytes()); // parameter defaults
+        out.extend_from_slice(&0i32.to_le_bytes()); // traits (non-const)
+        out.extend_from_slice(&(bytecode.len() as i32).to_le_bytes());
+        for &word in bytecode {
+            out.extend_from_slice(&word.to_le_bytes());
+        }
+        out.extend_from_slice(&0i32.to_le_bytes()); // bytecode references
+        out.extend_from_slice(&0i32.to_le_bytes()); // variable space
+        out.extend_from_slice(&0i32.to_le_bytes()); // object variable types
+        out.extend_from_slice(&0i32.to_le_bytes()); // object variable positions
+        out.extend_from_slice(&0i32.to_le_bytes()); // object variables on heap
+        out.extend_from_slice(&0i32.to_le_bytes()); // variable info program positions
+        out.extend_from_slice(&0i32.to_le_bytes()); // variable info offsets
+        out.extend_from_slice(&0i32.to_le_bytes()); // variable info options
+        out.extend_from_slice(&0i32.to_le_bytes()); // stack needed
+        out.extend_from_slice(&id.to_le_bytes());
+        out.extend_from_slice(&0i32.to_le_bytes()); // declared at
+        out.extend_from_slice(&0i32.to_le_bytes()); // line numbers
+        out.extend_from_slice(&0i32.to_le_bytes()); // not a UFunction
+        out
+    }
+
+    fn probe_property(name: &str) -> Vec<u8> {
+        let mut out = as_sia(name);
+        out.extend_from_slice(&probe_data_type(0x44)); // int
+        out.extend_from_slice(&0i32.to_le_bytes()); // not private
+        out.extend_from_slice(&0i32.to_le_bytes()); // not protected
+        out.extend_from_slice(&0i32.to_le_bytes()); // no Unreal property tail
+        out
+    }
+
+    fn probe_class(type_name: &str, method_name: &str, property_name: &str, id: i32) -> Vec<u8> {
+        let mut out = as_sia(type_name);
+        out.extend_from_slice(&as_sia("")); // namespace
+        out.extend_from_slice(&0i32.to_le_bytes()); // flags
+        out.extend_from_slice(&1i32.to_le_bytes()); // properties
+        out.extend_from_slice(&probe_property(property_name));
+        out.extend_from_slice(&1i32.to_le_bytes()); // methods
+        out.extend_from_slice(&probe_function(method_name, &[10], id)); // RET
+        out.extend_from_slice(&1i32.to_le_bytes()); // method table
+        out.extend_from_slice(&0i32.to_le_bytes()); // Methods[0]
+        out.extend_from_slice(&0i64.to_le_bytes()); // derived from
+        out.extend_from_slice(&0i64.to_le_bytes()); // shadow type
+        out.extend_from_slice(&0i32.to_le_bytes()); // constructors
+        out.extend_from_slice(&0i32.to_le_bytes()); // factory refs
+        out.extend_from_slice(&7i32.to_le_bytes()); // fixed behavior slots 0..6
+        out.extend_from_slice(&[0u8; 7 * 8]);
+        out.extend_from_slice(&0i32.to_le_bytes()); // behavior functions
+        out.extend_from_slice(&0i32.to_le_bytes()); // behavior function types
+        out.extend_from_slice(&0i32.to_le_bytes()); // no Unreal class tail
+        out
+    }
+
+    fn probe_global(name: &str) -> Vec<u8> {
+        let mut out = as_sia(name);
+        out.extend_from_slice(&as_sia("")); // namespace
+        out.extend_from_slice(&probe_data_type(0x44)); // int
+        out.extend_from_slice(&1i32.to_le_bytes()); // default initialized
+        out
+    }
+
+    fn build_script_cache_with_static_name_and_keys(
+        module: &str,
+        name: &str,
+        type_name: &str,
+        identity_seed: i32,
+        key_seed: i32,
+        type_id: i32,
+    ) -> Vec<u8> {
         use gore_as::cache::header::CACHE_MAGIC;
+        let method_name = format!("ProbeFunc{identity_seed}");
+        let property_name = format!("ProbeField{identity_seed}");
+        let global_name = format!("ProbeGlobal{identity_seed}");
+
         let mut out = vec![0u8; 16];
         out.extend_from_slice(&CACHE_MAGIC.to_le_bytes());
         out.extend_from_slice(&1u32.to_le_bytes());
         out.extend_from_slice(&as_fstring(module));
         out.extend_from_slice(&as_sia(module));
         out.extend_from_slice(&1i32.to_le_bytes()); // functions
-        out.extend_from_slice(&as_sia("StaticNameProbe"));
-        out.extend_from_slice(&as_sia("")); // namespace
-        out.extend_from_slice(&[0u8; 24]); // return DataType flags
-        out.extend_from_slice(&0i64.to_le_bytes()); // primitive TypeInfo
-        out.extend_from_slice(&0x40i32.to_le_bytes()); // void token
-        out.extend_from_slice(&[0u8; 5 * 4]); // params/names/flags/defaults/traits
-        out.extend_from_slice(&2i32.to_le_bytes()); // bytecode dwords
-        out.extend_from_slice(&60i32.to_le_bytes()); // STR StaticNames[0]
-        out.extend_from_slice(&10i32.to_le_bytes()); // RET
-        out.extend_from_slice(&[0u8; 12 * 4]); // function tail through line numbers
-        out.extend_from_slice(&0i32.to_le_bytes()); // not a UFunction
-        out.extend_from_slice(&[0u8; 4 * 4]); // classes/enums/globals/imports
+        out.extend_from_slice(&probe_function(
+            "StaticNameProbe",
+            &[60, 10], // STR StaticNames[0], RET
+            0x1200_0000i32 + key_seed,
+        ));
+        out.extend_from_slice(&1i32.to_le_bytes()); // classes
+        out.extend_from_slice(&probe_class(
+            &type_name,
+            &method_name,
+            &property_name,
+            0x1300_0000i32 + key_seed,
+        ));
+        out.extend_from_slice(&0i32.to_le_bytes()); // enums
+        out.extend_from_slice(&1i32.to_le_bytes()); // globals
+        out.extend_from_slice(&probe_global(&global_name));
+        out.extend_from_slice(&0i32.to_le_bytes()); // imports
         out.extend_from_slice(&0i64.to_le_bytes()); // code hash
         out.extend_from_slice(&0i32.to_le_bytes()); // imported modules
         out.extend_from_slice(&as_sia("")); // statics class
@@ -1753,16 +2043,14 @@ mod tests {
         out.extend_from_slice(&as_sia("")); // relative filename
         out.extend_from_slice(&0i32.to_le_bytes()); // post-init functions
 
-        let type_ptr = 0x6000_0000_1000_0000i64 + i64::from(seed);
-        let func_ptr = 0x6000_0000_2000_0000i64 + i64::from(seed);
-        let global_ptr = 0x6000_0000_3000_0000i64 + i64::from(seed);
-        let type_id = 0x0801_0000i32 + seed;
-        let func_id = 1_000_000i32 + seed;
-        let type_name = format!("ProbeType{seed}");
+        let type_ptr = 0x6000_0000_1000_0000i64 + i64::from(key_seed);
+        let func_ptr = 0x6000_0000_2000_0000i64 + i64::from(key_seed);
+        let global_ptr = 0x6000_0000_3000_0000i64 + i64::from(key_seed);
+        let func_id = 1_000_000i32 + key_seed;
 
         out.extend_from_slice(&1u32.to_le_bytes()); // T1 type
         out.extend_from_slice(&type_ptr.to_le_bytes());
-        out.extend_from_slice(&as_sia(&type_name));
+        out.extend_from_slice(&as_sia(type_name));
         out.extend_from_slice(&as_sia(module));
         out.extend_from_slice(&as_sia(""));
         out.extend_from_slice(&0u32.to_le_bytes()); // no subtypes
@@ -1773,15 +2061,17 @@ mod tests {
 
         out.extend_from_slice(&1u32.to_le_bytes()); // T3 function
         out.extend_from_slice(&func_ptr.to_le_bytes());
-        out.extend_from_slice(&as_sia(&format!("ProbeFunc{seed}")));
+        out.extend_from_slice(&as_sia(&method_name));
         out.extend_from_slice(&as_sia(module));
         out.extend_from_slice(&as_sia(""));
-        out.extend_from_slice(&[0u8; 3 * 4]); // const/imported/method
+        out.extend_from_slice(&0i32.to_le_bytes()); // not const
+        out.extend_from_slice(&0i32.to_le_bytes()); // not imported
+        out.extend_from_slice(&1i32.to_le_bytes()); // method: concrete owner below
         out.extend_from_slice(&type_ptr.to_le_bytes()); // owner
         out.extend_from_slice(&0u32.to_le_bytes()); // no params
         out.extend_from_slice(&[0u8; 24]); // void return DataType flags
         out.extend_from_slice(&0i64.to_le_bytes());
-        out.extend_from_slice(&0x40i32.to_le_bytes());
+        out.extend_from_slice(&0x52i32.to_le_bytes());
 
         out.extend_from_slice(&1u32.to_le_bytes()); // T4 function id -> ptr
         out.extend_from_slice(&func_id.to_le_bytes());
@@ -1789,7 +2079,7 @@ mod tests {
 
         out.extend_from_slice(&1u32.to_le_bytes()); // T5 global
         out.extend_from_slice(&global_ptr.to_le_bytes());
-        out.extend_from_slice(&as_sia(&format!("ProbeGlobal{seed}")));
+        out.extend_from_slice(&as_sia(&global_name));
         out.extend_from_slice(&as_sia(module));
         out.extend_from_slice(&as_sia(""));
         out.extend_from_slice(&0i32.to_le_bytes()); // not a string
@@ -1800,9 +2090,70 @@ mod tests {
         out.extend_from_slice(&1u32.to_le_bytes()); // T7 property
         let property_key = (i64::from(type_id) << 1) | (4i64 << 33) | 1;
         out.extend_from_slice(&property_key.to_le_bytes());
-        out.extend_from_slice(&as_sia(&format!("ProbeField{seed}")));
+        out.extend_from_slice(&as_sia(&property_name));
         out.extend_from_slice(&type_id.to_le_bytes());
         out
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct ScriptAssignments {
+        pointers: BTreeMap<String, i64>,
+        type_ids: BTreeMap<String, i32>,
+        function_ids: BTreeMap<String, i32>,
+    }
+
+    fn script_assignments(bytes: &[u8]) -> ScriptAssignments {
+        use gore_as::cache::tables::parse_tail_tables;
+        use gore_as::cache::walk_modules::module_region_end;
+        use gore_as::cache::wire::Cursor;
+
+        let tail = parse_tail_tables(bytes, module_region_end(bytes).unwrap()).unwrap();
+        let mut type_names = BTreeMap::new();
+        let mut function_names = BTreeMap::new();
+        let mut pointers = BTreeMap::new();
+        for &start in &tail.tables[0].entry_starts {
+            let mut cursor = Cursor::at(bytes, start);
+            let ptr = cursor.read_i64().unwrap();
+            let name = cursor.read_sia().unwrap();
+            type_names.insert(ptr, name.clone());
+            pointers.insert(format!("T1:{name}"), ptr);
+        }
+        for &start in &tail.tables[2].entry_starts {
+            let mut cursor = Cursor::at(bytes, start);
+            let ptr = cursor.read_i64().unwrap();
+            let name = cursor.read_sia().unwrap();
+            function_names.insert(ptr, name.clone());
+            pointers.insert(format!("T3:{name}"), ptr);
+        }
+        for &start in &tail.tables[4].entry_starts {
+            let mut cursor = Cursor::at(bytes, start);
+            let ptr = cursor.read_i64().unwrap();
+            let name = cursor.read_sia().unwrap();
+            pointers.insert(format!("T5:{name}"), ptr);
+        }
+        let mut type_ids = BTreeMap::new();
+        for &start in &tail.tables[1].entry_starts {
+            let mut cursor = Cursor::at(bytes, start);
+            let id = cursor.read_i32().unwrap();
+            let ptr = cursor.read_i64().unwrap();
+            if let Some(name) = type_names.get(&ptr) {
+                type_ids.insert(name.clone(), id);
+            }
+        }
+        let mut function_ids = BTreeMap::new();
+        for &start in &tail.tables[3].entry_starts {
+            let mut cursor = Cursor::at(bytes, start);
+            let id = cursor.read_i32().unwrap();
+            let ptr = cursor.read_i64().unwrap();
+            if let Some(name) = function_names.get(&ptr) {
+                function_ids.insert(name.clone(), id);
+            }
+        }
+        ScriptAssignments {
+            pointers,
+            type_ids,
+            function_ids,
+        }
     }
 
     // ── fake game tree ──────────────────────────────────────────────────────────────────────────
@@ -2142,6 +2493,10 @@ mod tests {
             !crate::record_path(&game.root).exists(),
             "failed plan construction must not create a deploy record"
         );
+        assert!(
+            !game.root.join(".gore-install-mutation.lock").exists(),
+            "failed plan construction must not acquire the durable install mutation lock"
+        );
     }
 
     #[test]
@@ -2266,22 +2621,24 @@ mod tests {
 
         let aggregate_game = FakeGame::new();
         let pristine_loc = fs::read(aggregate_game.lcache()).unwrap();
-        let pristine_script = b"game".to_vec();
+        let pristine_script = build_script_cache(&["_gore_pristine"]);
         fs::write(aggregate_game.script_cache(), &pristine_script).unwrap();
         let loc = aggregate_game.add_rawfile_mod("raw-loc", "RawLoc", RawTarget::Lcache, b"1234");
+        let raw_script = build_script_cache(&["_complete_replacement"]);
+        let raw_script_len = u64::try_from(raw_script.len()).unwrap();
         let script = aggregate_game.add_rawfile_mod(
             "raw-script",
             "RawScript",
             RawTarget::ScriptCache,
-            b"5678",
+            &raw_script,
         );
         let error = apply_loadout_with_limits(
             &aggregate_game.root,
             &aggregate_game.lib,
             &loadout(&[(&loc, true), (&script, true)]),
             ApplyLimits {
-                max_raw_file_bytes: 4,
-                max_raw_total_bytes: 7,
+                max_raw_file_bytes: raw_script_len,
+                max_raw_total_bytes: raw_script_len + 3,
                 ..DEFAULT_APPLY_LIMITS
             },
             false,
@@ -3978,49 +4335,262 @@ mod tests {
         assert_ne!(got, orig, "injected sample must differ from the original");
     }
 
+    #[test]
+    fn apply_audio_bank_case_variants_share_one_output_and_last_patch_wins() {
+        fn run(reverse: bool) {
+            let g = FakeGame::new();
+            let key = gore_fmod::GOTHIC_STUDIO_KEY;
+            let live = g.bank("Voice.bank");
+            fs::write(&live, build_pristine_bank("shout", 44100, &[0i16; 64], key)).unwrap();
+
+            let pcm_a: Vec<i16> = (0..40).map(|i| (1000 + i * 20) as i16).collect();
+            let pcm_b: Vec<i16> = (0..52).map(|i| (8000 - i * 30) as i16).collect();
+            let a = g.add_audio_mod(
+                "audio-a",
+                "AudioA",
+                "Voice.bank",
+                "shout",
+                &gore_fmod::wav_pcm16(44100, 1, &pcm_a),
+            );
+            let b = g.add_audio_mod(
+                "audio-b",
+                "AudioB",
+                "voice.BANK",
+                "shout",
+                &gore_fmod::wav_pcm16(44100, 1, &pcm_b),
+            );
+            let (entries, expected) = if reverse {
+                ([(b.as_str(), true), (a.as_str(), true)], pcm_a.as_slice())
+            } else {
+                ([(a.as_str(), true), (b.as_str(), true)], pcm_b.as_slice())
+            };
+
+            let report = apply_loadout(&g.root, &g.lib, &loadout(&entries)).unwrap();
+            assert!(
+                report.warnings.is_empty(),
+                "warnings: {:?}",
+                report.warnings
+            );
+            assert_eq!(
+                decode_last_fsb5_pcm(&fs::read(&live).unwrap(), key),
+                expected,
+                "the last patch of one case-insensitive bank/sample target must win"
+            );
+
+            let record = crate::read_record(&g.root).unwrap().unwrap().record;
+            assert_eq!(record.backups.len(), 1, "one live bank must be backed up");
+            assert_eq!(
+                record.deployed_hashes.len(),
+                1,
+                "case aliases must materialize one live output"
+            );
+            let bank_names: Vec<String> = fs::read_dir(live.parent().unwrap())
+                .unwrap()
+                .filter_map(Result::ok)
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.to_lowercase().ends_with(".bank"))
+                .collect();
+            let expected_name = if cfg!(windows) && !reverse {
+                "voice.BANK"
+            } else {
+                "Voice.bank"
+            };
+            assert_eq!(bank_names, vec![expected_name]);
+        }
+
+        run(false);
+        run(true);
+    }
+
+    #[test]
+    fn apply_audio_bank_identity_does_not_expand_sharp_s_into_ss() {
+        fn run(reverse: bool) {
+            let g = FakeGame::new();
+            let key = gore_fmod::GOTHIC_STUDIO_KEY;
+            let sharp_live = g.bank("Voiceß.bank");
+            let ss_live = g.bank("VoiceSS.bank");
+            fs::write(
+                &sharp_live,
+                build_pristine_bank("shout", 44100, &[0i16; 32], key),
+            )
+            .unwrap();
+            fs::write(
+                &ss_live,
+                build_pristine_bank("shout", 44100, &[0i16; 32], key),
+            )
+            .unwrap();
+
+            let sharp_pcm: Vec<i16> = (0..40).map(|i| (1000 + i * 20) as i16).collect();
+            let ss_pcm: Vec<i16> = (0..52).map(|i| (8000 - i * 30) as i16).collect();
+            let sharp = g.add_audio_mod(
+                "audio-sharp",
+                "AudioSharp",
+                "Voiceß.bank",
+                "shout",
+                &gore_fmod::wav_pcm16(44100, 1, &sharp_pcm),
+            );
+            let ss = g.add_audio_mod(
+                "audio-ss",
+                "AudioSs",
+                "VoiceSS.bank",
+                "shout",
+                &gore_fmod::wav_pcm16(44100, 1, &ss_pcm),
+            );
+            let entries = if reverse {
+                [(ss.as_str(), true), (sharp.as_str(), true)]
+            } else {
+                [(sharp.as_str(), true), (ss.as_str(), true)]
+            };
+
+            let report = apply_loadout(&g.root, &g.lib, &loadout(&entries)).unwrap();
+            assert!(
+                report.warnings.is_empty(),
+                "warnings: {:?}",
+                report.warnings
+            );
+            assert_eq!(
+                decode_last_fsb5_pcm(&fs::read(&sharp_live).unwrap(), key),
+                sharp_pcm,
+                "the sharp-s bank must retain its own patch"
+            );
+            assert_eq!(
+                decode_last_fsb5_pcm(&fs::read(&ss_live).unwrap(), key),
+                ss_pcm,
+                "the SS bank must retain its own patch"
+            );
+
+            let record = crate::read_record(&g.root).unwrap().unwrap().record;
+            assert_eq!(record.backups.len(), 2, "both distinct banks need backups");
+            assert_eq!(
+                record.deployed_hashes.len(),
+                2,
+                "both distinct banks must materialize their own output"
+            );
+        }
+
+        run(false);
+        run(true);
+    }
+
     /// A `RawFile{Bank}` supplies the whole bank BASE; an AudioPatch then injects on top of it —
-    /// mirroring the loc rawfile-then-patch layering for audio. The base bank's sample starts as
-    /// one pattern; the final live bank must carry the patch's pattern.
+    /// mirroring the loc rawfile-then-patch layering for audio. Match the two bank spellings using
+    /// Windows identity and prove composition is independent of their relative loadout order.
     #[test]
     fn apply_audio_rawfile_bank_is_base_then_patched() {
-        let g = FakeGame::new();
-        let key = gore_fmod::GOTHIC_STUDIO_KEY;
-        // Live pristine bank (pattern P0). The rawfile base will OVERRIDE this with pattern P1.
-        fs::write(
-            g.bank("Voice.bank"),
-            build_pristine_bank("shout", 44100, &[0i16; 64], key),
-        )
-        .unwrap();
-        let base_pat: Vec<i16> = (0..64).map(|i| (i * 100) as i16).collect();
-        let raw_bank = build_pristine_bank("shout", 44100, &base_pat, key);
-        let raw = g.add_rawfile_mod(
-            "mod-rawbank",
-            "RawBank",
-            RawTarget::Bank {
-                name: "Voice.bank".into(),
-            },
-            &raw_bank,
-        );
-        // Patch injects pattern P2 on top of the rawfile base.
-        let patch_pat: Vec<i16> = (0..48).map(|i| (7000 - i * 100) as i16).collect();
-        let wav = gore_fmod::wav_pcm16(44100, 1, &patch_pat);
-        let patch = g.add_audio_mod("mod-audiopatch", "AudioPatch", "Voice.bank", "shout", &wav);
+        fn run(patch_first: bool) {
+            let g = FakeGame::new();
+            let key = gore_fmod::GOTHIC_STUDIO_KEY;
+            // Live pristine bank (pattern P0). The rawfile base overrides it with pattern P1.
+            fs::write(
+                g.bank("Voice.bank"),
+                build_pristine_bank("shout", 44100, &[0i16; 64], key),
+            )
+            .unwrap();
+            let base_pat: Vec<i16> = (0..64).map(|i| (i * 100) as i16).collect();
+            let raw_bank = build_pristine_bank("shout", 44100, &base_pat, key);
+            let raw = g.add_rawfile_mod(
+                "mod-rawbank",
+                "RawBank",
+                RawTarget::Bank {
+                    name: "Voice.bank".into(),
+                },
+                &raw_bank,
+            );
+            // Deliberately use different casing: it is the same bank on the target Windows host.
+            let patch_pat: Vec<i16> = (0..48).map(|i| (7000 - i * 100) as i16).collect();
+            let wav = gore_fmod::wav_pcm16(44100, 1, &patch_pat);
+            let patch =
+                g.add_audio_mod("mod-audiopatch", "AudioPatch", "voice.BANK", "shout", &wav);
+            let entries = if patch_first {
+                [(patch.as_str(), true), (raw.as_str(), true)]
+            } else {
+                [(raw.as_str(), true), (patch.as_str(), true)]
+            };
 
-        // Raw first (base), patch second (on top).
-        let report =
-            apply_loadout(&g.root, &g.lib, &loadout(&[(&raw, true), (&patch, true)])).unwrap();
-        assert!(
-            report.warnings.is_empty(),
-            "warnings: {:?}",
-            report.warnings
-        );
+            let report = apply_loadout(&g.root, &g.lib, &loadout(&entries)).unwrap();
+            assert!(
+                report.warnings.is_empty(),
+                "warnings: {:?}",
+                report.warnings
+            );
 
-        let got = decode_last_fsb5_pcm(&fs::read(g.bank("Voice.bank")).unwrap(), key);
-        assert_eq!(
-            got, patch_pat,
-            "patch pattern must win over the rawfile base"
-        );
-        assert_ne!(got, base_pat, "must not be the un-patched rawfile base");
+            let live = fs::read(g.bank("Voice.bank")).unwrap();
+            let got = decode_last_fsb5_pcm(&live, key);
+            assert_eq!(
+                got, patch_pat,
+                "patch pattern must win over the rawfile base"
+            );
+            // The original sub-bank remains embedded after injection. Its PCM proves the raw bank,
+            // not the game's zero-filled pristine bank, supplied the composed base.
+            let view = gore_fmod::read_bank(&live, key).unwrap();
+            let (block, fsb) = &view.sub_banks[0];
+            let wav = gore_fmod::extract_wav(block, fsb, 0).unwrap();
+            let (_, _, base_pcm) = gore_fmod::read_wav_pcm16(&wav).unwrap();
+            assert_eq!(base_pcm, base_pat, "raw winner must supply the base");
+        }
+
+        run(false);
+        run(true);
+    }
+
+    #[test]
+    fn apply_raw_banks_casefold_last_wins_in_both_orders() {
+        fn run(reverse: bool) {
+            let g = FakeGame::new();
+            let key = gore_fmod::GOTHIC_STUDIO_KEY;
+            let live = g.bank("Voice.bank");
+            fs::write(&live, build_pristine_bank("shout", 44100, &[0i16; 16], key)).unwrap();
+
+            let bytes_a = build_pristine_bank("shout", 44100, &[111i16; 24], key);
+            let bytes_b = build_pristine_bank("shout", 44100, &[222i16; 32], key);
+            let a = g.add_rawfile_mod(
+                "raw-a",
+                "RawA",
+                RawTarget::Bank {
+                    name: "Voice.bank".into(),
+                },
+                &bytes_a,
+            );
+            let b = g.add_rawfile_mod(
+                "raw-b",
+                "RawB",
+                RawTarget::Bank {
+                    name: "voice.BANK".into(),
+                },
+                &bytes_b,
+            );
+            let (entries, expected) = if reverse {
+                ([(b.as_str(), true), (a.as_str(), true)], &bytes_a)
+            } else {
+                ([(a.as_str(), true), (b.as_str(), true)], &bytes_b)
+            };
+
+            let report = apply_loadout(&g.root, &g.lib, &loadout(&entries)).unwrap();
+            assert!(
+                report.warnings.is_empty(),
+                "warnings: {:?}",
+                report.warnings
+            );
+            assert_eq!(fs::read(&live).unwrap().as_slice(), expected.as_slice());
+
+            let bank_names: Vec<String> = fs::read_dir(live.parent().unwrap())
+                .unwrap()
+                .filter_map(Result::ok)
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.to_lowercase().ends_with(".bank"))
+                .collect();
+            // Windows keeps the last winner's spelling for this one case-insensitive file. Unix
+            // test hosts resolve back to the single existing entry to emulate that identity.
+            let expected_name = if cfg!(windows) && !reverse {
+                "voice.BANK"
+            } else {
+                "Voice.bank"
+            };
+            assert_eq!(bank_names, vec![expected_name]);
+        }
+
+        run(false);
+        run(true);
     }
 
     // ── SCRIPTS materialization ─────────────────────────────────────────────────────────────────
@@ -4067,6 +4637,156 @@ mod tests {
         );
     }
 
+    #[test]
+    fn apply_rejects_stale_script_minis_regardless_of_mod_origin() {
+        for (kind, id) in [
+            (ModKind::Goremod, "gore-script-mini"),
+            (ModKind::ForeignMixed, "external-script-mini"),
+        ] {
+            let g = FakeGame::new();
+            let mut base = build_script_cache(&["_gore_base"]);
+            base[..16].copy_from_slice(&[0x11; 16]);
+            fs::write(g.script_cache(), &base).unwrap();
+
+            let mut mini = build_script_cache(&["_gore_added"]);
+            mini[..16].copy_from_slice(&[0x22; 16]);
+            let script = g.add_script_mod(id, "StaleScriptMini", "add", "_gore_added", &mini);
+            let sidecar = g.lib.join(&script).join(META_FILE);
+            let mut meta: ModEntryMeta =
+                serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+            meta.kind = kind;
+            fs::write(&sidecar, serde_json::to_vec_pretty(&meta).unwrap()).unwrap();
+            let before_tree = crate::tree_fingerprint(&g.root).unwrap();
+
+            let error = apply_loadout(&g.root, &g.lib, &loadout(&[(&script, true)]))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("does not match target base GUID")
+                    && error.contains("remap the module against this exact game cache"),
+                "{kind:?} must use the same script validation; unexpected error: {error}"
+            );
+            assert_no_apply_artifacts(&g, &g.script_cache(), &base);
+            assert_eq!(
+                crate::tree_fingerprint(&g.root).unwrap(),
+                before_tree,
+                "refused {kind:?} script composition must leave the game tree byte-identical"
+            );
+        }
+    }
+
+    #[test]
+    fn script_overlay_validates_an_external_raw_replacement_before_mutation() {
+        let g = FakeGame::new();
+        let base = build_script_cache(&["_gore_base"]);
+        fs::write(g.script_cache(), &base).unwrap();
+
+        let raw = g.add_rawfile_mod(
+            "external-raw-script",
+            "ExternalRawScript",
+            RawTarget::ScriptCache,
+            b"not a script cache",
+        );
+        let raw_sidecar = g.lib.join(&raw).join(META_FILE);
+        let mut raw_meta: ModEntryMeta =
+            serde_json::from_slice(&fs::read(&raw_sidecar).unwrap()).unwrap();
+        raw_meta.kind = ModKind::ForeignRawfile;
+        fs::write(&raw_sidecar, serde_json::to_vec_pretty(&raw_meta).unwrap()).unwrap();
+
+        let mini = build_script_cache(&["_gore_added"]);
+        let patch = g.add_script_mod(
+            "script-overlay",
+            "ScriptOverlay",
+            "add",
+            "_gore_added",
+            &mini,
+        );
+        let before_tree = crate::tree_fingerprint(&g.root).unwrap();
+
+        let error = apply_loadout(&g.root, &g.lib, &loadout(&[(&raw, true), (&patch, true)]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("prepare script composition"),
+            "unexpected error: {error}"
+        );
+        assert_no_apply_artifacts(&g, &g.script_cache(), &base);
+        assert_eq!(
+            crate::tree_fingerprint(&g.root).unwrap(),
+            before_tree,
+            "an invalid external raw base must be refused before the game changes"
+        );
+    }
+
+    #[test]
+    fn script_overlay_uses_complete_raw_replacement_as_its_base_in_both_orders() {
+        use gore_as::cache::walk_modules::{module_count, module_names};
+
+        fn run(reverse: bool) {
+            let g = FakeGame::new();
+
+            let mut pristine = build_script_cache(&["_installed_pristine"]);
+            pristine[..16].copy_from_slice(&[0x11; 16]);
+            fs::write(g.script_cache(), &pristine).unwrap();
+
+            // A complete replacement owns its GUID. The mini was built against that replacement,
+            // not against the installed cache, so it carries the replacement's exact GUID.
+            let raw_guid = [0xa5; 16];
+            let mut raw_cache = build_script_cache(&["_raw_base"]);
+            raw_cache[..16].copy_from_slice(&raw_guid);
+            let raw = g.add_rawfile_mod(
+                "raw-script-base",
+                "RawScriptBase",
+                RawTarget::ScriptCache,
+                &raw_cache,
+            );
+
+            let mut mini = build_script_cache(&["_raw_patch"]);
+            mini[..16].copy_from_slice(&raw_guid);
+            let patch = g.add_script_mod(
+                "raw-bound-script-patch",
+                "RawBoundScriptPatch",
+                "add",
+                "_raw_patch",
+                &mini,
+            );
+
+            let entries = if reverse {
+                [(patch.as_str(), true), (raw.as_str(), true)]
+            } else {
+                [(raw.as_str(), true), (patch.as_str(), true)]
+            };
+            let report = match apply_loadout(&g.root, &g.lib, &loadout(&entries)) {
+                Ok(report) => report,
+                Err(error) => {
+                    assert_no_apply_artifacts(&g, &g.script_cache(), &pristine);
+                    panic!("valid raw-bound script composition failed: {error}");
+                }
+            };
+            assert!(
+                report.warnings.is_empty(),
+                "warnings: {:?}",
+                report.warnings
+            );
+
+            let live = fs::read(g.script_cache()).unwrap();
+            assert_eq!(
+                &live[..16],
+                &raw_guid,
+                "the raw base must own the output GUID"
+            );
+            assert_eq!(module_count(&live), 2);
+            assert_eq!(
+                module_names(&live).unwrap(),
+                vec!["_raw_base".to_string(), "_raw_patch".to_string()],
+                "the complete raw base and its bound patch must compose regardless of loadout order"
+            );
+        }
+
+        run(false);
+        run(true);
+    }
+
     /// The script `edit` op materializes a `replace_module`: a 2-module base has one module swapped
     /// in place (count unchanged), and the LIVE cache re-walks with the replacement present and the
     /// old module gone.
@@ -4108,70 +4828,302 @@ mod tests {
 
     #[test]
     fn apply_scripts_composes_two_independent_allow_new_minis() {
-        let g = FakeGame::new();
-        let base = build_script_cache(&["_gore_base"]);
-        fs::write(g.script_cache(), &base).unwrap();
-        let mini_a = build_script_cache_with_static_name("_gore_a", "FirstName", 1);
-        let mini_b = build_script_cache_with_static_name("_gore_b", "SecondName", 2);
-        let a = g.add_script_mod("mod-as-a", "AsA", "add", "_gore_a", &mini_a);
-        let b = g.add_script_mod("mod-as-b", "AsB", "add", "_gore_b", &mini_b);
+        fn run(reverse: bool) -> ScriptAssignments {
+            let g = FakeGame::new();
+            let base = build_script_cache(&["_gore_base"]);
+            fs::write(g.script_cache(), &base).unwrap();
+            // These two real production-domain ScriptObject identities have the same masked FNV
+            // start, 0x0B3F6760. Independently prepared minis therefore carry the same T2 ID even
+            // though their other provisional keys differ. The old sequential path rejected the
+            // second T2/T7 row; the loadout plan must allocate both identities together.
+            const COLLIDING_TYPE_ID: i32 = 0x0B3F_6760;
+            let mini_a = build_script_cache_with_static_name_and_keys(
+                "_gore_collision_14",
+                "FirstName",
+                "CollisionType1901",
+                1,
+                1,
+                COLLIDING_TYPE_ID,
+            );
+            let mini_b = build_script_cache_with_static_name_and_keys(
+                "_gore_collision_7",
+                "SecondName",
+                "CollisionType2149",
+                2,
+                2,
+                COLLIDING_TYPE_ID,
+            );
+            let a = g.add_script_mod("mod-as-a", "AsA", "add", "_gore_collision_14", &mini_a);
+            let b = g.add_script_mod("mod-as-b", "AsB", "add", "_gore_collision_7", &mini_b);
+            let ordered = if reverse {
+                loadout(&[(&b, true), (&a, true)])
+            } else {
+                loadout(&[(&a, true), (&b, true)])
+            };
 
-        let report = apply_loadout(&g.root, &g.lib, &loadout(&[(&a, true), (&b, true)])).unwrap();
-        assert!(
-            report.warnings.is_empty(),
-            "warnings: {:?}",
-            report.warnings
+            let report = apply_loadout(&g.root, &g.lib, &ordered).unwrap();
+            assert!(
+                report.warnings.is_empty(),
+                "warnings: {:?}",
+                report.warnings
+            );
+
+            let live = fs::read(g.script_cache()).unwrap();
+            let names = gore_as::cache::walk_modules::module_names(&live).unwrap();
+            let expected_names = if reverse {
+                vec!["_gore_base", "_gore_collision_7", "_gore_collision_14"]
+            } else {
+                vec!["_gore_base", "_gore_collision_14", "_gore_collision_7"]
+            };
+            assert_eq!(names, expected_names);
+            let refs = gore_as::cache::refs::RefResolver::build(&live).unwrap();
+            let expected_static = if reverse {
+                ["SecondName", "FirstName"]
+            } else {
+                ["FirstName", "SecondName"]
+            };
+            assert_eq!(refs.static_name(0), Some(expected_static[0]));
+            assert_eq!(refs.static_name(1), Some(expected_static[1]));
+
+            let assignments = script_assignments(&live);
+            let type_1 = assignments.type_ids["CollisionType1901"];
+            let type_2 = assignments.type_ids["CollisionType2149"];
+            assert_ne!(type_1, type_2);
+            assert_eq!(refs.type_by_id(type_1), Some("CollisionType1901"));
+            assert_eq!(refs.type_by_id(type_2), Some("CollisionType2149"));
+            let func_1 = assignments.function_ids["ProbeFunc1"];
+            let func_2 = assignments.function_ids["ProbeFunc2"];
+            assert_ne!(func_1, func_2);
+            assert_eq!(refs.func_by_id(func_1), Some("ProbeFunc1"));
+            assert_eq!(refs.func_by_id(func_2), Some("ProbeFunc2"));
+            assert_eq!(refs.member(type_1, 4), Some("ProbeField1"));
+            assert_eq!(refs.member(type_2, 4), Some("ProbeField2"));
+            let functions =
+                gore_as::cache::walk_modules::collect_function_bytecodes(&live).unwrap();
+            let indices: Vec<u16> = functions
+                .iter()
+                .filter_map(|function| {
+                    gore_as::cache::disasm::disassemble(&function.bytecode)
+                        .unwrap()
+                        .into_iter()
+                        .find(|ins| ins.op.name == "STR")
+                        .map(|instruction| instruction.words[0])
+                })
+                .collect();
+            assert_eq!(indices, vec![0, 1], "later mini operand must be rebased");
+            assignments
+        }
+
+        let forward = run(false);
+        let reverse = run(true);
+        assert_eq!(
+            forward, reverse,
+            "portable identities must keep the same canonical pointer/ID assignment under loadout reorder"
         );
-
-        let live = fs::read(g.script_cache()).unwrap();
-        let names = gore_as::cache::walk_modules::module_names(&live).unwrap();
-        assert_eq!(names, vec!["_gore_base", "_gore_a", "_gore_b"]);
-        let refs = gore_as::cache::refs::RefResolver::build(&live).unwrap();
-        assert_eq!(refs.static_name(0), Some("FirstName"));
-        assert_eq!(refs.static_name(1), Some("SecondName"));
-        assert_eq!(refs.type_by_id(0x0801_0001), Some("ProbeType1"));
-        assert_eq!(refs.type_by_id(0x0801_0002), Some("ProbeType2"));
-        assert_eq!(refs.func_by_id(1_000_001), Some("ProbeFunc1"));
-        assert_eq!(refs.func_by_id(1_000_002), Some("ProbeFunc2"));
-        assert_eq!(refs.member(0x0801_0001, 4), Some("ProbeField1"));
-        assert_eq!(refs.member(0x0801_0002, 4), Some("ProbeField2"));
-        let functions = gore_as::cache::walk_modules::collect_function_bytecodes(&live).unwrap();
-        let indices: Vec<u16> = functions
-            .iter()
-            .map(|function| {
-                gore_as::cache::disasm::disassemble(&function.bytecode)
-                    .unwrap()
-                    .into_iter()
-                    .find(|ins| ins.op.name == "STR")
-                    .unwrap()
-                    .words[0]
-            })
-            .collect();
-        assert_eq!(indices, vec![0, 1], "later mini operand must be rebased");
     }
 
-    /// The script-cache arm's rawfile path: a `RawFile{ScriptCache}` with arbitrary bytes and NO
-    /// script patches is written to the live cache VERBATIM (base with no overlay). This exercises
-    /// the deterministic orchestration of the script-cache target without needing real gore-as
-    /// bytes — the whole-file replacement that a script rawfile performs.
+    #[test]
+    fn apply_scripts_same_target_keeps_later_winner_and_independent_target() {
+        fn run(reverse: bool) {
+            let g = FakeGame::new();
+            let base = build_script_cache(&["_gore_base"]);
+            fs::write(g.script_cache(), &base).unwrap();
+
+            // Both contenders claim the exact same manifest target and carry that same module name.
+            // Their private symbols make it observable which mini actually reached composition.
+            let mini_a = build_script_cache_with_static_name_and_keys(
+                "_gore_shared",
+                "SharedFromA",
+                "SharedTypeA",
+                31,
+                31,
+                0x0801_0031,
+            );
+            let mini_b = build_script_cache_with_static_name_and_keys(
+                "_gore_shared",
+                "SharedFromB",
+                "SharedTypeB",
+                32,
+                32,
+                0x0801_0032,
+            );
+            let independent_mini = build_script_cache_with_static_name_and_keys(
+                "_gore_independent",
+                "IndependentName",
+                "IndependentType",
+                33,
+                33,
+                0x0801_0033,
+            );
+            let a = g.add_script_mod("script-a", "Script A", "add", "_gore_shared", &mini_a);
+            let independent = g.add_script_mod(
+                "script-independent",
+                "Independent",
+                "add",
+                "_gore_independent",
+                &independent_mini,
+            );
+            let b = g.add_script_mod("script-b", "Script B", "add", "_gore_shared", &mini_b);
+            let ordered = if reverse {
+                loadout(&[(&b, true), (&independent, true), (&a, true)])
+            } else {
+                loadout(&[(&a, true), (&independent, true), (&b, true)])
+            };
+
+            apply_loadout(&g.root, &g.lib, &ordered).unwrap();
+
+            let live = fs::read(g.script_cache()).unwrap();
+            assert_eq!(
+                gore_as::cache::walk_modules::module_names(&live).unwrap(),
+                vec!["_gore_base", "_gore_independent", "_gore_shared"]
+            );
+            let refs = gore_as::cache::refs::RefResolver::build(&live).unwrap();
+            let (winner_name, winner_type, loser_type) = if reverse {
+                ("SharedFromA", "SharedTypeA", "SharedTypeB")
+            } else {
+                ("SharedFromB", "SharedTypeB", "SharedTypeA")
+            };
+            assert_eq!(refs.static_name(0), Some("IndependentName"));
+            assert_eq!(refs.static_name(1), Some(winner_name));
+            assert_eq!(refs.static_name(2), None, "only two minis may be composed");
+
+            let assignments = script_assignments(&live);
+            assert!(assignments.type_ids.contains_key("IndependentType"));
+            assert!(assignments.type_ids.contains_key(winner_type));
+            assert!(
+                !assignments.type_ids.contains_key(loser_type),
+                "the earlier entry for one exact module target must not reach planning or compose"
+            );
+        }
+
+        run(false);
+        run(true);
+    }
+
+    /// A standalone `RawFile{ScriptCache}` is structurally validated from its private candidate,
+    /// then that same candidate is published VERBATIM. Its GUID belongs to the complete replacement
+    /// and deliberately need not match the installed cache. Origin never changes this policy.
     #[test]
     fn apply_scripts_rawfile_written_verbatim() {
-        let g = FakeGame::new();
-        // A live pristine cache that must be fully replaced by the rawfile.
-        fs::write(g.script_cache(), b"PRISTINE-CACHE-BYTES").unwrap();
-        let raw = b"\x00\x01\x02RAW-SCRIPT-CACHE\xff\xfe".to_vec();
-        let a = g.add_rawfile_mod("mod-rawsc", "RawSc", RawTarget::ScriptCache, &raw);
+        for (kind, id, guid) in [
+            (ModKind::Goremod, "gore-raw-script", 0xa5),
+            (ModKind::ForeignRawfile, "foreign-raw-script", 0x5a),
+        ] {
+            let g = FakeGame::new();
+            let pristine = build_script_cache(&["_gore_pristine"]);
+            fs::write(g.script_cache(), &pristine).unwrap();
 
-        let report = apply_loadout(&g.root, &g.lib, &loadout(&[(&a, true)])).unwrap();
-        assert!(
-            report.warnings.is_empty(),
-            "warnings: {:?}",
-            report.warnings
+            let mut raw = build_script_cache(&["_complete_replacement"]);
+            raw[..16].copy_from_slice(&[guid; 16]);
+            assert_ne!(&raw[..16], &pristine[..16]);
+            let entry = g.add_rawfile_mod(id, "RawSc", RawTarget::ScriptCache, &raw);
+            let sidecar = g.lib.join(&entry).join(META_FILE);
+            let mut meta: ModEntryMeta =
+                serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+            meta.kind = kind;
+            fs::write(&sidecar, serde_json::to_vec_pretty(&meta).unwrap()).unwrap();
+
+            let report = apply_loadout(&g.root, &g.lib, &loadout(&[(&entry, true)])).unwrap();
+            assert!(
+                report.warnings.is_empty(),
+                "{kind:?} warnings: {:?}",
+                report.warnings
+            );
+            assert_eq!(
+                fs::read(g.script_cache()).unwrap(),
+                raw,
+                "{kind:?} full ScriptCache replacement must remain byte-identical"
+            );
+        }
+    }
+
+    #[test]
+    fn standalone_script_rawfiles_reject_bad_containers_before_mutation() {
+        let valid = build_script_cache(&["_complete_replacement"]);
+        let short = vec![0u8; gore_as::cache::header::CacheHeader::SIZE - 1];
+        let mut wrong_magic = valid.clone();
+        wrong_magic[0x10..0x14].copy_from_slice(&0xdead_beefu32.to_le_bytes());
+        let mut truncated = valid.clone();
+        truncated.pop();
+        let mut impossible_count = valid.clone();
+        impossible_count[0x14..0x18].copy_from_slice(&u32::MAX.to_le_bytes());
+        let duplicate_module_key = build_script_cache(&["DuplicateModule", "DuplicateModule"]);
+
+        for (case, malformed) in [
+            ("short", short),
+            ("wrong-magic", wrong_magic),
+            ("truncated", truncated),
+            ("impossible-count", impossible_count),
+            ("duplicate-module-key", duplicate_module_key),
+        ] {
+            for (kind, origin) in [
+                (ModKind::Goremod, "gore"),
+                (ModKind::ForeignRawfile, "foreign"),
+            ] {
+                let g = FakeGame::new();
+                let pristine = build_script_cache(&["_gore_pristine"]);
+                fs::write(g.script_cache(), &pristine).unwrap();
+                let id = format!("{origin}-{case}");
+                let entry = g.add_rawfile_mod(
+                    &id,
+                    "MalformedScriptCache",
+                    RawTarget::ScriptCache,
+                    &malformed,
+                );
+                let sidecar = g.lib.join(&entry).join(META_FILE);
+                let mut meta: ModEntryMeta =
+                    serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+                meta.kind = kind;
+                fs::write(&sidecar, serde_json::to_vec_pretty(&meta).unwrap()).unwrap();
+
+                let error = apply_loadout(&g.root, &g.lib, &loadout(&[(&entry, true)]))
+                    .unwrap_err()
+                    .to_string();
+                assert!(
+                    error.contains("validate standalone script cache"),
+                    "{kind:?}/{case} unexpected error: {error}"
+                );
+                assert_no_apply_artifacts(&g, &g.script_cache(), &pristine);
+            }
+        }
+    }
+
+    #[test]
+    fn standalone_script_rawfile_uses_patch_base_limit_before_snapshot() {
+        let g = FakeGame::new();
+        let pristine = build_script_cache(&["_gore_pristine"]);
+        fs::write(g.script_cache(), &pristine).unwrap();
+        let raw = build_script_cache(&["_complete_replacement"]);
+        let entry = g.add_rawfile_mod(
+            "bounded-raw-script",
+            "BoundedRawScript",
+            RawTarget::ScriptCache,
+            &raw,
         );
+        let limit = u64::try_from(raw.len() - 1).unwrap();
+        let before_tree = crate::tree_fingerprint(&g.root).unwrap();
+
+        let error = apply_loadout_with_limits(
+            &g.root,
+            &g.lib,
+            &loadout(&[(&entry, true)]),
+            ApplyLimits {
+                max_patch_base_bytes: limit,
+                ..DEFAULT_APPLY_LIMITS
+            },
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains(&format!("raw-file payload exceeds the {limit} byte limit")),
+            "unexpected error: {error}"
+        );
+        assert_no_apply_artifacts(&g, &g.script_cache(), &pristine);
         assert_eq!(
-            fs::read(g.script_cache()).unwrap(),
-            raw,
-            "rawfile ScriptCache must be written verbatim as the live cache"
+            crate::tree_fingerprint(&g.root).unwrap(),
+            before_tree,
+            "the opened-file size gate must reject before snapshotting or game mutation"
         );
     }
 

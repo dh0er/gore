@@ -32,6 +32,13 @@ Three identities travel together and all three are sealed:
 | `G1R\Script\PrecompiledScript_Shipping.Cache` | the AngelScript module cache, carrying a GUID in its first 16 bytes |
 | `G1R\Script\Binds.Cache` | the native binding table: class → `/Script/` path, and field → type |
 
+Deployable AngelScript mini-caches are exact-generation artifacts too. GORE
+stamps the target cache GUID during remap and, before any installation mutation,
+requires the mini GUID to equal the effective base cache and resolves its
+bytecode and retained table dependencies against that base. A game update that
+changes the cache therefore invalidates old minis even when their module names
+still exist; rebuild or remap them against the new pristine cache.
+
 A fourth input is sealed but **not shipped by Steam**: the `.usmap` reflection
 dump under `G1R\Binaries\Win64\ue4ss\`. UE4SS generates it on your machine. Its
 filename carries the engine build (`G1R-5.4.3-<build>-<hash>.usmap`), so a stale

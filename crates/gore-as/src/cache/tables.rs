@@ -59,10 +59,16 @@ fn read_function_reference(c: &mut Cursor) -> Result<(), WireError> {
 }
 
 fn read_global_reference(c: &mut Cursor) -> Result<(), WireError> {
-    c.read_sia()?; // Name
+    // The game writes only string-literal names with AssignAsUTF8. The discriminator follows the
+    // three strings, so retain the validated bytes until it is available instead of guessing from
+    // the payload.
+    let name_pos = c.pos();
+    let name = c.read_sia_bytes()?; // Name
     c.read_sia()?; // Module
     c.read_sia()?; // Namespace
-    c.skip(4)?; // bIsString
+    if c.read_bool4()? {
+        name.decode_utf8(name_pos)?;
+    }
     Ok(())
 }
 
@@ -172,4 +178,66 @@ pub fn parse_tail_tables(bytes: &[u8], start: usize) -> Result<TailTables, WireE
         end: c.pos(),
         tables,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn push_sia_bytes(out: &mut Vec<u8>, value: &[u8]) {
+        if value.is_empty() {
+            out.extend_from_slice(&0i32.to_le_bytes());
+        } else {
+            out.extend_from_slice(&(value.len() as i32).to_le_bytes());
+            out.extend_from_slice(value);
+            out.push(0);
+        }
+    }
+
+    fn tail_with_global_name(name: &[u8], is_string: i32) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&0i32.to_le_bytes()); // TypeReferences
+        out.extend_from_slice(&0i32.to_le_bytes()); // TypeIdReferenceToPointer
+        out.extend_from_slice(&0i32.to_le_bytes()); // FunctionReferences
+        out.extend_from_slice(&0i32.to_le_bytes()); // FunctionIdReferenceToPointer
+        out.extend_from_slice(&1i32.to_le_bytes()); // GlobalReferences
+        out.extend_from_slice(&0x3000i64.to_le_bytes());
+        push_sia_bytes(&mut out, name);
+        push_sia_bytes(&mut out, b""); // Module
+        push_sia_bytes(&mut out, b""); // Namespace
+        out.extend_from_slice(&is_string.to_le_bytes());
+        out.extend_from_slice(&0i32.to_le_bytes()); // StaticNames
+        out.extend_from_slice(&0i32.to_le_bytes()); // PropertyReferences
+        out
+    }
+
+    #[test]
+    fn global_name_encoding_is_selected_only_after_b_is_string() {
+        let utf8 = tail_with_global_name("Grüße 世界".as_bytes(), 1);
+        assert_eq!(parse_tail_tables(&utf8, 0).unwrap().end, utf8.len());
+
+        let ansi = tail_with_global_name(&[0xff], 0);
+        assert_eq!(parse_tail_tables(&ansi, 0).unwrap().end, ansi.len());
+
+        let invalid_utf8 = tail_with_global_name(&[0xff], 1);
+        assert!(matches!(
+            parse_tail_tables(&invalid_utf8, 0),
+            Err(WireError::InvalidSia {
+                detail: "script string literal is not valid UTF-8",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn global_string_discriminator_must_be_a_canonical_archive_bool() {
+        assert!(matches!(
+            parse_tail_tables(&tail_with_global_name(b"literal", 2), 0),
+            Err(WireError::BadLen {
+                field: "bool",
+                len: 2,
+                ..
+            })
+        ));
+    }
 }

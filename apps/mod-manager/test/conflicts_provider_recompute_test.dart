@@ -371,6 +371,23 @@ void main() {
     expect(chain.winnerId, isNull);
   });
 
+  test('raw-base patch info advisory is ordered but has no winner', () {
+    const conflict = ConflictView(
+      kind: 'raw_file',
+      target: 'script_cache',
+      modIds: ['patch', 'raw'],
+      severity: 'info',
+    );
+    for (final order in [
+      const ['raw', 'patch'],
+      const ['patch', 'raw'],
+    ]) {
+      final chain = orderConflictChain(conflict, order);
+      expect(chain.modIds, order);
+      expect(chain.winnerId, isNull);
+    }
+  });
+
   test('proven soft conflict keeps later-wins winner', () {
     const conflict = ConflictView(
       kind: 'cdo',

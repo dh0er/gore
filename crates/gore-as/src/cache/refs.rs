@@ -91,6 +91,10 @@ pub struct RefResolver {
 impl RefResolver {
     /// Parse a cache's 7 tail tables into name lookups.
     pub fn build(bytes: &[u8]) -> Result<Self, WireError> {
+        // Bound all serialized row counts/bytes before the resolver materializes its lookup maps.
+        // Bytediff and other public readers accept external caches without going through the
+        // sequential composition guard, so they need the same allocation-light gate here.
+        super::remap::preflight_tail_tables(bytes)?;
         let tail = module_region_end(bytes)?;
         let mut c = Cursor::at(bytes, tail);
         let mut r = RefResolver::default();
@@ -186,10 +190,16 @@ impl RefResolver {
         c.ensure_minimum_remaining(global_reference_count, 24, "GlobalReferences")?;
         for _ in 0..global_reference_count {
             let key = c.read_i64()?;
-            let name = c.read_sia()?;
+            let name_pos = c.pos();
+            let name = c.read_sia_bytes()?;
             c.read_sia()?; // Module
             let ns = c.read_sia()?; // Namespace
             let is_string = c.read_bool4()?;
+            let name = if is_string {
+                name.decode_utf8(name_pos)?
+            } else {
+                name.decode_ansi()
+            };
             if is_string {
                 r.global_is_string.insert(key);
             }
@@ -995,8 +1005,14 @@ mod tests {
         bytes.extend_from_slice(&50_000_000i32.to_le_bytes());
         let error = RefResolver::build(&bytes).unwrap_err();
         assert!(
-            error.to_string().contains("unexpected end of data"),
-            "{error}"
+            matches!(
+                error,
+                WireError::BadLen {
+                    field: "tail keyed rows",
+                    ..
+                }
+            ),
+            "unexpected error: {error}"
         );
     }
 

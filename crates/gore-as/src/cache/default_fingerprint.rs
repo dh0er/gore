@@ -23,6 +23,7 @@ use super::default_tag_map::normalize_reference_proven_tag_map_operands;
 use super::disasm::disassemble;
 use super::header::CacheHeader;
 use super::model::parse_modules;
+use super::remap::{preflight_cache_module_work, preflight_tail_tables};
 use super::tables::parse_tail_tables;
 use super::walk_modules::{collect_function_bytecode_spans, module_region_end};
 
@@ -78,6 +79,9 @@ struct NormalizedRange {
 pub fn combined_default_cache_fingerprint(
     cache: &[u8],
 ) -> Result<DefaultCacheFingerprint, DefaultFingerprintError> {
+    // Keep resource-limit failures on the cache-structure error path rather than wrapping them as
+    // tag-map findings, and reject them before the tag normalizer clones the complete cache.
+    preflight_default_cache(cache)?;
     let (mut normalized, tag_report) = normalize_reference_proven_tag_map_operands(cache)
         .map_err(|error| DefaultFingerprintError::TagMap(error.to_string()))?;
     let scalar_ranges = scalar_default_operand_ranges(&normalized)?;
@@ -122,9 +126,11 @@ pub fn combined_default_cache_fingerprint(
 pub(crate) fn scalar_default_cache_sha256(
     cache: &[u8],
 ) -> Result<[u8; 32], DefaultFingerprintError> {
-    let mut normalized = cache.to_vec();
     let mut ranges = scalar_default_operand_ranges(cache)?;
     validate_non_overlapping(&mut ranges)?;
+    // The structural/resource checks and bytecode-span walk above must finish before duplicating a
+    // potentially large external cache.
+    let mut normalized = cache.to_vec();
     for operand in ranges {
         normalized
             .get_mut(operand.range)
@@ -221,8 +227,7 @@ fn validate_non_overlapping(ranges: &mut [NormalizedRange]) -> Result<(), Defaul
 }
 
 fn validate_cache(cache: &[u8]) -> Result<(), DefaultFingerprintError> {
-    CacheHeader::parse(cache)
-        .map_err(|error| DefaultFingerprintError::Header(error.to_string()))?;
+    preflight_default_cache(cache)?;
     let tail = module_region_end(cache)
         .map_err(|error| DefaultFingerprintError::Wire(error.to_string()))?;
     let tables = parse_tail_tables(cache, tail)
@@ -257,9 +262,75 @@ fn validate_cache(cache: &[u8]) -> Result<(), DefaultFingerprintError> {
     Ok(())
 }
 
+fn preflight_default_cache(cache: &[u8]) -> Result<(), DefaultFingerprintError> {
+    CacheHeader::parse(cache)
+        .map_err(|error| DefaultFingerprintError::Header(error.to_string()))?;
+    preflight_cache_module_work(cache)
+        .map_err(|error| DefaultFingerprintError::Wire(error.to_string()))?;
+    preflight_tail_tables(cache)
+        .map_err(|error| DefaultFingerprintError::Wire(error.to_string()))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use super::super::header::CACHE_MAGIC;
     use super::*;
+
+    fn cache_header(module_count: u32) -> Vec<u8> {
+        let mut cache = vec![0; CacheHeader::SIZE];
+        cache[0x10..0x14].copy_from_slice(&CACHE_MAGIC.to_le_bytes());
+        cache[0x14..0x18].copy_from_slice(&module_count.to_le_bytes());
+        cache
+    }
+
+    fn cache_with_excessive_tail_rows() -> Vec<u8> {
+        let mut cache = cache_header(0);
+        cache.extend_from_slice(&0i32.to_le_bytes()); // TypeReferences
+        cache.extend_from_slice(&1_000_001i32.to_le_bytes()); // TypeIdReferenceToPointer
+        cache
+    }
+
+    fn cache_with_excessive_modules() -> Vec<u8> {
+        const MODULE_COUNT: u32 = 1_000_001;
+        const MIN_MODULE_BYTES: usize = 60;
+        let mut cache = cache_header(MODULE_COUNT);
+        cache.resize(
+            CacheHeader::SIZE + MODULE_COUNT as usize * MIN_MODULE_BYTES,
+            0,
+        );
+        cache
+    }
+
+    #[test]
+    fn default_fingerprint_paths_map_tail_resource_limit_consistently() {
+        let cache = cache_with_excessive_tail_rows();
+        assert!(matches!(
+            combined_default_cache_fingerprint(&cache),
+            Err(DefaultFingerprintError::Wire(message))
+                if message.contains("tail keyed rows")
+        ));
+        assert!(matches!(
+            scalar_default_cache_sha256(&cache),
+            Err(DefaultFingerprintError::Wire(message))
+                if message.contains("tail keyed rows")
+        ));
+    }
+
+    #[test]
+    fn default_fingerprint_paths_preflight_module_work_before_cache_copies() {
+        let cache = cache_with_excessive_modules();
+        assert!(matches!(
+            combined_default_cache_fingerprint(&cache),
+            Err(DefaultFingerprintError::Wire(message))
+                if message.contains("module authority Modules")
+        ));
+        assert!(matches!(
+            scalar_default_cache_sha256(&cache),
+            Err(DefaultFingerprintError::Wire(message))
+                if message.contains("module authority Modules")
+        ));
+    }
 
     #[test]
     fn configured_combined_fingerprint_is_stable_under_tag_edits() {

@@ -54,6 +54,24 @@ Map<String, Object?> _libraryListResponse() => {
           'targets': ['Game/Items/ItLsTorch'],
           'coverage': 'exact',
         },
+        {
+          'type': 'file_patch',
+          'rel': 'files',
+          'targets': ['G1R/Content/Movies/Intro.bk2'],
+          'coverage': 'exact',
+        },
+        {
+          'type': 'pak_file_patch',
+          'rel': 'pak_files',
+          'targets': ['G1R/Content/Slate/Cursors/Normal/Normal.PNG'],
+          'coverage': 'exact',
+        },
+        {
+          'type': 'voice_archive_patch',
+          'rel': 'voice',
+          'targets': ['German.zip|NPC/Hero/hello.ogg'],
+          'coverage': 'exact',
+        },
       ],
     },
     {
@@ -186,6 +204,9 @@ void main() {
         'audio_patch',
         'texture_patch',
         'angel_script_patch',
+        'file_patch',
+        'pak_file_patch',
+        'voice_archive_patch',
       ]);
       final lua = a.components[0];
       expect(lua.name, 'torches');
@@ -200,6 +221,23 @@ void main() {
       expect(loc.opaque, isFalse);
       expect(loc.coverage, FootprintCoverage.exact);
       expect(loc.displayLabel, 'loc/patch.json');
+      final filePatch = a.components[5];
+      expect(filePatch.rel, 'files');
+      expect(filePatch.targets, ['G1R/Content/Movies/Intro.bk2']);
+      expect(filePatch.coverage, FootprintCoverage.exact);
+      expect(filePatch.displayLabel, 'files');
+      final pakFilePatch = a.components[6];
+      expect(pakFilePatch.rel, 'pak_files');
+      expect(pakFilePatch.targets, [
+        'G1R/Content/Slate/Cursors/Normal/Normal.PNG',
+      ]);
+      expect(pakFilePatch.coverage, FootprintCoverage.exact);
+      expect(pakFilePatch.displayLabel, 'pak_files');
+      final voiceArchivePatch = a.components[7];
+      expect(voiceArchivePatch.rel, 'voice');
+      expect(voiceArchivePatch.targets, ['German.zip|NPC/Hero/hello.ogg']);
+      expect(voiceArchivePatch.coverage, FootprintCoverage.exact);
+      expect(voiceArchivePatch.displayLabel, 'voice');
 
       final b = mods[1];
       expect(b.kind, 'foreign_mixed');

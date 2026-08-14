@@ -718,16 +718,14 @@ fn inspect_loadout_with_budgets(
                     .components
                     .iter()
                     .any(|component| matches!(component, ComponentInfo::Ue4ssLua { .. }));
+                // Component metadata is only a bounded projection. A malformed, legacy, or
+                // partially inspected sidecar may omit `targets`, but Apply will still read and
+                // compose the script manifest. Every enabled script component therefore requires
+                // the shipping cache; never let an empty advisory target list weaken preflight.
                 requires_script_cache |= meta
                     .components
                     .iter()
-                    .any(|component| {
-                        matches!(
-                            component,
-                            ComponentInfo::AngelScriptPatch { targets, .. }
-                                if !targets.is_empty()
-                        )
-                    });
+                    .any(|component| matches!(component, ComponentInfo::AngelScriptPatch { .. }));
             }
             Err(error) => match error {
                 EvidenceFailure::Problem(message) => {
@@ -2233,7 +2231,7 @@ mod tests {
         write_enabled_loadout(&loadout, &["deferred"]);
 
         let inspected = inspect_loadout(&library, &loadout);
-        assert!(!inspected.requires_script_cache);
+        assert!(inspected.requires_script_cache);
         let check = inspected.check;
         assert_eq!(check.state, PreflightStateV1::Ok);
         assert_eq!(check.code, "loadout_metadata_ready");
@@ -2246,7 +2244,7 @@ mod tests {
     }
 
     #[test]
-    fn script_cache_is_required_only_for_declared_script_edits() {
+    fn every_script_component_requires_the_shipping_cache() {
         let install = install_fixture();
         let library = install.path().join("library");
         fs::create_dir(&library).unwrap();
@@ -2279,8 +2277,13 @@ mod tests {
             )
         };
         let empty = inspect();
-        assert_eq!(empty.checks[1].code, "install_recognized");
-        assert_eq!(empty.checks[3].action, "review_apply");
+        assert_eq!(empty.checks[1].code, "install_incomplete");
+        assert_eq!(empty.checks[1].action, "verify_game_files");
+        assert!(empty.checks[1]
+            .items
+            .iter()
+            .any(|item| item.ends_with("PrecompiledScript_Shipping.Cache")));
+        assert_eq!(empty.checks[3].action, "verify_game_files");
 
         write_library_meta(
             &library,

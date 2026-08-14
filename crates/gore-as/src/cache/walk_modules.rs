@@ -28,16 +28,7 @@ const MIN_FUNCTION_IMPORT_SIZE: usize = 60;
 /// Parse the cache header + all `Modules`, returning `TAIL_OFF` (offset of the first
 /// global tail table = end of the last module).
 pub fn module_region_end(bytes: &[u8]) -> Result<usize, WireError> {
-    if bytes.len() < CacheHeader::SIZE {
-        return Err(WireError::Eof {
-            pos: 0,
-            need: CacheHeader::SIZE,
-            have: bytes.len(),
-        });
-    }
-    let mut c = Cursor::at(bytes, CacheHeader::SIZE); // skip FGuid+magic+count (0x18)
-                                                      // Re-read the count from its known offset (0x14) rather than trusting header parse.
-    let count = module_count(bytes) as usize;
+    let (mut c, count) = checked_module_cursor(bytes)?;
     for _ in 0..count {
         // Modules is TMap<FString key, FAngelscriptPrecompiledModule value>.
         c.read_fstring()?; // key (UE FString)
@@ -57,8 +48,7 @@ pub fn module_count(bytes: &[u8]) -> u32 {
 
 /// Collect every module's name (the `Modules` TMap key) in order.
 pub fn module_names(bytes: &[u8]) -> Result<Vec<String>, WireError> {
-    let mut c = Cursor::at(bytes, CacheHeader::SIZE);
-    let count = module_count(bytes) as usize;
+    let (mut c, count) = checked_module_cursor(bytes)?;
     let mut names = Vec::with_capacity(count);
     for _ in 0..count {
         names.push(c.read_fstring()?); // key
@@ -72,8 +62,7 @@ pub fn module_names(bytes: &[u8]) -> Result<Vec<String>, WireError> {
 /// module value (the cursor after `read_module`). Mirrors [`module_names`] but records
 /// positions — used by the splice to locate and replace a module's byte blob.
 pub fn module_ranges(bytes: &[u8]) -> Result<Vec<(String, usize, usize)>, WireError> {
-    let mut c = Cursor::at(bytes, CacheHeader::SIZE);
-    let count = module_count(bytes) as usize;
+    let (mut c, count) = checked_module_cursor(bytes)?;
     let mut ranges = Vec::with_capacity(count);
     for _ in 0..count {
         let start = c.pos();
@@ -149,6 +138,20 @@ pub fn collect_function_bytecodes(bytes: &[u8]) -> Result<Vec<FuncCode>, WireErr
 ///
 /// Function ordering and metadata are identical to [`collect_function_bytecodes`].
 pub fn collect_function_bytecode_spans(bytes: &[u8]) -> Result<Vec<FuncCodeSpan>, WireError> {
+    let (mut c, count) = checked_module_cursor(bytes)?;
+    let mut out = Vec::new();
+    for _ in 0..count {
+        c.read_fstring()?; // key
+        read_module_c(&mut c, &mut out)?;
+    }
+    Ok(out)
+}
+
+/// Start a module walk only after proving that the declared count can fit even the minimum
+/// serialized entry width. Besides bounding the loop, this proof must happen before callers use
+/// the not-yet-validated count as a `Vec` capacity: a 24-byte header with `u32::MAX` modules is
+/// malformed, not a request to reserve hundreds of gigabytes.
+fn checked_module_cursor(bytes: &[u8]) -> Result<(Cursor<'_>, usize), WireError> {
     if bytes.len() < CacheHeader::SIZE {
         return Err(WireError::Eof {
             pos: 0,
@@ -156,15 +159,10 @@ pub fn collect_function_bytecode_spans(bytes: &[u8]) -> Result<Vec<FuncCodeSpan>
             have: bytes.len(),
         });
     }
-    let mut c = Cursor::at(bytes, CacheHeader::SIZE);
+    let c = Cursor::at(bytes, CacheHeader::SIZE);
     let count = module_count(bytes) as usize;
     c.ensure_minimum_remaining(count, MIN_MODULE_ENTRY_SIZE, "Modules")?;
-    let mut out = Vec::new();
-    for _ in 0..count {
-        c.read_fstring()?; // key
-        read_module_c(&mut c, &mut out)?;
-    }
-    Ok(out)
+    Ok((c, count))
 }
 
 fn read_count_with_minimum(

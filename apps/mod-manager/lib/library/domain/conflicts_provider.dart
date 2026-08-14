@@ -123,7 +123,7 @@ List<ConflictView> conflictsForMod(List<ConflictView> conflicts, String modId) {
 
 /// A conflict's mod ids arranged in loadout order (lowest priority first),
 /// with the winner flagged for proven soft/hard conflicts. Informational
-/// unknown-footprint advisories have no winner. Load order list order is
+/// advisories (including compatible raw-base + patch composition) have no winner. Load order is
 /// priority-ascending on the Rust side, so the highest-priority (last)
 /// participant wins otherwise. Ids not present in [order] keep their original
 /// relative position at the front. When the conflict names fewer than two mods,
