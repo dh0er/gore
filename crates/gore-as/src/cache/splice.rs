@@ -595,8 +595,8 @@ impl SequentialMiniGuard {
     /// Validate `mini`, return the StaticNames-rebased bytes, and record its rows atomically.
     ///
     /// This advances validation history only; callers publishing a composed cache should prefer
-    /// [`Self::compose_add`] or [`Self::compose_edit`], which commit history only after the entire
-    /// prospective cache passes structural validation.
+    /// [`Self::compose_add`], [`Self::compose_edit`], or [`Self::compose_edit_or_add`], which commit
+    /// history only after the entire prospective cache passes structural validation.
     pub fn check_and_record(&mut self, mini: &[u8]) -> Result<Vec<u8>, SpliceError> {
         let (prepared, delta) = self.stage(mini)?;
         self.commit(delta);
@@ -655,6 +655,48 @@ impl SequentialMiniGuard {
         )?;
         let (prepared, delta) = self.stage(mini)?;
         let composed = replace_module(running, &prepared, target)?;
+        self.base
+            .reference_context
+            .validate_composed_declarations(&composed)
+            .map_err(SpliceError::ComposedModule)?;
+        let mut delta = delta;
+        delta.usage.composed_scan_bytes = scan_bytes;
+        self.commit(delta);
+        self.expected_running_sha256 = Sha256::digest(&composed).into();
+        Ok(composed)
+    }
+
+    /// Validate one winning replacement and edit `target` when it exists, or append the prepared
+    /// module when it does not. This is for a reduced same-target loadout where a shadowed earlier
+    /// `add` established that the winning `edit` may legitimately target a module absent from the
+    /// pristine base. The mini is staged once and guard history advances only after the chosen
+    /// composition passes every final validation.
+    pub fn compose_edit_or_add(
+        &mut self,
+        running: &[u8],
+        mini: &[u8],
+        target: &str,
+    ) -> Result<Vec<u8>, SpliceError> {
+        self.require_running_state(running)?;
+        let prospective = checked_composed_capacity(&[running.len(), mini.len()])?;
+        // In the missing-target branch, `replace_module` first performs its bounded target scan
+        // before `splice_auto` builds and validates the appended output. Charge that additional
+        // pass conservatively before staging so repeated upserts cannot bypass the cumulative cap.
+        let scan_bytes = u64::try_from(prospective)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(3);
+        checked_usage_add(
+            self.usage.composed_scan_bytes,
+            scan_bytes,
+            "composed validation scan bytes",
+            MAX_SEQUENTIAL_COMPOSED_SCAN_BYTES,
+        )?;
+        let (prepared, delta) = self.stage(mini)?;
+        let composed = match replace_module(running, &prepared, target) {
+            Ok(composed) => composed,
+            Err(SpliceError::NameNotFound(_)) => splice_auto(running, &prepared)?,
+            Err(error) => return Err(error),
+        };
         self.base
             .reference_context
             .validate_composed_declarations(&composed)

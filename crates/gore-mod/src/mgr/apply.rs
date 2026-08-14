@@ -30,7 +30,7 @@
 //! Voice ZIP edits are independent of rawfiles: they merge case-insensitively per archive/member,
 //! then rewrite each archive once from its own pristine/prior-backup base.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -395,11 +395,13 @@ fn snapshot_raw_payload(
 }
 
 /// Keep the last script entry for each exact manifest module target while preserving the original
-/// order of all winners. `analyze` uses the authored target string as `ScriptModule` identity, so
-/// this intentionally does not case-fold names or infer identity from the mini-cache contents.
+/// order of all winners. The returned set records winning edits whose target was introduced by an
+/// earlier, now-shadowed add; composition may retry those winners as adds if the effective base does
+/// not already contain the target. `analyze` uses the authored target string as `ScriptModule`
+/// identity, so this intentionally does not case-fold names or infer identity from mini contents.
 fn retain_last_script_target_winners(
     scripts: Vec<(String, String, PendingPayload)>,
-) -> crate::Result<Vec<(String, String, PendingPayload)>> {
+) -> crate::Result<(Vec<(String, String, PendingPayload)>, BTreeSet<String>)> {
     let mut last_by_target = BTreeMap::<String, usize>::new();
     for (index, (_, module, _)) in scripts.iter().enumerate() {
         last_by_target.insert(module.clone(), index);
@@ -411,12 +413,19 @@ fn retain_last_script_target_winners(
         .map_err(|error| {
             ModError::Other(format!("cannot reserve winning script entries: {error}"))
         })?;
+    let mut prior_add_targets = BTreeSet::new();
+    let mut winner_edits_after_add = BTreeSet::new();
     for (index, script) in scripts.into_iter().enumerate() {
         if last_by_target.get(&script.1) == Some(&index) {
+            if script.0 == "edit" && prior_add_targets.contains(&script.1) {
+                winner_edits_after_add.insert(script.1.clone());
+            }
             winners.push(script);
+        } else if script.0 == "add" {
+            prior_add_targets.insert(script.1.clone());
         }
     }
-    Ok(winners)
+    Ok((winners, winner_edits_after_add))
 }
 
 fn validate_standalone_script_candidate(
@@ -1356,7 +1365,8 @@ fn apply_loadout_with_limits(
         // Conflict analysis and the UI promise exact-target later-wins semantics. Reduce before
         // inventory, canonicalization, and composition so a shadowed mini cannot still collide in
         // the global ID plan or attempt a duplicate module splice.
-        scripts = retain_last_script_target_winners(scripts)?;
+        let (winning_scripts, winner_edits_after_add) = retain_last_script_target_winners(scripts)?;
+        scripts = winning_scripts;
         let (base, drifted) =
             match rawfile_sources.remove(&raw_target_identity(&RawTarget::ScriptCache)) {
                 Some((_target, source)) => (
@@ -1438,6 +1448,9 @@ fn apply_loadout_with_limits(
                 "add" => merge_guard
                     .compose_add(&acc, &mini)
                     .map_err(|e| ModError::Other(format!("splice {module}: {e}")))?,
+                "edit" if winner_edits_after_add.contains(module) => merge_guard
+                    .compose_edit_or_add(&acc, &mini, module)
+                    .map_err(|e| ModError::Other(format!("replace or splice {module}: {e}")))?,
                 "edit" => merge_guard
                     .compose_edit(&acc, &mini, module)
                     .map_err(|e| ModError::Other(format!("replace {module}: {e}")))?,
@@ -4998,6 +5011,69 @@ mod tests {
 
         run(false);
         run(true);
+    }
+
+    #[test]
+    fn apply_scripts_edit_after_shadowed_add_uses_only_the_winner() {
+        for target_exists_in_base in [false, true] {
+            let g = FakeGame::new();
+            let base_modules: &[&str] = if target_exists_in_base {
+                &["_gore_base", "_gore_shared"]
+            } else {
+                &["_gore_base"]
+            };
+            fs::write(g.script_cache(), build_script_cache(base_modules)).unwrap();
+
+            let shadowed = build_script_cache_with_static_name_and_keys(
+                "_gore_shared",
+                "ShadowedAdd",
+                "ShadowedType",
+                41,
+                41,
+                0x0801_0041,
+            );
+            let winner = build_script_cache_with_static_name_and_keys(
+                "_gore_shared",
+                "WinningEdit",
+                "WinningType",
+                42,
+                42,
+                0x0801_0042,
+            );
+            let add = g.add_script_mod(
+                "script-prerequisite-add",
+                "Prerequisite Add",
+                "add",
+                "_gore_shared",
+                &shadowed,
+            );
+            let edit = g.add_script_mod(
+                "script-winning-edit",
+                "Winning Edit",
+                "edit",
+                "_gore_shared",
+                &winner,
+            );
+
+            apply_loadout(&g.root, &g.lib, &loadout(&[(&add, true), (&edit, true)]))
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "same-target add -> edit failed (target_exists_in_base={target_exists_in_base}): {error}"
+                    )
+                });
+
+            let live = fs::read(g.script_cache()).unwrap();
+            assert_eq!(
+                gore_as::cache::walk_modules::module_names(&live).unwrap(),
+                vec!["_gore_base", "_gore_shared"]
+            );
+            let refs = gore_as::cache::refs::RefResolver::build(&live).unwrap();
+            assert_eq!(refs.static_name(0), Some("WinningEdit"));
+            assert_eq!(refs.static_name(1), None);
+            let assignments = script_assignments(&live);
+            assert!(assignments.type_ids.contains_key("WinningType"));
+            assert!(!assignments.type_ids.contains_key("ShadowedType"));
+        }
     }
 
     /// A standalone `RawFile{ScriptCache}` is structurally validated from its private candidate,
