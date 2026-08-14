@@ -1687,6 +1687,15 @@ class AppLocalizationsRu extends AppLocalizations {
   String get heroGroupAdvanced => 'Дополнительно';
 
   @override
+  String get heroGroupDiving => 'Ныряние';
+
+  @override
+  String get heroGroupSleep => 'Сон и отдых';
+
+  @override
+  String get heroGroupIntoxication => 'Опьянение';
+
+  @override
   String get heroEntryHeroTransform => 'Позиция';
 
   @override
@@ -1971,39 +1980,86 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String attributeManualFallbackLabel(String attributeId, String fallback) {
     String _temp0 = intl.Intl.selectLogic(attributeId, {
-      'Alcohol': 'Алкоголь',
-      'AlcoholDepletionRate': 'Скорость выведения алкоголя',
-      'MaxAlcohol': 'Максимальный уровень алкоголя',
-      'MaxSuperArmor': 'Максимальная суперброня',
-      'SuperArmor': 'Суперброня',
-      'Fatigue': 'Усталость',
-      'FillRatio': 'Коэффициент заполнения',
-      'FillRatioPeriod': 'Период заполнения',
-      'MaxFatigue': 'Максимальная усталость',
-      'MaxThresholdIndex': 'Максимальный индекс порога',
-      'RecoveryRatePerHourOfSleep': 'Восстановление за час сна',
-      'DamageMultiplier': 'Множитель урона',
-      'Toughness': 'Стойкость',
-      'ToughnessA': 'Стойкость A',
-      'ToughnessB': 'Стойкость B',
-      'ToughnessC': 'Стойкость C',
+      'SuperArmor': 'Стойкость',
+      'MaxSuperArmor': 'Макс. стойкость',
+      'DamageMultiplier': 'Получаемый урон',
+      'SpeedModifier': 'Скорость передвижения',
+      'Oxygen': 'Запас воздуха',
+      'MaxOxygen': 'Макс. запас воздуха',
+      'OxygenDepletionRate': 'Расход воздуха в секунду',
+      'OxygenRecoveryRate': 'Возврат воздуха в секунду',
+      'CriticalLevelPercent': 'Порог нехватки воздуха',
+      'SleepTime': 'Полезные часы сна',
+      'MaxSleepTime': 'Макс. полезные часы сна',
+      'SleepTimeRecoveryAmount': 'Возврат полезных часов',
+      'SleepTimeRecoveryPeriod': 'Интервал восполнения',
+      'MaxRestTime': 'Макс. время в кровати',
+      'Health_RecoveryRatePerHourOfSleep': 'Здоровье за час сна',
+      'Mana_RecoveryRatePerHourOfSleep': 'Мана за час сна',
+      'Alcohol': 'Уровень опьянения',
+      'MaxAlcohol': 'Макс. опьянение',
+      'AlcoholDepletionRate': 'Скорость отрезвления',
+      'Swampweed': 'Уровень болотника',
+      'MaxSwampweed': 'Макс. уровень болотника',
+      'SwampweedDepletionRate': 'Скорость выветривания',
       'XPExecutedBounty': 'Опыт за казнь',
-      'XPKillOrDefeatBounty': 'Опыт за убийство или победу',
-      'SpeedModifier': 'Модификатор скорости',
-      'CriticalLevelPercent': 'Критический уровень (%)',
-      'MaxOxygen': 'Максимальный запас кислорода',
-      'Oxygen': 'Кислород',
-      'OxygenDepletionRate': 'Скорость расхода кислорода',
-      'OxygenRecoveryRate': 'Скорость восстановления кислорода',
-      'MaxRestTime': 'Максимальное время отдыха',
-      'MaxSleepTime': 'Максимальное время сна',
-      'SleepTime': 'Время сна',
-      'SleepTimeRecoveryAmount': 'Объём восстановления во сне',
-      'SleepTimeRecoveryPeriod': 'Период восстановления во сне',
-      'MaxSwampweed': 'Максимальный запас болотника',
-      'Swampweed': 'Болотник',
-      'SwampweedDepletionRate': 'Скорость расхода болотника',
+      'XPKillOrDefeatBounty': 'Опыт за убийство',
       'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String attributeManualTooltip(String attributeId) {
+    String _temp0 = intl.Intl.selectLogic(attributeId, {
+      'SuperArmor': 'Сколько герой выдерживает, прежде чем удар его пошатнёт.',
+      'MaxSuperArmor':
+          'Полный запас стойкости; он растёт с уровнем и с надетой бронёй.',
+      'DamageMultiplier':
+          'Множитель урона, который получает герой: 1 — как обычно, больше — больнее.',
+      'SpeedModifier':
+          'Множитель того, как быстро герой двигается: 1 — как обычно.',
+      'Oxygen':
+          'Сколько секунд воздуха осталось под водой; на нуле герой тонет.',
+      'MaxOxygen':
+          'Сколько секунд герой может пробыть под водой; навык Ныряние это повышает.',
+      'OxygenDepletionRate':
+          'Сколько воздуха расходуется под водой каждую секунду.',
+      'OxygenRecoveryRate':
+          'Сколько воздуха возвращается каждую секунду после всплытия.',
+      'CriticalLevelPercent':
+          'Доля оставшегося воздуха, при которой игра предупреждает об угрозе утонуть.',
+      'SleepTime':
+          'Часы сна, которые ещё что-то дают; сверх них отдых уже ничего не восстанавливает.',
+      'MaxSleepTime':
+          'Наибольший запас полезных часов сна, который может держать герой.',
+      'SleepTimeRecoveryAmount':
+          'Сколько полезных часов сна возвращается при каждом восполнении.',
+      'SleepTimeRecoveryPeriod':
+          'Сколько времени проходит, прежде чем запас полезных часов сна восполнится снова.',
+      'MaxRestTime':
+          'Самое долгое пребывание в кровати за один раз, которое допускает игра.',
+      'Health_RecoveryRatePerHourOfSleep':
+          'Доля максимального здоровья, которая возвращается за каждый час сна.',
+      'Mana_RecoveryRatePerHourOfSleep':
+          'Доля максимальной маны, которая возвращается за каждый час сна.',
+      'Alcohol':
+          'Насколько герой пьян; высокие ступени меняют ловкость и ману на силу.',
+      'MaxAlcohol':
+          'Самый высокий уровень опьянения, которого может достичь герой.',
+      'AlcoholDepletionRate':
+          'Насколько быстро уровень опьянения падает обратно к трезвости.',
+      'Swampweed':
+          'Насколько герой одурманен; высокие ступени сдвигают его характеристики.',
+      'MaxSwampweed':
+          'Самый высокий уровень болотника, которого может достичь герой.',
+      'SwampweedDepletionRate':
+          'Насколько быстро проходит дурман от болотника.',
+      'XPExecutedBounty':
+          'Опыт, который получает тот, кто казнит этого персонажа.',
+      'XPKillOrDefeatBounty':
+          'Опыт, который получает тот, кто убьёт или победит этого персонажа.',
+      'other': '?',
     });
     return '$_temp0';
   }

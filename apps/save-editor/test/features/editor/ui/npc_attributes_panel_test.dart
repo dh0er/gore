@@ -191,8 +191,9 @@ void main() {
     await tester.pumpWidget(
       _wrap(
         _panel(
-          load: () async =>
-              NpcAttributesResult(attributes: [_row('DamageMultiplier', 1, 1)]),
+          load: () async => NpcAttributesResult(
+            attributes: [_row('XPKillOrDefeatBounty', 1, 1)],
+          ),
         ),
       ),
     );
@@ -201,7 +202,7 @@ void main() {
     // Only group present is Advanced (the catch-all), so it's selected and
     // its row is immediately visible.
     expect(find.text('Advanced'), findsWidgets);
-    expect(_npcBaseField('DamageMultiplier'), findsOneWidget);
+    expect(_npcBaseField('XPKillOrDefeatBounty'), findsOneWidget);
   });
 
   testWidgets('Thieving-only attributes produce NO Thieving group for NPCs', (

@@ -88,6 +88,7 @@ class NpcAttributesPanel extends StatefulWidget {
     this.initialPending,
     this.skillsSection,
     this.attributeLabel,
+    this.attributeTooltip,
   });
 
   final Future<NpcAttributesResult> Function() load;
@@ -126,6 +127,9 @@ class NpcAttributesPanel extends StatefulWidget {
   /// available.
   final AttributeLabelResolver? attributeLabel;
 
+  /// Resolves an attribute to a one-sentence explanation for its label tooltip.
+  final AttributeLabelResolver? attributeTooltip;
+
   @override
   State<NpcAttributesPanel> createState() => _NpcAttributesPanelState();
 }
@@ -156,6 +160,9 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
         HeroAttributeGroup.resistances => l10n.heroGroupResistances,
         // NPC thieving group is repurposed to host the skills editor.
         HeroAttributeGroup.thieving => l10n.heroGroupSkills,
+        HeroAttributeGroup.diving => l10n.heroGroupDiving,
+        HeroAttributeGroup.sleep => l10n.heroGroupSleep,
+        HeroAttributeGroup.intoxication => l10n.heroGroupIntoxication,
         HeroAttributeGroup.advanced => l10n.heroGroupAdvanced,
       };
 
@@ -164,6 +171,9 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
     HeroAttributeGroup.combat => Icons.shield_outlined,
     HeroAttributeGroup.resistances => Icons.security_outlined,
     HeroAttributeGroup.thieving => Icons.military_tech_outlined,
+    HeroAttributeGroup.diving => Icons.scuba_diving_outlined,
+    HeroAttributeGroup.sleep => Icons.bedtime_outlined,
+    HeroAttributeGroup.intoxication => Icons.local_bar_outlined,
     HeroAttributeGroup.advanced => Icons.tune,
   };
 
@@ -425,6 +435,9 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
               key: ValueKey((widget.reloadKey, a.key, a.basePath)),
               attribute: a,
               label: _displayLabel(a),
+              tooltip:
+                  widget.attributeTooltip?.call(a.key, _setClassFromPaths(a)) ??
+                  '',
               editable: widget.editable,
               initialBaseText: _pending[_pathKey(a.basePath)],
               initialCurrentText: _pending[_pathKey(a.currentPath)],
@@ -575,6 +588,7 @@ class _NpcAttributeRow extends StatefulWidget {
     super.key,
     required this.attribute,
     required this.label,
+    this.tooltip = '',
     required this.editable,
     required this.onBaseChanged,
     required this.onCurrentChanged,
@@ -584,6 +598,9 @@ class _NpcAttributeRow extends StatefulWidget {
 
   final NpcAttributeRow attribute;
   final String label;
+
+  /// One sentence on what this value does in the game. Empty = no tooltip.
+  final String tooltip;
   final bool editable;
   final ValueChanged<String> onBaseChanged;
   final ValueChanged<String> onCurrentChanged;
@@ -651,10 +668,20 @@ class _NpcAttributeRowState extends State<_NpcAttributeRow> {
               labelText: AppLocalizations.of(context).attributeCurrentValue,
             ),
           );
-          final rowLabel = Text(
-            widget.label,
-            style: Theme.of(context).textTheme.labelLarge,
-          );
+          // The label carries the explanation of what the value does in the
+          // game; rows we have nothing to say about stay plain text.
+          final Widget rowLabel = widget.tooltip.isEmpty
+              ? Text(
+                  widget.label,
+                  style: Theme.of(context).textTheme.labelLarge,
+                )
+              : Tooltip(
+                  message: widget.tooltip,
+                  child: Text(
+                    widget.label,
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                );
           if (compact) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

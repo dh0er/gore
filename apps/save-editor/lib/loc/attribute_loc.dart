@@ -1,3 +1,5 @@
+import 'package:goresave/features/editor/domain/hero_attributes.dart'
+    show heroAttributeKey;
 import 'package:goresave/l10n/app_localizations.dart';
 
 import 'game_lang.dart';
@@ -16,7 +18,7 @@ String localizedAttributeName(
   String? setClass,
   AppLocalizations? l10n,
 }) {
-  final fallback = readableAttributeName(attributeId, l10n);
+  final fallback = readableAttributeName(attributeId, l10n, setClass);
   if (catalog.isEmpty || attributeId.trim().isEmpty) return fallback;
 
   final id = _catalogPart(attributeId);
@@ -64,7 +66,11 @@ String localizedAttributeName(
 /// Human-friendly fallback for attributes absent from the loc catalog.
 /// Technical ids remain stable in the underlying edit paths; only their label
 /// is prettified here (`DamageMultiplier` -> `Damage multiplier`).
-String readableAttributeName(String attributeId, [AppLocalizations? l10n]) {
+String readableAttributeName(
+  String attributeId, [
+  AppLocalizations? l10n,
+  String? setClass,
+]) {
   final trimmed = attributeId.trim();
   if (trimmed.isEmpty) return attributeId;
   if (trimmed == 'SkillPoints') {
@@ -83,7 +89,25 @@ String readableAttributeName(String attributeId, [AppLocalizations? l10n]) {
   text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
   if (text.isEmpty) return trimmed;
   final readable = '${text[0].toUpperCase()}${text.substring(1).toLowerCase()}';
-  return l10n?.attributeManualFallbackLabel(trimmed, readable) ?? readable;
+  // Keyed by the curated view's composite key, so an id that means something
+  // different per attribute set (RecoveryRatePerHourOfSleep on Health vs Mana)
+  // can carry its own wording.
+  final key = heroAttributeKey(trimmed, setClass);
+  return l10n?.attributeManualFallbackLabel(key, readable) ?? readable;
+}
+
+/// One-sentence explanation of what an attribute does in the game, for the
+/// tooltip on its label. Empty when we have nothing worth saying, in which case
+/// the caller shows no tooltip at all.
+String attributeTooltip(
+  String attributeId, {
+  String? setClass,
+  AppLocalizations? l10n,
+}) {
+  if (l10n == null) return '';
+  final key = heroAttributeKey(attributeId.trim(), setClass);
+  final text = l10n.attributeManualTooltip(key);
+  return text == '?' ? '' : text;
 }
 
 String? _attributeSetName(String? setClass) {

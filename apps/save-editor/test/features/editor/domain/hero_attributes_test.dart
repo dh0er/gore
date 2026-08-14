@@ -34,8 +34,18 @@ TypedPropertyHit _heroHit(
 void main() {
   test('pairs BaseValue and CurrentValue leaves into one attribute', () {
     final attributes = parseHeroAttributes([
-      _heroHit('/Script/G1R.AttributeSet_Health', 'MaxHealth', 'BaseValue', '64'),
-      _heroHit('/Script/G1R.AttributeSet_Health', 'MaxHealth', 'CurrentValue', '64'),
+      _heroHit(
+        '/Script/G1R.AttributeSet_Health',
+        'MaxHealth',
+        'BaseValue',
+        '64',
+      ),
+      _heroHit(
+        '/Script/G1R.AttributeSet_Health',
+        'MaxHealth',
+        'CurrentValue',
+        '64',
+      ),
     ]);
 
     expect(attributes, hasLength(1));
@@ -51,10 +61,18 @@ void main() {
 
   test('keeps same-id attributes from different sets separate', () {
     final attributes = parseHeroAttributes([
-      _heroHit('/Script/G1R.AttributeSet_Health', 'RecoveryRatePerHourOfSleep',
-          'BaseValue', '0.125'),
-      _heroHit('/Script/G1R.AttributeSet_Mana', 'RecoveryRatePerHourOfSleep',
-          'BaseValue', '-0.125'),
+      _heroHit(
+        '/Script/G1R.AttributeSet_Health',
+        'RecoveryRatePerHourOfSleep',
+        'BaseValue',
+        '0.125',
+      ),
+      _heroHit(
+        '/Script/G1R.AttributeSet_Mana',
+        'RecoveryRatePerHourOfSleep',
+        'BaseValue',
+        '-0.125',
+      ),
     ]);
 
     expect(attributes, hasLength(2));
@@ -71,10 +89,20 @@ void main() {
     );
     final attributes = parseHeroAttributes([
       nonHero,
-      _heroHit('/Script/G1R.AttributeSet_Health', 'Health', 'BaseValue', '35',
-          editable: false),
-      _heroHit('/Script/G1R.AttributeSet_Health', 'Health', 'CurrentValue', '35',
-          type: 'StrProperty'),
+      _heroHit(
+        '/Script/G1R.AttributeSet_Health',
+        'Health',
+        'BaseValue',
+        '35',
+        editable: false,
+      ),
+      _heroHit(
+        '/Script/G1R.AttributeSet_Health',
+        'Health',
+        'CurrentValue',
+        '35',
+        type: 'StrProperty',
+      ),
     ]);
 
     expect(attributes, isEmpty);
@@ -86,11 +114,47 @@ void main() {
     // The per-weapon crit values are hidden from the curated view now; the
     // classifier still buckets any leftover into advanced.
     expect(heroAttributeGroup('Critical_OneHand'), HeroAttributeGroup.advanced);
-    expect(heroAttributeGroup('Resistance_Fire'), HeroAttributeGroup.resistances);
+    expect(
+      heroAttributeGroup('Resistance_Fire'),
+      HeroAttributeGroup.resistances,
+    );
     expect(heroAttributeGroup('PickPocketing'), HeroAttributeGroup.thieving);
     expect(heroAttributeGroup('MagicianLevel'), HeroAttributeGroup.advanced);
-    expect(heroAttributeGroup('Swampweed'), HeroAttributeGroup.advanced);
-    expect(heroAttributeGroup('SomeFutureAttribute'), HeroAttributeGroup.advanced);
+    expect(heroAttributeGroup('Swampweed'), HeroAttributeGroup.intoxication);
+    expect(heroAttributeGroup('Oxygen'), HeroAttributeGroup.diving);
+    expect(heroAttributeGroup('SleepTime'), HeroAttributeGroup.sleep);
+    expect(heroAttributeGroup('SpeedModifier'), HeroAttributeGroup.combat);
+    // Same id, different set: real when sleep restores health or mana, inert on
+    // Fatigue (which belongs to the unreachable Survival mode and is hidden).
+    expect(
+      heroAttributeGroup(
+        'RecoveryRatePerHourOfSleep',
+        '/Script/G1R.AttributeSet_Health',
+      ),
+      HeroAttributeGroup.sleep,
+    );
+    expect(
+      heroAttributeHidden(
+        'RecoveryRatePerHourOfSleep',
+        '/Script/G1R.AttributeSet_Fatigue',
+      ),
+      isTrue,
+    );
+    expect(
+      heroAttributeHidden(
+        'RecoveryRatePerHourOfSleep',
+        '/Script/G1R.AttributeSet_Mana',
+      ),
+      isFalse,
+    );
+    // The whole Survival trio is hidden: the abilities never activate.
+    for (final id in ['Hunger', 'Thirst', 'Fatigue', 'FillRatio']) {
+      expect(heroAttributeHidden(id), isTrue, reason: id);
+    }
+    expect(
+      heroAttributeGroup('SomeFutureAttribute'),
+      HeroAttributeGroup.advanced,
+    );
   });
 
   test('drops attributes the game derives from a learned skill', () {
@@ -101,12 +165,42 @@ void main() {
     // them here would be a control that silently does nothing, and MagicianLevel
     // carried the same label as the Talente row on top of that.
     final attributes = parseHeroAttributes([
-      _heroHit('/Script/G1R.AttributeSet_Mana', 'MagicianLevel', 'BaseValue', '0'),
-      _heroHit('/Script/G1R.AttributeSet_Mana', 'MagicianLevel', 'CurrentValue', '6'),
-      _heroHit('/Script/G1R.AttributeSet_Strength', 'Critical_OneHand', 'BaseValue', '0'),
-      _heroHit('/Script/G1R.AttributeSet_Strength', 'Critical_Fists', 'BaseValue', '0'),
-      _heroHit('/Script/G1R.AttributeSet_Strength', 'Critical_TwoHand', 'BaseValue', '0'),
-      _heroHit('/Script/G1R.AttributeSet_Strength', 'Critical_Orc', 'BaseValue', '0'),
+      _heroHit(
+        '/Script/G1R.AttributeSet_Mana',
+        'MagicianLevel',
+        'BaseValue',
+        '0',
+      ),
+      _heroHit(
+        '/Script/G1R.AttributeSet_Mana',
+        'MagicianLevel',
+        'CurrentValue',
+        '6',
+      ),
+      _heroHit(
+        '/Script/G1R.AttributeSet_Strength',
+        'Critical_OneHand',
+        'BaseValue',
+        '0',
+      ),
+      _heroHit(
+        '/Script/G1R.AttributeSet_Strength',
+        'Critical_Fists',
+        'BaseValue',
+        '0',
+      ),
+      _heroHit(
+        '/Script/G1R.AttributeSet_Strength',
+        'Critical_TwoHand',
+        'BaseValue',
+        '0',
+      ),
+      _heroHit(
+        '/Script/G1R.AttributeSet_Strength',
+        'Critical_Orc',
+        'BaseValue',
+        '0',
+      ),
       _heroHit('/Script/G1R.AttributeSet_Mana', 'MaxMana', 'BaseValue', '35'),
     ]);
 
@@ -116,13 +210,26 @@ void main() {
 
   test('sorts core attributes in display order before unknown ones', () {
     final attributes = parseHeroAttributes([
-      _heroHit('/Script/G1R.AttributeSet_Strength', 'Strength', 'BaseValue', '10'),
-      _heroHit('/Script/G1R.AttributeSet_Health', 'MaxHealth', 'BaseValue', '64'),
+      _heroHit(
+        '/Script/G1R.AttributeSet_Strength',
+        'Strength',
+        'BaseValue',
+        '10',
+      ),
+      _heroHit(
+        '/Script/G1R.AttributeSet_Health',
+        'MaxHealth',
+        'BaseValue',
+        '64',
+      ),
       _heroHit('/Script/G1R.AttributeSet_Health', 'Health', 'BaseValue', '35'),
     ]);
 
-    expect(attributes.map((a) => a.id).toList(),
-        ['Health', 'MaxHealth', 'Strength']);
+    expect(attributes.map((a) => a.id).toList(), [
+      'Health',
+      'MaxHealth',
+      'Strength',
+    ]);
   });
 
   test('labels SkillPoints as learn points', () {

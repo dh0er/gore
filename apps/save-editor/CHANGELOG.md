@@ -17,6 +17,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The advanced attributes are sorted into Combat & movement, Diving, Sleep &
+  rest and Intoxication instead of one long list, every value has a proper name
+  in your language, and hovering a name explains what it does in the game.
+- Values the game never acts on are gone from the attribute list: Toughness,
+  which no longer limits what you can carry, and hunger, thirst and fatigue,
+  which belong to a survival mode that cannot be switched on. They stay
+  editable under All data.
 - Saving is much faster: a save with eight changed values took eleven seconds
   and now takes one.
 

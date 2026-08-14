@@ -1677,6 +1677,15 @@ class AppLocalizationsDe extends AppLocalizations {
   String get heroGroupAdvanced => 'Erweitert';
 
   @override
+  String get heroGroupDiving => 'Tauchen';
+
+  @override
+  String get heroGroupSleep => 'Schlafen & Rasten';
+
+  @override
+  String get heroGroupIntoxication => 'Rausch';
+
+  @override
   String get heroEntryHeroTransform => 'Position';
 
   @override
@@ -1962,39 +1971,84 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String attributeManualFallbackLabel(String attributeId, String fallback) {
     String _temp0 = intl.Intl.selectLogic(attributeId, {
-      'Alcohol': 'Alkohol',
-      'AlcoholDepletionRate': 'Alkohol-Abbaurate',
-      'MaxAlcohol': 'Maximaler Alkoholwert',
-      'MaxSuperArmor': 'Maximale Superrüstung',
-      'SuperArmor': 'Superrüstung',
-      'Fatigue': 'Erschöpfung',
-      'FillRatio': 'Füllverhältnis',
-      'FillRatioPeriod': 'Zeitraum des Füllverhältnisses',
-      'MaxFatigue': 'Maximale Erschöpfung',
-      'MaxThresholdIndex': 'Maximaler Schwellenindex',
-      'RecoveryRatePerHourOfSleep': 'Erholung pro Schlafstunde',
-      'DamageMultiplier': 'Schadensmultiplikator',
-      'Toughness': 'Zähigkeit',
-      'ToughnessA': 'Zähigkeit A',
-      'ToughnessB': 'Zähigkeit B',
-      'ToughnessC': 'Zähigkeit C',
-      'XPExecutedBounty': 'EP-Belohnung für Hinrichtungen',
-      'XPKillOrDefeatBounty': 'EP-Belohnung für Tötungen oder Niederlagen',
-      'SpeedModifier': 'Geschwindigkeitsmodifikator',
-      'CriticalLevelPercent': 'Kritische Stufe (%)',
-      'MaxOxygen': 'Maximaler Sauerstoffwert',
-      'Oxygen': 'Sauerstoff',
-      'OxygenDepletionRate': 'Sauerstoff-Abbaurate',
-      'OxygenRecoveryRate': 'Sauerstoff-Erholungsrate',
-      'MaxRestTime': 'Maximale Ruhezeit',
-      'MaxSleepTime': 'Maximale Schlafzeit',
-      'SleepTime': 'Schlafzeit',
-      'SleepTimeRecoveryAmount': 'Schlafzeit-Erholungsmenge',
-      'SleepTimeRecoveryPeriod': 'Schlafzeit-Erholungsintervall',
-      'MaxSwampweed': 'Maximaler Sumpfkrautwert',
-      'Swampweed': 'Sumpfkraut',
-      'SwampweedDepletionRate': 'Sumpfkraut-Abbaurate',
+      'SuperArmor': 'Standfestigkeit',
+      'MaxSuperArmor': 'Max. Standfestigkeit',
+      'DamageMultiplier': 'Erlittener Schaden',
+      'SpeedModifier': 'Bewegungstempo',
+      'Oxygen': 'Atemluft',
+      'MaxOxygen': 'Max. Atemluft',
+      'OxygenDepletionRate': 'Luftverbrauch pro Sekunde',
+      'OxygenRecoveryRate': 'Lufterholung pro Sekunde',
+      'CriticalLevelPercent': 'Warnschwelle Atemluft',
+      'SleepTime': 'Erholsame Stunden übrig',
+      'MaxSleepTime': 'Max. erholsame Stunden',
+      'SleepTimeRecoveryAmount': 'Auffüllmenge',
+      'SleepTimeRecoveryPeriod': 'Auffüllintervall',
+      'MaxRestTime': 'Max. Zeit im Bett',
+      'Health_RecoveryRatePerHourOfSleep': 'Leben je Schlafstunde',
+      'Mana_RecoveryRatePerHourOfSleep': 'Mana je Schlafstunde',
+      'Alcohol': 'Alkoholpegel',
+      'MaxAlcohol': 'Max. Alkoholpegel',
+      'AlcoholDepletionRate': 'Ausnüchterungstempo',
+      'Swampweed': 'Sumpfkrautpegel',
+      'MaxSwampweed': 'Max. Sumpfkrautpegel',
+      'SwampweedDepletionRate': 'Abbautempo',
+      'XPExecutedBounty': 'EP fürs Hinrichten',
+      'XPKillOrDefeatBounty': 'EP fürs Töten',
       'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String attributeManualTooltip(String attributeId) {
+    String _temp0 = intl.Intl.selectLogic(attributeId, {
+      'SuperArmor':
+          'Wie viel der Held einsteckt, bevor ihn ein Treffer aus dem Tritt bringt.',
+      'MaxSuperArmor':
+          'Der volle Vorrat; er wächst mit der Stufe und mit der getragenen Rüstung.',
+      'DamageMultiplier':
+          'Faktor auf den Schaden, den der Held nimmt — 1 ist normal, höher tut mehr weh.',
+      'SpeedModifier':
+          'Faktor darauf, wie schnell sich der Held bewegt — 1 ist normal.',
+      'Oxygen':
+          'Verbleibende Sekunden Luft unter Wasser; bei null ertrinkt der Held.',
+      'MaxOxygen':
+          'Wie viele Sekunden der Held unter Wasser bleiben kann; das Talent Tauchen erhöht das.',
+      'OxygenDepletionRate':
+          'Wie viel Luft unter Wasser je Sekunde verbraucht wird.',
+      'OxygenRecoveryRate':
+          'Wie viel Luft nach dem Auftauchen je Sekunde zurückkommt.',
+      'CriticalLevelPercent':
+          'Anteil der Restluft, ab dem das Spiel vor dem Ertrinken warnt.',
+      'SleepTime':
+          'Schlafstunden, die noch etwas bringen; darüber hinaus gibt es keine Regeneration.',
+      'MaxSleepTime': 'Das größte Guthaben an erholsamen Stunden.',
+      'SleepTimeRecoveryAmount':
+          'Erholsame Stunden, die bei jeder Auffüllung zurückkommen.',
+      'SleepTimeRecoveryPeriod':
+          'Wie lange es dauert, bis das Guthaben wieder aufgefüllt wird.',
+      'MaxRestTime':
+          'Die längste Zeit, die am Stück im Bett verbracht werden kann.',
+      'Health_RecoveryRatePerHourOfSleep':
+          'Anteil der maximalen Lebenspunkte, der je geschlafener Stunde zurückkommt.',
+      'Mana_RecoveryRatePerHourOfSleep':
+          'Anteil des maximalen Manas, der je geschlafener Stunde zurückkommt.',
+      'Alcohol':
+          'Wie betrunken der Held ist; die höheren Stufen tauschen Geschicklichkeit und Mana gegen Stärke.',
+      'MaxAlcohol': 'Der höchste Alkoholpegel, den der Held erreichen kann.',
+      'AlcoholDepletionRate':
+          'Wie schnell der Alkoholpegel wieder Richtung nüchtern sinkt.',
+      'Swampweed':
+          'Wie berauscht der Held ist; die höheren Stufen verschieben seine Werte.',
+      'MaxSwampweed':
+          'Der höchste Sumpfkrautpegel, den der Held erreichen kann.',
+      'SwampweedDepletionRate': 'Wie schnell der Sumpfkrautrausch nachlässt.',
+      'XPExecutedBounty':
+          'Erfahrung, die das Hinrichten dieser Figur einbringt.',
+      'XPKillOrDefeatBounty':
+          'Erfahrung, die das Töten oder Besiegen dieser Figur einbringt.',
+      'other': '?',
     });
     return '$_temp0';
   }

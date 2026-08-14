@@ -1677,6 +1677,15 @@ class AppLocalizationsEs extends AppLocalizations {
   String get heroGroupAdvanced => 'Avanzado';
 
   @override
+  String get heroGroupDiving => 'Buceo';
+
+  @override
+  String get heroGroupSleep => 'Sueño y descanso';
+
+  @override
+  String get heroGroupIntoxication => 'Embriaguez';
+
+  @override
   String get heroEntryHeroTransform => 'Posición';
 
   @override
@@ -1961,39 +1970,85 @@ class AppLocalizationsEs extends AppLocalizations {
   @override
   String attributeManualFallbackLabel(String attributeId, String fallback) {
     String _temp0 = intl.Intl.selectLogic(attributeId, {
-      'Alcohol': 'Alcohol',
-      'AlcoholDepletionRate': 'Tasa de reducción de alcohol',
-      'MaxAlcohol': 'Nivel máximo de alcohol',
-      'MaxSuperArmor': 'Superarmadura máxima',
-      'SuperArmor': 'Superarmadura',
-      'Fatigue': 'Fatiga',
-      'FillRatio': 'Proporción de llenado',
-      'FillRatioPeriod': 'Periodo de llenado',
-      'MaxFatigue': 'Fatiga máxima',
-      'MaxThresholdIndex': 'Índice de umbral máximo',
-      'RecoveryRatePerHourOfSleep': 'Recuperación por hora de sueño',
-      'DamageMultiplier': 'Multiplicador de daño',
-      'Toughness': 'Tenacidad',
-      'ToughnessA': 'Tenacidad A',
-      'ToughnessB': 'Tenacidad B',
-      'ToughnessC': 'Tenacidad C',
-      'XPExecutedBounty': 'Recompensa de EXP por ejecución',
-      'XPKillOrDefeatBounty': 'Recompensa de EXP por muerte o derrota',
-      'SpeedModifier': 'Modificador de velocidad',
-      'CriticalLevelPercent': 'Nivel crítico (%)',
-      'MaxOxygen': 'Oxígeno máximo',
-      'Oxygen': 'Oxígeno',
-      'OxygenDepletionRate': 'Tasa de consumo de oxígeno',
-      'OxygenRecoveryRate': 'Tasa de recuperación de oxígeno',
-      'MaxRestTime': 'Tiempo máximo de descanso',
-      'MaxSleepTime': 'Tiempo máximo de sueño',
-      'SleepTime': 'Tiempo de sueño',
-      'SleepTimeRecoveryAmount': 'Cantidad recuperada durante el sueño',
-      'SleepTimeRecoveryPeriod': 'Intervalo de recuperación durante el sueño',
-      'MaxSwampweed': 'Cantidad máxima de hierba de pantano',
-      'Swampweed': 'Hierba de pantano',
-      'SwampweedDepletionRate': 'Tasa de consumo de hierba de pantano',
+      'SuperArmor': 'Aplomo',
+      'MaxSuperArmor': 'Aplomo máx.',
+      'DamageMultiplier': 'Daño recibido',
+      'SpeedModifier': 'Velocidad de movimiento',
+      'Oxygen': 'Aire',
+      'MaxOxygen': 'Aire máx.',
+      'OxygenDepletionRate': 'Aire gastado por segundo',
+      'OxygenRecoveryRate': 'Aire recuperado por seg.',
+      'CriticalLevelPercent': 'Aviso de falta de aire',
+      'SleepTime': 'Horas reparadoras rest.',
+      'MaxSleepTime': 'Máx. horas reparadoras',
+      'SleepTimeRecoveryAmount': 'Horas que se recuperan',
+      'SleepTimeRecoveryPeriod': 'Intervalo de recarga',
+      'MaxRestTime': 'Máx. tiempo en la cama',
+      'Health_RecoveryRatePerHourOfSleep': 'Vida por hora de sueño',
+      'Mana_RecoveryRatePerHourOfSleep': 'Maná por hora de sueño',
+      'Alcohol': 'Nivel de alcohol',
+      'MaxAlcohol': 'Nivel de alcohol máx.',
+      'AlcoholDepletionRate': 'Velocidad para despejarse',
+      'Swampweed': 'Nivel de hierba de pantano',
+      'MaxSwampweed': 'Máx. hierba de pantano',
+      'SwampweedDepletionRate': 'Velocidad del bajón',
+      'XPExecutedBounty': 'EXP por ejecutar',
+      'XPKillOrDefeatBounty': 'EXP por matar',
       'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String attributeManualTooltip(String attributeId) {
+    String _temp0 = intl.Intl.selectLogic(attributeId, {
+      'SuperArmor':
+          'Cuánto castigo aguanta el héroe antes de que un golpe lo haga tambalearse.',
+      'MaxSuperArmor':
+          'La reserva completa de aplomo; aumenta con el nivel y con la armadura que lleva puesta.',
+      'DamageMultiplier':
+          'Factor que se aplica al daño que recibe el héroe: 1 es lo normal, y cuanto más alto, más duele.',
+      'SpeedModifier':
+          'Factor sobre lo rápido que se mueve el héroe: 1 es lo normal.',
+      'Oxygen':
+          'Segundos de aire que quedan bajo el agua; al llegar a cero el héroe se ahoga.',
+      'MaxOxygen':
+          'Cuántos segundos puede aguantar el héroe bajo el agua; la habilidad Buceo lo aumenta.',
+      'OxygenDepletionRate': 'Aire que se consume cada segundo bajo el agua.',
+      'OxygenRecoveryRate':
+          'Aire que se recupera cada segundo al salir a la superficie.',
+      'CriticalLevelPercent':
+          'Porcentaje de aire restante con el que el juego avisa del peligro de ahogarse.',
+      'SleepTime':
+          'Horas de sueño que todavía aportan algo; a partir de ahí el juego no da ninguna recuperación.',
+      'MaxSleepTime':
+          'El mayor número de horas reparadoras que puede acumular el héroe.',
+      'SleepTimeRecoveryAmount':
+          'Horas reparadoras que se devuelven cada vez que se rellena la reserva.',
+      'SleepTimeRecoveryPeriod':
+          'Cuánto tarda la reserva de horas reparadoras en volver a llenarse.',
+      'MaxRestTime':
+          'El tiempo más largo que el juego permite pasar en la cama de una sola vez.',
+      'Health_RecoveryRatePerHourOfSleep':
+          'Porcentaje de la vida máxima que se recupera por cada hora dormida.',
+      'Mana_RecoveryRatePerHourOfSleep':
+          'Porcentaje del maná máximo que se recupera por cada hora dormida.',
+      'Alcohol':
+          'Lo borracho que está el héroe; los niveles altos cambian destreza y maná por fuerza.',
+      'MaxAlcohol': 'El nivel de alcohol más alto que puede alcanzar el héroe.',
+      'AlcoholDepletionRate':
+          'Con qué rapidez baja el nivel de alcohol hacia la sobriedad.',
+      'Swampweed':
+          'Lo colocado que está el héroe; los niveles altos le mueven los atributos.',
+      'MaxSwampweed':
+          'El nivel de hierba de pantano más alto que puede alcanzar el héroe.',
+      'SwampweedDepletionRate':
+          'Con qué rapidez se pasa el efecto de la hierba de pantano.',
+      'XPExecutedBounty':
+          'Experiencia que recibe quien ejecuta a este personaje.',
+      'XPKillOrDefeatBounty':
+          'Experiencia que recibe quien mata o derrota a este personaje.',
+      'other': '?',
     });
     return '$_temp0';
   }

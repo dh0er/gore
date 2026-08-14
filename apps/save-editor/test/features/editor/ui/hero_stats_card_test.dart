@@ -60,6 +60,7 @@ Finder _heroBaseField(String id) {
     'MaxHealth' => '/Script/G1R.AttributeSet_Health',
     'Resistance_Fire' => '/Script/G1R.AttributeSet_Resistance',
     'Swampweed' => '/Script/G1R.AttributeSet_Drugs',
+    'XPKillOrDefeatBounty' => '/Script/G1R.AttributeSet_LevelProgression',
     _ => throw ArgumentError.value(id, 'id'),
   };
   return find.byKey(ValueKey('hero-attribute:$setClass:$id:base'));
@@ -238,7 +239,11 @@ void main() {
         _card(
           load: () async => HeroAttributesResult(
             attributes: [
-              _attribute('Swampweed', '/Script/G1R.AttributeSet_Drugs', 0),
+              _attribute(
+                'XPKillOrDefeatBounty',
+                '/Script/G1R.AttributeSet_LevelProgression',
+                0,
+              ),
             ],
           ),
         ),
@@ -249,7 +254,7 @@ void main() {
     // Sidebar entry exists (may appear in sidebar AND card header).
     expect(find.text('Advanced'), findsWidgets);
     // Default: only group, so it's selected — row is immediately visible.
-    expect(_heroBaseField('Swampweed'), findsOneWidget);
+    expect(_heroBaseField('XPKillOrDefeatBounty'), findsOneWidget);
     // No ExpansionTile needed.
     expect(find.byType(ExpansionTile), findsNothing);
   });

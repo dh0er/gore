@@ -1666,6 +1666,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get heroGroupAdvanced => 'Advanced';
 
   @override
+  String get heroGroupDiving => 'Diving';
+
+  @override
+  String get heroGroupSleep => 'Sleep & rest';
+
+  @override
+  String get heroGroupIntoxication => 'Intoxication';
+
+  @override
   String get heroEntryHeroTransform => 'Position';
 
   @override
@@ -1950,39 +1959,78 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String attributeManualFallbackLabel(String attributeId, String fallback) {
     String _temp0 = intl.Intl.selectLogic(attributeId, {
-      'Alcohol': 'Alcohol',
-      'AlcoholDepletionRate': 'Alcohol depletion rate',
+      'SuperArmor': 'Poise',
+      'MaxSuperArmor': 'Maximum poise',
+      'DamageMultiplier': 'Damage taken',
+      'SpeedModifier': 'Movement speed',
+      'Oxygen': 'Breath',
+      'MaxOxygen': 'Maximum breath',
+      'OxygenDepletionRate': 'Breath used per second',
+      'OxygenRecoveryRate': 'Breath regained per second',
+      'CriticalLevelPercent': 'Low-breath warning',
+      'SleepTime': 'Restful hours left',
+      'MaxSleepTime': 'Maximum restful hours',
+      'SleepTimeRecoveryAmount': 'Restful hours regained',
+      'SleepTimeRecoveryPeriod': 'Refill interval',
+      'MaxRestTime': 'Maximum time in bed',
+      'Health_RecoveryRatePerHourOfSleep': 'Health per hour of sleep',
+      'Mana_RecoveryRatePerHourOfSleep': 'Mana per hour of sleep',
+      'Alcohol': 'Alcohol level',
       'MaxAlcohol': 'Maximum alcohol',
-      'MaxSuperArmor': 'Maximum super armor',
-      'SuperArmor': 'Super armor',
-      'Fatigue': 'Fatigue',
-      'FillRatio': 'Fill ratio',
-      'FillRatioPeriod': 'Fill ratio period',
-      'MaxFatigue': 'Maximum fatigue',
-      'MaxThresholdIndex': 'Maximum threshold index',
-      'RecoveryRatePerHourOfSleep': 'Recovery per hour of sleep',
-      'DamageMultiplier': 'Damage multiplier',
-      'Toughness': 'Toughness',
-      'ToughnessA': 'Toughness A',
-      'ToughnessB': 'Toughness B',
-      'ToughnessC': 'Toughness C',
-      'XPExecutedBounty': 'Execution XP reward',
-      'XPKillOrDefeatBounty': 'Kill or defeat XP reward',
-      'SpeedModifier': 'Speed modifier',
-      'CriticalLevelPercent': 'Critical level (%)',
-      'MaxOxygen': 'Maximum oxygen',
-      'Oxygen': 'Oxygen',
-      'OxygenDepletionRate': 'Oxygen depletion rate',
-      'OxygenRecoveryRate': 'Oxygen recovery rate',
-      'MaxRestTime': 'Maximum rest time',
-      'MaxSleepTime': 'Maximum sleep time',
-      'SleepTime': 'Sleep time',
-      'SleepTimeRecoveryAmount': 'Sleep recovery amount',
-      'SleepTimeRecoveryPeriod': 'Sleep recovery period',
+      'AlcoholDepletionRate': 'Sobering speed',
+      'Swampweed': 'Swampweed level',
       'MaxSwampweed': 'Maximum swampweed',
-      'Swampweed': 'Swampweed',
-      'SwampweedDepletionRate': 'Swampweed depletion rate',
+      'SwampweedDepletionRate': 'Wear-off speed',
+      'XPExecutedBounty': 'XP for executing',
+      'XPKillOrDefeatBounty': 'XP for killing',
       'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String attributeManualTooltip(String attributeId) {
+    String _temp0 = intl.Intl.selectLogic(attributeId, {
+      'SuperArmor':
+          'How much punishment the hero absorbs before a hit staggers him.',
+      'MaxSuperArmor':
+          'The full poise pool; it grows with character level and with worn armour.',
+      'DamageMultiplier':
+          'Factor applied to the damage the hero takes — 1 is normal, higher hurts more.',
+      'SpeedModifier': 'Factor on how fast the hero moves — 1 is normal.',
+      'Oxygen': 'Seconds of air left under water; at zero the hero drowns.',
+      'MaxOxygen':
+          'How many seconds the hero can stay under water; the Diving skill raises it.',
+      'OxygenDepletionRate': 'Air used up each second while submerged.',
+      'OxygenRecoveryRate': 'Air that comes back each second after surfacing.',
+      'CriticalLevelPercent':
+          'Share of remaining air at which the game warns of drowning.',
+      'SleepTime':
+          'Hours of sleep that still restore something; beyond them the game grants no resting bonus.',
+      'MaxSleepTime': 'The largest budget of restful hours the hero can hold.',
+      'SleepTimeRecoveryAmount':
+          'Restful hours added back each time the budget refills.',
+      'SleepTimeRecoveryPeriod':
+          'How long it takes before the budget of restful hours refills again.',
+      'MaxRestTime': 'The longest single stay in bed the game allows.',
+      'Health_RecoveryRatePerHourOfSleep':
+          'Share of maximum health restored for every hour slept.',
+      'Mana_RecoveryRatePerHourOfSleep':
+          'Share of maximum mana restored for every hour slept.',
+      'Alcohol':
+          'How drunk the hero is; the higher tiers trade dexterity and mana for strength.',
+      'MaxAlcohol': 'The highest alcohol level the hero can reach.',
+      'AlcoholDepletionRate':
+          'How quickly the alcohol level falls back towards sober.',
+      'Swampweed':
+          'How stoned the hero is; the higher tiers shift his attributes around.',
+      'MaxSwampweed': 'The highest swampweed level the hero can reach.',
+      'SwampweedDepletionRate': 'How quickly the swampweed high wears off.',
+      'XPExecutedBounty':
+          'Experience awarded to whoever executes this character.',
+      'XPKillOrDefeatBounty':
+          'Experience awarded to whoever kills or defeats this character.',
+      'other': '?',
     });
     return '$_temp0';
   }

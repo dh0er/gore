@@ -72,15 +72,47 @@ void main() {
         'DamageMultiplier',
         l10n: AppLocalizationsDe(),
       ),
-      'Schadensmultiplikator',
+      'Erlittener Schaden',
+    );
+    // Set-qualified: the same id means something different per attribute set,
+    // so the label has to follow the set, not the bare id.
+    expect(
+      localizedAttributeName(
+        const {},
+        gameLangByCode('de'),
+        'RecoveryRatePerHourOfSleep',
+        setClass: '/Script/G1R.AttributeSet_Health',
+        l10n: AppLocalizationsDe(),
+      ),
+      'Leben je Schlafstunde',
     );
     expect(
+      localizedAttributeName(
+        const {},
+        gameLangByCode('de'),
+        'RecoveryRatePerHourOfSleep',
+        setClass: '/Script/G1R.AttributeSet_Mana',
+        l10n: AppLocalizationsDe(),
+      ),
+      'Mana je Schlafstunde',
+    );
+    // The tooltip explains the value; unknown ids get none.
+    expect(
+      attributeTooltip(
+        'Oxygen',
+        setClass: '/Script/G1R.AttributeSet_Oxygen',
+        l10n: AppLocalizationsDe(),
+      ),
+      startsWith('Verbleibende Sekunden Luft'),
+    );
+    expect(attributeTooltip('SomeFutureAttribute', l10n: AppLocalizationsDe()), '');
+    expect(
       readableAttributeName('OxygenRecoveryRate', AppLocalizationsJa()),
-      '酸素回復速度',
+      '息の回復（毎秒）',
     );
     expect(
       readableAttributeName('MaxSwampweed', AppLocalizationsZh()),
-      '最大沼泽草量',
+      '最大沼泽草值',
     );
   });
 
