@@ -63,6 +63,7 @@ pages! {
     Reference / "studio-authoring"        => "reference/studio-authoring.md",
     Reference / "studio-voice"            => "reference/studio-voice.md",
     Reference / "studio-project-archive"  => "reference/studio-project-archive.md",
+    Reference / "survival-mode"           => "reference/survival-mode.md",
 }
 
 #[cfg(test)]

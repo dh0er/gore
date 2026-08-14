@@ -20,6 +20,7 @@ are changing GORE itself and need to know what a boundary guarantees.
 | [Mod Studio NPC and quest authoring internals](studio-authoring.md) | The offline logical-clone proof, the native archetype catalog, the revision-3 draft transaction, and the quest publication contract. |
 | [Mod Studio voice authoring internals](studio-voice.md) | Installed target resolution, the all-or-nothing sealed build, and the publication and failure boundaries. |
 | [Mod Studio project snapshot internals](studio-project-archive.md) | Snapshot V2 archive format, reachable closure, determinism, the import security model, wire limits, and stable failure codes. |
+| [Survival mode](survival-mode.md) | The shipped-but-unreachable hunger/thirst/fatigue system: why it never activates, the measurement that proved it, its full mechanics, and every attribute the save editor therefore hides. |
 
 These pages stay in the repository. They are **not** shipped in the release zip
 and are not rendered by `gore guide html` — but `gore.exe` does embed them, so
