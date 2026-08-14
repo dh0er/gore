@@ -1594,7 +1594,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get heroGroupMainStats => '主要属性';
 
   @override
-  String get heroGroupCombatSkills => '战斗技能';
+  String get heroGroupCombatMovement => '战斗与移动';
 
   @override
   String get heroGroupResistances => '抗性';
@@ -1914,8 +1914,8 @@ class AppLocalizationsZh extends AppLocalizations {
       'Swampweed': '沼泽草值',
       'MaxSwampweed': '最大沼泽草值',
       'SwampweedDepletionRate': '药性消退速度',
-      'XPExecutedBounty': '处决获得的经验',
-      'XPKillOrDefeatBounty': '击杀获得的经验',
+      'XPExecutedBounty': '倒地处决获得的经验',
+      'XPKillOrDefeatBounty': '击败获得的经验',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -1946,8 +1946,8 @@ class AppLocalizationsZh extends AppLocalizations {
       'Swampweed': '主角嗨到什么程度，较高的档位会让他的属性此消彼长。',
       'MaxSwampweed': '主角能达到的最高沼泽草值。',
       'SwampweedDepletionRate': '沼泽草带来的迷幻劲头消退得有多快。',
-      'XPExecutedBounty': '处决这名角色的人能拿到的经验值。',
-      'XPKillOrDefeatBounty': '杀死或击败这名角色的人能拿到的经验值。',
+      'XPExecutedBounty': '在这名角色已经被打倒在地时再将其杀死，所能拿到的经验值。',
+      'XPKillOrDefeatBounty': '把这名角色打倒时所能拿到的经验值，不管对方是当场毙命还是只被打晕在地。',
       'other': '?',
     });
     return '$_temp0';
@@ -4312,7 +4312,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get heroGroupMainStats => '主要属性';
 
   @override
-  String get heroGroupCombatSkills => '战斗技能';
+  String get heroGroupCombatMovement => '战斗与移动';
 
   @override
   String get heroGroupResistances => '抗性';
@@ -4632,8 +4632,8 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
       'Swampweed': '沼泽草值',
       'MaxSwampweed': '最大沼泽草值',
       'SwampweedDepletionRate': '药性消退速度',
-      'XPExecutedBounty': '处决获得的经验',
-      'XPKillOrDefeatBounty': '击杀获得的经验',
+      'XPExecutedBounty': '倒地处决获得的经验',
+      'XPKillOrDefeatBounty': '击败获得的经验',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -4664,8 +4664,8 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
       'Swampweed': '主角嗨到什么程度，较高的档位会让他的属性此消彼长。',
       'MaxSwampweed': '主角能达到的最高沼泽草值。',
       'SwampweedDepletionRate': '沼泽草带来的迷幻劲头消退得有多快。',
-      'XPExecutedBounty': '处决这名角色的人能拿到的经验值。',
-      'XPKillOrDefeatBounty': '杀死或击败这名角色的人能拿到的经验值。',
+      'XPExecutedBounty': '在这名角色已经被打倒在地时再将其杀死，所能拿到的经验值。',
+      'XPKillOrDefeatBounty': '把这名角色打倒时所能拿到的经验值，不管对方是当场毙命还是只被打晕在地。',
       'other': '?',
     });
     return '$_temp0';

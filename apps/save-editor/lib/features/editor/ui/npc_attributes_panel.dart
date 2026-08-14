@@ -156,7 +156,7 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
   String _groupTitle(AppLocalizations l10n, HeroAttributeGroup g) =>
       switch (g) {
         HeroAttributeGroup.core => l10n.heroGroupMainStats,
-        HeroAttributeGroup.combat => l10n.heroGroupCombatSkills,
+        HeroAttributeGroup.combat => l10n.heroGroupCombatMovement,
         HeroAttributeGroup.resistances => l10n.heroGroupResistances,
         // NPC thieving group is repurposed to host the skills editor.
         HeroAttributeGroup.thieving => l10n.heroGroupSkills,

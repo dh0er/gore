@@ -403,7 +403,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
   String _entryLabel(AppLocalizations l10n, _SidebarEntry entry) {
     return switch (entry) {
       _SidebarEntry.core => l10n.heroGroupMainStats,
-      _SidebarEntry.combat => l10n.heroGroupCombatSkills,
+      _SidebarEntry.combat => l10n.heroGroupCombatMovement,
       _SidebarEntry.resistances => l10n.heroGroupResistances,
       _SidebarEntry.thieving => l10n.heroGroupSkills,
       _SidebarEntry.diving => l10n.heroGroupDiving,

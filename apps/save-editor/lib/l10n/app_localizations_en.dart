@@ -1654,7 +1654,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get heroGroupMainStats => 'Main stats';
 
   @override
-  String get heroGroupCombatSkills => 'Combat skills';
+  String get heroGroupCombatMovement => 'Combat and movement';
 
   @override
   String get heroGroupResistances => 'Resistances';
@@ -1981,8 +1981,8 @@ class AppLocalizationsEn extends AppLocalizations {
       'Swampweed': 'Swampweed level',
       'MaxSwampweed': 'Maximum swampweed',
       'SwampweedDepletionRate': 'Wear-off speed',
-      'XPExecutedBounty': 'XP for executing',
-      'XPKillOrDefeatBounty': 'XP for killing',
+      'XPExecutedBounty': 'XP for finishing off',
+      'XPKillOrDefeatBounty': 'XP for defeating',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2027,9 +2027,9 @@ class AppLocalizationsEn extends AppLocalizations {
       'MaxSwampweed': 'The highest swampweed level the hero can reach.',
       'SwampweedDepletionRate': 'How quickly the swampweed high wears off.',
       'XPExecutedBounty':
-          'Experience awarded to whoever executes this character.',
+          'Experience for killing this character while it already lies defeated on the ground.',
       'XPKillOrDefeatBounty':
-          'Experience awarded to whoever kills or defeats this character.',
+          'Experience for bringing this character down, whether it dies or is only beaten unconscious.',
       'other': '?',
     });
     return '$_temp0';

@@ -1665,7 +1665,7 @@ class AppLocalizationsDe extends AppLocalizations {
   String get heroGroupMainStats => 'Hauptwerte';
 
   @override
-  String get heroGroupCombatSkills => 'Kampffertigkeiten';
+  String get heroGroupCombatMovement => 'Kampf und Bewegung';
 
   @override
   String get heroGroupResistances => 'Widerstände';
@@ -1993,8 +1993,8 @@ class AppLocalizationsDe extends AppLocalizations {
       'Swampweed': 'Sumpfkrautpegel',
       'MaxSwampweed': 'Max. Sumpfkrautpegel',
       'SwampweedDepletionRate': 'Abbautempo',
-      'XPExecutedBounty': 'EP fürs Hinrichten',
-      'XPKillOrDefeatBounty': 'EP fürs Töten',
+      'XPExecutedBounty': 'EP fürs Töten am Boden',
+      'XPKillOrDefeatBounty': 'EP fürs Besiegen',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2045,9 +2045,9 @@ class AppLocalizationsDe extends AppLocalizations {
           'Der höchste Sumpfkrautpegel, den der Held erreichen kann.',
       'SwampweedDepletionRate': 'Wie schnell der Sumpfkrautrausch nachlässt.',
       'XPExecutedBounty':
-          'Erfahrung, die das Hinrichten dieser Figur einbringt.',
+          'Erfahrung dafür, diese Figur zu töten, während sie bereits besiegt am Boden liegt.',
       'XPKillOrDefeatBounty':
-          'Erfahrung, die das Töten oder Besiegen dieser Figur einbringt.',
+          'Erfahrung dafür, diese Figur niederzustrecken, ob sie dabei stirbt oder nur bewusstlos liegen bleibt.',
       'other': '?',
     });
     return '$_temp0';

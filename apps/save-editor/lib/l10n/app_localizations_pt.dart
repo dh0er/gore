@@ -1665,7 +1665,7 @@ class AppLocalizationsPt extends AppLocalizations {
   String get heroGroupMainStats => 'Atributos principais';
 
   @override
-  String get heroGroupCombatSkills => 'Habilidades de combate';
+  String get heroGroupCombatMovement => 'Combate e movimento';
 
   @override
   String get heroGroupResistances => 'Resistências';
@@ -1993,8 +1993,8 @@ class AppLocalizationsPt extends AppLocalizations {
       'Swampweed': 'Nível de erva do pântano',
       'MaxSwampweed': 'Máx. de erva do pântano',
       'SwampweedDepletionRate': 'Rapidez para o efeito passar',
-      'XPExecutedBounty': 'XP por execução',
-      'XPKillOrDefeatBounty': 'XP por matar',
+      'XPExecutedBounty': 'XP por matar o caído',
+      'XPKillOrDefeatBounty': 'XP por derrotar',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2044,9 +2044,9 @@ class AppLocalizationsPt extends AppLocalizations {
       'SwampweedDepletionRate':
           'Com que rapidez o barato da erva do pântano vai passando.',
       'XPExecutedBounty':
-          'Experiência concedida a quem executa este personagem.',
+          'Experiência por matar este personagem enquanto ele já está no chão, derrotado.',
       'XPKillOrDefeatBounty':
-          'Experiência concedida a quem mata ou derrota este personagem.',
+          'Experiência por derrubar este personagem, quer ele morra, quer apenas fique desacordado.',
       'other': '?',
     });
     return '$_temp0';
@@ -4501,7 +4501,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String get heroGroupMainStats => 'Atributos principais';
 
   @override
-  String get heroGroupCombatSkills => 'Habilidades de combate';
+  String get heroGroupCombatMovement => 'Combate e movimento';
 
   @override
   String get heroGroupResistances => 'Resistências';
@@ -4829,8 +4829,8 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
       'Swampweed': 'Nível de erva do pântano',
       'MaxSwampweed': 'Máx. de erva do pântano',
       'SwampweedDepletionRate': 'Rapidez para o efeito passar',
-      'XPExecutedBounty': 'XP por execução',
-      'XPKillOrDefeatBounty': 'XP por matar',
+      'XPExecutedBounty': 'XP por matar o caído',
+      'XPKillOrDefeatBounty': 'XP por derrotar',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -4880,9 +4880,9 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
       'SwampweedDepletionRate':
           'Com que rapidez o barato da erva do pântano vai passando.',
       'XPExecutedBounty':
-          'Experiência concedida a quem executa este personagem.',
+          'Experiência por matar este personagem enquanto ele já está no chão, derrotado.',
       'XPKillOrDefeatBounty':
-          'Experiência concedida a quem mata ou derrota este personagem.',
+          'Experiência por derrubar este personagem, quer ele morra, quer apenas fique desacordado.',
       'other': '?',
     });
     return '$_temp0';

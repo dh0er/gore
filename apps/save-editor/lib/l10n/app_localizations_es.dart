@@ -1665,7 +1665,7 @@ class AppLocalizationsEs extends AppLocalizations {
   String get heroGroupMainStats => 'Estadísticas principales';
 
   @override
-  String get heroGroupCombatSkills => 'Habilidades de combate';
+  String get heroGroupCombatMovement => 'Combate y movimiento';
 
   @override
   String get heroGroupResistances => 'Resistencias';
@@ -1992,8 +1992,8 @@ class AppLocalizationsEs extends AppLocalizations {
       'Swampweed': 'Nivel de hierba de pantano',
       'MaxSwampweed': 'Máx. hierba de pantano',
       'SwampweedDepletionRate': 'Velocidad del bajón',
-      'XPExecutedBounty': 'EXP por ejecutar',
-      'XPKillOrDefeatBounty': 'EXP por matar',
+      'XPExecutedBounty': 'EXP por rematar en el suelo',
+      'XPKillOrDefeatBounty': 'EXP por derrotar',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2045,9 +2045,9 @@ class AppLocalizationsEs extends AppLocalizations {
       'SwampweedDepletionRate':
           'Con qué rapidez se pasa el efecto de la hierba de pantano.',
       'XPExecutedBounty':
-          'Experiencia que recibe quien ejecuta a este personaje.',
+          'Experiencia por matar a este personaje cuando ya yace derrotado en el suelo.',
       'XPKillOrDefeatBounty':
-          'Experiencia que recibe quien mata o derrota a este personaje.',
+          'Experiencia por derribar a este personaje, tanto si muere como si solo queda inconsciente.',
       'other': '?',
     });
     return '$_temp0';

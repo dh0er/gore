@@ -1675,7 +1675,7 @@ class AppLocalizationsRu extends AppLocalizations {
   String get heroGroupMainStats => 'Основные характеристики';
 
   @override
-  String get heroGroupCombatSkills => 'Боевые навыки';
+  String get heroGroupCombatMovement => 'Бой и передвижение';
 
   @override
   String get heroGroupResistances => 'Сопротивления';
@@ -2002,8 +2002,8 @@ class AppLocalizationsRu extends AppLocalizations {
       'Swampweed': 'Уровень болотника',
       'MaxSwampweed': 'Макс. уровень болотника',
       'SwampweedDepletionRate': 'Скорость выветривания',
-      'XPExecutedBounty': 'Опыт за казнь',
-      'XPKillOrDefeatBounty': 'Опыт за убийство',
+      'XPExecutedBounty': 'Опыт за добивание',
+      'XPKillOrDefeatBounty': 'Опыт за победу',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2056,9 +2056,9 @@ class AppLocalizationsRu extends AppLocalizations {
       'SwampweedDepletionRate':
           'Насколько быстро проходит дурман от болотника.',
       'XPExecutedBounty':
-          'Опыт, который получает тот, кто казнит этого персонажа.',
+          'Опыт за то, чтобы добить этого персонажа, пока он уже лежит поверженным на земле.',
       'XPKillOrDefeatBounty':
-          'Опыт, который получает тот, кто убьёт или победит этого персонажа.',
+          'Опыт за то, чтобы одолеть этого персонажа: убить его или просто оставить лежать без сознания.',
       'other': '?',
     });
     return '$_temp0';

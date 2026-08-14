@@ -1619,7 +1619,7 @@ class AppLocalizationsJa extends AppLocalizations {
   String get heroGroupMainStats => '主要ステータス';
 
   @override
-  String get heroGroupCombatSkills => '戦闘スキル';
+  String get heroGroupCombatMovement => '戦闘と移動';
 
   @override
   String get heroGroupResistances => '耐性';
@@ -1941,7 +1941,7 @@ class AppLocalizationsJa extends AppLocalizations {
       'Swampweed': '沼地草の酔い',
       'MaxSwampweed': '沼地草の酔いの最大値',
       'SwampweedDepletionRate': '酔いが抜ける速さ',
-      'XPExecutedBounty': '処刑で得る経験値',
+      'XPExecutedBounty': 'とどめで得る経験値',
       'XPKillOrDefeatBounty': '撃破で得る経験値',
       'other': '$fallback',
     });
@@ -1973,8 +1973,9 @@ class AppLocalizationsJa extends AppLocalizations {
       'Swampweed': 'どれだけ沼地草に酔っているかで、段階が上がるとヒーローの能力値が入れ替わる。',
       'MaxSwampweed': 'ヒーローが到達できる沼地草の酔いの上限。',
       'SwampweedDepletionRate': '沼地草の酔いがどれだけ早く抜けるか。',
-      'XPExecutedBounty': 'このキャラクターを処刑した者が得る経験値。',
-      'XPKillOrDefeatBounty': 'このキャラクターを倒すか打ち負かした者が得る経験値。',
+      'XPExecutedBounty': 'すでに倒れて動けないこのキャラクターに、とどめを刺して得られる経験値。',
+      'XPKillOrDefeatBounty':
+          'このキャラクターを打ち倒したときに得られる経験値で、そのまま死んでも気絶して倒れただけでも入る。',
       'other': '?',
     });
     return '$_temp0';

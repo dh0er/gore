@@ -1681,7 +1681,7 @@ class AppLocalizationsPl extends AppLocalizations {
   String get heroGroupMainStats => 'Główne statystyki';
 
   @override
-  String get heroGroupCombatSkills => 'Umiejętności bojowe';
+  String get heroGroupCombatMovement => 'Walka i ruch';
 
   @override
   String get heroGroupResistances => 'Odporności';
@@ -2008,8 +2008,8 @@ class AppLocalizationsPl extends AppLocalizations {
       'Swampweed': 'Poziom bagiennego ziela',
       'MaxSwampweed': 'Maks. bagienne ziele',
       'SwampweedDepletionRate': 'Tempo mijania odurzenia',
-      'XPExecutedBounty': 'PD za dobicie',
-      'XPKillOrDefeatBounty': 'PD za zabicie',
+      'XPExecutedBounty': 'PD za dobicie leżącego',
+      'XPKillOrDefeatBounty': 'PD za pokonanie',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2058,9 +2058,9 @@ class AppLocalizationsPl extends AppLocalizations {
           'Najwyższy poziom bagiennego ziela, jaki bohater może osiągnąć.',
       'SwampweedDepletionRate': 'Jak szybko mija odurzenie bagiennym zielem.',
       'XPExecutedBounty':
-          'Doświadczenie, jakie dostaje ten, kto dobije tę postać.',
+          'Doświadczenie za dobicie tej postaci, gdy leży już pokonana na ziemi.',
       'XPKillOrDefeatBounty':
-          'Doświadczenie, jakie dostaje ten, kto zabije lub pokona tę postać.',
+          'Doświadczenie za powalenie tej postaci, niezależnie od tego, czy zginie, czy tylko padnie nieprzytomna.',
       'other': '?',
     });
     return '$_temp0';

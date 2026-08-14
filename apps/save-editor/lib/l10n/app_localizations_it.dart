@@ -1670,7 +1670,7 @@ class AppLocalizationsIt extends AppLocalizations {
   String get heroGroupMainStats => 'Statistiche principali';
 
   @override
-  String get heroGroupCombatSkills => 'Abilità di combattimento';
+  String get heroGroupCombatMovement => 'Combattimento e movimento';
 
   @override
   String get heroGroupResistances => 'Resistenze';
@@ -1997,8 +1997,8 @@ class AppLocalizationsIt extends AppLocalizations {
       'Swampweed': 'Livello di erba palustre',
       'MaxSwampweed': 'Erba palustre max.',
       'SwampweedDepletionRate': 'Smaltimento dell\'erba',
-      'XPExecutedBounty': 'PE per l\'esecuzione',
-      'XPKillOrDefeatBounty': 'PE per l\'uccisione',
+      'XPExecutedBounty': 'PE per il colpo di grazia',
+      'XPKillOrDefeatBounty': 'PE per sconfiggere',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2047,9 +2047,9 @@ class AppLocalizationsIt extends AppLocalizations {
       'SwampweedDepletionRate':
           'Quanto in fretta svanisce lo sballo da erba palustre.',
       'XPExecutedBounty':
-          'Esperienza che ottiene chi giustizia questo personaggio.',
+          'Esperienza per uccidere questo personaggio mentre giace già sconfitto a terra.',
       'XPKillOrDefeatBounty':
-          'Esperienza che ottiene chi uccide o sconfigge questo personaggio.',
+          'Esperienza per abbattere questo personaggio, che muoia o resti soltanto privo di sensi.',
       'other': '?',
     });
     return '$_temp0';

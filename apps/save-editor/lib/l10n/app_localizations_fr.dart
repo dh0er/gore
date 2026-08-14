@@ -1674,7 +1674,7 @@ class AppLocalizationsFr extends AppLocalizations {
   String get heroGroupMainStats => 'Statistiques principales';
 
   @override
-  String get heroGroupCombatSkills => 'Compétences de combat';
+  String get heroGroupCombatMovement => 'Combat et déplacement';
 
   @override
   String get heroGroupResistances => 'Résistances';
@@ -2004,8 +2004,8 @@ class AppLocalizationsFr extends AppLocalizations {
       'Swampweed': 'Niveau d\'herbe des marais',
       'MaxSwampweed': 'Herbe des marais max.',
       'SwampweedDepletionRate': 'Vitesse de dissipation',
-      'XPExecutedBounty': 'XP pour l\'exécution',
-      'XPKillOrDefeatBounty': 'XP pour la mise à mort',
+      'XPExecutedBounty': 'XP pour le coup de grâce',
+      'XPKillOrDefeatBounty': 'XP pour vaincre',
       'other': '$fallback',
     });
     return '$_temp0';
@@ -2058,9 +2058,9 @@ class AppLocalizationsFr extends AppLocalizations {
       'SwampweedDepletionRate':
           'À quelle vitesse l\'effet de l\'herbe des marais se dissipe.',
       'XPExecutedBounty':
-          'Expérience accordée à celui qui exécute ce personnage.',
+          'Expérience obtenue en achevant ce personnage alors qu\'il est déjà vaincu, à terre.',
       'XPKillOrDefeatBounty':
-          'Expérience accordée à celui qui tue ou vainc ce personnage.',
+          'Expérience obtenue en mettant ce personnage à terre, qu\'il en meure ou qu\'il reste seulement assommé.',
       'other': '?',
     });
     return '$_temp0';
