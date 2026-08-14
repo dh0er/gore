@@ -1619,7 +1619,7 @@ class AppLocalizationsJa extends AppLocalizations {
   String get heroGroupMainStats => '主要ステータス';
 
   @override
-  String get heroGroupCombatMovement => '戦闘と移動';
+  String get heroGroupCombatMovement => '戦闘 / 移動';
 
   @override
   String get heroGroupResistances => '耐性';

@@ -139,7 +139,10 @@ class _SidebarTile extends StatelessWidget {
                 Expanded(
                   child: Text(
                     label,
-                    maxLines: 1,
+                    // A two-word heading like "Combat / movement" does not fit
+                    // this sidebar in every language, so let it wrap rather
+                    // than truncate; the ellipsis is the last resort.
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: selected ? scheme.primary : scheme.onSurface,

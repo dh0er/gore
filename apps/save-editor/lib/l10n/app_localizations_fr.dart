@@ -1674,7 +1674,7 @@ class AppLocalizationsFr extends AppLocalizations {
   String get heroGroupMainStats => 'Statistiques principales';
 
   @override
-  String get heroGroupCombatMovement => 'Combat et déplacement';
+  String get heroGroupCombatMovement => 'Combat / déplacement';
 
   @override
   String get heroGroupResistances => 'Résistances';

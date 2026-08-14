@@ -448,7 +448,7 @@
   "noKnowledgeEntriesAvailableToAdd": "追加できる知識エントリがありません",
   "noEntriesMatch": "一致するエントリがありません",
   "heroGroupMainStats": "主要ステータス",
-  "heroGroupCombatMovement": "戦闘と移動",
+  "heroGroupCombatMovement": "戦闘 / 移動",
   "heroGroupResistances": "耐性",
   "heroGroupThieving": "盗み",
   "heroGroupAdvanced": "詳細設定",

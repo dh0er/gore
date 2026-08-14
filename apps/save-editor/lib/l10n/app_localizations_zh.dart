@@ -1594,7 +1594,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get heroGroupMainStats => '主要属性';
 
   @override
-  String get heroGroupCombatMovement => '战斗与移动';
+  String get heroGroupCombatMovement => '战斗 / 移动';
 
   @override
   String get heroGroupResistances => '抗性';
@@ -4312,7 +4312,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get heroGroupMainStats => '主要属性';
 
   @override
-  String get heroGroupCombatMovement => '战斗与移动';
+  String get heroGroupCombatMovement => '战斗 / 移动';
 
   @override
   String get heroGroupResistances => '抗性';

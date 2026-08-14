@@ -1665,7 +1665,7 @@ class AppLocalizationsPt extends AppLocalizations {
   String get heroGroupMainStats => 'Atributos principais';
 
   @override
-  String get heroGroupCombatMovement => 'Combate e movimento';
+  String get heroGroupCombatMovement => 'Combate / movimento';
 
   @override
   String get heroGroupResistances => 'Resistências';
@@ -4501,7 +4501,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String get heroGroupMainStats => 'Atributos principais';
 
   @override
-  String get heroGroupCombatMovement => 'Combate e movimento';
+  String get heroGroupCombatMovement => 'Combate / movimento';
 
   @override
   String get heroGroupResistances => 'Resistências';

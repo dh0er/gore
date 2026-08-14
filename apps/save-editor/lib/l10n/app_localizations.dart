@@ -2939,7 +2939,7 @@ abstract class AppLocalizations {
   /// No description provided for @heroGroupCombatMovement.
   ///
   /// In en, this message translates to:
-  /// **'Combat and movement'**
+  /// **'Combat / movement'**
   String get heroGroupCombatMovement;
 
   /// No description provided for @heroGroupResistances.

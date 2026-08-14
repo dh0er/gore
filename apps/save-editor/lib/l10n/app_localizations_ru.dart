@@ -1675,7 +1675,7 @@ class AppLocalizationsRu extends AppLocalizations {
   String get heroGroupMainStats => 'Основные характеристики';
 
   @override
-  String get heroGroupCombatMovement => 'Бой и передвижение';
+  String get heroGroupCombatMovement => 'Бой / передвижение';
 
   @override
   String get heroGroupResistances => 'Сопротивления';

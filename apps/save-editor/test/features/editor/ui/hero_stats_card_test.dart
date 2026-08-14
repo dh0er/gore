@@ -253,6 +253,11 @@ void main() {
 
     // Sidebar entry exists (may appear in sidebar AND card header).
     expect(find.text('Advanced'), findsWidgets);
+
+    // A sidebar heading may be two words ("Combat / movement") and the sidebar
+    // is narrow, so the label wraps onto a second line rather than truncating.
+    final sidebarLabel = tester.widgetList<Text>(find.text('Advanced')).first;
+    expect(sidebarLabel.maxLines, 2);
     // Default: only group, so it's selected — row is immediately visible.
     expect(_heroBaseField('XPKillOrDefeatBounty'), findsOneWidget);
     // No ExpansionTile needed.
