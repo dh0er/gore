@@ -16,7 +16,7 @@ use super::model::{self, Class, Func, Module};
 use super::refs::RefResolver;
 use super::tables::parse_tail_tables;
 use super::walk_modules::module_names;
-use super::wire::WireError;
+use super::wire::{Cursor, SiaBytes, WireError};
 
 pub const MAX_NPC_CACHE_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_NPC_BINDS_BYTES: usize = 32 * 1024 * 1024;
@@ -462,6 +462,19 @@ impl<'a> PreflightCursor<'a> {
     fn read_bool(&mut self) -> Result<bool, NpcArchetypeError> {
         Ok(self.read_i32()? != 0)
     }
+
+    fn read_canonical_bool(&mut self) -> Result<bool, NpcArchetypeError> {
+        let position = self.position;
+        match self.read_i32()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            value => Err(invalid_wire(WireError::BadLen {
+                pos: position,
+                len: i64::from(value),
+                field: "bool",
+            })),
+        }
+    }
 }
 
 struct PreflightBudget {
@@ -571,6 +584,32 @@ impl PreflightBudget {
                 )
             }
         };
+        self.charge_serialized_string(content_bytes)?;
+        cursor.skip(payload_bytes).map_err(|error| match error {
+            NpcArchetypeError::InvalidShippingCache(_) => invalid_wire(WireError::Eof {
+                pos: position,
+                need: payload_bytes.saturating_add(4),
+                have: cursor.remaining().saturating_add(4),
+            }),
+            other => other,
+        })
+    }
+
+    /// Parse one allocation-free SIA payload while retaining its raw bytes for a later contextual
+    /// encoding decision. GlobalReference.bIsString follows Name/Module/Namespace on the wire.
+    fn sia_bytes<'a>(
+        &mut self,
+        cursor: &mut PreflightCursor<'a>,
+    ) -> Result<(SiaBytes<'a>, usize), NpcArchetypeError> {
+        let position = cursor.position;
+        let mut wire = Cursor::at(cursor.bytes, position);
+        let encoded = wire.read_sia_bytes().map_err(invalid_wire)?;
+        self.charge_serialized_string(encoded.len())?;
+        cursor.position = wire.pos();
+        Ok((encoded, position))
+    }
+
+    fn charge_serialized_string(&mut self, content_bytes: usize) -> Result<(), NpcArchetypeError> {
         if content_bytes > self.limits.serialized_string_bytes {
             return Err(NpcArchetypeError::StringTooLong {
                 kind: "serialized cache string",
@@ -587,14 +626,7 @@ impl PreflightBudget {
             });
         }
         self.string_payload_bytes = next;
-        cursor.skip(payload_bytes).map_err(|error| match error {
-            NpcArchetypeError::InvalidShippingCache(_) => invalid_wire(WireError::Eof {
-                pos: position,
-                need: payload_bytes.saturating_add(4),
-                have: cursor.remaining().saturating_add(4),
-            }),
-            other => other,
-        })
+        Ok(())
     }
 
     fn fixed_array(
@@ -916,10 +948,12 @@ fn preflight_tail(
     budget.fixed_array(cursor, 12, "FunctionIdReferenceToPointer")?;
     preflight_tail_map(cursor, budget, "GlobalReferences", |cursor, budget| {
         cursor.skip(8)?;
+        let (name, name_position) = budget.sia_bytes(cursor)?;
         budget.string(cursor, false)?;
         budget.string(cursor, false)?;
-        budget.string(cursor, false)?;
-        cursor.skip(4)?;
+        if cursor.read_canonical_bool()? {
+            name.decode_utf8(name_position).map_err(invalid_wire)?;
+        }
         Ok(())
     })?;
     budget.string_array(cursor, "StaticNames")?;
@@ -2162,6 +2196,41 @@ mod tests {
             .unwrap()
     }
 
+    fn push_preflight_sia(out: &mut Vec<u8>, value: &[u8]) {
+        if value.is_empty() {
+            out.extend_from_slice(&0i32.to_le_bytes());
+        } else {
+            out.extend_from_slice(&(value.len() as i32).to_le_bytes());
+            out.extend_from_slice(value);
+            out.push(0);
+        }
+    }
+
+    fn preflight_tail_with_global_name(
+        name: &[u8],
+        is_string: i32,
+    ) -> Result<(), NpcArchetypeError> {
+        let mut tail = Vec::new();
+        tail.extend_from_slice(&0i32.to_le_bytes()); // TypeReferences
+        tail.extend_from_slice(&0i32.to_le_bytes()); // TypeIdReferenceToPointer
+        tail.extend_from_slice(&0i32.to_le_bytes()); // FunctionReferences
+        tail.extend_from_slice(&0i32.to_le_bytes()); // FunctionIdReferenceToPointer
+        tail.extend_from_slice(&1i32.to_le_bytes()); // GlobalReferences
+        tail.extend_from_slice(&0x3000i64.to_le_bytes());
+        push_preflight_sia(&mut tail, name);
+        push_preflight_sia(&mut tail, b""); // Module
+        push_preflight_sia(&mut tail, b""); // Namespace
+        tail.extend_from_slice(&is_string.to_le_bytes());
+        tail.extend_from_slice(&0i32.to_le_bytes()); // StaticNames
+        tail.extend_from_slice(&0i32.to_le_bytes()); // PropertyReferences
+
+        let mut cursor = PreflightCursor::at(&tail, 0);
+        let mut budget = PreflightBudget::new(NpcLimits::default());
+        preflight_tail(&mut cursor, &mut budget)?;
+        assert_eq!(cursor.position, tail.len());
+        Ok(())
+    }
+
     #[test]
     fn exact_bytecode_edges_accept_non_suffix_triple_deterministically() {
         let fixture = fixture();
@@ -2360,6 +2429,23 @@ mod tests {
                 actual: 9,
                 max: 8,
             })
+        ));
+    }
+
+    #[test]
+    fn structural_preflight_validates_global_name_with_contextual_encoding() {
+        preflight_tail_with_global_name("Grüße 世界".as_bytes(), 1).unwrap();
+        preflight_tail_with_global_name(&[0xff], 0).unwrap();
+
+        assert!(matches!(
+            preflight_tail_with_global_name(&[0xff], 1),
+            Err(NpcArchetypeError::InvalidShippingCache(message))
+                if message.contains("script string literal is not valid UTF-8")
+        ));
+        assert!(matches!(
+            preflight_tail_with_global_name(b"literal", 2),
+            Err(NpcArchetypeError::InvalidShippingCache(message))
+                if message.contains("field bool")
         ));
     }
 

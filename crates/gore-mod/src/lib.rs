@@ -22,8 +22,8 @@ pub use dialog::DialogTopicSpec;
 
 pub type Files = BTreeMap<String, Vec<u8>>;
 
-// Bundle-side voice inputs are untrusted. Check the file length before allocating and retain a
-// bounded-reader check for files that grow after metadata is read. Keep this manifest limit in
+// Externally supplied voice inputs are not yet validated. Check the file length before allocating
+// and retain a bounded-reader check for files that grow after metadata is read. Keep this limit in
 // sync with the manager importer; Ogg payloads use gore-vo's public/default processing limit.
 const MAX_VOICE_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 /// Hard deployment/build-wide cap for simultaneously resident source Ogg payloads. Rewritten ZIP
@@ -34,6 +34,7 @@ const MAX_BUNDLE_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_DEPLOY_RECORD_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_AUDIO_WAV_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_SCRIPT_MINI_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_SCRIPT_MINI_TOTAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_TEXTURE_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
 /// A loose game file is opaque bytes we never decode, so the cap only has to keep one bundle
 /// payload from exhausting the disk it is staged on. Nothing about the format is assumed.
@@ -2766,6 +2767,35 @@ pub(crate) fn read_safe_bundle_file(
     read_regular_file_limited(&canonical, label, max_bytes)
 }
 
+fn read_bundle_script_mini_phase(
+    bundle_root: &Path,
+    rel: &Path,
+    phase: &'static str,
+    used: &mut u64,
+) -> Result<Vec<u8>> {
+    let remaining = MAX_SCRIPT_MINI_TOTAL_BYTES
+        .checked_sub(*used)
+        .ok_or_else(|| {
+            ModError::Other(format!(
+                "{phase} already exceeds the {MAX_SCRIPT_MINI_TOTAL_BYTES}-byte cumulative limit"
+            ))
+        })?;
+    let mini = read_safe_bundle_file(
+        bundle_root,
+        rel,
+        phase,
+        MAX_SCRIPT_MINI_BYTES.min(remaining),
+    )?;
+    charge_script_phase_bytes(
+        phase,
+        used,
+        u64::try_from(mini.len()).unwrap_or(u64::MAX),
+        MAX_SCRIPT_MINI_BYTES,
+        MAX_SCRIPT_MINI_TOTAL_BYTES,
+    )?;
+    Ok(mini)
+}
+
 fn resolve_safe_bundle_file(bundle_root: &Path, rel: &Path, label: &str) -> Result<(PathBuf, u64)> {
     let rel_text = rel.to_string_lossy();
     if !is_safe_rel_path(&rel_text) {
@@ -3311,6 +3341,7 @@ fn update_content_hash(hash: &mut u64, bytes: &[u8]) {
 
 /// Hash a file with a fixed-size buffer. Voice archives can be many GiB, so drift checks must not
 /// materialize the live ZIP merely to compare it with the hash persisted in the deploy record.
+#[cfg(test)]
 fn content_hash_file(path: &Path) -> std::io::Result<String> {
     let mut remaining = u64::MAX;
     content_hash_file_bounded(path, &mut remaining)
@@ -3495,11 +3526,7 @@ pub(crate) fn tree_fingerprint_bounded(
     remaining_bytes: &mut u64,
     remaining_entries: &mut u64,
 ) -> Result<String> {
-    tree_fingerprint_with_prefix_bounded(
-        root,
-        None,
-        Some((remaining_bytes, remaining_entries)),
-    )
+    tree_fingerprint_with_prefix_bounded(root, None, Some((remaining_bytes, remaining_entries)))
 }
 
 fn tree_fingerprint_with_prefix(root: &Path, prefix: Option<&str>) -> Result<String> {
@@ -3983,9 +4010,10 @@ thread_local! {
 #[cfg(test)]
 fn probe_install_state(install_root: &Path) -> gore_as::compile::InstallCompileStateProbe {
     let running = STATED_GAME_PROCESS.with(|stated| stated.get());
-    gore_as::compile::probe_install_compile_state_with_stated_game_process(install_root, move || {
-        Ok(running)
-    })
+    gore_as::compile::probe_install_compile_state_with_stated_game_process(
+        install_root,
+        move || Ok(running),
+    )
 }
 
 /// States, for the rest of this test, that the game is running. Restores the previous answer on
@@ -4129,7 +4157,180 @@ struct PlannedIdentity {
 struct DiskWrite {
     live: PathBuf,
     candidate: tempfile::TempPath,
+    len: u64,
     hash: String,
+}
+
+impl DiskWrite {
+    /// Bind a disk-backed candidate to the exact length and SHA-256 that planning accepted. The
+    /// publication path rechecks this identity on its same-directory staged copy immediately before
+    /// promotion, so a mutable tempfile can never make the record describe different live bytes.
+    fn seal(live: PathBuf, candidate: tempfile::TempPath) -> Result<Self> {
+        let metadata = std::fs::symlink_metadata(&candidate).map_err(io(&format!(
+            "reading disk-backed candidate metadata for {}",
+            live.display()
+        )))?;
+        if metadata_is_link(&metadata) || !metadata.is_file() {
+            return Err(ModError::Other(format!(
+                "disk-backed candidate is not a regular non-link file for {}",
+                live.display()
+            )));
+        }
+        let len = metadata.len();
+        let hash = sha256_file(&candidate).map_err(|error| {
+            ModError::Other(format!(
+                "hashing disk-backed candidate for {}: {error}",
+                live.display()
+            ))
+        })?;
+        let after = std::fs::symlink_metadata(&candidate).map_err(io(&format!(
+            "re-reading disk-backed candidate metadata for {}",
+            live.display()
+        )))?;
+        if metadata_is_link(&after) || !after.is_file() || after.len() != len {
+            return Err(ModError::Other(format!(
+                "disk-backed candidate changed while being sealed for {}",
+                live.display()
+            )));
+        }
+        Ok(Self {
+            live,
+            candidate,
+            len,
+            hash,
+        })
+    }
+}
+
+/// One canonical mini retained between loadout planning and guarded composition. The random
+/// tempfile owns cleanup on every early return; length plus SHA-256 bind the exact generated bytes
+/// across the reopen needed after the large planning context has been dropped.
+#[derive(Debug)]
+pub(crate) struct SealedScriptMini {
+    candidate: tempfile::TempPath,
+    len: u64,
+    sha256: [u8; 32],
+}
+
+fn charge_script_phase_bytes(
+    phase: &'static str,
+    used: &mut u64,
+    added: u64,
+    max_file_bytes: u64,
+    max_total_bytes: u64,
+) -> Result<()> {
+    if added > max_file_bytes {
+        return Err(ModError::Other(format!(
+            "{phase} exceeds the {max_file_bytes}-byte per-mini limit: {added} bytes"
+        )));
+    }
+    let actual = used
+        .checked_add(added)
+        .ok_or_else(|| ModError::Other(format!("{phase} cumulative byte count overflowed")))?;
+    if actual > max_total_bytes {
+        return Err(ModError::Other(format!(
+            "{phase} exceeds the {max_total_bytes}-byte cumulative limit: {actual} bytes"
+        )));
+    }
+    *used = actual;
+    Ok(())
+}
+
+/// Persist one canonicalized mini without retaining its bytes in memory. `used` is a phase-local
+/// disk-output budget, deliberately separate from both source-read passes.
+pub(crate) fn seal_script_mini(
+    bytes: Vec<u8>,
+    max_file_bytes: u64,
+    used: &mut u64,
+    max_total_bytes: u64,
+) -> Result<SealedScriptMini> {
+    let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    charge_script_phase_bytes(
+        "canonical script mini output",
+        used,
+        len,
+        max_file_bytes,
+        max_total_bytes,
+    )?;
+    let sha256 = Sha256::digest(&bytes).into();
+    let mut candidate = tempfile::Builder::new()
+        .prefix(".gore-script-canonical-")
+        .tempfile()
+        .map_err(io("creating canonical script mini candidate"))?;
+    candidate
+        .write_all(&bytes)
+        .map_err(io("writing canonical script mini candidate"))?;
+    candidate
+        .as_file()
+        .sync_all()
+        .map_err(io("syncing canonical script mini candidate"))?;
+    Ok(SealedScriptMini {
+        candidate: candidate.into_temp_path(),
+        len,
+        sha256,
+    })
+}
+
+/// Reopen and verify a canonical mini after the loadout plan has been dropped. Allocation is based
+/// only on the previously sealed length, and the same verified `Vec` is passed to the guard.
+pub(crate) fn read_sealed_script_mini(
+    sealed: &SealedScriptMini,
+    max_file_bytes: u64,
+    used: &mut u64,
+    max_total_bytes: u64,
+) -> Result<Vec<u8>> {
+    if sealed.len > max_file_bytes {
+        return Err(ModError::Other(format!(
+            "canonical script mini exceeds the {max_file_bytes}-byte per-mini read limit: {} bytes",
+            sealed.len
+        )));
+    }
+    let projected = used.checked_add(sealed.len).ok_or_else(|| {
+        ModError::Other("canonical script mini read cumulative byte count overflowed".into())
+    })?;
+    if projected > max_total_bytes {
+        return Err(ModError::Other(format!(
+            "canonical script mini reads exceed the {max_total_bytes}-byte cumulative limit: {projected} bytes"
+        )));
+    }
+    let capacity = usize::try_from(sealed.len).map_err(|_| {
+        ModError::Other(format!(
+            "canonical script mini is too large for this platform: {} bytes",
+            sealed.len
+        ))
+    })?;
+    let file = std::fs::File::open(&sealed.candidate).map_err(io(&format!(
+        "opening canonical script mini candidate {}",
+        sealed.candidate.display()
+    )))?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(capacity).map_err(|error| {
+        ModError::Other(format!(
+            "canonical script mini cannot be buffered for guarded composition ({} bytes): {error}",
+            sealed.len
+        ))
+    })?;
+    file.take(sealed.len.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(io(&format!(
+            "reading canonical script mini candidate {}",
+            sealed.candidate.display()
+        )))?;
+    let observed = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if observed != sealed.len {
+        return Err(ModError::Other(format!(
+            "canonical script mini candidate changed length: expected {}, read {observed}",
+            sealed.len
+        )));
+    }
+    let observed_sha256: [u8; 32] = Sha256::digest(&bytes).into();
+    if observed_sha256 != sealed.sha256 {
+        return Err(ModError::Other(
+            "canonical script mini candidate changed after planning".into(),
+        ));
+    }
+    *used = projected;
+    Ok(bytes)
 }
 
 impl DeployPlan {
@@ -4494,18 +4695,10 @@ pub(crate) fn prepare_voice_archive_writes(
         let (candidate, _) = archive
             .rewrite_edits_to_temp(archive_edits)
             .map_err(|e| ModError::Voice(format!("{}: {e}", live.display())))?;
-        let hash = content_hash_file(&candidate).map_err(io(&format!(
-            "hashing voice candidate for {}",
-            live.display()
-        )))?;
         if drifted {
             plan.refresh_baks.push(live.clone());
         }
-        plan.file_writes.push(DiskWrite {
-            live,
-            candidate,
-            hash,
-        });
+        plan.file_writes.push(DiskWrite::seal(live, candidate)?);
     }
     Ok(())
 }
@@ -5691,6 +5884,23 @@ fn prepare(
     gp: &GamePaths,
     prev: Option<&DeployRecord>,
 ) -> Result<DeployPlan> {
+    // Every AngelScript component materializes the same shipping ScriptCache. Reject a second one
+    // before opening either component's manifest or building any plan/temp state; otherwise each
+    // component would receive a fresh copy of the per-loadout resource envelope before the generic
+    // duplicate-destination gate rejects the finished deploy plan.
+    if manifest
+        .components
+        .iter()
+        .filter(|component| matches!(component, Component::AngelScriptPatch { .. }))
+        .take(2)
+        .count()
+        > 1
+    {
+        return Err(ModError::Other(format!(
+            "duplicate deploy target: {}",
+            gp.script_cache.display()
+        )));
+    }
     let mut plan = DeployPlan::default();
     let mut voice = PendingVoiceEdits::new();
     let mut voice_order = 0usize;
@@ -5699,7 +5909,7 @@ fn prepare(
     for (comp_idx, comp) in manifest.components.iter().enumerate() {
         match comp {
             Component::Ue4ssLua { name, path, .. } => {
-                // The manifest may come from an untrusted bundle: reject names/paths that could
+                // The manifest is externally supplied: reject names/paths that could
                 // escape the bundle source or the UE4SS Mods directory.
                 if !is_safe_mod_name(name) || !is_safe_rel_path(path) {
                     return Err(ModError::Other(format!(
@@ -5923,6 +6133,9 @@ fn prepare(
                         e.op, e.module
                     )));
                 }
+                if let Some(e) = entries.iter().find(|e| !is_safe_rel_path(&e.mini)) {
+                    return Err(ModError::Other(format!("unsafe mini path: {:?}", e.mini)));
+                }
                 let cache_path = gp.script_cache.clone();
                 if !cache_path.exists() {
                     return Err(ModError::Other(format!(
@@ -5935,40 +6148,93 @@ fn prepare(
                 if drifted {
                     plan.refresh_baks.push(cache_path.clone());
                 }
+                // Pass 1 inventories portable novel identities without retaining any mini bytes.
+                // The immutable union, rather than package/loadout order, determines every finite-
+                // domain pointer and engine-ID assignment.
+                let mut inspect_bytes = 0u64;
+                let mut loadout_builder =
+                    gore_as::cache::splice::LoadoutScriptIdPlanBuilder::new(&pristine)
+                        .map_err(|err| ModError::Other(format!("prepare script ID plan: {err}")))?;
+                for e in &entries {
+                    let mini = read_bundle_script_mini_phase(
+                        bundle_dir,
+                        Path::new(&e.mini),
+                        "script mini-cache inspection",
+                        &mut inspect_bytes,
+                    )?;
+                    loadout_builder.inspect(&mini).map_err(|err| {
+                        ModError::Other(format!("inspect script mini {}: {err}", e.module))
+                    })?;
+                }
+                let loadout_plan = loadout_builder
+                    .finish()
+                    .map_err(|err| ModError::Other(format!("finish script ID plan: {err}")))?;
+
+                // Pass 2 rereads the exact inspected source bytes. The core plan SHA-binds that
+                // reopen, then each canonical result is sealed in a private tempfile so the large
+                // plan/base context can be released before the guard builds its own base indexes.
+                let mut rewrite_source_bytes = 0u64;
+                let mut canonical_output_bytes = 0u64;
+                let mut canonical_minis = Vec::new();
+                canonical_minis
+                    .try_reserve_exact(entries.len())
+                    .map_err(|error| {
+                        ModError::Other(format!(
+                            "cannot reserve canonical script mini candidates: {error}"
+                        ))
+                    })?;
+                for e in &entries {
+                    let mini = read_bundle_script_mini_phase(
+                        bundle_dir,
+                        Path::new(&e.mini),
+                        "script mini-cache canonicalization",
+                        &mut rewrite_source_bytes,
+                    )?;
+                    let canonical = gore_as::cache::splice::remap_module_to_base_with_loadout_plan(
+                        &mini,
+                        &pristine,
+                        &loadout_plan,
+                    )
+                    .map_err(|err| {
+                        ModError::Other(format!("canonicalize script mini {}: {err}", e.module))
+                    })?;
+                    canonical_minis.push(seal_script_mini(
+                        canonical,
+                        MAX_SCRIPT_MINI_BYTES,
+                        &mut canonical_output_bytes,
+                        MAX_SCRIPT_MINI_TOTAL_BYTES,
+                    )?);
+                }
+                drop(loadout_plan);
+
+                // Pass 3 verifies each generated tempfile's length and SHA-256, then composes that
+                // exact Vec. Consuming the candidates releases their disk footprint incrementally.
                 let mut script_merge_guard =
                     gore_as::cache::splice::SequentialMiniGuard::new(&pristine).map_err(|err| {
                         ModError::Other(format!("prepare script composition: {err}"))
                     })?;
                 let mut running = pristine;
-                for e in &entries {
-                    if !is_safe_rel_path(&e.mini) {
-                        return Err(ModError::Other(format!("unsafe mini path: {:?}", e.mini)));
-                    }
-                    let mini = read_safe_bundle_file(
-                        bundle_dir,
-                        Path::new(&e.mini),
-                        "script mini-cache",
+                let mut canonical_read_bytes = 0u64;
+                for (e, sealed) in entries.iter().zip(canonical_minis) {
+                    let mini = read_sealed_script_mini(
+                        &sealed,
                         MAX_SCRIPT_MINI_BYTES,
+                        &mut canonical_read_bytes,
+                        MAX_SCRIPT_MINI_TOTAL_BYTES,
                     )?;
-                    if e.op != "add" && e.op != "edit" {
-                        return Err(ModError::Other(format!(
-                            "invalid script op {:?} for module {:?}",
-                            e.op, e.module
-                        )));
-                    }
-                    let prepared = script_merge_guard
-                        .check_and_record(&mini)
-                        .map_err(|err| ModError::Other(format!("compose {}: {err}", e.module)))?;
                     running = match e.op.as_str() {
-                        "add" => gore_as::cache::splice::splice_auto(&running, &prepared).map_err(
-                            |err| ModError::Other(format!("splice {}: {err}", e.module)),
-                        )?,
-                        "edit" => {
-                            gore_as::cache::splice::replace_module(&running, &prepared, &e.module)
+                        "add" => {
+                            script_merge_guard
+                                .compose_add(&running, &mini)
                                 .map_err(|err| {
-                                ModError::Other(format!("replace {}: {err}", e.module))
-                            })?
+                                    ModError::Other(format!("splice {}: {err}", e.module))
+                                })?
                         }
+                        "edit" => script_merge_guard
+                            .compose_edit(&running, &mini, &e.module)
+                            .map_err(|err| {
+                                ModError::Other(format!("replace {}: {err}", e.module))
+                            })?,
                         other => {
                             return Err(ModError::Other(format!(
                                 "invalid script op {other:?} for module {:?}",
@@ -6029,8 +6295,8 @@ fn prepare_file_component(
         MAX_BUNDLE_MANIFEST_BYTES,
     )?)?;
     for (game_path, payload_rel) in &map {
-        // The manifest may come from an untrusted bundle: re-ask the authoring-time question here
-        // rather than trusting that whoever wrote the bundle asked it.
+        // The manifest is externally supplied: re-ask the authoring-time question here because
+        // authoring-time validation is not a deployment-time proof.
         validate_loose_game_path(game_path)?;
         if !is_safe_rel_path(payload_rel) {
             return Err(ModError::Other(format!(
@@ -6068,17 +6334,13 @@ fn prepare_file_component(
         if select_pristine_source(&live, prev)?.drifted {
             plan.refresh_baks.push(live.clone());
         }
-        let (candidate, hash) = snapshot_bundle_payload(
+        let candidate = snapshot_bundle_payload(
             bundle_dir,
             payload_rel,
             "loose file payload",
             MAX_LOOSE_FILE_BYTES,
         )?;
-        plan.file_writes.push(DiskWrite {
-            live,
-            candidate,
-            hash,
-        });
+        plan.file_writes.push(DiskWrite::seal(live, candidate)?);
     }
     Ok(())
 }
@@ -6104,7 +6366,7 @@ fn snapshot_bundle_payload(
     rel: &str,
     label: &str,
     max_bytes: u64,
-) -> Result<(tempfile::TempPath, String)> {
+) -> Result<tempfile::TempPath> {
     let (canonical, len) = resolve_safe_bundle_file(bundle_dir, Path::new(rel), label)?;
     if len > max_bytes {
         return Err(ModError::Other(format!(
@@ -6133,9 +6395,7 @@ fn snapshot_bundle_payload(
         .as_file()
         .sync_all()
         .map_err(io(&format!("syncing {label} candidate")))?;
-    let candidate = candidate.into_temp_path();
-    let hash = content_hash_file(&candidate).map_err(io(&format!("hashing {label} candidate")))?;
-    Ok((candidate, hash))
+    Ok(candidate.into_temp_path())
 }
 
 /// Prepare ONE texture component: cook each PNG in the patch dir at `path` (bundle-relative)
@@ -6365,7 +6625,7 @@ fn prepare_pak_file_component(
                 None,
             );
             for (game_path, payload_rel) in &map {
-                // The manifest may come from an untrusted bundle: ask the same authoring question
+                // The manifest is externally supplied: ask the same authoring question
                 // the `files` section asks, against the same allowlist. One allowlist, one answer
                 // to "may a bundle claim this destination" — the mechanism does not widen it.
                 validate_loose_game_path(game_path)?;
@@ -6792,8 +7052,17 @@ fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
                     write.live.display()
                 ))
             })?;
+        let (staged, parent) = stage_atomic_publish_copy(
+            &write.candidate,
+            &write.live,
+            Some((write.len, write.hash.as_str())),
+        )?;
+        publish_atomic_temp(staged, &write.live)?;
+        // Only a completed atomic promote turns the prepared identity into a published identity.
+        // In particular, a staged length/SHA failure must leave Undo at `None` so rollback and the
+        // recovery record never describe intended bytes as if they had reached the live path.
         file_undo.published_hash = Some(write.hash.clone());
-        atomic_publish_copy(&write.candidate, &write.live)?;
+        sync_parent_directory(&parent)?;
     }
     Ok(())
 }
@@ -7243,6 +7512,28 @@ fn same_path(a: &Path, b: &str) -> bool {
 /// and `retire_leftovers` — recognize logically-identical paths regardless of prefix/case.
 fn same_path_s(a: &str, b: &str) -> bool {
     same_path(Path::new(a), b)
+}
+
+/// Stable ordinal case-insensitive identity for a single Windows filename. Windows compares UTF-16
+/// units without expanding them, so map only a BMP scalar whose Unicode uppercase is exactly one
+/// BMP scalar. This keeps `ß` distinct from `SS` and supplementary-plane letters distinct from
+/// their Unicode uppercase, while Greek final sigma (`ς`) and sigma (`σ`) still share `Σ`.
+pub(crate) fn windows_file_name_key(value: &str) -> String {
+    let mut key = String::with_capacity(value.len());
+    for scalar in value.chars() {
+        if scalar.len_utf16() != 1 {
+            key.push(scalar);
+            continue;
+        }
+        let mut uppercase = scalar.to_uppercase();
+        let first = uppercase.next().unwrap_or(scalar);
+        key.push(if uppercase.next().is_none() && first.len_utf16() == 1 {
+            first
+        } else {
+            scalar
+        });
+    }
+    key
 }
 
 fn path_exists_no_follow(path: &Path) -> bool {
@@ -9083,13 +9374,31 @@ fn atomic_copy(source: &Path, destination: &Path) -> Result<()> {
             destination.display()
         )));
     }
-    atomic_publish_copy(source, destination)
+    atomic_publish_copy(source, destination, None)
 }
 
 /// Publish a disk-backed candidate to `destination` with fixed memory use. The source may live on
 /// another volume: it is first streamed into a verified unique sibling of the destination, then
 /// durably atomically promoted using the same platform-specific path as [`atomic_write`].
-fn atomic_publish_copy(source: &Path, destination: &Path) -> Result<()> {
+#[cfg(test)]
+fn atomic_publish_copy(
+    source: &Path,
+    destination: &Path,
+    expected: Option<(u64, &str)>,
+) -> Result<()> {
+    let (temp, parent) = stage_atomic_publish_copy(source, destination, expected)?;
+    publish_atomic_temp(temp, destination)?;
+    sync_parent_directory(&parent)
+}
+
+/// Stream one source into a same-directory sibling and authenticate that sibling immediately
+/// before its caller promotes it. Keeping promotion separate lets transactional callers mark Undo
+/// as published only after the atomic rename has actually succeeded.
+fn stage_atomic_publish_copy(
+    source: &Path,
+    destination: &Path,
+    expected: Option<(u64, &str)>,
+) -> Result<(tempfile::NamedTempFile, PathBuf)> {
     #[cfg(test)]
     if take_injected_atomic_write_failure(destination) {
         return Err(ModError::Other(format!(
@@ -9104,8 +9413,27 @@ fn atomic_publish_copy(source: &Path, destination: &Path) -> Result<()> {
         ))
     })?;
     let temp = verified_temp_copy_in(source, parent, ".gore-copy-stage-")?;
-    publish_atomic_temp(temp, destination)?;
-    sync_parent_directory(parent)
+    if let Some((expected_len, expected_hash)) = expected {
+        let staged_len = temp
+            .as_file()
+            .metadata()
+            .map_err(io("reading staged disk-write metadata"))?
+            .len();
+        if staged_len != expected_len {
+            return Err(ModError::Other(format!(
+                "disk-backed candidate length changed after planning for {}: expected {expected_len}, staged {staged_len}",
+                destination.display()
+            )));
+        }
+        let staged_hash = sha256_file(temp.path())?;
+        if staged_hash != expected_hash {
+            return Err(ModError::Other(format!(
+                "disk-backed candidate SHA-256 changed after planning for {}: expected {expected_hash}, staged {staged_hash}",
+                destination.display()
+            )));
+        }
+    }
+    Ok((temp, parent.to_path_buf()))
 }
 
 #[cfg(test)]
@@ -12687,10 +13015,11 @@ mod tests {
         let backup = bak_path(&live);
         assert_eq!(std::fs::read(&backup).unwrap(), pristine_zip);
         assert_eq!(first_record.deployed_hashes.len(), 1);
+        let live_hash = sha256_file(&live).unwrap();
         assert!(first_record
             .deployed_hashes
             .values()
-            .any(|hash| hash == &content_hash(&std::fs::read(&live).unwrap())));
+            .any(|hash| hash == &live_hash));
 
         // A missing archive is a hard prepare error. It must leave the active deployment and its
         // record byte-for-byte intact rather than silently producing a partial voice patch.
@@ -12790,6 +13119,383 @@ mod tests {
         assert_eq!(std::fs::read(&live).unwrap(), before_live);
         assert_eq!(std::fs::read(&backup).unwrap(), before_backup);
         assert!(!record_path(&game).exists());
+    }
+
+    fn test_script_cache_with_guid(module: &str, guid: [u8; 16]) -> Vec<u8> {
+        fn sia(value: &str) -> Vec<u8> {
+            if value.is_empty() {
+                return 0i32.to_le_bytes().to_vec();
+            }
+            let mut out = (value.len() as i32).to_le_bytes().to_vec();
+            out.extend_from_slice(value.as_bytes());
+            out.push(0);
+            out
+        }
+
+        fn fstring(value: &str) -> Vec<u8> {
+            let mut out = ((value.len() + 1) as i32).to_le_bytes().to_vec();
+            out.extend_from_slice(value.as_bytes());
+            out.push(0);
+            out
+        }
+
+        let mut out = guid.to_vec();
+        out.extend_from_slice(&gore_as::cache::header::CACHE_MAGIC.to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring(module));
+        out.extend_from_slice(&sia(module));
+        out.extend_from_slice(&[0u8; 5 * 4]); // functions/classes/enums/globals/imports
+        out.extend_from_slice(&0i64.to_le_bytes()); // code hash
+        out.extend_from_slice(&0i32.to_le_bytes()); // imported modules
+        out.extend_from_slice(&sia("")); // statics class
+        out.extend_from_slice(&[0u8; 2 * 4]); // events/delegates
+        out.extend_from_slice(&sia("")); // source path
+        out.extend_from_slice(&0i32.to_le_bytes()); // post-init functions
+        out.extend_from_slice(&[0u8; 7 * 4]); // empty global tail tables
+        out
+    }
+
+    fn test_script_cache_with_type(
+        module: &str,
+        guid: [u8; 16],
+        type_name: &str,
+        provisional_ptr: i64,
+        provisional_type_id: i32,
+    ) -> Vec<u8> {
+        fn sia(value: &str) -> Vec<u8> {
+            if value.is_empty() {
+                return 0i32.to_le_bytes().to_vec();
+            }
+            let mut out = (value.len() as i32).to_le_bytes().to_vec();
+            out.extend_from_slice(value.as_bytes());
+            out.push(0);
+            out
+        }
+
+        fn fstring(value: &str) -> Vec<u8> {
+            let mut out = ((value.len() + 1) as i32).to_le_bytes().to_vec();
+            out.extend_from_slice(value.as_bytes());
+            out.push(0);
+            out
+        }
+
+        let mut out = guid.to_vec();
+        out.extend_from_slice(&gore_as::cache::header::CACHE_MAGIC.to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring(module));
+        out.extend_from_slice(&sia(module));
+        out.extend_from_slice(&0i32.to_le_bytes()); // functions
+        out.extend_from_slice(&1i32.to_le_bytes()); // classes
+        out.extend_from_slice(&sia(type_name));
+        out.extend_from_slice(&sia("")); // namespace
+        out.extend_from_slice(&[0u8; 3 * 4]); // flags/properties/methods
+        out.extend_from_slice(&0i32.to_le_bytes()); // method table
+        out.extend_from_slice(&0i64.to_le_bytes()); // derived from
+        out.extend_from_slice(&0i64.to_le_bytes()); // shadow type
+        out.extend_from_slice(&[0u8; 2 * 4]); // constructors/factories
+        out.extend_from_slice(&7i32.to_le_bytes()); // fixed behavior slots
+        out.extend_from_slice(&[0u8; 7 * 8]);
+        out.extend_from_slice(&[0u8; 3 * 4]); // behavior funcs/types + no Unreal tail
+        out.extend_from_slice(&[0u8; 3 * 4]); // enums/globals/imports
+        out.extend_from_slice(&0i64.to_le_bytes()); // code hash
+        out.extend_from_slice(&0i32.to_le_bytes()); // imported modules
+        out.extend_from_slice(&sia("")); // statics class
+        out.extend_from_slice(&[0u8; 2 * 4]); // events/delegates
+        out.extend_from_slice(&sia("")); // source path
+        out.extend_from_slice(&0i32.to_le_bytes()); // post-init functions
+
+        out.extend_from_slice(&1u32.to_le_bytes()); // T1
+        out.extend_from_slice(&provisional_ptr.to_le_bytes());
+        out.extend_from_slice(&sia(type_name));
+        out.extend_from_slice(&sia(module));
+        out.extend_from_slice(&sia("")); // namespace
+        out.extend_from_slice(&0u32.to_le_bytes()); // subtypes
+        out.extend_from_slice(&1u32.to_le_bytes()); // T2
+        out.extend_from_slice(&provisional_type_id.to_le_bytes());
+        out.extend_from_slice(&provisional_ptr.to_le_bytes());
+        out.extend_from_slice(&[0u8; 5 * 4]); // T3..T7
+        out
+    }
+
+    fn test_type_id_assignments(bytes: &[u8]) -> BTreeMap<String, i32> {
+        use gore_as::cache::tables::parse_tail_tables;
+        use gore_as::cache::walk_modules::module_region_end;
+        use gore_as::cache::wire::Cursor;
+
+        let tail = parse_tail_tables(bytes, module_region_end(bytes).unwrap()).unwrap();
+        let type_names: BTreeMap<i64, String> = tail.tables[0]
+            .entry_starts
+            .iter()
+            .map(|&start| {
+                let mut cursor = Cursor::at(bytes, start);
+                let ptr = cursor.read_i64().unwrap();
+                let name = cursor.read_sia().unwrap();
+                (name, ptr)
+            })
+            .map(|(name, ptr)| (ptr, name))
+            .collect();
+        tail.tables[1]
+            .entry_starts
+            .iter()
+            .filter_map(|&start| {
+                let mut cursor = Cursor::at(bytes, start);
+                let id = cursor.read_i32().unwrap();
+                let ptr = cursor.read_i64().unwrap();
+                type_names.get(&ptr).cloned().map(|name| (name, id))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn direct_script_prepare_canonicalizes_colliding_minis_independently_of_order() {
+        fn run(reverse: bool) -> BTreeMap<String, i32> {
+            let dir = tempfile::tempdir().unwrap();
+            let game = dir.path().join("game");
+            let script_dir = game.join("G1R/Script");
+            std::fs::create_dir_all(&script_dir).unwrap();
+            let live = script_dir.join("PrecompiledScript_Shipping.Cache");
+            let guid = [0x31; 16];
+            std::fs::write(&live, test_script_cache_with_guid("_gore_base", guid)).unwrap();
+
+            let bundle = dir.path().join("bundle");
+            std::fs::create_dir_all(bundle.join("scripts")).unwrap();
+            const COLLIDING_TYPE_ID: i32 = 0x0B3F_6760;
+            std::fs::write(
+                bundle.join("scripts/a.cache"),
+                test_script_cache_with_type(
+                    "_gore_collision_14",
+                    guid,
+                    "CollisionType1901",
+                    0x6000_0000_4455_0001,
+                    COLLIDING_TYPE_ID,
+                ),
+            )
+            .unwrap();
+            std::fs::write(
+                bundle.join("scripts/b.cache"),
+                test_script_cache_with_type(
+                    "_gore_collision_7",
+                    guid,
+                    "CollisionType2149",
+                    0x6000_0000_4455_0002,
+                    COLLIDING_TYPE_ID,
+                ),
+            )
+            .unwrap();
+            let mut entries = vec![
+                ScriptEntry {
+                    op: "add".into(),
+                    module: "_gore_collision_14".into(),
+                    mini: "scripts/a.cache".into(),
+                },
+                ScriptEntry {
+                    op: "add".into(),
+                    module: "_gore_collision_7".into(),
+                    mini: "scripts/b.cache".into(),
+                },
+            ];
+            if reverse {
+                entries.reverse();
+            }
+            std::fs::write(
+                bundle.join("scripts/manifest.json"),
+                serde_json::to_vec(&entries).unwrap(),
+            )
+            .unwrap();
+            let manifest = ModManifest {
+                format: 1,
+                mod_meta: ModMeta {
+                    name: "CanonicalScriptLoadout".into(),
+                    version: "1".into(),
+                    author: "offline-test".into(),
+                },
+                components: vec![Component::AngelScriptPatch {
+                    path: "scripts".into(),
+                }],
+            };
+
+            let plan = prepare(&bundle, &manifest, &resolve_game_paths(&game), None).unwrap();
+            let (_, output) = plan
+                .writes
+                .iter()
+                .find(|(path, _)| path == &live)
+                .expect("direct prepare emits the composed script cache");
+            let module_names = gore_as::cache::walk_modules::module_names(output).unwrap();
+            let expected = if reverse {
+                vec!["_gore_base", "_gore_collision_7", "_gore_collision_14"]
+            } else {
+                vec!["_gore_base", "_gore_collision_14", "_gore_collision_7"]
+            };
+            assert_eq!(module_names, expected);
+            let assignments = test_type_id_assignments(output);
+            assert_ne!(
+                assignments["CollisionType1901"], assignments["CollisionType2149"],
+                "colliding provisional T2 IDs need distinct final assignments"
+            );
+            assignments
+        }
+
+        assert_eq!(
+            run(false),
+            run(true),
+            "direct bundle order must not change portable-identity assignments"
+        );
+    }
+
+    #[test]
+    fn sealed_script_mini_rejects_same_length_temp_mutation_and_cleans_up() {
+        let original = b"canonical mini bytes".to_vec();
+        let mut output_bytes = 0u64;
+        let sealed = seal_script_mini(original, 1024, &mut output_bytes, 1024).unwrap();
+        assert_eq!(output_bytes, sealed.len);
+        let path = sealed.candidate.to_path_buf();
+        std::fs::write(&path, b"tampered!!mini bytes").unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), sealed.len);
+
+        let mut read_bytes = 0u64;
+        let error = read_sealed_script_mini(&sealed, 1024, &mut read_bytes, 1024)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("changed after planning"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(read_bytes, 0, "a rejected reopen must not commit budget");
+        drop(sealed);
+        assert!(!path.exists(), "TempPath drop must remove the candidate");
+    }
+
+    #[test]
+    fn script_phase_budgets_are_independent_and_checked_before_temp_io() {
+        let mut inspect_bytes = 0u64;
+        let mut rewrite_bytes = 0u64;
+        charge_script_phase_bytes("inspect", &mut inspect_bytes, 4, 4, 4).unwrap();
+        charge_script_phase_bytes("rewrite", &mut rewrite_bytes, 4, 4, 4).unwrap();
+        assert_eq!((inspect_bytes, rewrite_bytes), (4, 4));
+
+        let error = charge_script_phase_bytes("rewrite", &mut rewrite_bytes, 1, 4, 4)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("cumulative limit"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(rewrite_bytes, 4, "failed charge must not change its phase");
+
+        let mut output_bytes = 0u64;
+        let error = seal_script_mini(vec![0; 5], 4, &mut output_bytes, 4)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("per-mini limit"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            output_bytes, 0,
+            "oversized output must fail before tempfile I/O"
+        );
+    }
+
+    #[test]
+    fn deploy_rejects_a_script_mini_from_another_cache_before_game_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let script_dir = game.join("G1R/Script");
+        std::fs::create_dir_all(&script_dir).unwrap();
+        let live = script_dir.join("PrecompiledScript_Shipping.Cache");
+        let base = test_script_cache_with_guid("_gore_base", [0x11; 16]);
+        std::fs::write(&live, &base).unwrap();
+
+        let bundle = dir.path().join("bundle");
+        std::fs::create_dir_all(bundle.join("scripts")).unwrap();
+        let mini_rel = "scripts/0_Stale.cache";
+        std::fs::write(
+            bundle.join(mini_rel),
+            test_script_cache_with_guid("Stale", [0x22; 16]),
+        )
+        .unwrap();
+        std::fs::write(
+            bundle.join("scripts/manifest.json"),
+            serde_json::to_vec(&vec![ScriptEntry {
+                op: "add".into(),
+                module: "Stale".into(),
+                mini: mini_rel.into(),
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+        let manifest = ModManifest {
+            format: 1,
+            mod_meta: ModMeta {
+                name: "StaleScriptMini".into(),
+                version: "1".into(),
+                author: "offline-test".into(),
+            },
+            components: vec![Component::AngelScriptPatch {
+                path: "scripts".into(),
+            }],
+        };
+        std::fs::write(
+            bundle.join("gore-mod.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        let before_tree = tree_fingerprint(&game).unwrap();
+
+        let error = deploy(&bundle, &game).unwrap_err().to_string();
+        assert!(
+            error.contains("does not match target base GUID")
+                && error.contains("remap the module against this exact game cache"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&live).unwrap(), base);
+        assert!(!bak_path(&live).exists());
+        assert!(!record_path(&game).exists());
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+        assert_eq!(tree_fingerprint(&game).unwrap(), before_tree);
+    }
+
+    /// Multiple AngelScript components share one ScriptCache destination and must be rejected
+    /// before either component payload is opened or any per-loadout planning work begins.
+    #[test]
+    fn prepare_rejects_multiple_script_components_before_payload_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("bundle");
+        std::fs::create_dir_all(&bundle).unwrap();
+        let game = dir.path().join("game");
+        let gp = resolve_game_paths(&game);
+        let manifest = ModManifest {
+            format: 1,
+            mod_meta: ModMeta {
+                name: "DuplicateScripts".into(),
+                version: "1".into(),
+                author: "offline-test".into(),
+            },
+            components: vec![
+                Component::AngelScriptPatch {
+                    path: "missing-first".into(),
+                },
+                Component::AngelScriptPatch {
+                    path: "missing-second".into(),
+                },
+            ],
+        };
+
+        let error = prepare(&bundle, &manifest, &gp, None)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("duplicate deploy target:")
+                && error.contains(&gp.script_cache.display().to_string()),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !error.contains("script manifest"),
+            "component payload was opened before duplicate rejection: {error}"
+        );
+        assert!(!bundle.join("missing-first").exists());
+        assert!(!bundle.join("missing-second").exists());
     }
 
     /// prepare() must reject a manifest whose op is neither add nor edit, naming the module.
@@ -13882,6 +14588,84 @@ mod tests {
             }
         }
         prepare_target_identities(plan, Some(&prior)).unwrap();
+    }
+
+    #[test]
+    fn commit_rejects_same_length_disk_candidate_mutation_without_game_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let live = game.join("G1R/Content/mutable.bin");
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"pristine").unwrap();
+
+        let mut candidate = ::tempfile::NamedTempFile::new().unwrap();
+        candidate.write_all(b"prepared").unwrap();
+        candidate.as_file().sync_all().unwrap();
+        let write = DiskWrite::seal(live.clone(), candidate.into_temp_path()).unwrap();
+        let candidate_path = write.candidate.to_path_buf();
+        assert_eq!(std::fs::metadata(&candidate_path).unwrap().len(), write.len);
+        assert!(write.hash.starts_with("sha256:"));
+
+        // Same length defeats size-only validation; only the prepared SHA-256 can catch this.
+        std::fs::write(&candidate_path, b"tampered").unwrap();
+        assert_eq!(std::fs::metadata(&candidate_path).unwrap().len(), write.len);
+        let plan = DeployPlan {
+            file_writes: vec![write],
+            ..Default::default()
+        };
+
+        let mut apply_undo = Undo::default();
+        apply_undo.files.push(LiveFileUndo {
+            live: live.clone(),
+            snapshot: verified_temp_copy(&live, ".gore-test-undo-")
+                .unwrap()
+                .into_temp_path(),
+            published_hash: None,
+            backup: None,
+        });
+        let direct_error = apply_writes(&plan, &mut apply_undo)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            direct_error.contains("disk-backed candidate SHA-256 changed after planning"),
+            "unexpected error: {direct_error}"
+        );
+        assert_eq!(
+            apply_undo.files[0].published_hash, None,
+            "a failed staged verification must not claim intended bytes were published"
+        );
+        assert_eq!(std::fs::read(&live).unwrap(), b"pristine");
+        drop(apply_undo);
+
+        let error = commit_plan(
+            &resolve_game_paths(&game),
+            &game,
+            plan,
+            DeployRecord {
+                owner: "manager".into(),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("disk-backed candidate SHA-256 changed after planning"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&live).unwrap(), b"pristine");
+        assert!(
+            !bak_path(&live).exists(),
+            "failed commit must remove its backup"
+        );
+        assert!(
+            !record_path(&game).exists(),
+            "failed commit must restore the absent prior record"
+        );
+        assert!(
+            !candidate_path.exists(),
+            "the rejected prepared candidate remains TempPath-owned"
+        );
     }
 
     fn ue4ss_transaction_dirs(root: &Path) -> Vec<PathBuf> {
@@ -15656,6 +16440,24 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(original.exists());
+    }
+
+    #[test]
+    fn windows_filename_identity_collapses_unicode_case_aliases() {
+        assert_eq!(
+            windows_file_name_key("Voice\u{03c2}.bank"),
+            windows_file_name_key("voice\u{03c3}.BANK")
+        );
+        assert_ne!(
+            windows_file_name_key("Voiceß.bank"),
+            windows_file_name_key("VoiceSS.bank"),
+            "Windows ordinal comparison must not apply Unicode multi-scalar expansions"
+        );
+        assert_ne!(
+            windows_file_name_key("Voice\u{10428}.bank"),
+            windows_file_name_key("Voice\u{10400}.bank"),
+            "Windows ordinal comparison must not case-fold UTF-16 surrogate pairs"
+        );
     }
 
     #[cfg(windows)]

@@ -1,6 +1,9 @@
-use gore_as::cache::splice::{replace_module, splice, splice_auto, splice_case_a, SpliceError};
+use gore_as::cache::splice::{
+    extract_module, replace_module, splice, splice_auto, splice_case_a,
+    validate_standalone_script_cache, SequentialMiniGuard, SpliceError,
+};
 use gore_as::cache::tables::parse_tail_tables;
-use gore_as::cache::walk_modules::{module_count, module_names, module_region_end};
+use gore_as::cache::walk_modules::{module_count, module_names, module_ranges, module_region_end};
 
 const SAMPLES: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -13,6 +16,256 @@ fn read_sample(name: &str) -> Option<Vec<u8>> {
 
 const MINI: &str = "PrecompiledScript.minimal-1fn.Cache"; // 1 fn, empty tail
 const RICH: &str = "PrecompiledScript.richtest.Cache"; // class-bearing, non-empty tail
+
+fn fstring(value: &str) -> Vec<u8> {
+    let mut out = ((value.len() + 1) as i32).to_le_bytes().to_vec();
+    out.extend_from_slice(value.as_bytes());
+    out.push(0);
+    out
+}
+
+fn sia(value: &str) -> Vec<u8> {
+    if value.is_empty() {
+        return 0i32.to_le_bytes().to_vec();
+    }
+    let mut out = (value.len() as i32).to_le_bytes().to_vec();
+    out.extend_from_slice(value.as_bytes());
+    out.push(0);
+    out
+}
+
+fn empty_module_entry(outer_name: &str, inner_name: &str) -> Vec<u8> {
+    let mut out = fstring(outer_name);
+    out.extend_from_slice(&sia(inner_name));
+    out.extend_from_slice(&[0; 5 * 4]); // functions/classes/enums/globals/imports
+    out.extend_from_slice(&0i64.to_le_bytes()); // CodeHash
+    out.extend_from_slice(&0u32.to_le_bytes()); // ImportedModules
+    out.extend_from_slice(&sia("")); // StaticsClassName
+    out.extend_from_slice(&0u32.to_le_bytes()); // DeclaredEvents
+    out.extend_from_slice(&0u32.to_le_bytes()); // DeclaredDelegates
+    out.extend_from_slice(&sia("")); // ScriptRelativeFilename
+    out.extend_from_slice(&0u32.to_le_bytes()); // PostInitFunctions
+    out
+}
+
+fn empty_modules_cache(modules: &[(&str, &str)]) -> Vec<u8> {
+    let mut out = [0x11; 16].to_vec();
+    out.extend_from_slice(&gore_as::cache::header::CACHE_MAGIC.to_le_bytes());
+    out.extend_from_slice(&(modules.len() as u32).to_le_bytes());
+    for &(outer_name, inner_name) in modules {
+        out.extend_from_slice(&empty_module_entry(outer_name, inner_name));
+    }
+    out.extend_from_slice(&[0; 7 * 4]); // empty tail tables
+    out
+}
+
+fn empty_module_cache(module: &str) -> Vec<u8> {
+    empty_modules_cache(&[(module, module)])
+}
+
+fn standalone_cache_with_tail_keys(rows: &[(usize, i64)]) -> Vec<u8> {
+    let mut cache = empty_module_cache("FullReplacement");
+    cache.truncate(cache.len() - 7 * 4);
+    for table in 0..7 {
+        let keys = rows
+            .iter()
+            .filter_map(|&(candidate, key)| (candidate == table).then_some(key))
+            .collect::<Vec<_>>();
+        cache.extend_from_slice(&(keys.len() as i32).to_le_bytes());
+        for key in keys {
+            match table {
+                0 => {
+                    cache.extend_from_slice(&key.to_le_bytes());
+                    cache.extend_from_slice(&sia("Type"));
+                    cache.extend_from_slice(&sia("FullReplacement"));
+                    cache.extend_from_slice(&sia(""));
+                    cache.extend_from_slice(&0i32.to_le_bytes());
+                }
+                1 | 3 => {
+                    cache.extend_from_slice(&(key as i32).to_le_bytes());
+                    cache.extend_from_slice(&0x4000i64.to_le_bytes());
+                }
+                2 => {
+                    cache.extend_from_slice(&key.to_le_bytes());
+                    cache.extend_from_slice(&sia("Function"));
+                    cache.extend_from_slice(&sia("FullReplacement"));
+                    cache.extend_from_slice(&sia(""));
+                    cache.extend_from_slice(&[0; 3 * 4]);
+                    cache.extend_from_slice(&0i64.to_le_bytes());
+                    cache.extend_from_slice(&0i32.to_le_bytes());
+                    cache.extend_from_slice(&[0; 36]);
+                }
+                4 => {
+                    cache.extend_from_slice(&key.to_le_bytes());
+                    cache.extend_from_slice(&sia("Global"));
+                    cache.extend_from_slice(&sia("FullReplacement"));
+                    cache.extend_from_slice(&sia(""));
+                    cache.extend_from_slice(&0i32.to_le_bytes());
+                }
+                5 => unreachable!("StaticNames is intentionally not keyed"),
+                6 => {
+                    cache.extend_from_slice(&key.to_le_bytes());
+                    cache.extend_from_slice(&sia("Property"));
+                    cache.extend_from_slice(&0i32.to_le_bytes());
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+    cache
+}
+
+#[test]
+fn impossible_module_count_is_refused_before_capacity_allocation() {
+    let mut malformed = [0x11; 16].to_vec();
+    malformed.extend_from_slice(&gore_as::cache::header::CACHE_MAGIC.to_le_bytes());
+    malformed.extend_from_slice(&u32::MAX.to_le_bytes());
+    let mini = empty_module_cache("Mini");
+
+    assert!(module_region_end(&malformed).is_err());
+    assert!(module_names(&malformed).is_err());
+    assert!(module_ranges(&malformed).is_err());
+    assert!(extract_module(&malformed, "Missing").is_err());
+    assert!(splice(&malformed, &mini).is_err());
+    assert!(replace_module(&malformed, &mini, "Missing").is_err());
+}
+
+#[test]
+fn sequential_guard_rejects_bad_cache_magic_without_poisoning_retry() {
+    let base = empty_module_cache("Base");
+    let mut bad_base = base.clone();
+    bad_base[0x10..0x14].copy_from_slice(&0xdead_beefu32.to_le_bytes());
+    assert!(matches!(
+        SequentialMiniGuard::new(&bad_base),
+        Err(SpliceError::Header(_))
+    ));
+
+    let mut guard = SequentialMiniGuard::new(&base).unwrap();
+    let good_mini = empty_module_cache("Mini");
+    let mut bad_mini = good_mini.clone();
+    bad_mini[0x10..0x14].copy_from_slice(&0xdead_beefu32.to_le_bytes());
+    assert!(matches!(
+        guard.compose_add(&base, &bad_mini),
+        Err(SpliceError::Header(_))
+    ));
+    guard
+        .compose_add(&base, &good_mini)
+        .expect("a bad-magic refusal must not commit guard history");
+}
+
+#[test]
+fn standalone_script_cache_validation_is_structural_guid_agnostic_and_non_mutating() {
+    let mut cache = empty_module_cache("FullReplacement");
+    cache[..16].copy_from_slice(&[0xa5; 16]);
+    let original = cache.clone();
+
+    validate_standalone_script_cache(&cache)
+        .expect("a complete replacement owns its GUID and valid wire container");
+    assert_eq!(
+        cache, original,
+        "structural validation must not rewrite bytes"
+    );
+}
+
+#[test]
+fn standalone_script_cache_validation_rejects_bad_container_shapes() {
+    let short = vec![0u8; gore_as::cache::header::CacheHeader::SIZE - 1];
+    assert!(matches!(
+        validate_standalone_script_cache(&short),
+        Err(SpliceError::Header(_))
+    ));
+
+    let mut wrong_magic = empty_module_cache("FullReplacement");
+    wrong_magic[0x10..0x14].copy_from_slice(&0xdead_beefu32.to_le_bytes());
+    assert!(matches!(
+        validate_standalone_script_cache(&wrong_magic),
+        Err(SpliceError::Header(_))
+    ));
+
+    let mut truncated = empty_module_cache("FullReplacement");
+    truncated.pop();
+    assert!(matches!(
+        validate_standalone_script_cache(&truncated),
+        Err(SpliceError::Wire(_))
+    ));
+
+    let mut impossible_count = empty_module_cache("FullReplacement");
+    impossible_count[0x14..0x18].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(matches!(
+        validate_standalone_script_cache(&impossible_count),
+        Err(SpliceError::Wire(_))
+    ));
+
+    let mut trailing = empty_module_cache("FullReplacement");
+    trailing.push(0);
+    assert!(matches!(
+        validate_standalone_script_cache(&trailing),
+        Err(SpliceError::Wire(_))
+    ));
+
+    let duplicate_key = empty_modules_cache(&[("Dup", "InnerA"), ("Dup", "InnerB")]);
+    assert!(matches!(
+        validate_standalone_script_cache(&duplicate_key),
+        Err(SpliceError::ModuleKeyCollision(ref name)) if name == "Dup"
+    ));
+}
+
+#[test]
+fn standalone_script_cache_validation_rejects_tail_map_key_collisions() {
+    for table in [0usize, 1, 2, 3, 4, 6] {
+        let error = validate_standalone_script_cache(&standalone_cache_with_tail_keys(&[
+            (table, 0x41),
+            (table, 0x41),
+        ]))
+        .expect_err("duplicate TMap keys are malformed in a standalone cache too");
+        assert!(
+            matches!(error, SpliceError::KeyCollision { table: got, key: 0x41 } if got == table),
+            "unexpected table-{table} error: {error:?}"
+        );
+    }
+
+    for table in [2usize, 4, 6] {
+        let error = validate_standalone_script_cache(&standalone_cache_with_tail_keys(&[
+            (0, 0x52),
+            (table, 0x52),
+        ]))
+        .expect_err("T1/T3/T5/T7 share one runtime key domain");
+        assert!(
+            matches!(error, SpliceError::KeyCollision { table: got, key: 0x52 } if got == table),
+            "unexpected shared-domain table-{table} error: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn duplicate_outer_module_keys_are_rejected_before_ambiguous_composition() {
+    let malformed = empty_modules_cache(&[("Dup", "InnerA"), ("Dup", "InnerB")]);
+    let mini = empty_module_cache("Added");
+
+    let guard_error = SequentialMiniGuard::new(&malformed)
+        .expect_err("Unreal's Modules TMap cannot represent duplicate outer keys");
+    assert!(
+        matches!(guard_error, SpliceError::InnerNameCollision(ref name) if name == "Dup"),
+        "unexpected guard error: {guard_error:?}"
+    );
+
+    let splice_error = splice(&malformed, &mini)
+        .expect_err("a low-level splice must not publish a duplicate-key Modules TMap");
+    assert!(
+        matches!(splice_error, SpliceError::InnerNameCollision(ref name) if name == "Dup"),
+        "unexpected splice error: {splice_error:?}"
+    );
+
+    let replace_error = replace_module(&malformed, &mini, "Dup")
+        .expect_err("replace must not silently choose the first duplicate target key");
+    assert!(
+        matches!(replace_error, SpliceError::AmbiguousTarget(ref name) if name == "Dup"),
+        "unexpected replace error: {replace_error:?}"
+    );
+
+    let corrected = empty_modules_cache(&[("OuterA", "InnerA"), ("OuterB", "InnerB")]);
+    SequentialMiniGuard::new(&corrected).expect("distinct outer and inner names remain valid");
+}
 
 #[test]
 fn splices_primitive_module_into_base() {

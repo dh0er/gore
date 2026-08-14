@@ -15,8 +15,9 @@ use super::default_patterns::{
     is_reachable_linear_initializer,
 };
 use super::disasm::{disassemble, Instr};
+use super::remap::{preflight_cache_module_work, preflight_tail_tables};
 use super::walk_modules::{collect_function_bytecode_spans, module_region_end, FuncCodeSpan};
-use super::wire::{Cursor, WireError};
+use super::wire::{Cursor, SiaBytes, WireError};
 
 #[cfg(test)]
 use super::disasm::DisasmError;
@@ -138,6 +139,11 @@ pub(crate) struct ExactReferenceIndex {
 
 impl ExactReferenceIndex {
     pub fn build(cache: &[u8]) -> Result<Self, ExactReferenceError> {
+        // Bound every module-backed allocation before the tail preflight has to walk the module
+        // region, then bound tail rows/strings before the exact index creates owned identities and
+        // lookup maps. Public tag-map scans all enter through this constructor.
+        preflight_cache_module_work(cache)?;
+        preflight_tail_tables(cache)?;
         let tail = module_region_end(cache)?;
         Self::parse_tail(cache, tail)
     }
@@ -234,11 +240,20 @@ impl ExactReferenceIndex {
         c.ensure_minimum_remaining(global_count, 24, "GlobalReferences")?;
         for _ in 0..global_count {
             let key = c.read_i64()?;
+            let (name, name_offset) = read_exact_sia_bytes(&mut c, cache, "GlobalReference.Name")?;
+            let module = read_exact_sia(&mut c, cache, "GlobalReference.Module")?;
+            let namespace = read_exact_sia(&mut c, cache, "GlobalReference.Namespace")?;
+            let is_string = read_canonical_bool(&mut c, "GlobalReference.bIsString")?;
+            let name = if is_string {
+                decode_exact_utf8(&name, name_offset, "GlobalReference.Name")?
+            } else {
+                name.decode_ansi()
+            };
             let global = ExactGlobalReference {
-                name: read_exact_sia(&mut c, cache, "GlobalReference.Name")?,
-                module: read_exact_sia(&mut c, cache, "GlobalReference.Module")?,
-                namespace: read_exact_sia(&mut c, cache, "GlobalReference.Namespace")?,
-                is_string: read_canonical_bool(&mut c, "GlobalReference.bIsString")?,
+                name,
+                module,
+                namespace,
+                is_string,
             };
             insert_unique(&mut globals, key, global, "GlobalReferences")?;
         }
@@ -313,16 +328,15 @@ fn read_canonical_bool(
     }
 }
 
-/// Validate the raw SIA encoding after the shared cursor advances. The general decoder is
-/// intentionally tolerant and lossy for decompilation; mutation evidence must reject malformed
-/// UTF-8/UTF-16, embedded terminators, and nonzero terminators instead of normalizing them.
-fn read_exact_sia(
-    c: &mut Cursor<'_>,
+/// Validate the raw SIA framing without choosing its contextual character encoding. This is
+/// needed for GlobalReference.Name because bIsString is serialized after all three strings.
+fn read_exact_sia_bytes<'a>(
+    c: &mut Cursor<'a>,
     source: &[u8],
     field: &'static str,
-) -> Result<String, ExactReferenceError> {
+) -> Result<(SiaBytes<'a>, usize), ExactReferenceError> {
     let start = c.pos();
-    let decoded = c.read_sia()?;
+    let encoded = c.read_sia_bytes()?;
     let end = c.pos();
     let raw = source.get(start..end).ok_or(WireError::Eof {
         pos: start,
@@ -340,12 +354,11 @@ fn read_exact_sia(
         offset: start,
         reason: reason.to_owned(),
     };
-    let exact = match length.cmp(&0) {
+    match length.cmp(&0) {
         std::cmp::Ordering::Equal => {
             if raw.len() != 4 {
                 return Err(invalid("zero-length encoding has trailing bytes"));
             }
-            String::new()
         }
         std::cmp::Ordering::Greater => {
             let payload = raw
@@ -357,31 +370,34 @@ fn read_exact_sia(
             if payload.contains(&0) {
                 return Err(invalid("positive encoding contains an embedded zero"));
             }
-            std::str::from_utf8(payload)
-                .map_err(|_| invalid("positive encoding is not valid UTF-8"))?
-                .to_owned()
         }
-        std::cmp::Ordering::Less => {
-            let payload = raw
-                .get(4..raw.len().saturating_sub(2))
-                .ok_or_else(|| invalid("wide encoding is truncated"))?;
-            if raw.get(raw.len().saturating_sub(2)..) != Some(&[0, 0][..]) {
-                return Err(invalid("wide encoding has no zero terminator"));
-            }
-            let units: Vec<_> = payload
-                .chunks_exact(2)
-                .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
-                .collect();
-            if units.contains(&0) {
-                return Err(invalid("wide encoding contains an embedded zero"));
-            }
-            String::from_utf16(&units).map_err(|_| invalid("wide encoding is not valid UTF-16"))?
-        }
-    };
-    if exact != decoded {
-        return Err(invalid("tolerant decoder did not preserve the exact text"));
+        std::cmp::Ordering::Less => return Err(invalid("negative ANSI length")),
     }
-    Ok(exact)
+    Ok((encoded, start))
+}
+
+fn read_exact_sia<'a>(
+    c: &mut Cursor<'a>,
+    source: &[u8],
+    field: &'static str,
+) -> Result<String, ExactReferenceError> {
+    let (encoded, _) = read_exact_sia_bytes(c, source, field)?;
+    Ok(encoded.decode_ansi())
+}
+
+fn decode_exact_utf8(
+    encoded: &SiaBytes<'_>,
+    offset: usize,
+    field: &'static str,
+) -> Result<String, ExactReferenceError> {
+    encoded.decode_utf8(offset).map_err(|error| match error {
+        WireError::InvalidSia { pos, detail } => ExactReferenceError::NonCanonicalString {
+            field,
+            offset: pos,
+            reason: detail.to_owned(),
+        },
+        other => ExactReferenceError::Wire(other),
+    })
 }
 
 fn insert_unique<K, V>(
@@ -895,6 +911,7 @@ fn encode_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::header::{CacheHeader, CACHE_MAGIC};
     use super::super::types::DataType;
     use super::super::walk_modules::FuncCode;
     use super::*;
@@ -902,6 +919,14 @@ mod tests {
     const TAG_PTR: u64 = 0x024b_dd09_8bc8;
     const CALLEE_PTR: u64 = 0x024b_ef73_8200;
     const OWNER_TYPE_ID: u32 = 0x0400_1269;
+
+    fn cache_with_excessive_tail_rows() -> Vec<u8> {
+        let mut cache = vec![0; CacheHeader::SIZE];
+        cache[0x10..0x14].copy_from_slice(&CACHE_MAGIC.to_le_bytes());
+        cache.extend_from_slice(&0i32.to_le_bytes()); // TypeReferences
+        cache.extend_from_slice(&1_000_001i32.to_le_bytes()); // TypeIdReferenceToPointer
+        cache
+    }
 
     fn op(opcode: u8, word: u16) -> i32 {
         (u32::from(opcode) | (u32::from(word) << 16)) as i32
@@ -1048,11 +1073,15 @@ mod tests {
     }
 
     fn push_sia(out: &mut Vec<u8>, value: &str) {
+        push_sia_bytes(out, value.as_bytes());
+    }
+
+    fn push_sia_bytes(out: &mut Vec<u8>, value: &[u8]) {
         if value.is_empty() {
             out.extend_from_slice(&0i32.to_le_bytes());
         } else {
             out.extend_from_slice(&(value.len() as i32).to_le_bytes());
-            out.extend_from_slice(value.as_bytes());
+            out.extend_from_slice(value);
             out.push(0);
         }
     }
@@ -1073,12 +1102,25 @@ mod tests {
     }
 
     fn exact_tail_fixture(function_const: i32) -> Vec<u8> {
-        exact_tail_fixture_with_duplicate_type(function_const, false)
+        exact_tail_fixture_with_options(function_const, false, b"Tag", 0)
     }
 
     fn exact_tail_fixture_with_duplicate_type(
         function_const: i32,
         duplicate_type: bool,
+    ) -> Vec<u8> {
+        exact_tail_fixture_with_options(function_const, duplicate_type, b"Tag", 0)
+    }
+
+    fn exact_tail_fixture_with_global_name(name: &[u8], is_string: i32) -> Vec<u8> {
+        exact_tail_fixture_with_options(0, false, name, is_string)
+    }
+
+    fn exact_tail_fixture_with_options(
+        function_const: i32,
+        duplicate_type: bool,
+        global_name: &[u8],
+        global_is_string: i32,
     ) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&(if duplicate_type { 2i32 } else { 1i32 }).to_le_bytes());
@@ -1113,10 +1155,10 @@ mod tests {
 
         out.extend_from_slice(&1i32.to_le_bytes()); // GlobalReferences
         out.extend_from_slice(&0x3000i64.to_le_bytes());
-        push_sia(&mut out, "Tag");
+        push_sia_bytes(&mut out, global_name);
         push_sia(&mut out, "GlobalModule");
         push_sia(&mut out, "GlobalNamespace");
-        out.extend_from_slice(&0i32.to_le_bytes()); // non-string
+        out.extend_from_slice(&global_is_string.to_le_bytes());
 
         out.extend_from_slice(&0i32.to_le_bytes()); // StaticNames
 
@@ -1217,16 +1259,40 @@ mod tests {
     }
 
     #[test]
-    fn exact_tail_parser_rejects_lossy_string_identity() {
+    fn exact_tail_parser_preserves_ansi_string_identity_without_lossy_decoding() {
         let mut tail = exact_tail_fixture(0);
         // count(4) + key(8) + SIA length(4) => first TypeReference.Name payload byte.
         tail[16] = 0xff;
+        let refs = ExactReferenceIndex::parse_tail(&tail, 0).unwrap();
+        assert_eq!(refs.type_by_id(7).unwrap().identity.name, "ÿOwner");
+    }
+
+    #[test]
+    fn exact_tail_parser_decodes_only_string_global_names_as_utf8() {
+        let text = "Grüße 世界";
+        let tail = exact_tail_fixture_with_global_name(text.as_bytes(), 1);
+        let refs = ExactReferenceIndex::parse_tail(&tail, 0).unwrap();
+        let global = refs.global_by_ptr(0x3000).unwrap();
+        assert!(global.is_string);
+        assert_eq!(global.name, text);
+
+        let ansi = exact_tail_fixture_with_global_name(&[0xff], 0);
+        let refs = ExactReferenceIndex::parse_tail(&ansi, 0).unwrap();
+        assert_eq!(refs.global_by_ptr(0x3000).unwrap().name, "\u{00ff}");
+    }
+
+    #[test]
+    fn exact_tail_parser_rejects_invalid_utf8_string_global_with_field_diagnostic() {
         assert!(matches!(
-            ExactReferenceIndex::parse_tail(&tail, 0),
+            ExactReferenceIndex::parse_tail(
+                &exact_tail_fixture_with_global_name(&[0xff], 1),
+                0,
+            ),
             Err(ExactReferenceError::NonCanonicalString {
-                field: "TypeReference.Name",
+                field: "GlobalReference.Name",
+                reason,
                 ..
-            })
+            }) if reason == "script string literal is not valid UTF-8"
         ));
     }
 
@@ -1244,6 +1310,19 @@ mod tests {
         assert!(matches!(
             ExactReferenceIndex::parse_tail(&trailing, 0),
             Err(ExactReferenceError::TailNotAtEof { .. })
+        ));
+    }
+
+    #[test]
+    fn tag_map_normalization_rejects_tail_row_bomb_in_central_preflight() {
+        assert!(matches!(
+            normalize_reference_proven_tag_map_operands(&cache_with_excessive_tail_rows()),
+            Err(TagMapReferenceScanError::ExactReferences(
+                ExactReferenceError::Wire(WireError::BadLen {
+                    field: "tail keyed rows",
+                    ..
+                })
+            ))
         ));
     }
 

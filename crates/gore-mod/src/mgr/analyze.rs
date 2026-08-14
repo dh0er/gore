@@ -3,8 +3,10 @@
 //! [`analyze`] folds the enabled mods' component footprints into per-namespace buckets and
 //! reports every target claimed by two or more distinct mods. Opaque UE4SS components retain
 //! their known targets and also produce a conservative unknown-footprint advisory when another
-//! relevant UE4SS mod is enabled. It never touches the filesystem — everything comes from
-//! library metadata plus the loadout — so callers can re-run it on every reorder/toggle.
+//! relevant UE4SS mod is enabled. Compatible raw-base + patch layering is likewise an advisory,
+//! because neither participant wins the composed file. It never touches the filesystem —
+//! everything comes from library metadata plus the loadout — so callers can re-run it on every
+//! reorder/toggle.
 //!
 //! Ordering contract: [`Conflict::mods`] follows loadout (mount) order. For `Soft`/`Hard`
 //! conflicts the LAST id is the later-wins winner; `Info` advisories intentionally have no winner.
@@ -23,7 +25,7 @@ pub struct Conflict {
     pub kind: ConflictKind,
     pub target: String,
     /// Involved library mod ids in loadout order. The LAST one wins for `Soft`/`Hard`; `Info`
-    /// advisories describe uncertainty and have no winner.
+    /// advisories have no winner.
     pub mods: Vec<String>,
     pub severity: Severity,
 }
@@ -47,7 +49,8 @@ pub enum ConflictKind {
     ScriptModule,
     /// Voice ZIP member edit, target `"<archive>|<member path>"` (case-insensitive later-wins).
     VoiceArchive,
-    /// Wholesale live-file replacement (`"lcache"` / `"bank:<name>"` / `"script_cache"`).
+    /// Wholesale live-file replacement, including its base+patch composition advisory
+    /// (`"lcache"` / `"bank:<name>"` / `"script_cache"`).
     RawFile,
     /// One game-root-relative file claimed by two mods, target = that path (case-insensitive,
     /// forward slashes). Both routes to it live here: an in-place `files` replacement, and a pak
@@ -63,14 +66,16 @@ pub enum Severity {
     Soft,
     /// The earlier mod's whole component is clobbered or the two cannot coexist.
     Hard,
-    /// Advisory about an unknown footprint, not a proven later-wins clash.
+    /// Advisory without a later-wins winner (for example an unknown footprint or compatible
+    /// raw-base + patch composition).
     Info,
 }
 
 /// Report every target claimed by two or more distinct enabled mods, plus an `Info` advisory when
-/// an opaque UE4SS footprint can interact with another relevant UE4SS mod. `mods` is the library
-/// in any order; only loadout entries with `enabled == true` participate, in loadout order (which
-/// also orders [`Conflict::mods`]). Output is sorted by `(kind, target)` with mod ids deduped.
+/// an opaque UE4SS footprint can interact with another relevant UE4SS mod or when a raw base and a
+/// compatible patch compose without either mod winning the whole file. `mods` is the library in
+/// any order; only loadout entries with `enabled == true` participate, in loadout order (which also
+/// orders [`Conflict::mods`]). Output is sorted by `(kind, target)` with mod ids deduped.
 pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
     let enabled = enabled_in_order(mods, loadout);
     let mut buckets: BTreeMap<(ConflictKind, String), (Severity, Vec<String>)> = BTreeMap::new();
@@ -78,6 +83,10 @@ pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
     // not of either claimant: `note`'s take-the-worse rule cannot express "these two are only soft
     // because both arrive through the pak filesystem".
     let mut loose: BTreeMap<String, LooseClaims> = BTreeMap::new();
+    // Audio bank identity follows Windows filename semantics, while sample identity stays exact.
+    // Keep it separate from generic buckets so the displayed target can retain the last claimant's
+    // real spelling instead of exposing the normalized key.
+    let mut audio: BTreeMap<(String, Option<String>), AudioClaims> = BTreeMap::new();
 
     for m in &enabled {
         for c in &m.components {
@@ -95,13 +104,10 @@ pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
                 }
                 ComponentInfo::AudioPatch { targets, .. } => {
                     for t in targets {
-                        note(
-                            &mut buckets,
-                            ConflictKind::Audio,
-                            t.clone(),
-                            Severity::Soft,
-                            &m.id,
-                        );
+                        audio
+                            .entry(audio_target_identity(t))
+                            .or_default()
+                            .claim(t, &m.id);
                     }
                 }
                 // Texture patches and foreign triplets both mount cooked packages, so their
@@ -188,37 +194,68 @@ pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
             buckets.insert((ConflictKind::LooseFile, target), (severity, claims.ids));
         }
     }
+    for (_identity, claims) in audio {
+        if claims.ids.len() >= 2 {
+            buckets.insert(
+                (ConflictKind::Audio, claims.target),
+                (Severity::Soft, claims.ids),
+            );
+        }
+    }
 
-    // Raw-file keys: a wholesale replacement clashes with other raw files of the same key AND
-    // with any other mod patching that same live file (a raw .lcache steamrolls a loc patch even
-    // though no second raw file exists). Patch-only overlaps stay in their own namespaces above,
-    // and a mod combining a raw file with its own patches does not conflict with itself.
-    let mut raw_targets: Vec<RawTarget> = Vec::new();
+    // Raw-file keys have two distinct relations which must not be collapsed into one winner chain:
+    // raw-vs-raw is a whole-base replacement where the later raw wins, while raw-vs-patch is
+    // compatible composition — apply always lays every loc/audio/script patch over the winning raw
+    // base, independent of their relative loadout positions. Emit a Hard row containing only raw
+    // claimants and a separate Info advisory for cross-mod base+patch composition. Patch-only
+    // overlaps stay in their own namespaces above, and one mod composing its own base and patch is
+    // not a conflict.
+    // Windows resolves bank names case-insensitively. Key by that file identity, but retain the
+    // actual spelling from the last raw claimant so the Hard winner row describes its target.
+    let mut raw_targets: BTreeMap<String, RawTarget> = BTreeMap::new();
     for m in &enabled {
         for c in &m.components {
             if let ComponentInfo::RawFile { target_file, .. } = c {
-                if !raw_targets.contains(target_file) {
-                    raw_targets.push(target_file.clone());
-                }
+                raw_targets.insert(raw_identity(target_file), target_file.clone());
             }
         }
     }
-    for rt in &raw_targets {
-        let members: Vec<&str> = enabled
+    let mut raw_conflicts = Vec::new();
+    for rt in raw_targets.values() {
+        let raw_members: Vec<String> = enabled
             .iter()
-            .filter(|m| touches_raw(m, rt))
-            .map(|m| m.id.as_str())
+            .filter(|m| replaces_raw(m, rt))
+            .map(|m| m.id.clone())
             .collect();
-        if members.len() >= 2 {
-            for id in members {
-                note(
-                    &mut buckets,
-                    ConflictKind::RawFile,
-                    raw_key(rt),
-                    Severity::Hard,
-                    id,
-                );
-            }
+        if raw_members.len() >= 2 {
+            raw_conflicts.push(Conflict {
+                kind: ConflictKind::RawFile,
+                target: raw_key(rt),
+                mods: raw_members.clone(),
+                severity: Severity::Hard,
+            });
+        }
+
+        let patch_members: Vec<String> = enabled
+            .iter()
+            .filter(|m| patches_raw(m, rt))
+            .map(|m| m.id.clone())
+            .collect();
+        let has_cross_mod_composition = raw_members
+            .iter()
+            .any(|raw_id| patch_members.iter().any(|patch_id| patch_id != raw_id));
+        if has_cross_mod_composition {
+            let members = enabled
+                .iter()
+                .filter(|m| replaces_raw(m, rt) || patches_raw(m, rt))
+                .map(|m| m.id.clone())
+                .collect();
+            raw_conflicts.push(Conflict {
+                kind: ConflictKind::RawFile,
+                target: raw_key(rt),
+                mods: members,
+                severity: Severity::Info,
+            });
         }
     }
 
@@ -254,7 +291,7 @@ pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
         }
     }
 
-    buckets
+    let mut conflicts: Vec<Conflict> = buckets
         .into_iter()
         .filter(|(_, (severity, ids))| ids.len() >= 2 || *severity == Severity::Info)
         .map(|((kind, target), (severity, mods))| Conflict {
@@ -263,7 +300,18 @@ pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
             mods,
             severity,
         })
-        .collect()
+        .collect();
+    conflicts.extend(raw_conflicts);
+    conflicts.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then_with(|| left.target.cmp(&right.target))
+            // One target may have both a proven raw-vs-raw winner and a no-winner composition
+            // advisory. Keep the actionable row first and make equal-target order explicit.
+            .then_with(|| rank(right.severity).cmp(&rank(left.severity)))
+            .then_with(|| left.mods.cmp(&right.mods))
+    });
+    conflicts
 }
 
 /// Every mod claiming one game-root-relative file, and by which route each of them claims it.
@@ -276,6 +324,23 @@ struct LooseClaims {
     /// Claimant ids in loadout order, first-seen, deduped. A mod reaching this path by BOTH routes
     /// appears once here and in both route lists.
     ids: Vec<String>,
+}
+
+#[derive(Default)]
+struct AudioClaims {
+    /// Most recently encountered effective spelling of `bank|sample`.
+    target: String,
+    /// Distinct claimant ids in loadout order.
+    ids: Vec<String>,
+}
+
+impl AudioClaims {
+    fn claim(&mut self, target: &str, id: &str) {
+        self.target = target.to_string();
+        if !self.ids.iter().any(|existing| existing == id) {
+            self.ids.push(id.to_string());
+        }
+    }
 }
 
 impl LooseClaims {
@@ -387,16 +452,44 @@ fn raw_key(t: &RawTarget) -> String {
     }
 }
 
-/// Does `m` touch the live file `raw` replaces — either replacing it itself, or patching it
-/// (loc patch ↔ lcache, audio patch of the same bank ↔ that bank, AS patch ↔ script cache)?
-fn touches_raw(m: &ModEntryMeta, raw: &RawTarget) -> bool {
+/// Audio collision identity: Windows-case-insensitive bank filename plus the unchanged sample.
+/// A malformed legacy target without `|` retains its former exact-string behavior.
+fn audio_target_identity(target: &str) -> (String, Option<String>) {
+    match target.split_once('|') {
+        Some((bank, sample)) => (crate::windows_file_name_key(bank), Some(sample.to_string())),
+        None => (target.to_string(), None),
+    }
+}
+
+/// Case-insensitive Windows file identity used to join raw-bank claimants and audio patches.
+fn raw_identity(t: &RawTarget) -> String {
+    match t {
+        RawTarget::Lcache => "lcache".into(),
+        RawTarget::Bank { name } => format!("bank:{}", crate::windows_file_name_key(name)),
+        RawTarget::ScriptCache => "script_cache".into(),
+    }
+}
+
+fn replaces_raw(m: &ModEntryMeta, raw: &RawTarget) -> bool {
+    m.components.iter().any(|component| {
+        matches!(component, ComponentInfo::RawFile { target_file, .. }
+            if raw_identity(target_file) == raw_identity(raw))
+    })
+}
+
+/// Does `m` patch the live file whose base `raw` replaces (loc ↔ lcache, audio of the same bank ↔
+/// that bank, AngelScript ↔ script cache)?
+fn patches_raw(m: &ModEntryMeta, raw: &RawTarget) -> bool {
     m.components.iter().any(|c| match (c, raw) {
-        (ComponentInfo::RawFile { target_file, .. }, _) => target_file == raw,
         (ComponentInfo::LocPatch { .. }, RawTarget::Lcache) => true,
         (ComponentInfo::AngelScriptPatch { .. }, RawTarget::ScriptCache) => true,
         (ComponentInfo::AudioPatch { targets, .. }, RawTarget::Bank { name }) => {
-            let prefix = format!("{name}|");
-            targets.iter().any(|t| t.starts_with(&prefix))
+            let folded_name = crate::windows_file_name_key(name);
+            targets.iter().any(|target| {
+                target.split_once('|').is_some_and(|(bank, _sample)| {
+                    crate::windows_file_name_key(bank) == folded_name
+                })
+            })
         }
         _ => false,
     })
@@ -685,16 +778,81 @@ mod tests {
     #[test]
     fn audio_overlap() {
         let a = meta("mod-a", vec![audio(&["SFX.bank|whoosh", "SFX.bank|clang"])]);
-        let b = meta("mod-b", vec![audio(&["SFX.bank|whoosh"])]);
-        let out = analyze(&[&a, &b], &loadout_of(&[("mod-a", true), ("mod-b", true)]));
-        assert_eq!(
-            out,
-            vec![conflict(
-                ConflictKind::Audio,
+        let b = meta("mod-b", vec![audio(&["sfx.BANK|whoosh"])]);
+        for (entries, expected_mods, expected_target) in [
+            (
+                [("mod-a", true), ("mod-b", true)],
+                ["mod-a", "mod-b"],
+                "sfx.BANK|whoosh",
+            ),
+            (
+                [("mod-b", true), ("mod-a", true)],
+                ["mod-b", "mod-a"],
                 "SFX.bank|whoosh",
-                &["mod-a", "mod-b"],
-                Severity::Soft
-            )]
+            ),
+        ] {
+            assert_eq!(
+                analyze(&[&a, &b], &loadout_of(&entries)),
+                vec![conflict(
+                    ConflictKind::Audio,
+                    expected_target,
+                    &expected_mods,
+                    Severity::Soft
+                )]
+            );
+        }
+
+        let sample_case_variant = meta("mod-c", vec![audio(&["sfx.BANK|WHOOSH"])]);
+        assert!(
+            analyze(
+                &[&a, &sample_case_variant],
+                &loadout_of(&[("mod-a", true), ("mod-c", true)])
+            )
+            .is_empty(),
+            "sample identity must retain its existing case-sensitive semantics"
+        );
+    }
+
+    #[test]
+    fn bank_identity_does_not_expand_sharp_s_into_ss() {
+        let sharp_audio = meta("audio-sharp", vec![audio(&["Voiceß.bank|shout"])]);
+        let ss_audio = meta("audio-ss", vec![audio(&["VoiceSS.bank|shout"])]);
+        assert!(
+            analyze(
+                &[&sharp_audio, &ss_audio],
+                &loadout_of(&[("audio-sharp", true), ("audio-ss", true)])
+            )
+            .is_empty(),
+            "distinct audio banks must not be reported as one patch target"
+        );
+
+        let sharp_raw = meta(
+            "raw-sharp",
+            vec![raw(RawTarget::Bank {
+                name: "Voiceß.bank".into(),
+            })],
+        );
+        let ss_raw = meta(
+            "raw-ss",
+            vec![raw(RawTarget::Bank {
+                name: "VoiceSS.bank".into(),
+            })],
+        );
+        assert!(
+            analyze(
+                &[&sharp_raw, &ss_raw],
+                &loadout_of(&[("raw-sharp", true), ("raw-ss", true)])
+            )
+            .is_empty(),
+            "distinct raw banks must not be reported as later-wins replacements"
+        );
+        assert!(
+            analyze(
+                &[&sharp_raw, &ss_audio],
+                &loadout_of(&[("raw-sharp", true), ("audio-ss", true)])
+            )
+            .is_empty(),
+            "a raw bank must compose only with audio patches for the same Windows filename"
         );
     }
 
@@ -768,21 +926,47 @@ mod tests {
         );
     }
 
-    /// A wholesale .lcache replacement clobbers ANY other mod's loc patch — hard conflict even
-    /// though no second raw file is present.
+    /// Raw replacements are bases, and compatible patches always compose on top regardless of
+    /// which participant is later. Cover every raw-backed patch family in both loadout orders.
     #[test]
-    fn rawfile_lcache_vs_loc_patch_hard() {
-        let a = meta("mod-a", vec![raw(RawTarget::Lcache)]);
-        let b = meta("mod-b", vec![loc(&["itfo_cheese|german"])]);
-        let out = analyze(&[&a, &b], &loadout_of(&[("mod-a", true), ("mod-b", true)]));
-        assert_eq!(
-            out,
-            vec![conflict(
-                ConflictKind::RawFile,
-                "lcache",
-                &["mod-a", "mod-b"],
-                Severity::Hard
-            )]
+    fn rawfile_patch_pairs_are_no_winner_composition_advisories() {
+        fn assert_pair(raw_target: RawTarget, patch: ComponentInfo, target: &str) {
+            let raw_mod = meta("mod-raw", vec![raw(raw_target)]);
+            let patch_mod = meta("mod-patch", vec![patch]);
+            for (entries, expected_mods) in [
+                (
+                    [("mod-raw", true), ("mod-patch", true)],
+                    ["mod-raw", "mod-patch"],
+                ),
+                (
+                    [("mod-patch", true), ("mod-raw", true)],
+                    ["mod-patch", "mod-raw"],
+                ),
+            ] {
+                assert_eq!(
+                    analyze(&[&raw_mod, &patch_mod], &loadout_of(&entries)),
+                    vec![conflict(
+                        ConflictKind::RawFile,
+                        target,
+                        &expected_mods,
+                        Severity::Info,
+                    )]
+                );
+            }
+        }
+
+        assert_pair(RawTarget::Lcache, loc(&["itfo_cheese|german"]), "lcache");
+        assert_pair(
+            RawTarget::Bank {
+                name: "SFX.bank".into(),
+            },
+            audio(&["sfx.BANK|whoosh"]),
+            "bank:SFX.bank",
+        );
+        assert_pair(
+            RawTarget::ScriptCache,
+            as_patch(&["CombatTweaks"]),
+            "script_cache",
         );
     }
 
@@ -790,50 +974,105 @@ mod tests {
     fn rawfile_vs_rawfile_hard() {
         let a = meta("mod-a", vec![raw(RawTarget::Lcache)]);
         let b = meta("mod-b", vec![raw(RawTarget::Lcache)]);
-        let out = analyze(&[&a, &b], &loadout_of(&[("mod-a", true), ("mod-b", true)]));
-        assert_eq!(
-            out,
-            vec![conflict(
-                ConflictKind::RawFile,
-                "lcache",
-                &["mod-a", "mod-b"],
-                Severity::Hard
-            )]
-        );
+        for (entries, expected_mods) in [
+            ([("mod-a", true), ("mod-b", true)], ["mod-a", "mod-b"]),
+            ([("mod-b", true), ("mod-a", true)], ["mod-b", "mod-a"]),
+        ] {
+            assert_eq!(
+                analyze(&[&a, &b], &loadout_of(&entries)),
+                vec![conflict(
+                    ConflictKind::RawFile,
+                    "lcache",
+                    &expected_mods,
+                    Severity::Hard,
+                )]
+            );
+        }
     }
 
-    /// A raw bank replacement only clashes with audio patches of the SAME bank (targets with a
-    /// `"<name>|"` prefix), not with patches of other banks.
     #[test]
-    fn rawfile_bank_only_conflicts_same_bank_name() {
+    fn rawfile_bank_case_variants_share_windows_identity_and_keep_winner_spelling() {
+        let a = meta(
+            "mod-a",
+            vec![raw(RawTarget::Bank {
+                name: "Voice.bank".into(),
+            })],
+        );
+        let b = meta(
+            "mod-b",
+            vec![raw(RawTarget::Bank {
+                name: "voice.BANK".into(),
+            })],
+        );
+
+        for (entries, expected_mods, expected_target) in [
+            (
+                [("mod-a", true), ("mod-b", true)],
+                ["mod-a", "mod-b"],
+                "bank:voice.BANK",
+            ),
+            (
+                [("mod-b", true), ("mod-a", true)],
+                ["mod-b", "mod-a"],
+                "bank:Voice.bank",
+            ),
+        ] {
+            assert_eq!(
+                analyze(&[&a, &b], &loadout_of(&entries)),
+                vec![conflict(
+                    ConflictKind::RawFile,
+                    expected_target,
+                    &expected_mods,
+                    Severity::Hard,
+                )]
+            );
+        }
+    }
+
+    /// A raw bank only composes with audio patches of the SAME bank (`"<name>|"` prefix).
+    #[test]
+    fn rawfile_bank_ignores_other_bank_patch() {
         let rawm = meta(
             "mod-raw",
             vec![raw(RawTarget::Bank {
                 name: "SFX.bank".into(),
             })],
         );
-        let hit = meta("mod-hit", vec![audio(&["SFX.bank|whoosh"])]);
         let miss = meta("mod-miss", vec![audio(&["Music.bank|theme"])]);
-
-        let out = analyze(
-            &[&rawm, &hit],
-            &loadout_of(&[("mod-raw", true), ("mod-hit", true)]),
-        );
-        assert_eq!(
-            out,
-            vec![conflict(
-                ConflictKind::RawFile,
-                "bank:SFX.bank",
-                &["mod-raw", "mod-hit"],
-                Severity::Hard
-            )]
-        );
 
         let out = analyze(
             &[&rawm, &miss],
             &loadout_of(&[("mod-raw", true), ("mod-miss", true)]),
         );
         assert!(out.is_empty(), "different bank must not conflict: {out:?}");
+    }
+
+    #[test]
+    fn rawfile_raw_winner_stays_separate_from_patch_advisory() {
+        let raw_a = meta("raw-a", vec![raw(RawTarget::Lcache)]);
+        let patch = meta("patch", vec![loc(&["itfo_cheese|german"])]);
+        let raw_b = meta("raw-b", vec![raw(RawTarget::Lcache)]);
+
+        assert_eq!(
+            analyze(
+                &[&raw_a, &patch, &raw_b],
+                &loadout_of(&[("raw-a", true), ("patch", true), ("raw-b", true)]),
+            ),
+            vec![
+                conflict(
+                    ConflictKind::RawFile,
+                    "lcache",
+                    &["raw-a", "raw-b"],
+                    Severity::Hard,
+                ),
+                conflict(
+                    ConflictKind::RawFile,
+                    "lcache",
+                    &["raw-a", "patch", "raw-b"],
+                    Severity::Info,
+                ),
+            ]
+        );
     }
 
     /// Two UE4SS mods sharing a script `name` must NOT conflict: apply deploys each to its own
@@ -970,6 +1209,12 @@ mod tests {
                     "lcache",
                     &["mod-a", "mod-b"],
                     Severity::Hard
+                ),
+                conflict(
+                    ConflictKind::RawFile,
+                    "lcache",
+                    &["mod-a", "mod-b"],
+                    Severity::Info
                 ),
                 // The shared-name `lua("SharedDir", …)` on both mods yields NO conflict (distinct
                 // deploy dirs), so it does not appear here.

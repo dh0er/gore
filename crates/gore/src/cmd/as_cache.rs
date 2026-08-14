@@ -12,7 +12,6 @@ use gore_as::cache::default_evidence::{
 };
 use gore_as::cache::header::CacheHeader;
 use gore_as::cache::scan::scan_strings;
-use gore_as::cache::splice::splice_auto;
 use gore_as::cache::walk_modules::{module_count, module_region_end};
 
 #[derive(Subcommand)]
@@ -224,19 +223,24 @@ pub enum AsCmd {
         )]
         diagnostics_inject_delay_ms: u64,
     },
-    /// Replace an existing module (by name) in a base cache with a mini-cache's module.
+    /// Replace an existing module using a mini-cache bound to this exact base generation.
     Replace {
+        /// Base cache (e.g. PrecompiledScript_Shipping.Cache).
         base: PathBuf,
+        /// Base-bound mini-cache from `compile-module` or `extract-remap`; raw generator output
+        /// has a fresh GUID and is refused until it is remapped to this exact base.
         mini: PathBuf,
+        /// Existing outer Modules TMap key to replace.
         target: String,
         #[arg(short, long)]
         out: PathBuf,
     },
-    /// Splice a primitive-only mini-cache module into a base cache.
+    /// Splice a base-bound mini-cache module into a base cache.
     Splice {
         /// Base cache (e.g. PrecompiledScript_Shipping.Cache).
         base: PathBuf,
-        /// Mini-cache from -as-generate-precompiled-data (one primitive-only module).
+        /// Base-bound mini-cache from `compile-module` or `extract-remap`; raw generator output
+        /// has a fresh GUID and is refused until it is remapped to this exact base.
         mini: PathBuf,
         /// Output path for the spliced cache.
         #[arg(short, long)]
@@ -2290,7 +2294,10 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let base_b = read_module_cache(&base)?;
             let mini_b = read_module_cache(&mini)?;
             let n = module_count(&base_b);
-            let res = gore_as::cache::splice::replace_module(&base_b, &mini_b, &target)
+            let mut guard = gore_as::cache::splice::SequentialMiniGuard::new(&base_b)
+                .context("validating replace base")?;
+            let res = guard
+                .compose_edit(&base_b, &mini_b, &target)
                 .context("replace")?;
             std::fs::write(&out, &res).with_context(|| format!("writing {}", out.display()))?;
             println!(
@@ -2306,7 +2313,9 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let base_b = read_module_cache(&base)?;
             let mini_b = read_module_cache(&mini)?;
             let before = module_count(&base_b);
-            let spliced = splice_auto(&base_b, &mini_b).context("splicing")?;
+            let mut guard = gore_as::cache::splice::SequentialMiniGuard::new(&base_b)
+                .context("validating splice base")?;
+            let spliced = guard.compose_add(&base_b, &mini_b).context("splicing")?;
             std::fs::write(&out, &spliced).with_context(|| format!("writing {}", out.display()))?;
             println!(
                 "spliced: {} modules -> {} ; {} -> {} bytes ; wrote {}",

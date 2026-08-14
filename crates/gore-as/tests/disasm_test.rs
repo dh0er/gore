@@ -1,4 +1,4 @@
-use gore_as::cache::disasm::disassemble;
+use gore_as::cache::disasm::{disassemble, MAX_DISASSEMBLED_INSTRUCTIONS};
 use gore_as::cache::walk_modules::collect_function_bytecodes;
 
 const SAMPLES: &str = concat!(
@@ -59,9 +59,13 @@ fn all_richtest_functions_disassemble_clean() {
     }
 }
 
-/// Strong ISA validation: disassemble every function in the real 122 MB cache and
-/// report the clean rate. Wrong opcode sizes would desync -> Truncated/Unknown.
-/// Set GORE_AS_REAL_CACHE to run.
+/// Strong ISA validation: disassemble every function in a real Shipping cache
+/// and report both the clean rate and largest observed function. The audited
+/// 2026-08-14 cache had 389,358 instructions / 852,642 dwords in its largest
+/// function, comfortably below the production resource limits.
+///
+/// Wrong opcode sizes would desync -> Truncated/Unknown. Set
+/// GORE_AS_REAL_CACHE to run.
 #[test]
 fn real_cache_functions_disassemble() {
     let Ok(path) = std::env::var("GORE_AS_REAL_CACHE") else {
@@ -73,9 +77,16 @@ fn real_cache_functions_disassemble() {
     let total = funcs.len();
     let mut ok = 0usize;
     let mut errs: Vec<String> = Vec::new();
+    let mut largest: Option<(&str, usize, usize)> = None;
     for f in &funcs {
         match disassemble(&f.bytecode) {
-            Ok(_) => ok += 1,
+            Ok(instrs) => {
+                ok += 1;
+                if largest.is_none_or(|(_, instruction_count, _)| instrs.len() > instruction_count)
+                {
+                    largest = Some((&f.func, instrs.len(), f.bytecode.len()));
+                }
+            }
             Err(e) => {
                 if errs.len() < 10 {
                     errs.push(format!("{}: {e}", f.func));
@@ -86,6 +97,12 @@ fn real_cache_functions_disassemble() {
     eprintln!("real cache: {ok}/{total} functions disassembled clean");
     for e in &errs {
         eprintln!("  ERR {e}");
+    }
+    if let Some((function, instruction_count, dword_count)) = largest {
+        eprintln!(
+            "largest function: {function} ({instruction_count} instructions, {dword_count} dwords)"
+        );
+        assert!(instruction_count <= MAX_DISASSEMBLED_INSTRUCTIONS);
     }
     // Expect the vast majority to disassemble; a perfect ISA gives 100%.
     assert!(

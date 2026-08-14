@@ -11,6 +11,13 @@ fn fixture_path() -> String {
     .to_string()
 }
 
+fn minimal_cache_header(guid: [u8; 16], module_count: u32) -> Vec<u8> {
+    let mut bytes = guid.to_vec();
+    bytes.extend_from_slice(&gore_as::cache::header::CACHE_MAGIC.to_le_bytes());
+    bytes.extend_from_slice(&module_count.to_le_bytes());
+    bytes
+}
+
 fn expected_default_evidence(cache: &[u8]) -> (&'static str, &'static str, &'static str) {
     match format!("{:x}", Sha256::digest(cache)).as_str() {
         "1018f1cfe6b99a650eecb33afb96752d691d2088ead27808971b812f04ecb4c2" => (
@@ -113,6 +120,51 @@ fn every_module_cache_subcommand_rejects_a_file_that_is_not_a_module_cache() {
         !outdir_path.exists(),
         "emit-all must refuse before it creates an output tree"
     );
+}
+
+#[test]
+fn splice_and_replace_refuse_a_mini_from_another_cache_before_writing_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let base_path = dir.path().join("base.Cache");
+    let mini_path = dir.path().join("foreign-mini.Cache");
+    let out_path = dir.path().join("never-written.Cache");
+
+    let mut base = minimal_cache_header([0x11; 16], 0);
+    base.extend_from_slice(&[0u8; 28]); // seven empty tail tables
+    std::fs::write(&base_path, base).unwrap();
+    // The GUID mismatch is checked before the declared module body is parsed.
+    std::fs::write(&mini_path, minimal_cache_header([0x22; 16], 1)).unwrap();
+
+    for args in [
+        vec![
+            "as",
+            "splice",
+            base_path.to_str().unwrap(),
+            mini_path.to_str().unwrap(),
+            "-o",
+            out_path.to_str().unwrap(),
+        ],
+        vec![
+            "as",
+            "replace",
+            base_path.to_str().unwrap(),
+            mini_path.to_str().unwrap(),
+            "SomeModule",
+            "-o",
+            out_path.to_str().unwrap(),
+        ],
+    ] {
+        Command::cargo_bin("gore")
+            .unwrap()
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(contains("does not match target base GUID"));
+        assert!(
+            !out_path.exists(),
+            "a foreign mini must be refused before the output path is created"
+        );
+    }
 }
 
 #[test]
