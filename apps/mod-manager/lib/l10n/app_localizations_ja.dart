@@ -79,6 +79,48 @@ class AppLocalizationsJa extends AppLocalizations {
   String get installRecoveryEvidence => '検出された復旧データ';
 
   @override
+  String get managerRecoveryTitle => '中断されたマネージャー操作を復旧';
+
+  @override
+  String get managerRecoveryConfirm =>
+      'GORE は明確に中断されたマネージャー操作を検出しました。記録された操作を確認し、インストールを既知の状態に戻す場合にのみ続行してください。セーブデータは変更されません。';
+
+  @override
+  String get managerRecoveryAlreadyClean =>
+      '中断された操作はすでに解決されていました。インストールを再確認しました。';
+
+  @override
+  String get managerRecoveryBusy => '操作が再び実行中です。変更は行われていません。完了を待ってから再確認してください。';
+
+  @override
+  String get managerRecoveryLockCleared =>
+      '中断された操作はまだインストールを変更していませんでした。古いロックを安全に削除しました。';
+
+  @override
+  String get managerRecoveryRestoredPristine =>
+      '中断された変更を取り消し、記録されていたインストールの基準状態を復元しました。';
+
+  @override
+  String get managerRecoveryApplyPreserved =>
+      '適用はすでに完了していました。記録された状態を保持し、ステータスを再確認しました。';
+
+  @override
+  String get managerRecoveryUndeployConfirmed =>
+      '削除は完了していました。残っていたトランザクションデータを整理し、ステータスを再確認しました。';
+
+  @override
+  String get managerRecoveryCompileRequired =>
+      'これはスクリプトビルドの復旧に関するものです。マネージャーは変更していません。復旧ヘルプを確認してください。';
+
+  @override
+  String get managerRecoveryInspectionFailed =>
+      'GORE は中断された操作を安全に確認できませんでした。変更は行われていません。現在の復旧情報を確認してください。';
+
+  @override
+  String get managerRecoveryFailed =>
+      '復旧を完了できませんでした。GORE はインストールの再確認を試みましたが、現在の状態は不明な可能性があります。再試行する前に状態を確認してください。';
+
+  @override
   String get statusUnknown => '不明';
 
   @override

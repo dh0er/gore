@@ -82,6 +82,49 @@ class AppLocalizationsEn extends AppLocalizations {
   String get installRecoveryEvidence => 'Detected recovery data';
 
   @override
+  String get managerRecoveryTitle => 'Recover interrupted Manager change';
+
+  @override
+  String get managerRecoveryConfirm =>
+      'GORE found a clearly interrupted Manager change. Continue only if you want GORE to verify the recorded operation and restore the installation to a known state. Savegames are never changed.';
+
+  @override
+  String get managerRecoveryAlreadyClean =>
+      'The interrupted change was already resolved. The installation was checked again.';
+
+  @override
+  String get managerRecoveryBusy =>
+      'The operation is active again. Nothing was changed; wait for it to finish and check again.';
+
+  @override
+  String get managerRecoveryLockCleared =>
+      'The interrupted operation had not changed the installation. Its obsolete lock was removed safely.';
+
+  @override
+  String get managerRecoveryRestoredPristine =>
+      'The interrupted change was rolled back and the installation\'s recorded baseline state was restored.';
+
+  @override
+  String get managerRecoveryApplyPreserved =>
+      'Apply had already completed. The recorded state was preserved, and the status was checked again.';
+
+  @override
+  String get managerRecoveryUndeployConfirmed =>
+      'Removal had completed. Remaining transaction data was cleaned up, and the status was checked again.';
+
+  @override
+  String get managerRecoveryCompileRequired =>
+      'This belongs to script-build recovery, so Manager left it unchanged. Review the recovery help.';
+
+  @override
+  String get managerRecoveryInspectionFailed =>
+      'GORE could not verify the interrupted operation safely. Nothing was changed; review the current recovery details.';
+
+  @override
+  String get managerRecoveryFailed =>
+      'Recovery could not be completed. GORE tried to check the installation again, but its current state may be unknown. Review the status before trying again.';
+
+  @override
   String get statusUnknown => 'Unknown';
 
   @override

@@ -11,6 +11,7 @@ enum StatusDetailsAction { apply, refresh, recover, takeOver, settings, close }
 typedef StatusDetailsResult = ({
   StatusDetailsAction action,
   String? rootAtClick,
+  int? deploymentRecoveryGenerationAtClick,
 });
 
 const _lazyListThreshold = 50;
@@ -35,8 +36,9 @@ bool statusHasStudioOwnership(StatusState state, String? currentRoot) {
 ///
 /// This widget owns no deployment authority and performs no operation itself.
 /// It returns a [StatusDetailsResult] to the Home page, including the root that
-/// the user acted on. Home re-checks that root and the current providers before
-/// calling the existing notifier lanes.
+/// the user acted on and, only for deployment recovery, the exact preflight
+/// generation that exposed it. Home re-checks both and the current providers
+/// before calling the existing notifier lanes.
 class StatusDetailsDialog extends StatelessWidget {
   const StatusDetailsDialog({
     required this.state,
@@ -44,6 +46,7 @@ class StatusDetailsDialog extends StatelessWidget {
     required this.library,
     required this.operationsBusy,
     required this.applyEnabled,
+    this.deploymentRecoveryGeneration,
     super.key,
   });
 
@@ -52,6 +55,7 @@ class StatusDetailsDialog extends StatelessWidget {
   final LibraryState library;
   final bool operationsBusy;
   final bool applyEnabled;
+  final int? deploymentRecoveryGeneration;
 
   @override
   Widget build(BuildContext context) {
@@ -513,6 +517,9 @@ class StatusDetailsDialog extends StatelessWidget {
     Navigator.pop<StatusDetailsResult>(context, (
       action: action,
       rootAtClick: currentRoot,
+      deploymentRecoveryGenerationAtClick: action == StatusDetailsAction.recover
+          ? deploymentRecoveryGeneration
+          : null,
     ));
   }
 
@@ -572,7 +579,8 @@ class StatusDetailsDialog extends StatelessWidget {
           label: Text(l10n.takeOverAction),
         ),
       );
-    } else if (status is ManagerStatusRecoveryRequired) {
+    } else if (status is ManagerStatusRecoveryRequired &&
+        deploymentRecoveryGeneration != null) {
       actions.add(
         FilledButton.icon(
           key: const ValueKey('status-details-action-recover'),

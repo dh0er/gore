@@ -571,6 +571,7 @@ void main() {
     Map<String, Object?> response({
       String futureState = 'ok',
       String futureAction = 'none',
+      String? actionToken,
     }) {
       const ids = [
         'game_root',
@@ -592,6 +593,8 @@ void main() {
                 'state': index == 1 ? futureState : 'ok',
                 'code': index == 1 ? 'future_code' : 'ready',
                 'action': index == 1 ? futureAction : 'none',
+                if (index == 1 && actionToken != null)
+                  'action_token': actionToken,
                 'detail': 'evidence $index',
                 'items': <String>['item $index'],
                 'future_field': true,
@@ -693,6 +696,29 @@ void main() {
       },
     );
 
+    test('manager recovery requires and preserves one opaque token', () async {
+      Future<PreflightCheckView> findingFor(String? token) async {
+        final fake = FakeGoreCoreFfiService(
+          responses: {
+            'mgr_preflight_v1': response(
+              futureState: 'problem',
+              futureAction: 'recover_manager_mutation',
+              actionToken: token,
+            ),
+          },
+        );
+        return (await MgrFfi(fake).preflight('C:/game')).primarySetupFinding!;
+      }
+
+      final bound = await findingFor('opaque-guard:17');
+      expect(bound.action, PreflightActionKind.recoverManagerMutation);
+      expect(bound.actionToken, 'opaque-guard:17');
+
+      final missing = await findingFor(null);
+      expect(missing.rawAction, 'recover_manager_mutation');
+      expect(missing.action, isNull);
+    });
+
     test('malformed format, order, or field types fail closed', () async {
       final malformed = <Map<String, Object?>>[];
       final wrongFormat = response();
@@ -711,6 +737,12 @@ void main() {
       (typedChecks[0] as Map<String, Object?>)['items'] = [1];
       malformed.add(wrongItems);
 
+      final wrongToken = response(actionToken: 'token');
+      final tokenChecks =
+          (wrongToken['preflight'] as Map<String, Object?>)['checks'] as List;
+      (tokenChecks[1] as Map<String, Object?>)['action_token'] = 7;
+      malformed.add(wrongToken);
+
       for (final wire in malformed) {
         final fake = FakeGoreCoreFfiService(
           responses: {'mgr_preflight_v1': wire},
@@ -726,6 +758,62 @@ void main() {
           ),
         );
       }
+    });
+  });
+
+  group('MgrFfi.recoverInstall', () {
+    for (final entry in const <String, MgrInstallRecoveryOutcome>{
+      'already_clean': MgrInstallRecoveryOutcome.alreadyClean,
+      'busy': MgrInstallRecoveryOutcome.busy,
+      'pre_mutation_lock_cleared':
+          MgrInstallRecoveryOutcome.preMutationLockCleared,
+      'recovered_to_pristine': MgrInstallRecoveryOutcome.recoveredToPristine,
+      'completed_apply_preserved':
+          MgrInstallRecoveryOutcome.completedApplyPreserved,
+      'completed_undeploy_confirmed':
+          MgrInstallRecoveryOutcome.completedUndeployConfirmed,
+      'compile_recovery_required':
+          MgrInstallRecoveryOutcome.compileRecoveryRequired,
+      'inspection_failed': MgrInstallRecoveryOutcome.inspectionFailed,
+    }.entries) {
+      test('parses ${entry.key}', () async {
+        final fake = FakeGoreCoreFfiService(
+          responses: {
+            'mgr_recover_install_v1': {'ok': true, 'outcome': entry.key},
+          },
+        );
+
+        expect(
+          await MgrFfi(fake).recoverInstall('C:/game', 'guard-9'),
+          entry.value,
+        );
+        expect(fake.calls.single.payload, {
+          'game_root': 'C:/game',
+          'expected_guard_id': 'guard-9',
+        });
+      });
+    }
+
+    test('unknown outcome fails closed', () async {
+      final fake = FakeGoreCoreFfiService(
+        responses: {
+          'mgr_recover_install_v1': {
+            'ok': true,
+            'outcome': 'future_recovery_result',
+          },
+        },
+      );
+
+      await expectLater(
+        MgrFfi(fake).recoverInstall('C:/game', 'guard-9'),
+        throwsA(
+          isA<MgrFfiException>().having(
+            (error) => error.code,
+            'code',
+            'MGR_RECOVER_INSTALL_INVALID_RESPONSE',
+          ),
+        ),
+      );
     });
   });
 

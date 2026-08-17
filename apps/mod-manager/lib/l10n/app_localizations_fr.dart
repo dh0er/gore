@@ -84,6 +84,50 @@ class AppLocalizationsFr extends AppLocalizations {
   String get installRecoveryEvidence => 'Données de récupération détectées';
 
   @override
+  String get managerRecoveryTitle =>
+      'Récupérer l’opération interrompue du gestionnaire';
+
+  @override
+  String get managerRecoveryConfirm =>
+      'GORE a détecté une opération du gestionnaire clairement interrompue. Continuez uniquement si vous souhaitez que GORE vérifie l’opération enregistrée et rétablisse l’installation dans un état connu. Les sauvegardes ne sont jamais modifiées.';
+
+  @override
+  String get managerRecoveryAlreadyClean =>
+      'L’opération interrompue avait déjà été résolue. L’installation a été vérifiée à nouveau.';
+
+  @override
+  String get managerRecoveryBusy =>
+      'L’opération est de nouveau active. Rien n’a été modifié ; attendez sa fin puis vérifiez à nouveau.';
+
+  @override
+  String get managerRecoveryLockCleared =>
+      'L’opération interrompue n’avait pas encore modifié l’installation. Son verrou obsolète a été supprimé en toute sécurité.';
+
+  @override
+  String get managerRecoveryRestoredPristine =>
+      'La modification interrompue a été annulée et l’état de référence enregistré de l’installation a été restauré.';
+
+  @override
+  String get managerRecoveryApplyPreserved =>
+      'L’application était déjà terminée. L’état enregistré a été conservé et le statut a été vérifié à nouveau.';
+
+  @override
+  String get managerRecoveryUndeployConfirmed =>
+      'La suppression était terminée. Les données de transaction restantes ont été nettoyées et le statut a été vérifié à nouveau.';
+
+  @override
+  String get managerRecoveryCompileRequired =>
+      'Ceci relève de la récupération de compilation des scripts. Le gestionnaire n’a rien modifié ; consultez l’aide à la récupération.';
+
+  @override
+  String get managerRecoveryInspectionFailed =>
+      'GORE n’a pas pu vérifier l’opération interrompue en toute sécurité. Rien n’a été modifié ; consultez les détails de récupération actuels.';
+
+  @override
+  String get managerRecoveryFailed =>
+      'La récupération n’a pas pu être terminée. GORE a tenté de vérifier à nouveau l’installation, mais son état actuel peut être inconnu. Consultez l’état avant de réessayer.';
+
+  @override
   String get statusUnknown => 'Inconnu';
 
   @override

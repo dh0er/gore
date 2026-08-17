@@ -509,21 +509,24 @@ fn read_pristine_for_patch(
     prior: Option<&DeployRecord>,
     limits: ApplyLimits,
     budget: &mut ApplyBudget,
-) -> crate::Result<(Vec<u8>, bool)> {
+) -> crate::Result<(Vec<u8>, crate::PristineSource)> {
     let remaining = remaining_bytes(
         "manager pristine patch bases",
         budget.pristine_bytes,
         limits.max_pristine_total_bytes,
     )?;
-    let (bytes, drifted) =
-        crate::read_pristine_bounded(live, prior, limits.max_patch_base_bytes.min(remaining))?;
+    let (bytes, source) = crate::read_pristine_bounded_with_source(
+        live,
+        prior,
+        limits.max_patch_base_bytes.min(remaining),
+    )?;
     charge_bytes(
         "manager pristine patch bases",
         &mut budget.pristine_bytes,
         bytes.len() as u64,
         limits.max_pristine_total_bytes,
     )?;
-    Ok((bytes, drifted))
+    Ok((bytes, source))
 }
 
 fn ensure_generated_fits(
@@ -1208,16 +1211,20 @@ fn apply_loadout_with_limits(
     // else the pristine .lcache.
     if !loc.is_empty() {
         if let Some(lcache) = gp.lcache.clone() {
-            let (base, drifted) =
+            let (base, pristine_source) =
                 match rawfile_sources.remove(&raw_target_identity(&RawTarget::Lcache)) {
                     Some((_target, source)) => {
-                        let drifted = crate::select_pristine_source(&lcache, prior)?.drifted;
-                        (read_raw_for_patch(&source, limits, &mut budget)?, drifted)
+                        let pristine_source = crate::select_pristine_source(&lcache, prior)?;
+                        (
+                            read_raw_for_patch(&source, limits, &mut budget)?,
+                            pristine_source,
+                        )
                     }
                     // Read pristine from the PRIOR deployment's backup (via `prev`) — the live file is
                     // still the prior-modded one until the deferred undeploy below.
                     None => read_pristine_for_patch(&lcache, prior, limits, &mut budget)?,
                 };
+            plan.bind_backup_identity(&lcache, pristine_source.basis)?;
             let mut lc = gore_loc::loc::Lcache::decode(&base)?;
             let declared: BTreeMap<String, String> = lc
                 .languages()
@@ -1278,10 +1285,7 @@ fn apply_loadout_with_limits(
                     }
                 }
             }
-            stage_generated_output(&mut plan, lcache.clone(), lc.encode()?, limits, &mut budget)?;
-            if drifted {
-                plan.refresh_baks.push(lcache);
-            }
+            stage_generated_output(&mut plan, lcache, lc.encode()?, limits, &mut budget)?;
         } else {
             warnings.push(
                 "loc edits present but no AlkimiaLocalization .lcache in this install — skipping"
@@ -1315,14 +1319,18 @@ fn apply_loadout_with_limits(
                 Some((target, _)) => target.clone(),
                 None => resolve_bank_target_path(&gp.fmod_desktop, bank)?,
             };
-            let (base, drifted) = match raw_source {
+            let (base, pristine_source) = match raw_source {
                 Some((_target, source)) => {
-                    let drifted = crate::select_pristine_source(&bank_path, prior)?.drifted;
-                    (read_raw_for_patch(&source, limits, &mut budget)?, drifted)
+                    let pristine_source = crate::select_pristine_source(&bank_path, prior)?;
+                    (
+                        read_raw_for_patch(&source, limits, &mut budget)?,
+                        pristine_source,
+                    )
                 }
                 // Pristine from the prior deployment's backup (live is still modded until undeploy).
                 None => read_pristine_for_patch(&bank_path, prior, limits, &mut budget)?,
             };
+            plan.bind_backup_identity(&bank_path, pristine_source.basis)?;
             let mut repl = Vec::with_capacity(samples.len());
             for (sample, wav_payload) in samples {
                 let wav = read_pending_payload(
@@ -1345,10 +1353,7 @@ fn apply_loadout_with_limits(
             }
             let new_bank =
                 gore_fmod::replace_samples(&base, &fmod_key, repl).map_err(ModError::Fmod)?;
-            stage_generated_output(&mut plan, bank_path.clone(), new_bank, limits, &mut budget)?;
-            if drifted {
-                plan.refresh_baks.push(bank_path);
-            }
+            stage_generated_output(&mut plan, bank_path, new_bank, limits, &mut budget)?;
         }
     }
 
@@ -1367,14 +1372,18 @@ fn apply_loadout_with_limits(
         // the global ID plan or attempt a duplicate module splice.
         let (winning_scripts, winner_edits_after_add) = retain_last_script_target_winners(scripts)?;
         scripts = winning_scripts;
-        let (base, drifted) =
+        let (base, pristine_source) =
             match rawfile_sources.remove(&raw_target_identity(&RawTarget::ScriptCache)) {
-                Some((_target, source)) => (
-                    read_raw_for_patch(&source, limits, &mut budget)?,
-                    crate::select_pristine_source(&gp.script_cache, prior)?.drifted,
-                ),
+                Some((_target, source)) => {
+                    let pristine_source = crate::select_pristine_source(&gp.script_cache, prior)?;
+                    (
+                        read_raw_for_patch(&source, limits, &mut budget)?,
+                        pristine_source,
+                    )
+                }
                 None => read_pristine_for_patch(&gp.script_cache, prior, limits, &mut budget)?,
             };
+        plan.bind_backup_identity(&gp.script_cache, pristine_source.basis)?;
         // Pass 1 inventories the complete loadout while retaining only one source mini at a time.
         // Canonical assignments therefore depend on the portable-identity union, never mod order.
         let mut loadout_builder = gore_as::cache::splice::LoadoutScriptIdPlanBuilder::new(&base)
@@ -1463,9 +1472,6 @@ fn apply_loadout_with_limits(
             ensure_generated_fits(acc.len(), limits, &budget)?;
         }
         stage_generated_output(&mut plan, gp.script_cache.clone(), acc, limits, &mut budget)?;
-        if drifted {
-            plan.refresh_baks.push(gp.script_cache.clone());
-        }
     }
 
     // Any rawfile whose target was NOT further patched remains a whole-file replacement. Snapshot
@@ -1475,7 +1481,8 @@ fn apply_loadout_with_limits(
     // the original candidate is published. Any error still drops every candidate before the game
     // is touched.
     for (_identity, (target, source)) in rawfile_sources {
-        let drifted = crate::select_pristine_source(&target, prior)?.drifted;
+        let pristine_source = crate::select_pristine_source(&target, prior)?;
+        plan.bind_backup_identity(&target, pristine_source.basis)?;
         // Script caches are decoded for structural validation, so enforce the in-memory ceiling at
         // the opened-file metadata gate instead of first copying up to the generic 8-GiB raw limit.
         let snapshot_limit = if target == gp.script_cache {
@@ -1487,9 +1494,6 @@ fn apply_loadout_with_limits(
         if target == gp.script_cache {
             validate_standalone_script_candidate(&candidate, len, limits.max_patch_base_bytes)?;
         }
-        if drifted {
-            plan.refresh_baks.push(target.clone());
-        }
         plan.file_writes
             .push(crate::DiskWrite::seal(target, candidate)?);
     }
@@ -1499,11 +1503,9 @@ fn apply_loadout_with_limits(
     // replacement never becomes a resident `Vec` and an apply error drops every candidate before
     // the game is touched.
     for (_folded, (target, source)) in loose_files {
-        let drifted = crate::select_pristine_source(&target, prior)?.drifted;
+        let pristine_source = crate::select_pristine_source(&target, prior)?;
+        plan.bind_backup_identity(&target, pristine_source.basis)?;
         let candidate = snapshot_loose_payload(&source, limits, &mut budget)?;
-        if drifted {
-            plan.refresh_baks.push(target.clone());
-        }
         plan.file_writes
             .push(crate::DiskWrite::seal(target, candidate)?);
     }

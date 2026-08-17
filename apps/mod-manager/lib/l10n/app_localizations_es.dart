@@ -83,6 +83,50 @@ class AppLocalizationsEs extends AppLocalizations {
   String get installRecoveryEvidence => 'Datos de recuperación detectados';
 
   @override
+  String get managerRecoveryTitle =>
+      'Recuperar operación interrumpida del Gestor';
+
+  @override
+  String get managerRecoveryConfirm =>
+      'GORE detectó una operación del Gestor claramente interrumpida. Continúa solo si quieres que GORE verifique la operación registrada y devuelva la instalación a un estado conocido. Las partidas guardadas nunca se modifican.';
+
+  @override
+  String get managerRecoveryAlreadyClean =>
+      'La operación interrumpida ya estaba resuelta. La instalación se comprobó de nuevo.';
+
+  @override
+  String get managerRecoveryBusy =>
+      'La operación vuelve a estar activa. No se cambió nada; espera a que termine y vuelve a comprobar.';
+
+  @override
+  String get managerRecoveryLockCleared =>
+      'La operación interrumpida aún no había cambiado la instalación. Su bloqueo obsoleto se eliminó de forma segura.';
+
+  @override
+  String get managerRecoveryRestoredPristine =>
+      'Se revirtió el cambio interrumpido y se restauró el estado base registrado de la instalación.';
+
+  @override
+  String get managerRecoveryApplyPreserved =>
+      'La aplicación ya había terminado. Se conservó el estado registrado y se volvió a comprobar el estado actual.';
+
+  @override
+  String get managerRecoveryUndeployConfirmed =>
+      'La eliminación había terminado. Se limpiaron los datos de transacción restantes y se volvió a comprobar el estado.';
+
+  @override
+  String get managerRecoveryCompileRequired =>
+      'Esto corresponde a la recuperación de compilación de scripts. El Gestor no cambió nada; consulta la ayuda de recuperación.';
+
+  @override
+  String get managerRecoveryInspectionFailed =>
+      'GORE no pudo verificar con seguridad la operación interrumpida. No se cambió nada; revisa los detalles de recuperación actuales.';
+
+  @override
+  String get managerRecoveryFailed =>
+      'No se pudo completar la recuperación. GORE intentó comprobar de nuevo la instalación, pero su estado actual puede ser desconocido. Revisa el estado antes de volver a intentarlo.';
+
+  @override
   String get statusUnknown => 'Desconocido';
 
   @override

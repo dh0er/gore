@@ -279,10 +279,30 @@ void main() {
     expect(failure.missingCommands, ['mgr_preflight_v1']);
   });
 
+  test('a core without bound install recovery is blocked', () {
+    final commands = managerRequiredCoreCommands
+        .where((command) => command != 'mgr_recover_install_v1')
+        .toList();
+    final probe = _Probe(
+      states: {'old.dll': CoreCandidateState.present},
+      inspections: {
+        'old.dll': _currentEvidence(coreInfo: _coreInfo(commands: commands)),
+      },
+    );
+
+    final failure = _blocked(
+      inspectCoreCandidates(candidates: const ['old.dll'], probe: probe),
+    );
+
+    expect(failure.reason, CoreBootstrapFailureReason.requiredCommandsMissing);
+    expect(failure.missingCommands, ['mgr_recover_install_v1']);
+  });
+
   test(
     'preflight is required while future fields and commands stay additive',
     () {
       expect(managerRequiredCoreCommands, contains('mgr_preflight_v1'));
+      expect(managerRequiredCoreCommands, contains('mgr_recover_install_v1'));
       final probe = _Probe(
         states: {'future.dll': CoreCandidateState.present},
         inspections: {

@@ -239,6 +239,28 @@ disabling a mod in the middle of the order safe.
 
 `reset` restores the pristine install.
 
+### Interrupted Manager changes
+
+An interrupted Apply or Reset can leave an installation lock together with
+recovery data. The Mod Manager app distinguishes three cases:
+
+- If the Manager operation is still active, wait for it to finish and check
+  again.
+- If the native check can identify a clearly abandoned Manager operation, the
+  app offers **Recover** after confirmation. The action is bound to that exact
+  recorded operation and rechecks it before writing. Depending on where the old
+  operation stopped, recovery can clear a pre-change lock, restore the recorded
+  baseline, preserve an Apply that had already completed, or confirm a Reset
+  that had already completed. Check the status again afterwards; use Reset only
+  after recovery if you want to restore the pristine installation.
+- If the lock belongs to script-build recovery or GORE cannot safely tell which
+  operation created it, Manager does not change the installation and shows the
+  recovery guidance instead.
+
+Do not delete installation lock files by hand. This confirmation flow is a Mod
+Manager app action; `gore mgr status` and `gore doctor` only report the next
+step and do not perform this recovery.
+
 The Mod Manager app's deployment-details dialog can expand **Recorded ownership
 evidence** when the same validated deploy-record snapshot has the exact owner
 `manager`. It groups the recorded paths as replaced live files, pristine

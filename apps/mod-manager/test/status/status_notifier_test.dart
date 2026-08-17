@@ -545,6 +545,83 @@ void main() {
     });
   });
 
+  group('StatusNotifier.recoverInstall', () {
+    test('returns the structured outcome and always reloads status', () async {
+      final fake = FakeGoreCoreFfiService(
+        responses: {
+          'mgr_recover_install_v1': {
+            'ok': true,
+            'outcome': 'completed_apply_preserved',
+          },
+          'mgr_status': _statusResponse('in_sync'),
+        },
+      );
+      final n = _notifier(fake);
+
+      final outcome = await n.recoverInstall('C:/game', 'guard-17');
+
+      expect(outcome, MgrInstallRecoveryOutcome.completedApplyPreserved);
+      expect(
+        fake.calls.map((call) => call.command),
+        containsAllInOrder(['mgr_recover_install_v1', 'mgr_status']),
+      );
+      expect(fake.calls.first.payload, {
+        'game_root': 'C:/game',
+        'expected_guard_id': 'guard-17',
+      });
+      expect(n.state.status, isA<ManagerStatusInSync>());
+      expect(n.state.statusRoot, 'C:/game');
+      expect(n.state.busy, isFalse);
+    });
+
+    test(
+      'command failure returns no outcome but retains postflight truth',
+      () async {
+        final fake = FakeGoreCoreFfiService(
+          responses: {
+            'mgr_recover_install_v1': _errorResponse('recovery refused'),
+            'mgr_status': _statusResponse('recovery_required'),
+          },
+        );
+        final n = _notifier(fake);
+
+        final outcome = await n.recoverInstall('C:/game', 'guard-17');
+
+        expect(outcome, isNull);
+        expect(n.state.error, contains('recovery refused'));
+        expect(n.state.status, isA<ManagerStatusRecoveryRequired>());
+        expect(n.state.statusRoot, 'C:/game');
+      },
+    );
+
+    test(
+      'shares the exclusive mutation lane with Apply and Undeploy',
+      () async {
+        final core = _ControlledCore();
+        final n = StatusNotifier(MgrFfi(core));
+
+        final recovery = n.recoverInstall('C:/game', 'guard-17');
+        await _waitForRequests(core, 1);
+        await n.apply('C:/game');
+        await n.undeployAll('C:/game');
+        expect(core.requests, hasLength(1));
+        expect(core.requests.single.command, 'mgr_recover_install_v1');
+
+        core.requests.single.response.complete({
+          'ok': true,
+          'outcome': 'pre_mutation_lock_cleared',
+        });
+        await _waitForRequests(core, 2);
+        core.requests[1].response.complete(_statusResponse('nothing_deployed'));
+        expect(
+          await recovery,
+          MgrInstallRecoveryOutcome.preMutationLockCleared,
+        );
+        expect(n.state.busy, isFalse);
+      },
+    );
+  });
+
   group('StatusNotifier.undeployAll', () {
     test(
       'failure still runs postflight and keeps command error priority',

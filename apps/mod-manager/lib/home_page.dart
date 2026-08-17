@@ -37,6 +37,7 @@ bool _preflightFindingUsesRetry(PreflightCheckView finding) =>
       PreflightActionKind.recoverDeployment ||
       PreflightActionKind.waitForInstallMutation ||
       PreflightActionKind.recoverInstall ||
+      PreflightActionKind.recoverManagerMutation ||
       PreflightActionKind.removeStudioDeployment ||
       PreflightActionKind.reviewApply ||
       PreflightActionKind.reviewReapply ||
@@ -45,12 +46,18 @@ bool _preflightFindingUsesRetry(PreflightCheckView finding) =>
       _ => true,
     };
 
-enum _PreflightFocusTarget { retry, installMutationWait, installRecovery }
+enum _PreflightFocusTarget {
+  retry,
+  installMutationWait,
+  installRecovery,
+  managerMutationRecovery,
+}
 
 bool _preflightFocusTargetVisible(
   PreflightState state,
   _PreflightFocusTarget target,
   PreflightActionKind? expectedAction,
+  String? expectedToken,
 ) {
   final finding = state.authoritative
       ? state.report?.primarySetupFinding
@@ -67,6 +74,13 @@ bool _preflightFocusTargetVisible(
       state.error == null &&
           expectedAction == PreflightActionKind.recoverInstall &&
           finding?.action == expectedAction &&
+          finding != null,
+    _PreflightFocusTarget.managerMutationRecovery =>
+      state.error == null &&
+          expectedAction == PreflightActionKind.recoverManagerMutation &&
+          finding?.action == expectedAction &&
+          expectedToken != null &&
+          finding?.actionToken == expectedToken &&
           finding != null,
   };
 }
@@ -107,15 +121,21 @@ class _HomePageState extends ConsumerState<HomePage> {
   final FocusNode _preflightInstallRecoveryFocusNode = FocusNode(
     debugLabel: 'mod-manager-preflight-install-recovery',
   );
+  final FocusNode _preflightManagerMutationRecoveryFocusNode = FocusNode(
+    debugLabel: 'mod-manager-preflight-manager-mutation-recovery',
+  );
   ({FocusNode node, String? removedModId})? _pendingFocus;
   int _pendingFocusGeneration = 0;
   int _selectionGeneration = 0;
   bool _importRequestActive = false;
+  final Set<Completer<void>> _preflightReloadWaiters = {};
   ({
     String root,
     int generation,
     _PreflightFocusTarget target,
     PreflightActionKind? action,
+    String? actionToken,
+    bool fallbackToStatus,
   })?
   _preflightRetryFocusRequest;
 
@@ -138,6 +158,51 @@ class _HomePageState extends ConsumerState<HomePage> {
       return;
     }
     unawaited(ref.read(preflightProvider.notifier).refresh());
+  }
+
+  Future<void> _retryPreflightAndWait({
+    required String expectedRoot,
+    required bool restoreFocus,
+    required PreflightActionKind expectedAction,
+    required String expectedToken,
+  }) async {
+    final notifier = ref.read(preflightProvider.notifier);
+    notifier.retry();
+    final requestedGeneration = ref.read(preflightProvider).generation;
+    _rememberPreflightInstallRecoveryFocus(
+      expectedRoot,
+      requestedGeneration,
+      restoreFocus,
+      expectedAction,
+      true,
+      expectedToken,
+    );
+
+    bool settled(PreflightState state) =>
+        state.candidateRoot != expectedRoot ||
+        (state.generation >= requestedGeneration &&
+            !state.busy &&
+            !state.pending &&
+            (state.authoritative || state.error != null));
+
+    if (settled(ref.read(preflightProvider))) return;
+
+    final completed = Completer<void>();
+    _preflightReloadWaiters.add(completed);
+    final subscription = ref.listenManual<PreflightState>(preflightProvider, (
+      previous,
+      next,
+    ) {
+      if (!completed.isCompleted && settled(next)) completed.complete();
+    });
+    try {
+      if (settled(ref.read(preflightProvider))) return;
+      _refreshPreflightWhenIdle();
+      await completed.future;
+    } finally {
+      subscription.close();
+      _preflightReloadWaiters.remove(completed);
+    }
   }
 
   void _queueFocusWhenIdle(FocusNode node, {String? removedModId}) {
@@ -198,6 +263,8 @@ class _HomePageState extends ConsumerState<HomePage> {
             generation: generation,
             target: _PreflightFocusTarget.retry,
             action: null,
+            actionToken: null,
+            fallbackToStatus: false,
           )
         : null;
   }
@@ -207,6 +274,8 @@ class _HomePageState extends ConsumerState<HomePage> {
     int generation,
     bool restoreFocus,
     PreflightActionKind action,
+    bool fallbackToStatus,
+    String? actionToken,
   ) {
     _preflightRetryFocusRequest = root != null && restoreFocus
         ? (
@@ -217,9 +286,13 @@ class _HomePageState extends ConsumerState<HomePage> {
                 _PreflightFocusTarget.installMutationWait,
               PreflightActionKind.recoverInstall =>
                 _PreflightFocusTarget.installRecovery,
+              PreflightActionKind.recoverManagerMutation =>
+                _PreflightFocusTarget.managerMutationRecovery,
               _ => throw ArgumentError.value(action, 'action'),
             },
             action: action,
+            actionToken: actionToken,
+            fallbackToStatus: fallbackToStatus,
           )
         : null;
   }
@@ -231,6 +304,8 @@ class _HomePageState extends ConsumerState<HomePage> {
           _preflightInstallMutationWaitFocusNode,
         _PreflightFocusTarget.installRecovery =>
           _preflightInstallRecoveryFocusNode,
+        _PreflightFocusTarget.managerMutationRecovery =>
+          _preflightManagerMutationRecoveryFocusNode,
       };
 
   bool get _importAuthorityAvailable {
@@ -319,29 +394,49 @@ class _HomePageState extends ConsumerState<HomePage> {
   ) {
     final request = _preflightRetryFocusRequest;
     if (request == null || previous?.busy != true || next.busy) return;
+    if (next.candidateRoot == request.root &&
+        next.generation == request.generation &&
+        next.pending) {
+      return;
+    }
     _preflightRetryFocusRequest = null;
     if (next.candidateRoot != request.root ||
         next.generation != request.generation ||
-        !_preflightFocusTargetVisible(next, request.target, request.action)) {
+        (!_preflightFocusTargetVisible(
+              next,
+              request.target,
+              request.action,
+              request.actionToken,
+            ) &&
+            !request.fallbackToStatus)) {
       return;
     }
-    final targetNode = _preflightFocusNode(request.target);
+    final requestedNode = _preflightFocusNode(request.target);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final latest = ref.read(preflightProvider);
+      final requestedTargetVisible = _preflightFocusTargetVisible(
+        latest,
+        request.target,
+        request.action,
+        request.actionToken,
+      );
+      final targetNode = requestedTargetVisible
+          ? requestedNode
+          : request.fallbackToStatus
+          ? _statusDetailsFocusNode
+          : null;
       final currentFocus = FocusManager.instance.primaryFocus;
       final focusMovedElsewhere =
           currentFocus != null &&
+          currentFocus != requestedNode &&
           currentFocus != targetNode &&
           currentFocus is! FocusScopeNode;
       if (latest.candidateRoot != request.root ||
           latest.generation != request.generation ||
           latest.busy ||
-          !_preflightFocusTargetVisible(
-            latest,
-            request.target,
-            request.action,
-          ) ||
+          latest.pending ||
+          targetNode == null ||
           focusMovedElsewhere ||
           targetNode.context == null) {
         return;
@@ -352,6 +447,10 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   @override
   void dispose() {
+    for (final waiter in _preflightReloadWaiters) {
+      if (!waiter.isCompleted) waiter.complete();
+    }
+    _preflightReloadWaiters.clear();
     _importFocusNode.dispose();
     _libraryRefreshFocusNode.dispose();
     _statusDetailsFocusNode.dispose();
@@ -359,6 +458,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     _preflightRetryFocusNode.dispose();
     _preflightInstallMutationWaitFocusNode.dispose();
     _preflightInstallRecoveryFocusNode.dispose();
+    _preflightManagerMutationRecoveryFocusNode.dispose();
     super.dispose();
   }
 
@@ -546,12 +646,15 @@ class _HomePageState extends ConsumerState<HomePage> {
                         _preflightInstallMutationWaitFocusNode,
                     preflightInstallRecoveryFocusNode:
                         _preflightInstallRecoveryFocusNode,
+                    preflightManagerMutationRecoveryFocusNode:
+                        _preflightManagerMutationRecoveryFocusNode,
                     queueImportFocusAfterRemove: _queueImportFocusAfterRemove,
                     queueRefreshFocusAfterRemove: _queueRefreshFocusAfterRemove,
                     queueRefreshFocus: _queueRefreshFocus,
                     rememberPreflightRetryFocus: _rememberPreflightRetryFocus,
                     rememberPreflightInstallRecoveryFocus:
                         _rememberPreflightInstallRecoveryFocus,
+                    retryPreflightAndWait: _retryPreflightAndWait,
                   ),
                   SettingsTab(gamePathFocusNode: _settingsGamePathFocusNode),
                 ],
@@ -577,11 +680,13 @@ class _ModsTab extends ConsumerWidget {
     required this.preflightRetryFocusNode,
     required this.preflightInstallMutationWaitFocusNode,
     required this.preflightInstallRecoveryFocusNode,
+    required this.preflightManagerMutationRecoveryFocusNode,
     required this.queueImportFocusAfterRemove,
     required this.queueRefreshFocusAfterRemove,
     required this.queueRefreshFocus,
     required this.rememberPreflightRetryFocus,
     required this.rememberPreflightInstallRecoveryFocus,
+    required this.retryPreflightAndWait,
   });
 
   final FocusNode importFocusNode;
@@ -594,6 +699,7 @@ class _ModsTab extends ConsumerWidget {
   final FocusNode preflightRetryFocusNode;
   final FocusNode preflightInstallMutationWaitFocusNode;
   final FocusNode preflightInstallRecoveryFocusNode;
+  final FocusNode preflightManagerMutationRecoveryFocusNode;
   final ValueChanged<String> queueImportFocusAfterRemove;
   final ValueChanged<String> queueRefreshFocusAfterRemove;
   final VoidCallback queueRefreshFocus;
@@ -603,8 +709,17 @@ class _ModsTab extends ConsumerWidget {
     int generation,
     bool restoreFocus,
     PreflightActionKind action,
+    bool fallbackToStatus,
+    String? actionToken,
   )
   rememberPreflightInstallRecoveryFocus;
+  final Future<void> Function({
+    required String expectedRoot,
+    required bool restoreFocus,
+    required PreflightActionKind expectedAction,
+    required String expectedToken,
+  })
+  retryPreflightAndWait;
 
   String? _gameRoot(WidgetRef ref) =>
       gameRootFromExe(ref.read(gameExePathProvider));
@@ -697,9 +812,11 @@ class _ModsTab extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     String expectedRoot,
+    int expectedGeneration,
   ) async {
     final l10n = AppLocalizations.of(context);
-    if (_gameRoot(ref) != expectedRoot || !_canRecover(ref, expectedRoot)) {
+    if (_gameRoot(ref) != expectedRoot ||
+        !_canRecoverDeployment(ref, expectedRoot, expectedGeneration)) {
       return;
     }
     final root = expectedRoot;
@@ -720,7 +837,11 @@ class _ModsTab extends ConsumerWidget {
         ],
       ),
     );
-    if (ok != true || _gameRoot(ref) != root || !_canRecover(ref, root)) return;
+    if (ok != true ||
+        _gameRoot(ref) != root ||
+        !_canRecoverDeployment(ref, root, expectedGeneration)) {
+      return;
+    }
     try {
       await ref.read(statusProvider.notifier).undeployAll(root);
     } finally {
@@ -765,11 +886,37 @@ class _ModsTab extends ConsumerWidget {
     }
   }
 
-  bool _canRecover(WidgetRef ref, String root) {
+  int? _deploymentRecoveryGeneration(
+    PreflightState preflight,
+    String? expectedPreflightRoot,
+  ) {
+    if (expectedPreflightRoot == null ||
+        preflight.candidateRoot != expectedPreflightRoot ||
+        !preflight.authoritative ||
+        preflight.busy ||
+        preflight.pending ||
+        preflight.report?.primarySetupFinding?.action !=
+            PreflightActionKind.recoverDeployment) {
+      return null;
+    }
+    return preflight.generation;
+  }
+
+  bool _canRecoverDeployment(
+    WidgetRef ref,
+    String root,
+    int expectedGeneration,
+  ) {
     final status = ref.read(statusProvider);
+    final preflight = ref.read(preflightProvider);
+    final selectedPreflightRoot = diagnosticGameRootCandidate(
+      ref.read(gameExePathProvider),
+    );
     return !_statusActionBusy(ref) &&
         status.statusRoot == root &&
-        status.status is ManagerStatusRecoveryRequired;
+        status.status is ManagerStatusRecoveryRequired &&
+        _deploymentRecoveryGeneration(preflight, selectedPreflightRoot) ==
+            expectedGeneration;
   }
 
   bool _canTakeOver(WidgetRef ref, String root) =>
@@ -794,9 +941,9 @@ class _ModsTab extends ConsumerWidget {
       context: context,
       builder: (dialogContext) => Consumer(
         builder: (context, dialogRef, _) {
-          final gameRoot = gameRootFromExe(
-            dialogRef.watch(gameExePathProvider),
-          );
+          final gamePath = dialogRef.watch(gameExePathProvider);
+          final gameRoot = gameRootFromExe(gamePath);
+          final preflightRoot = diagnosticGameRootCandidate(gamePath);
           final status = dialogRef.watch(statusProvider);
           final library = dialogRef.watch(libraryProvider);
           final conflicts = dialogRef.watch(conflictsProvider);
@@ -827,6 +974,10 @@ class _ModsTab extends ConsumerWidget {
             operationsBusy: operationsBusy,
             applyEnabled:
                 applyEnabled && !preflight.busy && !conflicts.isLoading,
+            deploymentRecoveryGeneration: _deploymentRecoveryGeneration(
+              preflight,
+              preflightRoot,
+            ),
           );
         },
       ),
@@ -835,6 +986,8 @@ class _ModsTab extends ConsumerWidget {
 
     final action = result?.action;
     final expectedRoot = result?.rootAtClick;
+    final expectedRecoveryGeneration =
+        result?.deploymentRecoveryGenerationAtClick;
     switch (action) {
       case StatusDetailsAction.apply:
         if (expectedRoot != null) {
@@ -845,8 +998,13 @@ class _ModsTab extends ConsumerWidget {
           await _refreshAll(ref, expectedRoot: expectedRoot);
         }
       case StatusDetailsAction.recover:
-        if (expectedRoot != null) {
-          await _recoverDeployment(context, ref, expectedRoot);
+        if (expectedRoot != null && expectedRecoveryGeneration != null) {
+          await _recoverDeployment(
+            context,
+            ref,
+            expectedRoot,
+            expectedRecoveryGeneration,
+          );
         }
       case StatusDetailsAction.takeOver:
         if (expectedRoot != null) {
@@ -1070,9 +1228,12 @@ class _ModsTab extends ConsumerWidget {
           preflightInstallMutationWaitFocusNode:
               preflightInstallMutationWaitFocusNode,
           preflightInstallRecoveryFocusNode: preflightInstallRecoveryFocusNode,
+          preflightManagerMutationRecoveryFocusNode:
+              preflightManagerMutationRecoveryFocusNode,
           rememberPreflightRetryFocus: rememberPreflightRetryFocus,
           rememberPreflightInstallRecoveryFocus:
               rememberPreflightInstallRecoveryFocus,
+          retryPreflightAndWait: retryPreflightAndWait,
         ),
 
         const Divider(height: 1),
@@ -1315,8 +1476,10 @@ class _InfoBanner extends ConsumerWidget {
     required this.preflightRetryFocusNode,
     required this.preflightInstallMutationWaitFocusNode,
     required this.preflightInstallRecoveryFocusNode,
+    required this.preflightManagerMutationRecoveryFocusNode,
     required this.rememberPreflightRetryFocus,
     required this.rememberPreflightInstallRecoveryFocus,
+    required this.retryPreflightAndWait,
   });
 
   final StatusState status;
@@ -1328,14 +1491,24 @@ class _InfoBanner extends ConsumerWidget {
   final FocusNode preflightRetryFocusNode;
   final FocusNode preflightInstallMutationWaitFocusNode;
   final FocusNode preflightInstallRecoveryFocusNode;
+  final FocusNode preflightManagerMutationRecoveryFocusNode;
   final void Function(String? root, int generation) rememberPreflightRetryFocus;
   final void Function(
     String? root,
     int generation,
     bool restoreFocus,
     PreflightActionKind action,
+    bool fallbackToStatus,
+    String? actionToken,
   )
   rememberPreflightInstallRecoveryFocus;
+  final Future<void> Function({
+    required String expectedRoot,
+    required bool restoreFocus,
+    required PreflightActionKind expectedAction,
+    required String expectedToken,
+  })
+  retryPreflightAndWait;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1542,6 +1715,23 @@ class _InfoBanner extends ConsumerWidget {
         icon: const Icon(Icons.health_and_safety_outlined),
         label: Text(l10n.preflightReviewRecovery),
       ),
+      PreflightActionKind.recoverManagerMutation => TextButton.icon(
+        key: const ValueKey('preflight-manager-recovery-action'),
+        focusNode: preflightManagerMutationRecoveryFocusNode,
+        onPressed: blocked
+            ? null
+            : () => _recoverManagerMutation(
+                context,
+                ref,
+                finding,
+                expectedRoot: preflight.candidateRoot,
+                expectedGeneration: preflight.generation,
+                expectedAction: finding.action!,
+                expectedToken: finding.actionToken!,
+              ),
+        icon: const Icon(Icons.restore_outlined),
+        label: Text(l10n.recoveryAction),
+      ),
       PreflightActionKind.recoverDeployment ||
       PreflightActionKind.removeStudioDeployment ||
       PreflightActionKind.reviewApply ||
@@ -1664,9 +1854,165 @@ class _InfoBanner extends ConsumerWidget {
       current.generation + 1,
       restoreFocus,
       expectedAction,
+      false,
+      null,
     );
     ref.read(preflightProvider.notifier).retry();
   }
+
+  Future<void> _recoverManagerMutation(
+    BuildContext context,
+    WidgetRef ref,
+    PreflightCheckView finding, {
+    required String? expectedRoot,
+    required int expectedGeneration,
+    required PreflightActionKind expectedAction,
+    required String expectedToken,
+  }) async {
+    final snapshot = ref.read(preflightProvider);
+    final snapshotFinding = snapshot.authoritative
+        ? snapshot.report?.primarySetupFinding
+        : null;
+    if (expectedRoot == null ||
+        diagnosticGameRootCandidate(ref.read(gameExePathProvider)) !=
+            expectedRoot ||
+        snapshot.candidateRoot != expectedRoot ||
+        snapshot.generation != expectedGeneration ||
+        !snapshot.authoritative ||
+        !identical(snapshotFinding, finding) ||
+        snapshotFinding?.action != expectedAction ||
+        expectedAction != PreflightActionKind.recoverManagerMutation ||
+        snapshotFinding?.actionToken != expectedToken ||
+        ref.read(libraryProvider).busy ||
+        ref.read(statusProvider).busy ||
+        snapshot.busy ||
+        ref.read(conflictsProvider).isLoading) {
+      return;
+    }
+
+    final restoreFocus = preflightManagerMutationRecoveryFocusNode.hasFocus;
+    final l10n = AppLocalizations.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const ValueKey('preflight-manager-recovery-dialog'),
+        scrollable: true,
+        title: Text(l10n.managerRecoveryTitle),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: Text(l10n.managerRecoveryConfirm),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(l10n.commonCancel),
+          ),
+          FilledButton(
+            key: const ValueKey('preflight-manager-recovery-confirm'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(l10n.recoveryAction),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final current = ref.read(preflightProvider);
+    final currentFinding = current.authoritative
+        ? current.report?.primarySetupFinding
+        : null;
+    if (diagnosticGameRootCandidate(ref.read(gameExePathProvider)) !=
+            expectedRoot ||
+        current.candidateRoot != expectedRoot ||
+        current.generation != expectedGeneration ||
+        !current.authoritative ||
+        !identical(currentFinding, finding) ||
+        currentFinding?.action != expectedAction ||
+        currentFinding?.actionToken != expectedToken ||
+        ref.read(libraryProvider).busy ||
+        ref.read(statusProvider).busy ||
+        current.busy ||
+        ref.read(conflictsProvider).isLoading) {
+      return;
+    }
+
+    final outcome = await ref
+        .read(statusProvider.notifier)
+        .recoverInstall(expectedRoot, expectedToken);
+    if (!context.mounted) return;
+    final recoveryError = outcome == null
+        ? ref.read(statusProvider).error
+        : null;
+
+    // Recovery can settle at several valid endpoints. Reload every Manager
+    // projection from Native before reporting the structured outcome.
+    await ref.read(libraryProvider.notifier).refresh();
+    if (!context.mounted) return;
+    final selectedCandidate = diagnosticGameRootCandidate(
+      ref.read(gameExePathProvider),
+    );
+    final selectedRoot = selectedCandidate == expectedRoot
+        ? expectedRoot
+        : gameRootFromExe(ref.read(gameExePathProvider));
+    await ref.read(statusProvider.notifier).refresh(selectedRoot);
+    if (!context.mounted) return;
+
+    ref.invalidate(conflictsProvider);
+    final latestPreflight = ref.read(preflightProvider);
+    Future<void>? preflightRefresh;
+    if (latestPreflight.candidateRoot != null) {
+      preflightRefresh = retryPreflightAndWait(
+        expectedRoot: latestPreflight.candidateRoot!,
+        restoreFocus:
+            latestPreflight.candidateRoot == expectedRoot && restoreFocus,
+        expectedAction: expectedAction,
+        expectedToken: expectedToken,
+      );
+    }
+    try {
+      await Future.wait<void>([
+        ?preflightRefresh,
+        ref.read(conflictsProvider.future).then((_) {}),
+      ]);
+    } on Object {
+      // Each provider retains its own error state; both reads still settle
+      // before the structured recovery outcome is presented.
+    }
+    if (!context.mounted ||
+        diagnosticGameRootCandidate(ref.read(gameExePathProvider)) !=
+            expectedRoot) {
+      return;
+    }
+    final message = outcome == null
+        ? _withDiagnostic(
+            AppLocalizations.of(context).managerRecoveryFailed,
+            recoveryError,
+          )
+        : _managerRecoveryMessage(AppLocalizations.of(context), outcome);
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  String _managerRecoveryMessage(
+    AppLocalizations l10n,
+    MgrInstallRecoveryOutcome outcome,
+  ) => switch (outcome) {
+    MgrInstallRecoveryOutcome.alreadyClean => l10n.managerRecoveryAlreadyClean,
+    MgrInstallRecoveryOutcome.busy => l10n.managerRecoveryBusy,
+    MgrInstallRecoveryOutcome.preMutationLockCleared =>
+      l10n.managerRecoveryLockCleared,
+    MgrInstallRecoveryOutcome.recoveredToPristine =>
+      l10n.managerRecoveryRestoredPristine,
+    MgrInstallRecoveryOutcome.completedApplyPreserved =>
+      l10n.managerRecoveryApplyPreserved,
+    MgrInstallRecoveryOutcome.completedUndeployConfirmed =>
+      l10n.managerRecoveryUndeployConfirmed,
+    MgrInstallRecoveryOutcome.compileRecoveryRequired =>
+      l10n.managerRecoveryCompileRequired,
+    MgrInstallRecoveryOutcome.inspectionFailed =>
+      l10n.managerRecoveryInspectionFailed,
+  };
 
   Widget _preflightRetryAction(
     AppLocalizations l10n,

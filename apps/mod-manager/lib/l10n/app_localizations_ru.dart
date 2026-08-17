@@ -82,6 +82,50 @@ class AppLocalizationsRu extends AppLocalizations {
   String get installRecoveryEvidence => 'Обнаруженные данные восстановления';
 
   @override
+  String get managerRecoveryTitle =>
+      'Восстановить прерванную операцию Менеджера';
+
+  @override
+  String get managerRecoveryConfirm =>
+      'GORE обнаружил явно прерванную операцию Менеджера. Продолжайте, только если хотите, чтобы GORE проверил записанную операцию и вернул установку в известное состояние. Сохранения игры никогда не изменяются.';
+
+  @override
+  String get managerRecoveryAlreadyClean =>
+      'Прерванная операция уже была устранена. Установка проверена повторно.';
+
+  @override
+  String get managerRecoveryBusy =>
+      'Операция снова активна. Ничего не изменено; дождитесь её завершения и проверьте снова.';
+
+  @override
+  String get managerRecoveryLockCleared =>
+      'Прерванная операция ещё не изменила установку. Устаревшая блокировка безопасно удалена.';
+
+  @override
+  String get managerRecoveryRestoredPristine =>
+      'Прерванное изменение отменено, а записанное исходное состояние установки восстановлено.';
+
+  @override
+  String get managerRecoveryApplyPreserved =>
+      'Применение уже завершилось. Записанное состояние сохранено, а статус проверен повторно.';
+
+  @override
+  String get managerRecoveryUndeployConfirmed =>
+      'Удаление завершилось. Оставшиеся данные транзакции очищены, а статус проверен повторно.';
+
+  @override
+  String get managerRecoveryCompileRequired =>
+      'Это относится к восстановлению сборки скриптов. Менеджер ничего не изменил; откройте справку по восстановлению.';
+
+  @override
+  String get managerRecoveryInspectionFailed =>
+      'GORE не смог безопасно проверить прерванную операцию. Ничего не изменено; просмотрите текущие сведения о восстановлении.';
+
+  @override
+  String get managerRecoveryFailed =>
+      'Не удалось завершить восстановление. GORE попытался повторно проверить установку, но её текущее состояние может быть неизвестно. Перед новой попыткой просмотрите состояние.';
+
+  @override
   String get statusUnknown => 'Неизвестно';
 
   @override
