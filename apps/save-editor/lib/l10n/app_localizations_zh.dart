@@ -1661,7 +1661,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get heroGroupMainStats => '主要属性';
 
   @override
-  String get heroGroupCombatSkills => '战斗技能';
+  String get heroGroupCombatMovement => '战斗 / 移动';
 
   @override
   String get heroGroupResistances => '抗性';
@@ -1671,6 +1671,15 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get heroGroupAdvanced => '高级';
+
+  @override
+  String get heroGroupDiving => '潜水';
+
+  @override
+  String get heroGroupSleep => '睡眠与休息';
+
+  @override
+  String get heroGroupIntoxication => '醉酒';
 
   @override
   String get heroEntryHeroTransform => '位置';
@@ -1950,39 +1959,63 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String attributeManualFallbackLabel(String attributeId, String fallback) {
     String _temp0 = intl.Intl.selectLogic(attributeId, {
-      'Alcohol': '酒精值',
-      'AlcoholDepletionRate': '酒精消退速率',
-      'MaxAlcohol': '最大酒精值',
-      'MaxSuperArmor': '最大霸体值',
       'SuperArmor': '霸体值',
-      'Fatigue': '疲劳值',
-      'FillRatio': '填充比例',
-      'FillRatioPeriod': '填充周期',
-      'MaxFatigue': '最大疲劳值',
-      'MaxThresholdIndex': '最大阈值索引',
-      'RecoveryRatePerHourOfSleep': '每小时睡眠恢复量',
-      'DamageMultiplier': '伤害倍率',
-      'Toughness': '韧性',
-      'ToughnessA': '韧性 A',
-      'ToughnessB': '韧性 B',
-      'ToughnessC': '韧性 C',
-      'XPExecutedBounty': '处决经验奖励',
-      'XPKillOrDefeatBounty': '击杀或击败经验奖励',
-      'SpeedModifier': '速度修正',
-      'CriticalLevelPercent': '临界等级（%）',
-      'MaxOxygen': '最大氧气量',
+      'MaxSuperArmor': '最大霸体值',
+      'DamageMultiplier': '受到的伤害',
+      'SpeedModifier': '移动速度',
       'Oxygen': '氧气量',
-      'OxygenDepletionRate': '氧气消耗速率',
-      'OxygenRecoveryRate': '氧气恢复速率',
-      'MaxRestTime': '最大休息时间',
-      'MaxSleepTime': '最大睡眠时间',
-      'SleepTime': '睡眠时间',
-      'SleepTimeRecoveryAmount': '睡眠恢复量',
-      'SleepTimeRecoveryPeriod': '睡眠恢复周期',
-      'MaxSwampweed': '最大沼泽草量',
-      'Swampweed': '沼泽草',
-      'SwampweedDepletionRate': '沼泽草消耗速率',
+      'MaxOxygen': '最大氧气量',
+      'OxygenDepletionRate': '每秒氧气消耗',
+      'OxygenRecoveryRate': '每秒氧气恢复',
+      'CriticalLevelPercent': '缺氧警告阈值',
+      'SleepTime': '剩余有效睡眠',
+      'MaxSleepTime': '最大有效睡眠',
+      'SleepTimeRecoveryAmount': '有效睡眠回补量',
+      'SleepTimeRecoveryPeriod': '回补间隔',
+      'MaxRestTime': '最长卧床时间',
+      'Health_RecoveryRatePerHourOfSleep': '每小时睡眠回复生命',
+      'Mana_RecoveryRatePerHourOfSleep': '每小时睡眠回复法力',
+      'Alcohol': '酒精值',
+      'MaxAlcohol': '最大酒精值',
+      'AlcoholDepletionRate': '醒酒速度',
+      'Swampweed': '沼泽草值',
+      'MaxSwampweed': '最大沼泽草值',
+      'SwampweedDepletionRate': '药性消退速度',
+      'XPExecutedBounty': '倒地处决获得的经验',
+      'XPKillOrDefeatBounty': '击败获得的经验',
       'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String attributeManualTooltip(String attributeId) {
+    String _temp0 = intl.Intl.selectLogic(attributeId, {
+      'SuperArmor': '该角色在被一击打得踉跄之前还能扛下多少打击。',
+      'MaxSuperArmor': '霸体值的上限，会随着等级提升和所穿的护甲一起增长。',
+      'DamageMultiplier': '作用于该角色所受伤害的系数——1 为正常，数值越高越吃痛。',
+      'SpeedModifier': '该角色移动快慢的系数——1 为正常。',
+      'Oxygen': '水下剩余的呼吸秒数，归零时该角色就会淹死。',
+      'MaxOxygen': '该角色能在水下待多少秒，潜水技能可以提高这个上限。',
+      'OxygenDepletionRate': '潜在水下时每秒消耗掉的空气量。',
+      'OxygenRecoveryRate': '浮出水面后每秒回来的空气量。',
+      'CriticalLevelPercent': '剩余空气低到这个比例时，游戏就会发出溺水警告。',
+      'SleepTime': '还能带来恢复的睡眠小时数，超出之后再睡游戏也不会给任何恢复。',
+      'MaxSleepTime': '该角色能攒下的有效睡眠时间上限。',
+      'SleepTimeRecoveryAmount': '每次补充时重新加回来的有效睡眠小时数。',
+      'SleepTimeRecoveryPeriod': '有效睡眠时间隔多久才会重新补满。',
+      'MaxRestTime': '游戏允许一次躺在床上的最长时间。',
+      'Health_RecoveryRatePerHourOfSleep': '每睡一小时能恢复的最大生命值比例。',
+      'Mana_RecoveryRatePerHourOfSleep': '每睡一小时能恢复的最大法力值比例。',
+      'Alcohol': '该角色醉到什么程度，较高的档位会拿敏捷和法力去换力量。',
+      'MaxAlcohol': '该角色能达到的最高酒精值。',
+      'AlcoholDepletionRate': '酒精值往清醒方向回落得有多快。',
+      'Swampweed': '该角色嗨到什么程度，较高的档位会让其属性此消彼长。',
+      'MaxSwampweed': '该角色能达到的最高沼泽草值。',
+      'SwampweedDepletionRate': '沼泽草带来的迷幻劲头消退得有多快。',
+      'XPExecutedBounty': '在这名角色已经被打倒在地时再将其杀死，所能拿到的经验值。',
+      'XPKillOrDefeatBounty': '把这名角色打倒时所能拿到的经验值，不管对方是当场毙命还是只被打晕在地。',
+      'other': '?',
     });
     return '$_temp0';
   }
@@ -4417,7 +4450,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get heroGroupMainStats => '主要属性';
 
   @override
-  String get heroGroupCombatSkills => '战斗技能';
+  String get heroGroupCombatMovement => '战斗 / 移动';
 
   @override
   String get heroGroupResistances => '抗性';
@@ -4427,6 +4460,15 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get heroGroupAdvanced => '高级';
+
+  @override
+  String get heroGroupDiving => '潜水';
+
+  @override
+  String get heroGroupSleep => '睡眠与休息';
+
+  @override
+  String get heroGroupIntoxication => '醉酒';
 
   @override
   String get heroEntryHeroTransform => '位置';
@@ -4706,39 +4748,63 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   @override
   String attributeManualFallbackLabel(String attributeId, String fallback) {
     String _temp0 = intl.Intl.selectLogic(attributeId, {
-      'Alcohol': '酒精值',
-      'AlcoholDepletionRate': '酒精消退速率',
-      'MaxAlcohol': '最大酒精值',
-      'MaxSuperArmor': '最大霸体值',
       'SuperArmor': '霸体值',
-      'Fatigue': '疲劳值',
-      'FillRatio': '填充比例',
-      'FillRatioPeriod': '填充周期',
-      'MaxFatigue': '最大疲劳值',
-      'MaxThresholdIndex': '最大阈值索引',
-      'RecoveryRatePerHourOfSleep': '每小时睡眠恢复量',
-      'DamageMultiplier': '伤害倍率',
-      'Toughness': '韧性',
-      'ToughnessA': '韧性 A',
-      'ToughnessB': '韧性 B',
-      'ToughnessC': '韧性 C',
-      'XPExecutedBounty': '处决经验奖励',
-      'XPKillOrDefeatBounty': '击杀或击败经验奖励',
-      'SpeedModifier': '速度修正',
-      'CriticalLevelPercent': '临界等级（%）',
-      'MaxOxygen': '最大氧气量',
+      'MaxSuperArmor': '最大霸体值',
+      'DamageMultiplier': '受到的伤害',
+      'SpeedModifier': '移动速度',
       'Oxygen': '氧气量',
-      'OxygenDepletionRate': '氧气消耗速率',
-      'OxygenRecoveryRate': '氧气恢复速率',
-      'MaxRestTime': '最大休息时间',
-      'MaxSleepTime': '最大睡眠时间',
-      'SleepTime': '睡眠时间',
-      'SleepTimeRecoveryAmount': '睡眠恢复量',
-      'SleepTimeRecoveryPeriod': '睡眠恢复周期',
-      'MaxSwampweed': '最大沼泽草量',
-      'Swampweed': '沼泽草',
-      'SwampweedDepletionRate': '沼泽草消耗速率',
+      'MaxOxygen': '最大氧气量',
+      'OxygenDepletionRate': '每秒氧气消耗',
+      'OxygenRecoveryRate': '每秒氧气恢复',
+      'CriticalLevelPercent': '缺氧警告阈值',
+      'SleepTime': '剩余有效睡眠',
+      'MaxSleepTime': '最大有效睡眠',
+      'SleepTimeRecoveryAmount': '有效睡眠回补量',
+      'SleepTimeRecoveryPeriod': '回补间隔',
+      'MaxRestTime': '最长卧床时间',
+      'Health_RecoveryRatePerHourOfSleep': '每小时睡眠回复生命',
+      'Mana_RecoveryRatePerHourOfSleep': '每小时睡眠回复法力',
+      'Alcohol': '酒精值',
+      'MaxAlcohol': '最大酒精值',
+      'AlcoholDepletionRate': '醒酒速度',
+      'Swampweed': '沼泽草值',
+      'MaxSwampweed': '最大沼泽草值',
+      'SwampweedDepletionRate': '药性消退速度',
+      'XPExecutedBounty': '倒地处决获得的经验',
+      'XPKillOrDefeatBounty': '击败获得的经验',
       'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String attributeManualTooltip(String attributeId) {
+    String _temp0 = intl.Intl.selectLogic(attributeId, {
+      'SuperArmor': '该角色在被一击打得踉跄之前还能扛下多少打击。',
+      'MaxSuperArmor': '霸体值的上限，会随着等级提升和所穿的护甲一起增长。',
+      'DamageMultiplier': '作用于该角色所受伤害的系数——1 为正常，数值越高越吃痛。',
+      'SpeedModifier': '该角色移动快慢的系数——1 为正常。',
+      'Oxygen': '水下剩余的呼吸秒数，归零时该角色就会淹死。',
+      'MaxOxygen': '该角色能在水下待多少秒，潜水技能可以提高这个上限。',
+      'OxygenDepletionRate': '潜在水下时每秒消耗掉的空气量。',
+      'OxygenRecoveryRate': '浮出水面后每秒回来的空气量。',
+      'CriticalLevelPercent': '剩余空气低到这个比例时，游戏就会发出溺水警告。',
+      'SleepTime': '还能带来恢复的睡眠小时数，超出之后再睡游戏也不会给任何恢复。',
+      'MaxSleepTime': '该角色能攒下的有效睡眠时间上限。',
+      'SleepTimeRecoveryAmount': '每次补充时重新加回来的有效睡眠小时数。',
+      'SleepTimeRecoveryPeriod': '有效睡眠时间隔多久才会重新补满。',
+      'MaxRestTime': '游戏允许一次躺在床上的最长时间。',
+      'Health_RecoveryRatePerHourOfSleep': '每睡一小时能恢复的最大生命值比例。',
+      'Mana_RecoveryRatePerHourOfSleep': '每睡一小时能恢复的最大法力值比例。',
+      'Alcohol': '该角色醉到什么程度，较高的档位会拿敏捷和法力去换力量。',
+      'MaxAlcohol': '该角色能达到的最高酒精值。',
+      'AlcoholDepletionRate': '酒精值往清醒方向回落得有多快。',
+      'Swampweed': '该角色嗨到什么程度，较高的档位会让其属性此消彼长。',
+      'MaxSwampweed': '该角色能达到的最高沼泽草值。',
+      'SwampweedDepletionRate': '沼泽草带来的迷幻劲头消退得有多快。',
+      'XPExecutedBounty': '在这名角色已经被打倒在地时再将其杀死，所能拿到的经验值。',
+      'XPKillOrDefeatBounty': '把这名角色打倒时所能拿到的经验值，不管对方是当场毙命还是只被打晕在地。',
+      'other': '?',
     });
     return '$_temp0';
   }

@@ -1721,10 +1721,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get noEntriesMatch => 'No entries match';
 
   @override
-  String get heroGroupMainStats => 'Main stats';
+  String get heroGroupMainStats => 'Main Stats';
 
   @override
-  String get heroGroupCombatSkills => 'Combat skills';
+  String get heroGroupCombatMovement => 'Combat / Movement';
 
   @override
   String get heroGroupResistances => 'Resistances';
@@ -1734,6 +1734,15 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get heroGroupAdvanced => 'Advanced';
+
+  @override
+  String get heroGroupDiving => 'Diving';
+
+  @override
+  String get heroGroupSleep => 'Sleep & Rest';
+
+  @override
+  String get heroGroupIntoxication => 'Intoxication';
 
   @override
   String get heroEntryHeroTransform => 'Position';
@@ -2020,39 +2029,80 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String attributeManualFallbackLabel(String attributeId, String fallback) {
     String _temp0 = intl.Intl.selectLogic(attributeId, {
-      'Alcohol': 'Alcohol',
-      'AlcoholDepletionRate': 'Alcohol depletion rate',
+      'SuperArmor': 'Poise',
+      'MaxSuperArmor': 'Maximum poise',
+      'DamageMultiplier': 'Damage taken',
+      'SpeedModifier': 'Movement speed',
+      'Oxygen': 'Breath',
+      'MaxOxygen': 'Maximum breath',
+      'OxygenDepletionRate': 'Breath used per second',
+      'OxygenRecoveryRate': 'Breath regained per second',
+      'CriticalLevelPercent': 'Low-breath warning',
+      'SleepTime': 'Restful hours left',
+      'MaxSleepTime': 'Maximum restful hours',
+      'SleepTimeRecoveryAmount': 'Restful hours regained',
+      'SleepTimeRecoveryPeriod': 'Refill interval',
+      'MaxRestTime': 'Maximum time in bed',
+      'Health_RecoveryRatePerHourOfSleep': 'Health per hour of sleep',
+      'Mana_RecoveryRatePerHourOfSleep': 'Mana per hour of sleep',
+      'Alcohol': 'Alcohol level',
       'MaxAlcohol': 'Maximum alcohol',
-      'MaxSuperArmor': 'Maximum super armor',
-      'SuperArmor': 'Super armor',
-      'Fatigue': 'Fatigue',
-      'FillRatio': 'Fill ratio',
-      'FillRatioPeriod': 'Fill ratio period',
-      'MaxFatigue': 'Maximum fatigue',
-      'MaxThresholdIndex': 'Maximum threshold index',
-      'RecoveryRatePerHourOfSleep': 'Recovery per hour of sleep',
-      'DamageMultiplier': 'Damage multiplier',
-      'Toughness': 'Toughness',
-      'ToughnessA': 'Toughness A',
-      'ToughnessB': 'Toughness B',
-      'ToughnessC': 'Toughness C',
-      'XPExecutedBounty': 'Execution XP reward',
-      'XPKillOrDefeatBounty': 'Kill or defeat XP reward',
-      'SpeedModifier': 'Speed modifier',
-      'CriticalLevelPercent': 'Critical level (%)',
-      'MaxOxygen': 'Maximum oxygen',
-      'Oxygen': 'Oxygen',
-      'OxygenDepletionRate': 'Oxygen depletion rate',
-      'OxygenRecoveryRate': 'Oxygen recovery rate',
-      'MaxRestTime': 'Maximum rest time',
-      'MaxSleepTime': 'Maximum sleep time',
-      'SleepTime': 'Sleep time',
-      'SleepTimeRecoveryAmount': 'Sleep recovery amount',
-      'SleepTimeRecoveryPeriod': 'Sleep recovery period',
+      'AlcoholDepletionRate': 'Sobering speed',
+      'Swampweed': 'Swampweed level',
       'MaxSwampweed': 'Maximum swampweed',
-      'Swampweed': 'Swampweed',
-      'SwampweedDepletionRate': 'Swampweed depletion rate',
+      'SwampweedDepletionRate': 'Wear-off speed',
+      'XPExecutedBounty': 'XP for finishing off',
+      'XPKillOrDefeatBounty': 'XP for defeating',
       'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String attributeManualTooltip(String attributeId) {
+    String _temp0 = intl.Intl.selectLogic(attributeId, {
+      'SuperArmor':
+          'How much punishment this character absorbs before a hit staggers them.',
+      'MaxSuperArmor':
+          'The full poise pool; it grows with character level and with worn armour.',
+      'DamageMultiplier':
+          'Factor applied to the damage this character takes — 1 is normal, higher hurts more.',
+      'SpeedModifier': 'Factor on how fast this character moves — 1 is normal.',
+      'Oxygen':
+          'Seconds of air left under water; at zero this character drowns.',
+      'MaxOxygen':
+          'How many seconds this character can stay under water; the Diving skill raises it.',
+      'OxygenDepletionRate': 'Air used up each second while submerged.',
+      'OxygenRecoveryRate': 'Air that comes back each second after surfacing.',
+      'CriticalLevelPercent':
+          'Share of remaining air at which the game warns of drowning.',
+      'SleepTime':
+          'Hours of sleep that still restore something; beyond them the game grants no resting bonus.',
+      'MaxSleepTime':
+          'The largest budget of restful hours this character can hold.',
+      'SleepTimeRecoveryAmount':
+          'Restful hours added back each time the budget refills.',
+      'SleepTimeRecoveryPeriod':
+          'How long it takes before the budget of restful hours refills again.',
+      'MaxRestTime': 'The longest single stay in bed the game allows.',
+      'Health_RecoveryRatePerHourOfSleep':
+          'Share of maximum health restored for every hour slept.',
+      'Mana_RecoveryRatePerHourOfSleep':
+          'Share of maximum mana restored for every hour slept.',
+      'Alcohol':
+          'How drunk this character is; the higher tiers trade dexterity and mana for strength.',
+      'MaxAlcohol': 'The highest alcohol level this character can reach.',
+      'AlcoholDepletionRate':
+          'How quickly the alcohol level falls back towards sober.',
+      'Swampweed':
+          'How stoned this character is; the higher tiers shift their attributes around.',
+      'MaxSwampweed': 'The highest swampweed level this character can reach.',
+      'SwampweedDepletionRate': 'How quickly the swampweed high wears off.',
+      'XPExecutedBounty':
+          'Experience for killing this character while it already lies defeated on the ground.',
+      'XPKillOrDefeatBounty':
+          'Experience for bringing this character down, whether it dies or is only beaten unconscious.',
+      'other': '?',
     });
     return '$_temp0';
   }

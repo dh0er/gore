@@ -16,7 +16,7 @@ import 'package:goresave/providers/data_providers.dart';
 
 import '../domain/editor_notifier.dart';
 import '../domain/hero_attributes.dart'
-    show AttributeLabelResolver, TypedValueEdit;
+    show AttributeLabelResolver, TypedValueEdit, heroAttributeHidden;
 
 /// Reverse a stored per-NPC attribute registry entry back into the panel's
 /// [NpcTypedEdit] drafts so [NpcAttributesPanel] can resume from them on a
@@ -108,6 +108,8 @@ class AttributeDetail extends ConsumerWidget {
           setClass: setClass,
           l10n: l10n,
         );
+    String attributeTooltipFor(String id, String? setClass) =>
+        attributeTooltip(id, setClass: setClass, l10n: l10n);
 
     if (selected.isPlayer) {
       final body = _PrivatePanel(
@@ -119,6 +121,7 @@ class AttributeDetail extends ConsumerWidget {
         editable: editable,
         lockedBody: l10n.playerLockedBody,
         attributeLabel: attributeLabel,
+        attributeTooltip: attributeTooltipFor,
       );
       if (!showActorHeader) return body;
       // Player → a shared header ("Player", no GlobalId) above the EXISTING
@@ -194,6 +197,7 @@ class AttributeDetail extends ConsumerWidget {
               showRoster: false,
             ),
             attributeLabel: attributeLabel,
+            attributeTooltip: attributeTooltipFor,
             initialPending: () => _npcAttributeDraftsFromPending(
               notifier.pendingEditFor(pendingKey),
             ),
@@ -250,6 +254,7 @@ class _PrivatePanel extends StatelessWidget {
     required this.editable,
     required this.lockedBody,
     required this.attributeLabel,
+    required this.attributeTooltip,
   });
 
   final IconData icon;
@@ -260,6 +265,7 @@ class _PrivatePanel extends StatelessWidget {
   final bool editable;
   final String lockedBody;
   final AttributeLabelResolver attributeLabel;
+  final AttributeLabelResolver attributeTooltip;
 
   /// The legacy attributes editor, flattened: the whole tab body sits inside
   /// ONE main card now, so the section renders bare (no inner Card).
@@ -270,6 +276,7 @@ class _PrivatePanel extends StatelessWidget {
       editable: editable,
       reloadKey: inspection,
       attributeLabel: attributeLabel,
+      attributeTooltip: attributeTooltip,
     );
   }
 
@@ -334,6 +341,7 @@ class _PrivatePanel extends StatelessWidget {
               reloadKey: inspection,
             ),
             attributeLabel: attributeLabel,
+            attributeTooltip: attributeTooltip,
           ),
         );
       }
@@ -365,6 +373,7 @@ class _PrivatePlayerAttributesEditor extends StatelessWidget {
     required this.player,
     required this.notifier,
     required this.attributeLabel,
+    required this.attributeTooltip,
     this.editable = true,
     this.reloadKey,
   });
@@ -372,6 +381,7 @@ class _PrivatePlayerAttributesEditor extends StatelessWidget {
   final PrivatePlayerSummary player;
   final EditorNotifier notifier;
   final AttributeLabelResolver attributeLabel;
+  final AttributeLabelResolver attributeTooltip;
   final bool editable;
   final Object? reloadKey;
 
@@ -400,10 +410,17 @@ class _PrivatePlayerAttributesEditor extends StatelessWidget {
             final compact = constraints.maxWidth < 620;
             return Column(
               children: player.attributes
+                  // The typed view hides the attributes the game re-derives
+                  // from a learned skill; this fallback shows the same hero, so
+                  // it must hide them too. The core's summary carries
+                  // MagicianLevel, which would otherwise reappear here as a
+                  // second, ineffective "Magic Circle" beside the skill's own.
+                  .where((a) => !heroAttributeHidden(a.id))
                   .map(
                     (attribute) => _PrivatePlayerAttributeRow(
                       attribute: attribute,
                       label: attributeLabel(attribute.id, null),
+                      tooltip: attributeTooltip(attribute.id, null),
                       notifier: notifier,
                       editable: editable,
                       compact: compact,
@@ -423,6 +440,7 @@ class _PrivatePlayerAttributeRow extends StatefulWidget {
   const _PrivatePlayerAttributeRow({
     required this.attribute,
     required this.label,
+    this.tooltip = '',
     required this.notifier,
     required this.editable,
     required this.compact,
@@ -431,6 +449,9 @@ class _PrivatePlayerAttributeRow extends StatefulWidget {
 
   final PrivatePlayerAttribute attribute;
   final String label;
+
+  /// One sentence on what this value does in the game. Empty = no tooltip.
+  final String tooltip;
   final EditorNotifier notifier;
   final bool editable;
   final bool compact;
@@ -500,6 +521,14 @@ class _PrivatePlayerAttributeRowState
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final name = widget.label;
+    // Same affordance as the typed rows: the label explains what the value does.
+    Widget named() {
+      final text = Text(name, style: Theme.of(context).textTheme.labelLarge);
+      return widget.tooltip.isEmpty
+          ? text
+          : Tooltip(message: widget.tooltip, child: text);
+    }
+
     final baseField = TextField(
       key: ValueKey('legacy-attribute:${widget.attribute.id}:base'),
       controller: _baseController,
@@ -519,17 +548,14 @@ class _PrivatePlayerAttributeRowState
       onChanged: (_) => _updatePending(),
       decoration: InputDecoration(labelText: l10n.attributeCurrentValue),
     );
-    final label = SizedBox(
-      width: 116,
-      child: Text(name, style: Theme.of(context).textTheme.labelLarge),
-    );
+    final label = SizedBox(width: 116, child: named());
     if (widget.compact) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(name, style: Theme.of(context).textTheme.labelLarge),
+            named(),
             const SizedBox(height: 6),
             baseField,
             const SizedBox(height: 6),

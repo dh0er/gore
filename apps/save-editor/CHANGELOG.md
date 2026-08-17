@@ -20,6 +20,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- The advanced attributes are sorted into Combat & movement, Diving, Sleep &
+  rest and Intoxication instead of one long list, every value has a proper name
+  in your language, and hovering a name explains what it does in the game.
+- Values the game never acts on are gone from the attribute list: Toughness,
+  which no longer limits what you can carry, and hunger, thirst and fatigue,
+  which belong to a survival mode that cannot be switched on. They stay
+  editable under All data.
 - Saving is much faster: a save with eight changed values took eleven seconds
   and now takes one.
 - Opening a savegame is about four times faster.
@@ -30,6 +37,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The attribute list offered a second "Magic Circle", identically named to the
+  one under Skills but without any effect in the game. It is gone; the circle is
+  set under Skills.
 - Version 1.2.1 said an NPC's position cannot be changed because the game
   restores it from the level. That was wrong.
 - Removing an item from a list and then editing another item in the same list

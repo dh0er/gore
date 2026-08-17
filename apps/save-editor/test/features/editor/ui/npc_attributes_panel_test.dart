@@ -172,7 +172,7 @@ void main() {
 
     // Both group entries appear in the sidebar (Health → Main stats,
     // Resistance_Fire → Resistances).
-    expect(find.text('Main stats'), findsWidgets);
+    expect(find.text('Main Stats'), findsWidgets);
     expect(find.text('Resistances'), findsWidgets);
     // Default selection is Main stats — Health row is shown, Resistance is not.
     expect(_npcBaseField('Health'), findsOneWidget);
@@ -191,8 +191,9 @@ void main() {
     await tester.pumpWidget(
       _wrap(
         _panel(
-          load: () async =>
-              NpcAttributesResult(attributes: [_row('DamageMultiplier', 1, 1)]),
+          load: () async => NpcAttributesResult(
+            attributes: [_row('XPKillOrDefeatBounty', 1, 1)],
+          ),
         ),
       ),
     );
@@ -201,7 +202,7 @@ void main() {
     // Only group present is Advanced (the catch-all), so it's selected and
     // its row is immediately visible.
     expect(find.text('Advanced'), findsWidgets);
-    expect(_npcBaseField('DamageMultiplier'), findsOneWidget);
+    expect(_npcBaseField('XPKillOrDefeatBounty'), findsOneWidget);
   });
 
   testWidgets('Thieving-only attributes produce NO Thieving group for NPCs', (
@@ -222,7 +223,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // Main stats is present (Health), but Thieving never surfaces for NPCs.
-    expect(find.text('Main stats'), findsWidgets);
+    expect(find.text('Main Stats'), findsWidgets);
     expect(find.text('Thieving'), findsNothing);
     // The PickPocketing row is not reachable (its only group is gone).
     expect(_npcBaseField('PickPocketing'), findsNothing);
@@ -286,7 +287,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // Main stats group is present and the Status row is shown.
-    expect(find.text('Main stats'), findsWidgets);
+    expect(find.text('Main Stats'), findsWidgets);
     expect(find.text('Status'), findsOneWidget);
     expect(find.text('alive'), findsOneWidget);
   });

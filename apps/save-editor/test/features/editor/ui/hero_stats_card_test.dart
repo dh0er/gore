@@ -60,6 +60,7 @@ Finder _heroBaseField(String id) {
     'MaxHealth' => '/Script/G1R.AttributeSet_Health',
     'Resistance_Fire' => '/Script/G1R.AttributeSet_Resistance',
     'Swampweed' => '/Script/G1R.AttributeSet_Drugs',
+    'XPKillOrDefeatBounty' => '/Script/G1R.AttributeSet_LevelProgression',
     _ => throw ArgumentError.value(id, 'id'),
   };
   return find.byKey(ValueKey('hero-attribute:$setClass:$id:base'));
@@ -143,7 +144,7 @@ void main() {
 
     // Sidebar entries present for non-empty groups (may also appear in the
     // detail card header, so use findsWidgets not findsOneWidget).
-    expect(find.text('Main stats'), findsWidgets);
+    expect(find.text('Main Stats'), findsWidgets);
     expect(find.text('Resistances'), findsWidgets);
     // Entries absent for empty groups.
     expect(find.text('Thieving'), findsNothing);
@@ -238,7 +239,11 @@ void main() {
         _card(
           load: () async => HeroAttributesResult(
             attributes: [
-              _attribute('Swampweed', '/Script/G1R.AttributeSet_Drugs', 0),
+              _attribute(
+                'XPKillOrDefeatBounty',
+                '/Script/G1R.AttributeSet_LevelProgression',
+                0,
+              ),
             ],
           ),
         ),
@@ -248,8 +253,13 @@ void main() {
 
     // Sidebar entry exists (may appear in sidebar AND card header).
     expect(find.text('Advanced'), findsWidgets);
+
+    // A sidebar heading may be two words ("Combat / movement") and the sidebar
+    // is narrow, so the label wraps onto a second line rather than truncating.
+    final sidebarLabel = tester.widgetList<Text>(find.text('Advanced')).first;
+    expect(sidebarLabel.maxLines, 2);
     // Default: only group, so it's selected — row is immediately visible.
-    expect(_heroBaseField('Swampweed'), findsOneWidget);
+    expect(_heroBaseField('XPKillOrDefeatBounty'), findsOneWidget);
     // No ExpansionTile needed.
     expect(find.byType(ExpansionTile), findsNothing);
   });
@@ -405,7 +415,7 @@ void main() {
     expect(lastEdits, hasLength(1));
 
     // Switch back to Main stats.
-    await tester.tap(find.text('Main stats'));
+    await tester.tap(find.text('Main Stats'));
     await tester.pumpAndSettle();
 
     // Pending edit '77' must be visible again.
@@ -627,7 +637,7 @@ void main() {
 
     // Switch away and back: the editor must keep its unsaved draft — its
     // text backs a registered pending edit that would otherwise go stale.
-    await tester.tap(find.text('Main stats'));
+    await tester.tap(find.text('Main Stats'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Skills'));
     await tester.pumpAndSettle();

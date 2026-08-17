@@ -11,7 +11,16 @@ import 'grouped_attribute_sidebar.dart';
 /// The player's transform used to be a sixth entry here. It now lives in the
 /// Charaktere → Position sub-tab (PositionDetail), its ONLY home: two mounted
 /// copies would both drive the single 'transform' pending key.
-enum _SidebarEntry { core, combat, resistances, thieving, advanced }
+enum _SidebarEntry {
+  core,
+  combat,
+  resistances,
+  thieving,
+  diving,
+  sleep,
+  intoxication,
+  advanced,
+}
 
 /// Grouped editors for every hero gameplay attribute. Data arrives through
 /// [load] (typed property search) and leaves through [onPendingChanged]
@@ -35,6 +44,7 @@ class HeroStatsCard extends StatefulWidget {
     this.fallback,
     this.skillsSection,
     this.attributeLabel,
+    this.attributeTooltip,
   });
 
   final Future<HeroAttributesResult> Function() load;
@@ -70,6 +80,9 @@ class HeroStatsCard extends StatefulWidget {
   /// Resolves raw save ids to player-facing names. The editor remains usable
   /// without a localization catalog via [heroAttributeLabel].
   final AttributeLabelResolver? attributeLabel;
+
+  /// Resolves an attribute to a one-sentence explanation for its label tooltip.
+  final AttributeLabelResolver? attributeTooltip;
 
   @override
   State<HeroStatsCard> createState() => _HeroStatsCardState();
@@ -160,7 +173,10 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     final byGroup = <HeroAttributeGroup, List<HeroAttribute>>{};
     for (final attribute in attributes) {
       byGroup
-          .putIfAbsent(heroAttributeGroup(attribute.id), () => [])
+          .putIfAbsent(
+            heroAttributeGroup(attribute.id, attribute.setClass),
+            () => [],
+          )
           .add(attribute);
     }
     return byGroup;
@@ -373,6 +389,9 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       _SidebarEntry.combat => HeroAttributeGroup.combat,
       _SidebarEntry.resistances => HeroAttributeGroup.resistances,
       _SidebarEntry.thieving => HeroAttributeGroup.thieving,
+      _SidebarEntry.diving => HeroAttributeGroup.diving,
+      _SidebarEntry.sleep => HeroAttributeGroup.sleep,
+      _SidebarEntry.intoxication => HeroAttributeGroup.intoxication,
       _SidebarEntry.advanced => HeroAttributeGroup.advanced,
     };
   }
@@ -384,9 +403,12 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
   String _entryLabel(AppLocalizations l10n, _SidebarEntry entry) {
     return switch (entry) {
       _SidebarEntry.core => l10n.heroGroupMainStats,
-      _SidebarEntry.combat => l10n.heroGroupCombatSkills,
+      _SidebarEntry.combat => l10n.heroGroupCombatMovement,
       _SidebarEntry.resistances => l10n.heroGroupResistances,
       _SidebarEntry.thieving => l10n.heroGroupSkills,
+      _SidebarEntry.diving => l10n.heroGroupDiving,
+      _SidebarEntry.sleep => l10n.heroGroupSleep,
+      _SidebarEntry.intoxication => l10n.heroGroupIntoxication,
       _SidebarEntry.advanced => l10n.heroGroupAdvanced,
     };
   }
@@ -397,23 +419,24 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       _SidebarEntry.combat => Icons.shield_outlined,
       _SidebarEntry.resistances => Icons.security_outlined,
       _SidebarEntry.thieving => Icons.military_tech_outlined,
+      _SidebarEntry.diving => Icons.scuba_diving_outlined,
+      _SidebarEntry.sleep => Icons.bedtime_outlined,
+      _SidebarEntry.intoxication => Icons.local_bar_outlined,
       _SidebarEntry.advanced => Icons.tune,
     };
   }
 
   Widget _row(HeroAttribute attribute) {
-    final duplicate = _attributes.where((a) => a.id == attribute.id).length > 1;
-    var label = _displayLabel(attribute);
-    if (duplicate) {
-      final setName = attribute.setClass.split('.').last;
-      label = '$label ($setName)';
-    }
+    final label = _displayLabel(attribute);
+    final tooltip =
+        widget.attributeTooltip?.call(attribute.id, attribute.setClass) ?? '';
     return _HeroAttributeRow(
       // Record key compares reloadKey by its own equality (identity for
       // SaveInspection, which has no == override), not by toString(), so a
       // fresh SaveInspection instance always causes a new row to be built
       // rather than reusing stale field state from the previous load.
       key: ValueKey((widget.reloadKey, attribute.setClass, attribute.id)),
+      tooltip: tooltip,
       attribute: attribute,
       label: label,
       editable: widget.editable,
@@ -436,6 +459,7 @@ class _HeroAttributeRow extends StatefulWidget {
     super.key,
     required this.attribute,
     required this.label,
+    this.tooltip = '',
     required this.editable,
     required this.onBaseChanged,
     required this.onCurrentChanged,
@@ -445,6 +469,9 @@ class _HeroAttributeRow extends StatefulWidget {
 
   final HeroAttribute attribute;
   final String label;
+
+  /// One sentence on what this value does in the game. Empty = no tooltip.
+  final String tooltip;
   final bool editable;
   final ValueChanged<String> onBaseChanged;
   final ValueChanged<String> onCurrentChanged;
@@ -523,10 +550,20 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
               labelText: AppLocalizations.of(context).attributeCurrentValue,
             ),
           );
-          final rowLabel = Text(
-            widget.label,
-            style: Theme.of(context).textTheme.labelLarge,
-          );
+          // The label carries the explanation of what the value does in the
+          // game; rows we have nothing to say about stay plain text.
+          final Widget rowLabel = widget.tooltip.isEmpty
+              ? Text(
+                  widget.label,
+                  style: Theme.of(context).textTheme.labelLarge,
+                )
+              : Tooltip(
+                  message: widget.tooltip,
+                  child: Text(
+                    widget.label,
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                );
           if (compact) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

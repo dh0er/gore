@@ -1,4 +1,4 @@
-import 'hero_attributes.dart' show heroHiddenAttributeIds;
+import 'hero_attributes.dart' show heroAttributeHidden;
 
 /// One pending `private.typed.setValue` edit produced by the NPC attribute
 /// editor. Mirrors [TypedValueEdit] in hero_attributes.dart but kept local so
@@ -37,6 +37,23 @@ class NpcAttributeRow {
 
   /// Attribute name (e.g. `Health`). Doubles as the row label.
   final String key;
+
+  /// The owning `AttributeSet_*` class, recovered from the typed path. The core
+  /// does not send it as its own field, but every row's path carries it — and
+  /// without it the shared policy cannot tell a Fatigue
+  /// `RecoveryRatePerHourOfSleep` (inert) from the Health and Mana ones (real).
+  String? get setClass {
+    for (final path in [basePath, currentPath]) {
+      final index = path.indexOf('AttributeSetsByClass');
+      if (index < 0 || index + 1 >= path.length) continue;
+      var value = path[index + 1].trim();
+      if (value.startsWith('{') && value.endsWith('}')) {
+        value = value.substring(1, value.length - 1);
+      }
+      if (value.isNotEmpty) return value;
+    }
+    return null;
+  }
   final double base;
   final double current;
 
@@ -63,9 +80,11 @@ class NpcAttributesResult {
       attributes: raw
           .whereType<Map>()
           .map((m) => NpcAttributeRow.fromJson(m.cast<String, Object?>()))
-          // Hide the per-weapon critical values from the curated view (same as
-          // the player); they stay editable in the All-data browser.
-          .where((row) => !heroHiddenAttributeIds.contains(row.key))
+          // Hide what the game derives or never reads, same as for the player;
+          // it all stays editable in the All-data browser. The set class has to
+          // come along: `RecoveryRatePerHourOfSleep` is hidden on Fatigue and
+          // kept on Health and Mana.
+          .where((row) => !heroAttributeHidden(row.key, row.setClass))
           .toList(growable: false),
     );
   }

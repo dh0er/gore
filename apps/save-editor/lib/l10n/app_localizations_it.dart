@@ -1741,7 +1741,7 @@ class AppLocalizationsIt extends AppLocalizations {
   String get heroGroupMainStats => 'Statistiche principali';
 
   @override
-  String get heroGroupCombatSkills => 'Abilità di combattimento';
+  String get heroGroupCombatMovement => 'Combattimento / movimento';
 
   @override
   String get heroGroupResistances => 'Resistenze';
@@ -1751,6 +1751,15 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get heroGroupAdvanced => 'Avanzate';
+
+  @override
+  String get heroGroupDiving => 'Immersione';
+
+  @override
+  String get heroGroupSleep => 'Sonno e riposo';
+
+  @override
+  String get heroGroupIntoxication => 'Ebbrezza';
 
   @override
   String get heroEntryHeroTransform => 'Posizione';
@@ -2037,39 +2046,84 @@ class AppLocalizationsIt extends AppLocalizations {
   @override
   String attributeManualFallbackLabel(String attributeId, String fallback) {
     String _temp0 = intl.Intl.selectLogic(attributeId, {
-      'Alcohol': 'Alcol',
-      'AlcoholDepletionRate': 'Tasso di smaltimento dell’alcol',
-      'MaxAlcohol': 'Livello massimo di alcol',
-      'MaxSuperArmor': 'Super armatura massima',
-      'SuperArmor': 'Super armatura',
-      'Fatigue': 'Fatica',
-      'FillRatio': 'Rapporto di riempimento',
-      'FillRatioPeriod': 'Periodo di riempimento',
-      'MaxFatigue': 'Fatica massima',
-      'MaxThresholdIndex': 'Indice soglia massimo',
-      'RecoveryRatePerHourOfSleep': 'Recupero per ora di sonno',
-      'DamageMultiplier': 'Moltiplicatore danni',
-      'Toughness': 'Tenacia',
-      'ToughnessA': 'Tenacia A',
-      'ToughnessB': 'Tenacia B',
-      'ToughnessC': 'Tenacia C',
-      'XPExecutedBounty': 'Ricompensa PE per esecuzione',
-      'XPKillOrDefeatBounty': 'Ricompensa PE per uccisione o sconfitta',
-      'SpeedModifier': 'Modificatore velocità',
-      'CriticalLevelPercent': 'Livello critico (%)',
-      'MaxOxygen': 'Ossigeno massimo',
-      'Oxygen': 'Ossigeno',
-      'OxygenDepletionRate': 'Tasso di consumo dell’ossigeno',
-      'OxygenRecoveryRate': 'Tasso di recupero dell’ossigeno',
-      'MaxRestTime': 'Tempo massimo di riposo',
-      'MaxSleepTime': 'Tempo massimo di sonno',
-      'SleepTime': 'Tempo di sonno',
-      'SleepTimeRecoveryAmount': 'Quantità recuperata durante il sonno',
-      'SleepTimeRecoveryPeriod': 'Intervallo di recupero durante il sonno',
-      'MaxSwampweed': 'Quantità massima di erba palustre',
-      'Swampweed': 'Erba palustre',
-      'SwampweedDepletionRate': 'Tasso di consumo dell’erba palustre',
+      'SuperArmor': 'Equilibrio',
+      'MaxSuperArmor': 'Equilibrio max.',
+      'DamageMultiplier': 'Danno subito',
+      'SpeedModifier': 'Velocità di movimento',
+      'Oxygen': 'Fiato',
+      'MaxOxygen': 'Fiato max.',
+      'OxygenDepletionRate': 'Fiato consumato al secondo',
+      'OxygenRecoveryRate': 'Fiato recuperato al secondo',
+      'CriticalLevelPercent': 'Avviso di fiato basso',
+      'SleepTime': 'Ore di riposo rimaste',
+      'MaxSleepTime': 'Ore di riposo max.',
+      'SleepTimeRecoveryAmount': 'Ore di riposo recuperate',
+      'SleepTimeRecoveryPeriod': 'Intervallo di ricarica',
+      'MaxRestTime': 'Tempo max. a letto',
+      'Health_RecoveryRatePerHourOfSleep': 'Vita per ora di sonno',
+      'Mana_RecoveryRatePerHourOfSleep': 'Mana per ora di sonno',
+      'Alcohol': 'Livello di alcol',
+      'MaxAlcohol': 'Livello di alcol max.',
+      'AlcoholDepletionRate': 'Smaltimento dell\'alcol',
+      'Swampweed': 'Livello di erba palustre',
+      'MaxSwampweed': 'Erba palustre max.',
+      'SwampweedDepletionRate': 'Smaltimento dell\'erba',
+      'XPExecutedBounty': 'PE per il colpo di grazia',
+      'XPKillOrDefeatBounty': 'PE per sconfiggere',
       'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String attributeManualTooltip(String attributeId) {
+    String _temp0 = intl.Intl.selectLogic(attributeId, {
+      'SuperArmor':
+          'Quanto incassa questo personaggio prima che un colpo lo faccia barcollare.',
+      'MaxSuperArmor':
+          'La riserva completa di equilibrio; cresce con il livello e con l\'armatura indossata.',
+      'DamageMultiplier':
+          'Fattore applicato al danno che questo personaggio subisce: 1 è normale, valori più alti fanno più male.',
+      'SpeedModifier':
+          'Fattore sulla velocità con cui questo personaggio si muove: 1 è normale.',
+      'Oxygen':
+          'Secondi d\'aria rimasti sott\'acqua; a zero questo personaggio annega.',
+      'MaxOxygen':
+          'Per quanti secondi questo personaggio può restare sott\'acqua; l\'abilità Immersione lo aumenta.',
+      'OxygenDepletionRate': 'Aria consumata ogni secondo sott\'acqua.',
+      'OxygenRecoveryRate': 'Aria che torna ogni secondo dopo essere riemersi.',
+      'CriticalLevelPercent':
+          'Percentuale d\'aria residua alla quale il gioco avverte del pericolo di annegamento.',
+      'SleepTime':
+          'Ore di sonno che danno ancora un beneficio; oltre quelle il gioco non concede più alcun recupero.',
+      'MaxSleepTime':
+          'La riserva massima di ore di riposo che questo personaggio può accumulare.',
+      'SleepTimeRecoveryAmount': 'Ore di riposo che tornano a ogni ricarica.',
+      'SleepTimeRecoveryPeriod':
+          'Quanto tempo passa prima che la riserva di ore di riposo si ricarichi.',
+      'MaxRestTime':
+          'Il tempo più lungo che si può passare a letto in una volta sola.',
+      'Health_RecoveryRatePerHourOfSleep':
+          'Quota della vita massima che torna per ogni ora dormita.',
+      'Mana_RecoveryRatePerHourOfSleep':
+          'Quota del mana massimo che torna per ogni ora dormita.',
+      'Alcohol':
+          'Quanto è ubriaco questo personaggio; ai livelli più alti scambia destrezza e mana con forza.',
+      'MaxAlcohol':
+          'Il livello di alcol più alto che questo personaggio può raggiungere.',
+      'AlcoholDepletionRate':
+          'Quanto in fretta il livello di alcol scende di nuovo verso la sobrietà.',
+      'Swampweed':
+          'Quanto è sballato questo personaggio; ai livelli più alti i suoi valori si spostano.',
+      'MaxSwampweed':
+          'Il livello di erba palustre più alto che questo personaggio può raggiungere.',
+      'SwampweedDepletionRate':
+          'Quanto in fretta svanisce lo sballo da erba palustre.',
+      'XPExecutedBounty':
+          'Esperienza per uccidere questo personaggio mentre giace già sconfitto a terra.',
+      'XPKillOrDefeatBounty':
+          'Esperienza per abbattere questo personaggio, che muoia o resti soltanto privo di sensi.',
+      'other': '?',
     });
     return '$_temp0';
   }

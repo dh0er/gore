@@ -1745,7 +1745,7 @@ class AppLocalizationsFr extends AppLocalizations {
   String get heroGroupMainStats => 'Statistiques principales';
 
   @override
-  String get heroGroupCombatSkills => 'Compétences de combat';
+  String get heroGroupCombatMovement => 'Combat / déplacement';
 
   @override
   String get heroGroupResistances => 'Résistances';
@@ -1755,6 +1755,15 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get heroGroupAdvanced => 'Avancé';
+
+  @override
+  String get heroGroupDiving => 'Plongée';
+
+  @override
+  String get heroGroupSleep => 'Sommeil et repos';
+
+  @override
+  String get heroGroupIntoxication => 'Ivresse';
 
   @override
   String get heroEntryHeroTransform => 'Position';
@@ -2044,41 +2053,86 @@ class AppLocalizationsFr extends AppLocalizations {
   @override
   String attributeManualFallbackLabel(String attributeId, String fallback) {
     String _temp0 = intl.Intl.selectLogic(attributeId, {
-      'Alcohol': 'Alcool',
-      'AlcoholDepletionRate': 'Taux d’élimination de l’alcool',
-      'MaxAlcohol': 'Niveau maximal d’alcool',
-      'MaxSuperArmor': 'Super-armure maximale',
-      'SuperArmor': 'Super-armure',
-      'Fatigue': 'Fatigue',
-      'FillRatio': 'Taux de remplissage',
-      'FillRatioPeriod': 'Période de remplissage',
-      'MaxFatigue': 'Fatigue maximale',
-      'MaxThresholdIndex': 'Indice de seuil maximal',
-      'RecoveryRatePerHourOfSleep': 'Récupération par heure de sommeil',
-      'DamageMultiplier': 'Multiplicateur de dégâts',
-      'Toughness': 'Robustesse',
-      'ToughnessA': 'Robustesse A',
-      'ToughnessB': 'Robustesse B',
-      'ToughnessC': 'Robustesse C',
-      'XPExecutedBounty': 'Récompense d’EXP pour une exécution',
-      'XPKillOrDefeatBounty':
-          'Récompense d’EXP pour une élimination ou une défaite',
-      'SpeedModifier': 'Modificateur de vitesse',
-      'CriticalLevelPercent': 'Niveau critique (%)',
-      'MaxOxygen': 'Oxygène maximal',
-      'Oxygen': 'Oxygène',
-      'OxygenDepletionRate': 'Taux d’épuisement de l’oxygène',
-      'OxygenRecoveryRate': 'Taux de récupération de l’oxygène',
-      'MaxRestTime': 'Temps de repos maximal',
-      'MaxSleepTime': 'Temps de sommeil maximal',
-      'SleepTime': 'Temps de sommeil',
-      'SleepTimeRecoveryAmount': 'Quantité récupérée pendant le sommeil',
-      'SleepTimeRecoveryPeriod':
-          'Intervalle de récupération pendant le sommeil',
-      'MaxSwampweed': 'Quantité maximale d’herbe des marais',
-      'Swampweed': 'Herbe des marais',
-      'SwampweedDepletionRate': 'Taux d’épuisement de l’herbe des marais',
+      'SuperArmor': 'Stabilité',
+      'MaxSuperArmor': 'Stabilité max.',
+      'DamageMultiplier': 'Dégâts subis',
+      'SpeedModifier': 'Vitesse de déplacement',
+      'Oxygen': 'Souffle',
+      'MaxOxygen': 'Souffle max.',
+      'OxygenDepletionRate': 'Air consommé par seconde',
+      'OxygenRecoveryRate': 'Air récupéré par seconde',
+      'CriticalLevelPercent': 'Seuil d\'alerte du souffle',
+      'SleepTime': 'Heures de repos restantes',
+      'MaxSleepTime': 'Heures de repos max.',
+      'SleepTimeRecoveryAmount': 'Heures de repos rendues',
+      'SleepTimeRecoveryPeriod': 'Intervalle de recharge',
+      'MaxRestTime': 'Temps max. au lit',
+      'Health_RecoveryRatePerHourOfSleep': 'Vie par heure de sommeil',
+      'Mana_RecoveryRatePerHourOfSleep': 'Mana par heure de sommeil',
+      'Alcohol': 'Taux d\'alcool',
+      'MaxAlcohol': 'Taux d\'alcool max.',
+      'AlcoholDepletionRate': 'Vitesse de dégrisement',
+      'Swampweed': 'Niveau d\'herbe des marais',
+      'MaxSwampweed': 'Herbe des marais max.',
+      'SwampweedDepletionRate': 'Vitesse de dissipation',
+      'XPExecutedBounty': 'XP pour le coup de grâce',
+      'XPKillOrDefeatBounty': 'XP pour vaincre',
       'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String attributeManualTooltip(String attributeId) {
+    String _temp0 = intl.Intl.selectLogic(attributeId, {
+      'SuperArmor':
+          'Ce que ce personnage encaisse avant qu\'un coup ne le déséquilibre.',
+      'MaxSuperArmor':
+          'La réserve complète de stabilité ; elle augmente avec le niveau et avec l\'armure portée.',
+      'DamageMultiplier':
+          'Facteur appliqué aux dégâts que subit ce personnage — 1 est la normale, plus haut fait plus mal.',
+      'SpeedModifier':
+          'Facteur appliqué à la vitesse de déplacement de ce personnage — 1 est la normale.',
+      'Oxygen':
+          'Secondes d\'air qu\'il reste sous l\'eau ; à zéro, ce personnage se noie.',
+      'MaxOxygen':
+          'Combien de secondes ce personnage peut rester sous l\'eau ; le talent Plongée augmente cette durée.',
+      'OxygenDepletionRate': 'Air consommé chaque seconde sous l\'eau.',
+      'OxygenRecoveryRate':
+          'Air qui revient chaque seconde une fois de retour à la surface.',
+      'CriticalLevelPercent':
+          'Part d\'air restant à partir de laquelle le jeu prévient du risque de noyade.',
+      'SleepTime':
+          'Heures de sommeil qui apportent encore quelque chose ; au-delà, le jeu n\'accorde plus de récupération.',
+      'MaxSleepTime':
+          'La plus grande réserve d\'heures de repos que ce personnage peut avoir.',
+      'SleepTimeRecoveryAmount':
+          'Heures de repos qui reviennent à chaque recharge.',
+      'SleepTimeRecoveryPeriod':
+          'Le temps qu\'il faut pour que la réserve d\'heures de repos se remplisse à nouveau.',
+      'MaxRestTime':
+          'La plus longue durée que le jeu autorise à passer au lit d\'une traite.',
+      'Health_RecoveryRatePerHourOfSleep':
+          'Part des points de vie maximum rendue pour chaque heure de sommeil.',
+      'Mana_RecoveryRatePerHourOfSleep':
+          'Part du mana maximum rendue pour chaque heure de sommeil.',
+      'Alcohol':
+          'À quel point ce personnage est ivre ; aux paliers élevés, il échange dextérité et mana contre de la force.',
+      'MaxAlcohol':
+          'Le taux d\'alcool le plus élevé que ce personnage peut atteindre.',
+      'AlcoholDepletionRate':
+          'À quelle vitesse le taux d\'alcool redescend vers la sobriété.',
+      'Swampweed':
+          'À quel point ce personnage plane ; aux paliers élevés, ses caractéristiques sont chamboulées.',
+      'MaxSwampweed':
+          'Le niveau d\'herbe des marais le plus élevé que ce personnage peut atteindre.',
+      'SwampweedDepletionRate':
+          'À quelle vitesse l\'effet de l\'herbe des marais se dissipe.',
+      'XPExecutedBounty':
+          'Expérience obtenue en achevant ce personnage alors qu\'il est déjà vaincu, à terre.',
+      'XPKillOrDefeatBounty':
+          'Expérience obtenue en mettant ce personnage à terre, qu\'il en meure ou qu\'il reste seulement assommé.',
+      'other': '?',
     });
     return '$_temp0';
   }

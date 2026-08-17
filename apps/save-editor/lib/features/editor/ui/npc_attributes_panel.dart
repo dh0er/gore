@@ -88,6 +88,7 @@ class NpcAttributesPanel extends StatefulWidget {
     this.initialPending,
     this.skillsSection,
     this.attributeLabel,
+    this.attributeTooltip,
   });
 
   final Future<NpcAttributesResult> Function() load;
@@ -126,6 +127,9 @@ class NpcAttributesPanel extends StatefulWidget {
   /// available.
   final AttributeLabelResolver? attributeLabel;
 
+  /// Resolves an attribute to a one-sentence explanation for its label tooltip.
+  final AttributeLabelResolver? attributeTooltip;
+
   @override
   State<NpcAttributesPanel> createState() => _NpcAttributesPanelState();
 }
@@ -152,10 +156,13 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
   String _groupTitle(AppLocalizations l10n, HeroAttributeGroup g) =>
       switch (g) {
         HeroAttributeGroup.core => l10n.heroGroupMainStats,
-        HeroAttributeGroup.combat => l10n.heroGroupCombatSkills,
+        HeroAttributeGroup.combat => l10n.heroGroupCombatMovement,
         HeroAttributeGroup.resistances => l10n.heroGroupResistances,
         // NPC thieving group is repurposed to host the skills editor.
         HeroAttributeGroup.thieving => l10n.heroGroupSkills,
+        HeroAttributeGroup.diving => l10n.heroGroupDiving,
+        HeroAttributeGroup.sleep => l10n.heroGroupSleep,
+        HeroAttributeGroup.intoxication => l10n.heroGroupIntoxication,
         HeroAttributeGroup.advanced => l10n.heroGroupAdvanced,
       };
 
@@ -164,6 +171,9 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
     HeroAttributeGroup.combat => Icons.shield_outlined,
     HeroAttributeGroup.resistances => Icons.security_outlined,
     HeroAttributeGroup.thieving => Icons.military_tech_outlined,
+    HeroAttributeGroup.diving => Icons.scuba_diving_outlined,
+    HeroAttributeGroup.sleep => Icons.bedtime_outlined,
+    HeroAttributeGroup.intoxication => Icons.local_bar_outlined,
     HeroAttributeGroup.advanced => Icons.tune,
   };
 
@@ -173,14 +183,18 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
     final byGroup = <HeroAttributeGroup, List<NpcAttributeRow>>{};
     for (final attribute in _attributes) {
       byGroup
-          .putIfAbsent(heroAttributeGroup(attribute.key), () => [])
+          .putIfAbsent(
+            heroAttributeGroup(attribute.key, attribute.setClass),
+            () => [],
+          )
           .add(attribute);
     }
     for (final rows in byGroup.values) {
       rows.sort((a, b) {
         final rank = heroAttributeRank(
           a.key,
-        ).compareTo(heroAttributeRank(b.key));
+          a.setClass,
+        ).compareTo(heroAttributeRank(b.key, b.setClass));
         return rank != 0 ? rank : a.key.compareTo(b.key);
       });
     }
@@ -425,6 +439,9 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
               key: ValueKey((widget.reloadKey, a.key, a.basePath)),
               attribute: a,
               label: _displayLabel(a),
+              tooltip:
+                  widget.attributeTooltip?.call(a.key, a.setClass) ??
+                  '',
               editable: widget.editable,
               initialBaseText: _pending[_pathKey(a.basePath)],
               initialCurrentText: _pending[_pathKey(a.currentPath)],
@@ -459,22 +476,9 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
   String _displayLabel(NpcAttributeRow attribute) =>
       widget.attributeLabel?.call(
         attribute.key,
-        _setClassFromPaths(attribute),
+        attribute.setClass,
       ) ??
       heroAttributeLabel(attribute.key);
-
-  String? _setClassFromPaths(NpcAttributeRow attribute) {
-    for (final path in [attribute.basePath, attribute.currentPath]) {
-      final index = path.indexOf('AttributeSetsByClass');
-      if (index < 0 || index + 1 >= path.length) continue;
-      var value = path[index + 1].trim();
-      if (value.startsWith('{') && value.endsWith('}')) {
-        value = value.substring(1, value.length - 1);
-      }
-      if (value.isNotEmpty) return value;
-    }
-    return null;
-  }
 
   /// The NPC Status row shown as the FIRST entry of the core ("Hauptwerte")
   /// group detail: `Status <lebend|tot>` on the left and a **Wiederbeleben**
@@ -575,6 +579,7 @@ class _NpcAttributeRow extends StatefulWidget {
     super.key,
     required this.attribute,
     required this.label,
+    this.tooltip = '',
     required this.editable,
     required this.onBaseChanged,
     required this.onCurrentChanged,
@@ -584,6 +589,9 @@ class _NpcAttributeRow extends StatefulWidget {
 
   final NpcAttributeRow attribute;
   final String label;
+
+  /// One sentence on what this value does in the game. Empty = no tooltip.
+  final String tooltip;
   final bool editable;
   final ValueChanged<String> onBaseChanged;
   final ValueChanged<String> onCurrentChanged;
@@ -651,10 +659,20 @@ class _NpcAttributeRowState extends State<_NpcAttributeRow> {
               labelText: AppLocalizations.of(context).attributeCurrentValue,
             ),
           );
-          final rowLabel = Text(
-            widget.label,
-            style: Theme.of(context).textTheme.labelLarge,
-          );
+          // The label carries the explanation of what the value does in the
+          // game; rows we have nothing to say about stay plain text.
+          final Widget rowLabel = widget.tooltip.isEmpty
+              ? Text(
+                  widget.label,
+                  style: Theme.of(context).textTheme.labelLarge,
+                )
+              : Tooltip(
+                  message: widget.tooltip,
+                  child: Text(
+                    widget.label,
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                );
           if (compact) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
