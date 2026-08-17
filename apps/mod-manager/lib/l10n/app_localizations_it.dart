@@ -66,6 +66,23 @@ class AppLocalizationsIt extends AppLocalizations {
   String get preflightReviewStatus => 'Controlla stato';
 
   @override
+  String get preflightReviewRecovery => 'Guida';
+
+  @override
+  String get installRecoveryTitle => 'Ripristino dell’installazione';
+
+  @override
+  String get installRecoveryBody =>
+      'GORE ha trovato dati di ripristino relativi a un’installazione o a una compilazione di script. L’operazione associata potrebbe essere ancora in corso, oppure i dati potrebbero provenire da un’operazione già terminata. GORE non può eseguire una riparazione automatica in sicurezza.';
+
+  @override
+  String get installRecoverySteps =>
+      'Se l’operazione associata è ancora in corso, attendi che termini. Non interromperla e non eliminare alcun file di blocco. Segui il file README.txt nella cartella di ripristino indicata qui sotto solo quando sei certo che non sia in corso alcuna operazione associata. Se non è indicata alcuna cartella o hai dubbi, lascia invariati i dati di ripristino e chiedi assistenza. Poi controlla di nuovo.';
+
+  @override
+  String get installRecoveryEvidence => 'Dati di ripristino rilevati';
+
+  @override
   String get statusUnknown => 'Sconosciuto';
 
   @override

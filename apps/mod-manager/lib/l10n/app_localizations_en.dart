@@ -65,6 +65,23 @@ class AppLocalizationsEn extends AppLocalizations {
   String get preflightReviewStatus => 'Review status';
 
   @override
+  String get preflightReviewRecovery => 'Recovery help';
+
+  @override
+  String get installRecoveryTitle => 'Installation recovery';
+
+  @override
+  String get installRecoveryBody =>
+      'GORE found recovery data for an installation or script build. The related operation may still be running, or the data may be left over from an operation that has ended. GORE cannot safely repair this automatically.';
+
+  @override
+  String get installRecoverySteps =>
+      'If the related operation is still running, wait for it to finish. Do not stop it or delete any lock files. Only after you are sure that no related operation is running, follow README.txt in the recovery folder below. If no folder is listed or you are unsure, leave the recovery data unchanged and get help. Then check again.';
+
+  @override
+  String get installRecoveryEvidence => 'Detected recovery data';
+
+  @override
   String get statusUnknown => 'Unknown';
 
   @override

@@ -67,6 +67,23 @@ class AppLocalizationsFr extends AppLocalizations {
   String get preflightReviewStatus => 'Vérifier l’état';
 
   @override
+  String get preflightReviewRecovery => 'Aide';
+
+  @override
+  String get installRecoveryTitle => 'Récupération de l’installation';
+
+  @override
+  String get installRecoveryBody =>
+      'GORE a trouvé des données de récupération liées à une installation ou à une compilation de scripts. L’opération correspondante est peut-être encore en cours, ou ces données proviennent d’une opération déjà terminée. GORE ne peut pas effectuer une réparation automatique en toute sécurité.';
+
+  @override
+  String get installRecoverySteps =>
+      'Si l’opération correspondante est encore en cours, attendez qu’elle se termine. Ne l’arrêtez pas et ne supprimez aucun fichier de verrouillage. Suivez le fichier README.txt dans le dossier de récupération indiqué ci-dessous uniquement lorsque vous êtes certain qu’aucune opération correspondante n’est en cours. Si aucun dossier n’est indiqué ou si vous avez un doute, laissez les données de récupération inchangées et demandez de l’aide. Vérifiez ensuite à nouveau.';
+
+  @override
+  String get installRecoveryEvidence => 'Données de récupération détectées';
+
+  @override
   String get statusUnknown => 'Inconnu';
 
   @override

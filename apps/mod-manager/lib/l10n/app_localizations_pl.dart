@@ -66,6 +66,23 @@ class AppLocalizationsPl extends AppLocalizations {
   String get preflightReviewStatus => 'Sprawdź stan';
 
   @override
+  String get preflightReviewRecovery => 'Pomoc';
+
+  @override
+  String get installRecoveryTitle => 'Odzyskiwanie instalacji';
+
+  @override
+  String get installRecoveryBody =>
+      'GORE znalazł dane odzyskiwania związane z instalacją lub kompilacją skryptów. Powiązana operacja może nadal trwać albo dane mogły pozostać po jej zakończeniu. GORE nie może bezpiecznie przeprowadzić automatycznej naprawy.';
+
+  @override
+  String get installRecoverySteps =>
+      'Jeśli powiązana operacja nadal trwa, poczekaj na jej zakończenie. Nie zatrzymuj jej ani nie usuwaj żadnych plików blokady. Postępuj zgodnie z plikiem README.txt w folderze odzyskiwania wskazanym poniżej dopiero wtedy, gdy masz pewność, że żadna powiązana operacja już nie działa. Jeśli nie wskazano folderu lub nie masz pewności, pozostaw dane odzyskiwania bez zmian i poproś o pomoc. Następnie sprawdź ponownie.';
+
+  @override
+  String get installRecoveryEvidence => 'Wykryte dane odzyskiwania';
+
+  @override
   String get statusUnknown => 'Nieznany';
 
   @override

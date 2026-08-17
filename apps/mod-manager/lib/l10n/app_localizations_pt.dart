@@ -66,6 +66,23 @@ class AppLocalizationsPt extends AppLocalizations {
   String get preflightReviewStatus => 'Verificar estado';
 
   @override
+  String get preflightReviewRecovery => 'Ajuda';
+
+  @override
+  String get installRecoveryTitle => 'Recuperação da instalação';
+
+  @override
+  String get installRecoveryBody =>
+      'O GORE encontrou dados de recuperação associados a uma instalação ou a uma compilação de scripts. A operação associada pode ainda estar em execução, ou estes dados podem ser restos de uma operação já terminada. O GORE não pode efetuar uma reparação automática em segurança.';
+
+  @override
+  String get installRecoverySteps =>
+      'Se a operação associada ainda estiver em execução, aguarde que termine. Não a interrompa nem elimine nenhum ficheiro de bloqueio. Siga o ficheiro README.txt na pasta de recuperação indicada abaixo apenas quando tiver a certeza de que nenhuma operação associada está em execução. Se não for indicada nenhuma pasta ou se tiver dúvidas, deixe os dados de recuperação inalterados e peça ajuda. Depois, verifique novamente.';
+
+  @override
+  String get installRecoveryEvidence => 'Dados de recuperação detetados';
+
+  @override
   String get statusUnknown => 'Desconhecido';
 
   @override
@@ -586,6 +603,23 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get preflightReviewStatus => 'Verificar status';
+
+  @override
+  String get preflightReviewRecovery => 'Ajuda';
+
+  @override
+  String get installRecoveryTitle => 'Recuperação da instalação';
+
+  @override
+  String get installRecoveryBody =>
+      'O GORE encontrou dados de recuperação associados a uma instalação ou a uma compilação de scripts. A operação associada talvez ainda esteja em execução, ou esses dados podem ser restos de uma operação já encerrada. O GORE não pode fazer um reparo automático com segurança.';
+
+  @override
+  String get installRecoverySteps =>
+      'Se a operação associada ainda estiver em execução, espere até que termine. Não a interrompa nem exclua nenhum arquivo de bloqueio. Siga o arquivo README.txt na pasta de recuperação indicada abaixo somente quando tiver certeza de que nenhuma operação associada está em execução. Se nenhuma pasta for indicada ou se você não tiver certeza, deixe os dados de recuperação inalterados e peça ajuda. Depois, verifique novamente.';
+
+  @override
+  String get installRecoveryEvidence => 'Dados de recuperação detectados';
 
   @override
   String get statusUnknown => 'Desconhecido';

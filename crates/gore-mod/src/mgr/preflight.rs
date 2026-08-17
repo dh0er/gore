@@ -2996,11 +2996,18 @@ mod tests {
             disposition: InstallCompileStateDisposition::RecoveryArtifactsPresent,
             safe_to_compile: false,
             game_process: InstallCompileGameProcessDisposition::NotRunning,
-            artifacts: vec![InstallCompileArtifact {
-                kind: InstallCompileArtifactKind::CompileLock,
-                path: "C:/game/.gore-as-compile.lock".to_owned(),
-                path_truncated: false,
-            }],
+            artifacts: vec![
+                InstallCompileArtifact {
+                    kind: InstallCompileArtifactKind::InstallMutationLock,
+                    path: "C:/game/.gore-install-mutation.lock".to_owned(),
+                    path_truncated: false,
+                },
+                InstallCompileArtifact {
+                    kind: InstallCompileArtifactKind::CompileLock,
+                    path: "C:/game/.gore-as-compile.lock".to_owned(),
+                    path_truncated: false,
+                },
+            ],
             issues: Vec::new(),
         };
         let state = run_with(
@@ -3014,6 +3021,50 @@ mod tests {
         assert_eq!(state.checks[3].action, "wait_for_install_mutation");
         assert_eq!(state.checks[4].code, "install_mutation_lock_present");
         assert_eq!(state.checks[4].action, "wait_for_install_mutation");
+
+        let retained_recovery = InstallCompileStateProbe {
+            disposition: InstallCompileStateDisposition::RecoveryArtifactsPresent,
+            safe_to_compile: false,
+            game_process: InstallCompileGameProcessDisposition::NotRunning,
+            artifacts: vec![
+                InstallCompileArtifact {
+                    kind: InstallCompileArtifactKind::InstallMutationLock,
+                    path: "C:/game/.gore-install-mutation.lock".to_owned(),
+                    path_truncated: false,
+                },
+                InstallCompileArtifact {
+                    kind: InstallCompileArtifactKind::CompileLock,
+                    path: "C:/game/.gore-as-compile.lock".to_owned(),
+                    path_truncated: false,
+                },
+                InstallCompileArtifact {
+                    kind: InstallCompileArtifactKind::RecoveryJournal,
+                    path: "C:/game/.gore-as-compile-recovery".to_owned(),
+                    path_truncated: false,
+                },
+                InstallCompileArtifact {
+                    kind: InstallCompileArtifactKind::ShippingCacheBackup,
+                    path: "C:/game/PrecompiledScript_Shipping.Cache.gore-compile-bak".to_owned(),
+                    path_truncated: false,
+                },
+            ],
+            issues: Vec::new(),
+        };
+        let state = run_with(
+            install.path(),
+            &install.path().join("library"),
+            &install.path().join("loadout.json"),
+            |_, _, _| Ok(ManagerStatus::RecoveryRequired),
+            |_| retained_recovery.clone(),
+            |_| Ok(false),
+        );
+        assert_eq!(state.checks[3].action, "wait_for_install_mutation");
+        assert_eq!(state.checks[4].code, "install_mutation_lock_present");
+        assert_eq!(state.checks[4].action, "wait_for_install_mutation");
+        assert!(state.checks[4]
+            .items
+            .iter()
+            .any(|item| item.contains(".gore-as-compile-recovery")));
 
         let recovery_artifact = InstallCompileStateProbe {
             disposition: InstallCompileStateDisposition::RecoveryArtifactsPresent,

@@ -212,6 +212,36 @@ abstract class AppLocalizations {
   /// **'Review status'**
   String get preflightReviewStatus;
 
+  /// No description provided for @preflightReviewRecovery.
+  ///
+  /// In en, this message translates to:
+  /// **'Recovery help'**
+  String get preflightReviewRecovery;
+
+  /// No description provided for @installRecoveryTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Installation recovery'**
+  String get installRecoveryTitle;
+
+  /// No description provided for @installRecoveryBody.
+  ///
+  /// In en, this message translates to:
+  /// **'GORE found recovery data for an installation or script build. The related operation may still be running, or the data may be left over from an operation that has ended. GORE cannot safely repair this automatically.'**
+  String get installRecoveryBody;
+
+  /// No description provided for @installRecoverySteps.
+  ///
+  /// In en, this message translates to:
+  /// **'If the related operation is still running, wait for it to finish. Do not stop it or delete any lock files. Only after you are sure that no related operation is running, follow README.txt in the recovery folder below. If no folder is listed or you are unsure, leave the recovery data unchanged and get help. Then check again.'**
+  String get installRecoverySteps;
+
+  /// No description provided for @installRecoveryEvidence.
+  ///
+  /// In en, this message translates to:
+  /// **'Detected recovery data'**
+  String get installRecoveryEvidence;
+
   /// Deployment status is unavailable or uses an unsupported future state.
   ///
   /// In en, this message translates to:

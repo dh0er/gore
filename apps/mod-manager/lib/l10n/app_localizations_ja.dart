@@ -62,6 +62,23 @@ class AppLocalizationsJa extends AppLocalizations {
   String get preflightReviewStatus => '状態を確認';
 
   @override
+  String get preflightReviewRecovery => '復旧方法';
+
+  @override
+  String get installRecoveryTitle => 'インストールの復旧';
+
+  @override
+  String get installRecoveryBody =>
+      'GORE は、インストールまたはスクリプトビルドに関する復旧データを検出しました。関連する処理がまだ実行中か、処理の終了後にデータだけが残っている可能性があります。GORE はこれを安全に自動修復できません。';
+
+  @override
+  String get installRecoverySteps =>
+      '関連する処理がまだ実行中の場合は、完了するまで待ってください。その処理を停止したり、ロックファイルを削除したりしないでください。関連する処理が実行されていないことを確実に確認してから、下に表示された復旧フォルダー内の README.txt に従ってください。フォルダーが表示されない場合や確信が持てない場合は、復旧データを変更せず、サポートを求めてください。その後、もう一度確認してください。';
+
+  @override
+  String get installRecoveryEvidence => '検出された復旧データ';
+
+  @override
   String get statusUnknown => '不明';
 
   @override

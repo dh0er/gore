@@ -60,6 +60,23 @@ class AppLocalizationsZh extends AppLocalizations {
   String get preflightReviewStatus => '检查状态';
 
   @override
+  String get preflightReviewRecovery => '恢复帮助';
+
+  @override
+  String get installRecoveryTitle => '恢复安装';
+
+  @override
+  String get installRecoveryBody =>
+      'GORE 检测到与安装或脚本构建有关的恢复数据。相关操作可能仍在运行，也可能已经结束但留下了这些数据。GORE 无法安全地自动修复。';
+
+  @override
+  String get installRecoverySteps =>
+      '如果相关操作仍在运行，请等待它完成。不要终止该操作，也不要删除任何锁文件。只有在确认没有相关操作仍在运行后，才按照下方恢复文件夹中的 README.txt 操作。如果未列出文件夹或无法确定，请保持恢复数据不变并寻求帮助。然后重新检查。';
+
+  @override
+  String get installRecoveryEvidence => '检测到的恢复数据';
+
+  @override
   String get statusUnknown => '未知';
 
   @override
@@ -542,6 +559,23 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get preflightReviewStatus => '检查状态';
+
+  @override
+  String get preflightReviewRecovery => '恢复帮助';
+
+  @override
+  String get installRecoveryTitle => '恢复安装';
+
+  @override
+  String get installRecoveryBody =>
+      'GORE 检测到与安装或脚本构建有关的恢复数据。相关操作可能仍在运行，也可能已经结束但留下了这些数据。GORE 无法安全地自动修复。';
+
+  @override
+  String get installRecoverySteps =>
+      '如果相关操作仍在运行，请等待它完成。不要终止该操作，也不要删除任何锁文件。只有在确认没有相关操作仍在运行后，才按照下方恢复文件夹中的 README.txt 操作。如果未列出文件夹或无法确定，请保持恢复数据不变并寻求帮助。然后重新检查。';
+
+  @override
+  String get installRecoveryEvidence => '检测到的恢复数据';
 
   @override
   String get statusUnknown => '未知';

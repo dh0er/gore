@@ -12,6 +12,7 @@ import 'package:gore_manager/core/core_service.dart';
 import 'package:gore_manager/core/providers.dart';
 import 'package:gore_manager/home_page.dart';
 import 'package:gore_manager/l10n/app_localizations.dart';
+import 'package:gore_manager/preflight/domain/preflight_notifier.dart';
 import 'package:path/path.dart' as p;
 
 const _exeA = 'C:/games/a/G1R/Binaries/Win64/G1R-Win64-Shipping.exe';
@@ -40,6 +41,7 @@ Map<String, Object?> _preflight({
   String findingState = 'problem',
   String findingAction = 'none',
   String findingDetail = 'Setup evidence needs attention.',
+  List<String> findingItems = const [],
   String deploymentState = 'ok',
   String deploymentAction = 'none',
 }) {
@@ -80,7 +82,7 @@ Map<String, Object?> _preflight({
                 ? 'verify_during_apply'
                 : 'none',
             'detail': id == findingId ? findingDetail : 'ready: $id',
-            'items': <String>[],
+            'items': id == findingId ? findingItems : <String>[],
           },
       ],
     },
@@ -402,6 +404,16 @@ void main() {
       action: 'recover_deployment',
       key: 'preflight-status-action',
     ),
+    (
+      name: 'Recovery',
+      action: 'recover_install',
+      key: 'preflight-install-recovery-action',
+    ),
+    (
+      name: 'Install wait',
+      action: 'wait_for_install_mutation',
+      key: 'preflight-install-recovery-action',
+    ),
   ]) {
     testWidgets(
       'Retry does not restore focus when the result routes to ${transition.name}',
@@ -581,6 +593,279 @@ void main() {
     expect(core.count('mgr_undeploy_all'), 0);
   });
 
+  testWidgets(
+    'install recovery opens bounded manual guidance and never mutates',
+    (tester) async {
+      final core = _PreflightCore(
+        status: const {'state': 'recovery_required'},
+        preflight: _preflight(
+          findingId: 'install_mutation',
+          findingAction: 'recover_install',
+          findingDetail: 'A script build left recovery data behind.',
+          findingItems: const [
+            'recovery_journal: C:/games/a/.gore-as-compile-recovery',
+            'shipping_cache_backup: C:/games/a/cache.gore-compile-bak',
+          ],
+        ),
+      );
+      await tester.pumpWidget(_home(core));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('preflight-install-recovery-action')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('preflight-retry-action')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('preflight-status-action')),
+        findsNothing,
+      );
+
+      await tester.tap(
+        find.byKey(const ValueKey('preflight-install-recovery-action')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('preflight-install-recovery-dialog')),
+        findsOneWidget,
+      );
+      expect(find.text('Installation recovery'), findsOneWidget);
+      expect(find.textContaining('.gore-as-compile-recovery'), findsOneWidget);
+      expect(core.count('mgr_apply'), 0);
+      expect(core.count('mgr_undeploy_all'), 0);
+
+      await tester.tap(
+        find.byKey(const ValueKey('preflight-install-recovery-retry')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(core.count('mgr_preflight_v1'), 2);
+      expect(core.count('mgr_apply'), 0);
+      expect(core.count('mgr_undeploy_all'), 0);
+    },
+  );
+
+  testWidgets(
+    'active or retained install lock opens safe guidance and only rechecks',
+    (tester) async {
+      final lockState = _preflight(
+        findingId: 'install_mutation',
+        findingAction: 'wait_for_install_mutation',
+        findingDetail: 'An install or script-build lock is present.',
+        findingItems: const [
+          'install_mutation_lock: C:/games/a/.gore-install-mutation.lock',
+          'compile_lock: C:/games/a/.gore-as-compile.lock',
+          'recovery_journal: C:/games/a/.gore-as-compile-recovery',
+        ],
+      );
+      final core = _PreflightCore(preflight: lockState);
+      await tester.pumpWidget(_home(core));
+      await tester.pumpAndSettle();
+
+      final actionFinder = find.byKey(
+        const ValueKey('preflight-install-recovery-action'),
+      );
+      expect(actionFinder, findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('preflight-retry-action')),
+        findsNothing,
+      );
+
+      final action = tester.widget<TextButton>(actionFinder);
+      action.focusNode!.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('preflight-install-recovery-dialog')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('.gore-as-compile-recovery'), findsOneWidget);
+      expect(find.textContaining('may still be running'), findsOneWidget);
+      expect(core.count('mgr_apply'), 0);
+      expect(core.count('mgr_undeploy_all'), 0);
+
+      await tester.tap(
+        find.byKey(const ValueKey('preflight-install-recovery-retry')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(core.count('mgr_preflight_v1'), 2);
+      expect(
+        tester.widget<TextButton>(actionFinder).focusNode!.hasFocus,
+        isTrue,
+      );
+      expect(core.count('mgr_apply'), 0);
+      expect(core.count('mgr_undeploy_all'), 0);
+    },
+  );
+
+  testWidgets(
+    'install-lock retry does not move focus across a changed action',
+    (tester) async {
+      final waiting = _preflight(
+        findingId: 'install_mutation',
+        findingAction: 'wait_for_install_mutation',
+        findingDetail: 'An install operation may still be active.',
+      );
+      final core = _PreflightCore(preflight: waiting);
+      await tester.pumpWidget(_home(core));
+      await tester.pumpAndSettle();
+
+      final actionFinder = find.byKey(
+        const ValueKey('preflight-install-recovery-action'),
+      );
+      final action = tester.widget<TextButton>(actionFinder);
+      action.focusNode!.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+
+      core.blockNextPreflight = true;
+      await tester.tap(
+        find.byKey(const ValueKey('preflight-install-recovery-retry')),
+      );
+      for (var i = 0; i < 50 && core.blockedPreflight == null; i++) {
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+      expect(core.blockedPreflight, isNotNull);
+      core.blockedPreflight!.complete(
+        _preflight(
+          findingId: 'install_mutation',
+          findingAction: 'recover_install',
+          findingDetail: 'Recovery is required.',
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final refreshed = tester.widget<TextButton>(actionFinder);
+      expect(identical(refreshed.focusNode, action.focusNode), isFalse);
+      expect(refreshed.focusNode!.hasFocus, isFalse);
+      expect(core.count('mgr_preflight_v1'), 2);
+      expect(core.count('mgr_apply'), 0);
+      expect(core.count('mgr_undeploy_all'), 0);
+    },
+  );
+
+  testWidgets(
+    'stale recovery action cannot open old evidence after a new report publishes',
+    (tester) async {
+      final core = _PreflightCore(
+        preflight: _preflight(
+          findingId: 'install_mutation',
+          findingAction: 'recover_install',
+          findingDetail: 'A recovery is visible.',
+          findingItems: const ['recovery_journal: C:/games/a/A-recovery'],
+        ),
+      );
+      await tester.pumpWidget(_home(core));
+      await tester.pumpAndSettle();
+
+      final staleAction = find.byKey(
+        const ValueKey('preflight-install-recovery-action'),
+      );
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(HomePage)),
+      );
+      core.blockNextPreflight = true;
+      container.read(preflightProvider.notifier).retry();
+      for (var i = 0; i < 50 && core.blockedPreflight == null; i++) {
+        await Future<void>.value();
+      }
+      expect(core.blockedPreflight, isNotNull);
+      core.blockedPreflight!.complete(
+        _preflight(
+          findingId: 'install_mutation',
+          findingAction: 'recover_install',
+          findingDetail: 'B recovery is current.',
+          findingItems: const ['recovery_journal: C:/games/a/B-recovery'],
+        ),
+      );
+      for (var i = 0; i < 50; i++) {
+        final current = container.read(preflightProvider);
+        if (!current.busy &&
+            current.report?.primarySetupFinding?.items.singleOrNull ==
+                'recovery_journal: C:/games/a/B-recovery') {
+          break;
+        }
+        await Future<void>.value();
+      }
+      final current = container.read(preflightProvider);
+      expect(current.busy, isFalse);
+      expect(current.report?.primarySetupFinding?.items, const [
+        'recovery_journal: C:/games/a/B-recovery',
+      ]);
+
+      // No frame has been pumped since B published, so this still invokes the
+      // callback captured by A's visible button.
+      await tester.tap(staleAction);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('preflight-install-recovery-dialog')),
+        findsNothing,
+      );
+      expect(find.textContaining('A-recovery'), findsNothing);
+      expect(find.textContaining('B recovery is current.'), findsOneWidget);
+      expect(core.count('mgr_apply'), 0);
+      expect(core.count('mgr_undeploy_all'), 0);
+    },
+  );
+
+  testWidgets(
+    'slow unchanged recovery retry restores keyboard focus to its new button',
+    (tester) async {
+      final recovery = _preflight(
+        findingId: 'install_mutation',
+        findingAction: 'recover_install',
+        findingDetail: 'Recovery still needs attention.',
+        findingItems: const [
+          'recovery_journal: C:/games/a/.gore-as-compile-recovery',
+        ],
+      );
+      final core = _PreflightCore(preflight: recovery);
+      await tester.pumpWidget(_home(core));
+      await tester.pumpAndSettle();
+
+      final actionFinder = find.byKey(
+        const ValueKey('preflight-install-recovery-action'),
+      );
+      final action = tester.widget<TextButton>(actionFinder);
+      action.focusNode!.requestFocus();
+      await tester.pump();
+      expect(action.focusNode!.hasFocus, isTrue);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('preflight-install-recovery-dialog')),
+        findsOneWidget,
+      );
+
+      core.blockNextPreflight = true;
+      await tester.tap(
+        find.byKey(const ValueKey('preflight-install-recovery-retry')),
+      );
+      for (var i = 0; i < 50 && core.blockedPreflight == null; i++) {
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+      expect(core.blockedPreflight, isNotNull);
+      core.blockedPreflight!.complete(recovery);
+      await tester.pumpAndSettle();
+
+      final refreshed = tester.widget<TextButton>(actionFinder);
+      expect(refreshed.focusNode!.hasFocus, isTrue);
+      expect(core.count('mgr_preflight_v1'), 2);
+      expect(core.count('mgr_apply'), 0);
+      expect(core.count('mgr_undeploy_all'), 0);
+    },
+  );
+
   testWidgets('physical preflight read blocks every visible mutation lane', (
     tester,
   ) async {
@@ -669,5 +954,45 @@ void main() {
     );
     expect(node.flagsCollection.isLiveRegion, isTrue);
     semantics.dispose();
+  });
+
+  testWidgets('compact 200 percent keeps install recovery help reachable', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(700, 460);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final core = _PreflightCore(
+      preflight: _preflight(
+        findingId: 'install_mutation',
+        findingAction: 'recover_install',
+        findingDetail: 'Recovery data blocks installation changes.',
+      ),
+    );
+
+    await tester.pumpWidget(
+      _home(core, textScaler: const TextScaler.linear(2)),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+
+    final action = find.byKey(
+      const ValueKey('preflight-install-recovery-action'),
+    );
+    expect(action, findsOneWidget);
+    expect(
+      tester.getRect(action).overlaps(Offset.zero & tester.view.physicalSize),
+      isTrue,
+    );
+    await tester.tap(action);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('preflight-install-recovery-dialog')),
+      findsOneWidget,
+    );
+    expect(find.text('Installation recovery'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }

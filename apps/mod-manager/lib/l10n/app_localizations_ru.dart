@@ -65,6 +65,23 @@ class AppLocalizationsRu extends AppLocalizations {
   String get preflightReviewStatus => 'Проверить состояние';
 
   @override
+  String get preflightReviewRecovery => 'Помощь';
+
+  @override
+  String get installRecoveryTitle => 'Восстановление установки';
+
+  @override
+  String get installRecoveryBody =>
+      'GORE обнаружил данные восстановления, связанные с установкой или сборкой скриптов. Соответствующая операция может всё ещё выполняться, либо эти данные могли остаться после её завершения. GORE не может безопасно исправить это автоматически.';
+
+  @override
+  String get installRecoverySteps =>
+      'Если соответствующая операция ещё выполняется, дождитесь её завершения. Не останавливайте её и не удаляйте файлы блокировки. Следуйте инструкциям в файле README.txt в указанной ниже папке восстановления только после того, как убедитесь, что никакие связанные операции больше не выполняются. Если папка не указана или вы не уверены, оставьте данные восстановления без изменений и обратитесь за помощью. Затем проверьте снова.';
+
+  @override
+  String get installRecoveryEvidence => 'Обнаруженные данные восстановления';
+
+  @override
   String get statusUnknown => 'Неизвестно';
 
   @override
