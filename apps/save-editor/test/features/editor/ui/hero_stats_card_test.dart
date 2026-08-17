@@ -144,7 +144,7 @@ void main() {
 
     // Sidebar entries present for non-empty groups (may also appear in the
     // detail card header, so use findsWidgets not findsOneWidget).
-    expect(find.text('Main stats'), findsWidgets);
+    expect(find.text('Main Stats'), findsWidgets);
     expect(find.text('Resistances'), findsWidgets);
     // Entries absent for empty groups.
     expect(find.text('Thieving'), findsNothing);
@@ -415,7 +415,7 @@ void main() {
     expect(lastEdits, hasLength(1));
 
     // Switch back to Main stats.
-    await tester.tap(find.text('Main stats'));
+    await tester.tap(find.text('Main Stats'));
     await tester.pumpAndSettle();
 
     // Pending edit '77' must be visible again.
@@ -637,7 +637,7 @@ void main() {
 
     // Switch away and back: the editor must keep its unsaved draft — its
     // text backs a registered pending edit that would otherwise go stale.
-    await tester.tap(find.text('Main stats'));
+    await tester.tap(find.text('Main Stats'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Skills'));
     await tester.pumpAndSettle();

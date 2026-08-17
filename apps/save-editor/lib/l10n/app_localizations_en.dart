@@ -1651,10 +1651,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get noEntriesMatch => 'No entries match';
 
   @override
-  String get heroGroupMainStats => 'Main stats';
+  String get heroGroupMainStats => 'Main Stats';
 
   @override
-  String get heroGroupCombatMovement => 'Combat / movement';
+  String get heroGroupCombatMovement => 'Combat / Movement';
 
   @override
   String get heroGroupResistances => 'Resistances';
@@ -1669,7 +1669,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get heroGroupDiving => 'Diving';
 
   @override
-  String get heroGroupSleep => 'Sleep & rest';
+  String get heroGroupSleep => 'Sleep & Rest';
 
   @override
   String get heroGroupIntoxication => 'Intoxication';

@@ -172,7 +172,7 @@ void main() {
 
     // Both group entries appear in the sidebar (Health → Main stats,
     // Resistance_Fire → Resistances).
-    expect(find.text('Main stats'), findsWidgets);
+    expect(find.text('Main Stats'), findsWidgets);
     expect(find.text('Resistances'), findsWidgets);
     // Default selection is Main stats — Health row is shown, Resistance is not.
     expect(_npcBaseField('Health'), findsOneWidget);
@@ -223,7 +223,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // Main stats is present (Health), but Thieving never surfaces for NPCs.
-    expect(find.text('Main stats'), findsWidgets);
+    expect(find.text('Main Stats'), findsWidgets);
     expect(find.text('Thieving'), findsNothing);
     // The PickPocketing row is not reachable (its only group is gone).
     expect(_npcBaseField('PickPocketing'), findsNothing);
@@ -287,7 +287,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // Main stats group is present and the Status row is shown.
-    expect(find.text('Main stats'), findsWidgets);
+    expect(find.text('Main Stats'), findsWidgets);
     expect(find.text('Status'), findsOneWidget);
     expect(find.text('alive'), findsOneWidget);
   });

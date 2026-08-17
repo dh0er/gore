@@ -2933,13 +2933,13 @@ abstract class AppLocalizations {
   /// No description provided for @heroGroupMainStats.
   ///
   /// In en, this message translates to:
-  /// **'Main stats'**
+  /// **'Main Stats'**
   String get heroGroupMainStats;
 
   /// No description provided for @heroGroupCombatMovement.
   ///
   /// In en, this message translates to:
-  /// **'Combat / movement'**
+  /// **'Combat / Movement'**
   String get heroGroupCombatMovement;
 
   /// No description provided for @heroGroupResistances.
@@ -2969,7 +2969,7 @@ abstract class AppLocalizations {
   /// No description provided for @heroGroupSleep.
   ///
   /// In en, this message translates to:
-  /// **'Sleep & rest'**
+  /// **'Sleep & Rest'**
   String get heroGroupSleep;
 
   /// No description provided for @heroGroupIntoxication.
