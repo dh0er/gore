@@ -212,6 +212,36 @@ abstract class AppLocalizations {
   /// **'Review status'**
   String get preflightReviewStatus;
 
+  /// No description provided for @preflightReviewRecovery.
+  ///
+  /// In en, this message translates to:
+  /// **'Recovery help'**
+  String get preflightReviewRecovery;
+
+  /// No description provided for @installRecoveryTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Installation recovery'**
+  String get installRecoveryTitle;
+
+  /// No description provided for @installRecoveryBody.
+  ///
+  /// In en, this message translates to:
+  /// **'GORE found recovery data from an interrupted installation or script build. Automatic repair is unsafe because the previous operation and the original file state cannot be proven.'**
+  String get installRecoveryBody;
+
+  /// No description provided for @installRecoverySteps.
+  ///
+  /// In en, this message translates to:
+  /// **'Close Gothic, Mod Studio, and other GORE tasks. Follow README.txt in the recovery folder listed below. If no folder is listed, leave the listed recovery data unchanged and get help instead of deleting anything. Never remove a lock while a task is running. Then check again.'**
+  String get installRecoverySteps;
+
+  /// No description provided for @installRecoveryEvidence.
+  ///
+  /// In en, this message translates to:
+  /// **'Detected recovery data'**
+  String get installRecoveryEvidence;
+
   /// Deployment status is unavailable or uses an unsupported future state.
   ///
   /// In en, this message translates to:

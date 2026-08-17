@@ -6,10 +6,10 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.1.0] - 2026-07-03
+## [0.1.0] - Unreleased
 
-- Early Alpha release, published as a GitHub prerelease rather than a stable
-  general-use build.
+- First Early Alpha release candidate. Publication remains blocked on the
+  clean-machine and real-install acceptance passes.
 - Mod library, load order, conflict detection, and declarative Apply/Undeploy.
 - Windows installer with WinSparkle update checks; the portable zip remains
   self-contained and updater-free.

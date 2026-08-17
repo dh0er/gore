@@ -1,7 +1,8 @@
 # GORE Mod Manager
 
-> **Early Alpha:** this is a public preview, published as a GitHub prerelease.
-> Use it on a test installation, keep your own backups, and expect rough edges.
+> **Early Alpha release candidate:** no Mod Manager release has been published
+> yet. Local and CI-built packages are for acceptance testing on a test
+> installation; keep your own backups and expect rough edges.
 > For the established expert workflow, use the
 > [`gore` CLI](../../docs/guide/README.md).
 

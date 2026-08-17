@@ -66,6 +66,23 @@ class AppLocalizationsIt extends AppLocalizations {
   String get preflightReviewStatus => 'Controlla stato';
 
   @override
+  String get preflightReviewRecovery => 'Guida';
+
+  @override
+  String get installRecoveryTitle => 'Ripristino dell’installazione';
+
+  @override
+  String get installRecoveryBody =>
+      'GORE ha trovato dati di ripristino lasciati da un’installazione o una compilazione di script interrotta. La riparazione automatica non è sicura perché non è possibile verificare il processo precedente e lo stato originale dei file.';
+
+  @override
+  String get installRecoverySteps =>
+      'Chiudi Gothic, Mod Studio e le altre attività di GORE. Segui il file README.txt nella cartella di ripristino indicata qui sotto. Se non è indicata alcuna cartella, lascia invariati i dati di ripristino elencati e chiedi assistenza invece di eliminare qualcosa. Non rimuovere mai un blocco mentre un’attività è in esecuzione. Poi controlla di nuovo.';
+
+  @override
+  String get installRecoveryEvidence => 'Dati di ripristino rilevati';
+
+  @override
   String get statusUnknown => 'Sconosciuto';
 
   @override

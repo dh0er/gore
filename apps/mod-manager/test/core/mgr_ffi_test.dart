@@ -654,6 +654,24 @@ void main() {
       },
     );
 
+    test('recover_install parses as the known manual recovery route', () async {
+      final fake = FakeGoreCoreFfiService(
+        responses: {
+          'mgr_preflight_v1': response(
+            futureState: 'problem',
+            futureAction: 'recover_install',
+          ),
+        },
+      );
+
+      final report = await MgrFfi(fake).preflight('C:/game');
+
+      expect(
+        report.primarySetupFinding?.action,
+        PreflightActionKind.recoverInstall,
+      );
+    });
+
     test('malformed format, order, or field types fail closed', () async {
       final malformed = <Map<String, Object?>>[];
       final wrongFormat = response();

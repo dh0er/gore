@@ -62,6 +62,23 @@ class AppLocalizationsJa extends AppLocalizations {
   String get preflightReviewStatus => '状態を確認';
 
   @override
+  String get preflightReviewRecovery => '復旧方法';
+
+  @override
+  String get installRecoveryTitle => 'インストールの復旧';
+
+  @override
+  String get installRecoveryBody =>
+      'GORE は、中断されたインストールまたはスクリプトビルドの復旧データを検出しました。以前の処理と元のファイル状態を安全に確認できないため、自動修復は行えません。';
+
+  @override
+  String get installRecoverySteps =>
+      'Gothic、Mod Studio、その他の GORE 処理を閉じてください。下に表示された復旧フォルダー内の README.txt に従ってください。フォルダーが表示されない場合は、一覧の復旧データを変更せず、何も削除しないでサポートを求めてください。処理の実行中はロックを削除しないでください。その後、もう一度確認してください。';
+
+  @override
+  String get installRecoveryEvidence => '検出された復旧データ';
+
+  @override
   String get statusUnknown => '不明';
 
   @override

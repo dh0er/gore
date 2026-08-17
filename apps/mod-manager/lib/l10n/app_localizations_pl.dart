@@ -66,6 +66,23 @@ class AppLocalizationsPl extends AppLocalizations {
   String get preflightReviewStatus => 'Sprawdź stan';
 
   @override
+  String get preflightReviewRecovery => 'Pomoc';
+
+  @override
+  String get installRecoveryTitle => 'Odzyskiwanie instalacji';
+
+  @override
+  String get installRecoveryBody =>
+      'GORE znalazł dane odzyskiwania pozostawione przez przerwaną instalację lub kompilację skryptów. Automatyczna naprawa nie jest bezpieczna, ponieważ nie można potwierdzić poprzedniego procesu ani pierwotnego stanu plików.';
+
+  @override
+  String get installRecoverySteps =>
+      'Zamknij Gothic, Mod Studio i inne zadania GORE. Postępuj zgodnie z plikiem README.txt w folderze odzyskiwania wskazanym poniżej. Jeśli nie wskazano folderu, pozostaw wymienione dane odzyskiwania bez zmian i poproś o pomoc zamiast cokolwiek usuwać. Nigdy nie usuwaj blokady, gdy zadanie jest uruchomione. Następnie sprawdź ponownie.';
+
+  @override
+  String get installRecoveryEvidence => 'Wykryte dane odzyskiwania';
+
+  @override
   String get statusUnknown => 'Nieznany';
 
   @override

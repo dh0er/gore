@@ -65,6 +65,23 @@ class AppLocalizationsRu extends AppLocalizations {
   String get preflightReviewStatus => 'Проверить состояние';
 
   @override
+  String get preflightReviewRecovery => 'Помощь';
+
+  @override
+  String get installRecoveryTitle => 'Восстановление установки';
+
+  @override
+  String get installRecoveryBody =>
+      'GORE обнаружил данные восстановления после прерванной установки или сборки скриптов. Автоматическое исправление небезопасно, поскольку нельзя надёжно подтвердить состояние прежнего процесса и исходное состояние файлов.';
+
+  @override
+  String get installRecoverySteps =>
+      'Закройте Gothic, Mod Studio и другие задачи GORE. Следуйте файлу README.txt в указанной ниже папке восстановления. Если папка не указана, оставьте перечисленные данные восстановления без изменений и обратитесь за помощью, ничего не удаляя. Не удаляйте блокировку, пока выполняется задача. Затем проверьте снова.';
+
+  @override
+  String get installRecoveryEvidence => 'Обнаруженные данные восстановления';
+
+  @override
   String get statusUnknown => 'Неизвестно';
 
   @override

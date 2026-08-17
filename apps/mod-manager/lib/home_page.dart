@@ -28,6 +28,7 @@ bool _preflightFindingUsesRetry(PreflightCheckView finding) =>
     switch (finding.action) {
       PreflightActionKind.selectGameRoot ||
       PreflightActionKind.recoverDeployment ||
+      PreflightActionKind.recoverInstall ||
       PreflightActionKind.removeStudioDeployment ||
       PreflightActionKind.reviewApply ||
       PreflightActionKind.reviewReapply ||
@@ -35,6 +36,25 @@ bool _preflightFindingUsesRetry(PreflightCheckView finding) =>
       PreflightActionKind.runFullStatus => false,
       _ => true,
     };
+
+enum _PreflightFocusTarget { retry, installRecovery }
+
+bool _preflightFocusTargetVisible(
+  PreflightState state,
+  _PreflightFocusTarget target,
+) {
+  final finding = state.authoritative
+      ? state.report?.primarySetupFinding
+      : null;
+  return switch (target) {
+    _PreflightFocusTarget.retry =>
+      state.error != null ||
+          (finding != null && _preflightFindingUsesRetry(finding)),
+    _PreflightFocusTarget.installRecovery =>
+      state.error == null &&
+          finding?.action == PreflightActionKind.recoverInstall,
+  };
+}
 
 /// Home: a Mods tab (library list + detail + conflicts, with an import/apply
 /// action bar) and the unchanged Settings tab.
@@ -66,11 +86,15 @@ class _HomePageState extends ConsumerState<HomePage> {
   final FocusNode _preflightRetryFocusNode = FocusNode(
     debugLabel: 'mod-manager-preflight-retry',
   );
+  final FocusNode _preflightInstallRecoveryFocusNode = FocusNode(
+    debugLabel: 'mod-manager-preflight-install-recovery',
+  );
   ({FocusNode node, String? removedModId})? _pendingFocus;
   int _pendingFocusGeneration = 0;
   int _selectionGeneration = 0;
   bool _importRequestActive = false;
-  ({String root, int generation})? _preflightRetryFocusRequest;
+  ({String root, int generation, _PreflightFocusTarget target})?
+  _preflightRetryFocusRequest;
 
   String? get _gameRoot => gameRootFromExe(ref.read(gameExePathProvider));
 
@@ -146,9 +170,34 @@ class _HomePageState extends ConsumerState<HomePage> {
   void _rememberPreflightRetryFocus(String? root, int generation) {
     _preflightRetryFocusRequest =
         root != null && _preflightRetryFocusNode.hasFocus
-        ? (root: root, generation: generation)
+        ? (
+            root: root,
+            generation: generation,
+            target: _PreflightFocusTarget.retry,
+          )
         : null;
   }
+
+  void _rememberPreflightInstallRecoveryFocus(
+    String? root,
+    int generation,
+    bool restoreFocus,
+  ) {
+    _preflightRetryFocusRequest = root != null && restoreFocus
+        ? (
+            root: root,
+            generation: generation,
+            target: _PreflightFocusTarget.installRecovery,
+          )
+        : null;
+  }
+
+  FocusNode _preflightFocusNode(_PreflightFocusTarget target) =>
+      switch (target) {
+        _PreflightFocusTarget.retry => _preflightRetryFocusNode,
+        _PreflightFocusTarget.installRecovery =>
+          _preflightInstallRecoveryFocusNode,
+      };
 
   bool get _importAuthorityAvailable {
     final library = ref.read(libraryProvider);
@@ -237,38 +286,29 @@ class _HomePageState extends ConsumerState<HomePage> {
     final request = _preflightRetryFocusRequest;
     if (request == null || previous?.busy != true || next.busy) return;
     _preflightRetryFocusRequest = null;
-    final finding = next.authoritative
-        ? next.report?.primarySetupFinding
-        : null;
     if (next.candidateRoot != request.root ||
         next.generation != request.generation ||
-        (next.error == null &&
-            (finding == null || !_preflightFindingUsesRetry(finding)))) {
+        !_preflightFocusTargetVisible(next, request.target)) {
       return;
     }
+    final targetNode = _preflightFocusNode(request.target);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final latest = ref.read(preflightProvider);
-      final latestFinding = latest.authoritative
-          ? latest.report?.primarySetupFinding
-          : null;
-      final retryStillVisible =
-          latest.error != null ||
-          (latestFinding != null && _preflightFindingUsesRetry(latestFinding));
       final currentFocus = FocusManager.instance.primaryFocus;
       final focusMovedElsewhere =
           currentFocus != null &&
-          currentFocus != _preflightRetryFocusNode &&
+          currentFocus != targetNode &&
           currentFocus is! FocusScopeNode;
       if (latest.candidateRoot != request.root ||
           latest.generation != request.generation ||
           latest.busy ||
-          !retryStillVisible ||
+          !_preflightFocusTargetVisible(latest, request.target) ||
           focusMovedElsewhere ||
-          _preflightRetryFocusNode.context == null) {
+          targetNode.context == null) {
         return;
       }
-      _preflightRetryFocusNode.requestFocus();
+      targetNode.requestFocus();
     });
   }
 
@@ -279,6 +319,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     _statusDetailsFocusNode.dispose();
     _settingsGamePathFocusNode.dispose();
     _preflightRetryFocusNode.dispose();
+    _preflightInstallRecoveryFocusNode.dispose();
     super.dispose();
   }
 
@@ -462,10 +503,14 @@ class _HomePageState extends ConsumerState<HomePage> {
                     statusDetailsFocusNode: _statusDetailsFocusNode,
                     settingsGamePathFocusNode: _settingsGamePathFocusNode,
                     preflightRetryFocusNode: _preflightRetryFocusNode,
+                    preflightInstallRecoveryFocusNode:
+                        _preflightInstallRecoveryFocusNode,
                     queueImportFocusAfterRemove: _queueImportFocusAfterRemove,
                     queueRefreshFocusAfterRemove: _queueRefreshFocusAfterRemove,
                     queueRefreshFocus: _queueRefreshFocus,
                     rememberPreflightRetryFocus: _rememberPreflightRetryFocus,
+                    rememberPreflightInstallRecoveryFocus:
+                        _rememberPreflightInstallRecoveryFocus,
                   ),
                   SettingsTab(gamePathFocusNode: _settingsGamePathFocusNode),
                 ],
@@ -489,10 +534,12 @@ class _ModsTab extends ConsumerWidget {
     required this.statusDetailsFocusNode,
     required this.settingsGamePathFocusNode,
     required this.preflightRetryFocusNode,
+    required this.preflightInstallRecoveryFocusNode,
     required this.queueImportFocusAfterRemove,
     required this.queueRefreshFocusAfterRemove,
     required this.queueRefreshFocus,
     required this.rememberPreflightRetryFocus,
+    required this.rememberPreflightInstallRecoveryFocus,
   });
 
   final FocusNode importFocusNode;
@@ -503,10 +550,13 @@ class _ModsTab extends ConsumerWidget {
   final FocusNode statusDetailsFocusNode;
   final FocusNode settingsGamePathFocusNode;
   final FocusNode preflightRetryFocusNode;
+  final FocusNode preflightInstallRecoveryFocusNode;
   final ValueChanged<String> queueImportFocusAfterRemove;
   final ValueChanged<String> queueRefreshFocusAfterRemove;
   final VoidCallback queueRefreshFocus;
   final void Function(String? root, int generation) rememberPreflightRetryFocus;
+  final void Function(String? root, int generation, bool restoreFocus)
+  rememberPreflightInstallRecoveryFocus;
 
   String? _gameRoot(WidgetRef ref) =>
       gameRootFromExe(ref.read(gameExePathProvider));
@@ -969,7 +1019,10 @@ class _ModsTab extends ConsumerWidget {
           openSettings: () => _openSettings(context),
           openStatusDetails: () => _showStatusDetails(context, ref),
           preflightRetryFocusNode: preflightRetryFocusNode,
+          preflightInstallRecoveryFocusNode: preflightInstallRecoveryFocusNode,
           rememberPreflightRetryFocus: rememberPreflightRetryFocus,
+          rememberPreflightInstallRecoveryFocus:
+              rememberPreflightInstallRecoveryFocus,
         ),
 
         const Divider(height: 1),
@@ -1210,7 +1263,9 @@ class _InfoBanner extends ConsumerWidget {
     required this.openSettings,
     required this.openStatusDetails,
     required this.preflightRetryFocusNode,
+    required this.preflightInstallRecoveryFocusNode,
     required this.rememberPreflightRetryFocus,
+    required this.rememberPreflightInstallRecoveryFocus,
   });
 
   final StatusState status;
@@ -1220,7 +1275,10 @@ class _InfoBanner extends ConsumerWidget {
   final VoidCallback openSettings;
   final VoidCallback openStatusDetails;
   final FocusNode preflightRetryFocusNode;
+  final FocusNode preflightInstallRecoveryFocusNode;
   final void Function(String? root, int generation) rememberPreflightRetryFocus;
+  final void Function(String? root, int generation, bool restoreFocus)
+  rememberPreflightInstallRecoveryFocus;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1284,7 +1342,14 @@ class _InfoBanner extends ConsumerWidget {
           key: const ValueKey('preflight-setup-finding'),
           liveRegion: true,
           maxLines: 2,
-          action: _preflightAction(l10n, ref, finding, refreshBlocked),
+          action: _preflightAction(
+            context,
+            l10n,
+            ref,
+            preflight,
+            finding,
+            refreshBlocked,
+          ),
         ),
       );
     }
@@ -1387,8 +1452,10 @@ class _InfoBanner extends ConsumerWidget {
   }
 
   Widget _preflightAction(
+    BuildContext context,
     AppLocalizations l10n,
     WidgetRef ref,
+    PreflightState preflight,
     PreflightCheckView finding,
     bool blocked,
   ) {
@@ -1398,6 +1465,21 @@ class _InfoBanner extends ConsumerWidget {
         onPressed: blocked ? null : openSettings,
         icon: const Icon(Icons.settings_outlined),
         label: Text(l10n.statusDetailsOpenSettings),
+      ),
+      PreflightActionKind.recoverInstall => TextButton.icon(
+        key: const ValueKey('preflight-install-recovery-action'),
+        focusNode: preflightInstallRecoveryFocusNode,
+        onPressed: blocked
+            ? null
+            : () => _showInstallRecoveryGuide(
+                context,
+                ref,
+                finding,
+                expectedRoot: preflight.candidateRoot,
+                expectedGeneration: preflight.generation,
+              ),
+        icon: const Icon(Icons.health_and_safety_outlined),
+        label: Text(l10n.preflightReviewRecovery),
       ),
       PreflightActionKind.recoverDeployment ||
       PreflightActionKind.removeStudioDeployment ||
@@ -1412,6 +1494,108 @@ class _InfoBanner extends ConsumerWidget {
       ),
       _ => _preflightRetryAction(l10n, ref, blocked),
     };
+  }
+
+  Future<void> _showInstallRecoveryGuide(
+    BuildContext context,
+    WidgetRef ref,
+    PreflightCheckView finding, {
+    required String? expectedRoot,
+    required int expectedGeneration,
+  }) async {
+    final snapshot = ref.read(preflightProvider);
+    final snapshotFinding = snapshot.authoritative
+        ? snapshot.report?.primarySetupFinding
+        : null;
+    if (expectedRoot == null ||
+        snapshot.candidateRoot != expectedRoot ||
+        snapshot.generation != expectedGeneration ||
+        !snapshot.authoritative ||
+        !identical(snapshotFinding, finding) ||
+        snapshotFinding?.action != PreflightActionKind.recoverInstall ||
+        ref.read(libraryProvider).busy ||
+        ref.read(statusProvider).busy ||
+        snapshot.busy ||
+        ref.read(conflictsProvider).isLoading) {
+      return;
+    }
+    final restoreFocus = preflightInstallRecoveryFocusNode.hasFocus;
+    final l10n = AppLocalizations.of(context);
+    final retry = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const ValueKey('preflight-install-recovery-dialog'),
+        title: Text(l10n.installRecoveryTitle),
+        content: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 560,
+            maxHeight: MediaQuery.sizeOf(dialogContext).height * 0.45,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(l10n.installRecoveryBody),
+                const SizedBox(height: 12),
+                Text(l10n.installRecoverySteps),
+                if (finding.items.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  Text(
+                    l10n.installRecoveryEvidence,
+                    style: Theme.of(dialogContext).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 8),
+                  for (var index = 0; index < finding.items.length; index++)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: SelectableText(
+                        _boundedDiagnostic(finding.items[index]),
+                        key: ValueKey(
+                          'preflight-install-recovery-evidence-$index',
+                        ),
+                      ),
+                    ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(l10n.commonCancel),
+          ),
+          FilledButton(
+            key: const ValueKey('preflight-install-recovery-retry'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(l10n.preflightRetry),
+          ),
+        ],
+      ),
+    );
+    if (retry != true || !context.mounted) return;
+
+    final current = ref.read(preflightProvider);
+    final currentFinding = current.authoritative
+        ? current.report?.primarySetupFinding
+        : null;
+    if (current.candidateRoot != expectedRoot ||
+        current.generation != expectedGeneration ||
+        !identical(currentFinding, finding) ||
+        currentFinding?.action != PreflightActionKind.recoverInstall ||
+        ref.read(libraryProvider).busy ||
+        ref.read(statusProvider).busy ||
+        current.busy ||
+        ref.read(conflictsProvider).isLoading) {
+      return;
+    }
+    rememberPreflightInstallRecoveryFocus(
+      expectedRoot,
+      current.generation + 1,
+      restoreFocus,
+    );
+    ref.read(preflightProvider.notifier).retry();
   }
 
   Widget _preflightRetryAction(

@@ -66,6 +66,23 @@ class AppLocalizationsPt extends AppLocalizations {
   String get preflightReviewStatus => 'Verificar estado';
 
   @override
+  String get preflightReviewRecovery => 'Ajuda';
+
+  @override
+  String get installRecoveryTitle => 'Recuperação da instalação';
+
+  @override
+  String get installRecoveryBody =>
+      'O GORE encontrou dados de recuperação deixados por uma instalação ou compilação de scripts interrompida. A reparação automática não é segura porque não é possível confirmar o processo anterior nem o estado original dos ficheiros.';
+
+  @override
+  String get installRecoverySteps =>
+      'Feche o Gothic, o Mod Studio e as outras tarefas do GORE. Siga o ficheiro README.txt na pasta de recuperação indicada abaixo. Se não for indicada nenhuma pasta, deixe os dados de recuperação listados inalterados e peça ajuda em vez de eliminar alguma coisa. Nunca remova um bloqueio enquanto uma tarefa estiver em execução. Depois, verifique novamente.';
+
+  @override
+  String get installRecoveryEvidence => 'Dados de recuperação detetados';
+
+  @override
   String get statusUnknown => 'Desconhecido';
 
   @override
@@ -586,6 +603,23 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get preflightReviewStatus => 'Verificar status';
+
+  @override
+  String get preflightReviewRecovery => 'Ajuda';
+
+  @override
+  String get installRecoveryTitle => 'Recuperação da instalação';
+
+  @override
+  String get installRecoveryBody =>
+      'O GORE encontrou dados de recuperação deixados por uma instalação ou compilação de scripts interrompida. O reparo automático não é seguro porque não é possível confirmar o processo anterior nem o estado original dos arquivos.';
+
+  @override
+  String get installRecoverySteps =>
+      'Feche o Gothic, o Mod Studio e as outras tarefas do GORE. Siga o arquivo README.txt na pasta de recuperação indicada abaixo. Se nenhuma pasta for indicada, deixe os dados de recuperação listados inalterados e peça ajuda em vez de excluir qualquer coisa. Nunca remova um bloqueio enquanto uma tarefa estiver em execução. Depois, verifique novamente.';
+
+  @override
+  String get installRecoveryEvidence => 'Dados de recuperação detectados';
 
   @override
   String get statusUnknown => 'Desconhecido';

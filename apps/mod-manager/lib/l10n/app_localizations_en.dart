@@ -65,6 +65,23 @@ class AppLocalizationsEn extends AppLocalizations {
   String get preflightReviewStatus => 'Review status';
 
   @override
+  String get preflightReviewRecovery => 'Recovery help';
+
+  @override
+  String get installRecoveryTitle => 'Installation recovery';
+
+  @override
+  String get installRecoveryBody =>
+      'GORE found recovery data from an interrupted installation or script build. Automatic repair is unsafe because the previous operation and the original file state cannot be proven.';
+
+  @override
+  String get installRecoverySteps =>
+      'Close Gothic, Mod Studio, and other GORE tasks. Follow README.txt in the recovery folder listed below. If no folder is listed, leave the listed recovery data unchanged and get help instead of deleting anything. Never remove a lock while a task is running. Then check again.';
+
+  @override
+  String get installRecoveryEvidence => 'Detected recovery data';
+
+  @override
   String get statusUnknown => 'Unknown';
 
   @override

@@ -60,6 +60,23 @@ class AppLocalizationsZh extends AppLocalizations {
   String get preflightReviewStatus => '检查状态';
 
   @override
+  String get preflightReviewRecovery => '恢复帮助';
+
+  @override
+  String get installRecoveryTitle => '恢复安装';
+
+  @override
+  String get installRecoveryBody =>
+      'GORE 检测到中断的安装或脚本构建留下的恢复数据。由于无法安全确认之前的进程和文件的原始状态，因此不能自动修复。';
+
+  @override
+  String get installRecoverySteps =>
+      '关闭 Gothic、Mod Studio 和其他 GORE 任务。按照下方恢复文件夹中的 README.txt 操作。如果未列出文件夹，请保持列出的恢复数据不变并寻求帮助，不要删除任何内容。任务运行期间切勿删除锁。然后重新检查。';
+
+  @override
+  String get installRecoveryEvidence => '检测到的恢复数据';
+
+  @override
   String get statusUnknown => '未知';
 
   @override
@@ -542,6 +559,23 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get preflightReviewStatus => '检查状态';
+
+  @override
+  String get preflightReviewRecovery => '恢复帮助';
+
+  @override
+  String get installRecoveryTitle => '恢复安装';
+
+  @override
+  String get installRecoveryBody =>
+      'GORE 检测到中断的安装或脚本构建留下的恢复数据。由于无法安全确认之前的进程和文件的原始状态，因此不能自动修复。';
+
+  @override
+  String get installRecoverySteps =>
+      '关闭 Gothic、Mod Studio 和其他 GORE 任务。按照下方恢复文件夹中的 README.txt 操作。如果未列出文件夹，请保持列出的恢复数据不变并寻求帮助，不要删除任何内容。任务运行期间切勿删除锁。然后重新检查。';
+
+  @override
+  String get installRecoveryEvidence => '检测到的恢复数据';
 
   @override
   String get statusUnknown => '未知';
