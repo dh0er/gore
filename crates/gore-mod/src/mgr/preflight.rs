@@ -1463,16 +1463,7 @@ where
                 | InstallCompileArtifactKind::CompileLock
         )
     });
-    let durable_install_recovery = probe.artifacts.iter().any(|artifact| {
-        matches!(
-            artifact.kind,
-            InstallCompileArtifactKind::RecoveryJournal
-                | InstallCompileArtifactKind::ShippingCacheBackup
-                | InstallCompileArtifactKind::JittedCodeBackup
-                | InstallCompileArtifactKind::Ue4ssProxyBackup
-        )
-    });
-    if active_lock && !durable_install_recovery {
+    if active_lock {
         return InstallMutationInspection {
             check: PreflightCheckV1::new(
                 PreflightCheckIdV1::InstallMutation,
@@ -3051,6 +3042,11 @@ mod tests {
                     path: "C:/game/.gore-as-compile-recovery".to_owned(),
                     path_truncated: false,
                 },
+                InstallCompileArtifact {
+                    kind: InstallCompileArtifactKind::ShippingCacheBackup,
+                    path: "C:/game/PrecompiledScript_Shipping.Cache.gore-compile-bak".to_owned(),
+                    path_truncated: false,
+                },
             ],
             issues: Vec::new(),
         };
@@ -3062,9 +3058,9 @@ mod tests {
             |_| retained_recovery.clone(),
             |_| Ok(false),
         );
-        assert_eq!(state.checks[3].action, "recover_install");
-        assert_eq!(state.checks[4].code, "install_recovery_required");
-        assert_eq!(state.checks[4].action, "recover_install");
+        assert_eq!(state.checks[3].action, "wait_for_install_mutation");
+        assert_eq!(state.checks[4].code, "install_mutation_lock_present");
+        assert_eq!(state.checks[4].action, "wait_for_install_mutation");
         assert!(state.checks[4]
             .items
             .iter()

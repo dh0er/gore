@@ -409,6 +409,11 @@ void main() {
       action: 'recover_install',
       key: 'preflight-install-recovery-action',
     ),
+    (
+      name: 'Install wait',
+      action: 'wait_for_install_mutation',
+      key: 'preflight-install-recovery-action',
+    ),
   ]) {
     testWidgets(
       'Retry does not restore focus when the result routes to ${transition.name}',
@@ -638,6 +643,109 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      expect(core.count('mgr_preflight_v1'), 2);
+      expect(core.count('mgr_apply'), 0);
+      expect(core.count('mgr_undeploy_all'), 0);
+    },
+  );
+
+  testWidgets(
+    'active or retained install lock opens safe guidance and only rechecks',
+    (tester) async {
+      final lockState = _preflight(
+        findingId: 'install_mutation',
+        findingAction: 'wait_for_install_mutation',
+        findingDetail: 'An install or script-build lock is present.',
+        findingItems: const [
+          'install_mutation_lock: C:/games/a/.gore-install-mutation.lock',
+          'compile_lock: C:/games/a/.gore-as-compile.lock',
+          'recovery_journal: C:/games/a/.gore-as-compile-recovery',
+        ],
+      );
+      final core = _PreflightCore(preflight: lockState);
+      await tester.pumpWidget(_home(core));
+      await tester.pumpAndSettle();
+
+      final actionFinder = find.byKey(
+        const ValueKey('preflight-install-recovery-action'),
+      );
+      expect(actionFinder, findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('preflight-retry-action')),
+        findsNothing,
+      );
+
+      final action = tester.widget<TextButton>(actionFinder);
+      action.focusNode!.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('preflight-install-recovery-dialog')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('.gore-as-compile-recovery'), findsOneWidget);
+      expect(find.textContaining('may still be running'), findsOneWidget);
+      expect(core.count('mgr_apply'), 0);
+      expect(core.count('mgr_undeploy_all'), 0);
+
+      await tester.tap(
+        find.byKey(const ValueKey('preflight-install-recovery-retry')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(core.count('mgr_preflight_v1'), 2);
+      expect(
+        tester.widget<TextButton>(actionFinder).focusNode!.hasFocus,
+        isTrue,
+      );
+      expect(core.count('mgr_apply'), 0);
+      expect(core.count('mgr_undeploy_all'), 0);
+    },
+  );
+
+  testWidgets(
+    'install-lock retry does not move focus across a changed action',
+    (tester) async {
+      final waiting = _preflight(
+        findingId: 'install_mutation',
+        findingAction: 'wait_for_install_mutation',
+        findingDetail: 'An install operation may still be active.',
+      );
+      final core = _PreflightCore(preflight: waiting);
+      await tester.pumpWidget(_home(core));
+      await tester.pumpAndSettle();
+
+      final actionFinder = find.byKey(
+        const ValueKey('preflight-install-recovery-action'),
+      );
+      final action = tester.widget<TextButton>(actionFinder);
+      action.focusNode!.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+
+      core.blockNextPreflight = true;
+      await tester.tap(
+        find.byKey(const ValueKey('preflight-install-recovery-retry')),
+      );
+      for (var i = 0; i < 50 && core.blockedPreflight == null; i++) {
+        await tester.pump(const Duration(milliseconds: 10));
+      }
+      expect(core.blockedPreflight, isNotNull);
+      core.blockedPreflight!.complete(
+        _preflight(
+          findingId: 'install_mutation',
+          findingAction: 'recover_install',
+          findingDetail: 'Recovery is required.',
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final refreshed = tester.widget<TextButton>(actionFinder);
+      expect(identical(refreshed.focusNode, action.focusNode), isFalse);
+      expect(refreshed.focusNode!.hasFocus, isFalse);
       expect(core.count('mgr_preflight_v1'), 2);
       expect(core.count('mgr_apply'), 0);
       expect(core.count('mgr_undeploy_all'), 0);

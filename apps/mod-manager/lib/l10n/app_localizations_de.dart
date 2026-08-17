@@ -73,11 +73,11 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get installRecoveryBody =>
-      'GORE hat Wiederherstellungsdaten einer unterbrochenen Installation oder eines Skript-Builds gefunden. Eine automatische Reparatur wäre unsicher, weil weder der frühere Vorgang noch der ursprüngliche Dateistand sicher geprüft werden kann.';
+      'GORE hat Wiederherstellungsdaten zu einer Installation oder einer Skript-Kompilierung gefunden. Der zugehörige Vorgang läuft möglicherweise noch, oder die Daten stammen von einem bereits beendeten Vorgang. GORE kann dies nicht sicher automatisch reparieren.';
 
   @override
   String get installRecoverySteps =>
-      'Schließe Gothic, Mod Studio und andere GORE-Vorgänge. Folge der README.txt im unten genannten Wiederherstellungsordner. Falls kein Ordner genannt ist, lasse die aufgeführten Wiederherstellungsdaten unverändert und hole dir Hilfe, statt etwas zu löschen. Entferne niemals eine Sperre, solange noch ein Vorgang läuft. Prüfe danach erneut.';
+      'Falls der zugehörige Vorgang noch läuft, warte, bis er abgeschlossen ist. Beende ihn nicht und lösche keine Sperrdateien. Folge der README.txt im unten genannten Wiederherstellungsordner erst, wenn du sicher bist, dass kein zugehöriger Vorgang mehr läuft. Falls kein Ordner genannt ist oder du unsicher bist, lasse die Wiederherstellungsdaten unverändert und hole dir Hilfe. Prüfe danach erneut.';
 
   @override
   String get installRecoveryEvidence => 'Gefundene Wiederherstellungsdaten';

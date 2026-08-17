@@ -672,6 +672,27 @@ void main() {
       );
     });
 
+    test(
+      'wait_for_install_mutation parses as the known review route',
+      () async {
+        final fake = FakeGoreCoreFfiService(
+          responses: {
+            'mgr_preflight_v1': response(
+              futureState: 'problem',
+              futureAction: 'wait_for_install_mutation',
+            ),
+          },
+        );
+
+        final report = await MgrFfi(fake).preflight('C:/game');
+
+        expect(
+          report.primarySetupFinding?.action,
+          PreflightActionKind.waitForInstallMutation,
+        );
+      },
+    );
+
     test('malformed format, order, or field types fail closed', () async {
       final malformed = <Map<String, Object?>>[];
       final wrongFormat = response();

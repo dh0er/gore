@@ -50,6 +50,7 @@ enum PreflightActionKind {
   reviewReapply('review_reapply'),
   inspectDeployment('inspect_deployment'),
   closeGame('close_game'),
+  waitForInstallMutation('wait_for_install_mutation'),
   recoverInstall('recover_install'),
   installUe4ss('install_ue4ss'),
   verifyUe4ssProxy('verify_ue4ss_proxy'),
