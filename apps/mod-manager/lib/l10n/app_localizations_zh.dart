@@ -77,6 +77,42 @@ class AppLocalizationsZh extends AppLocalizations {
   String get installRecoveryEvidence => '检测到的恢复数据';
 
   @override
+  String get managerRecoveryTitle => '恢复中断的管理器操作';
+
+  @override
+  String get managerRecoveryConfirm =>
+      'GORE 检测到一个明确中断的管理器操作。仅当你希望 GORE 核对已记录的操作并将安装恢复到已知状态时才继续。游戏存档绝不会被修改。';
+
+  @override
+  String get managerRecoveryAlreadyClean => '中断的操作已被处理。安装已重新检查。';
+
+  @override
+  String get managerRecoveryBusy => '该操作再次处于活动状态。未进行任何更改；请等待其完成后重新检查。';
+
+  @override
+  String get managerRecoveryLockCleared => '中断的操作尚未更改安装。其过时的锁已安全移除。';
+
+  @override
+  String get managerRecoveryRestoredPristine => '已回滚中断的更改，并恢复了记录的安装基准状态。';
+
+  @override
+  String get managerRecoveryApplyPreserved => '应用已经完成。已保留记录的状态，并重新检查了当前状态。';
+
+  @override
+  String get managerRecoveryUndeployConfirmed => '移除已经完成。已清理剩余的事务数据，并重新检查了状态。';
+
+  @override
+  String get managerRecoveryCompileRequired => '这属于脚本构建恢复。管理器未进行更改；请查看恢复帮助。';
+
+  @override
+  String get managerRecoveryInspectionFailed =>
+      'GORE 无法安全核对中断的操作。未进行任何更改；请查看当前恢复详情。';
+
+  @override
+  String get managerRecoveryFailed =>
+      '无法完成恢复。GORE 已尝试重新检查安装，但当前状态可能未知。请先查看状态，再重试。';
+
+  @override
   String get statusUnknown => '未知';
 
   @override
@@ -576,6 +612,42 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get installRecoveryEvidence => '检测到的恢复数据';
+
+  @override
+  String get managerRecoveryTitle => '恢复中断的管理器操作';
+
+  @override
+  String get managerRecoveryConfirm =>
+      'GORE 检测到一个明确中断的管理器操作。仅当你希望 GORE 核对已记录的操作并将安装恢复到已知状态时才继续。游戏存档绝不会被修改。';
+
+  @override
+  String get managerRecoveryAlreadyClean => '中断的操作已被处理。安装已重新检查。';
+
+  @override
+  String get managerRecoveryBusy => '该操作再次处于活动状态。未进行任何更改；请等待其完成后重新检查。';
+
+  @override
+  String get managerRecoveryLockCleared => '中断的操作尚未更改安装。其过时的锁已安全移除。';
+
+  @override
+  String get managerRecoveryRestoredPristine => '已回滚中断的更改，并恢复了记录的安装基准状态。';
+
+  @override
+  String get managerRecoveryApplyPreserved => '应用已经完成。已保留记录的状态，并重新检查了当前状态。';
+
+  @override
+  String get managerRecoveryUndeployConfirmed => '移除已经完成。已清理剩余的事务数据，并重新检查了状态。';
+
+  @override
+  String get managerRecoveryCompileRequired => '这属于脚本构建恢复。管理器未进行更改；请查看恢复帮助。';
+
+  @override
+  String get managerRecoveryInspectionFailed =>
+      'GORE 无法安全核对中断的操作。未进行任何更改；请查看当前恢复详情。';
+
+  @override
+  String get managerRecoveryFailed =>
+      '无法完成恢复。GORE 已尝试重新检查安装，但当前状态可能未知。请先查看状态，再重试。';
 
   @override
   String get statusUnknown => '未知';

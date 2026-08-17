@@ -20,6 +20,7 @@ use gore_mod::mgr::{
     status::ManagerStatus,
     store::StoreSnapshot,
 };
+use gore_mod::ManagerInstallRecoveryReadiness;
 
 #[derive(Subcommand)]
 pub enum MgrAction {
@@ -338,7 +339,7 @@ pub fn run(action: MgrAction) -> Result<()> {
             let (lib, ld_path) = store_paths(library, loadout)?;
             let store = StoreSnapshot::open(&lib, &ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
             let st = store.status(&game).map_err(|e| anyhow::anyhow!("{e}"))?;
-            println!("{}", describe_status(&st));
+            println!("{}", describe_status(&game, &st));
             Ok(())
         }
 
@@ -401,12 +402,15 @@ fn set_enabled(
 }
 
 /// A friendly one-liner per [`ManagerStatus`] variant (the Debug form is verbose).
-fn describe_status(st: &ManagerStatus) -> String {
+fn describe_status(game_root: &std::path::Path, st: &ManagerStatus) -> String {
+    let recovery = gore_mod::probe_manager_install_recovery(game_root);
+    if !matches!(recovery, ManagerInstallRecoveryReadiness::Missing) {
+        return describe_recovery_status(&recovery);
+    }
+
     match st {
         ManagerStatus::NothingDeployed => "nothing deployed".to_string(),
-        ManagerStatus::RecoveryRequired => {
-            "recovery required: previous apply was interrupted (run undeploy first)".to_string()
-        }
+        ManagerStatus::RecoveryRequired => describe_recovery_status(&recovery),
         ManagerStatus::StudioDeployActive { mod_name } => {
             format!("studio deploy active: {mod_name} (manager won't touch it)")
         }
@@ -429,9 +433,41 @@ fn describe_status(st: &ManagerStatus) -> String {
     }
 }
 
+fn describe_recovery_status(readiness: &ManagerInstallRecoveryReadiness) -> String {
+    match readiness {
+        ManagerInstallRecoveryReadiness::Missing => {
+            "recovery required: previous apply was interrupted (run 'gore mgr reset' before \
+             applying again)"
+                .to_string()
+        }
+        ManagerInstallRecoveryReadiness::Active => {
+            "recovery blocked: a GORE installation change is still active (wait for it to finish; \
+             do not delete lock files)"
+                .to_string()
+        }
+        ManagerInstallRecoveryReadiness::AbandonedManager { .. } => {
+            "recovery required: an interrupted Manager change was abandoned (open the Mod Manager \
+             app and choose Recover; the CLI does not currently perform this recovery; do not \
+             delete lock files; run reset/undeploy only after recovery)"
+                .to_string()
+        }
+        ManagerInstallRecoveryReadiness::CompileOrAmbiguous => {
+            "recovery blocked: script-build recovery or an unclear lock source needs recovery help \
+             (do not delete lock files or run reset/undeploy)"
+                .to_string()
+        }
+        ManagerInstallRecoveryReadiness::Invalid => {
+            "recovery blocked: GORE could not inspect the installation lock safely (leave recovery \
+             data unchanged; do not delete lock files or run reset/undeploy)"
+                .to_string()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gore_as::compile::InstallMutationGuard;
     use gore_mod::mgr::analyze::ConflictKind;
 
     #[test]
@@ -479,5 +515,77 @@ mod tests {
             format_conflict(&conflict(Severity::Soft)),
             "Soft Cdo A.Value: first -> last (winner: last)"
         );
+    }
+
+    #[test]
+    fn recovery_status_keeps_each_native_recovery_lane_honest() {
+        let missing = describe_recovery_status(&ManagerInstallRecoveryReadiness::Missing);
+        assert!(missing.contains("gore mgr reset"), "{missing}");
+
+        let active = describe_recovery_status(&ManagerInstallRecoveryReadiness::Active);
+        assert!(active.contains("wait for it to finish"), "{active}");
+        assert!(!active.contains("reset/undeploy only after"), "{active}");
+
+        let abandoned =
+            describe_recovery_status(&ManagerInstallRecoveryReadiness::AbandonedManager {
+                guard_id: "opaque-test-token".into(),
+            });
+        assert!(abandoned.contains("choose Recover"), "{abandoned}");
+        assert!(abandoned.contains("CLI does not currently"), "{abandoned}");
+        assert!(abandoned.contains("only after recovery"), "{abandoned}");
+        assert!(!abandoned.contains("opaque-test-token"), "{abandoned}");
+
+        let compile =
+            describe_recovery_status(&ManagerInstallRecoveryReadiness::CompileOrAmbiguous);
+        assert!(compile.contains("recovery help"), "{compile}");
+        assert!(compile.contains("do not delete lock files"), "{compile}");
+
+        let invalid = describe_recovery_status(&ManagerInstallRecoveryReadiness::Invalid);
+        assert!(invalid.contains("could not inspect"), "{invalid}");
+        assert!(invalid.contains("do not delete lock files"), "{invalid}");
+    }
+
+    #[test]
+    fn status_prioritizes_every_lock_lane_without_a_deploy_record() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path();
+        let nothing = ManagerStatus::NothingDeployed;
+
+        assert_eq!(describe_status(game, &nothing), "nothing deployed");
+
+        let guard = InstallMutationGuard::acquire(game, "gore-mod:manager-apply").unwrap();
+        let lock = guard.path().to_path_buf();
+        assert_eq!(
+            describe_status(game, &nothing),
+            describe_recovery_status(&ManagerInstallRecoveryReadiness::Active)
+        );
+        drop(guard);
+
+        let guard = InstallMutationGuard::acquire(game, "gore-mod:manager-apply").unwrap();
+        guard.preserve_for_manual_recovery();
+        assert_eq!(
+            describe_status(game, &nothing),
+            describe_recovery_status(&ManagerInstallRecoveryReadiness::AbandonedManager {
+                guard_id: "opaque".into(),
+            })
+        );
+        std::fs::remove_file(&lock).unwrap();
+
+        let guard = InstallMutationGuard::acquire(game, "gore-as:compile").unwrap();
+        guard.preserve_for_manual_recovery();
+        assert_eq!(
+            describe_status(game, &nothing),
+            describe_recovery_status(&ManagerInstallRecoveryReadiness::CompileOrAmbiguous)
+        );
+        std::fs::remove_file(&lock).unwrap();
+
+        std::fs::write(&lock, b"not an install-mutation record").unwrap();
+        assert_eq!(
+            describe_status(game, &nothing),
+            describe_recovery_status(&ManagerInstallRecoveryReadiness::Invalid)
+        );
+        std::fs::remove_file(&lock).unwrap();
+
+        assert_eq!(describe_status(game, &nothing), "nothing deployed");
     }
 }

@@ -83,6 +83,50 @@ class AppLocalizationsDe extends AppLocalizations {
   String get installRecoveryEvidence => 'Gefundene Wiederherstellungsdaten';
 
   @override
+  String get managerRecoveryTitle =>
+      'Unterbrochenen Manager-Vorgang wiederherstellen';
+
+  @override
+  String get managerRecoveryConfirm =>
+      'GORE hat einen eindeutig unterbrochenen Manager-Vorgang gefunden. Fahre nur fort, wenn GORE den aufgezeichneten Vorgang prüfen und die Installation in einen bekannten Zustand bringen soll. Spielstände werden nie verändert.';
+
+  @override
+  String get managerRecoveryAlreadyClean =>
+      'Der unterbrochene Vorgang war bereits bereinigt. Die Installation wurde erneut geprüft.';
+
+  @override
+  String get managerRecoveryBusy =>
+      'Der Vorgang ist wieder aktiv. Es wurde nichts verändert; warte auf den Abschluss und prüfe erneut.';
+
+  @override
+  String get managerRecoveryLockCleared =>
+      'Der unterbrochene Vorgang hatte die Installation noch nicht verändert. Seine veraltete Sperre wurde sicher entfernt.';
+
+  @override
+  String get managerRecoveryRestoredPristine =>
+      'Die unterbrochene Änderung wurde zurückgenommen und der aufgezeichnete Ausgangszustand der Installation wiederhergestellt.';
+
+  @override
+  String get managerRecoveryApplyPreserved =>
+      'Das Anwenden war bereits abgeschlossen. Der aufgezeichnete Stand wurde beibehalten und der Status erneut geprüft.';
+
+  @override
+  String get managerRecoveryUndeployConfirmed =>
+      'Das Entfernen war abgeschlossen. Verbliebene Transaktionsdaten wurden bereinigt und der Status erneut geprüft.';
+
+  @override
+  String get managerRecoveryCompileRequired =>
+      'Dies gehört zur Skript-Kompilierung. Der Manager hat nichts verändert; öffne die Wiederherstellungshilfe.';
+
+  @override
+  String get managerRecoveryInspectionFailed =>
+      'GORE konnte den unterbrochenen Vorgang nicht sicher prüfen. Es wurde nichts verändert; prüfe die aktuellen Wiederherstellungsdetails.';
+
+  @override
+  String get managerRecoveryFailed =>
+      'Die Wiederherstellung konnte nicht abgeschlossen werden. GORE hat versucht, die Installation erneut zu prüfen, ihr aktueller Zustand kann jedoch unbekannt sein. Prüfe den Status, bevor du es erneut versuchst.';
+
+  @override
   String get statusUnknown => 'Unbekannt';
 
   @override

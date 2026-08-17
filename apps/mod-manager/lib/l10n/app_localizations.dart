@@ -242,6 +242,72 @@ abstract class AppLocalizations {
   /// **'Detected recovery data'**
   String get installRecoveryEvidence;
 
+  /// No description provided for @managerRecoveryTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Recover interrupted Manager change'**
+  String get managerRecoveryTitle;
+
+  /// No description provided for @managerRecoveryConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'GORE found a clearly interrupted Manager change. Continue only if you want GORE to verify the recorded operation and restore the installation to a known state. Savegames are never changed.'**
+  String get managerRecoveryConfirm;
+
+  /// No description provided for @managerRecoveryAlreadyClean.
+  ///
+  /// In en, this message translates to:
+  /// **'The interrupted change was already resolved. The installation was checked again.'**
+  String get managerRecoveryAlreadyClean;
+
+  /// No description provided for @managerRecoveryBusy.
+  ///
+  /// In en, this message translates to:
+  /// **'The operation is active again. Nothing was changed; wait for it to finish and check again.'**
+  String get managerRecoveryBusy;
+
+  /// No description provided for @managerRecoveryLockCleared.
+  ///
+  /// In en, this message translates to:
+  /// **'The interrupted operation had not changed the installation. Its obsolete lock was removed safely.'**
+  String get managerRecoveryLockCleared;
+
+  /// No description provided for @managerRecoveryRestoredPristine.
+  ///
+  /// In en, this message translates to:
+  /// **'The interrupted change was rolled back and the installation\'s recorded baseline state was restored.'**
+  String get managerRecoveryRestoredPristine;
+
+  /// No description provided for @managerRecoveryApplyPreserved.
+  ///
+  /// In en, this message translates to:
+  /// **'Apply had already completed. The recorded state was preserved, and the status was checked again.'**
+  String get managerRecoveryApplyPreserved;
+
+  /// No description provided for @managerRecoveryUndeployConfirmed.
+  ///
+  /// In en, this message translates to:
+  /// **'Removal had completed. Remaining transaction data was cleaned up, and the status was checked again.'**
+  String get managerRecoveryUndeployConfirmed;
+
+  /// No description provided for @managerRecoveryCompileRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'This belongs to script-build recovery, so Manager left it unchanged. Review the recovery help.'**
+  String get managerRecoveryCompileRequired;
+
+  /// No description provided for @managerRecoveryInspectionFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'GORE could not verify the interrupted operation safely. Nothing was changed; review the current recovery details.'**
+  String get managerRecoveryInspectionFailed;
+
+  /// No description provided for @managerRecoveryFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Recovery could not be completed. GORE tried to check the installation again, but its current state may be unknown. Review the status before trying again.'**
+  String get managerRecoveryFailed;
+
   /// Deployment status is unavailable or uses an unsupported future state.
   ///
   /// In en, this message translates to:

@@ -36,7 +36,7 @@ use gore_as::compile::{
 };
 use gore_loc::loc_store::LocMeta;
 use gore_mod::mgr::status::ManagerStatus;
-use gore_mod::GamePaths;
+use gore_mod::{GamePaths, ManagerInstallRecoveryReadiness};
 
 /// Width of the verdict column; `problem` is the longest word plus one space.
 const VERDICT_WIDTH: usize = 8;
@@ -1170,6 +1170,49 @@ fn deployment_without_a_library_projection(
     deployment_without_authoritative_target(gp, library, items, &unavailable, &unavailable, fix)
 }
 
+/// Human guidance for an interrupted install, kept in the CLI layer so every doctor finding
+/// respects the native ownership decision without exposing or guessing its opaque action token.
+fn install_recovery_fix(game_root: &Path, reset_without_lock: bool) -> &'static str {
+    let readiness = gore_mod::probe_manager_install_recovery(game_root);
+    install_recovery_fix_for(&readiness, reset_without_lock)
+}
+
+fn install_recovery_fix_for(
+    readiness: &ManagerInstallRecoveryReadiness,
+    reset_without_lock: bool,
+) -> &'static str {
+    match readiness {
+        ManagerInstallRecoveryReadiness::Missing if reset_without_lock => {
+            "no installation lock is present; run 'gore mgr reset' (or 'gore mod undeploy') to \
+             restore the recorded deployment before deploying anything else"
+        }
+        ManagerInstallRecoveryReadiness::Missing => {
+            "these are script-build or other recovery artifacts, not a clearly abandoned Manager \
+             operation. Leave them unchanged and open the Mod Manager recovery help; do not delete \
+             lock files or run reset/undeploy based only on this check"
+        }
+        ManagerInstallRecoveryReadiness::Active => {
+            "a GORE installation change is still active; wait for it to finish and check again. Do \
+             not stop it or delete lock files"
+        }
+        ManagerInstallRecoveryReadiness::AbandonedManager { .. } => {
+            "open the Mod Manager app for this installation and choose Recover. The app verifies \
+             the exact interrupted Manager operation before changing anything; the CLI does not \
+             currently perform this recovery. Do not delete lock files; run reset/undeploy only \
+             after recovery"
+        }
+        ManagerInstallRecoveryReadiness::CompileOrAmbiguous => {
+            "this belongs to script-build recovery or cannot be attributed safely. Leave the \
+             recovery data unchanged and open the Mod Manager recovery help; do not delete lock \
+             files or run reset/undeploy"
+        }
+        ManagerInstallRecoveryReadiness::Invalid => {
+            "GORE could not inspect the installation lock safely. Leave the recovery data unchanged \
+             and get help; do not delete lock files or run reset/undeploy"
+        }
+    }
+}
+
 fn deployment_without_authoritative_target(
     gp: &GamePaths,
     library: &Path,
@@ -1190,8 +1233,8 @@ fn deployment_without_authoritative_target(
         )
         .with_items(items)
         .with_fix(format!(
-            "run 'gore mgr reset' (or 'gore mod undeploy') to restore the game before deploying \
-             anything else. Separately: {fix}"
+            "{}. Separately: {fix}",
+            install_recovery_fix(&gp.root, true)
         )),
         Ok(ManagerStatus::StudioDeployActive { mod_name }) => Check::new(
             "deployment",
@@ -1327,10 +1370,7 @@ fn check_deployment(gp: &GamePaths, library: &Path, loadout_path: &Path) -> Chec
             "a previous deploy was interrupted and the install is half-changed",
         )
         .with_items(items)
-        .with_fix(
-            "run 'gore mgr reset' (or 'gore mod undeploy') to restore the game before deploying \
-             anything else",
-        ),
+        .with_fix(install_recovery_fix(&gp.root, true)),
         // A Problem with no fix is half a report, and this type's own contract says so: what was
         // looked at, what was found, and what to do about it.
         Err(gore_mod::mgr::store::StoreInspectionStatusError::Library(error)) => {
@@ -1657,8 +1697,9 @@ fn check_leftovers(
     }
 
     // Ranked ahead of both inspection failures below. A lock or journal is why deploy and
-    // 'as compile' refuse to start, and its recovery action is to finish the open transaction, not
-    // to re-run with more rights. Inside the probe `InspectionFailed` already outranks
+    // 'as compile' refuse to start. Its next step depends on the native owner decision: wait for an
+    // active operation, offer the app's exact Manager recovery, or leave compile/unclear evidence
+    // for recovery help. Inside the probe `InspectionFailed` already outranks
     // `RecoveryArtifactsPresent` — an unreadable process list is enough to trigger it — so unless
     // this branch comes first, a found lock is reported as a Note about something else entirely.
     if artifact_count > 0 {
@@ -1679,10 +1720,7 @@ fn check_leftovers(
             ),
         )
         .with_items(items)
-        .with_fix(
-            "a GORE process was interrupted. Make sure none is running, then run \
-             'gore mod undeploy' (or 'gore mgr reset') to finish the transaction it left open",
-        );
+        .with_fix(install_recovery_fix(&gp.root, false));
     }
 
     if let Some(error) = scan_error {
@@ -3162,7 +3200,7 @@ mod tests {
     }
 
     #[test]
-    fn a_leftover_install_mutation_lock_is_reported_with_the_command_that_clears_it() {
+    fn an_unidentified_install_mutation_lock_is_reported_without_a_cleanup_command() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         make_install(root);
@@ -3175,6 +3213,11 @@ mod tests {
             .items
             .iter()
             .any(|item| item.contains("InstallMutationLock")));
+        let fix = check.fix.expect("the blocker must have safe next steps");
+        assert!(fix.contains("get help"), "{fix}");
+        assert!(fix.contains("do not delete lock files"), "{fix}");
+        assert!(!fix.contains("'gore mgr reset'"), "{fix}");
+        assert!(!fix.contains("'gore mod undeploy'"), "{fix}");
     }
 
     #[test]
@@ -3201,7 +3244,9 @@ mod tests {
             "{}",
             check.detail
         );
-        assert!(check.fix.unwrap().contains("gore mod undeploy"));
+        let fix = check.fix.unwrap();
+        assert!(fix.contains("do not delete lock files"), "{fix}");
+        assert!(!fix.contains("'gore mod undeploy'"), "{fix}");
         assert!(check
             .items
             .iter()
@@ -3233,7 +3278,54 @@ mod tests {
         let check = check_leftovers(&paths(root), &probe, &nothing_deployed());
         assert_eq!(check.verdict, Verdict::Problem);
         assert!(check.detail.contains("refuse to start"), "{}", check.detail);
-        assert!(check.fix.unwrap().contains("gore mod undeploy"));
+        let fix = check.fix.unwrap();
+        assert!(fix.contains("do not delete lock files"), "{fix}");
+        assert!(!fix.contains("'gore mod undeploy'"), "{fix}");
+    }
+
+    #[test]
+    fn install_recovery_guidance_keeps_native_recovery_lanes_separate() {
+        let missing_record =
+            install_recovery_fix_for(&ManagerInstallRecoveryReadiness::Missing, true);
+        assert!(
+            missing_record.contains("gore mgr reset"),
+            "{missing_record}"
+        );
+
+        let missing_artifacts =
+            install_recovery_fix_for(&ManagerInstallRecoveryReadiness::Missing, false);
+        assert!(
+            missing_artifacts.contains("recovery help"),
+            "{missing_artifacts}"
+        );
+        assert!(
+            !missing_artifacts.contains("'gore mgr reset'"),
+            "{missing_artifacts}"
+        );
+
+        let active = install_recovery_fix_for(&ManagerInstallRecoveryReadiness::Active, true);
+        assert!(active.contains("wait for it to finish"), "{active}");
+        assert!(active.contains("Do not stop it"), "{active}");
+
+        let abandoned = install_recovery_fix_for(
+            &ManagerInstallRecoveryReadiness::AbandonedManager {
+                guard_id: "opaque-test-token".into(),
+            },
+            true,
+        );
+        assert!(abandoned.contains("choose Recover"), "{abandoned}");
+        assert!(abandoned.contains("CLI does not currently"), "{abandoned}");
+        assert!(abandoned.contains("only after recovery"), "{abandoned}");
+        assert!(!abandoned.contains("opaque-test-token"), "{abandoned}");
+
+        let compile =
+            install_recovery_fix_for(&ManagerInstallRecoveryReadiness::CompileOrAmbiguous, true);
+        assert!(compile.contains("recovery help"), "{compile}");
+        assert!(compile.contains("do not delete lock files"), "{compile}");
+
+        let invalid = install_recovery_fix_for(&ManagerInstallRecoveryReadiness::Invalid, true);
+        assert!(invalid.contains("could not inspect"), "{invalid}");
+        assert!(invalid.contains("do not delete lock files"), "{invalid}");
     }
 
     #[test]

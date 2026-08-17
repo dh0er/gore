@@ -151,12 +151,55 @@ class MgrFfi {
     }
   }
 
+  /// Recover one exact interrupted Manager install mutation. Native rechecks
+  /// both the selected root and the opaque guard id before changing anything.
+  Future<MgrInstallRecoveryOutcome> recoverInstall(
+    String gameRoot,
+    String expectedGuardId,
+  ) async {
+    final r = await _call('mgr_recover_install_v1', {
+      'game_root': gameRoot,
+      'expected_guard_id': expectedGuardId,
+    });
+    final outcome = MgrInstallRecoveryOutcome.fromWire(r['outcome']);
+    if (outcome == null) {
+      throw MgrFfiException(
+        'mgr_recover_install_v1: malformed recovery outcome',
+        code: 'MGR_RECOVER_INSTALL_INVALID_RESPONSE',
+      );
+    }
+    return outcome;
+  }
+
   /// Remove everything the manager deployed from the install. True when
   /// anything was actually removed.
   Future<bool> undeployAll(String gameRoot) async {
     final r = await _call('mgr_undeploy_all', {'game_root': gameRoot});
     return _truthy(r['removed']);
   }
+}
+
+enum MgrInstallRecoveryOutcome {
+  alreadyClean,
+  busy,
+  preMutationLockCleared,
+  recoveredToPristine,
+  completedApplyPreserved,
+  completedUndeployConfirmed,
+  compileRecoveryRequired,
+  inspectionFailed;
+
+  static MgrInstallRecoveryOutcome? fromWire(Object? value) => switch (value) {
+    'already_clean' => alreadyClean,
+    'busy' => busy,
+    'pre_mutation_lock_cleared' => preMutationLockCleared,
+    'recovered_to_pristine' => recoveredToPristine,
+    'completed_apply_preserved' => completedApplyPreserved,
+    'completed_undeploy_confirmed' => completedUndeployConfirmed,
+    'compile_recovery_required' => compileRecoveryRequired,
+    'inspection_failed' => inspectionFailed,
+    _ => null,
+  };
 }
 
 bool _validImportOutcome(

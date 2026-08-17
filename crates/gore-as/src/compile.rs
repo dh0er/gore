@@ -1177,26 +1177,110 @@ fn install_mutation_lock_path(game_dir: &Path) -> PathBuf {
     game_root_dir(game_dir).join(".gore-install-mutation.lock")
 }
 
+const INSTALL_MUTATION_INIT_PREFIX: &str = ".gore-install-mutation.init-";
+
+fn install_mutation_init_path(game_dir: &Path, owner: &str, guard_id: &str) -> PathBuf {
+    let owner_tag = match owner {
+        "gore-mod:manager-apply" => "manager-apply",
+        "gore-mod:manager-undeploy" => "manager-undeploy",
+        "gore-mod:deploy" => "legacy-deploy",
+        "gore-mod:undeploy" => "legacy-undeploy",
+        owner if owner.starts_with("gore-as:") => "compile",
+        _ => "other",
+    };
+    game_root_dir(game_dir).join(format!(
+        "{INSTALL_MUTATION_INIT_PREFIX}{owner_tag}--{guard_id}"
+    ))
+}
+
 const G1R_SHIPPING_EXE_NAME: &str = "G1R-Win64-Shipping.exe";
 const INSTALL_COMPILE_PROBE_PATH_LIMIT: usize = 4096;
 const INSTALL_COMPILE_PROBE_MESSAGE_LIMIT: usize = 2048;
 const INSTALL_MUTATION_OWNER_LIMIT: usize = 128;
 const INSTALL_MUTATION_RECORD_LIMIT: usize = 512;
+const INSTALL_MUTATION_GUARD_ID_LIMIT: usize = 160;
 
 /// Cross-tool exclusive ownership of a live game installation mutation.
 ///
-/// The lock is created atomically at `<game-root>/.gore-install-mutation.lock` and records a
-/// strictly bounded owner plus the current process id. Dropping the guard removes the lock. A
-/// caller that deliberately retains the guard (for example because a child process may still be
-/// writing the installation) retains the on-disk lock as well.
+/// A complete, synced ownership payload is published atomically at
+/// `<game-root>/.gore-install-mutation.lock`; the retained OS handle/lock, not its display PID,
+/// proves liveness. Dropping the guard removes the lock. A caller that deliberately retains the
+/// guard (for example because a child process may still be writing the installation) retains the
+/// on-disk lock as well.
 #[derive(Debug)]
 pub struct InstallMutationGuard {
     path: PathBuf,
     owner: String,
     pid: u32,
+    guard_id: String,
     payload: String,
     file: Option<std::fs::File>,
+    directory_lock: Option<std::fs::File>,
     active: bool,
+}
+
+/// An abandoned manager mutation bound through the exact retained operating-system lock handle.
+/// Dropping this value preserves the on-disk record; only an explicit successful [`Self::release`]
+/// removes it.
+#[derive(Debug)]
+pub struct AbandonedInstallMutation {
+    guard: Option<InstallMutationGuard>,
+}
+
+impl AbandonedInstallMutation {
+    pub fn owner(&self) -> &str {
+        self.guard
+            .as_ref()
+            .expect("abandoned mutation guard is retained until drop")
+            .owner()
+    }
+
+    pub fn guard_id(&self) -> &str {
+        self.guard
+            .as_ref()
+            .expect("abandoned mutation guard is retained until drop")
+            .guard_id()
+    }
+
+    pub fn path(&self) -> &Path {
+        self.guard
+            .as_ref()
+            .expect("abandoned mutation guard is retained until drop")
+            .path()
+    }
+
+    pub fn release(&mut self) -> Result<(), String> {
+        self.guard
+            .as_mut()
+            .expect("abandoned mutation guard is retained until drop")
+            .release()
+    }
+
+    pub fn preserve_for_manual_recovery(mut self) {
+        if let Some(guard) = self.guard.take() {
+            guard.preserve_for_manual_recovery();
+        }
+    }
+}
+
+impl Drop for AbandonedInstallMutation {
+    fn drop(&mut self) {
+        if let Some(guard) = self.guard.take() {
+            guard.preserve_for_manual_recovery();
+        }
+    }
+}
+
+/// Result of binding an existing lock for Manager recovery. Liveness is decided solely by the
+/// operating-system handle/lock; the bounded PID field remains display-only.
+#[derive(Debug)]
+pub enum InstallMutationTakeover {
+    Missing,
+    Busy,
+    Owned(AbandonedInstallMutation),
+    LegacyAmbiguous(AbandonedInstallMutation),
+    CompileOwner { owner: String, guard_id: String },
+    Invalid { message: String },
 }
 
 fn install_mutation_open_options() -> std::fs::OpenOptions {
@@ -1206,16 +1290,235 @@ fn install_mutation_open_options() -> std::fs::OpenOptions {
     {
         use std::os::windows::fs::OpenOptionsExt as _;
         use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
-        use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_SHARE_READ};
+        use windows_sys::Win32::Storage::FileSystem::{
+            DELETE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+        };
 
         // Retain DELETE authority on this exact handle while denying write/delete sharing. That
         // makes the ownership record immutable for the guard lifetime and lets release delete the
         // same file object by handle instead of checking one pathname object and unlinking another.
         options
             .access_mode(GENERIC_READ | GENERIC_WRITE | DELETE)
-            .share_mode(FILE_SHARE_READ);
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
     }
     options
+}
+
+fn install_mutation_open_existing_options() -> std::fs::OpenOptions {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+        use windows_sys::Win32::Storage::FileSystem::{
+            DELETE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+        };
+        options
+            .access_mode(GENERIC_READ | GENERIC_WRITE | DELETE)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    options
+}
+
+#[cfg(unix)]
+fn acquire_install_mutation_directory_lock(
+    game_dir: &Path,
+) -> std::io::Result<Option<std::fs::File>> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let root = std::fs::canonicalize(game_root_dir(game_dir))?;
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW);
+    let directory = options.open(root)?;
+    lock_install_mutation_handle(&directory)?;
+    Ok(Some(directory))
+}
+
+#[cfg(not(unix))]
+fn acquire_install_mutation_directory_lock(
+    _game_dir: &Path,
+) -> std::io::Result<Option<std::fs::File>> {
+    Ok(None)
+}
+
+#[cfg(windows)]
+fn lock_install_mutation_handle(_file: &std::fs::File) -> std::io::Result<()> {
+    // The Windows open requests read/write/delete access while denying write/delete sharing.
+    // A successful open is therefore the held-handle exclusivity proof.
+    Ok(())
+}
+
+#[cfg(unix)]
+fn lock_install_mutation_handle(file: &std::fs::File) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd as _;
+
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(any(windows, unix)))]
+fn lock_install_mutation_handle(_file: &std::fs::File) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "install-mutation OS locking is unsupported on this platform",
+    ))
+}
+
+#[cfg(windows)]
+fn install_mutation_lock_busy(error: &std::io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(32) | Some(33))
+}
+
+#[cfg(unix)]
+fn install_mutation_lock_busy(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(libc::EWOULDBLOCK) || error.raw_os_error() == Some(libc::EAGAIN)
+}
+
+#[cfg(not(any(windows, unix)))]
+fn install_mutation_lock_busy(_error: &std::io::Error) -> bool {
+    false
+}
+
+#[cfg(test)]
+thread_local! {
+    static INSTALL_MUTATION_TAKEOVER_AFTER_LOCK: std::cell::RefCell<
+        Option<Box<dyn FnOnce(&Path)>>,
+    > = std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn run_install_mutation_takeover_after_lock(path: &Path) {
+    INSTALL_MUTATION_TAKEOVER_AFTER_LOCK.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().take() {
+            hook(path);
+        }
+    });
+}
+
+#[cfg(unix)]
+fn install_mutation_handle_still_names_path(
+    file: &std::fs::File,
+    path: &Path,
+) -> Result<bool, String> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let held = file.metadata().map_err(|error| {
+        format!(
+            "reading held install-mutation lock identity {}: {error}",
+            path.display()
+        )
+    })?;
+    let current = match std::fs::symlink_metadata(path) {
+        Ok(current) => current,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!(
+                "reading current install-mutation lock identity {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    Ok(!current.file_type().is_symlink()
+        && held.nlink() == 1
+        && current.nlink() == 1
+        && held.dev() == current.dev()
+        && held.ino() == current.ino())
+}
+
+#[cfg(windows)]
+fn install_mutation_handle_still_names_path(
+    file: &std::fs::File,
+    path: &Path,
+) -> Result<bool, String> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT,
+    };
+
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut information) } == 0 {
+        return Err(format!(
+            "reading held install-mutation lock identity {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(
+        information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT == 0
+            && information.nNumberOfLinks == 1,
+    )
+}
+
+#[cfg(not(any(unix, windows)))]
+fn install_mutation_handle_still_names_path(
+    _file: &std::fs::File,
+    _path: &Path,
+) -> Result<bool, String> {
+    Ok(false)
+}
+
+fn valid_install_mutation_token(value: &str, limit: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= limit
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-:".contains(&byte))
+}
+
+struct InstallMutationRecord {
+    owner: String,
+    pid: u32,
+    guard_id: String,
+}
+
+fn parse_install_mutation_record(bytes: &[u8]) -> Result<InstallMutationRecord, String> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| "install-mutation ownership record is not valid UTF-8".to_owned())?;
+    let mut lines = text.lines();
+    if lines.next() != Some("version=1") {
+        return Err("install-mutation ownership record has an unsupported version".to_owned());
+    }
+    let owner = lines
+        .next()
+        .and_then(|line| line.strip_prefix("owner="))
+        .filter(|owner| valid_install_mutation_token(owner, INSTALL_MUTATION_OWNER_LIMIT))
+        .ok_or_else(|| "install-mutation ownership record has an invalid owner".to_owned())?;
+    let pid = lines
+        .next()
+        .and_then(|line| line.strip_prefix("pid="))
+        .and_then(|pid| pid.parse::<u32>().ok())
+        .ok_or_else(|| "install-mutation ownership record has an invalid display PID".to_owned())?;
+    let guard_id = lines
+        .next()
+        .and_then(|line| line.strip_prefix("guard_id="))
+        .filter(|guard_id| valid_install_mutation_token(guard_id, INSTALL_MUTATION_GUARD_ID_LIMIT))
+        .ok_or_else(|| "install-mutation ownership record has an invalid guard id".to_owned())?;
+    if lines.next().is_some() {
+        return Err("install-mutation ownership record contains unexpected fields".to_owned());
+    }
+    Ok(InstallMutationRecord {
+        owner: owner.to_owned(),
+        pid,
+        guard_id: guard_id.to_owned(),
+    })
 }
 
 fn read_install_mutation_payload(file: &mut std::fs::File, path: &Path) -> Result<Vec<u8>, String> {
@@ -1255,6 +1558,167 @@ fn read_install_mutation_payload(file: &mut std::fs::File, path: &Path) -> Resul
         ));
     }
     Ok(bytes)
+}
+
+fn install_mutation_init_owner_and_guard_id(path: &Path) -> Option<(String, String)> {
+    let name = path.file_name()?.to_str()?;
+    let encoded = name.strip_prefix(INSTALL_MUTATION_INIT_PREFIX)?;
+    let (owner_tag, guard_id) = encoded.split_once("--")?;
+    if !valid_install_mutation_token(guard_id, INSTALL_MUTATION_GUARD_ID_LIMIT) {
+        return None;
+    }
+    let owner = match owner_tag {
+        "manager-apply" => "gore-mod:manager-apply",
+        "manager-undeploy" => "gore-mod:manager-undeploy",
+        "legacy-deploy" => "gore-mod:deploy",
+        "legacy-undeploy" => "gore-mod:undeploy",
+        "compile" => "gore-as:initialization",
+        "other" => "other:initialization",
+        _ => return None,
+    };
+    Some((owner.to_owned(), guard_id.to_owned()))
+}
+
+fn install_mutation_initialization_candidates(game_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let root = game_root_dir(game_dir);
+    let entries = match std::fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(format!(
+                "enumerating install-mutation initialization records in {}: {error}",
+                root.display()
+            ));
+        }
+    };
+    let mut paths = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!(
+                "enumerating install-mutation initialization records in {}: {error}",
+                root.display()
+            )
+        })?;
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(INSTALL_MUTATION_INIT_PREFIX))
+        {
+            paths.push(entry.path());
+            if paths.len() > 16 {
+                return Err(format!(
+                    "refusing more than 16 install-mutation initialization records in {}",
+                    root.display()
+                ));
+            }
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+#[cfg(windows)]
+fn publish_install_mutation_initialization(init: &Path, path: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
+
+    let init: Vec<u16> = init
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let path: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    if unsafe { MoveFileExW(init.as_ptr(), path.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn publish_install_mutation_initialization(init: &Path, path: &Path) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let init = std::ffi::CString::new(init.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "install-mutation initialization path contains NUL",
+        )
+    })?;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "install-mutation lock path contains NUL",
+        )
+    })?;
+    if unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            init.as_ptr(),
+            libc::AT_FDCWD,
+            path.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    } == 0
+    {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_vendor = "apple")]
+fn publish_install_mutation_initialization(init: &Path, path: &Path) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let init = std::ffi::CString::new(init.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "install-mutation initialization path contains NUL",
+        )
+    })?;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "install-mutation lock path contains NUL",
+        )
+    })?;
+    if unsafe {
+        libc::renameatx_np(
+            libc::AT_FDCWD,
+            init.as_ptr(),
+            libc::AT_FDCWD,
+            path.as_ptr(),
+            libc::RENAME_EXCL,
+        )
+    } == 0
+    {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_vendor = "apple")))]
+fn publish_install_mutation_initialization(_init: &Path, _path: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic no-clobber install-mutation publication is unsupported on this platform",
+    ))
+}
+
+#[cfg(unix)]
+fn sync_install_mutation_directory(path: &Path) -> std::io::Result<()> {
+    std::fs::File::open(path)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_install_mutation_directory(_path: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -1300,6 +1764,8 @@ fn remove_install_mutation_file_by_handle(file: &std::fs::File, path: &Path) -> 
         )
     })?;
     if current.file_type().is_symlink()
+        || owned.nlink() != 1
+        || current.nlink() != 1
         || owned.dev() != current.dev()
         || owned.ino() != current.ino()
     {
@@ -1326,6 +1792,183 @@ fn remove_install_mutation_file_by_handle(
     Err("identity-bound install-mutation lock release is unsupported on this platform".to_owned())
 }
 
+fn remove_install_mutation_initialization_if_owned(
+    init_path: &Path,
+    expected_payload: &[u8],
+) -> Result<(), String> {
+    let mut file = install_mutation_open_existing_options()
+        .open(init_path)
+        .map_err(|error| {
+            format!(
+                "opening failed install-mutation initialization {}: {error}",
+                init_path.display()
+            )
+        })?;
+    lock_install_mutation_handle(&file).map_err(|error| {
+        format!(
+            "locking failed install-mutation initialization {}: {error}",
+            init_path.display()
+        )
+    })?;
+    if !install_mutation_handle_still_names_path(&file, init_path)? {
+        return Err(format!(
+            "refusing changed install-mutation initialization {}",
+            init_path.display()
+        ));
+    }
+    let actual = read_install_mutation_payload(&mut file, init_path)?;
+    if actual != expected_payload {
+        return Err(format!(
+            "refusing changed install-mutation initialization payload {}",
+            init_path.display()
+        ));
+    }
+    remove_install_mutation_file_by_handle(&file, init_path)
+}
+
+fn take_over_abandoned_initialization(
+    game_dir: &Path,
+    directory_lock: Option<std::fs::File>,
+) -> InstallMutationTakeover {
+    let candidates = match install_mutation_initialization_candidates(game_dir) {
+        Ok(candidates) => candidates,
+        Err(message) => return InstallMutationTakeover::Invalid { message },
+    };
+    let [path] = candidates.as_slice() else {
+        return if candidates.is_empty() {
+            InstallMutationTakeover::Missing
+        } else {
+            InstallMutationTakeover::Invalid {
+                message: "multiple interrupted install-mutation initializations require manual inspection"
+                    .to_owned(),
+            }
+        };
+    };
+    let Some((owner, guard_id)) = install_mutation_init_owner_and_guard_id(path) else {
+        return InstallMutationTakeover::Invalid {
+            message: format!(
+                "invalid install-mutation initialization name: {}",
+                path.display()
+            ),
+        };
+    };
+    let mut file = match install_mutation_open_existing_options().open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return InstallMutationTakeover::Missing;
+        }
+        Err(error) if install_mutation_lock_busy(&error) => {
+            return InstallMutationTakeover::Busy;
+        }
+        Err(error) => {
+            return InstallMutationTakeover::Invalid {
+                message: format!(
+                    "opening install-mutation initialization {}: {error}",
+                    path.display()
+                ),
+            };
+        }
+    };
+    if let Err(error) = lock_install_mutation_handle(&file) {
+        return if install_mutation_lock_busy(&error) {
+            InstallMutationTakeover::Busy
+        } else {
+            InstallMutationTakeover::Invalid {
+                message: format!(
+                    "locking install-mutation initialization {}: {error}",
+                    path.display()
+                ),
+            }
+        };
+    }
+    #[cfg(test)]
+    run_install_mutation_takeover_after_lock(path);
+    match install_mutation_handle_still_names_path(&file, path) {
+        Ok(true) => {}
+        Ok(false) => {
+            return InstallMutationTakeover::Invalid {
+                message: bounded_probe_text(
+                    &format!(
+                        "install-mutation initialization changed filesystem identity after it was \
+                         locked: {}",
+                        path.display()
+                    ),
+                    INSTALL_COMPILE_PROBE_MESSAGE_LIMIT,
+                )
+                .0,
+            };
+        }
+        Err(message) => return InstallMutationTakeover::Invalid { message },
+    }
+    let payload = match read_install_mutation_payload(&mut file, path) {
+        Ok(payload) => payload,
+        Err(message) => return InstallMutationTakeover::Invalid { message },
+    };
+    if let Ok(parsed) = parse_install_mutation_record(&payload) {
+        let owner_matches_name = if owner == "gore-as:initialization" {
+            parsed.owner.starts_with("gore-as:")
+        } else {
+            parsed.owner == owner
+        };
+        if !owner_matches_name || parsed.guard_id != guard_id {
+            return InstallMutationTakeover::Invalid {
+                message: format!(
+                    "install-mutation initialization name and payload disagree: {}",
+                    path.display()
+                ),
+            };
+        }
+        if owner == "gore-as:initialization" {
+            return InstallMutationTakeover::CompileOwner {
+                owner: parsed.owner,
+                guard_id: parsed.guard_id,
+            };
+        }
+    }
+    if owner.starts_with("gore-as:") {
+        return InstallMutationTakeover::CompileOwner { owner, guard_id };
+    }
+    let legacy_ambiguous = matches!(owner.as_str(), "gore-mod:deploy" | "gore-mod:undeploy");
+    if !matches!(
+        owner.as_str(),
+        "gore-mod:manager-apply"
+            | "gore-mod:manager-undeploy"
+            | "gore-mod:deploy"
+            | "gore-mod:undeploy"
+    ) {
+        return InstallMutationTakeover::Invalid {
+            message: format!(
+                "install-mutation initialization owner '{owner}' is not recoverable by Manager"
+            ),
+        };
+    }
+    let payload = match String::from_utf8(payload) {
+        Ok(payload) => payload,
+        Err(_) => {
+            return InstallMutationTakeover::Invalid {
+                message: "install-mutation initialization is not valid UTF-8".to_owned(),
+            };
+        }
+    };
+    let abandoned = AbandonedInstallMutation {
+        guard: Some(InstallMutationGuard {
+            path: path.clone(),
+            owner,
+            pid: 0,
+            guard_id,
+            payload,
+            file: Some(file),
+            directory_lock,
+            active: true,
+        }),
+    };
+    if legacy_ambiguous {
+        InstallMutationTakeover::LegacyAmbiguous(abandoned)
+    } else {
+        InstallMutationTakeover::Owned(abandoned)
+    }
+}
+
 impl InstallMutationGuard {
     pub fn acquire(game_dir: &Path, owner: &str) -> Result<Self, String> {
         if owner.is_empty()
@@ -1339,20 +1982,38 @@ impl InstallMutationGuard {
                  using only letters, digits, '.', '_', '-', or ':'"
             ));
         }
-        let path = install_mutation_lock_path(game_dir);
-        let mut file = install_mutation_open_options()
-            .open(&path)
-            .map_err(|error| {
-                let message = if error.kind() == std::io::ErrorKind::AlreadyExists {
-                    format!(
-                        "another install mutation is active (lock exists: {})",
-                        path.display()
-                    )
+        let directory_lock =
+            acquire_install_mutation_directory_lock(game_dir).map_err(|error| {
+                let message = if install_mutation_lock_busy(&error) {
+                    "another install mutation is active (install-root ownership is held)".to_owned()
                 } else {
-                    format!("creating install-mutation lock {}: {error}", path.display())
+                    format!("locking the canonical install root: {error}")
                 };
                 bounded_probe_text(&message, INSTALL_COMPILE_PROBE_MESSAGE_LIMIT).0
             })?;
+        let path = install_mutation_lock_path(game_dir);
+        match std::fs::symlink_metadata(&path) {
+            Ok(_) => {
+                return Err(format!(
+                    "another install mutation is active (lock exists: {})",
+                    path.display()
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "inspecting install-mutation lock {}: {error}",
+                    path.display()
+                ));
+            }
+        }
+        let initializations = install_mutation_initialization_candidates(game_dir)?;
+        if let Some(initialization) = initializations.first() {
+            return Err(format!(
+                "an interrupted install-mutation initialization requires recovery: {}",
+                initialization.display()
+            ));
+        }
         let pid = std::process::id();
         static GUARD_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let sequence = GUARD_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1360,38 +2021,300 @@ impl InstallMutationGuard {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let payload = format!(
-            "version=1\nowner={owner}\npid={pid}\nguard_id={pid}-{created_nanos}-{sequence}\n"
-        );
-        if let Err(error) = file
+        let guard_id = format!("{pid}-{created_nanos}-{sequence}");
+        let payload = format!("version=1\nowner={owner}\npid={pid}\nguard_id={guard_id}\n");
+        let init_path = install_mutation_init_path(game_dir, owner, &guard_id);
+        let mut init_file = install_mutation_open_options()
+            .open(&init_path)
+            .map_err(|error| {
+                bounded_probe_text(
+                    &format!(
+                        "creating install-mutation initialization {}: {error}",
+                        init_path.display()
+                    ),
+                    INSTALL_COMPILE_PROBE_MESSAGE_LIMIT,
+                )
+                .0
+            })?;
+        if let Err(error) = lock_install_mutation_handle(&init_file) {
+            let cleanup = remove_install_mutation_file_by_handle(&init_file, &init_path).err();
+            drop(init_file);
+            let message = match cleanup {
+                Some(cleanup) => format!(
+                    "locking new install-mutation initialization {}: {error}; additionally failed \
+                     to remove it: {cleanup}",
+                    init_path.display()
+                ),
+                None => format!(
+                    "locking new install-mutation initialization {}: {error}",
+                    init_path.display()
+                ),
+            };
+            return Err(bounded_probe_text(&message, INSTALL_COMPILE_PROBE_MESSAGE_LIMIT).0);
+        }
+        if let Err(error) = init_file
             .write_all(payload.as_bytes())
-            .and_then(|_| file.sync_all())
+            .and_then(|_| init_file.sync_all())
         {
-            // Cleanup through the still-open identity handle. Closing first and then unlinking the
-            // pathname would let a raced replacement become the deletion target.
-            let cleanup = remove_install_mutation_file_by_handle(&file, &path).err();
-            drop(file);
+            let cleanup = remove_install_mutation_file_by_handle(&init_file, &init_path).err();
+            drop(init_file);
             let message = match cleanup {
                 Some(cleanup) => format!(
                     "initializing install-mutation lock {}: {error}; additionally failed to \
                      remove it: {cleanup}",
-                    path.display()
+                    init_path.display()
                 ),
                 None => format!(
                     "initializing install-mutation lock {}: {error}",
+                    init_path.display()
+                ),
+            };
+            return Err(bounded_probe_text(&message, INSTALL_COMPILE_PROBE_MESSAGE_LIMIT).0);
+        }
+        drop(init_file);
+        if let Err(error) = publish_install_mutation_initialization(&init_path, &path) {
+            let cleanup =
+                remove_install_mutation_initialization_if_owned(&init_path, payload.as_bytes())
+                    .err();
+            let message = match cleanup {
+                Some(cleanup) => format!(
+                    "publishing install-mutation lock {}: {error}; additionally failed to remove \
+                     initialization {}: {cleanup}",
+                    path.display(),
+                    init_path.display()
+                ),
+                None => format!(
+                    "publishing install-mutation lock {}: {error}",
                     path.display()
                 ),
             };
             return Err(bounded_probe_text(&message, INSTALL_COMPILE_PROBE_MESSAGE_LIMIT).0);
         }
+        if let Some(parent) = path.parent() {
+            sync_install_mutation_directory(parent).map_err(|error| {
+                format!(
+                    "syncing published install-mutation lock directory {}: {error}",
+                    parent.display()
+                )
+            })?;
+        }
+        let mut file = install_mutation_open_existing_options()
+            .open(&path)
+            .map_err(|error| {
+                bounded_probe_text(
+                    &format!(
+                        "opening published install-mutation lock {}: {error}",
+                        path.display()
+                    ),
+                    INSTALL_COMPILE_PROBE_MESSAGE_LIMIT,
+                )
+                .0
+            })?;
+        lock_install_mutation_handle(&file).map_err(|error| {
+            bounded_probe_text(
+                &format!(
+                    "locking published install-mutation record {}: {error}",
+                    path.display()
+                ),
+                INSTALL_COMPILE_PROBE_MESSAGE_LIMIT,
+            )
+            .0
+        })?;
+        if !install_mutation_handle_still_names_path(&file, &path)? {
+            return Err(format!(
+                "published install-mutation record changed filesystem identity: {}",
+                path.display()
+            ));
+        }
+        if read_install_mutation_payload(&mut file, &path)? != payload.as_bytes() {
+            return Err(format!(
+                "published install-mutation ownership record changed before it was acquired: {}",
+                path.display()
+            ));
+        }
         Ok(Self {
             path,
             owner: owner.to_owned(),
             pid,
+            guard_id,
             payload,
             file: Some(file),
+            directory_lock,
             active: true,
         })
+    }
+
+    /// Bind an existing Manager lock only when the operating system proves its original handle is
+    /// no longer held. A stale compile owner is never returned as recoverable Manager ownership.
+    pub fn take_over_abandoned_manager(game_dir: &Path) -> InstallMutationTakeover {
+        let directory_lock = match acquire_install_mutation_directory_lock(game_dir) {
+            Ok(directory_lock) => directory_lock,
+            Err(error) if install_mutation_lock_busy(&error) => {
+                return InstallMutationTakeover::Busy;
+            }
+            Err(error) => {
+                return InstallMutationTakeover::Invalid {
+                    message: bounded_probe_text(
+                        &format!("locking the canonical install root for recovery: {error}"),
+                        INSTALL_COMPILE_PROBE_MESSAGE_LIMIT,
+                    )
+                    .0,
+                };
+            }
+        };
+        let path = install_mutation_lock_path(game_dir);
+        let mut file = match install_mutation_open_existing_options().open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return take_over_abandoned_initialization(game_dir, directory_lock);
+            }
+            Err(error) if install_mutation_lock_busy(&error) => {
+                return InstallMutationTakeover::Busy;
+            }
+            Err(error) => {
+                return InstallMutationTakeover::Invalid {
+                    message: bounded_probe_text(
+                        &format!(
+                            "opening existing install-mutation lock {}: {error}",
+                            path.display()
+                        ),
+                        INSTALL_COMPILE_PROBE_MESSAGE_LIMIT,
+                    )
+                    .0,
+                };
+            }
+        };
+        let metadata = match file.metadata() {
+            Ok(metadata) if metadata.is_file() => metadata,
+            Ok(_) => {
+                return InstallMutationTakeover::Invalid {
+                    message: format!(
+                        "existing install-mutation lock is not a regular file: {}",
+                        path.display()
+                    ),
+                };
+            }
+            Err(error) => {
+                return InstallMutationTakeover::Invalid {
+                    message: format!(
+                        "reading existing install-mutation lock metadata {}: {error}",
+                        path.display()
+                    ),
+                };
+            }
+        };
+        if metadata.len() > INSTALL_MUTATION_RECORD_LIMIT as u64 {
+            return InstallMutationTakeover::Invalid {
+                message: format!(
+                    "refusing oversized install-mutation ownership record at {} ({} bytes; limit {})",
+                    path.display(),
+                    metadata.len(),
+                    INSTALL_MUTATION_RECORD_LIMIT
+                ),
+            };
+        }
+        if let Err(error) = lock_install_mutation_handle(&file) {
+            if install_mutation_lock_busy(&error) {
+                return InstallMutationTakeover::Busy;
+            }
+            return InstallMutationTakeover::Invalid {
+                message: bounded_probe_text(
+                    &format!(
+                        "locking existing install-mutation record {}: {error}",
+                        path.display()
+                    ),
+                    INSTALL_COMPILE_PROBE_MESSAGE_LIMIT,
+                )
+                .0,
+            };
+        }
+        #[cfg(test)]
+        run_install_mutation_takeover_after_lock(&path);
+        match install_mutation_handle_still_names_path(&file, &path) {
+            Ok(true) => {}
+            Ok(false) => {
+                return InstallMutationTakeover::Invalid {
+                    message: bounded_probe_text(
+                        &format!(
+                            "install-mutation lock changed filesystem identity after it was \
+                             locked: {}",
+                            path.display()
+                        ),
+                        INSTALL_COMPILE_PROBE_MESSAGE_LIMIT,
+                    )
+                    .0,
+                };
+            }
+            Err(message) => return InstallMutationTakeover::Invalid { message },
+        }
+        let payload = match read_install_mutation_payload(&mut file, &path) {
+            Ok(payload) => payload,
+            Err(message) => return InstallMutationTakeover::Invalid { message },
+        };
+        let parsed = match parse_install_mutation_record(&payload) {
+            Ok(parsed) => parsed,
+            Err(message) => {
+                return InstallMutationTakeover::Invalid {
+                    message: bounded_probe_text(
+                        &format!(
+                            "invalid install-mutation lock {}: {message}",
+                            path.display()
+                        ),
+                        INSTALL_COMPILE_PROBE_MESSAGE_LIMIT,
+                    )
+                    .0,
+                };
+            }
+        };
+        if parsed.owner.starts_with("gore-as:") {
+            return InstallMutationTakeover::CompileOwner {
+                owner: parsed.owner,
+                guard_id: parsed.guard_id,
+            };
+        }
+        let legacy_ambiguous = matches!(
+            parsed.owner.as_str(),
+            "gore-mod:deploy" | "gore-mod:undeploy"
+        );
+        if !matches!(
+            parsed.owner.as_str(),
+            "gore-mod:manager-apply"
+                | "gore-mod:manager-undeploy"
+                | "gore-mod:deploy"
+                | "gore-mod:undeploy"
+        ) {
+            return InstallMutationTakeover::Invalid {
+                message: format!(
+                    "install-mutation owner '{}' is not a recoverable Manager operation",
+                    parsed.owner
+                ),
+            };
+        }
+        let payload = match String::from_utf8(payload) {
+            Ok(payload) => payload,
+            Err(_) => {
+                return InstallMutationTakeover::Invalid {
+                    message: "install-mutation ownership record is not valid UTF-8".to_owned(),
+                };
+            }
+        };
+        let abandoned = AbandonedInstallMutation {
+            guard: Some(InstallMutationGuard {
+                path,
+                owner: parsed.owner,
+                pid: parsed.pid,
+                guard_id: parsed.guard_id,
+                payload,
+                file: Some(file),
+                directory_lock,
+                active: true,
+            }),
+        };
+        if legacy_ambiguous {
+            InstallMutationTakeover::LegacyAmbiguous(abandoned)
+        } else {
+            InstallMutationTakeover::Owned(abandoned)
+        }
     }
 
     pub fn owner(&self) -> &str {
@@ -1400,6 +2323,10 @@ impl InstallMutationGuard {
 
     pub fn pid(&self) -> u32 {
         self.pid
+    }
+
+    pub fn guard_id(&self) -> &str {
+        &self.guard_id
     }
 
     pub fn path(&self) -> &Path {
@@ -1415,6 +2342,7 @@ impl InstallMutationGuard {
     fn close_handle_preserving_record(&mut self) {
         self.active = false;
         drop(self.file.take());
+        drop(self.directory_lock.take());
     }
 
     pub fn release(&mut self) -> Result<(), String> {
@@ -1438,6 +2366,7 @@ impl InstallMutationGuard {
             bounded_probe_text(&message, INSTALL_COMPILE_PROBE_MESSAGE_LIMIT).0
         })?;
         drop(self.file.take());
+        drop(self.directory_lock.take());
         self.active = false;
         Ok(())
     }
@@ -1767,6 +2696,31 @@ where
                     message_truncated,
                 });
             }
+        }
+    }
+    match install_mutation_initialization_candidates(game_dir) {
+        Ok(paths) => {
+            for path in paths {
+                let (path, path_truncated) = bounded_probe_path(&path);
+                artifacts.push(InstallCompileArtifact {
+                    kind: InstallCompileArtifactKind::InstallMutationLock,
+                    path,
+                    path_truncated,
+                });
+            }
+        }
+        Err(error) => {
+            let root = game_root_dir(game_dir);
+            let (path, path_truncated) = bounded_probe_path(&root);
+            let (message, message_truncated) =
+                bounded_probe_text(&error, INSTALL_COMPILE_PROBE_MESSAGE_LIMIT);
+            issues.push(InstallCompileInspectionIssue {
+                kind: InstallCompileInspectionIssueKind::ArtifactMetadata,
+                path: Some(path),
+                path_truncated,
+                message,
+                message_truncated,
+            });
         }
     }
 
@@ -6044,6 +6998,328 @@ mod tests {
     }
 
     #[test]
+    fn install_mutation_takeover_distinguishes_active_abandoned_and_explicit_release() {
+        let root = unique_test_root("install-mutation-takeover-manager");
+        let (game, _) = fake_install(&root);
+        let path = install_mutation_lock_path(&game);
+        let guard = InstallMutationGuard::acquire(&game, "gore-mod:manager-apply").unwrap();
+        let guard_id = guard.guard_id().to_owned();
+        assert!(matches!(
+            InstallMutationGuard::take_over_abandoned_manager(&game),
+            InstallMutationTakeover::Busy
+        ));
+
+        guard.preserve_for_manual_recovery();
+        let abandoned = match InstallMutationGuard::take_over_abandoned_manager(&game) {
+            InstallMutationTakeover::Owned(abandoned) => abandoned,
+            other => panic!("expected abandoned Manager lock, got {other:?}"),
+        };
+        assert_eq!(abandoned.guard_id(), guard_id);
+        assert!(matches!(
+            InstallMutationGuard::take_over_abandoned_manager(&game),
+            InstallMutationTakeover::Busy
+        ));
+        drop(abandoned);
+        assert!(
+            path.exists(),
+            "default abandoned drop must preserve evidence"
+        );
+
+        let mut abandoned = match InstallMutationGuard::take_over_abandoned_manager(&game) {
+            InstallMutationTakeover::Owned(abandoned) => abandoned,
+            other => panic!("expected repeat abandoned takeover, got {other:?}"),
+        };
+        abandoned.release().unwrap();
+        assert!(
+            !path.exists(),
+            "explicit release must remove the exact lock"
+        );
+        assert!(matches!(
+            InstallMutationGuard::take_over_abandoned_manager(&game),
+            InstallMutationTakeover::Missing
+        ));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn install_mutation_takeover_never_adopts_compile_legacy_or_unknown_owners() {
+        let root = unique_test_root("install-mutation-takeover-owner-classes");
+        let (game, _) = fake_install(&root);
+        let path = install_mutation_lock_path(&game);
+
+        let guard = InstallMutationGuard::acquire(&game, "gore-as:compile").unwrap();
+        let compile_id = guard.guard_id().to_owned();
+        guard.preserve_for_manual_recovery();
+        match InstallMutationGuard::take_over_abandoned_manager(&game) {
+            InstallMutationTakeover::CompileOwner { owner, guard_id } => {
+                assert_eq!(owner, "gore-as:compile");
+                assert_eq!(guard_id, compile_id);
+            }
+            other => panic!("expected compile classification, got {other:?}"),
+        }
+        assert!(path.exists());
+        std::fs::remove_file(&path).unwrap();
+
+        let guard = InstallMutationGuard::acquire(&game, "gore-mod:deploy").unwrap();
+        guard.preserve_for_manual_recovery();
+        let legacy = match InstallMutationGuard::take_over_abandoned_manager(&game) {
+            InstallMutationTakeover::LegacyAmbiguous(abandoned) => abandoned,
+            other => panic!("expected legacy ambiguity, got {other:?}"),
+        };
+        drop(legacy);
+        assert!(path.exists());
+        std::fs::remove_file(&path).unwrap();
+
+        let guard = InstallMutationGuard::acquire(&game, "other:writer").unwrap();
+        guard.preserve_for_manual_recovery();
+        assert!(matches!(
+            InstallMutationGuard::take_over_abandoned_manager(&game),
+            InstallMutationTakeover::Invalid { .. }
+        ));
+        assert!(path.exists());
+        std::fs::remove_file(&path).unwrap();
+
+        std::fs::write(&path, b"not a valid ownership record").unwrap();
+        assert!(matches!(
+            InstallMutationGuard::take_over_abandoned_manager(&game),
+            InstallMutationTakeover::Invalid { .. }
+        ));
+        assert!(path.exists());
+        std::fs::remove_file(&path).unwrap();
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn install_mutation_takeover_rejects_hardlinked_lock_authority() {
+        let root = unique_test_root("install-mutation-takeover-hardlink");
+        let (game, _) = fake_install(&root);
+        let path = install_mutation_lock_path(&game);
+        let linked = root.join("linked-lock");
+        let guard = InstallMutationGuard::acquire(&game, "gore-mod:manager-apply").unwrap();
+        guard.preserve_for_manual_recovery();
+        std::fs::hard_link(&path, &linked).unwrap();
+        match InstallMutationGuard::take_over_abandoned_manager(&game) {
+            InstallMutationTakeover::Invalid { message } => {
+                assert!(message.contains("filesystem identity"), "{message}");
+            }
+            other => panic!("expected invalid hardlinked lock authority, got {other:?}"),
+        }
+        assert!(path.exists());
+        assert!(linked.exists());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(&linked).unwrap();
+
+        let init = install_mutation_init_path(&game, "gore-mod:manager-apply", "123-456-10");
+        let linked_init = root.join("linked-initialization");
+        std::fs::write(&init, b"").unwrap();
+        std::fs::hard_link(&init, &linked_init).unwrap();
+        match InstallMutationGuard::take_over_abandoned_manager(&game) {
+            InstallMutationTakeover::Invalid { message } => {
+                assert!(message.contains("filesystem identity"), "{message}");
+            }
+            other => panic!("expected invalid hardlinked initialization, got {other:?}"),
+        }
+        assert!(init.exists());
+        assert!(linked_init.exists());
+        std::fs::remove_file(&init).unwrap();
+        std::fs::remove_file(&linked_init).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn install_mutation_takeover_rejects_a_reparse_lock_authority() {
+        let root = unique_test_root("install-mutation-takeover-reparse");
+        let (game, _) = fake_install(&root);
+        let path = install_mutation_lock_path(&game);
+        let target = root.join("foreign-lock-target");
+        std::fs::write(
+            &target,
+            b"version=1\nowner=gore-mod:manager-apply\npid=1\nguard_id=reparse-test\n",
+        )
+        .unwrap();
+        match std::os::windows::fs::symlink_file(&target, &path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                std::fs::remove_dir_all(root).unwrap();
+                return;
+            }
+            Err(error) => panic!("creating lock reparse-point fixture failed: {error}"),
+        }
+
+        match InstallMutationGuard::take_over_abandoned_manager(&game) {
+            InstallMutationTakeover::Invalid { .. } => {}
+            other => panic!("expected invalid reparse lock authority, got {other:?}"),
+        }
+        assert!(path.exists());
+        assert!(target.exists());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(&target).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_mutation_takeover_reports_replaced_identities_as_invalid() {
+        let root = unique_test_root("install-mutation-takeover-replaced-identity");
+        let (game, _) = fake_install(&root);
+        let path = install_mutation_lock_path(&game);
+        let displaced = root.join("displaced-lock-for-takeover");
+        let guard = InstallMutationGuard::acquire(&game, "gore-mod:manager-apply").unwrap();
+        guard.preserve_for_manual_recovery();
+
+        let displaced_for_hook = displaced.clone();
+        INSTALL_MUTATION_TAKEOVER_AFTER_LOCK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |opened_path| {
+                std::fs::rename(opened_path, &displaced_for_hook).unwrap();
+                std::fs::write(opened_path, b"replacement lock").unwrap();
+            }));
+        });
+        match InstallMutationGuard::take_over_abandoned_manager(&game) {
+            InstallMutationTakeover::Invalid { message } => {
+                assert!(message.contains("filesystem identity"), "{message}");
+            }
+            other => panic!("expected invalid replaced lock identity, got {other:?}"),
+        }
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(&displaced).unwrap();
+
+        let init = install_mutation_init_path(&game, "gore-mod:manager-apply", "123-456-11");
+        let displaced_init = root.join("displaced-initialization-for-takeover");
+        std::fs::write(&init, b"").unwrap();
+        let displaced_init_for_hook = displaced_init.clone();
+        INSTALL_MUTATION_TAKEOVER_AFTER_LOCK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |opened_path| {
+                std::fs::rename(opened_path, &displaced_init_for_hook).unwrap();
+                std::fs::write(opened_path, b"replacement initialization").unwrap();
+            }));
+        });
+        match InstallMutationGuard::take_over_abandoned_manager(&game) {
+            InstallMutationTakeover::Invalid { message } => {
+                assert!(message.contains("filesystem identity"), "{message}");
+            }
+            other => panic!("expected invalid replaced initialization, got {other:?}"),
+        }
+        std::fs::remove_file(&init).unwrap();
+        std::fs::remove_file(&displaced_init).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_mutation_directory_lock_blocks_replacement_race_and_release_preserves_replacement() {
+        let root = unique_test_root("install-mutation-replaced-path");
+        let (game, _) = fake_install(&root);
+        let path = install_mutation_lock_path(&game);
+        let displaced = root.join("displaced-lock");
+        let mut guard = InstallMutationGuard::acquire(&game, "gore-mod:manager-apply").unwrap();
+
+        std::fs::rename(&path, &displaced).unwrap();
+        std::fs::write(&path, b"replacement owned by another actor").unwrap();
+        let contender = InstallMutationGuard::acquire(&game, "gore-as:compile")
+            .expect_err("the stable install-root lock must still serialize a replaced lock name");
+        assert!(
+            contender.contains("install-root ownership is held"),
+            "{contender}"
+        );
+
+        let release = guard
+            .release()
+            .expect_err("release must not unlink a replacement at the canonical name");
+        assert!(release.contains("filesystem identity changed"), "{release}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"replacement owned by another actor"
+        );
+        guard.preserve_for_manual_recovery();
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(&displaced).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn install_mutation_takeover_clears_a_prepublication_manager_initialization_only_explicitly() {
+        let root = unique_test_root("install-mutation-takeover-initialization");
+        let (game, _) = fake_install(&root);
+        for (guard_id, payload) in [
+            ("123-456-7", b"".as_slice()),
+            ("123-456-8", b"version=1\nowner=".as_slice()),
+        ] {
+            let init = install_mutation_init_path(&game, "gore-mod:manager-apply", guard_id);
+            std::fs::write(&init, payload).unwrap();
+            let mut abandoned = match InstallMutationGuard::take_over_abandoned_manager(&game) {
+                InstallMutationTakeover::Owned(abandoned) => abandoned,
+                other => panic!("expected abandoned initialization, got {other:?}"),
+            };
+            assert_eq!(abandoned.guard_id(), guard_id);
+            assert!(init.exists());
+            abandoned.release().unwrap();
+            assert!(!init.exists());
+        }
+
+        let compile_init = install_mutation_init_path(&game, "gore-as:compile", "123-456-9");
+        std::fs::write(&compile_init, b"").unwrap();
+        match InstallMutationGuard::take_over_abandoned_manager(&game) {
+            InstallMutationTakeover::CompileOwner { owner, guard_id } => {
+                assert_eq!(owner, "gore-as:initialization");
+                assert_eq!(guard_id, "123-456-9");
+            }
+            other => panic!("expected empty compile initialization classification, got {other:?}"),
+        }
+        assert!(
+            compile_init.exists(),
+            "Manager recovery must never clear compiler initialization evidence"
+        );
+        std::fs::remove_file(&compile_init).unwrap();
+
+        let partial_compile_id = "123-456-9-partial";
+        let partial_compile_init =
+            install_mutation_init_path(&game, "gore-as:compile", partial_compile_id);
+        std::fs::write(&partial_compile_init, b"version=1\nowner=").unwrap();
+        match InstallMutationGuard::take_over_abandoned_manager(&game) {
+            InstallMutationTakeover::CompileOwner { owner, guard_id } => {
+                assert_eq!(owner, "gore-as:initialization");
+                assert_eq!(guard_id, partial_compile_id);
+            }
+            other => {
+                panic!("expected partial compile initialization classification, got {other:?}")
+            }
+        }
+        assert!(
+            partial_compile_init.exists(),
+            "Manager recovery must preserve partial compiler initialization evidence"
+        );
+        std::fs::remove_file(&partial_compile_init).unwrap();
+
+        let full_compile_id = "123-456-10";
+        let full_compile_init =
+            install_mutation_init_path(&game, "gore-as:compile", full_compile_id);
+        std::fs::write(
+            &full_compile_init,
+            format!(
+                "version=1\nowner=gore-as:compile\npid=123\nguard_id={full_compile_id}\n"
+            ),
+        )
+        .unwrap();
+        match InstallMutationGuard::take_over_abandoned_manager(&game) {
+            InstallMutationTakeover::CompileOwner { owner, guard_id } => {
+                assert_eq!(owner, "gore-as:compile");
+                assert_eq!(guard_id, full_compile_id);
+            }
+            other => panic!("expected full compile initialization classification, got {other:?}"),
+        }
+        assert!(
+            full_compile_init.exists(),
+            "Manager recovery must preserve full compiler initialization evidence"
+        );
+        std::fs::remove_file(&full_compile_init).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn one_preheld_guard_spans_authoritative_read_and_compiler_transaction() {
         let root = unique_test_root("preheld-guard-read-through-transaction");
         let (game, shipping) = fake_install(&root);
@@ -6176,7 +7452,8 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_process_inspection_still_answers_for_this_machine_without_touching_the_install() {
+    fn the_shipped_process_inspection_still_answers_for_this_machine_without_touching_the_install()
+    {
         // The seam means no transaction test enumerates processes any more, so this is the only
         // case left that runs the implementation a shipped binary actually uses. If it stopped
         // compiling or began failing on a supported host, every real compile would be refused and
@@ -6258,8 +7535,9 @@ mod tests {
         let journal = recovery_journal_path(&game);
 
         std::fs::write(&journal, b"{}").unwrap();
-        let refused = acquire_compile_install_mutation_with_stated_game_process(&game, || Ok(false))
-            .expect_err("a leftover recovery journal must refuse the acquisition");
+        let refused =
+            acquire_compile_install_mutation_with_stated_game_process(&game, || Ok(false))
+                .expect_err("a leftover recovery journal must refuse the acquisition");
         assert!(
             refused.contains("compile recovery journal already exists"),
             "got: {refused}"

@@ -192,6 +192,9 @@
 //!   Store override and returns seven fixed-order, bounded first-run findings. It never falls back to
 //!   config/Steam discovery, reconciles imports, probes by writing, repairs recovery state, or
 //!   claims that Apply is ready; all returned paths are display-only evidence.
+//! - `mgr_recover_install_v1` accepts one explicit game root and the exact opaque guard id from an
+//!   abandoned-Manager preflight finding. Native reclaims and compares the operating-system lock
+//!   before any repair and returns one closed, structured outcome.
 //! - `authoring_store_inspect_revision3_installed_dataasset_v1` accepts only one exact managed
 //!   revision-3 head, installed package-snapshot seals, game/Store roots, and a candidate ordinal.
 //!   It rebuilds every native authority and returns bounded whole-package fixed-leaf inspection
@@ -355,6 +358,7 @@ const CORE_COMMANDS: &[&str] = &[
     "mgr_import",
     "mgr_library_list",
     mgr_preflight::COMMAND,
+    "mgr_recover_install_v1",
     "mgr_remove",
     "mgr_set_loadout",
     "mgr_status",
@@ -855,6 +859,7 @@ fn dispatch(input: &str) -> Value {
         "mgr_remove" => mgr_remove(payload),
         "mgr_analyze" => mgr_analyze(payload),
         "mgr_apply" => mgr_apply(payload),
+        "mgr_recover_install_v1" => mgr_recover_install_v1(payload),
         "mgr_status" => mgr_status(payload),
         "mgr_undeploy_all" => mgr_undeploy_all(payload),
         "texture_index" => texture_index(payload),
@@ -1828,7 +1833,54 @@ fn mgr_status(payload: Value) -> Value {
     }
 }
 
-/// `{game_root}` → `{ok, removed:bool}` — undeploy whatever is active (manager or studio).
+/// `{game_root, expected_guard_id}` -> `{ok, outcome}` for one exact interrupted Manager change.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MgrRecoverInstallPayload {
+    game_root: String,
+    expected_guard_id: String,
+}
+
+fn mgr_recover_install_response(outcome: gore_mod::ManagerInstallRecoveryOutcome) -> Value {
+    json!({"ok": true, "outcome": outcome})
+}
+
+/// Recover the exact interrupted Manager transaction selected by read-only preflight.
+fn mgr_recover_install_v1(payload: Value) -> Value {
+    let payload: MgrRecoverInstallPayload = match serde_json::from_value(payload) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return err(
+                "BAD_REQUEST",
+                format!("invalid mgr_recover_install_v1 payload: {error}"),
+            )
+        }
+    };
+    if payload.game_root.is_empty() {
+        return err("BAD_REQUEST", "'game_root' must not be empty");
+    }
+    if payload.game_root.len() > 32 * 1024 {
+        return err("BAD_REQUEST", "'game_root' exceeds its bounded size");
+    }
+    if payload.expected_guard_id.is_empty() {
+        return err("BAD_REQUEST", "'expected_guard_id' must not be empty");
+    }
+    if payload.expected_guard_id.len() > 512 {
+        return err(
+            "BAD_REQUEST",
+            "'expected_guard_id' exceeds its bounded size",
+        );
+    }
+    match gore_mod::recover_manager_install(
+        std::path::Path::new(&payload.game_root),
+        &payload.expected_guard_id,
+    ) {
+        Ok(outcome) => mgr_recover_install_response(outcome),
+        Err(error) => err("RECOVER_INSTALL_FAILED", error.to_string()),
+    }
+}
+
+/// `{game_root}` -> `{ok, removed:bool}`; undeploy whatever is active (manager or studio).
 fn mgr_undeploy_all(payload: Value) -> Value {
     let Some(game_root) = payload.get("game_root").and_then(Value::as_str) else {
         return err("BAD_REQUEST", "missing 'game_root'");
@@ -2140,6 +2192,7 @@ mod tests {
                     "mgr_import",
                     "mgr_library_list",
                     "mgr_preflight_v1",
+                    "mgr_recover_install_v1",
                     "mgr_remove",
                     "mgr_set_loadout",
                     "mgr_status",
@@ -2292,6 +2345,84 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "voice_archive_match_line"));
+    }
+
+    #[test]
+    fn manager_install_recovery_outcomes_have_closed_wire_values() {
+        use gore_mod::ManagerInstallRecoveryOutcome as Outcome;
+
+        for (outcome, wire) in [
+            (Outcome::AlreadyClean, "already_clean"),
+            (Outcome::Busy, "busy"),
+            (Outcome::PreMutationLockCleared, "pre_mutation_lock_cleared"),
+            (Outcome::RecoveredToPristine, "recovered_to_pristine"),
+            (
+                Outcome::CompletedApplyPreserved,
+                "completed_apply_preserved",
+            ),
+            (
+                Outcome::CompletedUndeployConfirmed,
+                "completed_undeploy_confirmed",
+            ),
+            (
+                Outcome::CompileRecoveryRequired,
+                "compile_recovery_required",
+            ),
+            (Outcome::InspectionFailed, "inspection_failed"),
+        ] {
+            assert_eq!(
+                mgr_recover_install_response(outcome),
+                json!({"ok": true, "outcome": wire})
+            );
+        }
+    }
+
+    #[test]
+    fn manager_install_recovery_route_is_strict_and_returns_structured_outcomes() {
+        let game = tempfile::tempdir().unwrap();
+        let request = json!({
+            "command": "mgr_recover_install_v1",
+            "payload": {
+                "game_root": game.path().to_string_lossy(),
+                "expected_guard_id": "guard-a-17"
+            }
+        });
+        let response: Value = serde_json::from_str(&execute_json(&request.to_string())).unwrap();
+        assert_eq!(response, json!({"ok": true, "outcome": "already_clean"}));
+
+        let invalid_token = mgr_recover_install_v1(json!({
+            "game_root": game.path().to_string_lossy(),
+            "expected_guard_id": "not accepted!"
+        }));
+        assert_eq!(
+            invalid_token,
+            json!({"ok": true, "outcome": "inspection_failed"})
+        );
+
+        for payload in [
+            Value::Null,
+            json!({}),
+            json!({"game_root": "", "expected_guard_id": "guard"}),
+            json!({"game_root": "C:/game", "expected_guard_id": ""}),
+            json!({
+                "game_root": "C:/game",
+                "expected_guard_id": "guard",
+                "unexpected": true
+            }),
+            json!({"game_root": "C:/game", "expected_guard_id": 17}),
+            json!({
+                "game_root": "x".repeat(32 * 1024 + 1),
+                "expected_guard_id": "guard"
+            }),
+            json!({
+                "game_root": "C:/game",
+                "expected_guard_id": "g".repeat(513)
+            }),
+        ] {
+            let response = mgr_recover_install_v1(payload);
+            assert_eq!(response["ok"], false);
+            assert_eq!(response["error"]["code"], "BAD_REQUEST");
+        }
     }
 
     #[test]

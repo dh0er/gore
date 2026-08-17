@@ -3195,6 +3195,59 @@ pub enum DeployPhase {
     RecoveryRequired,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagerMutationOperation {
+    Apply,
+    Undeploy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryTransactionStep {
+    Staging,
+    Applying,
+}
+
+/// Durable identity of one Manager install transaction. The scratch root is a fixed direct child
+/// of the selected install root derived from `transaction_id`; all maps describe the exact state
+/// that existed before the first stage artifact was created.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecoveryTransaction {
+    pub format: u32,
+    pub transaction_id: String,
+    pub operation: ManagerMutationOperation,
+    pub step: RecoveryTransactionStep,
+    pub scratch_root: String,
+    pub pre_live_sha256: BTreeMap<String, Option<String>>,
+    pub pre_backup_sha256: BTreeMap<String, Option<String>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pre_tree_fingerprints: BTreeMap<String, Option<String>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagerInstallRecoveryOutcome {
+    AlreadyClean,
+    Busy,
+    PreMutationLockCleared,
+    RecoveredToPristine,
+    CompletedApplyPreserved,
+    CompletedUndeployConfirmed,
+    CompileRecoveryRequired,
+    InspectionFailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagerInstallRecoveryReadiness {
+    Missing,
+    Active,
+    AbandonedManager { guard_id: String },
+    CompileOrAmbiguous,
+    Invalid,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileCleanupClaim {
     /// Unique direct child of the install root, outside every game/mod scan directory.
@@ -3306,6 +3359,14 @@ pub struct DeployRecord {
     /// [`fingerprint`]: crate::mgr::model::ModEntryMeta::fingerprint
     #[serde(default)]
     pub deployed_fingerprints: std::collections::BTreeMap<String, String>,
+    /// Active Manager crash-recovery transaction. This is persisted before any backup, undo
+    /// snapshot, staging tree, or live write belonging to the transaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_transaction: Option<RecoveryTransaction>,
+    /// Exact transaction id that produced the final applied record. Recovery uses this binding to
+    /// preserve a deployment that completed durably but was interrupted before lock release.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_mutation_id: Option<String>,
     /// Durable transaction phase. Old records predate this field and therefore deserialize as the
     /// completed [`DeployPhase::Applied`] state. New commits persist `recovery_required` before any
     /// live write and clear it only in the final durable record write.
@@ -3420,6 +3481,88 @@ fn content_hash_file_bounded(path: &Path, remaining: &mut u64) -> std::io::Resul
 fn sha256_file(path: &Path) -> Result<String> {
     let mut remaining = u64::MAX;
     sha256_file_bounded(path, &mut remaining)
+}
+
+fn sha256_bytes(bytes: &[u8]) -> String {
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
+
+fn observed_file_identities(path: &Path) -> Result<(String, String)> {
+    let metadata = std::fs::symlink_metadata(path).map_err(io(&format!(
+        "reading pristine identity source metadata {}",
+        path.display()
+    )))?;
+    if metadata_is_link(&metadata) || !metadata.is_file() {
+        return Err(ModError::Other(format!(
+            "pristine identity source is not a regular non-link file: {}",
+            path.display()
+        )));
+    }
+    let mut file = std::fs::File::open(path).map_err(io(&format!(
+        "opening pristine identity source {}",
+        path.display()
+    )))?;
+    let opened = file
+        .metadata()
+        .map_err(io("reading opened pristine identity source metadata"))?;
+    let mut sha256 = Sha256::new();
+    let mut legacy = 0xcbf2_9ce4_8422_2325u64;
+    let mut buffer = vec![0u8; 1024 * 1024];
+    let mut total = 0u64;
+    {
+        let mut limited = std::io::Read::by_ref(&mut file).take(opened.len().saturating_add(1));
+        loop {
+            let read = limited
+                .read(&mut buffer)
+                .map_err(io("hashing pristine identity source"))?;
+            if read == 0 {
+                break;
+            }
+            sha256.update(&buffer[..read]);
+            update_content_hash(&mut legacy, &buffer[..read]);
+            total = total
+                .checked_add(read as u64)
+                .ok_or_else(|| ModError::Other("pristine identity length overflow".into()))?;
+        }
+    }
+    let after = file
+        .metadata()
+        .map_err(io("re-reading opened pristine identity source metadata"))?;
+    if total != opened.len() || after.len() != opened.len() || metadata.len() != opened.len() {
+        return Err(ModError::Other(format!(
+            "file changed while selecting pristine identity: {}",
+            path.display()
+        )));
+    }
+    Ok((
+        format!("sha256:{:x}", sha256.finalize()),
+        format!("{legacy:016x}"),
+    ))
+}
+
+fn recorded_identity_matches_observation(
+    path: &Path,
+    expected: &str,
+    sha256: &str,
+    legacy: &str,
+) -> Result<bool> {
+    if let Some(hex) = expected.strip_prefix("sha256:") {
+        if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(ModError::Other(format!(
+                "invalid recorded SHA-256 identity for {}",
+                path.display()
+            )));
+        }
+        Ok(expected == sha256)
+    } else {
+        if expected.len() != 16 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(ModError::Other(format!(
+                "invalid recorded legacy content hash for {}",
+                path.display()
+            )));
+        }
+        Ok(expected == legacy)
+    }
 }
 
 pub(crate) fn sha256_file_bounded(path: &Path, remaining: &mut u64) -> Result<String> {
@@ -3832,6 +3975,48 @@ fn values_for_path<'a>(
         .find_map(|(stored, value)| same_path(path, stored).then_some(value))
 }
 
+fn recovery_pre_file_identity<'a>(
+    record: &'a DeployRecord,
+    path: &Path,
+) -> Option<&'a Option<String>> {
+    record
+        .recovery_transaction
+        .as_ref()?
+        .pre_live_sha256
+        .iter()
+        .find_map(|(stored, identity)| same_path(path, stored).then_some(identity))
+}
+
+fn recovery_pre_backup_identity<'a>(
+    record: &'a DeployRecord,
+    path: &Path,
+) -> Option<&'a Option<String>> {
+    record
+        .recovery_transaction
+        .as_ref()?
+        .pre_backup_sha256
+        .iter()
+        .find_map(|(stored, identity)| same_path(path, stored).then_some(identity))
+}
+
+fn path_matches_recovery_pre_file(record: &DeployRecord, path: &Path) -> Result<bool> {
+    match recovery_pre_file_identity(record, path) {
+        Some(Some(identity)) if path_exists_no_follow(path) => {
+            file_matches_recorded_hash_result(path, identity)
+        }
+        Some(Some(_)) => Ok(false),
+        Some(None) => Ok(!path_exists_no_follow(path)),
+        None => Ok(false),
+    }
+}
+
+fn recovery_pre_live_is_pristine(record: &DeployRecord, live: &Path, backup: &Path) -> bool {
+    let Some(Some(pre_live)) = recovery_pre_file_identity(record, live) else {
+        return false;
+    };
+    backup_hash_for_path(backup, &record.backup_hashes).is_some_and(|pristine| pristine == pre_live)
+}
+
 fn file_cleanup_is_owned(record: &DeployRecord, path: &Path) -> bool {
     if !path_exists_no_follow(path) {
         return true;
@@ -3902,6 +4087,915 @@ fn prune_tree_identity(record: &mut DeployRecord, path: &Path) {
 }
 
 const RECORD_NAME: &str = "gore-mod.deployed.json";
+const MANAGER_RECOVERY_FORMAT: u32 = 1;
+const MANAGER_TRANSACTION_PREFIX: &str = ".gore-manager-transaction-";
+const MANAGER_TRANSACTION_ID_LIMIT: usize = 160;
+
+fn valid_manager_transaction_id(transaction_id: &str) -> bool {
+    !transaction_id.is_empty()
+        && transaction_id.len() <= MANAGER_TRANSACTION_ID_LIMIT
+        && transaction_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-:".contains(&byte))
+}
+
+fn manager_transaction_root(game_root: &Path, transaction_id: &str) -> Result<PathBuf> {
+    if !valid_manager_transaction_id(transaction_id) {
+        return Err(ModError::Other(
+            "manager install transaction has an invalid operation id".into(),
+        ));
+    }
+    Ok(record_root(game_root).join(format!("{MANAGER_TRANSACTION_PREFIX}{transaction_id}")))
+}
+
+#[derive(Debug)]
+struct ManagerTransactionRootGuard {
+    install_path: PathBuf,
+    identity: mgr::model::FileIdentity,
+    io_handle: std::fs::File,
+    name: std::ffi::OsString,
+    stable_path: PathBuf,
+}
+
+impl ManagerTransactionRootGuard {
+    fn create(game_root: &Path, transaction_id: &str) -> Result<Self> {
+        let stable_path = manager_transaction_root(game_root, transaction_id)?;
+        let install_path = stable_path
+            .parent()
+            .expect("manager transaction root is a direct install child");
+        let install = mgr::model::open_directory_chain_nofollow(
+            install_path,
+            "Manager transaction install root",
+        )?;
+        let name = stable_path
+            .file_name()
+            .expect("manager transaction root has a direct-child name")
+            .to_os_string();
+        let root = install.create_child_directory_new(&name, "Manager transaction scratch root")?;
+        Self::finish(install, root, name, stable_path)
+    }
+
+    fn open_existing(game_root: &Path, transaction_id: &str) -> Result<Option<Self>> {
+        let stable_path = manager_transaction_root(game_root, transaction_id)?;
+        let install_path = stable_path
+            .parent()
+            .expect("manager transaction root is a direct install child");
+        let install = mgr::model::open_directory_chain_nofollow(
+            install_path,
+            "Manager transaction install root",
+        )?;
+        let name = stable_path
+            .file_name()
+            .expect("manager transaction root has a direct-child name")
+            .to_os_string();
+        let Some(root) =
+            install.open_optional_child_directory(&name, "Manager transaction scratch root")?
+        else {
+            return Ok(None);
+        };
+        Self::finish(install, root, name, stable_path).map(Some)
+    }
+
+    fn finish(
+        install: mgr::model::SecureDirectory,
+        root: mgr::model::SecureDirectory,
+        name: std::ffi::OsString,
+        stable_path: PathBuf,
+    ) -> Result<Self> {
+        if record_path_key(root.path()) != record_path_key(&stable_path) {
+            return Err(ModError::Other(format!(
+                "Manager transaction scratch root is not its operation-bound direct child: {}",
+                root.path().display()
+            )));
+        }
+        let identity = root.identity();
+        let io_handle = open_manager_transaction_directory_handle(root.path())?;
+        if mgr::model::identity_from_open_file(&io_handle, "Manager transaction scratch root")?
+            != identity
+        {
+            return Err(ModError::Other(format!(
+                "Manager transaction scratch root changed while it was being bound: {}",
+                stable_path.display()
+            )));
+        }
+        let install_path = install.path().to_path_buf();
+        drop(root);
+        drop(install);
+        let guard = Self {
+            install_path,
+            identity,
+            io_handle,
+            name,
+            stable_path,
+        };
+        guard.revalidate_named()?;
+        Ok(guard)
+    }
+
+    fn stable_path(&self) -> &Path {
+        &self.stable_path
+    }
+
+    fn revalidate_named(&self) -> Result<()> {
+        if mgr::model::identity_from_open_file(
+            &self.io_handle,
+            "retained Manager transaction scratch root",
+        )? != self.identity
+        {
+            return Err(ModError::Other(format!(
+                "retained Manager transaction scratch root changed identity: {}",
+                self.stable_path.display()
+            )));
+        }
+        let install = mgr::model::open_directory_chain_nofollow(
+            &self.install_path,
+            "Manager transaction install root revalidation",
+        )?;
+        let named = install
+            .open_optional_child_directory(&self.name, "named Manager transaction scratch root")?
+            .ok_or_else(|| {
+                ModError::Other(format!(
+                    "Manager transaction scratch root disappeared: {}",
+                    self.stable_path.display()
+                ))
+            })?;
+        if named.identity() != self.identity {
+            return Err(ModError::Other(format!(
+                "Manager transaction scratch root changed filesystem identity: {}",
+                self.stable_path.display()
+            )));
+        }
+        Ok(())
+    }
+
+    fn root_directory(&self) -> Result<mgr::model::SecureDirectory> {
+        self.revalidate_named()?;
+        let install = mgr::model::open_directory_chain_nofollow(
+            &self.install_path,
+            "Manager transaction install root binding",
+        )?;
+        let root = install
+            .open_optional_child_directory(&self.name, "bound Manager transaction scratch root")?
+            .ok_or_else(|| {
+                ModError::Other(format!(
+                    "Manager transaction scratch root disappeared: {}",
+                    self.stable_path.display()
+                ))
+            })?;
+        if root.identity() != self.identity {
+            return Err(ModError::Other(format!(
+                "Manager transaction scratch root changed filesystem identity: {}",
+                self.stable_path.display()
+            )));
+        }
+        Ok(root)
+    }
+
+    fn mutation_path(&self) -> Result<PathBuf> {
+        self.revalidate_named()?;
+        #[cfg(test)]
+        apply_injected_scratch_root_mutation()?;
+        manager_transaction_handle_path(&self.io_handle, &self.stable_path)
+    }
+
+    fn bound_path(&self, stable: &Path) -> Result<PathBuf> {
+        self.revalidate_named()?;
+        let relative = stable.strip_prefix(&self.stable_path).map_err(|_| {
+            ModError::Other(format!(
+                "Manager transaction artifact is outside its bound scratch root: {}",
+                stable.display()
+            ))
+        })?;
+        if relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(ModError::Other(format!(
+                "Manager transaction artifact has unsafe relative syntax: {}",
+                stable.display()
+            )));
+        }
+        Ok(self.mutation_path()?.join(relative))
+    }
+
+    fn remove_self(self) -> Result<()> {
+        self.revalidate_named()?;
+        let identity = self.identity;
+        let stable_path = self.stable_path.clone();
+        let Self {
+            install_path,
+            identity: _,
+            io_handle,
+            name,
+            stable_path: _,
+        } = self;
+        let install = mgr::model::open_directory_chain_nofollow(
+            &install_path,
+            "Manager transaction install root cleanup",
+        )?;
+        drop(io_handle);
+        install.remove_child_directory_if_identity(
+            &name,
+            identity,
+            "empty Manager transaction scratch root",
+        )?;
+        sync_parent_directory(
+            stable_path
+                .parent()
+                .expect("scratch root has install parent"),
+        )
+    }
+}
+
+/// One exact direct child of a retained Manager transaction root.  The stable pathname is only
+/// recovery metadata; all mutations address the retained child handle (Unix) or keep the child
+/// non-replaceable for the complete mutation (Windows).
+#[derive(Debug)]
+struct ManagerScratchDirectoryGuard {
+    identity: mgr::model::FileIdentity,
+    io_handle: Option<std::fs::File>,
+    name: std::ffi::OsString,
+    stable_path: PathBuf,
+}
+
+impl ManagerScratchDirectoryGuard {
+    fn create_named(
+        root: &ManagerTransactionRootGuard,
+        name: &std::ffi::OsStr,
+        label: &str,
+    ) -> Result<Self> {
+        root.revalidate_named()?;
+        let root_directory = root.root_directory()?;
+        let directory = root_directory.create_child_directory_new(name, label)?;
+        drop(root_directory);
+        Self::finish(root, directory, name.to_os_string(), label)
+    }
+
+    fn create_unique(
+        root: &ManagerTransactionRootGuard,
+        prefix: &str,
+        label: &str,
+    ) -> Result<Self> {
+        static NEXT_MANAGER_SCRATCH_CHILD: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+
+        root.revalidate_named()?;
+        let root_directory = root.root_directory()?;
+        for _ in 0..1024 {
+            let serial =
+                NEXT_MANAGER_SCRATCH_CHILD.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let name = std::ffi::OsString::from(format!("{prefix}{}-{serial}", std::process::id()));
+            if let Some(directory) = root_directory.try_create_child_directory_new(&name, label)? {
+                drop(root_directory);
+                return Self::finish(root, directory, name, label);
+            }
+        }
+        Err(ModError::Other(format!(
+            "could not allocate a unique {label} below {}",
+            root.stable_path().display()
+        )))
+    }
+
+    fn finish(
+        root: &ManagerTransactionRootGuard,
+        directory: mgr::model::SecureDirectory,
+        name: std::ffi::OsString,
+        label: &str,
+    ) -> Result<Self> {
+        let stable_path = root.stable_path().join(&name);
+        if record_path_key(directory.path()) != record_path_key(&stable_path) {
+            return Err(ModError::Other(format!(
+                "{label} is not its operation-bound direct scratch child: {}",
+                directory.path().display()
+            )));
+        }
+        let identity = directory.identity();
+        let io_handle = open_manager_transaction_directory_handle(directory.path())?;
+        if mgr::model::identity_from_open_file(&io_handle, label)? != identity {
+            return Err(ModError::Other(format!(
+                "{label} changed while it was being bound: {}",
+                stable_path.display()
+            )));
+        }
+        let guard = Self {
+            identity,
+            io_handle: Some(io_handle),
+            name,
+            stable_path,
+        };
+        drop(directory);
+        guard.revalidate_named(root, label)?;
+        Ok(guard)
+    }
+
+    fn stable_path(&self) -> &Path {
+        &self.stable_path
+    }
+
+    fn revalidate_named(&self, root: &ManagerTransactionRootGuard, label: &str) -> Result<()> {
+        root.revalidate_named()?;
+        let io_handle = self.io_handle.as_ref().ok_or_else(|| {
+            ModError::Other(format!(
+                "retained {label} handle is temporarily unavailable"
+            ))
+        })?;
+        if mgr::model::identity_from_open_file(io_handle, label)? != self.identity {
+            return Err(ModError::Other(format!(
+                "retained {label} changed identity: {}",
+                self.stable_path.display()
+            )));
+        }
+        let root_directory = root.root_directory()?;
+        let named = root_directory
+            .open_optional_child_directory(&self.name, label)?
+            .ok_or_else(|| {
+                ModError::Other(format!(
+                    "{label} disappeared: {}",
+                    self.stable_path.display()
+                ))
+            })?;
+        if named.identity() != self.identity {
+            return Err(ModError::Other(format!(
+                "{label} changed filesystem identity: {}",
+                self.stable_path.display()
+            )));
+        }
+        Ok(())
+    }
+
+    fn mutation_path(&self, root: &ManagerTransactionRootGuard, label: &str) -> Result<PathBuf> {
+        self.revalidate_named(root, label)?;
+        #[cfg(test)]
+        apply_injected_scratch_child_mutation()?;
+        let io_handle = self.io_handle.as_ref().ok_or_else(|| {
+            ModError::Other(format!(
+                "retained {label} handle is temporarily unavailable"
+            ))
+        })?;
+        manager_transaction_handle_path(io_handle, &self.stable_path)
+    }
+
+    fn directory(
+        &self,
+        root: &ManagerTransactionRootGuard,
+        label: &str,
+    ) -> Result<mgr::model::SecureDirectory> {
+        self.revalidate_named(root, label)?;
+        let root_directory = root.root_directory()?;
+        let directory = root_directory
+            .open_optional_child_directory(&self.name, label)?
+            .ok_or_else(|| {
+                ModError::Other(format!(
+                    "{label} disappeared: {}",
+                    self.stable_path.display()
+                ))
+            })?;
+        if directory.identity() != self.identity {
+            return Err(ModError::Other(format!(
+                "{label} changed filesystem identity: {}",
+                self.stable_path.display()
+            )));
+        }
+        Ok(directory)
+    }
+
+    fn remove_contents_and_self(
+        self,
+        root: &ManagerTransactionRootGuard,
+        label: &str,
+    ) -> Result<()> {
+        self.revalidate_named(root, label)?;
+        let root_directory = root.root_directory()?;
+        let directory = match root_directory.open_child(&self.name, label)? {
+            mgr::model::SecureNode::Directory(directory) => directory,
+            mgr::model::SecureNode::File(file) => {
+                return Err(ModError::Other(format!(
+                    "{label} was replaced by a file: {}",
+                    file.path().display()
+                )))
+            }
+        };
+        if directory.identity() != self.identity {
+            return Err(ModError::Other(format!(
+                "refusing to remove replaced {label}: {}",
+                self.stable_path.display()
+            )));
+        }
+        remove_secure_manager_directory_contents(&directory, label)?;
+        let identity = directory.identity();
+        drop(directory);
+        let Self {
+            identity: _,
+            io_handle,
+            name,
+            stable_path: _,
+        } = self;
+        drop(io_handle);
+        root_directory.remove_child_directory_if_identity(&name, identity, label)?;
+        drop(root_directory);
+        root.revalidate_named()
+    }
+
+    fn move_path_into(
+        &mut self,
+        root: &ManagerTransactionRootGuard,
+        source: &Path,
+        child_name: &std::ffi::OsStr,
+        label: &str,
+    ) -> Result<PathBuf> {
+        let target = self.mutation_path(root, label)?.join(child_name);
+        #[cfg(windows)]
+        {
+            self.revalidate_named(root, label)?;
+            drop(self.io_handle.take());
+            let moved = windows_move_path_to_directory_noclobber(
+                source,
+                &self.stable_path,
+                self.identity,
+                child_name,
+                label,
+            );
+            let rebound =
+                open_manager_transaction_directory_handle(&self.stable_path).and_then(|handle| {
+                    if mgr::model::identity_from_open_file(&handle, label)? != self.identity {
+                        return Err(ModError::Other(format!(
+                            "{label} changed while its retained handle was rebound: {}",
+                            self.stable_path.display()
+                        )));
+                    }
+                    self.io_handle = Some(handle);
+                    self.revalidate_named(root, label)
+                });
+            moved?;
+            rebound?;
+        }
+        #[cfg(not(windows))]
+        promote_path_noclobber(source, &target)?;
+        self.revalidate_named(root, label)?;
+        Ok(target)
+    }
+
+    fn move_child_out(
+        &mut self,
+        root: &ManagerTransactionRootGuard,
+        child_name: &std::ffi::OsStr,
+        target: &Path,
+        label: &str,
+    ) -> Result<()> {
+        let source = self.mutation_path(root, label)?.join(child_name);
+        #[cfg(windows)]
+        {
+            let source_directory = self.directory(root, label)?;
+            let source_node = source_directory.open_child(child_name, label)?;
+            let (source_identity, source_is_directory) = match source_node {
+                mgr::model::SecureNode::File(file) => (file.identity(), false),
+                mgr::model::SecureNode::Directory(directory) => (directory.identity(), true),
+            };
+            drop(source_directory);
+            drop(self.io_handle.take());
+            let moved = windows_move_path_noclobber_with_identity(
+                &source,
+                target,
+                source_identity,
+                source_is_directory,
+                label,
+            );
+            let rebound =
+                open_manager_transaction_directory_handle(&self.stable_path).and_then(|handle| {
+                    if mgr::model::identity_from_open_file(&handle, label)? != self.identity {
+                        return Err(ModError::Other(format!(
+                            "{label} changed while its retained handle was rebound: {}",
+                            self.stable_path.display()
+                        )));
+                    }
+                    self.io_handle = Some(handle);
+                    self.revalidate_named(root, label)
+                });
+            moved?;
+            rebound?;
+        }
+        #[cfg(not(windows))]
+        promote_path_noclobber(&source, target)?;
+        self.revalidate_named(root, label)
+    }
+}
+
+#[derive(Debug)]
+struct ManagerCleanupHolderGuard<'a> {
+    root: &'a ManagerTransactionRootGuard,
+    identity: mgr::model::FileIdentity,
+    io_handle: std::fs::File,
+    name: std::ffi::OsString,
+    stable_path: PathBuf,
+}
+
+impl<'a> ManagerCleanupHolderGuard<'a> {
+    fn direct_child_name(
+        root: &ManagerTransactionRootGuard,
+        stable_path: &Path,
+    ) -> Result<std::ffi::OsString> {
+        let relative = stable_path.strip_prefix(root.stable_path()).map_err(|_| {
+            ModError::Other(format!(
+                "Manager cleanup holder is outside its transaction scratch root: {}",
+                stable_path.display()
+            ))
+        })?;
+        let mut components = relative.components();
+        let Some(std::path::Component::Normal(name)) = components.next() else {
+            return Err(ModError::Other(format!(
+                "Manager cleanup holder has no plain direct-child name: {}",
+                stable_path.display()
+            )));
+        };
+        if components.next().is_some() {
+            return Err(ModError::Other(format!(
+                "Manager cleanup holder is not a direct scratch child: {}",
+                stable_path.display()
+            )));
+        }
+        Ok(name.to_os_string())
+    }
+
+    fn open_existing(
+        root: &'a ManagerTransactionRootGuard,
+        stable_path: &Path,
+        label: &str,
+    ) -> Result<Option<Self>> {
+        root.revalidate_named()?;
+        let name = Self::direct_child_name(root, stable_path)?;
+        let root_directory = root.root_directory()?;
+        let Some(directory) = root_directory.open_optional_child_directory(&name, label)? else {
+            return Ok(None);
+        };
+        let identity = directory.identity();
+        let io_handle = open_manager_transaction_directory_handle(directory.path())?;
+        if mgr::model::identity_from_open_file(&io_handle, label)? != identity {
+            return Err(ModError::Other(format!(
+                "Manager cleanup holder changed while it was being bound: {}",
+                stable_path.display()
+            )));
+        }
+        drop(directory);
+        drop(root_directory);
+        let guard = Self {
+            root,
+            identity,
+            io_handle,
+            name,
+            stable_path: stable_path.to_path_buf(),
+        };
+        guard.revalidate_named(label)?;
+        Ok(Some(guard))
+    }
+
+    fn revalidate_named(&self, label: &str) -> Result<()> {
+        self.root.revalidate_named()?;
+        if mgr::model::identity_from_open_file(&self.io_handle, label)? != self.identity {
+            return Err(ModError::Other(format!(
+                "retained Manager cleanup holder changed identity: {}",
+                self.stable_path.display()
+            )));
+        }
+        let root_directory = self.root.root_directory()?;
+        let named = root_directory
+            .open_optional_child_directory(&self.name, label)?
+            .ok_or_else(|| {
+                ModError::Other(format!(
+                    "Manager cleanup holder disappeared: {}",
+                    self.stable_path.display()
+                ))
+            })?;
+        if named.identity() != self.identity {
+            return Err(ModError::Other(format!(
+                "Manager cleanup holder changed filesystem identity: {}",
+                self.stable_path.display()
+            )));
+        }
+        Ok(())
+    }
+
+    fn mutation_path(&self, label: &str) -> Result<PathBuf> {
+        self.revalidate_named(label)?;
+        #[cfg(test)]
+        apply_injected_cleanup_holder_mutation()?;
+        manager_transaction_handle_path(&self.io_handle, &self.stable_path)
+    }
+
+    fn remove_contents_and_self(self, label: &str) -> Result<()> {
+        self.revalidate_named(label)?;
+        #[cfg(test)]
+        apply_injected_cleanup_holder_mutation()?;
+        self.revalidate_named(label)?;
+        let root_directory = self.root.root_directory()?;
+        let directory = match root_directory.open_child(&self.name, label)? {
+            mgr::model::SecureNode::Directory(directory) => directory,
+            mgr::model::SecureNode::File(file) => {
+                return Err(ModError::Other(format!(
+                    "Manager cleanup holder was replaced by a file: {}",
+                    file.path().display()
+                )))
+            }
+        };
+        if directory.identity() != self.identity {
+            return Err(ModError::Other(format!(
+                "refusing to remove replaced Manager cleanup holder: {}",
+                self.stable_path.display()
+            )));
+        }
+        remove_secure_manager_directory_contents(&directory, label)?;
+        let identity = directory.identity();
+        drop(directory);
+        let Self {
+            root,
+            identity: _,
+            io_handle,
+            name,
+            stable_path: _,
+        } = self;
+        drop(io_handle);
+        root_directory.remove_child_directory_if_identity(&name, identity, label)?;
+        drop(root_directory);
+        root.revalidate_named()
+    }
+}
+
+#[cfg(windows)]
+fn open_manager_transaction_directory_handle(path: &Path) -> Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+    };
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(io("opening retained Manager transaction scratch root"))
+}
+
+#[cfg(unix)]
+fn open_manager_transaction_directory_handle(path: &Path) -> Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(io("opening retained Manager transaction scratch root"))
+}
+
+#[cfg(not(any(windows, unix)))]
+fn open_manager_transaction_directory_handle(path: &Path) -> Result<std::fs::File> {
+    std::fs::File::open(path).map_err(io("opening retained Manager transaction scratch root"))
+}
+
+#[cfg(unix)]
+fn manager_transaction_handle_path(file: &std::fs::File, stable: &Path) -> Result<PathBuf> {
+    use std::os::unix::io::AsRawFd as _;
+
+    for root in ["/proc/self/fd", "/dev/fd"] {
+        let path = Path::new(root).join(file.as_raw_fd().to_string());
+        if path.exists() {
+            // The fd entry itself is intentionally a kernel-owned link to the retained
+            // directory. Address `.` beneath it so callers that no-follow-check their final path
+            // observe the bound directory, while every descendant still resolves relative to the
+            // retained descriptor rather than the mutable install pathname.
+            return Ok(path.join("."));
+        }
+    }
+    Err(ModError::Other(format!(
+        "Manager transaction scratch root cannot be addressed through its retained directory handle: {}",
+        stable.display()
+    )))
+}
+
+#[cfg(not(unix))]
+fn manager_transaction_handle_path(_file: &std::fs::File, stable: &Path) -> Result<PathBuf> {
+    Ok(stable.to_path_buf())
+}
+
+#[cfg(windows)]
+fn windows_move_path_to_directory_noclobber(
+    source: &Path,
+    target_parent: &Path,
+    target_parent_identity: mgr::model::FileIdentity,
+    target_name: &std::ffi::OsStr,
+    label: &str,
+) -> Result<()> {
+    let source_parent_path = source.parent().ok_or_else(|| {
+        ModError::Other(format!(
+            "{label} source has no parent: {}",
+            source.display()
+        ))
+    })?;
+    let source_name = source.file_name().ok_or_else(|| {
+        ModError::Other(format!("{label} source has no name: {}", source.display()))
+    })?;
+    let source_parent = mgr::model::open_directory_chain_nofollow(source_parent_path, label)?;
+    let (identity, directory) = match source_parent.open_child(source_name, label)? {
+        mgr::model::SecureNode::File(file) => (file.identity(), false),
+        mgr::model::SecureNode::Directory(directory) => (directory.identity(), true),
+    };
+    drop(source_parent);
+    windows_move_path_to_directory_noclobber_with_identity(
+        source,
+        target_parent,
+        target_parent_identity,
+        target_name,
+        identity,
+        directory,
+        label,
+    )?;
+    sync_parent_directory(source_parent_path)
+}
+
+#[cfg(windows)]
+fn windows_move_path_noclobber_with_identity(
+    source: &Path,
+    target: &Path,
+    source_identity: mgr::model::FileIdentity,
+    source_is_directory: bool,
+    label: &str,
+) -> Result<()> {
+    let target_parent_path = target.parent().ok_or_else(|| {
+        ModError::Other(format!(
+            "{label} target has no parent: {}",
+            target.display()
+        ))
+    })?;
+    let target_name = target.file_name().ok_or_else(|| {
+        ModError::Other(format!("{label} target has no name: {}", target.display()))
+    })?;
+    let target_parent = mgr::model::open_directory_chain_nofollow(target_parent_path, label)?;
+    let target_parent_identity = target_parent.identity();
+    drop(target_parent);
+    windows_move_path_to_directory_noclobber_with_identity(
+        source,
+        target_parent_path,
+        target_parent_identity,
+        target_name,
+        source_identity,
+        source_is_directory,
+        label,
+    )?;
+    sync_parent_directory(target_parent_path)
+}
+
+#[cfg(windows)]
+fn windows_move_path_to_directory_noclobber_with_identity(
+    source: &Path,
+    target_parent: &Path,
+    expected_target_parent_identity: mgr::model::FileIdentity,
+    target_name: &std::ffi::OsStr,
+    expected_identity: mgr::model::FileIdentity,
+    expect_directory: bool,
+    label: &str,
+) -> Result<()> {
+    use std::mem::{offset_of, size_of};
+    use std::os::windows::ffi::OsStrExt as _;
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Foundation::{RtlNtStatusToDosError, HANDLE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_RENAME_INFO, FILE_SHARE_DELETE,
+        FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
+
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn NtSetInformationFile(
+            file_handle: HANDLE,
+            io_status_block: *mut IO_STATUS_BLOCK,
+            file_information: *const std::ffi::c_void,
+            length: u32,
+            file_information_class: i32,
+        ) -> i32;
+    }
+
+    let source_handle = std::fs::OpenOptions::new()
+        .access_mode(DELETE | FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(source)
+        .map_err(io(&format!(
+            "opening exact {label} source for handle rename"
+        )))?;
+    let source_metadata = source_handle
+        .metadata()
+        .map_err(io(&format!("reading opened {label} source metadata")))?;
+    if source_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || source_metadata.is_dir() != expect_directory
+        || (!expect_directory && !source_metadata.is_file())
+        || mgr::model::identity_from_open_file(&source_handle, label)? != expected_identity
+    {
+        return Err(ModError::Other(format!(
+            "{label} source changed before its handle-bound rename: {}",
+            source.display()
+        )));
+    }
+
+    let target_parent_handle = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(target_parent)
+        .map_err(io(&format!("opening exact {label} target parent")))?;
+    let target_parent_metadata = target_parent_handle.metadata().map_err(io(&format!(
+        "reading opened {label} target-parent metadata"
+    )))?;
+    if !target_parent_metadata.is_dir()
+        || target_parent_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || mgr::model::identity_from_open_file(&target_parent_handle, label)?
+            != expected_target_parent_identity
+    {
+        return Err(ModError::Other(format!(
+            "{label} target parent changed before its handle-bound rename: {}",
+            target_parent.display()
+        )));
+    }
+
+    let name = target_name.encode_wide().collect::<Vec<_>>();
+    let header_bytes = offset_of!(FILE_RENAME_INFO, FileName);
+    let byte_len = header_bytes
+        .checked_add(
+            name.len()
+                .checked_mul(size_of::<u16>())
+                .ok_or_else(|| ModError::Other(format!("{label} target name is too long")))?,
+        )
+        .ok_or_else(|| ModError::Other(format!("{label} rename buffer overflow")))?;
+    let mut storage = vec![0u64; byte_len.div_ceil(size_of::<u64>())];
+    let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    let mut io_status = IO_STATUS_BLOCK::default();
+    // SAFETY: `storage` is aligned and sized for the fixed header plus one final UTF-16 component;
+    // both exact source and target-parent handles remain live for the native handle-relative rename.
+    unsafe {
+        (*info).Anonymous.ReplaceIfExists = false;
+        (*info).RootDirectory = target_parent_handle.as_raw_handle();
+        (*info).FileNameLength = (name.len() * size_of::<u16>()) as u32;
+        std::ptr::copy_nonoverlapping(
+            name.as_ptr(),
+            storage
+                .as_mut_ptr()
+                .cast::<u8>()
+                .add(header_bytes)
+                .cast::<u16>(),
+            name.len(),
+        );
+        let status = NtSetInformationFile(
+            source_handle.as_raw_handle(),
+            &mut io_status,
+            info.cast_const().cast(),
+            byte_len as u32,
+            10,
+        );
+        if status < 0 {
+            return Err(io(&format!("renaming exact {label} without clobber"))(
+                std::io::Error::from_raw_os_error(RtlNtStatusToDosError(status) as i32),
+            ));
+        }
+    }
+    drop(source_handle);
+    drop(target_parent_handle);
+    let rebound_target_parent = mgr::model::open_directory_chain_nofollow(target_parent, label)?;
+    if rebound_target_parent.identity() != expected_target_parent_identity {
+        return Err(ModError::Other(format!(
+            "{label} target parent changed after handle-bound rename: {}",
+            target_parent.display()
+        )));
+    }
+    let published = rebound_target_parent.open_child(target_name, label)?;
+    let published_identity = match published {
+        mgr::model::SecureNode::File(file) => file.identity(),
+        mgr::model::SecureNode::Directory(directory) => directory.identity(),
+    };
+    if published_identity != expected_identity {
+        return Err(ModError::Other(format!(
+            "{label} target changed after handle-bound rename: {}",
+            target_parent.join(target_name).display()
+        )));
+    }
+    rebound_target_parent.sync_after_mutation(label)
+}
+
+fn create_manager_transaction_root(
+    game_root: &Path,
+    transaction_id: &str,
+) -> Result<ManagerTransactionRootGuard> {
+    ManagerTransactionRootGuard::create(game_root, transaction_id)
+}
+
+fn manager_operation_for_lock_owner(owner: &str) -> Option<ManagerMutationOperation> {
+    match owner {
+        "gore-mod:manager-apply" | "gore-mod:deploy" => Some(ManagerMutationOperation::Apply),
+        "gore-mod:manager-undeploy" | "gore-mod:undeploy" => {
+            Some(ManagerMutationOperation::Undeploy)
+        }
+        _ => None,
+    }
+}
 
 /// This install's FMOD bank encryption key: the one gore-dump recovered into `gore_fmod_key.json`
 /// (written to `Binaries/Win64`) if present and valid, else the known [`gore_fmod::GOTHIC_STUDIO_KEY`]
@@ -4058,6 +5152,45 @@ fn finish_live_install_mutation<T>(
     result: Result<T>,
     mut guard: gore_as::compile::InstallMutationGuard,
 ) -> Result<T> {
+    let manager_recovery_evidence = if result.is_err()
+        && matches!(
+            guard.owner(),
+            "gore-mod:manager-apply" | "gore-mod:manager-undeploy"
+        ) {
+        let install_root = guard.path().parent().map(Path::to_path_buf);
+        match install_root {
+            Some(install_root) => {
+                let scratch = manager_transaction_root(&install_root, guard.guard_id());
+                let scratch_present = match scratch {
+                    Ok(scratch) => match std::fs::symlink_metadata(scratch) {
+                        Ok(_) => true,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                        Err(_) => true,
+                    },
+                    Err(_) => true,
+                };
+                scratch_present
+                    || match read_record(&install_root) {
+                        Ok(Some(stored)) => stored
+                            .record
+                            .recovery_transaction
+                            .as_ref()
+                            .is_some_and(|transaction| {
+                                transaction.transaction_id == guard.guard_id()
+                            }),
+                        Ok(None) => false,
+                        Err(_) => true,
+                    }
+            }
+            None => true,
+        }
+    } else {
+        false
+    };
+    if manager_recovery_evidence {
+        guard.preserve_for_manual_recovery();
+        return result;
+    }
     let release = guard.release();
     match (result, release) {
         (result, Ok(())) => result,
@@ -4129,6 +5262,11 @@ pub(crate) struct DeployPlan {
     /// against the prior record. Filled by `commit_plan`, never by bundle parsing.
     additive_identities: BTreeMap<PathBuf, PlannedIdentity>,
     ue4ss_identities: BTreeMap<PathBuf, PlannedIdentity>,
+    /// Exact live/backup/pristine basis observed while the plan was still outside the install
+    /// lock. The guarded commit must observe the same three identities before publishing its early
+    /// recovery record; a stale `refresh_baks` decision is never silently recomputed under the
+    /// lock.
+    backup_identities: BTreeMap<PathBuf, PlannedBackupIdentity>,
     /// Format-3 Voice generation retained across prepare for the final pre-mutation check.
     voice_executable_generation: Option<VoiceExecutableGenerationSeal>,
     /// Retained component-wise no-follow binding of the fixed VoiceOver directory. This survives
@@ -4151,6 +5289,14 @@ pub(crate) struct DeployPlan {
 struct PlannedIdentity {
     intended: String,
     previous: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PlannedBackupIdentity {
+    pub(crate) live: String,
+    pub(crate) backup: Option<String>,
+    pub(crate) pristine: String,
+    pub(crate) refresh: bool,
 }
 
 #[derive(Debug)]
@@ -4334,6 +5480,36 @@ pub(crate) fn read_sealed_script_mini(
 }
 
 impl DeployPlan {
+    pub(crate) fn bind_backup_identity(
+        &mut self,
+        live: &Path,
+        basis: PlannedBackupIdentity,
+    ) -> Result<()> {
+        if let Some((_, existing)) = self
+            .backup_identities
+            .iter()
+            .find(|(stored, _)| record_path_key(stored) == record_path_key(live))
+        {
+            if existing != &basis {
+                return Err(ModError::Other(format!(
+                    "deploy plan selected conflicting live/backup bases for {}",
+                    live.display()
+                )));
+            }
+            return Ok(());
+        }
+        if basis.refresh
+            && !self
+                .refresh_baks
+                .iter()
+                .any(|stored| record_path_key(stored) == record_path_key(live))
+        {
+            self.refresh_baks.push(live.to_path_buf());
+        }
+        self.backup_identities.insert(live.to_path_buf(), basis);
+        Ok(())
+    }
+
     /// Dst paths of every UE4SS mod dir this plan installs.
     fn ue4ss_dsts(&self) -> Vec<String> {
         self.ue4ss_dirs
@@ -4361,10 +5537,9 @@ impl DeployPlan {
 /// caller has already required an untracked backup to be byte-identical, so the backup is safe.
 /// A recorded hash is checked by streaming the live archive; mismatch means a game update and the
 /// updated live ZIP becomes the new pristine source.
-fn pristine_voice_source(live: &Path, prev: Option<&DeployRecord>) -> Result<(PathBuf, bool)> {
+fn pristine_voice_source(live: &Path, prev: Option<&DeployRecord>) -> Result<PristineSource> {
     ensure_pristine_sources_bounded(live, gore_vo::Limits::default().max_archive_bytes)?;
-    let source = select_pristine_source(live, prev)?;
-    Ok((source.path, source.drifted))
+    select_pristine_source(live, prev)
 }
 
 /// Resolve one Voice archive to the same authenticated pristine source used by deployment.
@@ -4402,7 +5577,9 @@ fn resolve_pristine_voice_archive_with_guard(
         return Err(recovery_required_error());
     }
     let live = guard.path().join(archive);
-    let (path, drifted) = pristine_voice_source(&live, prior)?;
+    let source = pristine_voice_source(&live, prior)?;
+    let path = source.path;
+    let drifted = source.drifted;
     let metadata = std::fs::symlink_metadata(&path).map_err(io(&format!(
         "reading selected pristine Voice archive metadata {}",
         path.display()
@@ -4636,7 +5813,10 @@ pub(crate) fn prepare_voice_archive_writes(
             Err(error) => return Err(io("reading voice backup metadata")(error)),
         }
 
-        let (source, drifted) = pristine_voice_source(&live, prev)?;
+        let pristine = pristine_voice_source(&live, prev)?;
+        plan.bind_backup_identity(&live, pristine.basis.clone())?;
+        let selected_pristine_sha256 = pristine.basis.pristine.clone();
+        let source = pristine.path;
         let source_metadata = std::fs::symlink_metadata(&source).map_err(io(&format!(
             "reading voice archive base metadata {}",
             source.display()
@@ -4644,6 +5824,12 @@ pub(crate) fn prepare_voice_archive_writes(
         if metadata_is_link(&source_metadata) || !source_metadata.is_file() {
             return Err(ModError::Other(format!(
                 "voice archive base must be a regular non-link file: {}",
+                source.display()
+            )));
+        }
+        if sha256_file(&source)? != selected_pristine_sha256 {
+            return Err(ModError::Other(format!(
+                "selected pristine Voice archive changed before composition: {}",
                 source.display()
             )));
         }
@@ -4695,8 +5881,11 @@ pub(crate) fn prepare_voice_archive_writes(
         let (candidate, _) = archive
             .rewrite_edits_to_temp(archive_edits)
             .map_err(|e| ModError::Voice(format!("{}: {e}", live.display())))?;
-        if drifted {
-            plan.refresh_baks.push(live.clone());
+        if sha256_file(&source)? != selected_pristine_sha256 {
+            return Err(ModError::Other(format!(
+                "selected pristine Voice archive changed during composition: {}",
+                source.display()
+            )));
         }
         plan.file_writes.push(DiskWrite::seal(live, candidate)?);
     }
@@ -4819,6 +6008,131 @@ fn prepare_target_identities(plan: &mut DeployPlan, prior: Option<&DeployRecord>
     Ok(())
 }
 
+fn optional_planned_file_identity(path: &Path, label: &str) -> Result<Option<String>> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata_is_link(&metadata) || !metadata.is_file() => Err(ModError::Other(
+            format!("{label} is not a safe regular file: {}", path.display()),
+        )),
+        Ok(_) => Ok(Some(sha256_file(path)?)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(io(&format!("reading {label} metadata"))(error)),
+    }
+}
+
+/// Bind the exact live, backup and selected-pristine identities that informed the prepared plan.
+/// In particular, `refresh_baks` is only a decision derived from this basis; it is never authority
+/// to adopt different bytes observed after waiting for the install lock.
+fn prepare_backup_identities(plan: &DeployPlan) -> Result<()> {
+    for live in plan
+        .writes
+        .iter()
+        .map(|(live, _)| live)
+        .chain(plan.file_writes.iter().map(|write| &write.live))
+    {
+        let basis = plan.backup_identities.iter().find_map(|(stored, basis)| {
+            (record_path_key(stored) == record_path_key(live)).then_some(basis)
+        });
+        let Some(basis) = basis else {
+            return Err(ModError::Other(format!(
+                "deploy plan write has no source-bound live/backup basis: {}",
+                live.display()
+            )));
+        };
+        let listed_refresh = plan
+            .refresh_baks
+            .iter()
+            .any(|stored| record_path_key(stored) == record_path_key(live));
+        if listed_refresh != basis.refresh {
+            return Err(ModError::Other(format!(
+                "deploy plan refresh decision disagrees with its selected source basis: {}",
+                live.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn verify_prepared_target_identities(plan: &DeployPlan) -> Result<()> {
+    for (_, dst) in &plan.ue4ss_dirs {
+        let identity = plan.ue4ss_identities.get(dst).ok_or_else(|| {
+            ModError::Other(format!(
+                "UE4SS target identity was not prepared: {}",
+                dst.display()
+            ))
+        })?;
+        let current = optional_recovery_tree_identity(dst)?;
+        if current != identity.previous {
+            return Err(ModError::Other(format!(
+                "DEPLOY_TARGET_BASIS_CHANGED: UE4SS target changed after planning; rebuild and retry: {}",
+                dst.display()
+            )));
+        }
+    }
+    for (_, dst) in plan.texture_triplets.iter().chain(plan.managed_paks.iter()) {
+        let identity = plan.additive_identities.get(dst).ok_or_else(|| {
+            ModError::Other(format!(
+                "additive target identity was not prepared: {}",
+                dst.display()
+            ))
+        })?;
+        let current = optional_planned_file_identity(dst, "planned additive target")?;
+        if current != identity.previous {
+            return Err(ModError::Other(format!(
+                "DEPLOY_TARGET_BASIS_CHANGED: additive target changed after planning; rebuild and retry: {}",
+                dst.display()
+            )));
+        }
+    }
+    for live in plan
+        .writes
+        .iter()
+        .map(|(live, _)| live)
+        .chain(plan.file_writes.iter().map(|write| &write.live))
+    {
+        let prepared = plan.backup_identities.get(live).ok_or_else(|| {
+            ModError::Other(format!(
+                "live/backup identity was not prepared: {}",
+                live.display()
+            ))
+        })?;
+        let backup_path = bak_path(live);
+        if optional_planned_file_identity(live, "staged live target")?.as_deref()
+            != Some(prepared.live.as_str())
+            || optional_planned_file_identity(&backup_path, "staged pristine backup")?
+                != prepared.backup
+        {
+            return Err(ModError::Other(format!(
+                "DEPLOY_TARGET_BASIS_CHANGED: live or backup changed before staging; rebuild and retry: {}",
+                live.display()
+            )));
+        }
+        let prepared = plan.backup_identities.get(live).ok_or_else(|| {
+            ModError::Other(format!(
+                "live/backup identity was not prepared: {}",
+                live.display()
+            ))
+        })?;
+        let current_live = optional_planned_file_identity(live, "planned live target")?;
+        let backup = bak_path(live);
+        let current_backup = optional_planned_file_identity(&backup, "planned pristine backup")?;
+        let current_pristine = if prepared.refresh || current_backup.is_none() {
+            current_live.clone()
+        } else {
+            current_backup.clone()
+        };
+        if current_live.as_deref() != Some(prepared.live.as_str())
+            || current_backup != prepared.backup
+            || current_pristine.as_deref() != Some(prepared.pristine.as_str())
+        {
+            return Err(ModError::Other(format!(
+                "DEPLOY_TARGET_BASIS_CHANGED: live, backup, or pristine basis changed after planning; rebuild and retry: {}",
+                live.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Split a language tag into its stem and generation rank: `german` -> (german, 0), `german_new`
 /// -> (german, 1), `english_newer` -> (english, 2).
 ///
@@ -4933,17 +6247,40 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
 /// `owner`/`loadout` already set); `prev` is the record the plan was prepared against, whose
 /// not-overwritten leftovers/stale dirs/additive files are folded in here. A returned failure
 /// attempts to restore the exact prior state and record; any failed inverse operation is reported
-/// as `ROLLBACK_INCOMPLETE` and its disk snapshot is retained. This multi-target operation has no
-/// write-ahead journal: an abrupt process/OS crash is recoverable to pristine via the record, but
-/// is not promised to recreate the exact previously-active loadout automatically.
+/// as `ROLLBACK_INCOMPLETE` and its disk snapshot is retained. Manager commits durably bind their
+/// full pre-mutation identities and scratch root before staging, so an abrupt process stop can be
+/// recovered to pristine; recovery does not promise to recreate the previous active loadout.
 pub(crate) fn commit_plan(
     gp: &GamePaths,
     abs_root: &Path,
-    plan: DeployPlan,
+    mut plan: DeployPlan,
     record: DeployRecord,
     prev: Option<StoredDeployRecord>,
 ) -> Result<DeployRecord> {
-    let mutation = acquire_live_install_mutation(abs_root, "gore-mod:deploy")?;
+    let prior = prev.as_ref().map(|stored| &stored.record);
+    if let Some(prior) = prior {
+        validate_record_identities(prior)?;
+    }
+    if let Some(dup) = first_duplicate_dst(&plan) {
+        return Err(ModError::Other(format!("duplicate deploy target: {dup}")));
+    }
+    // These observations are part of the prepared plan and deliberately precede the possibly
+    // blocking install-lock acquire. The guarded side must see the exact same targets before it
+    // creates operation scratch or publishes recovery authority.
+    prepare_target_identities(&mut plan, prior)?;
+    prepare_backup_identities(&mut plan)?;
+
+    let manager = record.owner == "manager";
+    let owner = if manager {
+        "gore-mod:manager-apply"
+    } else {
+        "gore-mod:deploy"
+    };
+    let mutation = acquire_live_install_mutation(abs_root, owner)?;
+    let transaction_id = manager.then(|| mutation.guard_id().to_owned());
+    if manager {
+        manager_crash_test_checkpoint(abs_root, "apply.lock_acquired");
+    }
     let result = (|| {
         verify_deploy_record_basis(abs_root, prev.as_ref())?;
         if prev
@@ -4952,7 +6289,8 @@ pub(crate) fn commit_plan(
         {
             return Err(recovery_required_error());
         }
-        commit_plan_guarded(gp, abs_root, plan, record, prev)
+        verify_prepared_target_identities(&plan)?;
+        commit_plan_guarded(gp, abs_root, plan, record, prev, transaction_id.as_deref())
     })();
     finish_live_install_mutation(result, mutation)
 }
@@ -4981,31 +6319,281 @@ fn verify_deploy_record_basis(
     }
 }
 
+fn seed_manager_recovery_targets(
+    plan: &DeployPlan,
+    record: &mut DeployRecord,
+    _prior: Option<&DeployRecord>,
+    transaction_id: &str,
+    scratch_root: &Path,
+) -> Result<()> {
+    let mut transaction = RecoveryTransaction {
+        format: MANAGER_RECOVERY_FORMAT,
+        transaction_id: transaction_id.to_owned(),
+        operation: ManagerMutationOperation::Apply,
+        step: RecoveryTransactionStep::Staging,
+        scratch_root: scratch_root.display().to_string(),
+        pre_live_sha256: BTreeMap::new(),
+        pre_backup_sha256: BTreeMap::new(),
+        pre_tree_fingerprints: BTreeMap::new(),
+    };
+
+    for (index, (_, dst)) in plan.ue4ss_dirs.iter().enumerate() {
+        let identity = plan.ue4ss_identities.get(dst).ok_or_else(|| {
+            ModError::Other(format!(
+                "UE4SS target identity was not prepared: {}",
+                dst.display()
+            ))
+        })?;
+        let key = dst.display().to_string();
+        transaction
+            .pre_tree_fingerprints
+            .insert(key.clone(), identity.previous.clone());
+        let accepted = record
+            .recovery_tree_fingerprints
+            .entry(key.clone())
+            .or_default();
+        if let Some(previous) = &identity.previous {
+            accepted.push(previous.clone());
+        }
+        accepted.push(identity.intended.clone());
+        accepted.sort();
+        accepted.dedup();
+        record
+            .ue4ss_tree_fingerprints
+            .insert(key.clone(), identity.intended.clone());
+        if index == 0 && record.owner != "manager" {
+            record.ue4ss_mod_dir = Some(key);
+        } else if !contains_same_path(&record.ue4ss_mod_dirs, &key) {
+            record.ue4ss_mod_dirs.push(key);
+        }
+    }
+
+    for (_, dst) in &plan.texture_triplets {
+        let identity = plan.additive_identities.get(dst).ok_or_else(|| {
+            ModError::Other(format!(
+                "additive target identity was not prepared: {}",
+                dst.display()
+            ))
+        })?;
+        let key = dst.display().to_string();
+        transaction
+            .pre_live_sha256
+            .insert(key.clone(), identity.previous.clone());
+        if !contains_same_path(&record.texture_triplets, &key) {
+            record.texture_triplets.push(key.clone());
+        }
+        record
+            .deployed_hashes
+            .insert(key.clone(), identity.intended.clone());
+        if let Some(previous) = &identity.previous {
+            record
+                .recovery_file_hashes
+                .entry(key)
+                .or_default()
+                .push(previous.clone());
+        }
+    }
+    for (_, dst) in &plan.managed_paks {
+        let identity = plan.additive_identities.get(dst).ok_or_else(|| {
+            ModError::Other(format!(
+                "additive target identity was not prepared: {}",
+                dst.display()
+            ))
+        })?;
+        let key = dst.display().to_string();
+        transaction
+            .pre_live_sha256
+            .insert(key.clone(), identity.previous.clone());
+        if !contains_same_path(&record.managed_paks, &key) {
+            record.managed_paks.push(key.clone());
+        }
+        record
+            .deployed_hashes
+            .insert(key.clone(), identity.intended.clone());
+        if let Some(previous) = &identity.previous {
+            record
+                .recovery_file_hashes
+                .entry(key)
+                .or_default()
+                .push(previous.clone());
+        }
+    }
+
+    for live in plan
+        .writes
+        .iter()
+        .map(|(live, _)| live)
+        .chain(plan.file_writes.iter().map(|write| &write.live))
+    {
+        let live_key = live.display().to_string();
+        let prepared = plan.backup_identities.get(live).ok_or_else(|| {
+            ModError::Other(format!(
+                "live/backup identity was not prepared: {}",
+                live.display()
+            ))
+        })?;
+        let backup = bak_path(live);
+        let backup_key = backup.display().to_string();
+        transaction
+            .pre_live_sha256
+            .insert(live_key.clone(), Some(prepared.live.clone()));
+        transaction
+            .pre_backup_sha256
+            .insert(backup_key.clone(), prepared.backup.clone());
+        if !record
+            .backups
+            .iter()
+            .any(|(stored_live, stored_backup, _)| {
+                same_path(live, stored_live) && same_path(&backup, stored_backup)
+            })
+        {
+            record.backups.push((
+                live_key.clone(),
+                backup_key.clone(),
+                prepared.refresh || prepared.backup.is_none(),
+            ));
+        }
+        record
+            .backup_hashes
+            .insert(backup_key, prepared.pristine.clone());
+        let accepted = record.recovery_file_hashes.entry(live_key).or_default();
+        accepted.push(prepared.live.clone());
+        accepted.sort();
+        accepted.dedup();
+    }
+
+    record.recovery_transaction = Some(transaction);
+    record.phase = DeployPhase::RecoveryRequired;
+    Ok(())
+}
+
+fn fold_prior_recovery_footprint(
+    plan: &DeployPlan,
+    record: &mut DeployRecord,
+    prior: Option<&DeployRecord>,
+) -> Vec<(String, String, bool)> {
+    let leftovers: Vec<(String, String, bool)> = prior
+        .map(|previous| {
+            previous
+                .backups
+                .iter()
+                .filter(|(live, _, _)| {
+                    !plan.writes.iter().any(|(path, _)| same_path(path, live))
+                        && !plan
+                            .file_writes
+                            .iter()
+                            .any(|write| same_path(&write.live, live))
+                })
+                .map(|(live, backup, _)| (live.clone(), backup.clone(), false))
+                .collect()
+        })
+        .unwrap_or_default();
+    record.backups.extend(leftovers.iter().cloned());
+
+    if let Some(previous) = prior {
+        for (live, _, _) in &leftovers {
+            if let Some(hash) = deployed_hash_for_path(live, &previous.deployed_hashes) {
+                record.deployed_hashes.insert(live.clone(), hash.clone());
+            }
+            let backup = bak_path(Path::new(live));
+            if let Some(hash) = backup_hash_for_path(&backup, &previous.backup_hashes) {
+                record
+                    .backup_hashes
+                    .insert(backup.display().to_string(), hash.clone());
+            }
+        }
+
+        let new_dirs = plan.ue4ss_dsts();
+        for directory in previous
+            .ue4ss_mod_dir
+            .iter()
+            .chain(previous.stale_ue4ss_dirs.iter())
+            .chain(previous.ue4ss_mod_dirs.iter())
+        {
+            if !contains_same_path(&new_dirs, directory)
+                && !contains_same_path(&record.stale_ue4ss_dirs, directory)
+            {
+                record.stale_ue4ss_dirs.push(directory.clone());
+                if let Some(fingerprint) = tree_fingerprint_for_path(
+                    Path::new(directory),
+                    &previous.ue4ss_tree_fingerprints,
+                ) {
+                    record
+                        .ue4ss_tree_fingerprints
+                        .insert(directory.clone(), fingerprint.clone());
+                }
+            }
+        }
+
+        let new_additive = plan.additive_dsts();
+        for path in &previous.texture_triplets {
+            if !contains_same_path(&new_additive, path)
+                && !contains_same_path(&record.texture_triplets, path)
+            {
+                record.texture_triplets.push(path.clone());
+                if let Some(hash) = deployed_hash_for_path(path, &previous.deployed_hashes) {
+                    record.deployed_hashes.insert(path.clone(), hash.clone());
+                }
+            }
+        }
+        for path in &previous.managed_paks {
+            if !contains_same_path(&new_additive, path)
+                && !contains_same_path(&record.managed_paks, path)
+            {
+                record.managed_paks.push(path.clone());
+                if let Some(hash) = deployed_hash_for_path(path, &previous.deployed_hashes) {
+                    record.deployed_hashes.insert(path.clone(), hash.clone());
+                }
+            }
+        }
+    }
+
+    if record.owner == "manager" {
+        for path in record.managed_paks.clone() {
+            if !contains_same_path(&record.texture_triplets, &path) {
+                record.texture_triplets.push(path);
+            }
+        }
+        for directory in record.ue4ss_mod_dirs.clone() {
+            if !contains_same_path(&record.stale_ue4ss_dirs, &directory) {
+                record.stale_ue4ss_dirs.push(directory);
+            }
+        }
+    }
+    leftovers
+}
+
+fn verify_plan_pre_stage(gp: &GamePaths, plan: &DeployPlan) -> Result<()> {
+    if let Some(expected) = &plan.voice_over_guard {
+        let actual = bind_voice_over_root(&expected.install_root)?
+            .ok_or_else(|| ModError::Other("installed VoiceOver directory disappeared".into()))?;
+        if !expected.same_identity(&actual) {
+            return Err(ModError::Other(
+                "installed VoiceOver directory changed identity before deployment".into(),
+            ));
+        }
+    }
+    if let Some(generation) = &plan.voice_executable_generation {
+        require_live_voice_executable_generation(gp, generation)?;
+    }
+    gore_as::compile::require_shipping_game_process_closed().map_err(|error| {
+        ModError::Other(format!(
+            "INSTALL_MUTATION_BLOCKED: final pre-write process check: {error}"
+        ))
+    })
+}
+
 fn commit_plan_guarded(
     gp: &GamePaths,
     abs_root: &Path,
-    mut plan: DeployPlan,
+    plan: DeployPlan,
     mut record: DeployRecord,
     prev: Option<StoredDeployRecord>,
+    transaction_id: Option<&str>,
 ) -> Result<DeployRecord> {
     let game_root = abs_root;
     let prior = prev.as_ref().map(|stored| &stored.record);
     let prev_record_bytes = prev.as_ref().map(|stored| stored.raw.as_slice());
-    if let Some(prior) = prior {
-        validate_record_identities(prior)?;
-    }
-
-    // Reject a plan that would write the SAME destination twice (across in-place writes, UE4SS
-    // dirs, texture triplets, and manager paks). Two components/mods targeting one path would race in
-    // `apply_writes`, and the undo/retire bookkeeping (which keys off the dst) would double-track
-    // or mis-restore it. Compare with `same_path` semantics so `\\?\C:\..` vs the plain form (and
-    // Windows case differences) still count as the same target. This runs BEFORE `stage`, so on a
-    // duplicate the game is untouched.
-    if let Some(dup) = first_duplicate_dst(&plan) {
-        return Err(ModError::Other(format!("duplicate deploy target: {dup}")));
-    }
-    prepare_target_identities(&mut plan, prior)?;
-
     // Recovery records are persisted before live writes. Record both the exact previous identity
     // (when replacing an active deployment) and the exact intended identity so a crash on either
     // side of an atomic publication can still restore from backup without falling back to unsafe
@@ -5035,165 +6623,241 @@ fn commit_plan_guarded(
         accepted.dedup();
     }
 
+    // Every fallible identity/process check runs before the durable early record. Once that record
+    // exists, every return path below is a transaction rollback or a retained recovery state.
+    verify_plan_pre_stage(gp, &plan)?;
+    #[cfg(test)]
+    apply_injected_plan_basis_replacement()?;
+    verify_prepared_target_identities(&plan)?;
+    if transaction_id.is_some() {
+        manager_crash_test_checkpoint(game_root, "apply.plan_basis_revalidated");
+    }
+
+    let mut leftovers = Vec::new();
+    let mut manager_scratch = if let Some(transaction_id) = transaction_id {
+        let scratch_root = create_manager_transaction_root(game_root, transaction_id)?;
+        seed_manager_recovery_targets(
+            &plan,
+            &mut record,
+            prior,
+            transaction_id,
+            scratch_root.stable_path(),
+        )?;
+        leftovers = fold_prior_recovery_footprint(&plan, &mut record, prior);
+        if let Err(error) = write_record_file_staged_in(game_root, &record, Some(&scratch_root)) {
+            let mut failures = Vec::new();
+            if let Err(binding) = scratch_root.revalidate_named() {
+                failures.push(format!(
+                    "Manager transaction scratch root lost its bound name after the early record \
+                     publication attempt: {binding}; on-disk deploy record intentionally left \
+                     unchanged and transaction scratch retained for recovery"
+                ));
+                return Err(with_rollback_failures(error, failures));
+            }
+            match restore_record_file(game_root, prev_record_bytes, Some(&scratch_root)) {
+                Ok(()) => {
+                    if let Err(cleanup) = cleanup_bound_manager_transaction_root(scratch_root) {
+                        failures.push(cleanup.to_string());
+                    }
+                }
+                Err(restore) => {
+                    failures.push(format!(
+                        "restoring pre-transaction deploy record: {restore}; transaction scratch \
+                         intentionally retained for recovery"
+                    ));
+                }
+            }
+            return Err(with_rollback_failures(error, failures));
+        }
+        manager_crash_test_checkpoint(game_root, "apply.early_record_durable");
+        Some(scratch_root)
+    } else {
+        None
+    };
+
     // `undo` captures the exact pre-deploy state for an in-process rollback;
     // the record is persisted BEFORE any live write so even a crash mid-write is recoverable.
     let mut undo = Undo::default();
 
     // (a) Stage: snapshot prior bytes + create every *.gore-bak, and note the intended UE4SS
     //     target — but do NOT write any live game file yet.
-    if let Some(expected) = &plan.voice_over_guard {
-        let actual = bind_voice_over_root(&expected.install_root)?
-            .ok_or_else(|| ModError::Other("installed VoiceOver directory disappeared".into()))?;
-        if !expected.same_identity(&actual) {
-            return Err(ModError::Other(
-                "installed VoiceOver directory changed identity before deployment".into(),
-            ));
-        }
-    }
-    if let Some(generation) = &plan.voice_executable_generation {
-        require_live_voice_executable_generation(gp, generation)?;
-    }
     // Re-enumerate after shared ownership and immediately before `stage` creates the first backup.
     // This narrows but cannot eliminate a later game-launch race because the game does not honor
     // gore's lock file; gore-as documents the same limitation on this shared native check.
-    gore_as::compile::require_shipping_game_process_closed().map_err(|error| {
-        ModError::Other(format!(
-            "INSTALL_MUTATION_BLOCKED: final pre-write process check: {error}"
-        ))
-    })?;
-    if let Err(e) = stage(&plan, &mut record, &mut undo) {
-        return Err(with_rollback_failures(e, undo.rollback()));
+    if let Err(e) = stage(&plan, &mut record, &mut undo, manager_scratch.as_ref()) {
+        return if manager_scratch.is_some() {
+            Err(rollback_commit_error(
+                e,
+                undo,
+                game_root,
+                prev_record_bytes,
+                manager_scratch,
+            ))
+        } else {
+            Err(with_rollback_failures(e, undo.rollback(None)))
+        };
+    }
+    if let Some(transaction) = record.recovery_transaction.as_mut() {
+        transaction.step = RecoveryTransactionStep::Applying;
+        if let Err(error) =
+            write_record_file_staged_in(game_root, &record, manager_scratch.as_ref())
+        {
+            return Err(rollback_commit_error(
+                error,
+                undo,
+                game_root,
+                prev_record_bytes,
+                manager_scratch,
+            ));
+        }
     }
 
     // (b) Fold the previous mod's not-overwritten loose files into the record, then persist the
     //     record BEFORE touching live files. A crash after this point is recoverable via
     //     undeploy; a write failure here rolls back and restores the previous record.
-    let leftovers: Vec<(String, String, bool)> = prior
-        .map(|p| {
-            p.backups
-                .iter()
-                .filter(|(live, _, _)| {
-                    !plan.writes.iter().any(|(path, _)| same_path(path, live))
-                        && !plan
-                            .file_writes
-                            .iter()
-                            .any(|write| same_path(&write.live, live))
-                })
-                .map(|(l, b, _)| (l.clone(), b.clone(), false))
-                .collect()
-        })
-        .unwrap_or_default();
-    record.backups.extend(leftovers.iter().cloned());
+    if manager_scratch.is_none() {
+        leftovers = prior
+            .map(|p| {
+                p.backups
+                    .iter()
+                    .filter(|(live, _, _)| {
+                        !plan.writes.iter().any(|(path, _)| same_path(path, live))
+                            && !plan
+                                .file_writes
+                                .iter()
+                                .any(|write| same_path(&write.live, live))
+                    })
+                    .map(|(l, b, _)| (l.clone(), b.clone(), false))
+                    .collect()
+            })
+            .unwrap_or_default();
+        record.backups.extend(leftovers.iter().cloned());
 
-    // Carry the previous deploy's drift hashes for the leftover (not-overwritten) files, so undeploy
-    // can still detect an external update of those files and skip a stale-backup restore.
-    if let Some(p) = prior {
-        for (live, _, _) in &leftovers {
-            if let Some(h) = deployed_hash_for_path(live, &p.deployed_hashes) {
-                record.deployed_hashes.insert(live.clone(), h.clone());
-            }
-            let backup = bak_path(Path::new(live));
-            if let Some(hash) = backup_hash_for_path(&backup, &p.backup_hashes) {
-                record
-                    .backup_hashes
-                    .insert(backup.display().to_string(), hash.clone());
-            }
-        }
-    }
-
-    // Crash-safety: if the previous deployment used DIFFERENT-named UE4SS dir(s), record them as
-    // stale BEFORE persisting. apply_writes/retire_leftovers haven't removed them yet, so a crash
-    // in this window would otherwise leave them orphaned-and-active with no record to clean them
-    // up. retire_leftovers prunes any it later removes successfully.
-    if let Some(prev) = prior {
-        let new_dirs = plan.ue4ss_dsts();
-        for d in prev
-            .ue4ss_mod_dir
-            .iter()
-            .chain(prev.stale_ue4ss_dirs.iter())
-            .chain(prev.ue4ss_mod_dirs.iter())
-        {
-            // `same_path`: records hold canonicalized (`\\?\`-prefixed) paths but the plan may hold
-            // the plain form of the same dir — a raw compare would wrongly mark a still-deployed dir
-            // stale and retire could then delete a dir this deploy just installed.
-            if !contains_same_path(&new_dirs, d) && !contains_same_path(&record.stale_ue4ss_dirs, d)
-            {
-                record.stale_ue4ss_dirs.push(d.clone());
-                if let Some(fingerprint) =
-                    tree_fingerprint_for_path(Path::new(d), &prev.ue4ss_tree_fingerprints)
-                {
+        // Carry the previous deploy's drift hashes for the leftover (not-overwritten) files, so undeploy
+        // can still detect an external update of those files and skip a stale-backup restore.
+        if let Some(p) = prior {
+            for (live, _, _) in &leftovers {
+                if let Some(h) = deployed_hash_for_path(live, &p.deployed_hashes) {
+                    record.deployed_hashes.insert(live.clone(), h.clone());
+                }
+                let backup = bak_path(Path::new(live));
+                if let Some(hash) = backup_hash_for_path(&backup, &p.backup_hashes) {
                     record
-                        .ue4ss_tree_fingerprints
-                        .insert(d.clone(), fingerprint.clone());
+                        .backup_hashes
+                        .insert(backup.display().to_string(), hash.clone());
                 }
             }
         }
-    }
 
-    // Same for the previous deploy's additive ~mods texture triplets: any not re-created by this
-    // deploy must be retired. Pre-seed them into the record BEFORE persisting (crash-safety) so a
-    // crash mid-retire still lets undeploy remove them; retire_leftovers deletes + prunes the ones
-    // it cleans. Without this, redeploying (esp. a different mod name or a bundle with no texture
-    // component) would leave the old triplet mounted in ~mods with no record to undeploy it.
-    if let Some(prev) = prior {
-        // Compare against the UNION of this plan's additive dsts (triplets + manager paks): a
-        // manager deploy mirrors managed_paks into the legacy `texture_triplets` field, so a prev
-        // entry re-created by THIS plan as EITHER kind must be kept, not retired. `same_path` so a
-        // canonicalized prev path matches the plan's plain form of the same file.
-        let new_additive = plan.additive_dsts();
-        for t in &prev.texture_triplets {
-            if !contains_same_path(&new_additive, t)
-                && !contains_same_path(&record.texture_triplets, t)
+        // Crash-safety: if the previous deployment used DIFFERENT-named UE4SS dir(s), record them as
+        // stale BEFORE persisting. apply_writes/retire_leftovers haven't removed them yet, so a crash
+        // in this window would otherwise leave them orphaned-and-active with no record to clean them
+        // up. retire_leftovers prunes any it later removes successfully.
+        if let Some(prev) = prior {
+            let new_dirs = plan.ue4ss_dsts();
+            for d in prev
+                .ue4ss_mod_dir
+                .iter()
+                .chain(prev.stale_ue4ss_dirs.iter())
+                .chain(prev.ue4ss_mod_dirs.iter())
             {
-                record.texture_triplets.push(t.clone());
-                if let Some(hash) = deployed_hash_for_path(t, &prev.deployed_hashes) {
-                    record.deployed_hashes.insert(t.clone(), hash.clone());
+                // `same_path`: records hold canonicalized (`\\?\`-prefixed) paths but the plan may hold
+                // the plain form of the same dir — a raw compare would wrongly mark a still-deployed dir
+                // stale and retire could then delete a dir this deploy just installed.
+                if !contains_same_path(&new_dirs, d)
+                    && !contains_same_path(&record.stale_ue4ss_dirs, d)
+                {
+                    record.stale_ue4ss_dirs.push(d.clone());
+                    if let Some(fingerprint) =
+                        tree_fingerprint_for_path(Path::new(d), &prev.ue4ss_tree_fingerprints)
+                    {
+                        record
+                            .ue4ss_tree_fingerprints
+                            .insert(d.clone(), fingerprint.clone());
+                    }
                 }
             }
         }
-        for p in &prev.managed_paks {
-            if !contains_same_path(&new_additive, p) && !contains_same_path(&record.managed_paks, p)
-            {
-                record.managed_paks.push(p.clone());
-                if let Some(hash) = deployed_hash_for_path(p, &prev.deployed_hashes) {
-                    record.deployed_hashes.insert(p.clone(), hash.clone());
+
+        // Same for the previous deploy's additive ~mods texture triplets: any not re-created by this
+        // deploy must be retired. Pre-seed them into the record BEFORE persisting (crash-safety) so a
+        // crash mid-retire still lets undeploy remove them; retire_leftovers deletes + prunes the ones
+        // it cleans. Without this, redeploying (esp. a different mod name or a bundle with no texture
+        // component) would leave the old triplet mounted in ~mods with no record to undeploy it.
+        if let Some(prev) = prior {
+            // Compare against the UNION of this plan's additive dsts (triplets + manager paks): a
+            // manager deploy mirrors managed_paks into the legacy `texture_triplets` field, so a prev
+            // entry re-created by THIS plan as EITHER kind must be kept, not retired. `same_path` so a
+            // canonicalized prev path matches the plan's plain form of the same file.
+            let new_additive = plan.additive_dsts();
+            for t in &prev.texture_triplets {
+                if !contains_same_path(&new_additive, t)
+                    && !contains_same_path(&record.texture_triplets, t)
+                {
+                    record.texture_triplets.push(t.clone());
+                    if let Some(hash) = deployed_hash_for_path(t, &prev.deployed_hashes) {
+                        record.deployed_hashes.insert(t.clone(), hash.clone());
+                    }
+                }
+            }
+            for p in &prev.managed_paks {
+                if !contains_same_path(&new_additive, p)
+                    && !contains_same_path(&record.managed_paks, p)
+                {
+                    record.managed_paks.push(p.clone());
+                    if let Some(hash) = deployed_hash_for_path(p, &prev.deployed_hashes) {
+                        record.deployed_hashes.insert(p.clone(), hash.clone());
+                    }
+                }
+            }
+        }
+
+        // Old-binary compatibility: a pre-v2 build deserializes a manager record but silently DROPS the
+        // v2-only `managed_paks`/`ue4ss_mod_dirs` fields (serde unknown-field tolerance), so ITS
+        // undeploy would never remove them — leaving manager paks/dirs mounted forever. Mirror the
+        // manager footprint into the legacy fields an old binary DOES read, which have identical removal
+        // semantics: manager paks → `texture_triplets` (delete file), manager UE4SS dirs →
+        // `stale_ue4ss_dirs` (remove_dir_all). A v2 binary now sees each path in BOTH the new and the
+        // legacy field; every removal site (`retire_leftovers`, `restore_record`) guards with `!exists()`
+        // so the second pass is a harmless no-op, never a double-error. Studio deploys have no such
+        // fields, so this is manager-only. Done BEFORE the record is persisted so even a pre-v2 undeploy
+        // after a crash cleans up. (`record.managed_paks`/`ue4ss_mod_dirs` were filled by `stage`.)
+        if record.owner == "manager" {
+            for p in record.managed_paks.clone() {
+                if !contains_same_path(&record.texture_triplets, &p) {
+                    record.texture_triplets.push(p);
+                }
+            }
+            for d in record.ue4ss_mod_dirs.clone() {
+                if !contains_same_path(&record.stale_ue4ss_dirs, &d) {
+                    record.stale_ue4ss_dirs.push(d);
                 }
             }
         }
     }
-
-    // Old-binary compatibility: a pre-v2 build deserializes a manager record but silently DROPS the
-    // v2-only `managed_paks`/`ue4ss_mod_dirs` fields (serde unknown-field tolerance), so ITS
-    // undeploy would never remove them — leaving manager paks/dirs mounted forever. Mirror the
-    // manager footprint into the legacy fields an old binary DOES read, which have identical removal
-    // semantics: manager paks → `texture_triplets` (delete file), manager UE4SS dirs →
-    // `stale_ue4ss_dirs` (remove_dir_all). A v2 binary now sees each path in BOTH the new and the
-    // legacy field; every removal site (`retire_leftovers`, `restore_record`) guards with `!exists()`
-    // so the second pass is a harmless no-op, never a double-error. Studio deploys have no such
-    // fields, so this is manager-only. Done BEFORE the record is persisted so even a pre-v2 undeploy
-    // after a crash cleans up. (`record.managed_paks`/`ue4ss_mod_dirs` were filled by `stage`.)
-    if record.owner == "manager" {
-        for p in record.managed_paks.clone() {
-            if !contains_same_path(&record.texture_triplets, &p) {
-                record.texture_triplets.push(p);
-            }
+    if manager_scratch.is_none() {
+        record.phase = DeployPhase::RecoveryRequired;
+        if let Err(e) = write_record_file(game_root, &record) {
+            return Err(rollback_commit_error(
+                e,
+                undo,
+                game_root,
+                prev_record_bytes,
+                None,
+            ));
         }
-        for d in record.ue4ss_mod_dirs.clone() {
-            if !contains_same_path(&record.stale_ue4ss_dirs, &d) {
-                record.stale_ue4ss_dirs.push(d);
-            }
-        }
-    }
-
-    record.phase = DeployPhase::RecoveryRequired;
-    if let Err(e) = write_record_file(game_root, &record) {
-        return Err(rollback_commit_error(e, undo, game_root, prev_record_bytes));
     }
 
     // (c) Apply: write the live files and install the UE4SS mod. On failure restore the exact
     //     prior state and the previous record.
-    if let Err(e) = apply_writes(&plan, &mut undo) {
-        return Err(rollback_commit_error(e, undo, game_root, prev_record_bytes));
+    if let Err(e) = apply_writes(&plan, &mut undo, manager_scratch.as_ref()) {
+        return Err(rollback_commit_error(
+            e,
+            undo,
+            game_root,
+            prev_record_bytes,
+            manager_scratch,
+        ));
     }
 
     // (c2) The live files now actually hold our content, so the drift hashes are valid — record
@@ -5216,40 +6880,65 @@ fn commit_plan_guarded(
     // couldn't be detected and undeploy could restore a stale backup over an updated asset. The
     // undo is still live here, so on failure roll the whole deploy back rather than returning a
     // half-recorded success. The phase is cleared only after post-apply reconciliation succeeds.
-    if let Err(e) = write_record_file(game_root, &record) {
-        return Err(rollback_commit_error(e, undo, game_root, prev_record_bytes));
+    if let Err(e) = write_record_file_staged_in(game_root, &record, manager_scratch.as_ref()) {
+        return Err(rollback_commit_error(
+            e,
+            undo,
+            game_root,
+            prev_record_bytes,
+            manager_scratch,
+        ));
     }
 
     // (d) committed — drop the kept-aside previous UE4SS mod(s), then retire the previous mod's
     //     footprint now (best-effort), pruning retired leftovers from the record.
     let transaction_dirs = undo.ue4ss_transaction_dirs();
-    let aside_remaining = undo.discard();
-    let mut changed = retire_leftovers(game_root, &leftovers, prior, &plan, &mut record)?;
-    for transaction_dir in transaction_dirs {
-        if aside_remaining
-            .iter()
-            .any(|failed| same_path(failed, &transaction_dir.display().to_string()))
-        {
-            continue;
-        }
-        let before = record.stale_ue4ss_dirs.len();
-        record
-            .stale_ue4ss_dirs
-            .retain(|stored| !same_path(&transaction_dir, stored));
-        changed |= record.stale_ue4ss_dirs.len() != before;
-        prune_tree_identity(&mut record, &transaction_dir);
+    let aside_remaining = undo.discard(manager_scratch.as_ref());
+    if manager_scratch.is_some() && !aside_remaining.is_empty() {
+        return Err(ModError::Other(format!(
+            "deployment applied, but exact transaction-directory cleanup failed; recovery state retained: {}",
+            aside_remaining
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        )));
     }
-    for old in &aside_remaining {
-        // Track every remaining transaction directory before durable cleanup claims it.
-        let s = old.display().to_string();
-        if !record.stale_ue4ss_dirs.contains(&s) {
-            record.stale_ue4ss_dirs.push(s);
+    let mut changed = retire_leftovers(
+        game_root,
+        &leftovers,
+        prior,
+        &plan,
+        &mut record,
+        manager_scratch.as_ref(),
+    )?;
+    if manager_scratch.is_none() {
+        for transaction_dir in transaction_dirs {
+            if aside_remaining
+                .iter()
+                .any(|failed| same_path(failed, &transaction_dir.display().to_string()))
+            {
+                continue;
+            }
+            let before = record.stale_ue4ss_dirs.len();
+            record
+                .stale_ue4ss_dirs
+                .retain(|stored| !same_path(&transaction_dir, stored));
+            changed |= record.stale_ue4ss_dirs.len() != before;
+            prune_tree_identity(&mut record, &transaction_dir);
+        }
+        for old in &aside_remaining {
+            // Track every remaining transaction directory before durable cleanup claims it.
+            let s = old.display().to_string();
+            if !record.stale_ue4ss_dirs.contains(&s) {
+                record.stale_ue4ss_dirs.push(s);
+                changed = true;
+            }
+        }
+        for old in aside_remaining {
+            durable_ue4ss_cleanup(game_root, &mut record, &old, None)?;
             changed = true;
         }
-    }
-    for old in aside_remaining {
-        durable_ue4ss_cleanup(game_root, &mut record, &old)?;
-        changed = true;
     }
     if changed {
         // Durable cleanup has already persisted each claim transition. Persist the fully pruned
@@ -5263,15 +6952,49 @@ fn commit_plan_guarded(
     record.recovery_file_hashes.clear();
     record.recovery_tree_fingerprints.clear();
     record.phase = DeployPhase::Applied;
-    write_record_file(game_root, &record).map_err(|error| {
-        ModError::Other(format!(
-            "deployment applied, but clearing recovery-required state failed: {error}"
-        ))
-    })?;
+    if let (Some(transaction_id), Some(scratch_root)) = (transaction_id, manager_scratch.as_ref()) {
+        record.last_mutation_id = Some(transaction_id.to_owned());
+        write_record_file_staged_in(game_root, &record, Some(scratch_root)).map_err(|error| {
+            ModError::Other(format!(
+                "deployment applied, but publishing the final operation-bound record failed: {error}"
+            ))
+        })?;
+        manager_crash_test_checkpoint(game_root, "apply.applied_record_durable_before_unlock");
+        let scratch_root = manager_scratch
+            .take()
+            .expect("Manager transaction id has a retained scratch root");
+        cleanup_bound_manager_transaction_root(scratch_root)?;
+    } else {
+        write_record_file(game_root, &record).map_err(|error| {
+            ModError::Other(format!(
+                "deployment applied, but clearing recovery-required state failed: {error}"
+            ))
+        })?;
+    }
     Ok(record)
 }
 
 fn write_record_file(game_root: &Path, record: &DeployRecord) -> Result<()> {
+    let scratch_root = match record.recovery_transaction.as_ref() {
+        Some(transaction) => Some(
+            ManagerTransactionRootGuard::open_existing(game_root, &transaction.transaction_id)?
+                .ok_or_else(|| {
+                    ModError::Other(format!(
+                        "Manager transaction scratch root is missing before record publication: {}",
+                        transaction.scratch_root
+                    ))
+                })?,
+        ),
+        None => None,
+    };
+    write_record_file_staged_in(game_root, record, scratch_root.as_ref())
+}
+
+fn write_record_file_staged_in(
+    game_root: &Path,
+    record: &DeployRecord,
+    scratch_root: Option<&ManagerTransactionRootGuard>,
+) -> Result<()> {
     validate_record(game_root, record)?;
     validate_record_identities(record)?;
     let bytes = serde_json::to_vec_pretty(record)?;
@@ -5282,14 +7005,44 @@ fn write_record_file(game_root: &Path, record: &DeployRecord) -> Result<()> {
     }
     // Write via temp + rename so a crash mid-write can't truncate an existing record (which
     // undeploy needs to parse to restore game files / clean up backups).
-    atomic_write(&record_path(game_root), &bytes)
+    match scratch_root {
+        Some(scratch_root) => {
+            let mutation_root = scratch_root.mutation_path()?;
+            atomic_write_staged_in(
+                &record_path(game_root),
+                &bytes,
+                &mutation_root,
+                ".gore-record-stage-",
+                Some(game_root),
+            )?;
+            scratch_root.revalidate_named()
+        }
+        None => atomic_write(&record_path(game_root), &bytes),
+    }
 }
 
 /// Restore the deploy record file to its pre-deploy contents on rollback (or remove it if there
 /// was none), so the on-disk record matches the rolled-back game state.
-fn restore_record_file(game_root: &Path, prev_bytes: Option<&[u8]>) -> Result<()> {
+fn restore_record_file(
+    game_root: &Path,
+    prev_bytes: Option<&[u8]>,
+    scratch_root: Option<&ManagerTransactionRootGuard>,
+) -> Result<()> {
     match prev_bytes {
-        Some(b) => atomic_write(&record_path(game_root), b),
+        Some(b) => match scratch_root {
+            Some(root) => {
+                let mutation_root = root.mutation_path()?;
+                atomic_write_staged_in(
+                    &record_path(game_root),
+                    b,
+                    &mutation_root,
+                    ".gore-record-rollback-",
+                    None,
+                )?;
+                root.revalidate_named()
+            }
+            None => atomic_write(&record_path(game_root), b),
+        },
         None => remove_file_durable(
             &record_path(game_root),
             "removing rolled-back deploy record",
@@ -5316,11 +7069,20 @@ fn rollback_commit_error(
     undo: Undo,
     game_root: &Path,
     prev_record_bytes: Option<&[u8]>,
+    scratch_root: Option<ManagerTransactionRootGuard>,
 ) -> ModError {
-    let mut failures = undo.rollback();
+    let mut failures = undo.rollback(scratch_root.as_ref());
     if failures.is_empty() {
-        if let Err(error) = restore_record_file(game_root, prev_record_bytes) {
+        if let Err(error) = restore_record_file(game_root, prev_record_bytes, scratch_root.as_ref())
+        {
             failures.push(format!("restoring deploy record: {error}"));
+        }
+        if failures.is_empty() {
+            if let Some(scratch_root) = scratch_root {
+                if let Err(error) = cleanup_bound_manager_transaction_root(scratch_root) {
+                    failures.push(error.to_string());
+                }
+            }
         }
     } else {
         // If the pre-write record landed, it describes enough of the attempted deployment for a
@@ -5383,7 +7145,10 @@ struct BackupUndo {
 
 struct Ue4ssSwapUndo {
     staging: PathBuf,
+    staging_guard: Option<ManagerScratchDirectoryGuard>,
+    staging_payload_identity: Option<mgr::model::FileIdentity>,
     holder: Option<PathBuf>,
+    holder_guard: Option<ManagerScratchDirectoryGuard>,
     old: Option<PathBuf>,
     dst: PathBuf,
     intended_fingerprint: String,
@@ -5403,7 +7168,7 @@ impl Undo {
     /// Attempt every inverse operation and return all failures. A caller must surface a non-empty
     /// result: silently swallowing one of these errors can leave a partial mod mounted while the
     /// API reports only the original write failure.
-    fn rollback(self) -> Vec<String> {
+    fn rollback(self, transaction_root: Option<&ManagerTransactionRootGuard>) -> Vec<String> {
         let Undo {
             files,
             ue4ss_swaps,
@@ -5418,6 +7183,7 @@ impl Undo {
                 file.snapshot,
                 file.published_hash.as_deref(),
                 "live file",
+                transaction_root,
                 &mut failures,
             );
             if restored {
@@ -5428,29 +7194,80 @@ impl Undo {
             // On a failed live restore, `backup` drops only its obsolete stale snapshot. The current
             // backup remains untouched for the retained recovery-required record.
         }
-        for swap in ue4ss_swaps.into_iter().rev() {
-            rollback_remove_owned_tree(
-                &swap.staging,
-                &swap.intended_fingerprint,
-                "UE4SS staging directory",
-                &mut failures,
-            );
+        for mut swap in ue4ss_swaps.into_iter().rev() {
+            match (swap.staging_guard.take(), transaction_root) {
+                (Some(staging), Some(root)) => {
+                    let payload_must_exist = matches!(
+                        swap.state,
+                        Ue4ssSwapState::Prepared | Ue4ssSwapState::OldMoved
+                    );
+                    let payload = staging
+                        .mutation_path(root, "UE4SS transaction staging rollback")
+                        .map(|path| path.join("payload"));
+                    let payload_is_owned = !payload_must_exist
+                        || payload.as_ref().ok().is_some_and(|path| {
+                            tree_matches_recorded_fingerprint(path, &swap.intended_fingerprint)
+                        });
+                    if payload_is_owned {
+                        if let Err(error) = staging
+                            .remove_contents_and_self(root, "UE4SS transaction staging rollback")
+                        {
+                            failures.push(error.to_string());
+                        }
+                    } else {
+                        failures.push(format!(
+                            "refusing to remove changed UE4SS transaction staging tree: {}",
+                            payload
+                                .as_ref()
+                                .map(|path| path.display().to_string())
+                                .unwrap_or_else(|error| error.to_string())
+                        ));
+                    }
+                }
+                (Some(_), None) => failures
+                    .push("UE4SS transaction staging rollback lost its bound scratch root".into()),
+                (None, Some(_)) if path_exists_no_follow(&swap.staging) => failures.push(format!(
+                    "UE4SS transaction staging identity was lost; retained for recovery: {}",
+                    swap.staging.display()
+                )),
+                (None, _) => {
+                    rollback_remove_owned_tree(
+                        &swap.staging,
+                        &swap.intended_fingerprint,
+                        "UE4SS staging directory",
+                        transaction_root,
+                        &mut failures,
+                    );
+                }
+            }
             match swap.state {
-                Ue4ssSwapState::Prepared => {
-                    if let Some(holder) = swap.holder {
-                        if let Err(error) = remove_empty_dir_durable(
-                            &holder,
-                            "removing unused empty UE4SS transaction holder",
-                        ) {
+                Ue4ssSwapState::Prepared => match (swap.holder_guard.take(), transaction_root) {
+                    (Some(holder), Some(root)) => {
+                        if let Err(error) = holder
+                            .remove_contents_and_self(root, "unused empty UE4SS transaction holder")
+                        {
                             failures.push(error.to_string());
                         }
                     }
-                }
+                    (Some(_), None) => failures
+                        .push("UE4SS previous-tree holder lost its bound scratch root".into()),
+                    (None, _) => {
+                        if let Some(holder) = swap.holder {
+                            if let Err(error) = remove_empty_dir_durable(
+                                &holder,
+                                "removing unused empty UE4SS transaction holder",
+                            ) {
+                                failures.push(error.to_string());
+                            }
+                        }
+                    }
+                },
                 Ue4ssSwapState::PromotedFresh => {
                     rollback_remove_owned_tree(
                         &swap.dst,
                         &swap.intended_fingerprint,
                         "fresh UE4SS directory",
+                        transaction_root,
                         &mut failures,
                     );
                 }
@@ -5462,6 +7279,7 @@ impl Undo {
                             &swap.dst,
                             &swap.intended_fingerprint,
                             "new UE4SS directory",
+                            transaction_root,
                             &mut failures,
                         )
                     } else if path_exists_no_follow(&swap.dst) {
@@ -5474,28 +7292,70 @@ impl Undo {
                         true
                     };
                     if destination_ready {
-                        let previous_is_owned =
+                        let old_io = match (&swap.holder_guard, transaction_root) {
+                            (Some(guard), Some(root)) => guard
+                                .mutation_path(root, "UE4SS previous-tree rollback holder")
+                                .map(|path| path.join("previous")),
+                            (Some(_), None) => Err(ModError::Other(
+                                "UE4SS previous-tree rollback lost its bound scratch root".into(),
+                            )),
+                            (None, _) => Ok(old.clone()),
+                        };
+                        let previous_is_owned = old_io.as_ref().ok().is_some_and(|old_io| {
                             swap.previous_fingerprint.as_ref().is_some_and(|expected| {
-                                tree_matches_recorded_fingerprint(&old, expected)
-                            });
+                                tree_matches_recorded_fingerprint(old_io, expected)
+                            })
+                        });
                         if !previous_is_owned {
                             failures.push(format!(
                                 "refusing to restore changed UE4SS rollback tree retained at '{}'",
                                 old.display()
                             ));
-                        } else if let Err(error) = promote_path_noclobber(&old, &swap.dst) {
-                            failures.push(format!(
-                                "restoring UE4SS directory '{}' from '{}': {error}; previous \
+                        } else {
+                            let restored = match (swap.holder_guard.as_mut(), transaction_root) {
+                                (Some(guard), Some(root)) => guard.move_child_out(
+                                    root,
+                                    std::ffi::OsStr::new("previous"),
+                                    &swap.dst,
+                                    "UE4SS previous-tree rollback holder",
+                                ),
+                                (Some(_), None) => Err(ModError::Other(
+                                    "UE4SS previous-tree rollback lost its bound scratch root"
+                                        .into(),
+                                )),
+                                (None, _) => promote_path_noclobber(&old, &swap.dst),
+                            };
+                            if let Err(error) = restored {
+                                failures.push(format!(
+                                    "restoring UE4SS directory '{}' from '{}': {error}; previous \
                                  directory retained in transaction holder '{}'",
-                                swap.dst.display(),
-                                old.display(),
-                                holder.display()
-                            ));
-                        } else if let Err(error) = remove_empty_dir_durable(
-                            &holder,
-                            "removing restored UE4SS transaction holder",
-                        ) {
-                            failures.push(error.to_string());
+                                    swap.dst.display(),
+                                    old.display(),
+                                    holder.display()
+                                ));
+                            } else {
+                                match (swap.holder_guard.take(), transaction_root) {
+                                    (Some(guard), Some(root)) => {
+                                        if let Err(error) = guard.remove_contents_and_self(
+                                            root,
+                                            "restored UE4SS transaction holder",
+                                        ) {
+                                            failures.push(error.to_string());
+                                        }
+                                    }
+                                    (Some(_), None) => failures.push(
+                                        "restored UE4SS holder lost its bound scratch root".into(),
+                                    ),
+                                    (None, _) => {
+                                        if let Err(error) = remove_empty_dir_durable(
+                                            &holder,
+                                            "removing restored UE4SS transaction holder",
+                                        ) {
+                                            failures.push(error.to_string());
+                                        }
+                                    }
+                                }
+                            }
                         }
                     } else {
                         failures.push(format!(
@@ -5517,6 +7377,7 @@ impl Undo {
                         snapshot,
                         Some(&file.published_hash),
                         "additive file",
+                        transaction_root,
                         &mut failures,
                     );
                 }
@@ -5524,6 +7385,7 @@ impl Undo {
                     &file.path,
                     &file.published_hash,
                     "fresh additive file",
+                    transaction_root,
                     &mut failures,
                 ),
             }
@@ -5542,6 +7404,7 @@ impl Undo {
                         stale,
                         Some(&backup.published_hash),
                         "stale backup",
+                        transaction_root,
                         &mut failures,
                     );
                 } else if backup.created {
@@ -5549,6 +7412,7 @@ impl Undo {
                         &backup.path,
                         &backup.published_hash,
                         "new backup",
+                        transaction_root,
                         &mut failures,
                     );
                 }
@@ -5559,15 +7423,37 @@ impl Undo {
 
     /// Return transaction directories that still exist after publication so the caller can move
     /// them through the durable UE4SS cleanup state machine.
-    fn discard(self) -> Vec<PathBuf> {
+    fn discard(self, transaction_root: Option<&ManagerTransactionRootGuard>) -> Vec<PathBuf> {
         let mut failed = Vec::new();
-        for swap in &self.ue4ss_swaps {
-            if path_exists_no_follow(&swap.staging) {
-                failed.push(swap.staging.clone());
+        for mut swap in self.ue4ss_swaps {
+            match (swap.staging_guard.take(), transaction_root) {
+                (Some(staging), Some(root)) => {
+                    if staging
+                        .remove_contents_and_self(root, "committed UE4SS staging directory")
+                        .is_err()
+                    {
+                        failed.push(swap.staging.clone());
+                    }
+                }
+                (Some(_), None) => failed.push(swap.staging.clone()),
+                (None, _) if path_exists_no_follow(&swap.staging) => {
+                    failed.push(swap.staging.clone())
+                }
+                (None, _) => {}
             }
-            if let Some(holder) = &swap.holder {
-                if path_exists_no_follow(holder) {
-                    failed.push(holder.clone());
+            if let Some(holder_path) = swap.holder {
+                match (swap.holder_guard.take(), transaction_root) {
+                    (Some(holder), Some(root)) => {
+                        if holder
+                            .remove_contents_and_self(root, "committed UE4SS previous-tree holder")
+                            .is_err()
+                        {
+                            failed.push(holder_path);
+                        }
+                    }
+                    (Some(_), None) => failed.push(holder_path),
+                    (None, _) if path_exists_no_follow(&holder_path) => failed.push(holder_path),
+                    (None, _) => {}
                 }
             }
         }
@@ -5580,7 +7466,17 @@ impl Undo {
         self.ue4ss_swaps
             .iter()
             .flat_map(|swap| {
-                std::iter::once(swap.staging.clone()).chain(swap.holder.iter().cloned())
+                let staging = swap
+                    .staging_guard
+                    .as_ref()
+                    .map(|guard| guard.stable_path().to_path_buf())
+                    .unwrap_or_else(|| swap.staging.clone());
+                let holder = swap
+                    .holder_guard
+                    .as_ref()
+                    .map(|guard| guard.stable_path().to_path_buf())
+                    .or_else(|| swap.holder.clone());
+                std::iter::once(staging).chain(holder)
             })
             .collect()
     }
@@ -5591,6 +7487,7 @@ fn rollback_restore_snapshot(
     snapshot: tempfile::TempPath,
     published_hash: Option<&str>,
     kind: &str,
+    transaction_root: Option<&ManagerTransactionRootGuard>,
     failures: &mut Vec<String>,
 ) -> bool {
     let Some(published_hash) = published_hash else {
@@ -5616,17 +7513,18 @@ fn rollback_restore_snapshot(
         ));
         return false;
     }
-    let claimed = match claim_file_to_unique_holder(dst, ".gore-rollback-current-") {
-        Ok(path) => path,
-        Err(error) => {
-            let retained = retain_temp_path(snapshot, "snapshot");
-            failures.push(format!(
-                "claiming current {kind} '{}' before rollback: {error}; {retained}",
-                dst.display()
-            ));
-            return false;
-        }
-    };
+    let claimed =
+        match claim_file_to_unique_holder(dst, ".gore-rollback-current-", transaction_root) {
+            Ok(path) => path,
+            Err(error) => {
+                let retained = retain_temp_path(snapshot, "snapshot");
+                failures.push(format!(
+                    "claiming current {kind} '{}' before rollback: {error}; {retained}",
+                    dst.display()
+                ));
+                return false;
+            }
+        };
     let current_is_ours = file_matches_recorded_hash_result(&claimed, published_hash);
     match current_is_ours {
         Ok(true) => {
@@ -5647,17 +7545,26 @@ fn rollback_restore_snapshot(
                     dst.display(),
                     claimed.display()
                 ));
-            } else {
-                let _ = cleanup_untracked_holder(&claimed);
+            } else if let Err(error) =
+                claimed.cleanup_empty(transaction_root, "empty rollback file-claim holder")
+            {
+                failures.push(format!(
+                    "restored {kind} '{}', but could not remove its empty rollback holder: {error}",
+                    dst.display()
+                ));
             }
             true
         }
         Ok(false) | Err(_) => {
             // The path changed after our publication (or cannot be authenticated). Put that exact
             // object back only if the original name is still free; never overwrite a racing winner.
-            match promote_path_noclobber(&claimed, dst) {
+            let claimed_path = claimed.claimed.clone();
+            match claimed.return_to(
+                transaction_root,
+                dst,
+                "externally changed rollback file claim",
+            ) {
                 Ok(()) => {
-                    let _ = cleanup_untracked_holder(&claimed);
                     if file_matches_recorded_hash_result(dst, &snapshot_hash).unwrap_or(false) {
                         // Publication failed before its rename; the original bytes never changed.
                         // The duplicate snapshot may be dropped and the prior record restored.
@@ -5677,7 +7584,7 @@ fn rollback_restore_snapshot(
                         "current {kind} '{}' changed externally and could not be returned from '{}': \
                          {error}; {retained}",
                         dst.display(),
-                        claimed.display()
+                        claimed_path.display()
                     ));
                     false
                 }
@@ -5690,21 +7597,23 @@ fn rollback_remove_owned_file(
     path: &Path,
     published_hash: &str,
     kind: &str,
+    transaction_root: Option<&ManagerTransactionRootGuard>,
     failures: &mut Vec<String>,
 ) {
     if !path_exists_no_follow(path) {
         return;
     }
-    let claimed = match claim_file_to_unique_holder(path, ".gore-rollback-delete-") {
-        Ok(path) => path,
-        Err(error) => {
-            failures.push(format!(
-                "claiming {kind} '{}' before rollback delete: {error}",
-                path.display()
-            ));
-            return;
-        }
-    };
+    let claimed =
+        match claim_file_to_unique_holder(path, ".gore-rollback-delete-", transaction_root) {
+            Ok(path) => path,
+            Err(error) => {
+                failures.push(format!(
+                    "claiming {kind} '{}' before rollback delete: {error}",
+                    path.display()
+                ));
+                return;
+            }
+        };
     match file_matches_recorded_hash_result(&claimed, published_hash) {
         Ok(true) => {
             if let Err(error) = remove_file_durable(&claimed, "removing claimed rollback file") {
@@ -5712,20 +7621,28 @@ fn rollback_remove_owned_file(
                     "removing claimed {kind} '{}': {error}",
                     claimed.display()
                 ));
-            } else {
-                let _ = cleanup_untracked_holder(&claimed);
+            } else if let Err(error) =
+                claimed.cleanup_empty(transaction_root, "empty rollback delete holder")
+            {
+                failures.push(format!(
+                    "removing empty rollback holder for {kind} '{}': {error}",
+                    path.display()
+                ));
             }
         }
         Ok(false) | Err(_) => {
-            if let Err(error) = promote_path_noclobber(&claimed, path) {
+            let claimed_path = claimed.claimed.clone();
+            if let Err(error) = claimed.return_to(
+                transaction_root,
+                path,
+                "externally changed rollback delete claim",
+            ) {
                 failures.push(format!(
                     "refusing to delete externally changed {kind} '{}'; claimed object retained at \
                      '{}': {error}",
                     path.display(),
-                    claimed.display()
+                    claimed_path.display()
                 ));
-            } else {
-                let _ = cleanup_untracked_holder(&claimed);
             }
         }
     }
@@ -5735,12 +7652,14 @@ fn rollback_remove_owned_tree(
     path: &Path,
     expected_fingerprint: &str,
     kind: &str,
+    transaction_root: Option<&ManagerTransactionRootGuard>,
     failures: &mut Vec<String>,
 ) -> bool {
     if !path_exists_no_follow(path) {
         return true;
     }
-    let claimed = match claim_tree_to_unique_holder(path, ".gore-rollback-tree-") {
+    let claimed = match claim_tree_to_unique_holder(path, ".gore-rollback-tree-", transaction_root)
+    {
         Ok(path) => path,
         Err(error) => {
             failures.push(format!(
@@ -5752,10 +7671,16 @@ fn rollback_remove_owned_tree(
     };
     if tree_matches_recorded_fingerprint(&claimed, expected_fingerprint) {
         match remove_dir_all_durable(&claimed, "removing claimed rollback tree") {
-            Ok(()) => {
-                let _ = cleanup_untracked_holder(&claimed);
-                true
-            }
+            Ok(()) => match claimed.cleanup_empty(transaction_root, "empty rollback tree holder") {
+                Ok(()) => true,
+                Err(error) => {
+                    failures.push(format!(
+                        "removing empty rollback holder for {kind} '{}': {error}",
+                        path.display()
+                    ));
+                    false
+                }
+            },
             Err(error) => {
                 failures.push(format!(
                     "removing claimed {kind} '{}': {error}",
@@ -5765,15 +7690,18 @@ fn rollback_remove_owned_tree(
             }
         }
     } else {
-        if let Err(error) = promote_path_noclobber(&claimed, path) {
+        let claimed_path = claimed.claimed.clone();
+        if let Err(error) = claimed.return_to(
+            transaction_root,
+            path,
+            "externally changed rollback tree claim",
+        ) {
             failures.push(format!(
                 "refusing to delete externally changed {kind} '{}'; claimed tree retained at '{}': \
                  {error}",
                 path.display(),
-                claimed.display()
+                claimed_path.display()
             ));
-        } else {
-            let _ = cleanup_untracked_holder(&claimed);
         }
         false
     }
@@ -5786,19 +7714,104 @@ fn retain_temp_path(path: tempfile::TempPath, label: &str) -> String {
     }
 }
 
-fn claim_file_to_unique_holder(source: &Path, prefix: &str) -> Result<PathBuf> {
+struct RollbackClaim {
+    claimed: PathBuf,
+    holder: Option<ManagerScratchDirectoryGuard>,
+}
+
+impl std::ops::Deref for RollbackClaim {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.claimed
+    }
+}
+
+impl RollbackClaim {
+    fn cleanup_empty(
+        self,
+        transaction_root: Option<&ManagerTransactionRootGuard>,
+        label: &str,
+    ) -> Result<()> {
+        match (self.holder, transaction_root) {
+            (Some(holder), Some(root)) => holder.remove_contents_and_self(root, label),
+            (Some(_), None) => Err(ModError::Other(format!(
+                "{label} lost its bound Manager transaction root"
+            ))),
+            (None, _) => cleanup_untracked_holder(&self.claimed),
+        }
+    }
+
+    fn return_to(
+        self,
+        transaction_root: Option<&ManagerTransactionRootGuard>,
+        target: &Path,
+        label: &str,
+    ) -> Result<()> {
+        match (self.holder, transaction_root) {
+            (Some(mut holder), Some(root)) => {
+                holder.move_child_out(root, std::ffi::OsStr::new("claimed"), target, label)?;
+                holder.remove_contents_and_self(root, label)
+            }
+            (Some(_), None) => Err(ModError::Other(format!(
+                "{label} lost its bound Manager transaction root"
+            ))),
+            (None, _) => {
+                promote_path_noclobber(&self.claimed, target)?;
+                cleanup_untracked_holder(&self.claimed)
+            }
+        }
+    }
+}
+
+fn claim_file_to_unique_holder(
+    source: &Path,
+    prefix: &str,
+    transaction_root: Option<&ManagerTransactionRootGuard>,
+) -> Result<RollbackClaim> {
+    if let Some(root) = transaction_root {
+        let mut holder = ManagerScratchDirectoryGuard::create_unique(
+            root,
+            prefix,
+            "rollback file-claim holder",
+        )?;
+        let claimed = match holder.move_path_into(
+            root,
+            source,
+            std::ffi::OsStr::new("claimed"),
+            "rollback file-claim holder",
+        ) {
+            Ok(claimed) => claimed,
+            Err(error) => {
+                let _ = holder.remove_contents_and_self(root, "unused rollback file-claim holder");
+                return Err(error);
+            }
+        };
+        return Ok(RollbackClaim {
+            claimed,
+            holder: Some(holder),
+        });
+    }
     let root = untracked_cleanup_root(source)?;
     let holder = tempfile::Builder::new()
         .prefix(prefix)
-        .tempdir_in(&root)
-        .map_err(io("allocating unique file-claim path"))?;
-    let holder = holder.keep();
+        .tempdir_in(root)
+        .map_err(io("allocating unique file-claim path"))?
+        .keep();
     let claimed = holder.join("claimed");
     match promote_path_noclobber(source, &claimed) {
-        Ok(()) => Ok(claimed),
+        Ok(()) => Ok(RollbackClaim {
+            claimed,
+            holder: None,
+        }),
         // A parent-directory sync can fail after the atomic rename itself succeeded. Do not lose
         // the only path to the claimed object; the caller authenticates it before any delete.
-        Err(_) if !path_exists_no_follow(source) && path_exists_no_follow(&claimed) => Ok(claimed),
+        Err(_) if !path_exists_no_follow(source) && path_exists_no_follow(&claimed) => {
+            Ok(RollbackClaim {
+                claimed,
+                holder: None,
+            })
+        }
         Err(error) => {
             let _ = remove_empty_dir_durable(&holder, "removing unused rollback file holder");
             Err(error)
@@ -5806,18 +7819,53 @@ fn claim_file_to_unique_holder(source: &Path, prefix: &str) -> Result<PathBuf> {
     }
 }
 
-fn claim_tree_to_unique_holder(source: &Path, prefix: &str) -> Result<PathBuf> {
+fn claim_tree_to_unique_holder(
+    source: &Path,
+    prefix: &str,
+    transaction_root: Option<&ManagerTransactionRootGuard>,
+) -> Result<RollbackClaim> {
+    if let Some(root) = transaction_root {
+        let mut holder = ManagerScratchDirectoryGuard::create_unique(
+            root,
+            prefix,
+            "rollback tree-claim holder",
+        )?;
+        let claimed = match holder.move_path_into(
+            root,
+            source,
+            std::ffi::OsStr::new("claimed"),
+            "rollback tree-claim holder",
+        ) {
+            Ok(claimed) => claimed,
+            Err(error) => {
+                let _ = holder.remove_contents_and_self(root, "unused rollback tree-claim holder");
+                return Err(error);
+            }
+        };
+        return Ok(RollbackClaim {
+            claimed,
+            holder: Some(holder),
+        });
+    }
     let root = untracked_cleanup_root(source)?;
     let holder = tempfile::Builder::new()
         .prefix(prefix)
-        .tempdir_in(&root)
-        .map_err(io("allocating unique tree-claim path"))?;
-    let holder = holder.keep();
+        .tempdir_in(root)
+        .map_err(io("allocating unique tree-claim path"))?
+        .keep();
     let claimed = holder.join("claimed");
     match promote_path_noclobber(source, &claimed) {
-        Ok(()) => Ok(claimed),
+        Ok(()) => Ok(RollbackClaim {
+            claimed,
+            holder: None,
+        }),
         // As above, retain ownership of a successful rename even if the durability barrier failed.
-        Err(_) if !path_exists_no_follow(source) && path_exists_no_follow(&claimed) => Ok(claimed),
+        Err(_) if !path_exists_no_follow(source) && path_exists_no_follow(&claimed) => {
+            Ok(RollbackClaim {
+                claimed,
+                holder: None,
+            })
+        }
         Err(error) => {
             let _ = remove_empty_dir_durable(&holder, "removing unused rollback tree holder");
             Err(error)
@@ -5934,11 +7982,9 @@ fn prepare(
                 let lcache = gp.lcache.clone().ok_or_else(|| {
                     ModError::Other("no AlkimiaLocalization .lcache found in game".into())
                 })?;
-                let (pristine, drifted) =
-                    read_pristine_bounded(&lcache, prev, MAX_PRISTINE_PATCH_BYTES)?;
-                if drifted {
-                    plan.refresh_baks.push(lcache.clone());
-                }
+                let (pristine, source) =
+                    read_pristine_bounded_with_source(&lcache, prev, MAX_PRISTINE_PATCH_BYTES)?;
+                plan.bind_backup_identity(&lcache, source.basis)?;
                 let raw_edits: BTreeMap<String, BTreeMap<String, String>> =
                     serde_json::from_slice(&read_safe_bundle_file(
                         bundle_dir,
@@ -5997,7 +8043,8 @@ fn prepare(
                             // standalone `gore loc import` reports it by name, so swallowing it
                             // here left the two paths disagreeing about the same edit.
                             if let Err(error) = lc.set_value(id, set, text) {
-                                plan.loc_skipped.push(format!("'{id}' has no '{set}' text: {error}"));
+                                plan.loc_skipped
+                                    .push(format!("'{id}' has no '{set}' text: {error}"));
                                 continue;
                             }
                             // Only now: the edit is in the file, so the remaining question is
@@ -6009,9 +8056,9 @@ fn prepare(
                             // Suppressed when this same bundle also writes the winning generation
                             // for this id, which is the practice the guide recommends and must not
                             // be nagged about.
-                            if let Some(winner) =
-                                shadowing_generation(&carried, folded_set, |w| langs.contains_key(w))
-                            {
+                            if let Some(winner) = shadowing_generation(&carried, folded_set, |w| {
+                                langs.contains_key(w)
+                            }) {
                                 plan.loc_shadowed.push(format!(
                                     "'{id}' also carries '{winner}', which the game displays \
                                      instead of '{set}'"
@@ -6069,11 +8116,12 @@ fn prepare(
                 for (bank, samples) in &map {
                     validate_bank_name(bank)?;
                     let bank_path = gp.fmod_desktop.join(bank);
-                    let (pristine, drifted) =
-                        read_pristine_bounded(&bank_path, prev, MAX_PRISTINE_PATCH_BYTES)?;
-                    if drifted {
-                        plan.refresh_baks.push(bank_path.clone());
-                    }
+                    let (pristine, source) = read_pristine_bounded_with_source(
+                        &bank_path,
+                        prev,
+                        MAX_PRISTINE_PATCH_BYTES,
+                    )?;
+                    plan.bind_backup_identity(&bank_path, source.basis)?;
                     let mut repl = Vec::new();
                     for (sample, wav_rel) in samples {
                         if !is_safe_rel_path(wav_rel) {
@@ -6143,11 +8191,9 @@ fn prepare(
                         cache_path.display()
                     )));
                 }
-                let (pristine, drifted) =
-                    read_pristine_bounded(&cache_path, prev, MAX_PRISTINE_PATCH_BYTES)?;
-                if drifted {
-                    plan.refresh_baks.push(cache_path.clone());
-                }
+                let (pristine, source) =
+                    read_pristine_bounded_with_source(&cache_path, prev, MAX_PRISTINE_PATCH_BYTES)?;
+                plan.bind_backup_identity(&cache_path, source.basis)?;
                 // Pass 1 inventories portable novel identities without retaining any mini bytes.
                 // The immutable union, rather than package/loadout order, determines every finite-
                 // domain pointer and engine-ID assignment.
@@ -6331,9 +8377,8 @@ fn prepare_file_component(
         }
         // Inherit the game-update contract wholesale: if Steam replaced this file underneath a
         // deployed mod, the preserved backup is stale and `stage` must re-snapshot the newer file.
-        if select_pristine_source(&live, prev)?.drifted {
-            plan.refresh_baks.push(live.clone());
-        }
+        let source = select_pristine_source(&live, prev)?;
+        plan.bind_backup_identity(&live, source.basis)?;
         let candidate = snapshot_bundle_payload(
             bundle_dir,
             payload_rel,
@@ -6671,9 +8716,18 @@ fn prepare_pak_file_component(
 
 /// Stage a prepared plan WITHOUT touching any live game file: snapshot each target's current
 /// (pre-deploy) bytes into the undo, create its `*.gore-bak` backup, and record the intended
-/// UE4SS mod dir. This runs BEFORE the deploy record is persisted; the actual live writes happen
-/// later in [`apply_writes`], so a crash between record-write and apply is still recoverable.
-fn stage(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> Result<()> {
+/// UE4SS mod dir. Manager calls this only after its operation-bound early recovery record is
+/// durable; the actual live writes happen later in [`apply_writes`].
+fn stage(
+    plan: &DeployPlan,
+    record: &mut DeployRecord,
+    undo: &mut Undo,
+    transaction_guard: Option<&ManagerTransactionRootGuard>,
+) -> Result<()> {
+    let transaction_root = transaction_guard
+        .map(ManagerTransactionRootGuard::mutation_path)
+        .transpose()?;
+    let transaction_root = transaction_root.as_deref();
     // Note the intended UE4SS target(s) now so the persisted record knows about them even if a
     // crash interrupts the swap in `apply_writes` — undeploy can then still clean them up.
     //   - manager (`owner == "manager"`): a deployment composes SEVERAL mods, so ALL dirs go into
@@ -6689,64 +8743,161 @@ fn stage(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> Resul
                 dst.display()
             ))
         })?;
-        let staging = unique_ue4ss_swap_dir(dst, ".gore-ue4ss-stage-")?;
-        let (holder, old) = match std::fs::symlink_metadata(dst) {
-            Ok(_) => match unique_ue4ss_swap_dir(dst, ".gore-ue4ss-old-") {
-                Ok(holder) => {
+        let (staging, staging_guard, staging_payload_identity, staging_io, staging_binding) =
+            match transaction_guard {
+                Some(root) => {
+                    let guard = ManagerScratchDirectoryGuard::create_named(
+                        root,
+                        std::ffi::OsStr::new(&format!("ue4ss-stage-{i}")),
+                        "UE4SS transaction staging directory",
+                    )?;
+                    let wrapper = guard.directory(root, "UE4SS transaction staging directory")?;
+                    let payload = wrapper.create_child_directory_new(
+                        std::ffi::OsStr::new("payload"),
+                        "UE4SS transaction staging payload",
+                    )?;
+                    let payload_identity = payload.identity();
+                    let payload_handle = open_manager_transaction_directory_handle(payload.path())?;
+                    if mgr::model::identity_from_open_file(
+                        &payload_handle,
+                        "UE4SS transaction staging payload",
+                    )? != payload_identity
+                    {
+                        return Err(ModError::Other(
+                            "UE4SS transaction staging payload changed while being bound".into(),
+                        ));
+                    }
+                    let stable = guard.stable_path().join("payload");
+                    let io = manager_transaction_handle_path(&payload_handle, &stable)?;
+                    (
+                        stable,
+                        Some(guard),
+                        Some(payload_identity),
+                        io,
+                        Some((payload, payload_handle)),
+                    )
+                }
+                None => {
+                    let path = unique_ue4ss_swap_dir(dst, ".gore-ue4ss-stage-")?;
+                    (path.clone(), None, None, path, None)
+                }
+            };
+        let (holder, holder_guard, old) = match std::fs::symlink_metadata(dst) {
+            Ok(_) => match match transaction_guard {
+                Some(root) => ManagerScratchDirectoryGuard::create_named(
+                    root,
+                    std::ffi::OsStr::new(&format!("ue4ss-old-{i}")),
+                    "UE4SS previous-tree transaction holder",
+                )
+                .map(|guard| (guard.stable_path().to_path_buf(), Some(guard))),
+                None => unique_ue4ss_swap_dir(dst, ".gore-ue4ss-old-").map(|holder| (holder, None)),
+            } {
+                Ok((holder, guard)) => {
                     let old = holder.join("previous");
-                    (Some(holder), Some(old))
+                    (Some(holder), guard, Some(old))
                 }
                 Err(error) => {
+                    if transaction_guard.is_some() {
+                        return Err(error);
+                    }
                     return Err(with_directory_cleanup(
                         error,
-                        &staging,
+                        &staging_io,
                         "cleaning UE4SS staging after old-holder creation failure",
                     ));
                 }
             },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (None, None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (None, None, None),
             Err(error) => {
+                if transaction_guard.is_some() {
+                    return Err(io("reading UE4SS destination metadata")(error));
+                }
                 return Err(with_directory_cleanup(
                     io("reading UE4SS destination metadata")(error),
-                    &staging,
+                    &staging_io,
                     "cleaning UE4SS staging after destination metadata failure",
                 ));
             }
         };
         undo.ue4ss_swaps.push(Ue4ssSwapUndo {
             staging: staging.clone(),
+            staging_guard,
+            staging_payload_identity,
             holder: holder.clone(),
+            holder_guard,
             old,
             dst: dst.clone(),
             intended_fingerprint: identity.intended.clone(),
             previous_fingerprint: identity.previous.clone(),
             state: Ue4ssSwapState::Prepared,
         });
-        // Fully materialize and verify the non-live staging tree before the recovery record is
-        // published. Once that record exists, staging is therefore always either the exact
-        // intended tree or has already been atomically moved to its final destination; undeploy
-        // never has to guess ownership of a partially copied transaction tree after a crash.
-        if let Err(error) = copy_dir(src, &staging) {
+        // Materialize and verify the non-live staging tree after the durable early record and
+        // before live promotion. The transaction-bound scratch root contains any partial copy;
+        // only the verified intended fingerprint may later be promoted into the live destination.
+        let copied = match staging_binding.as_ref() {
+            Some((destination, _)) => {
+                let source = mgr::model::open_directory_chain_nofollow(
+                    src,
+                    "UE4SS transaction source tree",
+                )?;
+                copy_secure_directory_contents(
+                    &source,
+                    destination,
+                    "UE4SS transaction staging tree",
+                )
+            }
+            None => copy_dir(src, &staging_io),
+        };
+        if let Err(error) = copied {
+            if transaction_guard.is_some() {
+                return Err(error);
+            }
             return Err(with_directory_cleanup(
                 error,
-                &staging,
+                &staging_io,
                 "cleaning partial UE4SS staging directory",
             ));
         }
-        if tree_fingerprint(&staging)? != identity.intended {
+        if let (Some(root), Some(guard)) = (
+            transaction_guard,
+            undo.ue4ss_swaps
+                .last()
+                .and_then(|swap| swap.staging_guard.as_ref()),
+        ) {
+            guard.revalidate_named(root, "copied UE4SS transaction staging directory")?;
+        }
+        if tree_fingerprint(&staging_io)? != identity.intended {
+            if transaction_guard.is_some() {
+                return Err(ModError::Other(format!(
+                    "UE4SS source changed while staging: {}",
+                    src.display()
+                )));
+            }
             return Err(with_directory_cleanup(
                 ModError::Other(format!(
                     "UE4SS source changed while staging: {}",
                     src.display()
                 )),
-                &staging,
+                &staging_io,
                 "cleaning changed UE4SS staging directory",
             ));
         }
-        for transaction_dir in std::iter::once(staging).chain(holder) {
-            let transaction_dir = transaction_dir.display().to_string();
-            if !contains_same_path(&record.stale_ue4ss_dirs, &transaction_dir) {
-                record.stale_ue4ss_dirs.push(transaction_dir.clone());
+        drop(staging_binding);
+        if let Some(guard) = transaction_guard {
+            manager_crash_test_checkpoint(
+                guard
+                    .stable_path()
+                    .parent()
+                    .expect("scratch root has install parent"),
+                "apply.first_ue4ss_stage_durable",
+            );
+        }
+        if transaction_root.is_none() {
+            for transaction_dir in std::iter::once(staging).chain(holder) {
+                let transaction_dir = transaction_dir.display().to_string();
+                if !contains_same_path(&record.stale_ue4ss_dirs, &transaction_dir) {
+                    record.stale_ue4ss_dirs.push(transaction_dir.clone());
+                }
             }
         }
         let s = dst.display().to_string();
@@ -6760,29 +8911,32 @@ fn stage(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> Resul
                 .or_default()
                 .push(previous.clone());
         }
-        let swap = undo
-            .ue4ss_swaps
-            .last()
-            .expect("UE4SS swap was pushed immediately above");
-        let empty_tree =
-            tree_fingerprint(swap.holder.as_deref().unwrap_or(swap.staging.as_path()))?;
-        let staging_key = swap.staging.display().to_string();
-        record
-            .ue4ss_tree_fingerprints
-            .insert(staging_key.clone(), identity.intended.clone());
-        // Staging was fully copied above, before this record can be persisted, so its intended
-        // fingerprint is the only accepted identity. Holders remain empty until one atomic move.
-        if let (Some(holder), Some(_)) = (&swap.holder, &identity.previous) {
-            let holder_key = holder.display().to_string();
-            let moved_tree = tree_fingerprint_with_prefix(dst, Some("previous"))?;
+        if transaction_root.is_none() {
+            let swap = undo
+                .ue4ss_swaps
+                .last()
+                .expect("UE4SS swap was pushed immediately above");
+            let empty_tree =
+                tree_fingerprint(swap.holder.as_deref().unwrap_or(swap.staging.as_path()))?;
+            let staging_key = swap.staging.display().to_string();
             record
                 .ue4ss_tree_fingerprints
-                .insert(holder_key.clone(), moved_tree);
-            record
-                .recovery_tree_fingerprints
-                .entry(holder_key)
-                .or_default()
-                .push(empty_tree);
+                .insert(staging_key.clone(), identity.intended.clone());
+            // Legacy transactions keep their swap trees outside the Manager scratch root, so the
+            // generic cleanup maps must authenticate them. Manager scratch paths are operation-
+            // bound recovery artifacts and deliberately never enter live-target ownership maps.
+            if let (Some(holder), Some(_)) = (&swap.holder, &identity.previous) {
+                let holder_key = holder.display().to_string();
+                let moved_tree = tree_fingerprint_with_prefix(dst, Some("previous"))?;
+                record
+                    .ue4ss_tree_fingerprints
+                    .insert(holder_key.clone(), moved_tree);
+                record
+                    .recovery_tree_fingerprints
+                    .entry(holder_key)
+                    .or_default()
+                    .push(empty_tree);
+            }
         }
         if !manager && i == 0 {
             record.ue4ss_mod_dir = Some(s);
@@ -6799,7 +8953,9 @@ fn stage(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> Resul
                 dst.display()
             ))
         })?;
-        record.texture_triplets.push(key.clone());
+        if !contains_same_path(&record.texture_triplets, &key) {
+            record.texture_triplets.push(key.clone());
+        }
         record
             .deployed_hashes
             .insert(key.clone(), identity.intended.clone());
@@ -6820,7 +8976,9 @@ fn stage(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> Resul
                 dst.display()
             ))
         })?;
-        record.managed_paks.push(key.clone());
+        if !contains_same_path(&record.managed_paks, &key) {
+            record.managed_paks.push(key.clone());
+        }
         record
             .deployed_hashes
             .insert(key.clone(), identity.intended.clone());
@@ -6841,7 +8999,37 @@ fn stage(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> Resul
         // Snapshot the current (pre-deploy) bytes so rollback restores the EXACT prior state —
         // the previous mod's content, not just the game-pristine backup. If this read fails we
         // abort BEFORE writing anything, rather than snapshot empty and risk an empty-file rollback.
-        let prior = verified_temp_copy(live, ".gore-undo-live-")?.into_temp_path();
+        let prepared = plan.backup_identities.get(live).ok_or_else(|| {
+            ModError::Other(format!(
+                "live/backup identity was not prepared: {}",
+                live.display()
+            ))
+        })?;
+        let backup_path = bak_path(live);
+        if optional_planned_file_identity(live, "live target before staging")?.as_deref()
+            != Some(prepared.live.as_str())
+            || optional_planned_file_identity(&backup_path, "backup target before staging")?
+                != prepared.backup
+        {
+            return Err(ModError::Other(format!(
+                "DEPLOY_TARGET_BASIS_CHANGED: live or backup target changed before staging; rebuild and retry: {}",
+                live.display()
+            )));
+        }
+        let prior = match transaction_root {
+            Some(root) => verified_temp_copy_in(live, root, ".gore-undo-live-")?,
+            None => verified_temp_copy(live, ".gore-undo-live-")?,
+        }
+        .into_temp_path();
+        if sha256_file(&prior)? != prepared.live
+            || optional_planned_file_identity(live, "rechecked staged live target")?.as_deref()
+                != Some(prepared.live.as_str())
+        {
+            return Err(ModError::Other(format!(
+                "DEPLOY_TARGET_BASIS_CHANGED: live target changed while staging; rebuild and retry: {}",
+                live.display()
+            )));
+        }
         undo.files.push(LiveFileUndo {
             live: live.clone(),
             snapshot: prior,
@@ -6853,18 +9041,37 @@ fn stage(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> Resul
             .last_mut()
             .expect("live undo was pushed immediately above");
         // If the live file drifted (game updated) since our last deploy, its preserved backup is
-        // stale: drop it so backup() re-snapshots the current file as the new pristine, instead of
+        // stale: drop it so staging re-snapshots the current file as the new pristine, instead of
         // keeping a pre-update backup that a future undeploy would restore over the newer asset.
         // The removal MUST succeed — if it can't (read-only/locked), backup() would keep the stale
         // backup, so fail the deploy now (stage runs pre-write, so the caller rolls back cleanly).
-        if plan.refresh_baks.iter().any(|p| p == live) {
-            let bak = bak_path(live);
+        if prepared.refresh {
+            let bak = backup_path;
             if bak.exists() {
                 // Snapshot the stale backup before deleting so rollback can put it back — otherwise
                 // a later-step failure would restore the previous record while its backup is gone.
                 // A failed snapshot must abort BEFORE deletion. Otherwise rollback could restore
                 // the prior record while its only pristine backup has vanished.
-                let prior_bak = verified_temp_copy(&bak, ".gore-undo-backup-")?.into_temp_path();
+                let prior_bak = match transaction_root {
+                    Some(root) => verified_temp_copy_in(&bak, root, ".gore-undo-backup-")?,
+                    None => verified_temp_copy(&bak, ".gore-undo-backup-")?,
+                }
+                .into_temp_path();
+                let expected_backup = prepared.backup.as_ref().ok_or_else(|| {
+                    ModError::Other(format!(
+                        "backup appeared after planning for refreshed target: {}",
+                        bak.display()
+                    ))
+                })?;
+                if sha256_file(&prior_bak)? != *expected_backup
+                    || optional_planned_file_identity(&bak, "rechecked stale backup")?.as_ref()
+                        != Some(expected_backup)
+                {
+                    return Err(ModError::Other(format!(
+                        "DEPLOY_TARGET_BASIS_CHANGED: backup changed while staging; rebuild and retry: {}",
+                        bak.display()
+                    )));
+                }
                 if std::fs::remove_file(&bak).is_err() && bak.exists() {
                     return Err(ModError::Other(format!(
                         "stale backup '{}' could not be removed (read-only or locked); close the \
@@ -6880,7 +9087,16 @@ fn stage(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> Resul
                 });
             }
         }
-        let (bak, created) = backup(live, record)?;
+        let (bak, created) = backup_staged_in(live, record, transaction_root)?;
+        if let Some(guard) = transaction_guard {
+            manager_crash_test_checkpoint(
+                guard
+                    .stable_path()
+                    .parent()
+                    .expect("scratch root has install parent"),
+                "apply.first_backup_durable",
+            );
+        }
         if created || file_undo.backup.is_some() {
             let backup_undo = file_undo.backup.get_or_insert_with(|| BackupUndo {
                 path: bak.clone(),
@@ -6892,21 +9108,68 @@ fn stage(plan: &DeployPlan, record: &mut DeployRecord, undo: &mut Undo) -> Resul
             backup_undo.created = created;
             backup_undo.published_hash =
                 backup_hash_for_path(&backup_undo.path, &record.backup_hashes)
-                    .expect("backup() records the authenticated backup identity")
+                    .expect("backup staging records the authenticated backup identity")
                     .clone();
         }
     }
+    if let Some(guard) = transaction_guard {
+        guard.revalidate_named()?;
+    }
     Ok(())
+}
+
+fn note_manager_live_write(
+    transaction_guard: Option<&ManagerTransactionRootGuard>,
+    completed: &mut usize,
+    total: usize,
+) {
+    *completed += 1;
+    if *completed == 1 && total > 1 {
+        if let Some(guard) = transaction_guard {
+            manager_crash_test_checkpoint(
+                guard
+                    .stable_path()
+                    .parent()
+                    .expect("scratch root has install parent"),
+                "apply.between_live_writes",
+            );
+        }
+    }
 }
 
 /// Perform the live changes of a staged plan: install/swap the UE4SS mod and write each target
 /// file. Backups and undo snapshots were already taken by [`stage`]; on error the caller calls
 /// `undo.rollback()` to restore the exact prior state.
-fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
+fn apply_writes(
+    plan: &DeployPlan,
+    undo: &mut Undo,
+    transaction_guard: Option<&ManagerTransactionRootGuard>,
+) -> Result<()> {
+    let transaction_root = transaction_guard
+        .map(ManagerTransactionRootGuard::mutation_path)
+        .transpose()?;
+    let transaction_root = transaction_root.as_deref();
     if undo.ue4ss_swaps.len() != plan.ue4ss_dirs.len() {
         return Err(ModError::Other(
             "UE4SS writes were not staged before apply".into(),
         ));
+    }
+    let live_write_total = plan.ue4ss_dirs.len()
+        + plan.texture_triplets.len()
+        + plan.managed_paks.len()
+        + plan.writes.len()
+        + plan.file_writes.len();
+    let mut completed_live_writes = 0usize;
+    if live_write_total > 0 {
+        if let Some(guard) = transaction_guard {
+            manager_crash_test_checkpoint(
+                guard
+                    .stable_path()
+                    .parent()
+                    .expect("scratch root has install parent"),
+                "apply.before_first_live_write",
+            );
+        }
     }
     for ((src, dst), swap) in plan.ue4ss_dirs.iter().zip(&mut undo.ue4ss_swaps) {
         let identity = plan.ue4ss_identities.get(dst).ok_or_else(|| {
@@ -6917,17 +9180,66 @@ fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
         })?;
         // Stage already built the complete tree before the recovery record was persisted. Recheck
         // it here immediately before the live swap so a post-stage mutation cannot be installed.
-        let staged_fingerprint = tree_fingerprint(&swap.staging)?;
+        let (staging_io, staging_binding) = match (&swap.staging_guard, transaction_guard) {
+            (Some(staging), Some(root)) => {
+                let wrapper = staging.directory(root, "UE4SS transaction staging directory")?;
+                let payload = match wrapper.open_child(
+                    std::ffi::OsStr::new("payload"),
+                    "UE4SS transaction staging payload",
+                )? {
+                    mgr::model::SecureNode::Directory(directory) => directory,
+                    mgr::model::SecureNode::File(file) => {
+                        return Err(ModError::Other(format!(
+                            "UE4SS transaction staging payload was replaced by a file: {}",
+                            file.path().display()
+                        )))
+                    }
+                };
+                if Some(payload.identity()) != swap.staging_payload_identity {
+                    return Err(ModError::Other(format!(
+                        "UE4SS transaction staging payload changed filesystem identity: {}",
+                        swap.staging.display()
+                    )));
+                }
+                let handle = open_manager_transaction_directory_handle(payload.path())?;
+                if mgr::model::identity_from_open_file(
+                    &handle,
+                    "UE4SS transaction staging payload",
+                )? != payload.identity()
+                {
+                    return Err(ModError::Other(format!(
+                        "UE4SS transaction staging payload changed while being rebound: {}",
+                        swap.staging.display()
+                    )));
+                }
+                let io = manager_transaction_handle_path(&handle, &swap.staging)?;
+                (io, Some((payload, handle)))
+            }
+            (Some(_), None) => {
+                return Err(ModError::Other(
+                    "UE4SS transaction staging directory lost its bound scratch root".into(),
+                ))
+            }
+            (None, _) => (swap.staging.clone(), None),
+        };
+        let staged_fingerprint = tree_fingerprint(&staging_io)?;
         if staged_fingerprint != identity.intended {
+            if transaction_guard.is_some() {
+                return Err(ModError::Other(format!(
+                    "UE4SS source changed after preflight: {}",
+                    src.display()
+                )));
+            }
             return Err(with_directory_cleanup(
                 ModError::Other(format!(
                     "UE4SS source changed after preflight: {}",
                     src.display()
                 )),
-                &swap.staging,
+                &staging_io,
                 "cleaning changed UE4SS staging directory",
             ));
         }
+        drop(staging_binding);
         #[cfg(test)]
         apply_injected_ue4ss_replacement(dst)?;
         if let Some(old) = &swap.old {
@@ -6938,6 +9250,12 @@ fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
                 ))
             })?;
             if !tree_matches_recorded_fingerprint(dst, expected_previous) {
+                if transaction_guard.is_some() {
+                    return Err(ModError::Other(format!(
+                        "owned UE4SS destination changed before apply: {}",
+                        dst.display()
+                    )));
+                }
                 return Err(with_directory_cleanup(
                     ModError::Other(format!(
                         "owned UE4SS destination changed before apply: {}",
@@ -6947,33 +9265,109 @@ fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
                     "cleaning UE4SS staging after destination disappeared",
                 ));
             }
-            if let Err(error) = std::fs::rename(dst, old) {
+            let (moved_old, old_io) = match (swap.holder_guard.as_mut(), transaction_guard) {
+                (Some(holder), Some(root)) => {
+                    let moved = holder.move_path_into(
+                        root,
+                        dst,
+                        std::ffi::OsStr::new("previous"),
+                        "UE4SS previous-tree transaction holder",
+                    );
+                    let io = moved.as_ref().ok().cloned();
+                    (moved.map(|_| ()), io)
+                }
+                (Some(_), None) => (
+                    Err(ModError::Other(
+                        "UE4SS previous-tree holder lost its bound scratch root".into(),
+                    )),
+                    None,
+                ),
+                (None, _) => (
+                    std::fs::rename(dst, old).map_err(io("moving old ue4ss mod aside")),
+                    Some(old.clone()),
+                ),
+            };
+            if let Err(error) = moved_old {
+                if transaction_guard.is_some() {
+                    return Err(error);
+                }
                 return Err(with_directory_cleanup(
-                    io("moving old ue4ss mod aside")(error),
-                    &swap.staging,
+                    error,
+                    &staging_io,
                     "cleaning UE4SS staging after move-aside failure",
                 ));
             }
             swap.state = Ue4ssSwapState::OldMoved;
+            let live_parent = dst.parent().ok_or_else(|| {
+                ModError::Other(format!(
+                    "UE4SS destination has no parent after move-aside: {}",
+                    dst.display()
+                ))
+            })?;
+            sync_parent_directory(live_parent)?;
+            if transaction_guard.is_none() {
+                let old_parent = old.parent().ok_or_else(|| {
+                    ModError::Other(format!(
+                        "UE4SS transaction holder has no parent after move-aside: {}",
+                        old.display()
+                    ))
+                })?;
+                if old_parent != live_parent {
+                    sync_parent_directory(old_parent)?;
+                }
+            }
+            if let Some(guard) = transaction_guard {
+                manager_crash_test_checkpoint(
+                    guard
+                        .stable_path()
+                        .parent()
+                        .expect("scratch root has install parent"),
+                    "apply.ue4ss_old_moved",
+                );
+            }
             // `old` contains the former destination at this point. Validate it against the exact
             // prior tree before installing anything new; a concurrent content change is rolled
             // back rather than silently adopted.
-            if !tree_matches_recorded_fingerprint(old, expected_previous) {
+            let old_io = old_io.expect("successful UE4SS move has a bound destination path");
+            if !tree_matches_recorded_fingerprint(&old_io, expected_previous) {
                 return Err(ModError::Other(format!(
                     "UE4SS destination changed while being moved aside: {}",
                     dst.display()
                 )));
             }
-            if let Err(error) = promote_ue4ss_staging(&swap.staging, dst) {
+            let promoted = match (swap.staging_guard.as_mut(), transaction_guard) {
+                (Some(staging), Some(root)) => staging.move_child_out(
+                    root,
+                    std::ffi::OsStr::new("payload"),
+                    dst,
+                    "UE4SS transaction staging directory",
+                ),
+                (Some(_), None) => Err(ModError::Other(
+                    "UE4SS transaction staging directory lost its bound scratch root".into(),
+                )),
+                (None, _) => {
+                    promote_ue4ss_staging(&swap.staging, dst).map_err(io("installing ue4ss mod"))
+                }
+            };
+            if let Err(error) = promoted {
+                if transaction_guard.is_some() {
+                    return Err(error);
+                }
                 return Err(with_directory_cleanup(
-                    io("installing ue4ss mod")(error),
-                    &swap.staging,
+                    error,
+                    &staging_io,
                     "cleaning failed UE4SS staging promotion",
                 ));
             }
             swap.state = Ue4ssSwapState::PromotedReplacement;
         } else {
             if path_exists_no_follow(dst) {
+                if transaction_guard.is_some() {
+                    return Err(ModError::Other(format!(
+                        "unowned UE4SS destination appeared after preflight: {}",
+                        dst.display()
+                    )));
+                }
                 return Err(with_directory_cleanup(
                     ModError::Other(format!(
                         "unowned UE4SS destination appeared after preflight: {}",
@@ -6983,10 +9377,27 @@ fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
                     "cleaning UE4SS staging after destination collision",
                 ));
             }
-            if let Err(error) = promote_ue4ss_staging(&swap.staging, dst) {
+            let promoted = match (swap.staging_guard.as_mut(), transaction_guard) {
+                (Some(staging), Some(root)) => staging.move_child_out(
+                    root,
+                    std::ffi::OsStr::new("payload"),
+                    dst,
+                    "UE4SS transaction staging directory",
+                ),
+                (Some(_), None) => Err(ModError::Other(
+                    "UE4SS transaction staging directory lost its bound scratch root".into(),
+                )),
+                (None, _) => {
+                    promote_ue4ss_staging(&swap.staging, dst).map_err(io("installing ue4ss mod"))
+                }
+            };
+            if let Err(error) = promoted {
+                if transaction_guard.is_some() {
+                    return Err(error);
+                }
                 return Err(with_directory_cleanup(
-                    io("installing ue4ss mod")(error),
-                    &swap.staging,
+                    error,
+                    &staging_io,
                     "cleaning failed UE4SS staging promotion",
                 ));
             }
@@ -6998,6 +9409,11 @@ fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
                 dst.display()
             )));
         }
+        note_manager_live_write(
+            transaction_guard,
+            &mut completed_live_writes,
+            live_write_total,
+        );
     }
     // Copy each texture triplet file into `~mods`, tracking it for rollback. Snapshot any bytes
     // already at `dst` BEFORE overwriting (a same-named redeploy targets the same paths as the
@@ -7010,7 +9426,12 @@ fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
                 dst.display()
             ))
         })?;
-        publish_additive(src, dst, identity, undo)?;
+        publish_additive(src, dst, identity, undo, transaction_root)?;
+        note_manager_live_write(
+            transaction_guard,
+            &mut completed_live_writes,
+            live_write_total,
+        );
     }
     // Copy each manager-installed pak/triplet file into place, tracked for rollback exactly
     // like the texture triplets above (prior bytes restored, fresh additions deleted). Their
@@ -7022,7 +9443,12 @@ fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
                 dst.display()
             ))
         })?;
-        publish_additive(src, dst, identity, undo)?;
+        publish_additive(src, dst, identity, undo, transaction_root)?;
+        note_manager_live_write(
+            transaction_guard,
+            &mut completed_live_writes,
+            live_write_total,
+        );
     }
     // Prepared pack sources remain alive for the complete commit/rollback call. Their unique
     // `temporary_roots` guards clean them when the plan drops on either success or failure; no
@@ -7039,7 +9465,15 @@ fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
                 ))
             })?;
         file_undo.published_hash = Some(content_hash(bytes));
-        atomic_write(live, bytes)?;
+        match transaction_root {
+            Some(root) => atomic_write_staged_in(live, bytes, root, ".gore-live-stage-", None)?,
+            None => atomic_write(live, bytes)?,
+        }
+        note_manager_live_write(
+            transaction_guard,
+            &mut completed_live_writes,
+            live_write_total,
+        );
     }
     for write in &plan.file_writes {
         let file_undo = undo
@@ -7052,10 +9486,11 @@ fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
                     write.live.display()
                 ))
             })?;
-        let (staged, parent) = stage_atomic_publish_copy(
+        let (staged, parent) = stage_atomic_publish_copy_in(
             &write.candidate,
             &write.live,
             Some((write.len, write.hash.as_str())),
+            transaction_root,
         )?;
         publish_atomic_temp(staged, &write.live)?;
         // Only a completed atomic promote turns the prepared identity into a published identity.
@@ -7063,6 +9498,14 @@ fn apply_writes(plan: &DeployPlan, undo: &mut Undo) -> Result<()> {
         // recovery record never describe intended bytes as if they had reached the live path.
         file_undo.published_hash = Some(write.hash.clone());
         sync_parent_directory(&parent)?;
+        note_manager_live_write(
+            transaction_guard,
+            &mut completed_live_writes,
+            live_write_total,
+        );
+    }
+    if let Some(guard) = transaction_guard {
+        guard.revalidate_named()?;
     }
     Ok(())
 }
@@ -7076,6 +9519,7 @@ fn publish_additive(
     dst: &Path,
     identity: &PlannedIdentity,
     undo: &mut Undo,
+    transaction_root: Option<&Path>,
 ) -> Result<()> {
     let parent = dst.parent().ok_or_else(|| {
         ModError::Other(format!(
@@ -7084,7 +9528,11 @@ fn publish_additive(
         ))
     })?;
     std::fs::create_dir_all(parent).map_err(io("creating additive destination directory"))?;
-    let staged = verified_temp_copy_in(src, parent, ".gore-additive-stage-")?;
+    let staged = verified_temp_copy_in(
+        src,
+        transaction_root.unwrap_or(parent),
+        ".gore-additive-stage-",
+    )?;
     if sha256_file(staged.path())? != identity.intended {
         return Err(ModError::Other(format!(
             "additive source changed after preflight: {}",
@@ -7108,7 +9556,7 @@ fn publish_additive(
                 dst.display()
             )));
         }
-        let prior = snapshot_existing_additive(dst)?.ok_or_else(|| {
+        let prior = snapshot_existing_additive(dst, transaction_root)?.ok_or_else(|| {
             ModError::Other(format!(
                 "owned additive destination disappeared before apply: {}",
                 dst.display()
@@ -7157,10 +9605,17 @@ fn publish_additive(
     Ok(())
 }
 
-fn snapshot_existing_additive(dst: &Path) -> Result<Option<tempfile::TempPath>> {
+fn snapshot_existing_additive(
+    dst: &Path,
+    transaction_root: Option<&Path>,
+) -> Result<Option<tempfile::TempPath>> {
     match std::fs::symlink_metadata(dst) {
         Ok(_) => Ok(Some(
-            verified_temp_copy(dst, ".gore-undo-additive-")?.into_temp_path(),
+            match transaction_root {
+                Some(root) => verified_temp_copy_in(dst, root, ".gore-undo-additive-")?,
+                None => verified_temp_copy(dst, ".gore-undo-additive-")?,
+            }
+            .into_temp_path(),
         )),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(io(&format!(
@@ -7181,6 +9636,7 @@ fn retire_leftovers(
     prev: Option<&DeployRecord>,
     plan: &DeployPlan,
     record: &mut DeployRecord,
+    scratch_root: Option<&ManagerTransactionRootGuard>,
 ) -> Result<bool> {
     let mut changed = false;
     for (live_s, bak_s, _) in leftovers {
@@ -7207,6 +9663,7 @@ fn retire_leftovers(
                         live,
                         identities,
                         Some((bak, &backup_hash)),
+                        scratch_root,
                     )?;
                     true
                 }
@@ -7233,7 +9690,14 @@ fn retire_leftovers(
                         )))
                     }
                 };
-                durable_file_cleanup(game_root, record, bak, vec![backup_identity], None)?;
+                durable_file_cleanup(
+                    game_root,
+                    record,
+                    bak,
+                    vec![backup_identity],
+                    None,
+                    scratch_root,
+                )?;
             }
             record.deployed_hashes.remove(live_s);
             remove_backup_hash_for_path(bak, &mut record.backup_hashes);
@@ -7268,7 +9732,7 @@ fn retire_leftovers(
             let prev_path = Path::new(&prev_dir);
             let identity_matches = tree_cleanup_is_owned(record, prev_path);
             if identity_matches {
-                durable_ue4ss_cleanup(game_root, record, prev_path)?;
+                durable_ue4ss_cleanup(game_root, record, prev_path, scratch_root)?;
                 changed = true;
             }
         }
@@ -7297,7 +9761,7 @@ fn retire_leftovers(
                 true
             } else {
                 let identities = file_identities_for_path(record, target);
-                durable_file_cleanup(game_root, record, target, identities, None)?;
+                durable_file_cleanup(game_root, record, target, identities, None, scratch_root)?;
                 true
             };
             if removed {
@@ -7363,6 +9827,150 @@ fn remove_dir_all_durable(path: &Path, context: &'static str) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(io(context)(error)),
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ManagerScratchChildKind {
+    File,
+    Tree,
+}
+
+fn manager_scratch_child_kind(name: &str) -> Option<ManagerScratchChildKind> {
+    let numbered_directory = |prefix: &str| {
+        name.strip_prefix(prefix).is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+        })
+    };
+    if numbered_directory("ue4ss-stage-") || numbered_directory("ue4ss-old-") {
+        return Some(ManagerScratchChildKind::Tree);
+    }
+    if [
+        ".gore-rollback-current-",
+        ".gore-rollback-delete-",
+        ".gore-rollback-tree-",
+        ".gore-mod-cleanup-",
+        ".gore-ue4ss-delete-",
+    ]
+    .iter()
+    .any(|prefix| name.starts_with(prefix))
+    {
+        return Some(ManagerScratchChildKind::Tree);
+    }
+    if [
+        ".gore-record-stage-",
+        ".gore-record-rollback-",
+        ".gore-undo-live-",
+        ".gore-undo-backup-",
+        ".gore-backup-stage-",
+        ".gore-additive-stage-",
+        ".gore-undo-additive-",
+        ".gore-live-stage-",
+        ".gore-copy-stage-",
+        ".gore-restore-stage-",
+    ]
+    .iter()
+    .any(|prefix| name.starts_with(prefix))
+    {
+        return Some(ManagerScratchChildKind::File);
+    }
+    None
+}
+
+fn cleanup_manager_transaction_root(game_root: &Path, transaction_id: &str) -> Result<()> {
+    let Some(root) = ManagerTransactionRootGuard::open_existing(game_root, transaction_id)? else {
+        return Ok(());
+    };
+    cleanup_bound_manager_transaction_root(root)
+}
+
+fn remove_secure_manager_directory_contents(
+    directory: &mgr::model::SecureDirectory,
+    label: &str,
+) -> Result<()> {
+    let names = directory
+        .read_dir(label)?
+        .map(|entry| {
+            entry
+                .map(|entry| entry.file_name())
+                .map_err(io("enumerating bound Manager transaction directory"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for name in names {
+        match directory.open_child(&name, label)? {
+            mgr::model::SecureNode::File(file) => {
+                let identity = file.identity();
+                drop(file);
+                directory.remove_child_file_if_identity(&name, identity, label)?;
+            }
+            mgr::model::SecureNode::Directory(child) => {
+                remove_secure_manager_directory_contents(&child, label)?;
+                let identity = child.identity();
+                drop(child);
+                directory.remove_child_directory_if_identity(&name, identity, label)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn cleanup_bound_manager_transaction_root(root: ManagerTransactionRootGuard) -> Result<()> {
+    root.revalidate_named()?;
+    let root_directory = root.root_directory()?;
+    let names = root_directory
+        .read_dir("Manager transaction scratch root")?
+        .map(|entry| {
+            entry
+                .map(|entry| entry.file_name())
+                .map_err(io("enumerating bound Manager transaction root"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for name in names {
+        let name_text = name.to_str().ok_or_else(|| {
+            ModError::Other("Manager transaction root contains a non-UTF-8 child".into())
+        })?;
+        let expected = manager_scratch_child_kind(name_text).ok_or_else(|| {
+            ModError::Other(format!(
+                "Manager transaction root contains an unknown child: {}",
+                root.stable_path().join(&name).display()
+            ))
+        })?;
+        match (
+            expected,
+            root_directory.open_child(&name, "Manager transaction artifact")?,
+        ) {
+            (ManagerScratchChildKind::File, mgr::model::SecureNode::File(file)) => {
+                let identity = file.identity();
+                drop(file);
+                root_directory.remove_child_file_if_identity(
+                    &name,
+                    identity,
+                    "Manager transaction artifact",
+                )?;
+            }
+            (ManagerScratchChildKind::Tree, mgr::model::SecureNode::Directory(directory)) => {
+                remove_secure_manager_directory_contents(
+                    &directory,
+                    "Manager transaction artifact tree",
+                )?;
+                let identity = directory.identity();
+                drop(directory);
+                root_directory.remove_child_directory_if_identity(
+                    &name,
+                    identity,
+                    "Manager transaction artifact tree",
+                )?;
+            }
+            _ => {
+                return Err(ModError::Other(format!(
+                    "Manager transaction artifact has the wrong filesystem type: {}",
+                    root.stable_path().join(&name).display()
+                )))
+            }
+        }
+        root.revalidate_named()?;
+    }
+    drop(root_directory);
+    root.remove_self()
 }
 
 fn remove_empty_dir_durable(path: &Path, context: &'static str) -> Result<()> {
@@ -7659,6 +10267,88 @@ fn validate_record(record_root_hint: &Path, record: &DeployRecord) -> Result<()>
     let canonical_root = std::fs::canonicalize(&selected_root)
         .map_err(io("canonicalizing selected game root for deploy record"))?;
 
+    if let Some(last_mutation_id) = &record.last_mutation_id {
+        if !valid_manager_transaction_id(last_mutation_id) {
+            return Err(ModError::Other(
+                "deploy record contains an invalid last manager mutation id".into(),
+            ));
+        }
+    }
+    if let Some(transaction) = &record.recovery_transaction {
+        if record.owner != "manager"
+            || transaction.format != MANAGER_RECOVERY_FORMAT
+            || !valid_manager_transaction_id(&transaction.transaction_id)
+        {
+            return Err(ModError::Other(
+                "deploy record contains an invalid manager recovery transaction".into(),
+            ));
+        }
+        let expected_scratch =
+            manager_transaction_root(&canonical_root, &transaction.transaction_id)?;
+        let stored_scratch = Path::new(&transaction.scratch_root);
+        if !stored_scratch.is_absolute()
+            || stored_scratch.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::CurDir | std::path::Component::ParentDir
+                )
+            })
+            || record_path_key(stored_scratch) != record_path_key(&expected_scratch)
+        {
+            return Err(ModError::Other(
+                "manager recovery transaction scratch root is not its operation-bound install child"
+                    .into(),
+            ));
+        }
+        if record.phase == DeployPhase::Applied
+            && record.last_mutation_id.as_deref() != Some(transaction.transaction_id.as_str())
+        {
+            return Err(ModError::Other(
+                "applied manager recovery transaction is not bound to last_mutation_id".into(),
+            ));
+        }
+        for (path, identity) in &transaction.pre_live_sha256 {
+            if validate_record_path(&canonical_root, path, RecordPathClass::LiveFile).is_err()
+                && validate_record_path(&canonical_root, path, RecordPathClass::AdditiveFile)
+                    .is_err()
+            {
+                return Err(ModError::Other(format!(
+                    "manager recovery pre-live path is not an allowed target: {path}"
+                )));
+            }
+            if identity
+                .as_deref()
+                .is_some_and(|identity| !valid_sha256_identity(identity))
+            {
+                return Err(ModError::Other(format!(
+                    "manager recovery pre-live identity is invalid: {path}"
+                )));
+            }
+        }
+        for (path, identity) in &transaction.pre_backup_sha256 {
+            validate_record_path(&canonical_root, path, RecordPathClass::BackupFile)?;
+            if identity
+                .as_deref()
+                .is_some_and(|identity| !valid_sha256_identity(identity))
+            {
+                return Err(ModError::Other(format!(
+                    "manager recovery pre-backup identity is invalid: {path}"
+                )));
+            }
+        }
+        for (path, identity) in &transaction.pre_tree_fingerprints {
+            validate_record_path(&canonical_root, path, RecordPathClass::Ue4ssDirectory)?;
+            if identity
+                .as_deref()
+                .is_some_and(|identity| !valid_sha256_identity(identity))
+            {
+                return Err(ModError::Other(format!(
+                    "manager recovery pre-tree identity is invalid: {path}"
+                )));
+            }
+        }
+    }
+
     for (live, backup, _) in &record.backups {
         let live_path = validate_record_path(&canonical_root, live, RecordPathClass::LiveFile)?;
         let backup_path =
@@ -7850,10 +10540,18 @@ fn validate_record(record_root_hint: &Path, record: &DeployRecord) -> Result<()>
                         .iter()
                         .any(|(_, backup, _)| same_path(source_path, backup));
                     let recorded = backup_hash_for_path(source_path, &record.backup_hashes);
+                    let pre_transaction = record
+                        .recovery_transaction
+                        .as_ref()
+                        .filter(|transaction| {
+                            transaction.operation == ManagerMutationOperation::Apply
+                        })
+                        .and_then(|_| recovery_pre_backup_identity(record, source_path))
+                        .and_then(Option::as_ref);
+                    let expected = claim.expected_hashes.first();
                     if !tracked
-                        || recorded.is_none()
                         || claim.expected_hashes.len() != 1
-                        || recorded != claim.expected_hashes.first()
+                        || (recorded != expected && pre_transaction != expected)
                     {
                         return Err(ModError::Other(format!(
                             "backup cleanup claim is not authorized by its tracked identity: {source}"
@@ -8109,9 +10807,17 @@ fn record_path_matches_class(relative: &Path, class: RecordPathClass) -> bool {
                         || parts[4].starts_with(".gore-ue4ss-old-")
                         || parts[4].starts_with(".gore-ue4ss-delete-"))
                     && file_name_safe())
+                || (parts.len() == 2
+                    && parts[0].starts_with(MANAGER_TRANSACTION_PREFIX)
+                    && parts[1].starts_with(".gore-ue4ss-delete-")
+                    && file_name_safe())
         }
         RecordPathClass::CleanupHolder => {
-            parts.len() == 1 && parts[0].starts_with(".gore-mod-cleanup-") && file_name_safe()
+            (parts.len() == 1 && parts[0].starts_with(".gore-mod-cleanup-") && file_name_safe())
+                || (parts.len() == 2
+                    && parts[0].starts_with(MANAGER_TRANSACTION_PREFIX)
+                    && parts[1].starts_with(".gore-mod-cleanup-")
+                    && file_name_safe())
         }
     }
 }
@@ -8276,6 +10982,68 @@ pub fn deploy_recovery_required(game_root: &Path) -> Result<bool> {
         .is_some_and(|stored| stored.record.phase == DeployPhase::RecoveryRequired))
 }
 
+fn manager_recovery_compile_blocker(game_root: &Path) -> Option<ManagerInstallRecoveryOutcome> {
+    use gore_as::compile::{InstallCompileArtifactKind, InstallCompileGameProcessDisposition};
+
+    let probe = probe_install_state(game_root);
+    if !probe.issues.is_empty()
+        || probe.game_process == InstallCompileGameProcessDisposition::InspectionFailed
+    {
+        return Some(ManagerInstallRecoveryOutcome::InspectionFailed);
+    }
+    if probe.game_process == InstallCompileGameProcessDisposition::Running {
+        return Some(ManagerInstallRecoveryOutcome::Busy);
+    }
+    if probe
+        .artifacts
+        .iter()
+        .any(|artifact| artifact.kind != InstallCompileArtifactKind::InstallMutationLock)
+    {
+        return Some(ManagerInstallRecoveryOutcome::CompileRecoveryRequired);
+    }
+    // The exact canonical lock (or its pre-publication initialization record) currently held by
+    // the abandoned wrapper must be the one and only remaining artifact. Anything else means the
+    // read-only snapshot did not describe the authority we hold and recovery fails closed.
+    if probe.artifacts.len() != 1 {
+        return Some(ManagerInstallRecoveryOutcome::InspectionFailed);
+    }
+    None
+}
+
+/// Read-only liveness probe for the Manager recovery button. The returned guard id is display/
+/// confirmation data only; mutation binds it again through the exact operating-system lock handle.
+pub fn probe_manager_install_recovery(game_root: &Path) -> ManagerInstallRecoveryReadiness {
+    use gore_as::compile::InstallMutationTakeover;
+
+    match gore_as::compile::InstallMutationGuard::take_over_abandoned_manager(game_root) {
+        InstallMutationTakeover::Missing => ManagerInstallRecoveryReadiness::Missing,
+        InstallMutationTakeover::Busy => ManagerInstallRecoveryReadiness::Active,
+        InstallMutationTakeover::Owned(abandoned) => {
+            let guard_id = abandoned.guard_id().to_owned();
+            let blocker = manager_recovery_compile_blocker(game_root);
+            drop(abandoned);
+            match blocker {
+                None => ManagerInstallRecoveryReadiness::AbandonedManager { guard_id },
+                Some(ManagerInstallRecoveryOutcome::Busy) => {
+                    ManagerInstallRecoveryReadiness::Active
+                }
+                Some(ManagerInstallRecoveryOutcome::CompileRecoveryRequired) => {
+                    ManagerInstallRecoveryReadiness::CompileOrAmbiguous
+                }
+                Some(_) => ManagerInstallRecoveryReadiness::Invalid,
+            }
+        }
+        InstallMutationTakeover::LegacyAmbiguous(abandoned) => {
+            drop(abandoned);
+            ManagerInstallRecoveryReadiness::CompileOrAmbiguous
+        }
+        InstallMutationTakeover::CompileOwner { .. } => {
+            ManagerInstallRecoveryReadiness::CompileOrAmbiguous
+        }
+        InstallMutationTakeover::Invalid { .. } => ManagerInstallRecoveryReadiness::Invalid,
+    }
+}
+
 /// Pristine bytes to rebuild a modded file from, plus whether the live file has DRIFTED from what
 /// we previously deployed there (e.g. Steam verified/updated it). Normally the preserved
 /// `*.gore-bak` is the pristine source; but if `prev` recorded a hash for this file and the
@@ -8286,6 +11054,7 @@ pub fn deploy_recovery_required(game_root: &Path) -> Result<bool> {
 pub(crate) struct PristineSource {
     pub(crate) path: PathBuf,
     pub(crate) drifted: bool,
+    pub(crate) basis: PlannedBackupIdentity,
 }
 
 /// Select the pristine source without materializing it. Drift is decided by a streaming hash and
@@ -8310,6 +11079,7 @@ pub(crate) fn select_pristine_source(
         )));
     }
 
+    let (live_sha256, live_legacy) = observed_file_identities(live)?;
     let backup = bak_path(live);
     match std::fs::symlink_metadata(&backup) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -8329,6 +11099,12 @@ pub(crate) fn select_pristine_source(
             return Ok(PristineSource {
                 path: live.to_path_buf(),
                 drifted: false,
+                basis: PlannedBackupIdentity {
+                    live: live_sha256.clone(),
+                    backup: None,
+                    pristine: live_sha256,
+                    refresh: false,
+                },
             });
         }
         Err(error) => return Err(io("reading pristine backup metadata")(error)),
@@ -8341,11 +11117,18 @@ pub(crate) fn select_pristine_source(
         Ok(_) => {}
     }
 
+    let (backup_sha256, backup_legacy) = observed_file_identities(&backup)?;
+
     let backup_identity =
         prev.and_then(|record| backup_hash_for_path(&backup, &record.backup_hashes));
     if let Some(expected) = backup_identity {
         if !expected.starts_with("sha256:")
-            || !file_matches_recorded_hash_result(&backup, expected)?
+            || !recorded_identity_matches_observation(
+                &backup,
+                expected,
+                &backup_sha256,
+                &backup_legacy,
+            )?
         {
             return Err(ModError::Other(format!(
                 "pristine backup content no longer matches its recorded identity: {}",
@@ -8355,7 +11138,7 @@ pub(crate) fn select_pristine_source(
     } else {
         // A path-only backup is not a trustworthy restore source.  The sole safe legacy case is
         // when using it is observationally identical to using the current live file.
-        if sha256_file(live)? != sha256_file(&backup)? {
+        if live_sha256 != backup_sha256 {
             return Err(ModError::Other(format!(
                 "unverifiable legacy pristine backup for '{}': live and backup differ but no backup SHA-256 is recorded; refusing path-only restore/rebuild",
                 live.display()
@@ -8364,30 +11147,54 @@ pub(crate) fn select_pristine_source(
         return Ok(PristineSource {
             path: backup,
             drifted: false,
+            basis: PlannedBackupIdentity {
+                live: live_sha256,
+                backup: Some(backup_sha256.clone()),
+                pristine: backup_sha256,
+                refresh: false,
+            },
         });
     }
 
     let live_key = live.display().to_string();
     if let Some(expected) = prev.and_then(|p| deployed_hash_for_path(&live_key, &p.deployed_hashes))
     {
-        if file_matches_recorded_hash_result(live, expected)? {
+        if recorded_identity_matches_observation(live, expected, &live_sha256, &live_legacy)? {
             return Ok(PristineSource {
                 path: backup,
                 drifted: false,
+                basis: PlannedBackupIdentity {
+                    live: live_sha256,
+                    backup: Some(backup_sha256.clone()),
+                    pristine: backup_sha256,
+                    refresh: false,
+                },
             });
         }
         return Ok(PristineSource {
             path: live.to_path_buf(),
             drifted: true,
+            basis: PlannedBackupIdentity {
+                live: live_sha256.clone(),
+                backup: Some(backup_sha256),
+                pristine: live_sha256,
+                refresh: true,
+            },
         });
     }
 
     // A new-format backup identity proves the restore source, but without a live identity we still
     // cannot decide whether differing live bytes are ours or a later game update.
-    if sha256_file(live)? == backup_identity.expect("checked above").as_str() {
+    if live_sha256 == backup_identity.expect("checked above").as_str() {
         Ok(PristineSource {
             path: backup,
             drifted: false,
+            basis: PlannedBackupIdentity {
+                live: live_sha256,
+                backup: Some(backup_sha256.clone()),
+                pristine: backup_sha256,
+                refresh: false,
+            },
         })
     } else {
         Err(ModError::Other(format!(
@@ -8402,14 +11209,31 @@ pub(crate) fn read_pristine_bounded(
     prev: Option<&DeployRecord>,
     max_bytes: u64,
 ) -> Result<(Vec<u8>, bool)> {
+    read_pristine_bounded_with_source(live, prev, max_bytes)
+        .map(|(bytes, source)| (bytes, source.drifted))
+}
+
+pub(crate) fn read_pristine_bounded_with_source(
+    live: &Path,
+    prev: Option<&DeployRecord>,
+    max_bytes: u64,
+) -> Result<(Vec<u8>, PristineSource)> {
     ensure_pristine_sources_bounded(live, max_bytes)?;
     let source = select_pristine_source(live, prev)?;
+    #[cfg(test)]
+    apply_injected_pristine_replacement()?;
     let bytes = read_regular_file_limited(
         &source.path,
         &format!("pristine patch base for {}", live.display()),
         max_bytes,
     )?;
-    Ok((bytes, source.drifted))
+    if sha256_bytes(&bytes) != source.basis.pristine {
+        return Err(ModError::Other(format!(
+            "selected pristine source changed while it was being read: {}",
+            source.path.display()
+        )));
+    }
+    Ok((bytes, source))
 }
 
 fn ensure_pristine_sources_bounded(live: &Path, max_bytes: u64) -> Result<()> {
@@ -8485,15 +11309,488 @@ fn path_matches_any_file_identity(path: &Path, identities: &[String]) -> Result<
     Ok(false)
 }
 
-fn unique_cleanup_holder(game_root: &Path) -> Result<PathBuf> {
-    let root = record_root(game_root);
+#[cfg(windows)]
+fn observe_secure_file_identities(
+    file: &mut mgr::model::SecureFile,
+    label: &str,
+) -> Result<(String, String)> {
+    let expected = file.len();
+    let mut sha256 = Sha256::new();
+    let mut legacy = 0xcbf2_9ce4_8422_2325u64;
+    let mut buffer = vec![0u8; 1024 * 1024];
+    let mut total = 0u64;
+    {
+        let mut limited = std::io::Read::by_ref(&mut file.file).take(expected.saturating_add(1));
+        loop {
+            let read = limited
+                .read(&mut buffer)
+                .map_err(io(&format!("hashing opened {label}")))?;
+            if read == 0 {
+                break;
+            }
+            sha256.update(&buffer[..read]);
+            update_content_hash(&mut legacy, &buffer[..read]);
+            total = total
+                .checked_add(read as u64)
+                .ok_or_else(|| ModError::Other(format!("{label} length overflow")))?;
+        }
+    }
+    file.verify_len(expected, label)?;
+    if total != expected {
+        return Err(ModError::Other(format!(
+            "opened {label} changed length while it was read: {}",
+            file.path().display()
+        )));
+    }
+    Ok((
+        format!("sha256:{:x}", sha256.finalize()),
+        format!("{legacy:016x}"),
+    ))
+}
+
+#[cfg(windows)]
+fn secure_file_matches_any_identity(
+    file: &mut mgr::model::SecureFile,
+    expected: &[String],
+    label: &str,
+) -> Result<bool> {
+    let path = file.path().to_path_buf();
+    let (sha256, legacy) = observe_secure_file_identities(file, label)?;
+    for identity in expected {
+        if recorded_identity_matches_observation(&path, identity, &sha256, &legacy)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(windows)]
+fn open_secure_cleanup_source(
+    source: &Path,
+    label: &str,
+) -> Result<
+    Option<(
+        mgr::model::SecureDirectory,
+        std::ffi::OsString,
+        mgr::model::SecureFile,
+    )>,
+> {
+    let parent = source
+        .parent()
+        .ok_or_else(|| ModError::Other(format!("{label} has no parent: {}", source.display())))?;
+    let name = source
+        .file_name()
+        .ok_or_else(|| ModError::Other(format!("{label} has no file name: {}", source.display())))?
+        .to_os_string();
+    let directory = mgr::model::open_directory_chain_nofollow(parent, label)?;
+    let Some(node) = directory.open_optional_child(&name, label)? else {
+        return Ok(None);
+    };
+    match node {
+        mgr::model::SecureNode::File(file) => Ok(Some((directory, name, file))),
+        mgr::model::SecureNode::Directory(_) => Ok(None),
+    }
+}
+
+#[cfg(windows)]
+fn claim_file_to_bound_holder_windows(
+    source: &Path,
+    claimed: &Path,
+    expected_hashes: &[String],
+) -> Result<()> {
+    let (source_parent, source_name, mut source_file) =
+        open_secure_cleanup_source(source, "durable cleanup source")?.ok_or_else(|| {
+            ModError::Other(format!(
+                "durable cleanup source disappeared before its bound copy: {}",
+                source.display()
+            ))
+        })?;
+    let source_len = source_file.len();
+    let source_identity = source_file.identity();
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(claimed)
+        .map_err(io("creating bound durable cleanup claim"))?;
+    let copied = std::io::copy(
+        &mut std::io::Read::by_ref(&mut source_file.file).take(source_len.saturating_add(1)),
+        &mut output,
+    )
+    .map_err(io("copying bound durable cleanup claim"))?;
+    source_file.verify_len(source_len, "durable cleanup source")?;
+    if copied != source_len {
+        drop(output);
+        let _ = std::fs::remove_file(claimed);
+        return Err(ModError::Other(format!(
+            "durable cleanup source changed while it was copied: {}",
+            source.display()
+        )));
+    }
+    output
+        .sync_all()
+        .map_err(io("syncing bound durable cleanup claim"))?;
+    drop(output);
+    if !path_matches_any_file_identity(claimed, expected_hashes)? {
+        let _ = std::fs::remove_file(claimed);
+        return Err(ModError::Other(format!(
+            "durable cleanup source did not match its prepared identity: {}",
+            source.display()
+        )));
+    }
+    drop(source_file);
+    source_parent.remove_child_file_if_identity(
+        &source_name,
+        source_identity,
+        "bound durable cleanup source",
+    )?;
+    sync_parent_directory(source.parent().expect("cleanup source has a parent"))
+}
+
+#[cfg(windows)]
+fn remove_duplicate_bound_cleanup_source_windows(
+    source: &Path,
+    expected_hashes: &[String],
+) -> Result<()> {
+    let Some((source_parent, source_name, mut source_file)) =
+        open_secure_cleanup_source(source, "resumed durable cleanup source")?
+    else {
+        return Ok(());
+    };
+    if !secure_file_matches_any_identity(
+        &mut source_file,
+        expected_hashes,
+        "resumed durable cleanup source",
+    )? {
+        return Ok(());
+    }
+    let identity = source_file.identity();
+    drop(source_file);
+    source_parent.remove_child_file_if_identity(
+        &source_name,
+        identity,
+        "resumed durable cleanup source",
+    )?;
+    sync_parent_directory(source.parent().expect("cleanup source has a parent"))
+}
+
+fn copy_secure_directory_contents(
+    source: &mgr::model::SecureDirectory,
+    destination: &mgr::model::SecureDirectory,
+    label: &str,
+) -> Result<()> {
+    let mut entries = 0u64;
+    let mut total_bytes = 0u64;
+    copy_secure_directory_contents_bounded(
+        source,
+        destination,
+        label,
+        &mut entries,
+        &mut total_bytes,
+    )
+}
+
+fn copy_secure_directory_contents_bounded(
+    source: &mgr::model::SecureDirectory,
+    destination: &mgr::model::SecureDirectory,
+    label: &str,
+    entries: &mut u64,
+    total_bytes: &mut u64,
+) -> Result<()> {
+    let names = source
+        .read_dir(label)?
+        .map(|entry| {
+            entry
+                .map(|entry| entry.file_name())
+                .map_err(io("enumerating bound UE4SS cleanup source"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for name in names {
+        *entries = entries
+            .checked_add(1)
+            .ok_or_else(|| ModError::Other(format!("{label} entry count overflow")))?;
+        if *entries > MAX_UE4SS_TREE_ENTRIES {
+            return Err(ModError::Other(format!(
+                "{label} exceeds the {MAX_UE4SS_TREE_ENTRIES}-entry limit"
+            )));
+        }
+        match source.open_child(&name, label)? {
+            mgr::model::SecureNode::File(mut input) => {
+                let expected = input.len();
+                if expected > MAX_UE4SS_FILE_BYTES {
+                    return Err(ModError::Other(format!(
+                        "{label} file exceeds the {MAX_UE4SS_FILE_BYTES}-byte limit: {}",
+                        input.path().display()
+                    )));
+                }
+                *total_bytes = total_bytes
+                    .checked_add(expected)
+                    .ok_or_else(|| ModError::Other(format!("{label} byte total overflow")))?;
+                if *total_bytes > MAX_UE4SS_TREE_BYTES {
+                    return Err(ModError::Other(format!(
+                        "{label} exceeds the {MAX_UE4SS_TREE_BYTES}-byte total limit"
+                    )));
+                }
+                let (mut output, _) = destination.create_child_file_new(&name, label)?;
+                let copied = std::io::copy(
+                    &mut std::io::Read::by_ref(&mut input.file).take(expected.saturating_add(1)),
+                    &mut output,
+                )
+                .map_err(io("copying bound UE4SS cleanup file"))?;
+                input.verify_len(expected, label)?;
+                if copied != expected {
+                    return Err(ModError::Other(format!(
+                        "bound UE4SS cleanup file changed while it was copied: {}",
+                        input.path().display()
+                    )));
+                }
+                output
+                    .sync_all()
+                    .map_err(io("syncing bound UE4SS cleanup file"))?;
+            }
+            mgr::model::SecureNode::Directory(input) => {
+                let output = destination.create_child_directory_new(&name, label)?;
+                copy_secure_directory_contents_bounded(
+                    &input,
+                    &output,
+                    label,
+                    entries,
+                    total_bytes,
+                )?;
+                output.sync_after_mutation(label)?;
+            }
+        }
+    }
+    destination.sync_after_mutation(label)
+}
+
+#[cfg(windows)]
+fn claim_ue4ss_tree_to_bound_holder_windows(
+    root: &ManagerTransactionRootGuard,
+    original: &Path,
+    holder: &Path,
+    expected: &[String],
+) -> Result<()> {
+    let source_parent_path = original.parent().ok_or_else(|| {
+        ModError::Other(format!(
+            "UE4SS cleanup source has no parent: {}",
+            original.display()
+        ))
+    })?;
+    let source_name = original
+        .file_name()
+        .ok_or_else(|| {
+            ModError::Other(format!(
+                "UE4SS cleanup source has no directory name: {}",
+                original.display()
+            ))
+        })?
+        .to_os_string();
+    let source_parent = mgr::model::open_directory_chain_nofollow(
+        source_parent_path,
+        "UE4SS cleanup source parent",
+    )?;
+    let source = match source_parent.open_child(&source_name, "UE4SS cleanup source")? {
+        mgr::model::SecureNode::Directory(directory) => directory,
+        mgr::model::SecureNode::File(file) => {
+            return Err(ModError::Other(format!(
+                "UE4SS cleanup source was replaced by a file: {}",
+                file.path().display()
+            )))
+        }
+    };
+    if expected.is_empty() || !path_matches_any_tree_identity(original, expected) {
+        return Err(ModError::Other(format!(
+            "UE4SS cleanup source changed before its bound copy: {}",
+            original.display()
+        )));
+    }
+    let holder_name = ManagerCleanupHolderGuard::direct_child_name(root, holder)?;
+    let root_directory = root.root_directory()?;
+    let holder_directory =
+        root_directory.create_child_directory_new(&holder_name, "bound UE4SS cleanup holder")?;
+    copy_secure_directory_contents(&source, &holder_directory, "bound UE4SS cleanup tree")?;
+    if !path_matches_any_tree_identity(holder_directory.path(), expected) {
+        return Err(ModError::Other(format!(
+            "bound UE4SS cleanup copy failed identity verification: {}",
+            holder.display()
+        )));
+    }
+    if !path_matches_any_tree_identity(original, expected) {
+        return Err(ModError::Other(format!(
+            "UE4SS cleanup source changed while its bound copy was prepared: {}",
+            original.display()
+        )));
+    }
+    remove_secure_manager_directory_contents(&source, "bound UE4SS cleanup source")?;
+    let source_identity = source.identity();
+    drop(source);
+    source_parent.remove_child_directory_if_identity(
+        &source_name,
+        source_identity,
+        "bound UE4SS cleanup source",
+    )?;
+    drop(holder_directory);
+    drop(root_directory);
+    sync_parent_directory(source_parent_path)?;
+    root.revalidate_named()
+}
+
+#[cfg(windows)]
+fn remove_duplicate_bound_ue4ss_source_windows(original: &Path, expected: &[String]) -> Result<()> {
+    let parent_path = original.parent().ok_or_else(|| {
+        ModError::Other(format!(
+            "UE4SS cleanup source has no parent: {}",
+            original.display()
+        ))
+    })?;
+    let name = original
+        .file_name()
+        .ok_or_else(|| {
+            ModError::Other(format!(
+                "UE4SS cleanup source has no directory name: {}",
+                original.display()
+            ))
+        })?
+        .to_os_string();
+    let parent =
+        mgr::model::open_directory_chain_nofollow(parent_path, "resumed UE4SS cleanup parent")?;
+    let Some(node) = parent.open_optional_child(&name, "resumed UE4SS cleanup source")? else {
+        return Ok(());
+    };
+    let source = match node {
+        mgr::model::SecureNode::Directory(directory) => directory,
+        mgr::model::SecureNode::File(file) => {
+            return Err(ModError::Other(format!(
+                "residual UE4SS cleanup source was replaced by a file: {}",
+                file.path().display()
+            )))
+        }
+    };
+    if expected.is_empty() {
+        return Err(ModError::Other(format!(
+            "residual UE4SS cleanup source has no authenticated identity: {}",
+            original.display()
+        )));
+    }
+    if !path_matches_any_tree_identity(source.path(), expected) {
+        return Err(ModError::Other(format!(
+            "residual UE4SS cleanup source is only partially removed or changed externally: {}",
+            original.display()
+        )));
+    }
+    remove_secure_manager_directory_contents(&source, "resumed UE4SS cleanup source")?;
+    let identity = source.identity();
+    drop(source);
+    parent.remove_child_directory_if_identity(&name, identity, "resumed UE4SS cleanup source")?;
+    sync_parent_directory(parent_path)
+}
+
+fn transaction_artifact_io_path(
+    record: &DeployRecord,
+    scratch_root: Option<&ManagerTransactionRootGuard>,
+    stable_path: &Path,
+) -> Result<PathBuf> {
+    match &record.recovery_transaction {
+        Some(transaction) => {
+            let root = scratch_root.ok_or_else(|| {
+                ModError::Other(format!(
+                    "Manager transaction scratch root is not bound for artifact mutation: {}",
+                    transaction.scratch_root
+                ))
+            })?;
+            if record_path_key(root.stable_path())
+                != record_path_key(Path::new(&transaction.scratch_root))
+            {
+                return Err(ModError::Other(
+                    "bound Manager transaction scratch root disagrees with the recovery record"
+                        .into(),
+                ));
+            }
+            root.bound_path(stable_path)
+        }
+        None => Ok(stable_path.to_path_buf()),
+    }
+}
+
+fn write_record_file_bound(
+    game_root: &Path,
+    record: &DeployRecord,
+    scratch_root: Option<&ManagerTransactionRootGuard>,
+) -> Result<()> {
+    if record.recovery_transaction.is_some() {
+        let scratch_root = scratch_root.ok_or_else(|| {
+            ModError::Other("Manager transaction record mutation has no bound scratch root".into())
+        })?;
+        write_record_file_staged_in(game_root, record, Some(scratch_root))
+    } else {
+        write_record_file(game_root, record)
+    }
+}
+
+fn remove_cleanup_holder_bound(
+    record: &DeployRecord,
+    scratch_root: Option<&ManagerTransactionRootGuard>,
+    bound_holder: Option<ManagerCleanupHolderGuard<'_>>,
+    stable_holder: &Path,
+    label: &str,
+) -> Result<()> {
+    if record.recovery_transaction.is_none() {
+        return remove_dir_all_durable(stable_holder, "removing durable cleanup holder");
+    }
+    let root = scratch_root.ok_or_else(|| {
+        ModError::Other("Manager cleanup has no bound transaction scratch root".into())
+    })?;
+    let name = ManagerCleanupHolderGuard::direct_child_name(root, stable_holder)?;
+    match bound_holder {
+        Some(holder) => {
+            if record_path_key(&holder.stable_path) != record_path_key(stable_holder) {
+                return Err(ModError::Other(format!(
+                    "bound Manager cleanup holder disagrees with the recovery record: {}",
+                    stable_holder.display()
+                )));
+            }
+            holder.remove_contents_and_self(label)
+        }
+        None => {
+            let root_directory = root.root_directory()?;
+            if root_directory.open_optional_child(&name, label)?.is_some() {
+                return Err(ModError::Other(format!(
+                    "Manager cleanup holder exists without its retained identity binding: {}",
+                    stable_holder.display()
+                )));
+            }
+            drop(root_directory);
+            root.revalidate_named()
+        }
+    }
+}
+
+fn unique_cleanup_holder(
+    game_root: &Path,
+    record: &DeployRecord,
+    scratch_root: Option<&ManagerTransactionRootGuard>,
+) -> Result<PathBuf> {
+    let stable_root = record
+        .recovery_transaction
+        .as_ref()
+        .map(|transaction| PathBuf::from(&transaction.scratch_root))
+        .unwrap_or_else(|| record_root(game_root));
+    let root = transaction_artifact_io_path(record, scratch_root, &stable_root)?;
     let holder = tempfile::Builder::new()
         .prefix(".gore-mod-cleanup-")
         .tempdir_in(&root)
         .map_err(io("creating durable cleanup holder"))?
         .keep();
     sync_parent_directory(&root)?;
-    Ok(holder)
+    match &record.recovery_transaction {
+        Some(_) => {
+            let name = holder.file_name().ok_or_else(|| {
+                ModError::Other("Manager cleanup holder has no direct-child name".into())
+            })?;
+            Ok(stable_root.join(name))
+        }
+        None => Ok(holder),
+    }
 }
 
 /// Once an authenticated backup has been isolated and its tombstone is trusted, remove the
@@ -8531,6 +11828,7 @@ fn durable_file_cleanup(
     source: &Path,
     mut expected_hashes: Vec<String>,
     restore: Option<(&Path, &str)>,
+    scratch_root: Option<&ManagerTransactionRootGuard>,
 ) -> Result<()> {
     #[cfg(test)]
     if take_injected_durable_remove_failure(source) {
@@ -8556,7 +11854,7 @@ fn durable_file_cleanup(
         if !path_exists_no_follow(source) {
             return Ok(());
         }
-        let holder = unique_cleanup_holder(game_root)?;
+        let holder = unique_cleanup_holder(game_root, record, scratch_root)?;
         let claim = FileCleanupClaim {
             holder: holder.display().to_string(),
             expected_hashes,
@@ -8564,19 +11862,22 @@ fn durable_file_cleanup(
             restore_hash: restore.map(|(_, hash)| hash.to_string()),
         };
         record.file_cleanup_claims.insert(source_key.clone(), claim);
-        if let Err(error) = write_record_file(game_root, record) {
+        if let Err(error) = write_record_file_bound(game_root, record, scratch_root) {
             record.file_cleanup_claims.remove(&source_key);
-            let _ = remove_empty_dir_durable(&holder, "removing unused cleanup holder");
+            if let Ok(holder_io) = transaction_artifact_io_path(record, scratch_root, &holder) {
+                let _ = remove_empty_dir_durable(&holder_io, "removing unused cleanup holder");
+            }
             return Err(error);
         }
     }
-    advance_file_cleanup_claim(game_root, record, source)
+    advance_file_cleanup_claim(game_root, record, source, scratch_root)
 }
 
 fn advance_file_cleanup_claim(
     game_root: &Path,
     record: &mut DeployRecord,
     source: &Path,
+    scratch_root: Option<&ManagerTransactionRootGuard>,
 ) -> Result<()> {
     let source_key = record
         .file_cleanup_claims
@@ -8595,14 +11896,39 @@ fn advance_file_cleanup_claim(
         .cloned()
         .expect("claim key was selected above");
     let holder = PathBuf::from(&claim.holder);
-    let claimed = holder.join("claimed");
     let trusted = record
         .trusted_file_tombstones
         .iter()
         .any(|stored| same_path(&holder, stored));
+    let mut bound_holder = match (&record.recovery_transaction, scratch_root) {
+        (Some(_), Some(root)) => {
+            ManagerCleanupHolderGuard::open_existing(root, &holder, "durable file cleanup holder")?
+        }
+        (Some(_), None) => {
+            return Err(ModError::Other(
+                "Manager file cleanup holder has no bound transaction scratch root".into(),
+            ))
+        }
+        (None, _) => None,
+    };
+    if !trusted && record.recovery_transaction.is_some() && bound_holder.is_none() {
+        return Err(ModError::Other(format!(
+            "durable file cleanup holder disappeared before its claim was trusted: {}",
+            holder.display()
+        )));
+    }
+    let holder_io = match bound_holder.as_ref() {
+        Some(holder) => {
+            let path = holder.mutation_path("durable file cleanup holder")?;
+            holder.revalidate_named("durable file cleanup holder")?;
+            path
+        }
+        None => holder.clone(),
+    };
+    let claimed = holder_io.join("claimed");
 
     if !trusted {
-        let holder_metadata = std::fs::symlink_metadata(&holder)
+        let holder_metadata = std::fs::symlink_metadata(&holder_io)
             .map_err(io("reading durable file cleanup holder"))?;
         if metadata_is_link(&holder_metadata) || !holder_metadata.is_dir() {
             return Err(ModError::Other(format!(
@@ -8617,7 +11943,17 @@ fn advance_file_cleanup_claim(
                     source.display()
                 )));
             }
+            #[cfg(windows)]
+            if bound_holder.is_some() {
+                claim_file_to_bound_holder_windows(source, &claimed, &claim.expected_hashes)?;
+            } else {
+                promote_path_noclobber(source, &claimed)?;
+            }
+            #[cfg(not(windows))]
             promote_path_noclobber(source, &claimed)?;
+            if let Some(holder) = bound_holder.as_ref() {
+                holder.revalidate_named("durable file cleanup holder after atomic claim")?;
+            }
         }
         let claimed_metadata = std::fs::symlink_metadata(&claimed)
             .map_err(io("reading claimed cleanup file metadata"))?;
@@ -8638,20 +11974,33 @@ fn advance_file_cleanup_claim(
                     source.display()
                 ))
             })?;
+            if let Some(holder) = bound_holder.as_ref() {
+                holder.revalidate_named("abandoned file cleanup holder")?;
+            }
             record
                 .trusted_file_tombstones
                 .push(holder.display().to_string());
-            write_record_file(game_root, record)?;
-            remove_dir_all_durable(&holder, "removing abandoned file cleanup holder")?;
+            write_record_file_bound(game_root, record, scratch_root)?;
+            remove_cleanup_holder_bound(
+                record,
+                scratch_root,
+                bound_holder.take(),
+                &holder,
+                "abandoned file cleanup holder",
+            )?;
             record
                 .trusted_file_tombstones
                 .retain(|stored| !same_path(&holder, stored));
             record.file_cleanup_claims.remove(&source_key);
-            write_record_file(game_root, record)?;
+            write_record_file_bound(game_root, record, scratch_root)?;
             return Err(ModError::Other(format!(
                 "refusing to clean externally changed file: {}",
                 source.display()
             )));
+        }
+        #[cfg(windows)]
+        if bound_holder.is_some() && path_exists_no_follow(source) {
+            remove_duplicate_bound_cleanup_source_windows(source, &claim.expected_hashes)?;
         }
 
         if let (Some(restore_from), Some(restore_hash)) = (&claim.restore_from, &claim.restore_hash)
@@ -8672,8 +12021,16 @@ fn advance_file_cleanup_claim(
                         source.display()
                     ))
                 })?;
+                let staging_root = match &record.recovery_transaction {
+                    Some(transaction) => transaction_artifact_io_path(
+                        record,
+                        scratch_root,
+                        Path::new(&transaction.scratch_root),
+                    )?,
+                    None => parent.to_path_buf(),
+                };
                 let candidate =
-                    verified_temp_copy_in(restore_from, parent, ".gore-restore-stage-")?;
+                    verified_temp_copy_in(restore_from, &staging_root, ".gore-restore-stage-")?;
                 if sha256_file(candidate.path())? != restore_hash.as_str() {
                     return Err(ModError::Other(format!(
                         "restore source changed while being staged: {}",
@@ -8698,32 +12055,47 @@ fn advance_file_cleanup_claim(
         if claim.restore_from.is_none() {
             prune_completed_backup_claim(record, source);
         }
-        write_record_file(game_root, record)?;
+        if let Some(holder) = bound_holder.as_ref() {
+            holder.revalidate_named("trusted file cleanup tombstone")?;
+        }
+        write_record_file_bound(game_root, record, scratch_root)?;
     } else if claim.restore_from.is_none() && prune_completed_backup_claim(record, source) {
         // Older/interrupted trusted records may still carry the tuple. Persist its pruning before
         // deleting the only remaining tombstone payload.
-        write_record_file(game_root, record)?;
+        write_record_file_bound(game_root, record, scratch_root)?;
     }
 
     // Once trusted state is durable, a prior crash may have left any prefix of a recursive holder
     // delete. The holder is outside scanned game trees and can be retried without re-authenticating
     // the now-partial contents.
-    remove_dir_all_durable(&holder, "removing trusted file cleanup tombstone")?;
+    remove_cleanup_holder_bound(
+        record,
+        scratch_root,
+        bound_holder.take(),
+        &holder,
+        "trusted file cleanup tombstone",
+    )?;
     record
         .trusted_file_tombstones
         .retain(|stored| !same_path(&holder, stored));
     record.file_cleanup_claims.remove(&source_key);
-    write_record_file(game_root, record)
+    write_record_file_bound(game_root, record, scratch_root)?;
+    manager_crash_test_checkpoint(game_root, "recovery.after_first_cleanup_durable");
+    Ok(())
 }
 
-fn process_file_cleanup_claims(game_root: &Path, record: &mut DeployRecord) -> Result<()> {
+fn process_file_cleanup_claims(
+    game_root: &Path,
+    record: &mut DeployRecord,
+    scratch_root: Option<&ManagerTransactionRootGuard>,
+) -> Result<()> {
     let sources: Vec<PathBuf> = record
         .file_cleanup_claims
         .keys()
         .map(PathBuf::from)
         .collect();
     for source in sources {
-        advance_file_cleanup_claim(game_root, record, &source)?;
+        advance_file_cleanup_claim(game_root, record, &source, scratch_root)?;
     }
     Ok(())
 }
@@ -8747,20 +12119,38 @@ fn path_matches_any_tree_identity(path: &Path, identities: &[String]) -> bool {
         .any(|identity| tree_matches_recorded_fingerprint(path, identity))
 }
 
-fn unique_ue4ss_cleanup_holder(game_root: &Path) -> Result<PathBuf> {
-    let ue4ss_root = resolve_game_paths(game_root)
-        .ue4ss_mods
-        .parent()
-        .ok_or_else(|| ModError::Other("UE4SS Mods directory has no parent".into()))?
-        .to_path_buf();
-    std::fs::create_dir_all(&ue4ss_root).map_err(io("creating UE4SS cleanup root"))?;
+fn unique_ue4ss_cleanup_holder(
+    game_root: &Path,
+    record: &DeployRecord,
+    scratch_root: Option<&ManagerTransactionRootGuard>,
+) -> Result<PathBuf> {
+    let stable_root = match &record.recovery_transaction {
+        Some(transaction) => PathBuf::from(&transaction.scratch_root),
+        None => resolve_game_paths(game_root)
+            .ue4ss_mods
+            .parent()
+            .ok_or_else(|| ModError::Other("UE4SS Mods directory has no parent".into()))?
+            .to_path_buf(),
+    };
+    let ue4ss_root = transaction_artifact_io_path(record, scratch_root, &stable_root)?;
+    if record.recovery_transaction.is_none() {
+        std::fs::create_dir_all(&ue4ss_root).map_err(io("creating UE4SS cleanup root"))?;
+    }
     let holder = tempfile::Builder::new()
         .prefix(".gore-ue4ss-delete-")
         .tempdir_in(&ue4ss_root)
         .map_err(io("creating durable UE4SS cleanup holder"))?
         .keep();
     remove_empty_dir_durable(&holder, "reserving unique UE4SS cleanup holder name")?;
-    Ok(holder)
+    match &record.recovery_transaction {
+        Some(_) => {
+            let name = holder.file_name().ok_or_else(|| {
+                ModError::Other("Manager UE4SS cleanup holder has no direct-child name".into())
+            })?;
+            Ok(stable_root.join(name))
+        }
+        None => Ok(holder),
+    }
 }
 
 fn remove_ue4ss_tracking(record: &mut DeployRecord, path: &Path) {
@@ -8784,6 +12174,7 @@ fn durable_ue4ss_cleanup(
     game_root: &Path,
     record: &mut DeployRecord,
     original: &Path,
+    scratch_root: Option<&ManagerTransactionRootGuard>,
 ) -> Result<()> {
     if !record
         .ue4ss_cleanup_claims
@@ -8801,7 +12192,7 @@ fn durable_ue4ss_cleanup(
                 original.display()
             )));
         }
-        let holder = unique_ue4ss_cleanup_holder(game_root)?;
+        let holder = unique_ue4ss_cleanup_holder(game_root, record, scratch_root)?;
         let original_key = original.display().to_string();
         let holder_key = holder.display().to_string();
         record
@@ -8818,19 +12209,20 @@ fn durable_ue4ss_cleanup(
                 .recovery_tree_fingerprints
                 .insert(holder_key.clone(), expected[1..].to_vec());
         }
-        if let Err(error) = write_record_file(game_root, record) {
+        if let Err(error) = write_record_file_bound(game_root, record, scratch_root) {
             record.ue4ss_cleanup_claims.remove(&original_key);
             remove_ue4ss_tracking(record, &holder);
             return Err(error);
         }
     }
-    advance_ue4ss_cleanup_claim(game_root, record, original)
+    advance_ue4ss_cleanup_claim(game_root, record, original, scratch_root)
 }
 
 fn advance_ue4ss_cleanup_claim(
     game_root: &Path,
     record: &mut DeployRecord,
     original: &Path,
+    scratch_root: Option<&ManagerTransactionRootGuard>,
 ) -> Result<()> {
     let original_key = record
         .ue4ss_cleanup_claims
@@ -8853,9 +12245,33 @@ fn advance_ue4ss_cleanup_claim(
         .trusted_ue4ss_tombstones
         .iter()
         .any(|stored| same_path(&holder, stored));
+    let mut bound_holder = match (&record.recovery_transaction, scratch_root) {
+        (Some(_), Some(root)) => {
+            ManagerCleanupHolderGuard::open_existing(root, &holder, "durable UE4SS cleanup holder")?
+        }
+        (Some(_), None) => {
+            return Err(ModError::Other(
+                "Manager UE4SS cleanup holder has no bound transaction scratch root".into(),
+            ))
+        }
+        (None, _) => None,
+    };
+    let mut holder_io = match bound_holder.as_ref() {
+        Some(holder) => {
+            let path = holder.mutation_path("durable UE4SS cleanup holder")?;
+            holder.revalidate_named("durable UE4SS cleanup holder")?;
+            path
+        }
+        None => transaction_artifact_io_path(record, scratch_root, &holder)?,
+    };
 
     if !trusted {
-        if !path_exists_no_follow(&holder) {
+        let holder_exists = if record.recovery_transaction.is_some() {
+            bound_holder.is_some()
+        } else {
+            path_exists_no_follow(&holder_io)
+        };
+        if !holder_exists {
             if !path_exists_no_follow(original) {
                 return Err(ModError::Other(format!(
                     "UE4SS cleanup source and prepared holder are both missing: {}",
@@ -8869,9 +12285,32 @@ fn advance_ue4ss_cleanup_claim(
                     original.display()
                 )));
             }
-            promote_path_noclobber(original, &holder)?;
+            #[cfg(windows)]
+            if let (Some(root), Some(_)) = (scratch_root, &record.recovery_transaction) {
+                claim_ue4ss_tree_to_bound_holder_windows(root, original, &holder, &expected)?;
+            } else {
+                promote_path_noclobber(original, &holder_io)?;
+            }
+            #[cfg(not(windows))]
+            promote_path_noclobber(original, &holder_io)?;
+            if let (Some(root), Some(_)) = (scratch_root, &record.recovery_transaction) {
+                root.revalidate_named()?;
+                bound_holder = ManagerCleanupHolderGuard::open_existing(
+                    root,
+                    &holder,
+                    "claimed UE4SS cleanup holder",
+                )?;
+                let guard = bound_holder.as_ref().ok_or_else(|| {
+                    ModError::Other(format!(
+                        "claimed UE4SS cleanup holder disappeared: {}",
+                        holder.display()
+                    ))
+                })?;
+                holder_io = guard.mutation_path("claimed UE4SS cleanup holder")?;
+                guard.revalidate_named("claimed UE4SS cleanup holder")?;
+            }
         } else {
-            let holder_metadata = std::fs::symlink_metadata(&holder)
+            let holder_metadata = std::fs::symlink_metadata(&holder_io)
                 .map_err(io("reading UE4SS cleanup holder metadata"))?;
             if metadata_is_link(&holder_metadata) || !holder_metadata.is_dir() {
                 return Err(ModError::Other(format!(
@@ -8880,6 +12319,9 @@ fn advance_ue4ss_cleanup_claim(
                 )));
             }
         }
+        if let Some(holder) = bound_holder.as_ref() {
+            holder.revalidate_named("claimed UE4SS cleanup holder")?;
+        }
         let expected_holder = tree_identities_for_path(record, &holder);
         if expected_holder.is_empty() {
             return Err(ModError::Other(format!(
@@ -8887,9 +12329,9 @@ fn advance_ue4ss_cleanup_claim(
                 holder.display()
             )));
         }
-        if !path_matches_any_tree_identity(&holder, &expected_holder) {
+        if !path_matches_any_tree_identity(&holder_io, &expected_holder) {
             if !path_exists_no_follow(original) {
-                promote_path_noclobber(&holder, original).map_err(|error| {
+                promote_path_noclobber(&holder_io, original).map_err(|error| {
                     ModError::Other(format!(
                         "claimed UE4SS tree failed identity verification and could not be returned \
                          to '{}': {error}",
@@ -8902,6 +12344,10 @@ fn advance_ue4ss_cleanup_claim(
                 original.display()
             )));
         }
+        #[cfg(windows)]
+        if bound_holder.is_some() && path_exists_no_follow(original) {
+            remove_duplicate_bound_ue4ss_source_windows(original, &expected_holder)?;
+        }
         if !contains_same_path(&record.trusted_ue4ss_tombstones, &holder_key) {
             record.trusted_ue4ss_tombstones.push(holder_key.clone());
         }
@@ -8910,26 +12356,84 @@ fn advance_ue4ss_cleanup_claim(
         record
             .ue4ss_cleanup_claims
             .insert(original_key.clone(), holder_key.clone());
-        write_record_file(game_root, record)?;
+        if let Some(holder) = bound_holder.as_ref() {
+            holder.revalidate_named("trusted UE4SS cleanup tombstone")?;
+        }
+        write_record_file_bound(game_root, record, scratch_root)?;
     }
 
-    remove_dir_all_durable(&holder, "removing trusted UE4SS cleanup tombstone")?;
+    remove_cleanup_holder_bound(
+        record,
+        scratch_root,
+        bound_holder.take(),
+        &holder,
+        "trusted UE4SS cleanup tombstone",
+    )?;
     record
         .trusted_ue4ss_tombstones
         .retain(|stored| !same_path(&holder, stored));
     record.ue4ss_cleanup_claims.remove(&original_key);
     remove_ue4ss_tracking(record, &holder);
-    write_record_file(game_root, record)
+    write_record_file_bound(game_root, record, scratch_root)?;
+    manager_crash_test_checkpoint(game_root, "recovery.after_first_cleanup_durable");
+    Ok(())
 }
 
-fn process_ue4ss_cleanup_claims(game_root: &Path, record: &mut DeployRecord) -> Result<()> {
+fn process_ue4ss_cleanup_claims(
+    game_root: &Path,
+    record: &mut DeployRecord,
+    scratch_root: Option<&ManagerTransactionRootGuard>,
+) -> Result<()> {
     let originals: Vec<PathBuf> = record
         .ue4ss_cleanup_claims
         .keys()
         .map(PathBuf::from)
         .collect();
     for original in originals {
-        advance_ue4ss_cleanup_claim(game_root, record, &original)?;
+        advance_ue4ss_cleanup_claim(game_root, record, &original, scratch_root)?;
+    }
+    Ok(())
+}
+
+fn restore_missing_transaction_live(
+    record: &DeployRecord,
+    live: &Path,
+    backup: &Path,
+    scratch_root: Option<&ManagerTransactionRootGuard>,
+) -> Result<()> {
+    let transaction = record.recovery_transaction.as_ref().ok_or_else(|| {
+        ModError::Other(format!(
+            "refusing to recreate missing live file outside a bound Manager recovery: {}",
+            live.display()
+        ))
+    })?;
+    let backup_hash = backup_hash_for_path(backup, &record.backup_hashes).ok_or_else(|| {
+        ModError::Other(format!(
+            "authenticated backup identity is missing for {}",
+            backup.display()
+        ))
+    })?;
+    if !file_matches_recorded_hash_result(backup, backup_hash)? {
+        return Err(ModError::Other(format!(
+            "authenticated backup changed before recreating missing live file: {}",
+            backup.display()
+        )));
+    }
+    let staging_root =
+        transaction_artifact_io_path(record, scratch_root, Path::new(&transaction.scratch_root))?;
+    let candidate = verified_temp_copy_in(backup, &staging_root, ".gore-restore-stage-")?;
+    if sha256_file(candidate.path())? != *backup_hash {
+        return Err(ModError::Other(format!(
+            "backup changed while staging missing-live recovery: {}",
+            backup.display()
+        )));
+    }
+    publish_noclobber_temp(candidate, live)?;
+    if !file_matches_recorded_hash_result(live, backup_hash)? {
+        return Err(ModError::Other(format!(
+            "recreated live file failed identity verification: {}",
+            live.display()
+        )));
     }
     Ok(())
 }
@@ -8940,55 +12444,82 @@ fn process_ue4ss_cleanup_claims(game_root: &Path, record: &mut DeployRecord) -> 
 /// dangling in a retained record. Returns true only if EVERYTHING was handled; otherwise the
 /// still-pending entries remain in `record` so the caller can persist a pruned record and retry.
 /// (Deploy rollback uses [`Undo`] instead, to restore the exact prior state.)
-fn restore_record(game_root: &Path, record: &mut DeployRecord) -> Result<Vec<String>> {
-    process_file_cleanup_claims(game_root, record)?;
-    process_ue4ss_cleanup_claims(game_root, record)?;
+fn restore_record(
+    game_root: &Path,
+    record: &mut DeployRecord,
+    scratch_root: Option<&ManagerTransactionRootGuard>,
+) -> Result<Vec<String>> {
+    process_file_cleanup_claims(game_root, record, scratch_root)?;
+    process_ue4ss_cleanup_claims(game_root, record, scratch_root)?;
     let mut failures = Vec::new();
     let mut index = 0;
+    let mut completed_restores = 0usize;
     while index < record.backups.len() {
         let entry = record.backups[index].clone();
         let live_s = entry.0.clone();
         let bak_s = entry.1.clone();
         let (live, bak) = (Path::new(&live_s), Path::new(&bak_s));
-        let completion = match safe_to_restore(&live_s, record) {
-            Err(error) => Err(error),
-            // Missing or externally drifted live bytes win. Never recreate/replace them from an
-            // older backup; only the authenticated backup cleanup below remains.
-            Ok(false) => Ok(()),
-            Ok(true) if !bak.exists() => Err(ModError::Other(format!(
-                "recorded backup is missing for '{}': {}",
-                live.display(),
-                bak.display()
-            ))),
-            Ok(true) => {
-                let identities = file_identities_for_path(record, live);
-                if identities.is_empty() {
-                    // The only legacy case admitted by `safe_to_restore` is byte-identical, so no
-                    // live write is needed and no path-only ownership is adopted.
-                    if files_equal(live, bak)? {
-                        Ok(())
+        let pre_mutation_live_is_pristine = path_matches_recovery_pre_file(record, live)?
+            && recovery_pre_live_is_pristine(record, live, bak);
+        let completion = if pre_mutation_live_is_pristine {
+            // Staging may have stopped before publishing this backup, or during a drift refresh
+            // after removing the old backup. Only an exact pre-live identity that is ALSO the
+            // operation's recorded pristine identity proves no restore is needed; a reapply's
+            // pre-live bytes are the old Manager deployment and must still be removed.
+            Ok(())
+        } else if !path_exists_no_follow(live)
+            && matches!(recovery_pre_file_identity(record, live), Some(Some(_)))
+        {
+            if !path_exists_no_follow(bak) {
+                Err(ModError::Other(format!(
+                    "transaction target and its authenticated backup are both missing: {}",
+                    live.display()
+                )))
+            } else {
+                restore_missing_transaction_live(record, live, bak, scratch_root)
+            }
+        } else {
+            match safe_to_restore(&live_s, record) {
+                Err(error) => Err(error),
+                // Missing or externally drifted live bytes win. Never recreate/replace them from an
+                // older backup; only the authenticated backup cleanup below remains.
+                Ok(false) => Ok(()),
+                Ok(true) if !bak.exists() => Err(ModError::Other(format!(
+                    "recorded backup is missing for '{}': {}",
+                    live.display(),
+                    bak.display()
+                ))),
+                Ok(true) => {
+                    let identities = file_identities_for_path(record, live);
+                    if identities.is_empty() {
+                        // The only legacy case admitted by `safe_to_restore` is byte-identical, so no
+                        // live write is needed and no path-only ownership is adopted.
+                        if files_equal(live, bak)? {
+                            Ok(())
+                        } else {
+                            Err(ModError::Other(format!(
+                                "refusing legacy path-only restore for {}",
+                                live.display()
+                            )))
+                        }
                     } else {
-                        Err(ModError::Other(format!(
-                            "refusing legacy path-only restore for {}",
-                            live.display()
-                        )))
+                        let backup_hash = backup_hash_for_path(bak, &record.backup_hashes)
+                            .ok_or_else(|| {
+                                ModError::Other(format!(
+                                    "authenticated backup identity is missing for {}",
+                                    bak.display()
+                                ))
+                            })?
+                            .clone();
+                        durable_file_cleanup(
+                            game_root,
+                            record,
+                            live,
+                            identities,
+                            Some((bak, &backup_hash)),
+                            scratch_root,
+                        )
                     }
-                } else {
-                    let backup_hash = backup_hash_for_path(bak, &record.backup_hashes)
-                        .ok_or_else(|| {
-                            ModError::Other(format!(
-                                "authenticated backup identity is missing for {}",
-                                bak.display()
-                            ))
-                        })?
-                        .clone();
-                    durable_file_cleanup(
-                        game_root,
-                        record,
-                        live,
-                        identities,
-                        Some((bak, &backup_hash)),
-                    )
                 }
             }
         };
@@ -8999,9 +12530,19 @@ fn restore_record(game_root: &Path, record: &mut DeployRecord) -> Result<Vec<Str
             continue;
         }
 
+        completed_restores += 1;
+        if completed_restores == 1
+            && record.recovery_transaction.as_ref().is_some_and(|transaction| {
+                transaction.operation == ManagerMutationOperation::Undeploy
+            })
+        {
+            manager_crash_test_checkpoint(game_root, "undeploy.after_first_restore_durable");
+        }
+
         if path_exists_no_follow(bak) {
-            let backup_identity = match backup_hash_for_path(bak, &record.backup_hashes) {
-                Some(hash) => hash.clone(),
+            let recorded_backup = backup_hash_for_path(bak, &record.backup_hashes);
+            let backup_identity = match recorded_backup {
+                Some(hash) if file_matches_recorded_hash_result(bak, hash)? => hash.clone(),
                 None if path_exists_no_follow(live) && files_equal(live, bak)? => {
                     let hash = sha256_file(bak)?;
                     record
@@ -9009,18 +12550,33 @@ fn restore_record(game_root: &Path, record: &mut DeployRecord) -> Result<Vec<Str
                         .insert(bak.display().to_string(), hash.clone());
                     hash
                 }
-                None => {
-                    failures.push(format!(
-                        "refusing to delete legacy path-only backup: {}",
-                        bak.display()
-                    ));
-                    index += 1;
-                    continue;
-                }
+                _ => match record
+                    .recovery_transaction
+                    .as_ref()
+                    .filter(|transaction| transaction.operation == ManagerMutationOperation::Apply)
+                    .and_then(|_| recovery_pre_backup_identity(record, bak))
+                {
+                    Some(Some(identity)) if file_matches_recorded_hash_result(bak, identity)? => {
+                        identity.clone()
+                    }
+                    _ => {
+                        failures.push(format!(
+                            "refusing to delete backup without a matching transaction identity: {}",
+                            bak.display()
+                        ));
+                        index += 1;
+                        continue;
+                    }
+                },
             };
-            if let Err(error) =
-                durable_file_cleanup(game_root, record, bak, vec![backup_identity], None)
-            {
+            if let Err(error) = durable_file_cleanup(
+                game_root,
+                record,
+                bak,
+                vec![backup_identity],
+                None,
+                scratch_root,
+            ) {
                 failures.push(error.to_string());
                 index += 1;
                 continue;
@@ -9039,7 +12595,7 @@ fn restore_record(game_root: &Path, record: &mut DeployRecord) -> Result<Vec<Str
         let removed_hash = remove_deployed_hash_for_path(&live_s, &mut record.deployed_hashes);
         let removed_recovery = take_vec_map_path(live, &mut record.recovery_file_hashes);
         let removed_backup_hash = remove_backup_hash_for_path(bak, &mut record.backup_hashes);
-        if let Err(error) = write_record_file(game_root, record) {
+        if let Err(error) = write_record_file_bound(game_root, record, scratch_root) {
             if let Some((position, removed_entry)) = removed_entry {
                 record
                     .backups
@@ -9069,7 +12625,7 @@ fn restore_record(game_root: &Path, record: &mut DeployRecord) -> Result<Vec<Str
                 path.display()
             ));
         } else {
-            match durable_ue4ss_cleanup(game_root, record, path) {
+            match durable_ue4ss_cleanup(game_root, record, path, scratch_root) {
                 Ok(()) => {}
                 Err(error) => failures.push(error.to_string()),
             }
@@ -9084,7 +12640,7 @@ fn restore_record(game_root: &Path, record: &mut DeployRecord) -> Result<Vec<Str
                 path.display()
             ));
         } else {
-            match durable_ue4ss_cleanup(game_root, record, path) {
+            match durable_ue4ss_cleanup(game_root, record, path, scratch_root) {
                 Ok(()) => {}
                 Err(error) => {
                     failures.push(error.to_string());
@@ -9106,7 +12662,7 @@ fn restore_record(game_root: &Path, record: &mut DeployRecord) -> Result<Vec<Str
         } else {
             let identities = file_identities_for_path(record, p);
             let cleanup = if path_exists_no_follow(p) {
-                durable_file_cleanup(game_root, record, p, identities, None)
+                durable_file_cleanup(game_root, record, p, identities, None, scratch_root)
             } else {
                 Ok(())
             };
@@ -9135,7 +12691,7 @@ fn restore_record(game_root: &Path, record: &mut DeployRecord) -> Result<Vec<Str
         } else {
             let identities = file_identities_for_path(record, p);
             let cleanup = if path_exists_no_follow(p) {
-                durable_file_cleanup(game_root, record, p, identities, None)
+                durable_file_cleanup(game_root, record, p, identities, None, scratch_root)
             } else {
                 Ok(())
             };
@@ -9160,7 +12716,7 @@ fn restore_record(game_root: &Path, record: &mut DeployRecord) -> Result<Vec<Str
                 path.display()
             ));
         } else {
-            match durable_ue4ss_cleanup(game_root, record, path) {
+            match durable_ue4ss_cleanup(game_root, record, path, scratch_root) {
                 Ok(()) => {}
                 Err(error) => {
                     failures.push(error.to_string());
@@ -9171,6 +12727,170 @@ fn restore_record(game_root: &Path, record: &mut DeployRecord) -> Result<Vec<Str
     Ok(failures)
 }
 
+fn release_recovered_manager_lock(
+    game_root: &Path,
+    abandoned: &mut gore_as::compile::AbandonedInstallMutation,
+) -> Result<()> {
+    manager_crash_test_checkpoint(game_root, "recovery.before_lock_release");
+    abandoned.release().map_err(|error| {
+        ModError::Other(format!(
+            "INSTALL_MUTATION_RECOVERY_REQUIRED: recovered install state, but releasing its exact lock handle failed: {error}"
+        ))
+    })
+}
+
+fn recover_owned_manager_install(
+    game_root: &Path,
+    expected_guard_id: &str,
+    mut abandoned: gore_as::compile::AbandonedInstallMutation,
+    legacy_ambiguous: bool,
+) -> Result<ManagerInstallRecoveryOutcome> {
+    if abandoned.guard_id() != expected_guard_id {
+        return Ok(ManagerInstallRecoveryOutcome::InspectionFailed);
+    }
+    let Some(lock_operation) = manager_operation_for_lock_owner(abandoned.owner()) else {
+        return Ok(ManagerInstallRecoveryOutcome::InspectionFailed);
+    };
+    if let Some(blocker) = manager_recovery_compile_blocker(game_root) {
+        return Ok(blocker);
+    }
+    manager_crash_test_checkpoint(game_root, "recovery.lock_taken_over");
+    let stored = match read_record(game_root) {
+        Ok(stored) => stored,
+        Err(_) => return Ok(ManagerInstallRecoveryOutcome::InspectionFailed),
+    };
+    let bound = stored.as_ref().is_some_and(|stored| {
+        stored.record.owner == "manager"
+            && stored
+                .record
+                .recovery_transaction
+                .as_ref()
+                .is_some_and(|transaction| {
+                    transaction.transaction_id == expected_guard_id
+                        && transaction.operation == lock_operation
+                })
+    });
+    if legacy_ambiguous && !bound {
+        return Ok(ManagerInstallRecoveryOutcome::InspectionFailed);
+    }
+
+    let Some(stored) = stored else {
+        cleanup_manager_transaction_root(game_root, expected_guard_id)?;
+        manager_crash_test_checkpoint(game_root, "recovery.after_first_cleanup_durable");
+        release_recovered_manager_lock(game_root, &mut abandoned)?;
+        return Ok(if lock_operation == ManagerMutationOperation::Undeploy {
+            ManagerInstallRecoveryOutcome::CompletedUndeployConfirmed
+        } else {
+            ManagerInstallRecoveryOutcome::PreMutationLockCleared
+        });
+    };
+    let mut record = stored.record;
+    if !bound {
+        if record.phase != DeployPhase::Applied {
+            return Ok(ManagerInstallRecoveryOutcome::InspectionFailed);
+        }
+        cleanup_manager_transaction_root(game_root, expected_guard_id)?;
+        manager_crash_test_checkpoint(game_root, "recovery.after_first_cleanup_durable");
+        release_recovered_manager_lock(game_root, &mut abandoned)?;
+        return Ok(ManagerInstallRecoveryOutcome::PreMutationLockCleared);
+    }
+
+    if record.phase == DeployPhase::Applied {
+        if lock_operation != ManagerMutationOperation::Apply
+            || record.last_mutation_id.as_deref() != Some(expected_guard_id)
+        {
+            return Ok(ManagerInstallRecoveryOutcome::InspectionFailed);
+        }
+        cleanup_manager_transaction_root(game_root, expected_guard_id)?;
+        manager_crash_test_checkpoint(game_root, "recovery.after_first_cleanup_durable");
+        release_recovered_manager_lock(game_root, &mut abandoned)?;
+        return Ok(ManagerInstallRecoveryOutcome::CompletedApplyPreserved);
+    }
+
+    let scratch_root = ManagerTransactionRootGuard::open_existing(game_root, expected_guard_id)?
+        .ok_or_else(|| {
+            ModError::Other(format!(
+                "INSTALL_MUTATION_RECOVERY_REQUIRED: Manager transaction scratch root is missing for {expected_guard_id}"
+            ))
+        })?;
+    manager_crash_test_checkpoint(game_root, "recovery.scratch_bound");
+
+    gore_as::compile::require_shipping_game_process_closed().map_err(|error| {
+        ModError::Other(format!(
+            "INSTALL_MUTATION_BLOCKED: final recovery process check: {error}"
+        ))
+    })?;
+    let failures = restore_record(game_root, &mut record, Some(&scratch_root))?;
+    if !failures.is_empty() {
+        write_record_file_staged_in(game_root, &record, Some(&scratch_root))?;
+        return Err(ModError::Other(format!(
+            "INSTALL_MUTATION_RECOVERY_REQUIRED: Manager recovery could not restore every target: {}",
+            failures.join(" | ")
+        )));
+    }
+    remove_file_durable(
+        &record_path(game_root),
+        "removing completed Manager recovery record",
+    )?;
+    cleanup_bound_manager_transaction_root(scratch_root)?;
+    manager_crash_test_checkpoint(game_root, "recovery.after_first_cleanup_durable");
+    release_recovered_manager_lock(game_root, &mut abandoned)?;
+    Ok(match lock_operation {
+        ManagerMutationOperation::Apply => ManagerInstallRecoveryOutcome::RecoveredToPristine,
+        ManagerMutationOperation::Undeploy => {
+            ManagerInstallRecoveryOutcome::CompletedUndeployConfirmed
+        }
+    })
+}
+
+/// Recover exactly the stale Manager operation selected by a prior read-only probe. The expected
+/// guard id prevents a delayed UI action from taking ownership of a newer operation.
+pub fn recover_manager_install(
+    game_root: &Path,
+    expected_guard_id: &str,
+) -> Result<ManagerInstallRecoveryOutcome> {
+    use gore_as::compile::InstallMutationTakeover;
+
+    if !valid_manager_transaction_id(expected_guard_id) {
+        return Ok(ManagerInstallRecoveryOutcome::InspectionFailed);
+    }
+    let game_root = abs_root(game_root);
+    match gore_as::compile::InstallMutationGuard::take_over_abandoned_manager(&game_root) {
+        InstallMutationTakeover::Missing => {
+            let scratch = manager_transaction_root(&game_root, expected_guard_id)?;
+            let scratch_present = match std::fs::symlink_metadata(scratch) {
+                Ok(_) => true,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(_) => return Ok(ManagerInstallRecoveryOutcome::InspectionFailed),
+            };
+            let record_requires_recovery = match read_record(&game_root) {
+                Ok(record) => record
+                    .as_ref()
+                    .is_some_and(|stored| stored.record.phase == DeployPhase::RecoveryRequired),
+                Err(_) => return Ok(ManagerInstallRecoveryOutcome::InspectionFailed),
+            };
+            if scratch_present || record_requires_recovery {
+                Ok(ManagerInstallRecoveryOutcome::InspectionFailed)
+            } else {
+                Ok(ManagerInstallRecoveryOutcome::AlreadyClean)
+            }
+        }
+        InstallMutationTakeover::Busy => Ok(ManagerInstallRecoveryOutcome::Busy),
+        InstallMutationTakeover::CompileOwner { .. } => {
+            Ok(ManagerInstallRecoveryOutcome::CompileRecoveryRequired)
+        }
+        InstallMutationTakeover::Invalid { .. } => {
+            Ok(ManagerInstallRecoveryOutcome::InspectionFailed)
+        }
+        InstallMutationTakeover::Owned(abandoned) => {
+            recover_owned_manager_install(&game_root, expected_guard_id, abandoned, false)
+        }
+        InstallMutationTakeover::LegacyAmbiguous(abandoned) => {
+            recover_owned_manager_install(&game_root, expected_guard_id, abandoned, true)
+        }
+    }
+}
+
 /// Undo the active gore-mod deployment at `game_root`: restore every backup and remove the
 /// UE4SS mod. No-op if nothing is deployed.
 pub fn undeploy(game_root: &Path) -> Result<Option<DeployRecord>> {
@@ -9179,19 +12899,132 @@ pub fn undeploy(game_root: &Path) -> Result<Option<DeployRecord>> {
     // Preserve the established no-op behavior without creating a lock file. A present record is
     // always re-read after ownership is acquired, so two concurrent undeploy/deploy processes can
     // never act on this unlocked observation.
-    if read_record(&game_root)?.is_none() {
+    let Some(initial) = read_record(&game_root)? else {
         return Ok(None);
-    }
-    let mutation = acquire_live_install_mutation(&game_root, "gore-mod:undeploy")?;
-    let result = undeploy_guarded(&game_root);
+    };
+    let manager = initial.record.owner == "manager";
+    let owner = if manager {
+        "gore-mod:manager-undeploy"
+    } else {
+        "gore-mod:undeploy"
+    };
+    #[cfg(test)]
+    apply_injected_record_replacement_before_undeploy_acquire(&game_root)?;
+    let mutation = acquire_live_install_mutation(&game_root, owner)?;
+    let transaction_id = manager.then(|| mutation.guard_id().to_owned());
+    let result = (|| {
+        let current = verify_undeploy_record_basis(&game_root, &initial)?;
+        if manager {
+            manager_crash_test_checkpoint(&game_root, "undeploy.lock_acquired");
+        }
+        undeploy_guarded(&game_root, transaction_id.as_deref(), current)
+    })();
     finish_live_install_mutation(result, mutation)
 }
 
-fn undeploy_guarded(game_root: &Path) -> Result<Option<DeployRecord>> {
-    let rp = record_path(game_root);
-    let Some(stored) = read_record(game_root)? else {
-        return Ok(None);
+/// Re-read the record only after cross-tool ownership is held, then carry those exact bytes into
+/// undeploy. The unlocked read above selects the lock owner, so accepting a newer record here
+/// could otherwise run a Manager transaction against a Studio record (or vice versa).
+fn verify_undeploy_record_basis(
+    game_root: &Path,
+    expected: &StoredDeployRecord,
+) -> Result<StoredDeployRecord> {
+    let current = read_record(game_root)?;
+    match current {
+        Some(current) if current.raw == expected.raw => Ok(current),
+        _ => Err(ModError::Other(
+            "UNDEPLOY_BASIS_CHANGED: the active deploy record changed while undeploy was waiting \
+             for install ownership; retry undeploy"
+                .into(),
+        )),
+    }
+}
+
+fn optional_recovery_file_identity(path: &Path) -> Result<Option<String>> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata_is_link(&metadata) || !metadata.is_file() => {
+            Err(ModError::Other(format!(
+                "recovery target is not a safe regular file: {}",
+                path.display()
+            )))
+        }
+        Ok(_) => Ok(Some(sha256_file(path)?)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(io("reading recovery target metadata")(error)),
+    }
+}
+
+fn optional_recovery_tree_identity(path: &Path) -> Result<Option<String>> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata_is_link(&metadata) || !metadata.is_dir() => {
+            Err(ModError::Other(format!(
+                "recovery target is not a safe directory: {}",
+                path.display()
+            )))
+        }
+        Ok(_) => Ok(Some(tree_fingerprint(path)?)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(io("reading recovery tree metadata")(error)),
+    }
+}
+
+fn seed_manager_undeploy_recovery(
+    record: &mut DeployRecord,
+    transaction_id: &str,
+    scratch_root: &Path,
+) -> Result<()> {
+    let mut transaction = RecoveryTransaction {
+        format: MANAGER_RECOVERY_FORMAT,
+        transaction_id: transaction_id.to_owned(),
+        operation: ManagerMutationOperation::Undeploy,
+        step: RecoveryTransactionStep::Applying,
+        scratch_root: scratch_root.display().to_string(),
+        pre_live_sha256: BTreeMap::new(),
+        pre_backup_sha256: BTreeMap::new(),
+        pre_tree_fingerprints: BTreeMap::new(),
     };
+    for (live, backup, _) in &record.backups {
+        transaction.pre_live_sha256.insert(
+            live.clone(),
+            optional_recovery_file_identity(Path::new(live))?,
+        );
+        transaction.pre_backup_sha256.insert(
+            backup.clone(),
+            optional_recovery_file_identity(Path::new(backup))?,
+        );
+    }
+    for path in record
+        .texture_triplets
+        .iter()
+        .chain(record.managed_paks.iter())
+    {
+        transaction.pre_live_sha256.insert(
+            path.clone(),
+            optional_recovery_file_identity(Path::new(path))?,
+        );
+    }
+    for path in record
+        .ue4ss_mod_dir
+        .iter()
+        .chain(record.stale_ue4ss_dirs.iter())
+        .chain(record.ue4ss_mod_dirs.iter())
+    {
+        transaction.pre_tree_fingerprints.insert(
+            path.clone(),
+            optional_recovery_tree_identity(Path::new(path))?,
+        );
+    }
+    record.recovery_transaction = Some(transaction);
+    record.phase = DeployPhase::RecoveryRequired;
+    Ok(())
+}
+
+fn undeploy_guarded(
+    game_root: &Path,
+    transaction_id: Option<&str>,
+    stored: StoredDeployRecord,
+) -> Result<Option<DeployRecord>> {
+    let rp = record_path(game_root);
     let bytes = stored.raw;
     let mut record = stored.record;
     // This is the final process check after shared ownership and immediately before the recovery
@@ -9201,25 +13034,61 @@ fn undeploy_guarded(game_root: &Path) -> Result<Option<DeployRecord>> {
             "INSTALL_MUTATION_BLOCKED: final pre-write process check: {error}"
         ))
     })?;
-    // Mark recovery durably before the first filesystem mutation. A crash at any later point
-    // cannot make status/apply report a completed deployment while undeploy is only half done.
-    record.phase = DeployPhase::RecoveryRequired;
-    write_record_file(game_root, &record).map_err(|error| {
-        ModError::Other(format!(
-            "persisting undeploy recovery state before cleanup: {error}"
-        ))
-    })?;
+    // Mark recovery durably before the first filesystem mutation. Manager undeploy also binds all
+    // later temps and cleanup holders to its guard-derived scratch root.
+    let mut manager_scratch = None;
+    if let Some(transaction_id) = transaction_id {
+        let scratch_root = create_manager_transaction_root(game_root, transaction_id)?;
+        seed_manager_undeploy_recovery(&mut record, transaction_id, scratch_root.stable_path())?;
+        if let Err(error) = write_record_file_staged_in(game_root, &record, Some(&scratch_root)) {
+            let mut failures = Vec::new();
+            match restore_record_file(game_root, Some(&bytes), Some(&scratch_root)) {
+                Ok(()) => {
+                    if let Err(cleanup) = cleanup_bound_manager_transaction_root(scratch_root) {
+                        failures.push(cleanup.to_string());
+                    }
+                }
+                Err(restore) => {
+                    failures.push(format!(
+                        "restoring pre-undeploy record: {restore}; transaction scratch \
+                         intentionally retained for recovery"
+                    ));
+                }
+            }
+            return Err(with_rollback_failures(error, failures));
+        }
+        manager_scratch = Some(scratch_root);
+        manager_crash_test_checkpoint(game_root, "undeploy.early_record_durable");
+    } else {
+        record.phase = DeployPhase::RecoveryRequired;
+        write_record_file(game_root, &record).map_err(|error| {
+            ModError::Other(format!(
+                "persisting undeploy recovery state before cleanup: {error}"
+            ))
+        })?;
+    }
 
-    let failures = restore_record(game_root, &mut record)?;
+    let failures = restore_record(game_root, &mut record, manager_scratch.as_ref())?;
     if failures.is_empty() {
         remove_file_durable(&rp, "removing completed deploy record")?;
+        if transaction_id.is_some() {
+            manager_crash_test_checkpoint(
+                game_root,
+                "undeploy.record_removed_before_scratch_cleanup",
+            );
+            cleanup_bound_manager_transaction_root(
+                manager_scratch
+                    .take()
+                    .expect("Manager undeploy has a retained scratch root"),
+            )?;
+        }
         // Return the original record (pre-pruning) for reporting.
         Ok(Some(serde_json::from_slice(&bytes)?))
     } else {
         // Persist the PRUNED record so a retry only processes what's still pending — entries whose
         // file was restored and backup deleted are not re-attempted (and won't fail the next run on
         // a now-missing backup). Then report failure so the user can resolve the lock and retry.
-        write_record_file(game_root, &record)?;
+        write_record_file_bound(game_root, &record, manager_scratch.as_ref())?;
         Err(ModError::Other(format!(
             "some game files could not be restored (locked or unwritable); the remaining backups \
              and a pruned deploy record were kept — close the game and retry undeploy: {}",
@@ -9228,9 +13097,11 @@ fn undeploy_guarded(game_root: &Path) -> Result<Option<DeployRecord>> {
     }
 }
 
-/// Back up `live` to `live.gore-bak` if no backup exists yet (preserving the pristine file),
-/// register it in `record`, and return the backup path. The backup is the pristine source.
-pub(crate) fn backup(live: &Path, record: &mut DeployRecord) -> Result<(PathBuf, bool)> {
+fn backup_staged_in(
+    live: &Path,
+    record: &mut DeployRecord,
+    transaction_root: Option<&Path>,
+) -> Result<(PathBuf, bool)> {
     let live_meta = std::fs::symlink_metadata(live).map_err(io("reading live backup metadata"))?;
     if metadata_is_link(&live_meta) || !live_meta.is_file() {
         return Err(ModError::Other(format!(
@@ -9252,7 +13123,10 @@ pub(crate) fn backup(live: &Path, record: &mut DeployRecord) -> Result<(PathBuf,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             // Build, sync and byte-verify a sibling temp first. Publishing is no-clobber, so a
             // crash/disk-full condition cannot leave a truncated file masquerading as pristine.
-            let temp = verified_temp_copy(live, ".gore-backup-stage-")?;
+            let temp = match transaction_root {
+                Some(root) => verified_temp_copy_in(live, root, ".gore-backup-stage-")?,
+                None => verified_temp_copy(live, ".gore-backup-stage-")?,
+            };
             publish_noclobber_temp(temp, &bak)?;
             true
         }
@@ -9271,11 +13145,22 @@ pub(crate) fn backup(live: &Path, record: &mut DeployRecord) -> Result<(PathBuf,
         }
         Err(error) => return Err(error),
     };
-    record.backups.push((
-        live.display().to_string(),
-        bak.display().to_string(),
-        created,
-    ));
+    if let Some((_, _, stored_created)) =
+        record
+            .backups
+            .iter_mut()
+            .find(|(stored_live, stored_backup, _)| {
+                same_path(live, stored_live) && same_path(&bak, stored_backup)
+            })
+    {
+        *stored_created = created;
+    } else {
+        record.backups.push((
+            live.display().to_string(),
+            bak.display().to_string(),
+            created,
+        ));
+    }
     record
         .backup_hashes
         .insert(bak.display().to_string(), backup_hash);
@@ -9394,10 +13279,20 @@ fn atomic_publish_copy(
 /// Stream one source into a same-directory sibling and authenticate that sibling immediately
 /// before its caller promotes it. Keeping promotion separate lets transactional callers mark Undo
 /// as published only after the atomic rename has actually succeeded.
+#[cfg(test)]
 fn stage_atomic_publish_copy(
     source: &Path,
     destination: &Path,
     expected: Option<(u64, &str)>,
+) -> Result<(tempfile::NamedTempFile, PathBuf)> {
+    stage_atomic_publish_copy_in(source, destination, expected, None)
+}
+
+fn stage_atomic_publish_copy_in(
+    source: &Path,
+    destination: &Path,
+    expected: Option<(u64, &str)>,
+    transaction_root: Option<&Path>,
 ) -> Result<(tempfile::NamedTempFile, PathBuf)> {
     #[cfg(test)]
     if take_injected_atomic_write_failure(destination) {
@@ -9412,7 +13307,11 @@ fn stage_atomic_publish_copy(
             destination.display()
         ))
     })?;
-    let temp = verified_temp_copy_in(source, parent, ".gore-copy-stage-")?;
+    let temp = verified_temp_copy_in(
+        source,
+        transaction_root.unwrap_or(parent),
+        ".gore-copy-stage-",
+    )?;
     if let Some((expected_len, expected_hash)) = expected {
         let staged_len = temp
             .as_file()
@@ -9433,8 +13332,82 @@ fn stage_atomic_publish_copy(
             )));
         }
     }
+    #[cfg(all(test, windows))]
+    manager_crash_test_checkpoint_for_transaction_temp(
+        temp.path(),
+        "apply.windows_copy_stage_ready",
+    );
     Ok((temp, parent.to_path_buf()))
 }
+
+#[cfg(test)]
+pub(crate) const MANAGER_CRASH_TEST_ROOT_ENV: &str = "GORE_MOD_CRASH_TEST_ROOT";
+#[cfg(test)]
+pub(crate) const MANAGER_CRASH_TEST_POINT_ENV: &str = "GORE_MOD_CRASH_TEST_POINT";
+#[cfg(test)]
+pub(crate) const MANAGER_CRASH_TEST_READY_ENV: &str = "GORE_MOD_CRASH_TEST_READY";
+#[cfg(test)]
+pub(crate) const MANAGER_CRASH_TEST_NONCE_ENV: &str = "GORE_MOD_CRASH_TEST_NONCE";
+
+#[cfg(all(test, windows))]
+fn manager_crash_test_checkpoint_for_transaction_temp(path: &Path, point: &'static str) {
+    let Some(scratch_root) = path.parent() else {
+        return;
+    };
+    if !scratch_root
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|name| name.starts_with(MANAGER_TRANSACTION_PREFIX))
+    {
+        return;
+    }
+    let Some(game_root) = scratch_root.parent() else {
+        return;
+    };
+    manager_crash_test_checkpoint(game_root, point);
+}
+
+/// Test-only hard-kill barrier. A targeted child publishes a durable ready witness and then parks;
+/// the parent must terminate the process, so Rust drops and rollback paths cannot run.
+#[cfg(test)]
+pub(crate) fn manager_crash_test_checkpoint(game_root: &Path, point: &'static str) {
+    let Some(expected_point) = std::env::var_os(MANAGER_CRASH_TEST_POINT_ENV) else {
+        return;
+    };
+    if expected_point != std::ffi::OsStr::new(point) {
+        return;
+    }
+    let expected_root = std::env::var_os(MANAGER_CRASH_TEST_ROOT_ENV)
+        .expect("crash-test point requires an operation-bound game root");
+    if record_path_key(game_root) != record_path_key(Path::new(&expected_root)) {
+        return;
+    }
+    let ready_path = PathBuf::from(
+        std::env::var_os(MANAGER_CRASH_TEST_READY_ENV)
+            .expect("crash-test point requires a ready witness path"),
+    );
+    let nonce =
+        std::env::var_os(MANAGER_CRASH_TEST_NONCE_ENV).expect("crash-test point requires a nonce");
+    let mut ready = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&ready_path)
+        .expect("creating crash-test ready witness");
+    writeln!(ready, "point={point}").expect("writing crash-test point witness");
+    writeln!(ready, "nonce={}", nonce.to_string_lossy()).expect("writing crash-test nonce witness");
+    ready.sync_all().expect("syncing crash-test ready witness");
+    let ready_parent = ready_path
+        .parent()
+        .expect("crash-test ready witness has a parent");
+    sync_parent_directory(ready_parent).expect("syncing crash-test ready witness directory");
+    loop {
+        std::thread::park();
+    }
+}
+
+#[cfg(not(test))]
+#[inline]
+fn manager_crash_test_checkpoint(_game_root: &Path, _point: &'static str) {}
 
 #[cfg(test)]
 thread_local! {
@@ -9456,6 +13429,102 @@ thread_local! {
     static REPLACE_UE4SS_BEFORE_APPLY: std::cell::RefCell<Option<(PathBuf, Vec<u8>)>> = const {
         std::cell::RefCell::new(None)
     };
+    static REPLACE_RECORD_BEFORE_UNDEPLOY_ACQUIRE: std::cell::RefCell<Option<(PathBuf, Vec<u8>)>> = const {
+        std::cell::RefCell::new(None)
+    };
+    static FAIL_EARLY_RECORD_AFTER_PUBLISH_AND_RESTORE: std::cell::RefCell<Option<(PathBuf, bool)>> = const {
+        std::cell::RefCell::new(None)
+    };
+    static MUTATE_PLAN_BASIS_BEFORE_FINAL_REVALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce() -> Result<()>>>> =
+        std::cell::RefCell::new(None);
+    static MUTATE_PRISTINE_AFTER_SELECTION: std::cell::RefCell<Option<Box<dyn FnOnce() -> Result<()>>>> =
+        std::cell::RefCell::new(None);
+    static MUTATE_SCRATCH_ROOT_AFTER_REVALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce() -> Result<()>>>> =
+        std::cell::RefCell::new(None);
+    static MUTATE_SCRATCH_CHILD_AFTER_REVALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce() -> Result<()>>>> =
+        std::cell::RefCell::new(None);
+    static MUTATE_CLEANUP_HOLDER_AFTER_REVALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce() -> Result<()>>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn inject_plan_basis_replacement(hook: impl FnOnce() -> Result<()> + 'static) {
+    MUTATE_PLAN_BASIS_BEFORE_FINAL_REVALIDATION.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+}
+
+#[cfg(test)]
+fn apply_injected_plan_basis_replacement() -> Result<()> {
+    let hook = MUTATE_PLAN_BASIS_BEFORE_FINAL_REVALIDATION.with(|slot| slot.borrow_mut().take());
+    match hook {
+        Some(hook) => hook(),
+        None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+fn inject_pristine_replacement(hook: impl FnOnce() -> Result<()> + 'static) {
+    MUTATE_PRISTINE_AFTER_SELECTION.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+}
+
+#[cfg(test)]
+fn apply_injected_pristine_replacement() -> Result<()> {
+    let hook = MUTATE_PRISTINE_AFTER_SELECTION.with(|slot| slot.borrow_mut().take());
+    match hook {
+        Some(hook) => hook(),
+        None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+fn inject_scratch_root_mutation(hook: impl FnOnce() -> Result<()> + 'static) {
+    MUTATE_SCRATCH_ROOT_AFTER_REVALIDATION.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+}
+
+#[cfg(test)]
+fn apply_injected_scratch_root_mutation() -> Result<()> {
+    let hook = MUTATE_SCRATCH_ROOT_AFTER_REVALIDATION.with(|slot| slot.borrow_mut().take());
+    match hook {
+        Some(hook) => hook(),
+        None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+fn inject_scratch_child_mutation(hook: impl FnOnce() -> Result<()> + 'static) {
+    MUTATE_SCRATCH_CHILD_AFTER_REVALIDATION.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+}
+
+#[cfg(test)]
+fn apply_injected_scratch_child_mutation() -> Result<()> {
+    let hook = MUTATE_SCRATCH_CHILD_AFTER_REVALIDATION.with(|slot| slot.borrow_mut().take());
+    match hook {
+        Some(hook) => hook(),
+        None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+fn inject_cleanup_holder_mutation(hook: impl FnOnce() -> Result<()> + 'static) {
+    MUTATE_CLEANUP_HOLDER_AFTER_REVALIDATION.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+}
+
+#[cfg(test)]
+fn apply_injected_cleanup_holder_mutation() -> Result<()> {
+    let hook = MUTATE_CLEANUP_HOLDER_AFTER_REVALIDATION.with(|slot| slot.borrow_mut().take());
+    match hook {
+        Some(hook) => hook(),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -9585,6 +13654,70 @@ fn apply_injected_ue4ss_replacement(path: &Path) -> Result<()> {
     })
 }
 
+#[cfg(test)]
+fn replace_record_before_undeploy_acquire(path: &Path, bytes: &[u8]) {
+    REPLACE_RECORD_BEFORE_UNDEPLOY_ACQUIRE.with(|slot| {
+        *slot.borrow_mut() = Some((path.to_path_buf(), bytes.to_vec()));
+    });
+}
+
+#[cfg(test)]
+fn apply_injected_record_replacement_before_undeploy_acquire(game_root: &Path) -> Result<()> {
+    let record = record_path(game_root);
+    REPLACE_RECORD_BEFORE_UNDEPLOY_ACQUIRE.with(|slot| {
+        let replacement = slot
+            .borrow()
+            .as_ref()
+            .filter(|(expected, _)| same_path(&record, &expected.display().to_string()))
+            .cloned();
+        if let Some((_, bytes)) = replacement {
+            slot.borrow_mut().take();
+            std::fs::write(&record, bytes)
+                .map_err(io("injecting pre-lock undeploy record replacement"))?;
+        }
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+fn fail_early_record_after_publish_and_restore(path: &Path) {
+    FAIL_EARLY_RECORD_AFTER_PUBLISH_AND_RESTORE.with(|slot| {
+        *slot.borrow_mut() = Some((path.to_path_buf(), false));
+    });
+}
+
+#[cfg(test)]
+fn take_injected_early_record_post_publish_failure(path: &Path) -> bool {
+    FAIL_EARLY_RECORD_AFTER_PUBLISH_AND_RESTORE.with(|slot| {
+        let mut state = slot.borrow_mut();
+        let Some((expected, stage_failed)) = state.as_mut() else {
+            return false;
+        };
+        if !*stage_failed && same_path(path, &expected.display().to_string()) {
+            *stage_failed = true;
+            true
+        } else {
+            false
+        }
+    })
+}
+
+#[cfg(test)]
+fn take_injected_early_record_restore_failure(path: &Path) -> bool {
+    FAIL_EARLY_RECORD_AFTER_PUBLISH_AND_RESTORE.with(|slot| {
+        let matches = slot
+            .borrow()
+            .as_ref()
+            .is_some_and(|(expected, stage_failed)| {
+                *stage_failed && same_path(path, &expected.display().to_string())
+            });
+        if matches {
+            slot.borrow_mut().take();
+        }
+        matches
+    })
+}
+
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     #[cfg(test)]
     if take_injected_atomic_write_failure(path) {
@@ -9615,6 +13748,64 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     sync_parent_directory(parent)
 }
 
+fn atomic_write_staged_in(
+    path: &Path,
+    bytes: &[u8],
+    staging_root: &Path,
+    prefix: &str,
+    checkpoint_game_root: Option<&Path>,
+) -> Result<()> {
+    #[cfg(test)]
+    if prefix == ".gore-record-rollback-" && take_injected_early_record_restore_failure(path) {
+        return Err(ModError::Other(format!(
+            "injected pre-record restoration failure for {}",
+            path.display()
+        )));
+    }
+    #[cfg(test)]
+    if take_injected_atomic_write_failure(path) {
+        return Err(ModError::Other(format!(
+            "injected atomic-write failure for {}",
+            path.display()
+        )));
+    }
+    let parent = path.parent().ok_or_else(|| {
+        ModError::Other(format!(
+            "atomic-write target has no parent: {}",
+            path.display()
+        ))
+    })?;
+    let mut temp = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempfile_in(staging_root)
+        .map_err(io("creating transaction-bound atomic-write temp"))?;
+    temp.as_file_mut()
+        .write_all(bytes)
+        .map_err(io("writing transaction-bound atomic-write temp"))?;
+    temp.as_file()
+        .sync_all()
+        .map_err(io("syncing transaction-bound atomic-write temp"))?;
+    if prefix == ".gore-record-stage-" {
+        if let Some(game_root) = checkpoint_game_root {
+            manager_crash_test_checkpoint(game_root, "apply.early_record_temp_synced");
+        }
+    }
+    #[cfg(all(test, windows))]
+    manager_crash_test_checkpoint_for_transaction_temp(
+        temp.path(),
+        "apply.windows_write_stage_ready",
+    );
+    publish_atomic_temp(temp, path)?;
+    #[cfg(test)]
+    if prefix == ".gore-record-stage-" && take_injected_early_record_post_publish_failure(path) {
+        return Err(ModError::Other(format!(
+            "injected record failure after atomic publication for {}",
+            path.display()
+        )));
+    }
+    sync_parent_directory(parent)
+}
+
 #[cfg(not(windows))]
 fn publish_noclobber_temp(temp: tempfile::NamedTempFile, path: &Path) -> Result<()> {
     let parent = path.parent().ok_or_else(|| {
@@ -9635,6 +13826,17 @@ fn publish_noclobber_temp(temp: tempfile::NamedTempFile, path: &Path) -> Result<
         MoveFileExW, SetFileAttributesW, FILE_ATTRIBUTE_NORMAL, MOVEFILE_WRITE_THROUGH,
     };
 
+    let _parent = path.parent().ok_or_else(|| {
+        ModError::Other(format!(
+            "no-clobber destination has no parent: {}",
+            path.display()
+        ))
+    })?;
+    #[cfg(test)]
+    manager_crash_test_checkpoint_for_transaction_temp(
+        temp.path(),
+        "apply.windows_noclobber_stage_ready",
+    );
     let temp = temp.into_temp_path();
     let old_wide: Vec<u16> = temp
         .as_os_str()
@@ -9706,9 +13908,11 @@ fn publish_atomic_temp(temp: tempfile::NamedTempFile, path: &Path) -> Result<()>
             MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
         ) == 0
         {
-            return Err(io("publishing durable atomic write")(
-                std::io::Error::last_os_error(),
-            ));
+            return Err(io(&format!(
+                "publishing durable atomic write '{}' to '{}'",
+                temp.display(),
+                path.display()
+            ))(std::io::Error::last_os_error()));
         }
     }
     Ok(())
@@ -9887,6 +14091,9 @@ fn copy_dir_bounded(
     }
     sync_parent_directory(dst)
 }
+
+#[cfg(test)]
+mod crash_tests;
 
 #[cfg(test)]
 mod canonical_tempfile {
@@ -10124,7 +14331,10 @@ mod tests {
         assert!(error.contains("INSTALL_MUTATION_BLOCKED"), "got: {error}");
         assert!(error.contains("close the game"), "got: {error}");
         assert!(!deployed.exists(), "a refused deploy published a file");
-        assert!(!record_path(&game).exists(), "a refused deploy left a record");
+        assert!(
+            !record_path(&game).exists(),
+            "a refused deploy left a record"
+        );
     }
 
     #[test]
@@ -13670,7 +17880,7 @@ mod tests {
         };
         // New plan has NO texture triplets (e.g. a non-texture mod) -> all prev ones are stale.
         let plan = DeployPlan::default();
-        let changed = retire_leftovers(&game, &[], Some(&prev), &plan, &mut record).unwrap();
+        let changed = retire_leftovers(&game, &[], Some(&prev), &plan, &mut record, None).unwrap();
         assert!(changed);
         for f in &old {
             assert!(
@@ -13715,6 +17925,69 @@ mod tests {
                 "triplet not removed: {f}"
             );
         }
+    }
+
+    fn assert_undeploy_record_owner_swap_is_refused(initial_owner: &str, current_owner: &str) {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let mods = game.join("G1R/Content/Paks/~mods");
+        std::fs::create_dir_all(&mods).unwrap();
+        let initial_live = mods.join("initial_P.pak");
+        let current_live = mods.join("current_P.pak");
+        std::fs::write(&initial_live, b"initial-live").unwrap();
+        std::fs::write(&current_live, b"current-live").unwrap();
+
+        let make_record = |name: &str, owner: &str, live: &Path| DeployRecord {
+            mod_name: name.into(),
+            owner: owner.into(),
+            managed_paks: vec![live.display().to_string()],
+            deployed_hashes: BTreeMap::from([(
+                live.display().to_string(),
+                sha256_file(live).unwrap(),
+            )]),
+            ..Default::default()
+        };
+        let initial = make_record("Initial", initial_owner, &initial_live);
+        let current = make_record("Concurrent", current_owner, &current_live);
+        let path = record_path(&game);
+        std::fs::write(&path, serde_json::to_vec(&initial).unwrap()).unwrap();
+        let current_bytes = serde_json::to_vec_pretty(&current).unwrap();
+        replace_record_before_undeploy_acquire(&path, &current_bytes);
+
+        let error = undeploy(&game).unwrap_err().to_string();
+
+        assert!(error.contains("UNDEPLOY_BASIS_CHANGED"), "got: {error}");
+        assert!(error.contains("retry undeploy"), "got: {error}");
+        assert_eq!(std::fs::read(&initial_live).unwrap(), b"initial-live");
+        assert_eq!(std::fs::read(&current_live).unwrap(), b"current-live");
+        assert_eq!(std::fs::read(&path).unwrap(), current_bytes);
+        let current_after: DeployRecord =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(current_after.phase, DeployPhase::Applied);
+        assert!(current_after.recovery_transaction.is_none());
+
+        let residue: Vec<_> = std::fs::read_dir(&game)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| {
+                name.starts_with(MANAGER_TRANSACTION_PREFIX)
+                    || name.starts_with(".gore-install-mutation")
+            })
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "undeploy left recovery residue: {residue:?}"
+        );
+    }
+
+    #[test]
+    fn undeploy_refuses_manager_record_replaced_by_studio_before_lock() {
+        assert_undeploy_record_owner_swap_is_refused("manager", "");
+    }
+
+    #[test]
+    fn undeploy_refuses_studio_record_replaced_by_manager_before_lock() {
+        assert_undeploy_record_owner_swap_is_refused("", "manager");
     }
 
     #[test]
@@ -14419,6 +18692,43 @@ mod tests {
     }
 
     #[test]
+    fn pristine_read_rejects_a_live_replacement_after_source_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        std::fs::write(&live, b"pristine-p").unwrap();
+        write_record_file(
+            &game,
+            &DeployRecord {
+                owner: "manager".into(),
+                mod_name: "unchanged active record".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let record_before = std::fs::read(record_path(&game)).unwrap();
+        let hook_live = live.clone();
+        inject_pristine_replacement(move || {
+            std::fs::write(&hook_live, b"external-u")
+                .map_err(io("replacing selected pristine source in race fixture"))
+        });
+
+        let error =
+            read_pristine_bounded_with_source(&live, None, MAX_PRISTINE_PATCH_BYTES).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("selected pristine source changed while it was being read"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&live).unwrap(), b"external-u");
+        assert!(!bak_path(&live).exists());
+        assert_eq!(std::fs::read(record_path(&game)).unwrap(), record_before);
+        assert_no_manager_pre_mutation_residue(&game);
+    }
+
+    #[test]
     fn undeploy_does_not_recreate_a_live_file_removed_by_game_update() {
         let dir = tempfile::tempdir().unwrap();
         let game = dir.path().join("game");
@@ -14609,10 +18919,12 @@ mod tests {
         // Same length defeats size-only validation; only the prepared SHA-256 can catch this.
         std::fs::write(&candidate_path, b"tampered").unwrap();
         assert_eq!(std::fs::metadata(&candidate_path).unwrap().len(), write.len);
-        let plan = DeployPlan {
+        let source = select_pristine_source(&live, None).unwrap();
+        let mut plan = DeployPlan {
             file_writes: vec![write],
             ..Default::default()
         };
+        plan.bind_backup_identity(&live, source.basis).unwrap();
 
         let mut apply_undo = Undo::default();
         apply_undo.files.push(LiveFileUndo {
@@ -14623,7 +18935,7 @@ mod tests {
             published_hash: None,
             backup: None,
         });
-        let direct_error = apply_writes(&plan, &mut apply_undo)
+        let direct_error = apply_writes(&plan, &mut apply_undo, None)
             .unwrap_err()
             .to_string();
         assert!(
@@ -14710,8 +19022,8 @@ mod tests {
         prepare_test_plan_identities(&mut plan);
         let mut undo = Undo::default();
         let mut record = DeployRecord::default();
-        stage(&plan, &mut record, &mut undo).unwrap();
-        apply_writes(&plan, &mut undo).unwrap();
+        stage(&plan, &mut record, &mut undo, None).unwrap();
+        apply_writes(&plan, &mut undo, None).unwrap();
         assert_eq!(std::fs::read(dst.join("payload.txt")).unwrap(), b"new");
         assert_eq!(undo.ue4ss_swaps.len(), 1);
         assert_eq!(
@@ -14720,13 +19032,13 @@ mod tests {
         );
         assert!(undo.ue4ss_swaps[0].holder.as_ref().unwrap().exists());
 
-        let remaining = undo.discard();
+        let remaining = undo.discard(None);
         assert_eq!(remaining.len(), 1);
         let game = dir.path().join("game");
         record.phase = DeployPhase::RecoveryRequired;
         write_record_file(&game, &record).unwrap();
         for path in remaining {
-            durable_ue4ss_cleanup(&game, &mut record, &path).unwrap();
+            durable_ue4ss_cleanup(&game, &mut record, &path, None).unwrap();
         }
         assert!(ue4ss_transaction_dirs(&root).is_empty());
         assert_eq!(
@@ -14756,10 +19068,10 @@ mod tests {
         prepare_test_plan_identities(&mut plan);
         let mut undo = Undo::default();
         let mut record = DeployRecord::default();
-        stage(&plan, &mut record, &mut undo).unwrap();
+        stage(&plan, &mut record, &mut undo, None).unwrap();
         fail_next_ue4ss_promotion(&dst);
 
-        let error = apply_writes(&plan, &mut undo).unwrap_err();
+        let error = apply_writes(&plan, &mut undo, None).unwrap_err();
         assert!(
             error.to_string().contains("injected UE4SS promotion"),
             "unexpected error: {error}"
@@ -14778,7 +19090,7 @@ mod tests {
             *undo.ue4ss_swaps[0].holder.as_ref().unwrap()
         );
 
-        let failures = undo.rollback();
+        let failures = undo.rollback(None);
         assert!(failures.is_empty(), "rollback failures: {failures:?}");
         assert_eq!(std::fs::read(dst.join("payload.txt")).unwrap(), b"old");
         assert!(ue4ss_transaction_dirs(&root).is_empty());
@@ -15107,6 +19419,522 @@ mod tests {
         assert_eq!(std::fs::read(record_path(&game)).unwrap(), prior_raw);
     }
 
+    fn assert_no_manager_pre_mutation_residue(game: &Path) {
+        let residue: Vec<_> = std::fs::read_dir(game)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| {
+                name.starts_with(MANAGER_TRANSACTION_PREFIX)
+                    || name.starts_with(".gore-install-mutation")
+            })
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "pre-mutation rejection left recovery residue: {residue:?}"
+        );
+    }
+
+    fn current_manager_transaction_root(game: &Path) -> PathBuf {
+        let mut roots: Vec<_> = std::fs::read_dir(game)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .starts_with(MANAGER_TRANSACTION_PREFIX)
+            })
+            .collect();
+        roots.sort();
+        assert_eq!(roots.len(), 1, "expected one Manager transaction root");
+        roots.remove(0)
+    }
+
+    fn current_manager_cleanup_holder(game: &Path, prefix: &str) -> PathBuf {
+        let scratch = current_manager_transaction_root(game);
+        let mut holders: Vec<_> = std::fs::read_dir(&scratch)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .starts_with(prefix)
+            })
+            .collect();
+        holders.sort();
+        assert_eq!(holders.len(), 1, "expected one Manager cleanup holder");
+        holders.remove(0)
+    }
+
+    #[test]
+    fn manager_commit_revalidates_fresh_additive_basis_before_scratch() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let dst = game.join("G1R/Content/Paks/~mods/fresh.pak");
+        std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
+        let src = dir.path().join("fresh-source.pak");
+        std::fs::write(&src, b"intended-bytes").unwrap();
+        let hook_dst = dst.clone();
+        inject_plan_basis_replacement(move || {
+            std::fs::write(&hook_dst, b"intended-bytes")
+                .map_err(io("injecting same-intended additive creator"))
+        });
+
+        let error = commit_plan(
+            &resolve_game_paths(&game),
+            &game,
+            DeployPlan {
+                managed_paks: vec![(src, dst.clone())],
+                ..Default::default()
+            },
+            DeployRecord {
+                owner: "manager".into(),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains("DEPLOY_TARGET_BASIS_CHANGED"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&dst).unwrap(), b"intended-bytes");
+        assert!(!record_path(&game).exists());
+        assert_no_manager_pre_mutation_residue(&game);
+    }
+
+    #[test]
+    fn manager_commit_revalidates_existing_ue4ss_basis_before_scratch() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let dst = game.join("G1R/Binaries/Win64/ue4ss/Mods/Owned");
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(dst.join("payload.txt"), b"previous-owned").unwrap();
+        let src = make_mod_src(dir.path(), "intended-ue4ss");
+        std::fs::write(src.join("payload.txt"), b"intended-tree").unwrap();
+        let prior_record = DeployRecord {
+            owner: "manager".into(),
+            ue4ss_mod_dirs: vec![dst.display().to_string()],
+            ue4ss_tree_fingerprints: BTreeMap::from([(
+                dst.display().to_string(),
+                tree_fingerprint(&dst).unwrap(),
+            )]),
+            ..Default::default()
+        };
+        write_record_file(&game, &prior_record).unwrap();
+        let prior_raw = std::fs::read(record_path(&game)).unwrap();
+        let prior = read_record(&game).unwrap().unwrap();
+        let hook_src = src.clone();
+        let hook_dst = dst.clone();
+        inject_plan_basis_replacement(move || {
+            std::fs::remove_dir_all(&hook_dst)
+                .map_err(io("removing prior UE4SS target in basis-race fixture"))?;
+            copy_dir(&hook_src, &hook_dst)
+        });
+
+        let error = commit_plan(
+            &resolve_game_paths(&game),
+            &game,
+            DeployPlan {
+                ue4ss_dirs: vec![(src, dst.clone())],
+                ..Default::default()
+            },
+            DeployRecord {
+                owner: "manager".into(),
+                ..Default::default()
+            },
+            Some(prior),
+        )
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains("DEPLOY_TARGET_BASIS_CHANGED"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            std::fs::read(dst.join("payload.txt")).unwrap(),
+            b"intended-tree"
+        );
+        assert_eq!(std::fs::read(record_path(&game)).unwrap(), prior_raw);
+        assert_no_manager_pre_mutation_residue(&game);
+    }
+
+    #[test]
+    fn manager_commit_keeps_source_bound_live_basis_before_scratch() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let live = game.join("G1R/Script/source-bound-live.bin");
+        std::fs::write(&live, b"pristine-source-p").unwrap();
+        let source = select_pristine_source(&live, None).unwrap();
+        let mut plan = DeployPlan {
+            writes: vec![(live.clone(), b"built-from-p".to_vec())],
+            ..Default::default()
+        };
+        plan.bind_backup_identity(&live, source.basis).unwrap();
+        let hook_live = live.clone();
+        inject_plan_basis_replacement(move || {
+            std::fs::write(&hook_live, b"external-live-u")
+                .map_err(io("injecting live basis replacement"))
+        });
+
+        let error = commit_plan(
+            &resolve_game_paths(&game),
+            &game,
+            plan,
+            DeployRecord {
+                owner: "manager".into(),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains("DEPLOY_TARGET_BASIS_CHANGED"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&live).unwrap(), b"external-live-u");
+        assert!(!bak_path(&live).exists());
+        assert!(!record_path(&game).exists());
+        assert_no_manager_pre_mutation_residue(&game);
+    }
+
+    #[test]
+    fn manager_commit_keeps_source_bound_backup_basis_before_scratch() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        let backup = bak_path(&live);
+        std::fs::write(&live, b"previous-deployment").unwrap();
+        std::fs::write(&backup, b"pristine-backup-p").unwrap();
+        let prior_record = DeployRecord {
+            owner: "manager".into(),
+            backups: vec![(
+                live.display().to_string(),
+                backup.display().to_string(),
+                true,
+            )],
+            deployed_hashes: BTreeMap::from([(
+                live.display().to_string(),
+                sha256_file(&live).unwrap(),
+            )]),
+            backup_hashes: BTreeMap::from([(
+                backup.display().to_string(),
+                sha256_file(&backup).unwrap(),
+            )]),
+            ..Default::default()
+        };
+        write_record_file(&game, &prior_record).unwrap();
+        let prior_raw = std::fs::read(record_path(&game)).unwrap();
+        let prior = read_record(&game).unwrap().unwrap();
+        let source = select_pristine_source(&live, Some(&prior.record)).unwrap();
+        let mut plan = DeployPlan {
+            writes: vec![(live.clone(), b"built-from-backup-p".to_vec())],
+            ..Default::default()
+        };
+        plan.bind_backup_identity(&live, source.basis).unwrap();
+        let hook_backup = backup.clone();
+        inject_plan_basis_replacement(move || {
+            std::fs::write(&hook_backup, b"external-backup-q")
+                .map_err(io("injecting backup basis replacement"))
+        });
+
+        let error = commit_plan(
+            &resolve_game_paths(&game),
+            &game,
+            plan,
+            DeployRecord {
+                owner: "manager".into(),
+                ..Default::default()
+            },
+            Some(prior),
+        )
+        .unwrap_err();
+
+        assert!(
+            error.to_string().contains("DEPLOY_TARGET_BASIS_CHANGED"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&live).unwrap(), b"previous-deployment");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"external-backup-q");
+        assert_eq!(std::fs::read(record_path(&game)).unwrap(), prior_raw);
+        assert_no_manager_pre_mutation_residue(&game);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manager_scratch_name_swap_never_redirects_transaction_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        std::fs::write(&live, b"pristine").unwrap();
+        let source = select_pristine_source(&live, None).unwrap();
+        let mut plan = DeployPlan {
+            writes: vec![(live.clone(), b"manager-output".to_vec())],
+            ..Default::default()
+        };
+        plan.bind_backup_identity(&live, source.basis).unwrap();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("sentinel"), b"outside-safe").unwrap();
+        let hook_game = game.clone();
+        let hook_outside = outside.clone();
+        let detached = game.join("detached-manager-scratch");
+        let hook_detached = detached.clone();
+        inject_scratch_root_mutation(move || {
+            let scratch = current_manager_transaction_root(&hook_game);
+            std::fs::rename(&scratch, &hook_detached)
+                .map_err(io("detaching transaction root in swap fixture"))?;
+            std::os::unix::fs::symlink(&hook_outside, &scratch)
+                .map_err(io("installing transaction-root swap fixture"))
+        });
+
+        let error = commit_plan(
+            &resolve_game_paths(&game),
+            &game,
+            plan,
+            DeployRecord {
+                owner: "manager".into(),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("ROLLBACK_INCOMPLETE"), "{error}");
+        assert_eq!(
+            std::fs::read(outside.join("sentinel")).unwrap(),
+            b"outside-safe"
+        );
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1);
+        assert_eq!(std::fs::read(&live).unwrap(), b"pristine");
+        assert!(detached.is_dir());
+        assert!(record_path(&game).exists());
+        assert!(game.join(".gore-install-mutation.lock").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn retained_manager_scratch_handle_blocks_windows_name_swap() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        std::fs::write(&live, b"pristine").unwrap();
+        let source = select_pristine_source(&live, None).unwrap();
+        let mut plan = DeployPlan {
+            writes: vec![(live.clone(), b"manager-output".to_vec())],
+            ..Default::default()
+        };
+        plan.bind_backup_identity(&live, source.basis).unwrap();
+        let hook_game = game.clone();
+        let detached = game.join("detached-manager-scratch");
+        let hook_detached = detached.clone();
+        inject_scratch_root_mutation(move || {
+            let scratch = current_manager_transaction_root(&hook_game);
+            let error = std::fs::rename(&scratch, &hook_detached).unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(32));
+            Ok(())
+        });
+
+        commit_plan(
+            &resolve_game_paths(&game),
+            &game,
+            plan,
+            DeployRecord {
+                owner: "manager".into(),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read(&live).unwrap(), b"manager-output");
+        assert!(!detached.exists());
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+        assert!(std::fs::read_dir(&game).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(MANAGER_TRANSACTION_PREFIX)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manager_scratch_tree_children_keep_writes_on_the_bound_directory_after_name_swap() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let root = create_manager_transaction_root(&game, "scratch-child-swap").unwrap();
+        let outside = dir.path().join("outside-scratch-child");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("sentinel"), b"outside-safe").unwrap();
+
+        for (index, name) in ["ue4ss-stage-0", "ue4ss-old-0", ".gore-rollback-fixture"]
+            .into_iter()
+            .enumerate()
+        {
+            let guard = ManagerScratchDirectoryGuard::create_named(
+                &root,
+                std::ffi::OsStr::new(name),
+                "Manager scratch child swap fixture",
+            )
+            .unwrap();
+            let stable = guard.stable_path().to_path_buf();
+            let detached = root.stable_path().join(format!("detached-child-{index}"));
+            let hook_stable = stable.clone();
+            let hook_detached = detached.clone();
+            let hook_outside = outside.clone();
+            inject_scratch_child_mutation(move || {
+                std::fs::rename(&hook_stable, &hook_detached)
+                    .map_err(io("detaching Manager scratch child in swap fixture"))?;
+                std::os::unix::fs::symlink(&hook_outside, &hook_stable)
+                    .map_err(io("installing Manager scratch-child swap fixture"))
+            });
+
+            let bound = guard
+                .mutation_path(&root, "Manager scratch child swap fixture")
+                .unwrap();
+            std::fs::write(bound.join("transaction-only"), name.as_bytes()).unwrap();
+
+            let bound_metadata = std::fs::symlink_metadata(&bound).unwrap();
+            assert!(!metadata_is_link(&bound_metadata));
+            assert!(bound_metadata.is_dir());
+            assert_eq!(
+                tree_fingerprint(&bound).unwrap(),
+                tree_fingerprint(&detached).unwrap()
+            );
+            assert_eq!(
+                std::fs::read(outside.join("sentinel")).unwrap(),
+                b"outside-safe"
+            );
+            assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1);
+            assert_eq!(
+                std::fs::read(detached.join("transaction-only")).unwrap(),
+                name.as_bytes()
+            );
+            assert!(guard
+                .revalidate_named(&root, "Manager scratch child swap fixture")
+                .is_err());
+
+            std::fs::remove_file(&stable).unwrap();
+            std::fs::rename(&detached, &stable).unwrap();
+            guard
+                .remove_contents_and_self(&root, "Manager scratch child swap fixture")
+                .unwrap();
+        }
+
+        root.remove_self().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn retained_manager_scratch_tree_child_handles_block_windows_name_swaps() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let root = create_manager_transaction_root(&game, "scratch-child-swap").unwrap();
+
+        for (index, name) in ["ue4ss-stage-0", "ue4ss-old-0", ".gore-rollback-fixture"]
+            .into_iter()
+            .enumerate()
+        {
+            let guard = ManagerScratchDirectoryGuard::create_named(
+                &root,
+                std::ffi::OsStr::new(name),
+                "Manager scratch child swap fixture",
+            )
+            .unwrap();
+            let stable = guard.stable_path().to_path_buf();
+            let detached = root.stable_path().join(format!("detached-child-{index}"));
+            let rename_error = Rc::new(Cell::new(None));
+            let hook_rename_error = rename_error.clone();
+            inject_scratch_child_mutation(move || {
+                let error = std::fs::rename(&stable, &detached).unwrap_err();
+                hook_rename_error.set(error.raw_os_error());
+                Ok(())
+            });
+
+            let bound = guard
+                .mutation_path(&root, "Manager scratch child swap fixture")
+                .unwrap();
+            std::fs::write(bound.join("transaction-only"), name.as_bytes()).unwrap();
+            assert_eq!(rename_error.get(), Some(32));
+            guard
+                .revalidate_named(&root, "Manager scratch child swap fixture")
+                .unwrap();
+            guard
+                .remove_contents_and_self(&root, "Manager scratch child swap fixture")
+                .unwrap();
+        }
+
+        root.remove_self().unwrap();
+    }
+
+    #[test]
+    fn bound_ue4ss_copy_never_follows_a_replaced_nested_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let source_path = dir.path().join("source-tree");
+        let destination_path = dir.path().join("destination-tree");
+        let outside = dir.path().join("outside-copy-target");
+        std::fs::create_dir_all(source_path.join("nested")).unwrap();
+        std::fs::write(source_path.join("nested/payload"), b"transaction-bytes").unwrap();
+        std::fs::create_dir(&destination_path).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("sentinel"), b"outside-safe").unwrap();
+        let source =
+            mgr::model::open_directory_chain_nofollow(&source_path, "nested-copy source fixture")
+                .unwrap();
+        let destination = mgr::model::open_directory_chain_nofollow(
+            &destination_path,
+            "nested-copy destination fixture",
+        )
+        .unwrap();
+        let parked = dir.path().join("parked-nested-copy-target");
+        let hook_parked = parked.clone();
+        let hook_outside = outside.clone();
+        let link_installed = Rc::new(Cell::new(false));
+        let hook_link_installed = link_installed.clone();
+        let rename_blocked = Rc::new(Cell::new(false));
+        let hook_rename_blocked = rename_blocked.clone();
+        mgr::model::inject_create_child_directory_race(move |created| {
+            if std::fs::rename(created, &hook_parked).is_err() {
+                hook_rename_blocked.set(true);
+                return;
+            }
+            if make_test_dir_link(&hook_outside, created) {
+                hook_link_installed.set(true);
+            } else {
+                std::fs::rename(&hook_parked, created).unwrap();
+            }
+        });
+
+        let copied = copy_secure_directory_contents(
+            &source,
+            &destination,
+            "nested UE4SS destination swap fixture",
+        );
+        if link_installed.get() {
+            assert!(copied.is_err());
+            assert!(!outside.join("payload").exists());
+        } else {
+            copied.unwrap();
+            assert!(
+                rename_blocked.get(),
+                "the retained destination must block a nested rename when no hostile link was installed"
+            );
+            assert_eq!(
+                std::fs::read(destination_path.join("nested/payload")).unwrap(),
+                b"transaction-bytes"
+            );
+            assert!(!parked.exists());
+        }
+        assert_eq!(
+            std::fs::read(outside.join("sentinel")).unwrap(),
+            b"outside-safe"
+        );
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1);
+    }
+
     #[test]
     fn undeploy_never_deletes_same_path_external_file_or_tree() {
         let dir = tempfile::tempdir().unwrap();
@@ -15188,7 +20016,7 @@ mod tests {
         prepare_test_plan_identities(&mut plan);
         let mut record = DeployRecord::default();
         let mut undo = Undo::default();
-        stage(&plan, &mut record, &mut undo).unwrap();
+        stage(&plan, &mut record, &mut undo, None).unwrap();
         let transaction_dirs = undo.ue4ss_transaction_dirs();
         assert_eq!(transaction_dirs.len(), 1);
         assert!(transaction_dirs.iter().all(|path| path.exists()));
@@ -15222,7 +20050,7 @@ mod tests {
         prepare_test_plan_identities(&mut plan);
         let mut record = DeployRecord::default();
         let mut undo = Undo::default();
-        stage(&plan, &mut record, &mut undo).unwrap();
+        stage(&plan, &mut record, &mut undo, None).unwrap();
         let swap = &mut undo.ue4ss_swaps[0];
         std::fs::rename(&dst, swap.old.as_ref().unwrap()).unwrap();
         swap.state = Ue4ssSwapState::OldMoved;
@@ -15413,7 +20241,7 @@ mod tests {
             ..Default::default()
         };
 
-        let _ = retire_leftovers(dir.path(), &[], Some(&prev), &plan, &mut record).unwrap();
+        let _ = retire_leftovers(dir.path(), &[], Some(&prev), &plan, &mut record, None).unwrap();
         assert!(
             dst.exists(),
             "file the new deploy re-creates must NOT be retired despite path-form mismatch"
@@ -15554,7 +20382,7 @@ mod tests {
         };
         prepare_test_plan_identities(&mut plan);
         let mut undo = Undo::default();
-        apply_writes(&plan, &mut undo).unwrap();
+        apply_writes(&plan, &mut undo, None).unwrap();
 
         assert_eq!(std::fs::read(&dst).unwrap(), b"new-pak-content");
         assert_eq!(undo.texture_files.len(), 1);
@@ -15569,7 +20397,7 @@ mod tests {
             b"old-active-pak-content"
         );
 
-        let failures = undo.rollback();
+        let failures = undo.rollback(None);
         assert!(failures.is_empty(), "rollback failures: {failures:?}");
         assert_eq!(std::fs::read(&dst).unwrap(), b"old-active-pak-content");
         assert!(
@@ -15600,7 +20428,7 @@ mod tests {
             published_hash: Some(content_hash(b"published")),
             backup: None,
         });
-        let failures = undo.rollback();
+        let failures = undo.rollback(None);
         assert_eq!(failures.len(), 1, "failures: {failures:?}");
         assert!(failures[0].contains("live file"));
         assert!(failures[0].contains("snapshot retained"));
@@ -15650,6 +20478,7 @@ mod tests {
             undo,
             &game,
             Some(b"previous-record"),
+            None,
         );
         let text = error.to_string();
         assert!(text.contains("ROLLBACK_INCOMPLETE"), "{text}");
@@ -15714,7 +20543,7 @@ mod tests {
                 published_hash: sha256_file(&backup).unwrap(),
             }),
         });
-        let failures = undo.rollback();
+        let failures = undo.rollback(None);
 
         assert_eq!(failures.len(), 1, "failures: {failures:?}");
         assert_eq!(
@@ -15754,7 +20583,7 @@ mod tests {
                 published_hash: sha256_file(&backup).unwrap(),
             }),
         });
-        let failures = undo.rollback();
+        let failures = undo.rollback(None);
 
         assert_eq!(failures.len(), 1, "failures: {failures:?}");
         assert_eq!(
@@ -16211,6 +21040,290 @@ mod tests {
     }
 
     #[test]
+    fn manager_undeploy_never_authorizes_foreign_backup_from_pre_transaction_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        let backup = bak_path(&live);
+        std::fs::write(&live, b"recorded-pristine-p").unwrap();
+        std::fs::write(&backup, b"recorded-pristine-p").unwrap();
+        let recorded_pristine = sha256_file(&backup).unwrap();
+        let record = DeployRecord {
+            owner: "manager".into(),
+            backups: vec![(
+                live.display().to_string(),
+                backup.display().to_string(),
+                true,
+            )],
+            deployed_hashes: BTreeMap::from([(
+                live.display().to_string(),
+                recorded_pristine.clone(),
+            )]),
+            backup_hashes: BTreeMap::from([(backup.display().to_string(), recorded_pristine)]),
+            ..Default::default()
+        };
+        write_record_file(&game, &record).unwrap();
+        std::fs::write(&backup, b"foreign-backup-f").unwrap();
+
+        let error = undeploy(&game).unwrap_err();
+        assert!(
+            error.to_string().contains("matching transaction identity"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&live).unwrap(), b"recorded-pristine-p");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"foreign-backup-f");
+        let stored = read_record(&game).unwrap().unwrap();
+        assert_eq!(stored.record.phase, DeployPhase::RecoveryRequired);
+        let transaction = stored.record.recovery_transaction.unwrap();
+        assert_eq!(transaction.operation, ManagerMutationOperation::Undeploy);
+        assert!(Path::new(&transaction.scratch_root).is_dir());
+        assert!(game.join(".gore-install-mutation.lock").is_file());
+
+        let recovery_error =
+            recover_manager_install(&game, &transaction.transaction_id).unwrap_err();
+        assert!(
+            recovery_error
+                .to_string()
+                .contains("matching transaction identity"),
+            "unexpected recovery error: {recovery_error}"
+        );
+        assert_eq!(std::fs::read(&live).unwrap(), b"recorded-pristine-p");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"foreign-backup-f");
+        assert!(record_path(&game).exists());
+        assert!(Path::new(&transaction.scratch_root).exists());
+        assert!(game.join(".gore-install-mutation.lock").exists());
+    }
+
+    #[test]
+    fn undeploy_cleanup_claim_cannot_use_pre_transaction_backup_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        let backup = bak_path(&live);
+        std::fs::write(&live, b"recorded-pristine-p").unwrap();
+        std::fs::write(&backup, b"foreign-backup-f").unwrap();
+        let recorded_pristine = format!("sha256:{:x}", Sha256::digest(b"recorded-pristine-p"));
+        let foreign = sha256_file(&backup).unwrap();
+        let transaction_id = "undeploy-claim-validation";
+        let scratch_guard = create_manager_transaction_root(&game, transaction_id).unwrap();
+        let scratch = scratch_guard.stable_path().to_path_buf();
+        drop(scratch_guard);
+        let holder = scratch.join(".gore-mod-cleanup-fixture");
+        let mut transaction = manager_recovery_transaction(
+            &scratch,
+            transaction_id,
+            ManagerMutationOperation::Undeploy,
+        );
+        transaction.pre_live_sha256.insert(
+            live.display().to_string(),
+            Some(sha256_file(&live).unwrap()),
+        );
+        transaction
+            .pre_backup_sha256
+            .insert(backup.display().to_string(), Some(foreign.clone()));
+        let record = DeployRecord {
+            owner: "manager".into(),
+            phase: DeployPhase::RecoveryRequired,
+            backups: vec![(
+                live.display().to_string(),
+                backup.display().to_string(),
+                true,
+            )],
+            deployed_hashes: BTreeMap::from([(
+                live.display().to_string(),
+                sha256_file(&live).unwrap(),
+            )]),
+            backup_hashes: BTreeMap::from([(backup.display().to_string(), recorded_pristine)]),
+            file_cleanup_claims: BTreeMap::from([(
+                backup.display().to_string(),
+                FileCleanupClaim {
+                    holder: holder.display().to_string(),
+                    expected_hashes: vec![foreign],
+                    restore_from: None,
+                    restore_hash: None,
+                },
+            )]),
+            recovery_transaction: Some(transaction),
+            ..Default::default()
+        };
+
+        let error = write_record_file(&game, &record).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("backup cleanup claim is not authorized"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&backup).unwrap(), b"foreign-backup-f");
+        assert!(!record_path(&game).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manager_file_holder_swap_preserves_foreign_tree_and_recovery_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let pak = game.join("G1R/Content/Paks/~mods/owned.pak");
+        std::fs::create_dir_all(pak.parent().unwrap()).unwrap();
+        std::fs::write(&pak, b"manager-pak").unwrap();
+        write_record_file(
+            &game,
+            &DeployRecord {
+                owner: "manager".into(),
+                managed_paks: vec![pak.display().to_string()],
+                deployed_hashes: BTreeMap::from([(
+                    pak.display().to_string(),
+                    sha256_file(&pak).unwrap(),
+                )]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let outside = dir.path().join("outside-file-holder");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("sentinel"), b"outside-safe").unwrap();
+        let hook_game = game.clone();
+        let hook_outside = outside.clone();
+        let detached_seen = Rc::new(RefCell::new(None));
+        let hook_detached_seen = detached_seen.clone();
+        inject_cleanup_holder_mutation(move || {
+            let holder = current_manager_cleanup_holder(&hook_game, ".gore-mod-cleanup-");
+            let detached = holder.with_file_name(".gore-mod-cleanup-detached-fixture");
+            std::fs::rename(&holder, &detached)
+                .map_err(io("detaching file cleanup holder in swap fixture"))?;
+            std::os::unix::fs::symlink(&hook_outside, &holder)
+                .map_err(io("installing file-holder swap fixture"))?;
+            *hook_detached_seen.borrow_mut() = Some(detached);
+            Ok(())
+        });
+
+        let error = undeploy(&game).unwrap_err();
+        let error_text = error.to_string();
+        assert!(
+            error_text.contains(".gore-mod-cleanup-")
+                && (error_text.contains("cleanup holder")
+                    || error_text
+                        .contains("deploy record path crosses a symlink or reparse point")),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(&pak).unwrap(), b"manager-pak");
+        assert_eq!(
+            std::fs::read(outside.join("sentinel")).unwrap(),
+            b"outside-safe"
+        );
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1);
+        assert!(detached_seen.borrow().as_ref().unwrap().is_dir());
+        assert!(record_path(&game).exists());
+        assert!(game.join(".gore-install-mutation.lock").exists());
+        assert!(current_manager_transaction_root(&game).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manager_ue4ss_holder_swap_preserves_foreign_tree_and_recovery_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let tree = game.join("G1R/Binaries/Win64/ue4ss/Mods/Owned");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tree.join("payload.txt"), b"manager-tree").unwrap();
+        write_record_file(
+            &game,
+            &DeployRecord {
+                owner: "manager".into(),
+                ue4ss_mod_dirs: vec![tree.display().to_string()],
+                ue4ss_tree_fingerprints: BTreeMap::from([(
+                    tree.display().to_string(),
+                    tree_fingerprint(&tree).unwrap(),
+                )]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let outside = dir.path().join("outside-ue4ss-holder");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("sentinel"), b"outside-safe").unwrap();
+        let hook_game = game.clone();
+        let hook_outside = outside.clone();
+        let detached_seen = Rc::new(RefCell::new(None));
+        let hook_detached_seen = detached_seen.clone();
+        inject_cleanup_holder_mutation(move || {
+            let holder = current_manager_cleanup_holder(&hook_game, ".gore-ue4ss-delete-");
+            let detached = holder.with_file_name(".gore-ue4ss-delete-detached-fixture");
+            std::fs::rename(&holder, &detached)
+                .map_err(io("detaching UE4SS cleanup holder in swap fixture"))?;
+            std::os::unix::fs::symlink(&hook_outside, &holder)
+                .map_err(io("installing UE4SS-holder swap fixture"))?;
+            *hook_detached_seen.borrow_mut() = Some(detached);
+            Ok(())
+        });
+
+        let error = undeploy(&game).unwrap_err();
+        let error_text = error.to_string();
+        assert!(
+            error_text.contains(".gore-ue4ss-delete-")
+                && (error_text.contains("cleanup holder")
+                    || error_text
+                        .contains("deploy record path crosses a symlink or reparse point")),
+            "{error}"
+        );
+        let detached = detached_seen.borrow();
+        let detached = detached.as_ref().unwrap();
+        assert_eq!(
+            std::fs::read(detached.join("payload.txt")).unwrap(),
+            b"manager-tree"
+        );
+        assert_eq!(
+            std::fs::read(outside.join("sentinel")).unwrap(),
+            b"outside-safe"
+        );
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1);
+        assert!(record_path(&game).exists());
+        assert!(game.join(".gore-install-mutation.lock").exists());
+        assert!(current_manager_transaction_root(&game).exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn retained_manager_holder_handle_blocks_windows_name_swap() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let pak = game.join("G1R/Content/Paks/~mods/owned.pak");
+        std::fs::create_dir_all(pak.parent().unwrap()).unwrap();
+        std::fs::write(&pak, b"manager-pak").unwrap();
+        write_record_file(
+            &game,
+            &DeployRecord {
+                owner: "manager".into(),
+                managed_paks: vec![pak.display().to_string()],
+                deployed_hashes: BTreeMap::from([(
+                    pak.display().to_string(),
+                    sha256_file(&pak).unwrap(),
+                )]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let hook_game = game.clone();
+        inject_cleanup_holder_mutation(move || {
+            let holder = current_manager_cleanup_holder(&hook_game, ".gore-mod-cleanup-");
+            let detached = holder.with_file_name(".gore-mod-cleanup-detached-fixture");
+            let error = std::fs::rename(&holder, &detached).unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(32));
+            Ok(())
+        });
+
+        undeploy(&game).unwrap();
+        assert!(!pak.exists());
+        assert!(!record_path(&game).exists());
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+        assert!(std::fs::read_dir(&game).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(MANAGER_TRANSACTION_PREFIX)));
+    }
+
+    #[test]
     fn rollback_preserves_external_file_that_replaced_our_publication() {
         let dir = tempfile::tempdir().unwrap();
         let prior = dir.path().join("prior.bin");
@@ -16229,7 +21342,7 @@ mod tests {
             backup: None,
         });
 
-        let failures = undo.rollback();
+        let failures = undo.rollback(None);
         assert_eq!(failures.len(), 1, "failures: {failures:?}");
         assert_eq!(std::fs::read(&live).unwrap(), b"external-race-winner");
         assert_eq!(std::fs::read(&snapshot_path).unwrap(), b"prior-state");
@@ -16440,6 +21553,597 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(original.exists());
+    }
+
+    fn manager_recovery_test_game(dir: &Path) -> PathBuf {
+        let game = dir.join("game");
+        std::fs::create_dir_all(game.join("G1R/Script")).unwrap();
+        std::fs::canonicalize(game).unwrap()
+    }
+
+    fn manager_recovery_transaction(
+        scratch: &Path,
+        transaction_id: &str,
+        operation: ManagerMutationOperation,
+    ) -> RecoveryTransaction {
+        RecoveryTransaction {
+            format: MANAGER_RECOVERY_FORMAT,
+            transaction_id: transaction_id.to_owned(),
+            operation,
+            step: RecoveryTransactionStep::Applying,
+            scratch_root: scratch.display().to_string(),
+            pre_live_sha256: BTreeMap::new(),
+            pre_backup_sha256: BTreeMap::new(),
+            pre_tree_fingerprints: BTreeMap::new(),
+        }
+    }
+
+    fn assert_interrupted_early_record_is_recoverable(
+        game: &Path,
+        operation: ManagerMutationOperation,
+        expected_outcome: ManagerInstallRecoveryOutcome,
+    ) {
+        let stored = read_record(game).unwrap().unwrap();
+        assert_eq!(stored.record.phase, DeployPhase::RecoveryRequired);
+        let transaction = stored.record.recovery_transaction.unwrap();
+        assert_eq!(transaction.operation, operation);
+        assert!(
+            Path::new(&transaction.scratch_root).is_dir(),
+            "transaction scratch was lost after record restoration failed"
+        );
+        assert!(game.join(".gore-install-mutation.lock").is_file());
+        assert_eq!(
+            probe_manager_install_recovery(game),
+            ManagerInstallRecoveryReadiness::AbandonedManager {
+                guard_id: transaction.transaction_id.clone(),
+            }
+        );
+
+        assert_eq!(
+            recover_manager_install(game, &transaction.transaction_id).unwrap(),
+            expected_outcome
+        );
+        assert!(!record_path(game).exists());
+        assert!(!Path::new(&transaction.scratch_root).exists());
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+        assert_eq!(
+            recover_manager_install(game, &transaction.transaction_id).unwrap(),
+            ManagerInstallRecoveryOutcome::AlreadyClean
+        );
+    }
+
+    #[test]
+    fn manager_apply_retains_scratch_when_early_record_restore_fails_after_publication() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let prior = DeployRecord {
+            mod_name: "Prior manager loadout".into(),
+            owner: "manager".into(),
+            ..Default::default()
+        };
+        write_record_file(&game, &prior).unwrap();
+        let prior = read_record(&game).unwrap();
+        fail_early_record_after_publish_and_restore(&record_path(&game));
+
+        let error = commit_plan(
+            &resolve_game_paths(&game),
+            &game,
+            DeployPlan::default(),
+            DeployRecord {
+                mod_name: "Replacement manager loadout".into(),
+                owner: "manager".into(),
+                ..Default::default()
+            },
+            prior,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            error.contains("after atomic publication"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("ROLLBACK_INCOMPLETE"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("intentionally retained for recovery"),
+            "unexpected error: {error}"
+        );
+        assert_interrupted_early_record_is_recoverable(
+            &game,
+            ManagerMutationOperation::Apply,
+            ManagerInstallRecoveryOutcome::RecoveredToPristine,
+        );
+    }
+
+    #[test]
+    fn manager_undeploy_retains_scratch_when_early_record_restore_fails_after_publication() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let prior = DeployRecord {
+            mod_name: "Manager loadout".into(),
+            owner: "manager".into(),
+            ..Default::default()
+        };
+        write_record_file(&game, &prior).unwrap();
+        fail_early_record_after_publish_and_restore(&record_path(&game));
+
+        let error = undeploy(&game).unwrap_err().to_string();
+
+        assert!(
+            error.contains("after atomic publication"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("ROLLBACK_INCOMPLETE"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("intentionally retained for recovery"),
+            "unexpected error: {error}"
+        );
+        assert_interrupted_early_record_is_recoverable(
+            &game,
+            ManagerMutationOperation::Undeploy,
+            ManagerInstallRecoveryOutcome::CompletedUndeployConfirmed,
+        );
+    }
+
+    #[test]
+    fn manager_install_recovery_binds_the_selected_stale_guard_before_clearing_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let lock = game.join(".gore-install-mutation.lock");
+        let guard =
+            gore_as::compile::InstallMutationGuard::acquire(&game, "gore-mod:manager-apply")
+                .unwrap();
+        let guard_id = guard.guard_id().to_owned();
+        assert_eq!(
+            probe_manager_install_recovery(&game),
+            ManagerInstallRecoveryReadiness::Active
+        );
+        guard.preserve_for_manual_recovery();
+
+        assert_eq!(
+            probe_manager_install_recovery(&game),
+            ManagerInstallRecoveryReadiness::AbandonedManager {
+                guard_id: guard_id.clone(),
+            }
+        );
+        assert_eq!(
+            recover_manager_install(&game, "different-valid-guard").unwrap(),
+            ManagerInstallRecoveryOutcome::InspectionFailed
+        );
+        assert!(
+            lock.exists(),
+            "a stale UI token must preserve recovery evidence"
+        );
+
+        assert_eq!(
+            recover_manager_install(&game, &guard_id).unwrap(),
+            ManagerInstallRecoveryOutcome::PreMutationLockCleared
+        );
+        assert!(!lock.exists());
+        assert_eq!(
+            recover_manager_install(&game, &guard_id).unwrap(),
+            ManagerInstallRecoveryOutcome::AlreadyClean
+        );
+    }
+
+    #[test]
+    fn manager_install_recovery_never_overlaps_compile_recovery_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let lock = game.join(".gore-install-mutation.lock");
+        let journal = game.join(".gore-as-compile-recovery");
+        let compile_backup =
+            game.join("G1R/Script/PrecompiledScript_Shipping.Cache.gore-compile-bak");
+        let guard =
+            gore_as::compile::InstallMutationGuard::acquire(&game, "gore-mod:manager-apply")
+                .unwrap();
+        let guard_id = guard.guard_id().to_owned();
+        std::fs::create_dir(&journal).unwrap();
+        std::fs::write(&compile_backup, b"compiler recovery bytes").unwrap();
+        guard.preserve_for_manual_recovery();
+
+        assert_eq!(
+            probe_manager_install_recovery(&game),
+            ManagerInstallRecoveryReadiness::CompileOrAmbiguous
+        );
+        assert_eq!(
+            recover_manager_install(&game, &guard_id).unwrap(),
+            ManagerInstallRecoveryOutcome::CompileRecoveryRequired
+        );
+        assert!(lock.exists());
+        assert!(journal.exists());
+        assert_eq!(
+            std::fs::read(&compile_backup).unwrap(),
+            b"compiler recovery bytes"
+        );
+
+        std::fs::remove_dir(&journal).unwrap();
+        std::fs::remove_file(&compile_backup).unwrap();
+        assert_eq!(
+            recover_manager_install(&game, &guard_id).unwrap(),
+            ManagerInstallRecoveryOutcome::PreMutationLockCleared
+        );
+        assert!(!lock.exists());
+    }
+
+    #[test]
+    fn manager_install_recovery_preserves_a_durably_completed_apply() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let lock = game.join(".gore-install-mutation.lock");
+        let guard =
+            gore_as::compile::InstallMutationGuard::acquire(&game, "gore-mod:manager-apply")
+                .unwrap();
+        let guard_id = guard.guard_id().to_owned();
+        let scratch_guard = create_manager_transaction_root(&game, &guard_id).unwrap();
+        let scratch = scratch_guard.stable_path().to_path_buf();
+        drop(scratch_guard);
+        let record = DeployRecord {
+            owner: "manager".into(),
+            recovery_transaction: Some(manager_recovery_transaction(
+                &scratch,
+                &guard_id,
+                ManagerMutationOperation::Apply,
+            )),
+            last_mutation_id: Some(guard_id.clone()),
+            phase: DeployPhase::Applied,
+            ..Default::default()
+        };
+        write_record_file(&game, &record).unwrap();
+        std::fs::write(scratch.join(".gore-live-stage-crash-fixture"), b"staged").unwrap();
+        guard.preserve_for_manual_recovery();
+
+        assert_eq!(
+            recover_manager_install(&game, &guard_id).unwrap(),
+            ManagerInstallRecoveryOutcome::CompletedApplyPreserved
+        );
+        let stored = read_record(&game).unwrap().unwrap();
+        assert_eq!(stored.record.phase, DeployPhase::Applied);
+        assert_eq!(
+            stored.record.last_mutation_id.as_deref(),
+            Some(guard_id.as_str())
+        );
+        assert!(!scratch.exists());
+        assert!(!lock.exists());
+    }
+
+    #[test]
+    fn manager_install_recovery_restores_pristine_bytes_and_leaves_no_residue() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        let backup = bak_path(&live);
+        std::fs::write(&live, b"manager-deployed").unwrap();
+        std::fs::write(&backup, b"pristine").unwrap();
+        let pristine_hash = sha256_file(&backup).unwrap();
+
+        let guard =
+            gore_as::compile::InstallMutationGuard::acquire(&game, "gore-mod:manager-apply")
+                .unwrap();
+        let guard_id = guard.guard_id().to_owned();
+        let scratch_guard = create_manager_transaction_root(&game, &guard_id).unwrap();
+        let scratch = scratch_guard.stable_path().to_path_buf();
+        drop(scratch_guard);
+        let mut transaction =
+            manager_recovery_transaction(&scratch, &guard_id, ManagerMutationOperation::Apply);
+        transaction
+            .pre_live_sha256
+            .insert(live.display().to_string(), Some(pristine_hash.clone()));
+        transaction
+            .pre_backup_sha256
+            .insert(backup.display().to_string(), None);
+        let record = DeployRecord {
+            owner: "manager".into(),
+            backups: vec![(
+                live.display().to_string(),
+                backup.display().to_string(),
+                true,
+            )],
+            deployed_hashes: BTreeMap::from([(
+                live.display().to_string(),
+                content_hash(b"manager-deployed"),
+            )]),
+            backup_hashes: BTreeMap::from([(backup.display().to_string(), pristine_hash)]),
+            recovery_transaction: Some(transaction),
+            phase: DeployPhase::RecoveryRequired,
+            ..Default::default()
+        };
+        write_record_file(&game, &record).unwrap();
+        guard.preserve_for_manual_recovery();
+
+        assert_eq!(
+            recover_manager_install(&game, &guard_id).unwrap(),
+            ManagerInstallRecoveryOutcome::RecoveredToPristine
+        );
+        assert_eq!(std::fs::read(&live).unwrap(), b"pristine");
+        assert!(!backup.exists());
+        assert!(!record_path(&game).exists());
+        assert!(!scratch.exists());
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+    }
+
+    #[test]
+    fn manager_recovery_only_recreates_live_when_pre_live_was_present() {
+        for (case, pre_live_was_present) in [("missing-before-apply", false), ("present", true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let game = manager_recovery_test_game(&dir.path().join(case));
+            let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+            let backup = bak_path(&live);
+            std::fs::write(&backup, b"authenticated-pristine").unwrap();
+            let pristine_hash = sha256_file(&backup).unwrap();
+
+            let guard =
+                gore_as::compile::InstallMutationGuard::acquire(&game, "gore-mod:manager-apply")
+                    .unwrap();
+            let guard_id = guard.guard_id().to_owned();
+            let scratch_guard = create_manager_transaction_root(&game, &guard_id).unwrap();
+            let scratch = scratch_guard.stable_path().to_path_buf();
+            drop(scratch_guard);
+            let mut transaction =
+                manager_recovery_transaction(&scratch, &guard_id, ManagerMutationOperation::Apply);
+            transaction.pre_live_sha256.insert(
+                live.display().to_string(),
+                pre_live_was_present.then(|| pristine_hash.clone()),
+            );
+            transaction
+                .pre_backup_sha256
+                .insert(backup.display().to_string(), Some(pristine_hash.clone()));
+            let record = DeployRecord {
+                owner: "manager".into(),
+                backups: vec![(
+                    live.display().to_string(),
+                    backup.display().to_string(),
+                    true,
+                )],
+                deployed_hashes: BTreeMap::from([(
+                    live.display().to_string(),
+                    content_hash(b"manager-output"),
+                )]),
+                backup_hashes: BTreeMap::from([(backup.display().to_string(), pristine_hash)]),
+                recovery_transaction: Some(transaction),
+                phase: DeployPhase::RecoveryRequired,
+                ..Default::default()
+            };
+            write_record_file(&game, &record).unwrap();
+            guard.preserve_for_manual_recovery();
+
+            assert_eq!(
+                recover_manager_install(&game, &guard_id).unwrap(),
+                ManagerInstallRecoveryOutcome::RecoveredToPristine
+            );
+            if pre_live_was_present {
+                assert_eq!(std::fs::read(&live).unwrap(), b"authenticated-pristine");
+            } else {
+                assert!(
+                    !live.exists(),
+                    "Some(None) must preserve the pre-operation missing-live state"
+                );
+            }
+            assert!(!backup.exists());
+            assert!(!record_path(&game).exists());
+            assert!(!scratch.exists());
+            assert!(!game.join(".gore-install-mutation.lock").exists());
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn manager_recovery_retains_a_valid_ue4ss_holder_when_the_live_source_is_only_partial() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let original = game.join("G1R/Binaries/Win64/ue4ss/Mods/Owned");
+        std::fs::create_dir_all(&original).unwrap();
+        std::fs::write(original.join("one.txt"), b"one").unwrap();
+        std::fs::write(original.join("two.txt"), b"two").unwrap();
+        let expected = tree_fingerprint(&original).unwrap();
+
+        let guard =
+            gore_as::compile::InstallMutationGuard::acquire(&game, "gore-mod:manager-undeploy")
+                .unwrap();
+        let guard_id = guard.guard_id().to_owned();
+        let scratch_guard = create_manager_transaction_root(&game, &guard_id).unwrap();
+        let scratch = scratch_guard.stable_path().to_path_buf();
+        drop(scratch_guard);
+        let holder = scratch.join(".gore-ue4ss-delete-partial-source");
+        std::fs::create_dir(&holder).unwrap();
+        std::fs::write(holder.join("one.txt"), b"one").unwrap();
+        std::fs::write(holder.join("two.txt"), b"two").unwrap();
+        assert_eq!(tree_fingerprint(&holder).unwrap(), expected);
+        std::fs::remove_file(original.join("one.txt")).unwrap();
+
+        let mut transaction =
+            manager_recovery_transaction(&scratch, &guard_id, ManagerMutationOperation::Undeploy);
+        transaction
+            .pre_tree_fingerprints
+            .insert(original.display().to_string(), Some(expected.clone()));
+        let record = DeployRecord {
+            owner: "manager".into(),
+            phase: DeployPhase::RecoveryRequired,
+            ue4ss_mod_dirs: vec![original.display().to_string()],
+            stale_ue4ss_dirs: vec![holder.display().to_string()],
+            ue4ss_tree_fingerprints: BTreeMap::from([
+                (original.display().to_string(), expected.clone()),
+                (holder.display().to_string(), expected),
+            ]),
+            ue4ss_cleanup_claims: BTreeMap::from([(
+                original.display().to_string(),
+                holder.display().to_string(),
+            )]),
+            recovery_transaction: Some(transaction),
+            ..Default::default()
+        };
+        write_record_file(&game, &record).unwrap();
+        let record_before = std::fs::read(record_path(&game)).unwrap();
+        guard.preserve_for_manual_recovery();
+
+        let error = recover_manager_install(&game, &guard_id).unwrap_err();
+        assert!(
+            error.to_string().contains("only partially removed"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read(original.join("two.txt")).unwrap(), b"two");
+        assert_eq!(std::fs::read(holder.join("one.txt")).unwrap(), b"one");
+        assert_eq!(std::fs::read(holder.join("two.txt")).unwrap(), b"two");
+        assert_eq!(std::fs::read(record_path(&game)).unwrap(), record_before);
+        assert!(game.join(".gore-install-mutation.lock").exists());
+        assert!(scratch.exists());
+
+        std::fs::remove_dir_all(&original).unwrap();
+        assert_eq!(
+            recover_manager_install(&game, &guard_id).unwrap(),
+            ManagerInstallRecoveryOutcome::CompletedUndeployConfirmed
+        );
+        assert!(!holder.exists());
+        assert!(!record_path(&game).exists());
+        assert!(!scratch.exists());
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+    }
+
+    #[test]
+    fn manager_install_recovery_accepts_the_bound_pre_refresh_backup_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let live = game.join("G1R/Script/PrecompiledScript_Shipping.Cache");
+        let backup = bak_path(&live);
+        std::fs::write(&live, b"new-pristine").unwrap();
+        std::fs::write(&backup, b"old-stale-backup").unwrap();
+        let new_pristine_hash = sha256_file(&live).unwrap();
+        let old_backup_hash = sha256_file(&backup).unwrap();
+
+        let guard =
+            gore_as::compile::InstallMutationGuard::acquire(&game, "gore-mod:manager-apply")
+                .unwrap();
+        let guard_id = guard.guard_id().to_owned();
+        let scratch_guard = create_manager_transaction_root(&game, &guard_id).unwrap();
+        let scratch = scratch_guard.stable_path().to_path_buf();
+        drop(scratch_guard);
+        let mut transaction =
+            manager_recovery_transaction(&scratch, &guard_id, ManagerMutationOperation::Apply);
+        transaction
+            .pre_live_sha256
+            .insert(live.display().to_string(), Some(new_pristine_hash.clone()));
+        transaction
+            .pre_backup_sha256
+            .insert(backup.display().to_string(), Some(old_backup_hash));
+        let record = DeployRecord {
+            owner: "manager".into(),
+            backups: vec![(
+                live.display().to_string(),
+                backup.display().to_string(),
+                true,
+            )],
+            backup_hashes: BTreeMap::from([(backup.display().to_string(), new_pristine_hash)]),
+            recovery_transaction: Some(transaction),
+            phase: DeployPhase::RecoveryRequired,
+            ..Default::default()
+        };
+        write_record_file(&game, &record).unwrap();
+        guard.preserve_for_manual_recovery();
+
+        assert_eq!(
+            recover_manager_install(&game, &guard_id).unwrap(),
+            ManagerInstallRecoveryOutcome::RecoveredToPristine
+        );
+        assert_eq!(std::fs::read(&live).unwrap(), b"new-pristine");
+        assert!(!backup.exists());
+        assert!(!record_path(&game).exists());
+        assert!(!scratch.exists());
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+    }
+
+    #[test]
+    fn manager_install_recovery_fails_closed_on_an_unknown_scratch_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let lock = game.join(".gore-install-mutation.lock");
+        let guard =
+            gore_as::compile::InstallMutationGuard::acquire(&game, "gore-mod:manager-apply")
+                .unwrap();
+        let guard_id = guard.guard_id().to_owned();
+        let scratch_guard = create_manager_transaction_root(&game, &guard_id).unwrap();
+        let scratch = scratch_guard.stable_path().to_path_buf();
+        drop(scratch_guard);
+        let record = DeployRecord {
+            owner: "manager".into(),
+            recovery_transaction: Some(manager_recovery_transaction(
+                &scratch,
+                &guard_id,
+                ManagerMutationOperation::Apply,
+            )),
+            last_mutation_id: Some(guard_id.clone()),
+            phase: DeployPhase::Applied,
+            ..Default::default()
+        };
+        write_record_file(&game, &record).unwrap();
+        let foreign = scratch.join("foreign.txt");
+        std::fs::write(&foreign, b"not transaction-owned").unwrap();
+        guard.preserve_for_manual_recovery();
+
+        let error = recover_manager_install(&game, &guard_id).unwrap_err();
+        assert!(error.to_string().contains("unknown child"), "{error}");
+        assert!(foreign.exists());
+        assert!(record_path(&game).exists());
+        assert!(
+            lock.exists(),
+            "cleanup failure must retain the stale lock evidence"
+        );
+
+        std::fs::remove_file(foreign).unwrap();
+        assert_eq!(
+            recover_manager_install(&game, &guard_id).unwrap(),
+            ManagerInstallRecoveryOutcome::CompletedApplyPreserved
+        );
+        assert!(!scratch.exists());
+        assert!(!lock.exists());
+    }
+
+    #[test]
+    fn manager_install_recovery_rejects_scratch_root_type_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = manager_recovery_test_game(dir.path());
+        let lock = game.join(".gore-install-mutation.lock");
+        let guard =
+            gore_as::compile::InstallMutationGuard::acquire(&game, "gore-mod:manager-apply")
+                .unwrap();
+        let guard_id = guard.guard_id().to_owned();
+        let scratch_guard = create_manager_transaction_root(&game, &guard_id).unwrap();
+        let scratch = scratch_guard.stable_path().to_path_buf();
+        let record = DeployRecord {
+            owner: "manager".into(),
+            recovery_transaction: Some(manager_recovery_transaction(
+                &scratch,
+                &guard_id,
+                ManagerMutationOperation::Apply,
+            )),
+            phase: DeployPhase::RecoveryRequired,
+            ..Default::default()
+        };
+        write_record_file(&game, &record).unwrap();
+        drop(scratch_guard);
+        let detached = game.join("detached-real-scratch");
+        std::fs::rename(&scratch, &detached).unwrap();
+        std::fs::write(detached.join("sentinel"), b"real-scratch-safe").unwrap();
+        std::fs::write(&scratch, b"foreign-type-replacement").unwrap();
+        guard.preserve_for_manual_recovery();
+
+        let error = recover_manager_install(&game, &guard_id).unwrap_err();
+        assert!(error.to_string().contains("real directory"), "{error}");
+        assert_eq!(
+            std::fs::read(&scratch).unwrap(),
+            b"foreign-type-replacement"
+        );
+        assert_eq!(
+            std::fs::read(detached.join("sentinel")).unwrap(),
+            b"real-scratch-safe"
+        );
+        assert!(record_path(&game).exists());
+        assert!(lock.exists());
     }
 
     #[test]

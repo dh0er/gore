@@ -307,6 +307,7 @@ mod tests {
             state: PreflightStateV1::Unknown,
             code: "injected_test",
             action: "none",
+            action_token: None,
             detail: "x".repeat(MAX_RESPONSE_BYTES),
             items: Vec::new(),
         };

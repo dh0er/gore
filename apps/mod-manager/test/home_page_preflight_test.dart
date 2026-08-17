@@ -13,6 +13,7 @@ import 'package:gore_manager/core/providers.dart';
 import 'package:gore_manager/home_page.dart';
 import 'package:gore_manager/l10n/app_localizations.dart';
 import 'package:gore_manager/preflight/domain/preflight_notifier.dart';
+import 'package:gore_manager/status/ui/status_details_dialog.dart';
 import 'package:path/path.dart' as p;
 
 const _exeA = 'C:/games/a/G1R/Binaries/Win64/G1R-Win64-Shipping.exe';
@@ -39,7 +40,9 @@ SharedConfig _config(String? gamePath) {
 Map<String, Object?> _preflight({
   String? findingId,
   String findingState = 'problem',
+  String findingCode = 'test_finding',
   String findingAction = 'none',
+  String? findingActionToken,
   String findingDetail = 'Setup evidence needs attention.',
   List<String> findingItems = const [],
   String deploymentState = 'ok',
@@ -70,7 +73,7 @@ Map<String, Object?> _preflight({
                 ? 'unverified'
                 : 'ok',
             'code': id == findingId
-                ? 'test_finding'
+                ? findingCode
                 : id == 'write_access'
                 ? 'unverified_read_only'
                 : 'ready',
@@ -81,6 +84,8 @@ Map<String, Object?> _preflight({
                 : id == 'write_access'
                 ? 'verify_during_apply'
                 : 'none',
+            if (id == findingId && findingActionToken != null)
+              'action_token': findingActionToken,
             'detail': id == findingId ? findingDetail : 'ready: $id',
             'items': id == findingId ? findingItems : <String>[],
           },
@@ -97,8 +102,12 @@ class _PreflightCore implements GoreCoreFfiService {
 
   Map<String, Object?> preflight;
   Map<String, Object?> status;
+  String recoveryOutcome = 'recovered_to_pristine';
+  String? recoveryError;
   bool blockNextPreflight = false;
   Completer<Map<String, Object?>>? blockedPreflight;
+  bool blockNextRecovery = false;
+  Completer<Map<String, Object?>>? blockedRecovery;
   final calls = <({String command, Map<String, Object?> payload})>[];
 
   @override
@@ -134,6 +143,7 @@ class _PreflightCore implements GoreCoreFfiService {
       'mgr_analyze' => {'ok': true, 'conflicts': <Object?>[]},
       'mgr_status' => {'ok': true, 'status': status},
       'mgr_preflight_v1' => await _runPreflight(),
+      'mgr_recover_install_v1' => await _runRecovery(),
       'mgr_apply' => {'ok': true, 'report': const {}},
       'mgr_undeploy_all' => {'ok': true, 'removed': true},
       _ => {'ok': true},
@@ -145,6 +155,23 @@ class _PreflightCore implements GoreCoreFfiService {
     blockNextPreflight = false;
     final blocked = Completer<Map<String, Object?>>();
     blockedPreflight = blocked;
+    return blocked.future;
+  }
+
+  Future<Map<String, Object?>> _runRecovery() {
+    final error = recoveryError;
+    if (error != null) {
+      return Future.value({
+        'ok': false,
+        'error': {'code': 'IO', 'message': error},
+      });
+    }
+    if (!blockNextRecovery) {
+      return Future.value({'ok': true, 'outcome': recoveryOutcome});
+    }
+    blockNextRecovery = false;
+    final blocked = Completer<Map<String, Object?>>();
+    blockedRecovery = blocked;
     return blocked.future;
   }
 
@@ -552,9 +579,30 @@ void main() {
     await tester.pumpWidget(_home(core));
     await tester.pumpAndSettle();
     expect(core.count('mgr_preflight_v1'), 1);
+    final initialPreflight = ProviderScope.containerOf(
+      tester.element(find.byType(HomePage)),
+    ).read(preflightProvider);
+    expect(initialPreflight.authoritative, isTrue);
+    expect(initialPreflight.busy, isFalse);
+    expect(initialPreflight.pending, isFalse);
+    expect(
+      initialPreflight.report?.primarySetupFinding?.rawAction,
+      'recover_deployment',
+    );
+    expect(
+      find.byKey(const ValueKey('preflight-status-action')),
+      findsOneWidget,
+    );
 
     await tester.tap(find.byKey(const ValueKey('preflight-status-action')));
     await tester.pumpAndSettle();
+    final statusDialog = tester.widget<StatusDetailsDialog>(
+      find.byType(StatusDetailsDialog),
+    );
+    expect(
+      statusDialog.deploymentRecoveryGeneration,
+      initialPreflight.generation,
+    );
     core.preflight = _preflight();
     core.status = const {'state': 'nothing_deployed'};
     await tester.tap(
@@ -565,12 +613,102 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(core.count('mgr_undeploy_all'), 1);
+    expect(core.count('mgr_recover_install_v1'), 0);
     expect(core.count('mgr_preflight_v1'), 2);
     expect(
       find.textContaining('Interrupted deployment needs review.'),
       findsNothing,
     );
   });
+
+  testWidgets(
+    'Manager recovery is the only recovery route for recovery-required status',
+    (tester) async {
+      final core = _PreflightCore(
+        status: const {'state': 'recovery_required'},
+        preflight: _preflight(
+          findingId: 'install_mutation',
+          findingCode: 'manager_mutation_recovery_required',
+          findingAction: 'recover_manager_mutation',
+          findingActionToken: 'guard-a-17',
+        ),
+      );
+      await tester.pumpWidget(_home(core));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('preflight-manager-recovery-action')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('status-details-trigger')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('status-details-action-recover')),
+        findsNothing,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('status-details-action-close')),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byKey(const ValueKey('preflight-manager-recovery-action')),
+      );
+      await tester.pumpAndSettle();
+      core.preflight = _preflight();
+      await tester.tap(
+        find.byKey(const ValueKey('preflight-manager-recovery-confirm')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(core.count('mgr_recover_install_v1'), 1);
+      expect(core.count('mgr_undeploy_all'), 0);
+    },
+  );
+
+  testWidgets(
+    'deployment recovery confirmation cannot use a replaced preflight generation',
+    (tester) async {
+      final core = _PreflightCore(
+        status: const {'state': 'recovery_required'},
+        preflight: _preflight(
+          findingId: 'install_mutation',
+          findingAction: 'recover_deployment',
+        ),
+      );
+      await tester.pumpWidget(_home(core));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('preflight-status-action')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('status-details-action-recover')),
+      );
+      await tester.pumpAndSettle();
+
+      core.preflight = _preflight(
+        findingId: 'install_mutation',
+        findingCode: 'manager_mutation_recovery_required',
+        findingAction: 'recover_manager_mutation',
+        findingActionToken: 'guard-b-18',
+      );
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(HomePage)),
+      );
+      container.read(preflightProvider.notifier).retry();
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Recover'));
+      await tester.pumpAndSettle();
+
+      expect(core.count('mgr_undeploy_all'), 0);
+      expect(core.count('mgr_recover_install_v1'), 0);
+      expect(
+        find.byKey(const ValueKey('preflight-manager-recovery-action')),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('recovery hint opens existing status UI without mutating', (
     tester,
@@ -648,6 +786,316 @@ void main() {
       expect(core.count('mgr_undeploy_all'), 0);
     },
   );
+
+  testWidgets(
+    'bound interrupted Manager recovery confirms, reloads all views, and reports its outcome',
+    (tester) async {
+      final core = _PreflightCore(
+        preflight: _preflight(
+          findingId: 'install_mutation',
+          findingCode: 'manager_mutation_recovery_required',
+          findingAction: 'recover_manager_mutation',
+          findingActionToken: 'guard-a-17',
+          findingDetail: 'An interrupted Manager Apply can be recovered.',
+        ),
+      );
+      await tester.pumpWidget(_home(core));
+      await tester.pumpAndSettle();
+
+      final initialLibraryReads = core.count('mgr_library_list');
+      final initialStatusReads = core.count('mgr_status');
+      final initialPreflightReads = core.count('mgr_preflight_v1');
+      final initialConflictReads = core.count('mgr_analyze');
+      final actionFinder = find.byKey(
+        const ValueKey('preflight-manager-recovery-action'),
+      );
+      final action = tester.widget<TextButton>(actionFinder);
+      action.focusNode!.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('preflight-manager-recovery-dialog')),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Savegames are never changed'),
+        findsOneWidget,
+      );
+
+      // The next preflight read must prove that recovery cleared the finding.
+      core.preflight = _preflight();
+      await tester.tap(
+        find.byKey(const ValueKey('preflight-manager-recovery-confirm')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(core.count('mgr_recover_install_v1'), 1);
+      final recoveryCall = core.calls.singleWhere(
+        (call) => call.command == 'mgr_recover_install_v1',
+      );
+      expect(recoveryCall.payload, {
+        'game_root': r'C:\games\a',
+        'expected_guard_id': 'guard-a-17',
+      });
+      expect(core.count('mgr_library_list'), greaterThan(initialLibraryReads));
+      expect(core.count('mgr_status'), greaterThan(initialStatusReads));
+      expect(
+        core.count('mgr_preflight_v1'),
+        greaterThan(initialPreflightReads),
+      );
+      expect(core.count('mgr_analyze'), greaterThan(initialConflictReads));
+      expect(
+        find.textContaining('recorded baseline state was restored'),
+        findsOneWidget,
+      );
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'mod-manager-status-details',
+      );
+    },
+  );
+
+  testWidgets('manager recovery without its opaque token stays read-only', (
+    tester,
+  ) async {
+    final core = _PreflightCore(
+      preflight: _preflight(
+        findingId: 'install_mutation',
+        findingCode: 'manager_mutation_recovery_required',
+        findingAction: 'recover_manager_mutation',
+      ),
+    );
+    await tester.pumpWidget(_home(core));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('preflight-manager-recovery-action')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('preflight-retry-action')),
+      findsOneWidget,
+    );
+    expect(core.count('mgr_recover_install_v1'), 0);
+  });
+
+  testWidgets('busy recovery outcome is reported without claiming success', (
+    tester,
+  ) async {
+    final core = _PreflightCore(
+      preflight: _preflight(
+        findingId: 'install_mutation',
+        findingCode: 'manager_mutation_recovery_required',
+        findingAction: 'recover_manager_mutation',
+        findingActionToken: 'guard-a-17',
+      ),
+    )..recoveryOutcome = 'busy';
+    await tester.pumpWidget(_home(core));
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey('preflight-manager-recovery-action')),
+    );
+    await tester.pumpAndSettle();
+    core.preflight = _preflight(
+      findingId: 'install_mutation',
+      findingAction: 'wait_for_install_mutation',
+      findingDetail: 'The operation is active again.',
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('preflight-manager-recovery-confirm')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('operation is active again'), findsWidgets);
+    expect(
+      find.textContaining('recorded baseline state was restored'),
+      findsNothing,
+    );
+    expect(core.count('mgr_recover_install_v1'), 1);
+  });
+
+  testWidgets(
+    'failed manager recovery survives reload as a localized bounded error',
+    (tester) async {
+      final core =
+          _PreflightCore(
+              preflight: _preflight(
+                findingId: 'install_mutation',
+                findingCode: 'manager_mutation_recovery_required',
+                findingAction: 'recover_manager_mutation',
+                findingActionToken: 'guard-a-17',
+              ),
+            )
+            ..recoveryError =
+                'recovery refused\n${List<String>.filled(700, 'x').join()}';
+      await tester.pumpWidget(_home(core));
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byKey(const ValueKey('preflight-manager-recovery-action')),
+      );
+      await tester.pumpAndSettle();
+      core.preflight = _preflight();
+      await tester.tap(
+        find.byKey(const ValueKey('preflight-manager-recovery-confirm')),
+      );
+      await tester.pumpAndSettle();
+
+      final feedback = tester.widget<Text>(
+        find.textContaining('Recovery could not be completed'),
+      );
+      expect(feedback.data, contains('recovery refused x'));
+      expect(feedback.data, isNot(contains('\n')));
+      expect(feedback.data, endsWith('…'));
+      expect(core.count('mgr_library_list'), greaterThan(1));
+      expect(core.count('mgr_status'), greaterThan(1));
+      expect(core.count('mgr_preflight_v1'), greaterThan(1));
+      expect(core.count('mgr_analyze'), greaterThan(1));
+    },
+  );
+
+  testWidgets('manager recovery awaits the requested preflight generation', (
+    tester,
+  ) async {
+    final interrupted = _preflight(
+      findingId: 'install_mutation',
+      findingCode: 'manager_mutation_recovery_required',
+      findingAction: 'recover_manager_mutation',
+      findingActionToken: 'guard-a-17',
+    );
+    final core = _PreflightCore(preflight: interrupted);
+    await tester.pumpWidget(_home(core));
+    await tester.pumpAndSettle();
+    final initialPreflightReads = core.count('mgr_preflight_v1');
+
+    final actionFinder = find.byKey(
+      const ValueKey('preflight-manager-recovery-action'),
+    );
+    final action = tester.widget<TextButton>(actionFinder);
+    action.focusNode!.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    core.blockNextPreflight = true;
+    await tester.tap(
+      find.byKey(const ValueKey('preflight-manager-recovery-confirm')),
+    );
+    while (core.blockedPreflight == null) {
+      await tester.pump();
+    }
+    await tester.pump();
+
+    expect(
+      find.textContaining('recorded baseline state was restored'),
+      findsNothing,
+    );
+    expect(core.count('mgr_preflight_v1'), initialPreflightReads + 1);
+
+    core.blockedPreflight!.complete(interrupted);
+    await tester.pumpAndSettle();
+
+    expect(core.count('mgr_preflight_v1'), initialPreflightReads + 2);
+    expect(
+      find.textContaining('recorded baseline state was restored'),
+      findsOneWidget,
+    );
+    expect(action.focusNode!.hasFocus, isTrue);
+  });
+
+  testWidgets('recovery focus never moves from old token A to new token B', (
+    tester,
+  ) async {
+    final core = _PreflightCore(
+      preflight: _preflight(
+        findingId: 'install_mutation',
+        findingCode: 'manager_mutation_recovery_required',
+        findingAction: 'recover_manager_mutation',
+        findingActionToken: 'guard-a-17',
+      ),
+    )..recoveryOutcome = 'busy';
+    await tester.pumpWidget(_home(core));
+    await tester.pumpAndSettle();
+
+    final actionFinder = find.byKey(
+      const ValueKey('preflight-manager-recovery-action'),
+    );
+    final oldAction = tester.widget<TextButton>(actionFinder);
+    oldAction.focusNode!.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    core.preflight = _preflight(
+      findingId: 'install_mutation',
+      findingCode: 'manager_mutation_recovery_required',
+      findingAction: 'recover_manager_mutation',
+      findingActionToken: 'guard-b-18',
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('preflight-manager-recovery-confirm')),
+    );
+    await tester.pumpAndSettle();
+
+    final newAction = tester.widget<TextButton>(actionFinder);
+    expect(identical(newAction.focusNode, oldAction.focusNode), isTrue);
+    expect(newAction.focusNode!.hasFocus, isFalse);
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'mod-manager-status-details',
+    );
+    expect(core.count('mgr_recover_install_v1'), 1);
+  });
+
+  testWidgets('confirmation cannot use a stale finding or replacement token', (
+    tester,
+  ) async {
+    final core = _PreflightCore(
+      preflight: _preflight(
+        findingId: 'install_mutation',
+        findingCode: 'manager_mutation_recovery_required',
+        findingAction: 'recover_manager_mutation',
+        findingActionToken: 'guard-a-17',
+      ),
+    );
+    await tester.pumpWidget(_home(core));
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey('preflight-manager-recovery-action')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('preflight-manager-recovery-dialog')),
+      findsOneWidget,
+    );
+
+    core.preflight = _preflight(
+      findingId: 'install_mutation',
+      findingCode: 'manager_mutation_recovery_required',
+      findingAction: 'recover_manager_mutation',
+      findingActionToken: 'guard-b-18',
+    );
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(HomePage)),
+    );
+    container.read(preflightProvider.notifier).retry();
+    await container.read(preflightProvider.notifier).refresh();
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey('preflight-manager-recovery-confirm')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(core.count('mgr_recover_install_v1'), 0);
+    expect(
+      find.byKey(const ValueKey('preflight-manager-recovery-action')),
+      findsOneWidget,
+    );
+  });
 
   testWidgets(
     'active or retained install lock opens safe guidance and only rechecks',
@@ -995,4 +1443,52 @@ void main() {
     expect(find.text('Installation recovery'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'compact German 200 percent keeps manager recovery confirmation reachable',
+    (tester) async {
+      tester.view.physicalSize = const Size(1000, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final core = _PreflightCore(
+        preflight: _preflight(
+          findingId: 'install_mutation',
+          findingCode: 'manager_mutation_recovery_required',
+          findingAction: 'recover_manager_mutation',
+          findingActionToken: 'guard-a-17',
+        ),
+      );
+
+      await tester.pumpWidget(
+        _home(
+          core,
+          textScaler: const TextScaler.linear(2),
+          locale: const Locale('de'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(
+        find.byKey(const ValueKey('preflight-manager-recovery-action')),
+      );
+      await tester.pumpAndSettle();
+
+      tester.view.physicalSize = const Size(700, 460);
+      await tester.pumpAndSettle();
+
+      final confirm = find.byKey(
+        const ValueKey('preflight-manager-recovery-confirm'),
+      );
+      expect(confirm, findsOneWidget);
+      expect(
+        tester
+            .getRect(confirm)
+            .overlaps(Offset.zero & tester.view.physicalSize),
+        isTrue,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

@@ -83,6 +83,49 @@ class AppLocalizationsPl extends AppLocalizations {
   String get installRecoveryEvidence => 'Wykryte dane odzyskiwania';
 
   @override
+  String get managerRecoveryTitle => 'Odzyskaj przerwaną operację Menedżera';
+
+  @override
+  String get managerRecoveryConfirm =>
+      'GORE wykrył jednoznacznie przerwaną operację Menedżera. Kontynuuj tylko wtedy, gdy chcesz, aby GORE sprawdził zapisaną operację i przywrócił instalację do znanego stanu. Zapisy gry nigdy nie są zmieniane.';
+
+  @override
+  String get managerRecoveryAlreadyClean =>
+      'Przerwana operacja była już rozwiązana. Instalacja została sprawdzona ponownie.';
+
+  @override
+  String get managerRecoveryBusy =>
+      'Operacja jest ponownie aktywna. Niczego nie zmieniono; poczekaj na jej zakończenie i sprawdź ponownie.';
+
+  @override
+  String get managerRecoveryLockCleared =>
+      'Przerwana operacja nie zdążyła zmienić instalacji. Jej nieaktualna blokada została bezpiecznie usunięta.';
+
+  @override
+  String get managerRecoveryRestoredPristine =>
+      'Przerwana zmiana została cofnięta, a zapisany stan bazowy instalacji został przywrócony.';
+
+  @override
+  String get managerRecoveryApplyPreserved =>
+      'Stosowanie było już zakończone. Zapisany stan został zachowany, a status sprawdzony ponownie.';
+
+  @override
+  String get managerRecoveryUndeployConfirmed =>
+      'Usuwanie było zakończone. Pozostałe dane transakcji zostały uprzątnięte, a status sprawdzony ponownie.';
+
+  @override
+  String get managerRecoveryCompileRequired =>
+      'To dotyczy odzyskiwania kompilacji skryptów. Menedżer niczego nie zmienił; sprawdź pomoc odzyskiwania.';
+
+  @override
+  String get managerRecoveryInspectionFailed =>
+      'GORE nie mógł bezpiecznie sprawdzić przerwanej operacji. Niczego nie zmieniono; sprawdź bieżące szczegóły odzyskiwania.';
+
+  @override
+  String get managerRecoveryFailed =>
+      'Nie udało się zakończyć odzyskiwania. GORE próbował ponownie sprawdzić instalację, ale jej bieżący stan może być nieznany. Przed kolejną próbą sprawdź stan.';
+
+  @override
   String get statusUnknown => 'Nieznany';
 
   @override

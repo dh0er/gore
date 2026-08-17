@@ -59,6 +59,21 @@ Map<String, Object?> _libraryList({String firstName = 'Better Torches'}) => {
   },
 };
 
+Map<String, Object?> _deploymentRecoveryPreflight() {
+  final response = fakeHealthyManagerPreflightResponse();
+  final preflight = response['preflight']! as Map<String, Object?>;
+  final checks = preflight['checks']! as List<Object?>;
+  checks[4] = {
+    'id': 'install_mutation',
+    'state': 'problem',
+    'code': 'deployment_recovery_required',
+    'action': 'recover_deployment',
+    'detail': 'Interrupted deployment needs recovery.',
+    'items': <String>[],
+  };
+  return response;
+}
+
 /// Mutable native-core stand-in for the remove flow. It returns a library
 /// without mod-a after a successful mgr_remove, matching the real FFI contract.
 class _RemoveCore implements GoreCoreFfiService {
@@ -1157,6 +1172,7 @@ void main() {
           'ok': true,
           'status': {'state': 'recovery_required'},
         },
+        'mgr_preflight_v1': _deploymentRecoveryPreflight(),
         'mgr_undeploy_all': {'ok': true, 'removed': 1},
       },
     );

@@ -34,6 +34,11 @@ portable builds are deliberately updater-free.
 - **Apply** declaratively: full-recompute the modded state from a pristine base
   and deploy the whole enabled set (backups first), or **undeploy all** to
   restore.
+- **Recover an interrupted Manager change** after confirmation when the native
+  setup check can identify a clearly abandoned Manager operation. Active
+  changes stay on the wait path. Script-build recovery and recovery data that
+  GORE cannot identify stay in recovery help. Do not delete the installation
+  lock by hand; check the status again before using Undeploy.
 - **Inspect recorded ownership evidence** in deployment details for an exact
   Manager-owned record: replaced files, pristine backups, additive containers,
   UE4SS directories, and recovery paths. These bounded, selectable paths are

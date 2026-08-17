@@ -61,6 +61,8 @@ pub struct PreflightCheckV1 {
     pub state: PreflightStateV1,
     pub code: &'static str,
     pub action: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action_token: Option<String>,
     pub detail: String,
     pub items: Vec<String>,
 }
@@ -78,9 +80,15 @@ impl PreflightCheckV1 {
             state,
             code,
             action,
+            action_token: None,
             detail: bounded_text(&detail.into(), MAX_DETAIL_BYTES),
             items: Vec::new(),
         }
+    }
+
+    fn with_action_token(mut self, action_token: String) -> Self {
+        self.action_token = Some(action_token);
+        self
     }
 
     fn with_items(mut self, items: impl IntoIterator<Item = String>) -> Self {
@@ -189,6 +197,7 @@ pub fn preflight_v1(
         loadout_path,
         super::status::status_for_preflight,
         gore_as::compile::probe_install_compile_state,
+        crate::probe_manager_install_recovery,
         crate::deploy_recovery_required,
     )
 }
@@ -217,21 +226,24 @@ where
                 check_game_process,
             )
         },
+        crate::probe_manager_install_recovery,
         crate::deploy_recovery_required,
     )
 }
 
-fn preflight_v1_with<S, P, R>(
+fn preflight_v1_with<S, P, M, R>(
     game_root: &Path,
     library_dir: &Path,
     loadout_path: &Path,
     status: S,
     install_state: P,
+    manager_install_recovery: M,
     deploy_recovery: R,
 ) -> ManagerPreflightV1
 where
     S: FnOnce(&Path, &Path, &Loadout) -> crate::Result<ManagerStatus>,
     P: FnOnce(&Path) -> InstallCompileStateProbe,
+    M: FnOnce(&Path) -> crate::ManagerInstallRecoveryReadiness,
     R: FnOnce(&Path) -> crate::Result<bool>,
 {
     let root = inspect_game_root(game_root);
@@ -248,6 +260,7 @@ where
         root.root.as_deref(),
         deployment_recovery,
         install_state,
+        manager_install_recovery,
         deploy_recovery,
     );
     let ue4ss = inspect_ue4ss(root.directory.as_ref(), loadout.ue4ss);
@@ -318,6 +331,7 @@ fn defer_deployment_action(
         return;
     };
     deployment.action = blocker.action;
+    deployment.action_token = blocker.action_token.clone();
     deployment.detail = bounded_text(
         &format!(
             "{}; resolve the {label} finding before this deployment action",
@@ -1342,14 +1356,16 @@ where
     (check, deployment_recovery)
 }
 
-fn inspect_install_mutation<P, R>(
+fn inspect_install_mutation<P, M, R>(
     game_root: Option<&Path>,
     deployment_recovery: DeploymentRecoveryEvidence,
     install_state: P,
+    manager_install_recovery: M,
     deploy_recovery: R,
 ) -> InstallMutationInspection
 where
     P: FnOnce(&Path) -> InstallCompileStateProbe,
+    M: FnOnce(&Path) -> crate::ManagerInstallRecoveryReadiness,
     R: FnOnce(&Path) -> crate::Result<bool>,
 {
     let Some(game_root) = game_root else {
@@ -1365,6 +1381,7 @@ where
         };
     };
     let probe = install_state(game_root);
+    let manager_recovery = manager_install_recovery(game_root);
     let recovery = deploy_recovery(game_root);
     let mut items = Vec::new();
     items.extend(probe.artifacts.iter().map(|artifact| {
@@ -1455,6 +1472,62 @@ where
             .with_items(items),
             blocks_deployment_recovery: true,
         };
+    }
+    match manager_recovery {
+        crate::ManagerInstallRecoveryReadiness::Active => {
+            return InstallMutationInspection {
+                check: PreflightCheckV1::new(
+                    PreflightCheckIdV1::InstallMutation,
+                    PreflightStateV1::Problem,
+                    "install_mutation_lock_present",
+                    "wait_for_install_mutation",
+                    "a Manager install change is still active; wait for it to finish, then retry",
+                )
+                .with_items(items),
+                blocks_deployment_recovery: true,
+            };
+        }
+        crate::ManagerInstallRecoveryReadiness::AbandonedManager { guard_id } => {
+            return InstallMutationInspection {
+                check: PreflightCheckV1::new(
+                    PreflightCheckIdV1::InstallMutation,
+                    PreflightStateV1::Problem,
+                    "manager_mutation_recovery_required",
+                    "recover_manager_mutation",
+                    "an interrupted Manager install change can be recovered after confirmation",
+                )
+                .with_action_token(guard_id)
+                .with_items(items),
+                blocks_deployment_recovery: true,
+            };
+        }
+        crate::ManagerInstallRecoveryReadiness::CompileOrAmbiguous => {
+            return InstallMutationInspection {
+                check: PreflightCheckV1::new(
+                    PreflightCheckIdV1::InstallMutation,
+                    PreflightStateV1::Problem,
+                    "install_recovery_required",
+                    "recover_install",
+                    "an install lock belongs to script-build recovery or cannot be attributed safely; review the recovery guidance",
+                )
+                .with_items(items),
+                blocks_deployment_recovery: true,
+            };
+        }
+        crate::ManagerInstallRecoveryReadiness::Invalid => {
+            return InstallMutationInspection {
+                check: PreflightCheckV1::new(
+                    PreflightCheckIdV1::InstallMutation,
+                    PreflightStateV1::Unknown,
+                    "install_mutation_inspection_failed",
+                    "inspect_permissions",
+                    "the install-mutation owner could not be established safely",
+                )
+                .with_items(items),
+                blocks_deployment_recovery: true,
+            };
+        }
+        crate::ManagerInstallRecoveryReadiness::Missing => {}
     }
     let active_lock = probe.artifacts.iter().any(|artifact| {
         matches!(
@@ -1758,7 +1831,120 @@ mod tests {
         P: FnOnce(&Path) -> InstallCompileStateProbe,
         R: FnOnce(&Path) -> crate::Result<bool>,
     {
-        preflight_v1_with(root, library, loadout, status, probe, recovery)
+        preflight_v1_with(
+            root,
+            library,
+            loadout,
+            status,
+            probe,
+            |_| crate::ManagerInstallRecoveryReadiness::Missing,
+            recovery,
+        )
+    }
+
+    fn run_with_manager_readiness<S, P, R>(
+        root: &Path,
+        library: &Path,
+        loadout: &Path,
+        status: S,
+        probe: P,
+        readiness: crate::ManagerInstallRecoveryReadiness,
+        recovery: R,
+    ) -> ManagerPreflightV1
+    where
+        S: FnOnce(&Path, &Path, &Loadout) -> crate::Result<ManagerStatus>,
+        P: FnOnce(&Path) -> InstallCompileStateProbe,
+        R: FnOnce(&Path) -> crate::Result<bool>,
+    {
+        preflight_v1_with(
+            root,
+            library,
+            loadout,
+            status,
+            probe,
+            |_| readiness,
+            recovery,
+        )
+    }
+
+    #[test]
+    fn only_abandoned_manager_recovery_exposes_a_bound_mutation_action() {
+        let install = install_fixture();
+        let library = install.path().join("library");
+        let loadout = install.path().join("loadout.json");
+        let abandoned = run_with_manager_readiness(
+            install.path(),
+            &library,
+            &loadout,
+            |_, _, _| {
+                Ok(ManagerStatus::ChangesPending {
+                    deployed: Vec::new(),
+                    target: Vec::new(),
+                })
+            },
+            |_| safe_probe(),
+            crate::ManagerInstallRecoveryReadiness::AbandonedManager {
+                guard_id: "guard-a-17".to_owned(),
+            },
+            |_| Ok(false),
+        );
+        assert_eq!(
+            abandoned.checks[4].code,
+            "manager_mutation_recovery_required"
+        );
+        assert_eq!(abandoned.checks[4].action, "recover_manager_mutation");
+        assert_eq!(
+            abandoned.checks[4].action_token.as_deref(),
+            Some("guard-a-17")
+        );
+        assert_eq!(
+            serde_json::to_value(&abandoned.checks[4]).unwrap()["action_token"],
+            "guard-a-17"
+        );
+        assert_eq!(abandoned.checks[3].action, "recover_manager_mutation");
+        assert_eq!(
+            abandoned.checks[3].action_token.as_deref(),
+            Some("guard-a-17")
+        );
+
+        for (readiness, state, code, action) in [
+            (
+                crate::ManagerInstallRecoveryReadiness::Active,
+                PreflightStateV1::Problem,
+                "install_mutation_lock_present",
+                "wait_for_install_mutation",
+            ),
+            (
+                crate::ManagerInstallRecoveryReadiness::CompileOrAmbiguous,
+                PreflightStateV1::Problem,
+                "install_recovery_required",
+                "recover_install",
+            ),
+            (
+                crate::ManagerInstallRecoveryReadiness::Invalid,
+                PreflightStateV1::Unknown,
+                "install_mutation_inspection_failed",
+                "inspect_permissions",
+            ),
+        ] {
+            let snapshot = run_with_manager_readiness(
+                install.path(),
+                &library,
+                &loadout,
+                |_, _, _| Ok(ManagerStatus::NothingDeployed),
+                |_| safe_probe(),
+                readiness,
+                |_| Ok(false),
+            );
+            assert_eq!(snapshot.checks[4].state, state);
+            assert_eq!(snapshot.checks[4].code, code);
+            assert_eq!(snapshot.checks[4].action, action);
+            assert_eq!(snapshot.checks[4].action_token, None);
+            assert!(serde_json::to_value(&snapshot.checks[4])
+                .unwrap()
+                .get("action_token")
+                .is_none());
+        }
     }
 
     #[test]
@@ -1939,9 +2125,7 @@ mod tests {
         assert_eq!(unsupported.check.action, "repair_library");
 
         fs::write(
-            library
-                .join("alpha")
-                .join(super::super::model::META_FILE),
+            library.join("alpha").join(super::super::model::META_FILE),
             b"{",
         )
         .unwrap();

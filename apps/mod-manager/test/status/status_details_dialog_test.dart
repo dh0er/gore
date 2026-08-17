@@ -70,6 +70,7 @@ class _DialogHarness extends StatelessWidget {
     required this.operationsBusy,
     required this.onResult,
     this.library,
+    this.deploymentRecoveryGeneration,
     this.textScaler = TextScaler.noScaling,
   });
 
@@ -78,6 +79,7 @@ class _DialogHarness extends StatelessWidget {
   final bool applyEnabled;
   final bool operationsBusy;
   final LibraryState? library;
+  final int? deploymentRecoveryGeneration;
   final ValueChanged<StatusDetailsResult?> onResult;
   final TextScaler textScaler;
 
@@ -110,6 +112,8 @@ class _DialogHarness extends StatelessWidget {
                       library: library ?? _library,
                       operationsBusy: operationsBusy,
                       applyEnabled: applyEnabled,
+                      deploymentRecoveryGeneration:
+                          deploymentRecoveryGeneration,
                     ),
                   ),
                 );
@@ -130,6 +134,7 @@ Future<StatusDetailsResult?> _open(
   bool applyEnabled = true,
   bool operationsBusy = false,
   LibraryState? library,
+  int? deploymentRecoveryGeneration,
   TextScaler textScaler = TextScaler.noScaling,
 }) async {
   StatusDetailsResult? result;
@@ -140,6 +145,7 @@ Future<StatusDetailsResult?> _open(
       applyEnabled: applyEnabled,
       operationsBusy: operationsBusy,
       library: library,
+      deploymentRecoveryGeneration: deploymentRecoveryGeneration,
       textScaler: textScaler,
       onResult: (value) => result = value,
     ),
@@ -473,6 +479,7 @@ void main() {
         currentRoot: _root,
         applyEnabled: false,
         operationsBusy: false,
+        deploymentRecoveryGeneration: 17,
         onResult: (value) => result = value,
       ),
     );
@@ -488,7 +495,28 @@ void main() {
     await tester.pumpAndSettle();
     expect(result?.action, StatusDetailsAction.recover);
     expect(result?.rootAtClick, _root);
+    expect(result?.deploymentRecoveryGenerationAtClick, 17);
   });
+
+  testWidgets(
+    'recovery required without a bound deployment action is read-only',
+    (tester) async {
+      await _open(
+        tester,
+        _state({'state': 'recovery_required'}),
+        applyEnabled: false,
+      );
+
+      expect(
+        find.byKey(const ValueKey('status-details-action-recover')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('status-details-action-close')),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('unknown and errored states retain technical detail and Refresh', (
     tester,

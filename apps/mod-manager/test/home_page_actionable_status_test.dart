@@ -40,14 +40,31 @@ SharedConfig _config(String? gamePath) {
   return config;
 }
 
+Map<String, Object?> _deploymentRecoveryPreflight() {
+  final response = fakeHealthyManagerPreflightResponse();
+  final preflight = response['preflight']! as Map<String, Object?>;
+  final checks = preflight['checks']! as List<Object?>;
+  checks[4] = {
+    'id': 'install_mutation',
+    'state': 'problem',
+    'code': 'deployment_recovery_required',
+    'action': 'recover_deployment',
+    'detail': 'Interrupted deployment needs recovery.',
+    'items': <String>[],
+  };
+  return response;
+}
+
 class _HomeCore implements GoreCoreFfiService {
   _HomeCore(
     this.status, {
     this.applyWarnings = const ['Optional payload skipped'],
-  });
+    Map<String, Object?>? preflight,
+  }) : preflight = preflight ?? fakeHealthyManagerPreflightResponse();
 
   Map<String, Object?> status;
   List<String> applyWarnings;
+  Map<String, Object?> preflight;
   Completer<Map<String, Object?>>? pendingStatus;
   final calls = <({String command, Map<String, Object?> payload})>[];
 
@@ -91,7 +108,7 @@ class _HomeCore implements GoreCoreFfiService {
         }
         return {'ok': true, 'status': status};
       case 'mgr_preflight_v1':
-        return fakeHealthyManagerPreflightResponse();
+        return preflight;
       case 'mgr_apply':
         return {
           'ok': true,
@@ -385,7 +402,9 @@ void main() {
   testWidgets('recovery confirmation rechecks the selected root before write', (
     tester,
   ) async {
-    final core = _HomeCore({'state': 'recovery_required'});
+    final core = _HomeCore({
+      'state': 'recovery_required',
+    }, preflight: _deploymentRecoveryPreflight());
     await tester.pumpWidget(_home(core));
     await tester.pumpAndSettle();
 

@@ -52,6 +52,7 @@ enum PreflightActionKind {
   closeGame('close_game'),
   waitForInstallMutation('wait_for_install_mutation'),
   recoverInstall('recover_install'),
+  recoverManagerMutation('recover_manager_mutation'),
   installUe4ss('install_ue4ss'),
   verifyUe4ssProxy('verify_ue4ss_proxy'),
   verifyDuringApply('verify_during_apply'),
@@ -74,6 +75,7 @@ class PreflightCheckView {
     required this.rawState,
     required this.code,
     required this.rawAction,
+    required this.actionToken,
     required this.detail,
     required this.items,
   });
@@ -82,11 +84,19 @@ class PreflightCheckView {
   final String rawState;
   final String code;
   final String rawAction;
+  final String? actionToken;
   final String detail;
   final List<String> items;
 
   PreflightStateKind? get state => PreflightStateKind.fromWire(rawState);
-  PreflightActionKind? get action => PreflightActionKind.fromWire(rawAction);
+  PreflightActionKind? get action {
+    final parsed = PreflightActionKind.fromWire(rawAction);
+    if (parsed == PreflightActionKind.recoverManagerMutation &&
+        !_usableActionToken(actionToken)) {
+      return null;
+    }
+    return parsed;
+  }
 
   bool get needsAttention =>
       state == PreflightStateKind.problem ||
@@ -101,12 +111,14 @@ class PreflightCheckView {
     final state = raw['state'];
     final code = raw['code'];
     final action = raw['action'];
+    final actionToken = raw['action_token'];
     final detail = raw['detail'];
     final items = raw['items'];
     if (id != expectedId.wire ||
         state is! String ||
         code is! String ||
         action is! String ||
+        (actionToken != null && actionToken is! String) ||
         detail is! String ||
         items is! List ||
         items.any((item) => item is! String)) {
@@ -117,11 +129,18 @@ class PreflightCheckView {
       rawState: state,
       code: code,
       rawAction: action,
+      actionToken: actionToken as String?,
       detail: detail,
       items: List.unmodifiable(items.cast<String>()),
     );
   }
 }
+
+/// The token is deliberately opaque to Dart. This check only prevents an
+/// absent, empty, or unexpectedly large value from enabling a mutation; Native
+/// remains the sole authority that compares it with the current transaction.
+bool _usableActionToken(String? token) =>
+    token != null && token.isNotEmpty && token.runes.length <= 512;
 
 class ManagerPreflightView {
   const ManagerPreflightView({required this.checks});

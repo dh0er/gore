@@ -83,6 +83,50 @@ class AppLocalizationsIt extends AppLocalizations {
   String get installRecoveryEvidence => 'Dati di ripristino rilevati';
 
   @override
+  String get managerRecoveryTitle =>
+      'Ripristina operazione interrotta del gestore';
+
+  @override
+  String get managerRecoveryConfirm =>
+      'GORE ha rilevato un’operazione del gestore chiaramente interrotta. Continua solo se vuoi che GORE verifichi l’operazione registrata e riporti l’installazione a uno stato noto. I salvataggi non vengono mai modificati.';
+
+  @override
+  String get managerRecoveryAlreadyClean =>
+      'L’operazione interrotta era già stata risolta. L’installazione è stata verificata di nuovo.';
+
+  @override
+  String get managerRecoveryBusy =>
+      'L’operazione è di nuovo attiva. Non è stato modificato nulla; attendi che termini e controlla di nuovo.';
+
+  @override
+  String get managerRecoveryLockCleared =>
+      'L’operazione interrotta non aveva ancora modificato l’installazione. Il blocco obsoleto è stato rimosso in sicurezza.';
+
+  @override
+  String get managerRecoveryRestoredPristine =>
+      'La modifica interrotta è stata annullata ed è stato ripristinato lo stato di base registrato dell’installazione.';
+
+  @override
+  String get managerRecoveryApplyPreserved =>
+      'L’applicazione era già terminata. Lo stato registrato è stato conservato e lo stato è stato controllato di nuovo.';
+
+  @override
+  String get managerRecoveryUndeployConfirmed =>
+      'La rimozione era terminata. I dati di transazione rimanenti sono stati ripuliti e lo stato è stato controllato di nuovo.';
+
+  @override
+  String get managerRecoveryCompileRequired =>
+      'Questo riguarda il ripristino della compilazione degli script. Il gestore non ha modificato nulla; consulta la guida al ripristino.';
+
+  @override
+  String get managerRecoveryInspectionFailed =>
+      'GORE non ha potuto verificare in sicurezza l’operazione interrotta. Non è stato modificato nulla; controlla i dettagli di ripristino attuali.';
+
+  @override
+  String get managerRecoveryFailed =>
+      'Non è stato possibile completare il ripristino. GORE ha provato a verificare di nuovo l’installazione, ma lo stato attuale potrebbe essere sconosciuto. Controlla lo stato prima di riprovare.';
+
+  @override
   String get statusUnknown => 'Sconosciuto';
 
   @override

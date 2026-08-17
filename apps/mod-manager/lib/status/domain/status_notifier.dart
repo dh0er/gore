@@ -140,6 +140,23 @@ class StatusNotifier extends StateNotifier<StatusState> {
     },
   );
 
+  /// Recover only the interrupted Manager mutation identified by Native's
+  /// opaque preflight token, then establish deployment status again.
+  Future<MgrInstallRecoveryOutcome?> recoverInstall(
+    String gameRoot,
+    String expectedGuardId,
+  ) async {
+    MgrInstallRecoveryOutcome? outcome;
+    await _runMutation(
+      gameRoot,
+      command: () async {
+        outcome = await _mgr.recoverInstall(gameRoot, expectedGuardId);
+        return null;
+      },
+    );
+    return outcome;
+  }
+
   Future<void> _runStatusRefresh(
     String? gameRoot, {
     bool preserveExistingError = false,

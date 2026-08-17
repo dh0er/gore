@@ -41,6 +41,7 @@ const managerRequiredCoreCommands = <String>[
   'mgr_import',
   'mgr_library_list',
   'mgr_preflight_v1',
+  'mgr_recover_install_v1',
   'mgr_remove',
   'mgr_set_loadout',
   'mgr_status',
