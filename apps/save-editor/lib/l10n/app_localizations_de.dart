@@ -2004,17 +2004,17 @@ class AppLocalizationsDe extends AppLocalizations {
   String attributeManualTooltip(String attributeId) {
     String _temp0 = intl.Intl.selectLogic(attributeId, {
       'SuperArmor':
-          'Wie viel der Held einsteckt, bevor ihn ein Treffer aus dem Tritt bringt.',
+          'Wie viel diese Figur einsteckt, bevor sie ein Treffer aus dem Tritt bringt.',
       'MaxSuperArmor':
           'Der volle Vorrat; er wächst mit der Stufe und mit der getragenen Rüstung.',
       'DamageMultiplier':
-          'Faktor auf den Schaden, den der Held nimmt — 1 ist normal, höher tut mehr weh.',
+          'Faktor auf den Schaden, den diese Figur nimmt — 1 ist normal, höher tut mehr weh.',
       'SpeedModifier':
-          'Faktor darauf, wie schnell sich der Held bewegt — 1 ist normal.',
+          'Faktor darauf, wie schnell sich diese Figur bewegt — 1 ist normal.',
       'Oxygen':
-          'Verbleibende Sekunden Luft unter Wasser; bei null ertrinkt der Held.',
+          'Verbleibende Sekunden Luft unter Wasser; bei null ertrinkt diese Figur.',
       'MaxOxygen':
-          'Wie viele Sekunden der Held unter Wasser bleiben kann; das Talent Tauchen erhöht das.',
+          'Wie viele Sekunden diese Figur unter Wasser bleiben kann; das Talent Tauchen erhöht das.',
       'OxygenDepletionRate':
           'Wie viel Luft unter Wasser je Sekunde verbraucht wird.',
       'OxygenRecoveryRate':
@@ -2035,14 +2035,14 @@ class AppLocalizationsDe extends AppLocalizations {
       'Mana_RecoveryRatePerHourOfSleep':
           'Anteil des maximalen Manas, der je geschlafener Stunde zurückkommt.',
       'Alcohol':
-          'Wie betrunken der Held ist; die höheren Stufen tauschen Geschicklichkeit und Mana gegen Stärke.',
-      'MaxAlcohol': 'Der höchste Alkoholpegel, den der Held erreichen kann.',
+          'Wie betrunken diese Figur ist; die höheren Stufen tauschen Geschicklichkeit und Mana gegen Stärke.',
+      'MaxAlcohol': 'Der höchste Alkoholpegel, den diese Figur erreichen kann.',
       'AlcoholDepletionRate':
           'Wie schnell der Alkoholpegel wieder Richtung nüchtern sinkt.',
       'Swampweed':
-          'Wie berauscht der Held ist; die höheren Stufen verschieben seine Werte.',
+          'Wie berauscht diese Figur ist; die höheren Stufen verschieben ihre Werte.',
       'MaxSwampweed':
-          'Der höchste Sumpfkrautpegel, den der Held erreichen kann.',
+          'Der höchste Sumpfkrautpegel, den diese Figur erreichen kann.',
       'SwampweedDepletionRate': 'Wie schnell der Sumpfkrautrausch nachlässt.',
       'XPExecutedBounty':
           'Erfahrung dafür, diese Figur zu töten, während sie bereits besiegt am Boden liegt.',

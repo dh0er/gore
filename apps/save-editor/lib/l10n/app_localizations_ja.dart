@@ -1951,10 +1951,10 @@ class AppLocalizationsJa extends AppLocalizations {
   @override
   String attributeManualTooltip(String attributeId) {
     String _temp0 = intl.Intl.selectLogic(attributeId, {
-      'SuperArmor': '一撃で怯まされるまでに、ヒーローがどれだけ攻撃に耐えられるか。',
+      'SuperArmor': '一撃で怯まされるまでに、このキャラクターがどれだけ攻撃に耐えられるか。',
       'MaxSuperArmor': '強靭度の総量で、レベルと身に着けた鎧に応じて増える。',
-      'DamageMultiplier': 'ヒーローが受けるダメージにかかる倍率で、1が標準、大きいほど痛い。',
-      'SpeedModifier': 'ヒーローの移動の速さにかかる倍率で、1が標準。',
+      'DamageMultiplier': 'このキャラクターが受けるダメージにかかる倍率で、1が標準、大きいほど痛い。',
+      'SpeedModifier': 'このキャラクターの移動の速さにかかる倍率で、1が標準。',
       'Oxygen': '水中に残っている息の秒数で、ゼロになると溺れる。',
       'MaxOxygen': '水中にいられる秒数で、潜水スキルを上げると伸びる。',
       'OxygenDepletionRate': '水中で1秒ごとに減っていく息の量。',
@@ -1968,10 +1968,10 @@ class AppLocalizationsJa extends AppLocalizations {
       'Health_RecoveryRatePerHourOfSleep': '1時間眠るごとに戻る最大体力の割合。',
       'Mana_RecoveryRatePerHourOfSleep': '1時間眠るごとに戻る最大マナの割合。',
       'Alcohol': 'どれだけ酔っているかで、段階が上がるほど器用さとマナが下がり力が上がる。',
-      'MaxAlcohol': 'ヒーローが到達できる酔いの度合いの上限。',
+      'MaxAlcohol': 'このキャラクターが到達できる酔いの度合いの上限。',
       'AlcoholDepletionRate': '酔いがどれだけ早く覚めていくか。',
-      'Swampweed': 'どれだけ沼地草に酔っているかで、段階が上がるとヒーローの能力値が入れ替わる。',
-      'MaxSwampweed': 'ヒーローが到達できる沼地草の酔いの上限。',
+      'Swampweed': 'どれだけ沼地草に酔っているかで、段階が上がるとこのキャラクターの能力値が入れ替わる。',
+      'MaxSwampweed': 'このキャラクターが到達できる沼地草の酔いの上限。',
       'SwampweedDepletionRate': '沼地草の酔いがどれだけ早く抜けるか。',
       'XPExecutedBounty': 'すでに倒れて動けないこのキャラクターに、とどめを刺して得られる経験値。',
       'XPKillOrDefeatBounty':

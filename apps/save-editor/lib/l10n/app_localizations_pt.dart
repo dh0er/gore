@@ -2004,17 +2004,17 @@ class AppLocalizationsPt extends AppLocalizations {
   String attributeManualTooltip(String attributeId) {
     String _temp0 = intl.Intl.selectLogic(attributeId, {
       'SuperArmor':
-          'Quanto castigo o herói aguenta antes de um golpe tirá-lo do sério equilíbrio.',
+          'Quanto castigo este personagem aguenta antes de um golpe tirá-lo do equilíbrio.',
       'MaxSuperArmor':
           'A reserva total de firmeza; ela cresce com o nível do personagem e com a armadura usada.',
       'DamageMultiplier':
-          'Fator aplicado ao dano que o herói sofre — 1 é o normal, mais alto dói mais.',
+          'Fator aplicado ao dano que este personagem sofre — 1 é o normal, mais alto dói mais.',
       'SpeedModifier':
-          'Fator sobre a rapidez com que o herói se move — 1 é o normal.',
+          'Fator sobre a rapidez com que este personagem se move — 1 é o normal.',
       'Oxygen':
-          'Segundos de ar que restam debaixo d\'água; ao chegar a zero, o herói se afoga.',
+          'Segundos de ar que restam debaixo d\'água; ao chegar a zero, este personagem se afoga.',
       'MaxOxygen':
-          'Quantos segundos o herói consegue ficar debaixo d\'água; a habilidade Mergulho aumenta isso.',
+          'Quantos segundos este personagem consegue ficar debaixo d\'água; a habilidade Mergulho aumenta isso.',
       'OxygenDepletionRate': 'Ar consumido a cada segundo debaixo d\'água.',
       'OxygenRecoveryRate': 'Ar que volta a cada segundo depois de emergir.',
       'CriticalLevelPercent':
@@ -2022,7 +2022,7 @@ class AppLocalizationsPt extends AppLocalizations {
       'SleepTime':
           'Horas de sono que ainda rendem algo; além delas, o jogo não dá mais nenhum bônus de descanso.',
       'MaxSleepTime':
-          'O maior estoque de horas de descanso que o herói pode acumular.',
+          'O maior estoque de horas de descanso que este personagem pode acumular.',
       'SleepTimeRecoveryAmount':
           'Horas de descanso que voltam a cada reposição do estoque.',
       'SleepTimeRecoveryPeriod':
@@ -2033,14 +2033,14 @@ class AppLocalizationsPt extends AppLocalizations {
       'Mana_RecoveryRatePerHourOfSleep':
           'Parcela do mana máximo recuperada a cada hora dormida.',
       'Alcohol':
-          'O quão bêbado o herói está; os níveis mais altos trocam destreza e mana por força.',
-      'MaxAlcohol': 'O maior nível de álcool que o herói pode atingir.',
+          'O quão bêbado este personagem está; os níveis mais altos trocam destreza e mana por força.',
+      'MaxAlcohol': 'O maior nível de álcool que este personagem pode atingir.',
       'AlcoholDepletionRate':
           'Com que rapidez o nível de álcool cai de volta rumo à sobriedade.',
       'Swampweed':
-          'O quão chapado o herói está; os níveis mais altos mexem nos atributos dele.',
+          'O quão chapado este personagem está; os níveis mais altos mexem nos atributos dele.',
       'MaxSwampweed':
-          'O maior nível de erva do pântano que o herói pode atingir.',
+          'O maior nível de erva do pântano que este personagem pode atingir.',
       'SwampweedDepletionRate':
           'Com que rapidez o barato da erva do pântano vai passando.',
       'XPExecutedBounty':
@@ -4840,17 +4840,17 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String attributeManualTooltip(String attributeId) {
     String _temp0 = intl.Intl.selectLogic(attributeId, {
       'SuperArmor':
-          'Quanto castigo o herói aguenta antes de um golpe tirá-lo do sério equilíbrio.',
+          'Quanto castigo este personagem aguenta antes de um golpe tirá-lo do equilíbrio.',
       'MaxSuperArmor':
           'A reserva total de firmeza; ela cresce com o nível do personagem e com a armadura usada.',
       'DamageMultiplier':
-          'Fator aplicado ao dano que o herói sofre — 1 é o normal, mais alto dói mais.',
+          'Fator aplicado ao dano que este personagem sofre — 1 é o normal, mais alto dói mais.',
       'SpeedModifier':
-          'Fator sobre a rapidez com que o herói se move — 1 é o normal.',
+          'Fator sobre a rapidez com que este personagem se move — 1 é o normal.',
       'Oxygen':
-          'Segundos de ar que restam debaixo d\'água; ao chegar a zero, o herói se afoga.',
+          'Segundos de ar que restam debaixo d\'água; ao chegar a zero, este personagem se afoga.',
       'MaxOxygen':
-          'Quantos segundos o herói consegue ficar debaixo d\'água; a habilidade Mergulho aumenta isso.',
+          'Quantos segundos este personagem consegue ficar debaixo d\'água; a habilidade Mergulho aumenta isso.',
       'OxygenDepletionRate': 'Ar consumido a cada segundo debaixo d\'água.',
       'OxygenRecoveryRate': 'Ar que volta a cada segundo depois de emergir.',
       'CriticalLevelPercent':
@@ -4858,7 +4858,7 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
       'SleepTime':
           'Horas de sono que ainda rendem algo; além delas, o jogo não dá mais nenhum bônus de descanso.',
       'MaxSleepTime':
-          'O maior estoque de horas de descanso que o herói pode acumular.',
+          'O maior estoque de horas de descanso que este personagem pode acumular.',
       'SleepTimeRecoveryAmount':
           'Horas de descanso que voltam a cada reposição do estoque.',
       'SleepTimeRecoveryPeriod':
@@ -4869,14 +4869,14 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
       'Mana_RecoveryRatePerHourOfSleep':
           'Parcela do mana máximo recuperada a cada hora dormida.',
       'Alcohol':
-          'O quão bêbado o herói está; os níveis mais altos trocam destreza e mana por força.',
-      'MaxAlcohol': 'O maior nível de álcool que o herói pode atingir.',
+          'O quão bêbado este personagem está; os níveis mais altos trocam destreza e mana por força.',
+      'MaxAlcohol': 'O maior nível de álcool que este personagem pode atingir.',
       'AlcoholDepletionRate':
           'Com que rapidez o nível de álcool cai de volta rumo à sobriedade.',
       'Swampweed':
-          'O quão chapado o herói está; os níveis mais altos mexem nos atributos dele.',
+          'O quão chapado este personagem está; os níveis mais altos mexem nos atributos dele.',
       'MaxSwampweed':
-          'O maior nível de erva do pântano que o herói pode atingir.',
+          'O maior nível de erva do pântano que este personagem pode atingir.',
       'SwampweedDepletionRate':
           'Com que rapidez o barato da erva do pântano vai passando.',
       'XPExecutedBounty':

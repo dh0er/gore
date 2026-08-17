@@ -2015,17 +2015,17 @@ class AppLocalizationsFr extends AppLocalizations {
   String attributeManualTooltip(String attributeId) {
     String _temp0 = intl.Intl.selectLogic(attributeId, {
       'SuperArmor':
-          'Ce que le héros encaisse avant qu\'un coup ne le déséquilibre.',
+          'Ce que ce personnage encaisse avant qu\'un coup ne le déséquilibre.',
       'MaxSuperArmor':
           'La réserve complète de stabilité ; elle augmente avec le niveau et avec l\'armure portée.',
       'DamageMultiplier':
-          'Facteur appliqué aux dégâts que subit le héros — 1 est la normale, plus haut fait plus mal.',
+          'Facteur appliqué aux dégâts que subit ce personnage — 1 est la normale, plus haut fait plus mal.',
       'SpeedModifier':
-          'Facteur appliqué à la vitesse de déplacement du héros — 1 est la normale.',
+          'Facteur appliqué à la vitesse de déplacement de ce personnage — 1 est la normale.',
       'Oxygen':
-          'Secondes d\'air qu\'il reste sous l\'eau ; à zéro, le héros se noie.',
+          'Secondes d\'air qu\'il reste sous l\'eau ; à zéro, ce personnage se noie.',
       'MaxOxygen':
-          'Combien de secondes le héros peut rester sous l\'eau ; le talent Plongée augmente cette durée.',
+          'Combien de secondes ce personnage peut rester sous l\'eau ; le talent Plongée augmente cette durée.',
       'OxygenDepletionRate': 'Air consommé chaque seconde sous l\'eau.',
       'OxygenRecoveryRate':
           'Air qui revient chaque seconde une fois de retour à la surface.',
@@ -2034,27 +2034,27 @@ class AppLocalizationsFr extends AppLocalizations {
       'SleepTime':
           'Heures de sommeil qui apportent encore quelque chose ; au-delà, le jeu n\'accorde plus de récupération.',
       'MaxSleepTime':
-          'La plus grande réserve d\'heures de repos que le héros peut avoir.',
+          'La plus grande réserve d\'heures de repos que ce personnage peut avoir.',
       'SleepTimeRecoveryAmount':
           'Heures de repos qui reviennent à chaque recharge.',
       'SleepTimeRecoveryPeriod':
           'Le temps qu\'il faut pour que la réserve d\'heures de repos se remplisse à nouveau.',
       'MaxRestTime':
-          'La plus longue durée que le héros peut passer au lit d\'une traite.',
+          'La plus longue durée que le jeu autorise à passer au lit d\'une traite.',
       'Health_RecoveryRatePerHourOfSleep':
           'Part des points de vie maximum rendue pour chaque heure de sommeil.',
       'Mana_RecoveryRatePerHourOfSleep':
           'Part du mana maximum rendue pour chaque heure de sommeil.',
       'Alcohol':
-          'À quel point le héros est ivre ; aux paliers élevés, il échange dextérité et mana contre de la force.',
+          'À quel point ce personnage est ivre ; aux paliers élevés, il échange dextérité et mana contre de la force.',
       'MaxAlcohol':
-          'Le taux d\'alcool le plus élevé que le héros peut atteindre.',
+          'Le taux d\'alcool le plus élevé que ce personnage peut atteindre.',
       'AlcoholDepletionRate':
           'À quelle vitesse le taux d\'alcool redescend vers la sobriété.',
       'Swampweed':
-          'À quel point le héros plane ; aux paliers élevés, ses caractéristiques sont chamboulées.',
+          'À quel point ce personnage plane ; aux paliers élevés, ses caractéristiques sont chamboulées.',
       'MaxSwampweed':
-          'Le niveau d\'herbe des marais le plus élevé que le héros peut atteindre.',
+          'Le niveau d\'herbe des marais le plus élevé que ce personnage peut atteindre.',
       'SwampweedDepletionRate':
           'À quelle vitesse l\'effet de l\'herbe des marais se dissipe.',
       'XPExecutedBounty':

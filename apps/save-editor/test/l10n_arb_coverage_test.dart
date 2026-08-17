@@ -146,6 +146,34 @@ void main() {
       }
     }
   });
+  test('attribute tooltips name no particular actor', () {
+    // The same tooltip is shown for the player AND for a selected NPC, so a
+    // sentence about "the hero" would claim the wrong thing on an NPC row.
+    const heroWords = ['hero', 'Held', 'héroe', 'héros', 'eroe', 'bohater'];
+    final template = _readArb(templateFile);
+    final english = template['attributeManualTooltip'] as String;
+    for (final word in heroWords) {
+      expect(
+        english.toLowerCase(),
+        isNot(contains(word.toLowerCase())),
+        reason: 'attributeManualTooltip must not name the hero',
+      );
+    }
+    final localeFiles = l10nDirectory.listSync().whereType<File>().where(
+      (file) => RegExp(r'app_[\w]+\.arb$').hasMatch(file.path),
+    );
+    for (final file in localeFiles) {
+      final text = (_readArb(file)['attributeManualTooltip'] as String)
+          .toLowerCase();
+      for (final word in heroWords) {
+        expect(
+          text,
+          isNot(contains(word.toLowerCase())),
+          reason: '${file.path}:attributeManualTooltip names "$word"',
+        );
+      }
+    }
+  });
 }
 
 Map<String, Object?> _readArb(File file) =>

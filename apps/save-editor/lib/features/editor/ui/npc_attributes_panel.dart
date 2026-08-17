@@ -183,14 +183,18 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
     final byGroup = <HeroAttributeGroup, List<NpcAttributeRow>>{};
     for (final attribute in _attributes) {
       byGroup
-          .putIfAbsent(heroAttributeGroup(attribute.key), () => [])
+          .putIfAbsent(
+            heroAttributeGroup(attribute.key, attribute.setClass),
+            () => [],
+          )
           .add(attribute);
     }
     for (final rows in byGroup.values) {
       rows.sort((a, b) {
         final rank = heroAttributeRank(
           a.key,
-        ).compareTo(heroAttributeRank(b.key));
+          a.setClass,
+        ).compareTo(heroAttributeRank(b.key, b.setClass));
         return rank != 0 ? rank : a.key.compareTo(b.key);
       });
     }
@@ -436,7 +440,7 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
               attribute: a,
               label: _displayLabel(a),
               tooltip:
-                  widget.attributeTooltip?.call(a.key, _setClassFromPaths(a)) ??
+                  widget.attributeTooltip?.call(a.key, a.setClass) ??
                   '',
               editable: widget.editable,
               initialBaseText: _pending[_pathKey(a.basePath)],
@@ -472,22 +476,9 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
   String _displayLabel(NpcAttributeRow attribute) =>
       widget.attributeLabel?.call(
         attribute.key,
-        _setClassFromPaths(attribute),
+        attribute.setClass,
       ) ??
       heroAttributeLabel(attribute.key);
-
-  String? _setClassFromPaths(NpcAttributeRow attribute) {
-    for (final path in [attribute.basePath, attribute.currentPath]) {
-      final index = path.indexOf('AttributeSetsByClass');
-      if (index < 0 || index + 1 >= path.length) continue;
-      var value = path[index + 1].trim();
-      if (value.startsWith('{') && value.endsWith('}')) {
-        value = value.substring(1, value.length - 1);
-      }
-      if (value.isNotEmpty) return value;
-    }
-    return null;
-  }
 
   /// The NPC Status row shown as the FIRST entry of the core ("Hauptwerte")
   /// group detail: `Status <lebend|tot>` on the left and a **Wiederbeleben**

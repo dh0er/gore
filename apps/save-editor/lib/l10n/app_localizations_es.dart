@@ -2003,17 +2003,17 @@ class AppLocalizationsEs extends AppLocalizations {
   String attributeManualTooltip(String attributeId) {
     String _temp0 = intl.Intl.selectLogic(attributeId, {
       'SuperArmor':
-          'Cuánto castigo aguanta el héroe antes de que un golpe lo haga tambalearse.',
+          'Cuánto castigo aguanta este personaje antes de que un golpe lo haga tambalearse.',
       'MaxSuperArmor':
           'La reserva completa de aplomo; aumenta con el nivel y con la armadura que lleva puesta.',
       'DamageMultiplier':
-          'Factor que se aplica al daño que recibe el héroe: 1 es lo normal, y cuanto más alto, más duele.',
+          'Factor que se aplica al daño que recibe este personaje: 1 es lo normal, y cuanto más alto, más duele.',
       'SpeedModifier':
-          'Factor sobre lo rápido que se mueve el héroe: 1 es lo normal.',
+          'Factor sobre lo rápido que se mueve este personaje: 1 es lo normal.',
       'Oxygen':
-          'Segundos de aire que quedan bajo el agua; al llegar a cero el héroe se ahoga.',
+          'Segundos de aire que quedan bajo el agua; al llegar a cero este personaje se ahoga.',
       'MaxOxygen':
-          'Cuántos segundos puede aguantar el héroe bajo el agua; la habilidad Buceo lo aumenta.',
+          'Cuántos segundos puede aguantar este personaje bajo el agua; la habilidad Buceo lo aumenta.',
       'OxygenDepletionRate': 'Aire que se consume cada segundo bajo el agua.',
       'OxygenRecoveryRate':
           'Aire que se recupera cada segundo al salir a la superficie.',
@@ -2022,7 +2022,7 @@ class AppLocalizationsEs extends AppLocalizations {
       'SleepTime':
           'Horas de sueño que todavía aportan algo; a partir de ahí el juego no da ninguna recuperación.',
       'MaxSleepTime':
-          'El mayor número de horas reparadoras que puede acumular el héroe.',
+          'El mayor número de horas reparadoras que puede acumular este personaje.',
       'SleepTimeRecoveryAmount':
           'Horas reparadoras que se devuelven cada vez que se rellena la reserva.',
       'SleepTimeRecoveryPeriod':
@@ -2034,14 +2034,15 @@ class AppLocalizationsEs extends AppLocalizations {
       'Mana_RecoveryRatePerHourOfSleep':
           'Porcentaje del maná máximo que se recupera por cada hora dormida.',
       'Alcohol':
-          'Lo borracho que está el héroe; los niveles altos cambian destreza y maná por fuerza.',
-      'MaxAlcohol': 'El nivel de alcohol más alto que puede alcanzar el héroe.',
+          'Lo borracho que está este personaje; los niveles altos cambian destreza y maná por fuerza.',
+      'MaxAlcohol':
+          'El nivel de alcohol más alto que puede alcanzar este personaje.',
       'AlcoholDepletionRate':
           'Con qué rapidez baja el nivel de alcohol hacia la sobriedad.',
       'Swampweed':
-          'Lo colocado que está el héroe; los niveles altos le mueven los atributos.',
+          'Lo colocado que está este personaje; los niveles altos le mueven los atributos.',
       'MaxSwampweed':
-          'El nivel de hierba de pantano más alto que puede alcanzar el héroe.',
+          'El nivel de hierba de pantano más alto que puede alcanzar este personaje.',
       'SwampweedDepletionRate':
           'Con qué rapidez se pasa el efecto de la hierba de pantano.',
       'XPExecutedBounty':

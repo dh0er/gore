@@ -2018,17 +2018,17 @@ class AppLocalizationsPl extends AppLocalizations {
   @override
   String attributeManualTooltip(String attributeId) {
     String _temp0 = intl.Intl.selectLogic(attributeId, {
-      'SuperArmor': 'Ile bohater zniesie, zanim cios wytrąci go z równowagi.',
+      'SuperArmor': 'Ile zniesie ta postać, zanim cios wytrąci ją z równowagi.',
       'MaxSuperArmor':
           'Pełny zapas równowagi; rośnie z poziomem postaci i z noszoną zbroją.',
       'DamageMultiplier':
-          'Mnożnik obrażeń, które przyjmuje bohater – 1 to wartość normalna, wyższa boli bardziej.',
+          'Mnożnik obrażeń, które przyjmuje ta postać – 1 to wartość normalna, wyższa boli bardziej.',
       'SpeedModifier':
-          'Mnożnik tempa poruszania się bohatera – 1 to wartość normalna.',
+          'Mnożnik tempa poruszania się tej postaci – 1 to wartość normalna.',
       'Oxygen':
-          'Sekundy powietrza pozostałe pod wodą; przy zerze bohater tonie.',
+          'Sekundy powietrza pozostałe pod wodą; przy zerze ta postać tonie.',
       'MaxOxygen':
-          'Ile sekund bohater wytrzyma pod wodą; umiejętność Nurkowanie to zwiększa.',
+          'Ile sekund ta postać wytrzyma pod wodą; umiejętność Nurkowanie to zwiększa.',
       'OxygenDepletionRate': 'Ile powietrza ubywa co sekundę pod wodą.',
       'OxygenRecoveryRate': 'Ile powietrza wraca co sekundę po wynurzeniu.',
       'CriticalLevelPercent':
@@ -2036,7 +2036,7 @@ class AppLocalizationsPl extends AppLocalizations {
       'SleepTime':
           'Godziny snu, które jeszcze coś dają; ponad ten limit odpoczynek nic już nie przywraca.',
       'MaxSleepTime':
-          'Największy zapas godzin odpoczynku, jaki bohater może mieć.',
+          'Największy zapas godzin odpoczynku, jaki ta postać może mieć.',
       'SleepTimeRecoveryAmount':
           'Godziny odpoczynku, które wracają przy każdym uzupełnieniu zapasu.',
       'SleepTimeRecoveryPeriod':
@@ -2048,14 +2048,14 @@ class AppLocalizationsPl extends AppLocalizations {
       'Mana_RecoveryRatePerHourOfSleep':
           'Część maksymalnej many, która wraca za każdą przespaną godzinę.',
       'Alcohol':
-          'Jak bardzo bohater jest pijany; na wyższych stopniach zamienia zręczność i manę na siłę.',
-      'MaxAlcohol': 'Najwyższy poziom alkoholu, jaki bohater może osiągnąć.',
+          'Jak bardzo ta postać jest pijana; na wyższych stopniach zamienia zręczność i manę na siłę.',
+      'MaxAlcohol': 'Najwyższy poziom alkoholu, jaki ta postać może osiągnąć.',
       'AlcoholDepletionRate':
           'Jak szybko poziom alkoholu spada z powrotem do trzeźwości.',
       'Swampweed':
-          'Jak bardzo bohater jest odurzony; wyższe stopnie przestawiają jego atrybuty.',
+          'Jak bardzo ta postać jest odurzona; wyższe stopnie przestawiają jej atrybuty.',
       'MaxSwampweed':
-          'Najwyższy poziom bagiennego ziela, jaki bohater może osiągnąć.',
+          'Najwyższy poziom bagiennego ziela, jaki ta postać może osiągnąć.',
       'SwampweedDepletionRate': 'Jak szybko mija odurzenie bagiennym zielem.',
       'XPExecutedBounty':
           'Doświadczenie za dobicie tej postaci, gdy leży już pokonana na ziemi.',

@@ -2008,16 +2008,17 @@ class AppLocalizationsIt extends AppLocalizations {
   String attributeManualTooltip(String attributeId) {
     String _temp0 = intl.Intl.selectLogic(attributeId, {
       'SuperArmor':
-          'Quanto incassa l\'eroe prima che un colpo lo faccia barcollare.',
+          'Quanto incassa questo personaggio prima che un colpo lo faccia barcollare.',
       'MaxSuperArmor':
           'La riserva completa di equilibrio; cresce con il livello e con l\'armatura indossata.',
       'DamageMultiplier':
-          'Fattore applicato al danno che l\'eroe subisce: 1 è normale, valori più alti fanno più male.',
+          'Fattore applicato al danno che questo personaggio subisce: 1 è normale, valori più alti fanno più male.',
       'SpeedModifier':
-          'Fattore sulla velocità con cui l\'eroe si muove: 1 è normale.',
-      'Oxygen': 'Secondi d\'aria rimasti sott\'acqua; a zero l\'eroe annega.',
+          'Fattore sulla velocità con cui questo personaggio si muove: 1 è normale.',
+      'Oxygen':
+          'Secondi d\'aria rimasti sott\'acqua; a zero questo personaggio annega.',
       'MaxOxygen':
-          'Per quanti secondi l\'eroe può restare sott\'acqua; l\'abilità Immersione lo aumenta.',
+          'Per quanti secondi questo personaggio può restare sott\'acqua; l\'abilità Immersione lo aumenta.',
       'OxygenDepletionRate': 'Aria consumata ogni secondo sott\'acqua.',
       'OxygenRecoveryRate': 'Aria che torna ogni secondo dopo essere riemersi.',
       'CriticalLevelPercent':
@@ -2025,7 +2026,7 @@ class AppLocalizationsIt extends AppLocalizations {
       'SleepTime':
           'Ore di sonno che danno ancora un beneficio; oltre quelle il gioco non concede più alcun recupero.',
       'MaxSleepTime':
-          'La riserva massima di ore di riposo che l\'eroe può accumulare.',
+          'La riserva massima di ore di riposo che questo personaggio può accumulare.',
       'SleepTimeRecoveryAmount': 'Ore di riposo che tornano a ogni ricarica.',
       'SleepTimeRecoveryPeriod':
           'Quanto tempo passa prima che la riserva di ore di riposo si ricarichi.',
@@ -2036,14 +2037,15 @@ class AppLocalizationsIt extends AppLocalizations {
       'Mana_RecoveryRatePerHourOfSleep':
           'Quota del mana massimo che torna per ogni ora dormita.',
       'Alcohol':
-          'Quanto è ubriaco l\'eroe; ai livelli più alti scambia destrezza e mana con forza.',
-      'MaxAlcohol': 'Il livello di alcol più alto che l\'eroe può raggiungere.',
+          'Quanto è ubriaco questo personaggio; ai livelli più alti scambia destrezza e mana con forza.',
+      'MaxAlcohol':
+          'Il livello di alcol più alto che questo personaggio può raggiungere.',
       'AlcoholDepletionRate':
           'Quanto in fretta il livello di alcol scende di nuovo verso la sobrietà.',
       'Swampweed':
-          'Quanto è sballato l\'eroe; ai livelli più alti i suoi valori si spostano.',
+          'Quanto è sballato questo personaggio; ai livelli più alti i suoi valori si spostano.',
       'MaxSwampweed':
-          'Il livello di erba palustre più alto che l\'eroe può raggiungere.',
+          'Il livello di erba palustre più alto che questo personaggio può raggiungere.',
       'SwampweedDepletionRate':
           'Quanto in fretta svanisce lo sballo da erba palustre.',
       'XPExecutedBounty':
