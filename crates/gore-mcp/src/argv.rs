@@ -1973,6 +1973,25 @@ mod tests {
     }
 
     #[test]
+    fn manager_recovery_forces_noninteractive_confirmation_and_json() {
+        assert_eq!(
+            argv_of(
+                "gore_mgr",
+                "recover",
+                json!({ "expected_guard_id": "guard-1" }),
+            ),
+            vec![
+                "mgr",
+                "recover",
+                "--expected-guard-id",
+                "guard-1",
+                "--yes",
+                "--json",
+            ]
+        );
+    }
+
+    #[test]
     fn positionals_are_ordered_and_separated_from_flags() {
         assert_eq!(
             argv_of(

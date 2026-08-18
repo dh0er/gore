@@ -315,7 +315,7 @@ fn mgr_import_list_enable_disable_order_analyze_status_reset() {
         ])
         .assert()
         .success()
-        .stdout(predicates::str::contains("no conflicts"));
+        .stdout(predicates::str::contains("no recognized conflicts"));
 
     // order: move id_b to position 0; the reported order lists it first.
     Command::cargo_bin("gore")
@@ -337,7 +337,7 @@ fn mgr_import_list_enable_disable_order_analyze_status_reset() {
 
     // status on an empty game tree: nothing was ever deployed here.
     let game = tmp.path().join("game");
-    std::fs::create_dir_all(&game).unwrap();
+    std::fs::create_dir_all(game.join("G1R")).unwrap();
     Command::cargo_bin("gore")
         .unwrap()
         .args([
@@ -353,6 +353,28 @@ fn mgr_import_list_enable_disable_order_analyze_status_reset() {
         .assert()
         .success()
         .stdout(predicates::str::contains("nothing deployed"));
+
+    let status_json = Command::cargo_bin("gore")
+        .unwrap()
+        .args([
+            "mgr",
+            "status",
+            "--game",
+            game.to_str().unwrap(),
+            "--library",
+            lib.to_str().unwrap(),
+            "--loadout",
+            loadout.to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let status_json: serde_json::Value = serde_json::from_slice(&status_json).unwrap();
+    assert_eq!(status_json["ok"], true);
+    assert_eq!(status_json["status"]["state"], "nothing_deployed");
 
     // reset on a game that has nothing deployed runs clean and says so.
     Command::cargo_bin("gore")
@@ -376,7 +398,8 @@ fn mgr_import_list_enable_disable_order_analyze_status_reset() {
         ])
         .assert()
         .success()
-        .stdout(predicates::str::contains("true"));
+        .stdout(predicates::str::contains("true"))
+        .stdout(predicates::str::contains("gore mgr apply"));
     assert!(!lib.join(&id_a).exists(), "removed entry dir must be gone");
 
     Command::cargo_bin("gore")
@@ -415,6 +438,209 @@ fn mgr_enable_unknown_id_errors() {
         .assert()
         .failure()
         .stderr(predicates::str::contains("does-not-exist"));
+}
+
+#[test]
+fn mgr_preflight_selects_and_recovers_only_the_exact_abandoned_manager_token() {
+    use gore_as::compile::InstallMutationGuard;
+
+    let tmp = TempDir::new().unwrap();
+    let game = tmp.path().join("game");
+    let library = tmp.path().join("library");
+    let loadout = tmp.path().join("loadout.json");
+    std::fs::create_dir_all(game.join("G1R")).unwrap();
+    let lock = game.join(".gore-install-mutation.lock");
+    let guard = InstallMutationGuard::acquire(&game, "gore-mod:manager-apply").unwrap();
+    let guard_id = guard.guard_id().to_owned();
+    guard.preserve_for_manual_recovery();
+
+    let output = Command::cargo_bin("gore")
+        .unwrap()
+        .args([
+            "mgr",
+            "preflight",
+            "--game",
+            game.to_str().unwrap(),
+            "--library",
+            library.to_str().unwrap(),
+            "--loadout",
+            loadout.to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let document: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["preflight"]["format"], 1);
+    let install_mutation = document["preflight"]["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["id"] == "install_mutation")
+        .unwrap();
+    assert_eq!(
+        install_mutation["code"],
+        "manager_mutation_recovery_required"
+    );
+    assert_eq!(install_mutation["action_token"], guard_id);
+
+    Command::cargo_bin("gore")
+        .unwrap()
+        .args([
+            "mgr",
+            "recover",
+            "--game",
+            game.to_str().unwrap(),
+            "--expected-guard-id",
+            "different-valid-token",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("selection changed"));
+    assert!(lock.exists(), "a mismatched token must preserve the lock");
+
+    Command::cargo_bin("gore")
+        .unwrap()
+        .args([
+            "mgr",
+            "recover",
+            "--game",
+            game.to_str().unwrap(),
+            "--expected-guard-id",
+            &guard_id,
+        ])
+        .write_stdin("n\n")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("Proceed? [y/N]"))
+        .stdout(predicates::str::contains("Aborted."));
+    assert!(
+        lock.exists(),
+        "declining confirmation must preserve the lock"
+    );
+
+    let output = Command::cargo_bin("gore")
+        .unwrap()
+        .args([
+            "mgr",
+            "recover",
+            "--game",
+            game.to_str().unwrap(),
+            "--expected-guard-id",
+            &guard_id,
+            "--yes",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let document: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        document,
+        serde_json::json!({"ok": true, "outcome": "pre_mutation_lock_cleared"})
+    );
+    assert!(!lock.exists());
+}
+
+#[test]
+fn mgr_recover_refuses_an_active_install_mutation_without_takeover() {
+    use gore_as::compile::InstallMutationGuard;
+
+    let tmp = TempDir::new().unwrap();
+    let game = tmp.path().join("game");
+    std::fs::create_dir_all(game.join("G1R")).unwrap();
+    let guard = InstallMutationGuard::acquire(&game, "gore-mod:manager-apply").unwrap();
+    let guard_id = guard.guard_id().to_owned();
+    let lock = guard.path().to_path_buf();
+
+    Command::cargo_bin("gore")
+        .unwrap()
+        .args([
+            "mgr",
+            "recover",
+            "--game",
+            game.to_str().unwrap(),
+            "--expected-guard-id",
+            &guard_id,
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("installation change is active"));
+    assert!(lock.exists());
+    drop(guard);
+    assert!(!lock.exists());
+}
+
+#[test]
+fn mgr_reset_refuses_and_preserves_a_studio_deploy_record() {
+    let tmp = TempDir::new().unwrap();
+    let game = tmp.path().join("game");
+    std::fs::create_dir_all(game.join("G1R")).unwrap();
+    let record = gore_mod::DeployRecord {
+        mod_name: "StudioFixture".into(),
+        ..Default::default()
+    };
+    let bytes = serde_json::to_vec_pretty(&record).unwrap();
+    let record_path = gore_mod::deploy_record_path(&game);
+    std::fs::write(&record_path, &bytes).unwrap();
+
+    Command::cargo_bin("gore")
+        .unwrap()
+        .args(["mgr", "reset", "--game", game.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("studio deploy is active"));
+
+    assert_eq!(std::fs::read(&record_path).unwrap(), bytes);
+    assert!(!game.join(".gore-install-mutation.lock").exists());
+}
+
+#[test]
+fn mgr_analyze_discloses_opaque_coverage_instead_of_claiming_no_conflicts() {
+    let tmp = TempDir::new().unwrap();
+    let library = tmp.path().join("library");
+    let loadout = tmp.path().join("loadout.json");
+    let pak = tmp.path().join("opaque_P.pak");
+    std::fs::write(&pak, b"not an indexable pak").unwrap();
+    let id = import(&library, &loadout, &pak);
+
+    Command::cargo_bin("gore")
+        .unwrap()
+        .args([
+            "mgr",
+            "enable",
+            &id,
+            "--library",
+            library.to_str().unwrap(),
+            "--loadout",
+            loadout.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("gore")
+        .unwrap()
+        .args([
+            "mgr",
+            "analyze",
+            "--library",
+            library.to_str().unwrap(),
+            "--loadout",
+            loadout.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("no recognized conflicts"))
+        .stdout(predicates::str::contains("conflict analysis is incomplete"))
+        .stdout(predicates::str::contains("opaque=1"))
+        .stdout(predicates::str::contains("no conflicts").not());
 }
 
 /// Real CLI path for format-2 additive file mods: build -> manager import/loadout -> analyze ->

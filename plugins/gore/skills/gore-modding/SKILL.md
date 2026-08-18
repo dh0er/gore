@@ -1,6 +1,6 @@
 ---
 name: gore-modding
-description: Use when modding Gothic 1 Remake with the GORE tools - changing textures, localized text, dialog, audio, voice-over, item values or AngelScript, or building and deploying a mod bundle. Covers what the tools can and cannot reach, the consent gate, and what "deployed" does and does not prove.
+description: Use when modding Gothic 1 Remake with GORE - changing textures, localized text, dialog, audio, voice-over, item values or AngelScript; building a bundle; or importing, enabling, ordering, analyzing, preflighting, applying, checking status, recovering, removing, and resetting GORE or external mods with the Mod Manager. Covers the consent gate and what "deployed" does and does not prove.
 ---
 
 # Modding Gothic 1 Remake with GORE
@@ -26,6 +26,58 @@ Call `gore_guide` for the page that covers your domain: `textures`, `audio`,
 small. `gore_help` gives exact current flags; the guide gives the order to do
 things in and what breaks when a step is skipped.
 
+## Manage a loadout as one declarative deployment
+
+For installing or managing mods, use `gore_mgr`, not a sequence of direct
+`gore_mod deploy` calls. A Manager loadout is one owned deployment; Apply
+rebuilds its complete enabled state from the pristine base.
+
+Read `gore_guide` page `mod-manager` and the exact `gore_help` entry first. The
+guide is the authority for the current accepted GORE bundles, external folders,
+archives, loose files, containers, UE4SS mods, and mixed packages. Do not infer
+support for a format from its extension or from where the mod came from.
+
+Use this lifecycle:
+
+1. If the setup is unknown or already looks wrong, run `gore_doctor` once; do
+   not repeat it between ordinary Manager steps. `gore_mgr import` the package
+   and keep the returned entry id. Import writes
+   protected Manager library/loadout state, not the game installation; it still
+   needs consent because a verified re-import may replace the stored payload.
+2. `gore_mgr enable` the intended entries, use `order` when needed, then run
+   `analyze`. Position 0 goes first and loses recognized ordered conflicts. An
+   intended winner is evidence from the analyzer, not proof of runtime priority.
+   `enable`, `disable`, and `order` update the reversible target loadout
+   immediately and intentionally do not open the protected-write consent gate;
+   state the intended edit before the call and report the resulting order.
+3. Immediately before an installation change, run `gore_mgr preflight` for the
+   exact read-only readiness/recovery report. An active Studio deployment, game
+   drift, or interrupted operation is a state to resolve, not something to
+   overwrite.
+4. Before `apply`, summarize the enabled loadout and observable effects, give
+   the exact Apply and Reset commands, and obtain consent. Apply writes the game
+   installation. Follow it with `status` and then a concrete in-game checklist.
+5. `remove` deletes the library entry and its loadout slot, but does not change
+   bytes already deployed in the game. Apply the remaining loadout afterwards
+   to make the installation match, then check `status` again.
+6. `reset` is the terminal cleanup path for a Manager-owned deployment and must
+   refuse rather than remove a Studio deployment. Check `status` afterwards;
+   never treat a successful command as proof that the game displayed or executed
+   every component.
+
+`list`, `analyze`, and `status` are not advertised as read-only because opening
+the authoritative Manager store may reconcile its loadout; list and analyze may
+also finish recovery of an interrupted library replacement. They remain ungated,
+but their result must still be treated as authoritative refreshed state.
+
+Never delete a GORE installation lock or recovery directory by hand. If an
+operation is still active, wait. If `preflight` identifies an abandoned Manager
+operation, pass its exact opaque action token as `expected_guard_id` to
+`gore_mgr recover` and obtain consent for that call. Recovery atomically rechecks
+the token; never guess or reuse one after the state changes. Compiler-owned,
+ambiguous, or invalid recovery state gets help, not an improvised reset. Re-run
+`preflight` and `status` after recovery before Apply or Reset.
+
 ## Pick a target that the engine actually reads
 
 This is where mods silently fail, and the tools cannot warn you: they will
@@ -36,7 +88,7 @@ containers, which is what `gore_texture` and `gore_asset` reach. A short,
 enumerable set sits loose on disk under `G1R\Content` — the FMOD banks, the Bink
 movies and their subtitles, the splash bitmap, and the mouse-cursor PNGs — and
 none of those is reachable through the texture commands. Read
-`gore_guide{page:"textures"}` before choosing, and check which world your target
+`gore_guide{action:"read",page:"textures"}` before choosing, and check which world your target
 is in. A bundle's `files` section replaces a loose file; `texture` replaces a
 cooked one. Using the wrong one deploys cleanly and changes nothing.
 
@@ -101,8 +153,12 @@ user in any form, tell them four things:
 1. **What the mod changes**, domain by domain — for each one, what they will see
    or hear, and where. Not the spec; what it does.
 2. **Where the bundle is**, as a full path.
-3. **The deploy command**, spelled out, so they can run it themselves.
-4. **The undeploy command** that removes all of it.
+3. **The installation route**, spelled out. For a Manager loadout this is
+   `mgr import`, `enable`, and `apply`; use direct `mod deploy` only when the user
+   explicitly chose the single-bundle route and no Manager deployment owns the
+   installation.
+4. **The matching cleanup route**: Manager `remove` plus Apply, or Manager Reset;
+   direct `mod undeploy` only for a direct deployment.
 
 Then ask.
 
@@ -118,9 +174,9 @@ conversation.
 
 ## After deploying, be honest about what is proven
 
-`gore mod deploy` verifies that the bytes it wrote are the bytes it meant to
-write, by hash. Nothing observes the screen. A successful deploy is not evidence
-that the change is visible.
+`gore mod deploy` and `gore mgr apply` verify that the bytes they wrote are the
+bytes they meant to write, by hash. Nothing observes the screen. A successful
+deploy or Apply is not evidence that the change is visible.
 
 So follow it with a checklist the user can actually run: what to look at, in what
 order, and what each item would look like if it worked. Mark the items you could

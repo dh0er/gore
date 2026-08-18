@@ -44,6 +44,31 @@ byte-identical. The only difference was three ASCII digits in the already-known
 `/Engine/Transient.GothicScreenshotsSave_*` object name in
 `PersistentDataList.sav`; its other bytes and every slot save were unchanged.
 
+## Current version-3 live observation
+
+On 2026-08-18, on Steam BuildID `24539464`, the version-3 Viper registration
+runtime crossed the live render boundary again as part of the Mod Manager
+campaign. The visible choice was `[Gore probe] UI fixture`, and `UE4SS.log`
+recorded the ordered `ARMED`, `CHOICE_PASS`, and `RENDER_PASS` states with
+`exact_count=1` at `2026-08-18 19:54:38`. The user opened the Viper conversation
+but did not select the fixture, and no save was written during this check.
+
+This was a GORE-authored fixture, not a third-party AngelScript mod. The
+packaged Manager was built from the PR #90 merge, while the app-local Core DLL
+used for this script check contained the PR #91 prepared-StaticNames fix. The
+third-party #269 Gothic UI Reposition mod was disabled for this observation
+after an earlier crash had been isolated to its own UE4SS Lua loop calling
+`FindAllOf("W_Hotbar_C")` off the game thread; that crash contained no GORE or
+AngelScript frame.
+
+Postflight restored the captured four-mod loadout byte-for-byte, removed the
+temporary campaign entries and Viper payload, restored the original signed
+Core DLL, and reported the user's original four-mod deployment in sync. This is
+one live proof of the current version-3 GORE path on one installation. It does
+not retroactively qualify the frozen `24169431` artifact below, a third-party
+AngelScript package, topic selection or persistence, or a three-way script
+conflict.
+
 ## Historical version-3 requalification candidates
 
 The production generator emitted runtime version 3 for the retained Viper
@@ -138,12 +163,12 @@ separate behavioral qualification because selecting its fixture can change
 quest/save state. The offline evidence qualifies its hotfix-remapped
 build/composition only, not selection, effects, persistence, or save/reload.
 
-The central generation registry now also contains Steam build `24340829`, but
-only for its separately recorded bounded offline authoring evidence. No
-dialog-runtime candidate or qualification has been retained for `24340829`,
-and none of the `24169431` runtime evidence carries forward across that
-generation boundary. Offline composition and any separately authorized live
-runtime requalification therefore remain open for the current build.
+The central generation registry also contains Steam build `24340829`, but only
+for its separately recorded bounded offline authoring evidence. No dialog-
+runtime candidate or qualification has been retained for `24340829`, and none
+of the `24169431` evidence carries across a generation boundary. Build
+`24539464` instead has the separate version-3 live observation recorded above;
+it does not convert either historical candidate into a qualified artifact.
 
 ## Discovery versus insertion
 
@@ -175,10 +200,11 @@ locality-qualified registrations before mutation. Conversation-local
 participant or exact-sentinel-topic mismatches remain registration-specific
 skips. Classes are resolved at the natural callback rather than loader startup
 because they may load lazily. This preflight-atomic behavior is covered by the
-version-3 mock-runtime suite; it is not transactional if a native `AddTopic`
+version-3 mock-runtime suite, and the build-`24539464` Viper observation covers
+one successful live render path. It is not transactional if a native `AddTopic`
 call itself fails. Such a failure stops all later mutation attempts, but the
 failing call or an earlier successful call may already have mutated and neither
-has a proven safe inverse. Version 3 is not yet a live-game proof.
+has a proven safe inverse; the live proof did not force that failure path.
 The runtime never selects or removes a topic, scans global objects, starts a
 conversation, uses a timer or console command, grants/activates an ability, or
 writes a save/quest/knowledge field.
@@ -198,13 +224,13 @@ writes a save/quest/knowledge field.
   9 June 2026 build timestamp, which is consistent with that, and a file
   creation date of 7 August 2026, which is not evidence either way because
   re-extracting the same archive resets it. Both the reviewed v0.4 fixture and version 1 of the exact adapter
-  emitted by the parameterized production generator completed the clean live
-  visual proof. Runtime version 3 has a frozen offline candidate for the older
-  build `24169431`: its deterministic builds, batch class preflight, observer
-  behavior, forbidden-operation boundary, and exact sandbox closure were
-  qualified offline, but its exact artifact never completed the same clean
-  visual requalification. Build `24340829` has no dialog-runtime qualification
-  at all. Other game, UE4SS, and runtime combinations remain to be qualified.
+  emitted by the parameterized production generator completed the original
+  clean live visual proof. Runtime version 3 has both the current
+  build-`24539464` GORE-fixture observation above and a frozen offline candidate
+  for older build `24169431`; that older exact artifact never completed the
+  same live requalification. Build `24340829` has no dialog-runtime
+  qualification at all. Other game, UE4SS, and runtime combinations remain to
+  be qualified.
 - Topic selection, authored knowledge/quest changes, recorded voice, and
   selection-side save effects are not certified by the insertion proof.
 - The exact native ordering of knowledge rules, `IsVisible_Implementation`,

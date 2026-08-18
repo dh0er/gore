@@ -1196,10 +1196,10 @@ fn install_recovery_fix_for(
              not stop it or delete lock files"
         }
         ManagerInstallRecoveryReadiness::AbandonedManager { .. } => {
-            "open the Mod Manager app for this installation and choose Recover. The app verifies \
-             the exact interrupted Manager operation before changing anything; the CLI does not \
-             currently perform this recovery. Do not delete lock files; run reset/undeploy only \
-             after recovery"
+            "run 'gore mgr preflight' for this installation, then pass its exact current token to \
+             'gore mgr recover --expected-guard-id <TOKEN>' and confirm; or open the Mod Manager \
+             app and choose Recover. Both routes recheck the exact interrupted Manager operation. \
+             Do not delete lock files; run reset/undeploy only after recovery"
         }
         ManagerInstallRecoveryReadiness::CompileOrAmbiguous => {
             "this belongs to script-build recovery or cannot be attributed safely. Leave the \
@@ -3313,8 +3313,9 @@ mod tests {
             },
             true,
         );
+        assert!(abandoned.contains("gore mgr preflight"), "{abandoned}");
+        assert!(abandoned.contains("gore mgr recover"), "{abandoned}");
         assert!(abandoned.contains("choose Recover"), "{abandoned}");
-        assert!(abandoned.contains("CLI does not currently"), "{abandoned}");
         assert!(abandoned.contains("only after recovery"), "{abandoned}");
         assert!(!abandoned.contains("opaque-test-token"), "{abandoned}");
 

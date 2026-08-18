@@ -178,8 +178,9 @@ gore/
 | [`gore-oodle`](../crates/gore-oodle) | Rust lib | Oodle/Kraken codec (pure Rust; no proprietary `oo2core` DLL). |
 | [`gore-as`](../crates/gore-as) | Rust lib | AngelScript precompiled-cache decoder/emitter/decompiler/splicer. |
 
-The Flutter GUIs reuse the exact same Rust crates as the CLI through the
-`dart:ffi` bridge, so the CLI is always the most complete surface.
+The Flutter GUIs reuse the same Rust engine as the CLI through the `dart:ffi`
+bridge. The CLI remains the expert and automation surface; the apps present
+shared contracts as guided workflows rather than maintaining another engine.
 
 ## Versioning
 

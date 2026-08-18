@@ -2,7 +2,7 @@
 //!
 //! This is where most of the commands that reach into the game installation live. Everything that
 //! only *produces* a mod is [`Safety::write`]; everything that *installs* one is
-//! [`Safety::mutate`], and `mgr reset` — which undeploys everything — is
+//! [`Safety::mutate`], and `mgr reset` — which removes only a Manager-owned deployment — is
 //! [`Safety::destructive`].
 //!
 //! Every `summary` and `help` string is copied verbatim from the corresponding clap doc comment.
@@ -579,20 +579,32 @@ const MGR_GAME_ARGS: &[ArgSpec] = &[GAME, LIBRARY, LOADOUT];
 
 const MGR_RESET_ARGS: &[ArgSpec] = &[GAME];
 
+const MGR_RECOVER_ARGS: &[ArgSpec] = &[
+    GAME,
+    ArgSpec::new(
+        "expected_guard_id",
+        Long("expected-guard-id"),
+        Str,
+        "Exact opaque action token reported by `mgr preflight`",
+        true,
+    ),
+];
+
 const MGR_COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(
         "import",
         "Import a mod (folder, .zip, or single game file) into the library",
         MGR_IMPORT_ARGS,
-        // Re-importing the same source under the same name derives the same id, and activation moves
-        // the existing library entry aside before `cleanup()` deletes its payload for good -- so an
-        // import can be the only thing standing between the user and an older mod version.
-        Safety::mutate(),
+        // A verified source/content/entry-id match may update an existing Manager entry. The
+        // crash-safe publication either leaves an unchanged import alone or promotes the new tree
+        // and cleans the previous payload before returning. It never touches the game installation.
+        Safety::manager_write(),
         T_NORMAL,
     )
     .gated_because(
-        "supersedes the library entry of the same name, and the version it replaces is deleted \
-         for good the next time the loadout is applied",
+        "can replace a verified source, content, or entry-id match in the Manager library; changed \
+         content is cleaned up during crash-safe publication, while an unchanged re-import is a \
+         no-op",
     )
     .guide("mod-manager"),
     CommandSpec::new(
@@ -604,14 +616,14 @@ const MGR_COMMANDS: &[CommandSpec] = &[
         // it either renames the backup back into place or calls `transaction.cleanup()`, which
         // discards the superseded entry for good. It stays ungated — refusing to *list* a library
         // would be absurd — but nothing may advertise it as read-only when it can delete.
-        Safety::write(),
+        Safety::manager_reconcile(),
         T_FAST,
     )
     .guide("mod-manager"),
     // Deletes the imported mod from the library, then rewrites the loadout without it. Nothing
     // here is created, and nothing puts it back: the user has to re-import from wherever the mod
     // originally came from, which they may no longer have. `enable`, `disable` and `order` stay
-    // plain writes because each is undone by its own inverse; this one is not.
+    // ungated Manager edits because each is undone by its own inverse; this one is not.
     CommandSpec::new(
         "remove",
         "Remove a mod from the library (and drop it from the loadout)",
@@ -628,7 +640,7 @@ const MGR_COMMANDS: &[CommandSpec] = &[
         "enable",
         "Enable a loadout entry (it will deploy on the next apply)",
         MGR_ID_ARGS,
-        Safety::write(),
+        Safety::manager_edit(),
         T_FAST,
     )
     .guide("mod-manager"),
@@ -636,7 +648,7 @@ const MGR_COMMANDS: &[CommandSpec] = &[
         "disable",
         "Disable a loadout entry (it will not deploy)",
         MGR_ID_ARGS,
-        Safety::write(),
+        Safety::manager_edit(),
         T_FAST,
     )
     .guide("mod-manager"),
@@ -644,7 +656,7 @@ const MGR_COMMANDS: &[CommandSpec] = &[
         "order",
         "Move a loadout entry to a new position (0 = mounts first, loses conflicts)",
         MGR_ORDER_ARGS,
-        Safety::write(),
+        Safety::manager_edit(),
         T_FAST,
     )
     .guide("mod-manager"),
@@ -657,8 +669,33 @@ const MGR_COMMANDS: &[CommandSpec] = &[
         // it either renames the backup back into place or calls `transaction.cleanup()`, which
         // discards the superseded entry for good. It stays ungated — refusing to *list* a library
         // would be absurd — but nothing may advertise it as read-only when it can delete.
-        Safety::write(),
+        Safety::manager_reconcile(),
         T_NORMAL,
+    )
+    .guide("mod-manager"),
+    CommandSpec::new(
+        "preflight",
+        "Inspect Manager readiness and recovery evidence without changing anything",
+        MGR_GAME_ARGS,
+        Safety::read(),
+        T_NORMAL,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("mod-manager"),
+    CommandSpec::new(
+        "recover",
+        "Recover one exact abandoned Manager mutation selected by its preflight token",
+        MGR_RECOVER_ARGS,
+        Safety::mutate(),
+        T_LONG,
+    )
+    .json(JsonSupport::Stdout)
+    // The CLI asks y/N by default. MCP stdin carries JSON-RPC and cannot answer that prompt, so the
+    // server's own consent gate stands in for it and the child receives the explicit confirmation.
+    .forced(&["--yes"])
+    .gated_because(
+        "repairs the exact abandoned Manager installation change selected by the preflight token \
+         and may restore its recorded pristine state or preserve a change that already completed",
     )
     .guide("mod-manager"),
     CommandSpec::new(
@@ -677,22 +714,26 @@ const MGR_COMMANDS: &[CommandSpec] = &[
         "status",
         "Show whether the game is in sync with the target loadout",
         MGR_GAME_ARGS,
-        Safety::read(),
+        // Status opens the authoritative Store snapshot. Like list/analyze, that may persist a
+        // valid loadout reconciliation, so clients must not advertise the call as read-only. It is
+        // intentionally ungated: the repair only canonicalizes Manager-owned state.
+        Safety::manager_reconcile(),
         T_NORMAL,
     )
+    .json(JsonSupport::Stdout)
     .guide("mod-manager"),
-    // Undeploys everything and restores the pristine installation. The only command in the whole
-    // table classified as destructive rather than merely mutating.
+    // Removes only a Manager-owned deployment and restores its pristine base. A Studio deployment
+    // is refused and preserved, including if ownership changes during the operation.
     CommandSpec::new(
         "reset",
-        "Undeploy everything the manager has active (restore pristine)",
+        "Undeploy the active Manager deployment (never removes a Studio deploy)",
         MGR_RESET_ARGS,
         Safety::destructive(),
         T_LONG,
     )
     .gated_because(
-        "undeploys every mod the manager has active and restores the pristine installation, so \
-         nothing this manager deployed is left in the game",
+        "undeploys the active Manager deployment and restores its pristine base while refusing to \
+         remove a Studio deployment",
     )
     .guide("mod-manager"),
 ];
@@ -701,8 +742,9 @@ pub const MGR: GroupSpec = GroupSpec {
     tool: "gore_mgr",
     title: "gore mgr",
     cli: "mgr",
-    summary: "Run several mods at once: import them into a library, order them, check for \
-              conflicts, and apply the whole loadout as one composed deployment.",
+    summary: "Run several mods at once: import and order them, inspect readiness, conflicts, and \
+              status, recover an interrupted Manager change, and apply or reset the whole loadout \
+              as one composed deployment.",
     shape: GroupShape::Nested,
     commands: MGR_COMMANDS,
 };
@@ -717,27 +759,45 @@ mod tests {
         assert_eq!(TEXTURE.commands.len(), 8);
         assert_eq!(ASSET.commands.len(), 4);
         assert_eq!(MOD.commands.len(), 3);
-        assert_eq!(MGR.commands.len(), 10);
+        assert_eq!(MGR.commands.len(), 12);
     }
 
     #[test]
-    fn no_manager_command_that_can_recover_a_transaction_claims_to_be_read_only() {
-        // `mgr list` and `mgr analyze` print and nothing else — but both go through
-        // `import::list`, which recovers an interrupted replacement before listing and may discard
-        // the superseded entry. Some clients auto-approve read-only tools; this must not be one.
-        for sub in ["list", "analyze"] {
+    fn manager_reads_that_may_reconcile_state_are_not_advertised_as_read_only() {
+        // `mgr list` and `mgr analyze` may finish an interrupted library replacement. All three
+        // open the authoritative Store snapshot, which may persist a valid loadout reconciliation.
+        // Some clients auto-approve read-only tools; these must not claim that annotation.
+        for sub in ["list", "analyze", "status"] {
             let command = MGR.command(sub).expect("exists");
             assert_ne!(
                 command.safety.worst_case(),
                 Class::Read,
-                "`mgr {sub}` recovers interrupted imports and cannot be advertised as read-only"
+                "`mgr {sub}` may reconcile Manager state and cannot be advertised as read-only"
             );
-            // Still ungated: refusing to list a library would be worse than the problem.
+            // Still ungated: canonical Store reconciliation is part of taking an authoritative
+            // Manager snapshot, not a user-requested install or library mutation.
             assert!(!command.safety.worst_case().needs_write_permission());
         }
 
-        // `status` is genuinely read-only — it does not go through `import::list`.
-        assert_eq!(MGR.command("status").expect("exists").safety.worst_case(), Class::Read);
+        let preflight = MGR.command("preflight").expect("exists");
+        assert_eq!(preflight.safety.worst_case(), Class::Read);
+        assert_eq!(preflight.json, JsonSupport::Stdout);
+    }
+
+    #[test]
+    fn manager_recovery_is_token_bound_gated_and_noninteractive_over_mcp() {
+        let recover = MGR.command("recover").expect("exists");
+        assert_eq!(recover.safety.worst_case(), Class::Mutate);
+        assert!(recover.safety.worst_case().needs_write_permission());
+        assert_eq!(recover.json, JsonSupport::Stdout);
+        assert_eq!(recover.forced_argv, ["--yes"]);
+        assert!(recover.arg("expected_guard_id").is_some());
+
+        let reset = MGR.command("reset").expect("exists");
+        assert!(
+            reset.gated_because.is_some_and(|reason| reason.contains("Studio deployment")),
+            "reset consent must disclose its Manager-only ownership boundary"
+        );
     }
 
     #[test]
@@ -755,11 +815,11 @@ mod tests {
 
     #[test]
     fn exactly_the_installing_and_deleting_commands_need_allow_write() {
-        // The two `deploy`/`undeploy` pairs are texture and mod; `apply` and `reset` are the
-        // manager's install-wide operations. The rest are here because they overwrite or delete
-        // paths this layer cannot check: `remove` destroys library content, `import` replaces it
-        // when the same mod is imported twice, and `texture replace` rewrites cooked files under a
-        // mount-mapped path. `texture index` is here only in its `out`-less form, where it
+        // The two `deploy`/`undeploy` pairs are texture and mod; `recover`, `apply`, and `reset` are
+        // the manager's install-wide operations. The rest are here because they overwrite or
+        // delete paths this layer cannot check: `remove` destroys library content, `import` may
+        // replace a verified source/content/entry-id match, and `texture replace` rewrites cooked
+        // files under a mount-mapped path. `texture index` is here only in its `out`-less form, where it
         // publishes into the shared data directory and prunes the other cached generations;
         // `worst_case` reports that shape.
         //
@@ -776,7 +836,7 @@ mod tests {
             gated,
             vec![
                 "replace", "deploy", "index", "undeploy", "deploy", "undeploy",
-                "import", "remove", "apply", "reset"
+                "import", "remove", "recover", "apply", "reset"
             ]
         );
 

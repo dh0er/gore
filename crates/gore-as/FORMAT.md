@@ -48,6 +48,22 @@ extract-remap --allow-new-symbols can retain and rekey the minimal rows needed
 by a newly authored class/function-bearing module; the default remains strict
 and rejects unresolved new symbols.
 
+### StaticNames indices in raw and prepared minis
+
+The compact T6 table does not have one index convention at every stage. A raw
+extracted mini addresses its private StaticNames rows by local table index. A
+mini already prepared against a pristine base instead encodes a private row as
+the absolute operand `pristine_static_count + compact_row`; operands below the
+pristine count still refer directly to pristine rows.
+
+The loadout-wide second remap pass therefore preserves valid pristine operands
+and resolves each prepared absolute private operand through the mini's compact
+T6 row. It may then reuse a same-named pristine or already selected row, or
+append the row to the composed pool. It must not reinterpret that absolute
+operand as a local row. An operand in the prepared private range without the
+corresponding compact row fails closed with `MissingStaticName`; the raw
+extract/remap path keeps the local-index rule.
+
 ## Semantic-oracle slot normalization
 
 `gore as bytediff --norm-slots` keeps N2 opt-in and fail-closed. Its cheap path
@@ -74,7 +90,8 @@ difference.
 
 - The complete 7,305-module tree parses through the final tail-table byte.
 - Extract/remap/splice round-trips are covered by synthetic and real-cache
-  tests, including independently composed class-bearing mini-caches.
+  tests, including independently composed class-bearing mini-caches and
+  prepared absolute StaticNames operands with a missing-row refusal.
 - The corrected emitted tree compiles with the game compiler into a structurally
   complete cache; an intentional unknown symbol produces normal
   file:line:column error output and publishes no cache.

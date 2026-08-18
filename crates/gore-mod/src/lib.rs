@@ -12906,6 +12906,22 @@ pub fn recover_manager_install(
 /// Undo the active gore-mod deployment at `game_root`: restore every backup and remove the
 /// UE4SS mod. No-op if nothing is deployed.
 pub fn undeploy(game_root: &Path) -> Result<Option<DeployRecord>> {
+    undeploy_with_owner_policy(game_root, false)
+}
+
+/// Undo only an active Manager-owned deployment at `game_root`.
+///
+/// A Studio-owned deployment is refused before install ownership is acquired. The deploy record
+/// is then re-read under that ownership and must still match byte-for-byte, so a concurrent
+/// Manager-to-Studio owner change is also refused without touching either deployment.
+pub fn undeploy_manager(game_root: &Path) -> Result<Option<DeployRecord>> {
+    undeploy_with_owner_policy(game_root, true)
+}
+
+fn undeploy_with_owner_policy(
+    game_root: &Path,
+    manager_only: bool,
+) -> Result<Option<DeployRecord>> {
     // Match deploy's absolutization so the record file is found regardless of the caller's cwd.
     let game_root = abs_root(game_root);
     // Preserve the established no-op behavior without creating a lock file. A present record is
@@ -12915,6 +12931,12 @@ pub fn undeploy(game_root: &Path) -> Result<Option<DeployRecord>> {
         return Ok(None);
     };
     let manager = initial.record.owner == "manager";
+    if manager_only && !manager {
+        return Err(ModError::Other(format!(
+            "STUDIO_DEPLOY_ACTIVE:{}",
+            initial.record.mod_name
+        )));
+    }
     let owner = if manager {
         "gore-mod:manager-undeploy"
     } else {
@@ -18000,6 +18022,64 @@ mod tests {
     #[test]
     fn undeploy_refuses_studio_record_replaced_by_manager_before_lock() {
         assert_undeploy_record_owner_swap_is_refused("", "manager");
+    }
+
+    #[test]
+    fn manager_only_undeploy_preserves_a_studio_deploy() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        std::fs::create_dir_all(&game).unwrap();
+        let record = DeployRecord {
+            mod_name: "StudioMod".into(),
+            ..Default::default()
+        };
+        let bytes = serde_json::to_vec_pretty(&record).unwrap();
+        let path = record_path(&game);
+        std::fs::write(&path, &bytes).unwrap();
+
+        let error = undeploy_manager(&game).unwrap_err().to_string();
+
+        assert_eq!(error, "STUDIO_DEPLOY_ACTIVE:StudioMod");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+    }
+
+    #[test]
+    fn manager_only_undeploy_refuses_a_manager_to_studio_owner_swap() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let mods = game.join("G1R/Content/Paks/~mods");
+        std::fs::create_dir_all(&mods).unwrap();
+        let manager_live = mods.join("manager_P.pak");
+        let studio_live = mods.join("studio_P.pak");
+        std::fs::write(&manager_live, b"manager").unwrap();
+        std::fs::write(&studio_live, b"studio").unwrap();
+        let record_for = |name: &str, owner: &str, live: &Path| DeployRecord {
+            mod_name: name.into(),
+            owner: owner.into(),
+            managed_paks: vec![live.display().to_string()],
+            deployed_hashes: BTreeMap::from([(
+                live.display().to_string(),
+                sha256_file(live).unwrap(),
+            )]),
+            ..Default::default()
+        };
+        let path = record_path(&game);
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&record_for("Manager", "manager", &manager_live)).unwrap(),
+        )
+        .unwrap();
+        let studio_bytes =
+            serde_json::to_vec_pretty(&record_for("Studio", "", &studio_live)).unwrap();
+        replace_record_before_undeploy_acquire(&path, &studio_bytes);
+
+        let error = undeploy_manager(&game).unwrap_err().to_string();
+
+        assert!(error.contains("UNDEPLOY_BASIS_CHANGED"), "got: {error}");
+        assert_eq!(std::fs::read(&manager_live).unwrap(), b"manager");
+        assert_eq!(std::fs::read(&studio_live).unwrap(), b"studio");
+        assert_eq!(std::fs::read(&path).unwrap(), studio_bytes);
     }
 
     #[test]

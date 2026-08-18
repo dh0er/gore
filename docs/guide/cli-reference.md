@@ -20,7 +20,7 @@ gore --version
 | `find` | — | Search the bundled catalogs and the effect register: class names, ids, categories, display names, and what an id does in game. | [find](find.md) |
 | `gen` | — | Compile `overrides.toml` → a UE4SS Lua override mod. | [items](items.md) |
 | `mod` | `build` · `deploy` · `undeploy` | Build/deploy/undeploy a unified bundle. | [bundles](bundles.md) |
-| `mgr` | `import` · `list` · `remove` · `enable` · `disable` · `order` · `analyze` · `apply` · `status` · `reset` | Multi-mod manager: library, load order, conflicts, composed deploy. | [mod-manager](mod-manager.md) |
+| `mgr` | `import` · `list` · `remove` · `enable` · `disable` · `order` · `analyze` · `preflight` · `recover` · `apply` · `status` · `reset` | Multi-mod manager: library, load order, readiness/recovery, conflicts, composed deployment, status and Reset. | [mod-manager](mod-manager.md) |
 | `loc` | `extract` · `status` · `export` · `import` | Read/edit localized text & dialogs in the encrypted `.lcache`. | [text-and-dialogs](text-and-dialogs.md) |
 | `audio` | `list` · `extract` · `replace` · `restore` · `export-patch` · `apply-patch` | Read/replace FMOD `.bank` audio (PCM injection, `*.gore-bak`). | [audio](audio.md) |
 | `voice` | `list` (`index`) · `match-line` · `extract` · `add` · `replace` · `apply-manifest` (`apply`) | Index/extract/copy-on-write edit voice-over ZIP archives. | [voice](voice.md) |
@@ -153,18 +153,28 @@ and failing would bury the line explaining what was not searched.
 
 ## `mgr`
 
-All subcommands except `reset` accept `--library <DIR>` and `--loadout <FILE>`.
+All subcommands except `reset` and `recover` accept `--library <DIR>` and
+`--loadout <FILE>`. Supply either both overrides or neither; a lone override is
+refused rather than being paired with unrelated default Manager state.
 
 | Subcommand | Arguments |
 |---|---|
 | `import <PATH>` | source folder / `.zip` / game file |
 | `list` | — |
-| `remove <ID>` | library entry id |
+| `remove <ID>` | library entry id; updates the target loadout only, so Apply afterwards if it was deployed |
 | `enable <ID>` / `disable <ID>` | library entry id |
 | `order <ID> <POS>` | `POS` is 0-based; 0 mounts first and loses conflicts |
 | `analyze` | — |
-| `apply` / `status` | `--game <GAME>` |
-| `reset` | `--game <GAME>` |
+| `preflight` | `--game <GAME>` · `--json`; read-only fixed setup/recovery checks |
+| `recover` | `--game <GAME>` · `--expected-guard-id <TOKEN>` · `--yes` · `--json` (`--json` requires `--yes`) |
+| `apply` | `--game <GAME>` |
+| `status` | `--game <GAME>` · `--json` |
+| `reset` | `--game <GAME>`; Manager-owned deployment only, refuses Studio ownership |
+
+`recover` accepts only the exact current abandoned-Manager `action_token`
+reported by `preflight`; it re-probes before mutation. See
+[Running many mods](mod-manager.md#interrupted-manager-changes) for the consent,
+JSON, and refusal contract.
 
 ## `loc`
 

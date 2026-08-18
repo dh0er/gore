@@ -18,9 +18,10 @@ of that page, not a second claim.
 
 | | |
 |---|---|
-| **Shown in game** | An authored topic rendered in a real conversation on Gothic 1 Remake **1.0.3**: caption independently confirmed, `RENDER_PASS`, the same object and exact class once each in both observed arrays. `gore mod undeploy` then restored the 123,394,250-byte shipping cache to its recorded SHA-256, with 92 of 93 saves byte-identical. |
+| **Shown in game** | An authored topic rendered in a real conversation on Gothic 1 Remake **1.0.3**: caption independently confirmed, `RENDER_PASS`, the same object and exact class once each in both observed arrays. That historical version-1 proof restored the 123,394,250-byte shipping cache to its recorded SHA-256, with 92 of 93 saves byte-identical. On 2026-08-18, runtime version 3 also rendered `[Gore probe] UI fixture` on BuildID 24539464 and logged `ARMED`, `CHOICE_PASS`, and `RENDER_PASS` with `exact_count=1`; no topic was selected and no save was written. |
+| **Current-proof boundary** | The version-3 probe was GORE-authored and used the PR #91-fixed app-local Core DLL. Postflight restored the captured four-mod baseline loadout byte-for-byte and removed the temporary fixture. It does not qualify a third-party AngelScript mod or a three-way script conflict. |
 | **Not certified by that proof** | Selecting the topic. Authored knowledge or quest changes. **Recorded voice on an authored topic.** Save effects on the selection side. |
-| **Not qualified at all** | Steam build `24340829`. Runtime version 3 — it has a frozen offline candidate for `24169431`, which never completed the same clean visual requalification. |
+| **Not qualified at all** | Steam build `24340829`, the exact frozen runtime-version-3 artifact for older build `24169431`, and game/UE4SS combinations other than the separately recorded proofs. |
 | **Unproven** | Automatic discovery: that every class in a new module reaches an already constructed `ConversationTopicSet`. |
 
 One consequence worth stating plainly, because it spans two guide pages:

@@ -8,9 +8,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.1.0] - Unreleased
 
-- First Early Alpha release candidate. Publication remains blocked on the
-  clean-machine and real-install acceptance passes.
-- Mod library, load order, conflict detection, and declarative Apply/Undeploy.
+- First Early Alpha release candidate. The real-install workflow has completed
+  one acceptance campaign; publication remains blocked on clean-Windows
+  portable, installer, recovery, Reset, and uninstall acceptance and explicit
+  release authorization.
+- Complete Manager lifecycle: import, inspect, enable, disable, reorder, remove,
+  analyze, declarative Apply, deployment status, confirmed abandoned-operation
+  recovery, Studio takeover, and Reset/Undeploy.
+- Bounded import for GORE bundles and supported foreign zips/folders, loose
+  `_P.pak`, IoStore `.utoc`/`.ucas` pairs with optional same-stem `.pak`, UE4SS
+  Lua folders, mixed packages, and raw `.lcache`, `.bank`, and
+  `PrecompiledScript*.Cache` replacements. `.7z`/`.rar`, multipart or incomplete
+  IoStore, unknown, unsafe, and corrupt inputs fail without a partial import.
+- Stable verified source/content identity keeps moved or unchanged reimports on
+  one entry, updates changed input in place, and refuses ambiguous identity.
+- Full-loadout deployment for item overrides, localization, audio, voice,
+  textures, cooked assets, loose files, packed files, AngelScript, and dialog
+  topics, with owned backups, drift/status evidence, and fail-closed recovery.
+- Conflict and footprint reporting distinguishes Exact, Partial, Advisory, and
+  Opaque knowledge instead of presenting an empty result as proof of safety.
+  Voice archives and loose/packed-file claims are covered; opaque UE4SS and
+  undeclared script targets remain visibly qualified.
+- Numeric Unreal container priorities now follow the displayed order. A
+  real-install campaign with Nexus mods #244, #512, #269, and Attack Input V4
+  verified both #244/#512 order directions, new-game and existing-save loading,
+  enable/disable/reorder/Reset, and byte-exact restoration of the captured
+  loadout with no temporary campaign residue.
+- Fixed prepared-mini AngelScript StaticNames remapping. A GORE-authored Viper
+  probe using the PR #91 Core DLL rendered `[Gore probe] UI fixture` and logged
+  `ARMED`, `CHOICE_PASS`, and `RENDER_PASS` with `exact_count=1`. This does not
+  qualify a third-party AngelScript mod or a three-way script conflict. #269 was
+  disabled for that probe after its separate off-game-thread UE4SS Lua crash.
+- Actionable first-run diagnosis, compact localized mutation errors, intended
+  winners/load-order direction, deployment ownership details, and truthful
+  recovery guidance are available in the GUI.
 - Windows installer with WinSparkle update checks; the portable zip remains
   self-contained and updater-free.
 - Documented that uninstalling removes the app and its normal

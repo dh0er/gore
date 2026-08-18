@@ -1,8 +1,8 @@
 {
   "name": "gore",
   "displayName": "GORE",
-  "description": "Mod Gothic 1 Remake: textures, localized text, dialog, audio, voice-over, item values and AngelScript, built into one bundle and deployed as a unit. Bundles the skill and MCP server configuration; needs the gore CLI on PATH.",
-  "version": "0.2.0",
+  "description": "Author Gothic 1 Remake mods or safely import, enable, order, analyze, preflight, apply, check status, recover, remove, and reset GORE or external mods. Bundles the skill and MCP server configuration; needs the gore CLI on PATH.",
+  "version": "0.3.0",
   "author": {
     "name": "Daniel Hoer",
     "url": "https://github.com/dh0er"

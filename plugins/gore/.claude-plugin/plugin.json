@@ -1,7 +1,7 @@
 {
   "name": "gore",
-  "description": "Mod Gothic 1 Remake with the GORE toolkit: the MCP server that exposes every gore CLI command, plus the workflow knowledge that keeps an assistant from modding something the engine never reads.",
-  "version": "0.2.0",
+  "description": "Author Gothic 1 Remake mods or safely import, enable, order, analyze, preflight, apply, check status, recover, remove, and reset GORE or external mods.",
+  "version": "0.3.0",
   "author": {
     "name": "Daniel Hoer"
   },
@@ -19,8 +19,8 @@
   "userConfig": {
     "allow_write": {
       "type": "boolean",
-      "title": "Change the game without confirming each time",
-      "description": "Off by default: every change to your installation is confirmed with you first. Turn this on only where nobody is watching, such as a scripted run.",
+      "title": "Change the install or protected Manager content without confirming",
+      "description": "Off by default: installation changes and protected Manager import, replacement, removal, recovery, and Reset calls are confirmed first. Reversible enable, disable, and order edits update the target loadout immediately without this setting.",
       "default": false
     },
     "allow_game_launch": {

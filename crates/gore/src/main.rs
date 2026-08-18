@@ -199,7 +199,7 @@ enum Commands {
         #[command(subcommand)]
         action: cmd::texture::TextureAction,
     },
-    /// Multi-mod manager: library + loadout + conflicts + composed deploy
+    /// Multi-mod manager: library, loadout, readiness/recovery, apply, status and reset
     Mgr {
         #[command(subcommand)]
         action: cmd::mgr::MgrAction,

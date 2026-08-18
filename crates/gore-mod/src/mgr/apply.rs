@@ -1570,6 +1570,12 @@ pub fn undeploy_all(game_root: &Path) -> crate::Result<bool> {
     Ok(crate::undeploy(game_root)?.is_some())
 }
 
+/// Undeploy only a Manager-owned deployment. A Studio deploy is preserved and refused, including
+/// if the deploy owner changes while this operation waits for install ownership.
+pub fn undeploy_manager_only(game_root: &Path) -> crate::Result<bool> {
+    Ok(crate::undeploy_manager(game_root)?.is_some())
+}
+
 // ── naming helpers ────────────────────────────────────────────────────────────────────────────
 
 /// `<root>/G1R/Content/Paks/~mods` — where manager paks/triplets mount.
