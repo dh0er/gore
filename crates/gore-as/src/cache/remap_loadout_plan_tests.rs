@@ -1563,6 +1563,128 @@ fn prepared_base_only_func_id_preserves_factory_ref_and_static_name() {
 }
 
 #[test]
+fn loadout_second_pass_accepts_prepared_absolute_static_name_index() {
+    const BASE_FUNC_PTR: i64 = 0xc110;
+    const BASE_FUNC_ID: i32 = 130;
+    const MINI_FUNC_PTR: i64 = 0xc220;
+    const MINI_FUNC_ID: i32 = 131;
+    let base = cache(
+        "Pristine",
+        &[function_record("__STATIC_NAME", &[], BASE_FUNC_ID)],
+        &[],
+        TailRows {
+            funcs: vec![function_tail_row(
+                BASE_FUNC_PTR,
+                "__STATIC_NAME",
+                "Pristine",
+                &[],
+            )],
+            func_ids: vec![id_row(BASE_FUNC_ID, BASE_FUNC_PTR)],
+            static_names: vec![sia("BaseName0"), sia("BaseName1")],
+            ..TailRows::default()
+        },
+    );
+    // A compile-module artifact has already been remapped against `base`: its first compact T6
+    // row is addressed at the absolute index immediately after the two pristine rows.
+    let prepared = cache(
+        "PreparedStaticConsumer",
+        &[function_record_with_code(
+            "UsesPreparedStaticName",
+            &[],
+            MINI_FUNC_ID,
+            &[2, 2, 9, BASE_FUNC_ID, 10],
+        )],
+        &[],
+        TailRows {
+            funcs: vec![function_tail_row(
+                MINI_FUNC_PTR,
+                "UsesPreparedStaticName",
+                "PreparedStaticConsumer",
+                &[],
+            )],
+            func_ids: vec![id_row(MINI_FUNC_ID, MINI_FUNC_PTR)],
+            static_names: vec![sia("PreparedName")],
+            ..TailRows::default()
+        },
+    );
+
+    let mut builder = LoadoutScriptIdPlanBuilder::new(&base).unwrap();
+    builder.inspect(&prepared).unwrap();
+    let plan = builder.finish().unwrap();
+    let output = remap_module_to_base_with_loadout_plan(&prepared, &base, &plan)
+        .unwrap()
+        .0;
+
+    let meta = TailMetadata::build(&output).unwrap();
+    assert_eq!(meta.static_names.len(), 1);
+    assert_eq!(meta.static_names[0].name, "PreparedName");
+    let spans = collect_module_spans(&output).unwrap();
+    assert_eq!(spans.code.len(), 1);
+    let span = &spans.code[0];
+    let code: Vec<i32> = (0..span.count)
+        .map(|index| {
+            let offset = span.data_off + index * 4;
+            i32::from_le_bytes(output[offset..offset + 4].try_into().unwrap())
+        })
+        .collect();
+    assert_eq!(code, [2, 2, 9, BASE_FUNC_ID, 10]);
+}
+
+#[test]
+fn loadout_second_pass_rejects_missing_prepared_static_name_row() {
+    const BASE_FUNC_PTR: i64 = 0xd110;
+    const BASE_FUNC_ID: i32 = 140;
+    const MINI_FUNC_PTR: i64 = 0xd220;
+    const MINI_FUNC_ID: i32 = 141;
+    let base = cache(
+        "Pristine",
+        &[function_record("__STATIC_NAME", &[], BASE_FUNC_ID)],
+        &[],
+        TailRows {
+            funcs: vec![function_tail_row(
+                BASE_FUNC_PTR,
+                "__STATIC_NAME",
+                "Pristine",
+                &[],
+            )],
+            func_ids: vec![id_row(BASE_FUNC_ID, BASE_FUNC_PTR)],
+            static_names: vec![sia("BaseName")],
+            ..TailRows::default()
+        },
+    );
+    let malformed = cache(
+        "MalformedStaticConsumer",
+        &[function_record_with_code(
+            "UsesMissingStaticName",
+            &[],
+            MINI_FUNC_ID,
+            &[2, 2, 9, BASE_FUNC_ID, 10],
+        )],
+        &[],
+        TailRows {
+            funcs: vec![function_tail_row(
+                MINI_FUNC_PTR,
+                "UsesMissingStaticName",
+                "MalformedStaticConsumer",
+                &[],
+            )],
+            func_ids: vec![id_row(MINI_FUNC_ID, MINI_FUNC_PTR)],
+            // Its sole row lives at prepared absolute index 1, not the referenced gap at 2.
+            static_names: vec![sia("OnlyPreparedName")],
+            ..TailRows::default()
+        },
+    );
+
+    let mut builder = LoadoutScriptIdPlanBuilder::new(&base).unwrap();
+    builder.inspect(&malformed).unwrap();
+    let plan = builder.finish().unwrap();
+    assert!(matches!(
+        remap_module_to_base_with_loadout_plan(&malformed, &base, &plan),
+        Err(RemapError::MissingStaticName(2))
+    ));
+}
+
+#[test]
 fn successor_allocator_wraps_and_reports_small_domain_exhaustion() {
     let mut allocator = SuccessorAllocator::new(1, 3, [2, 3]);
     assert_eq!(allocator.allocate_from(2), Some(1));
