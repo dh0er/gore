@@ -10,17 +10,19 @@
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
+use std::io::Write as _;
 use std::path::PathBuf;
 
 use gore_mod::mgr::{
     self,
     analyze::{Conflict, Severity},
-    apply::undeploy_all,
+    apply::undeploy_manager_only,
     import,
+    model::FootprintCoverage,
     status::ManagerStatus,
     store::StoreSnapshot,
 };
-use gore_mod::ManagerInstallRecoveryReadiness;
+use gore_mod::{ManagerInstallRecoveryOutcome, ManagerInstallRecoveryReadiness};
 
 #[derive(Subcommand)]
 pub enum MgrAction {
@@ -87,6 +89,34 @@ pub enum MgrAction {
         #[arg(long)]
         loadout: Option<PathBuf>,
     },
+    /// Inspect Manager readiness and recovery evidence without changing anything
+    Preflight {
+        /// Game root (the folder containing G1R/)
+        #[arg(long)]
+        game: Option<PathBuf>,
+        #[arg(long)]
+        library: Option<PathBuf>,
+        #[arg(long)]
+        loadout: Option<PathBuf>,
+        /// Emit the stable native preflight response as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Recover one exact abandoned Manager mutation selected by its preflight token
+    Recover {
+        /// Game root (the folder containing G1R/)
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Exact opaque action token reported by `mgr preflight`
+        #[arg(long)]
+        expected_guard_id: String,
+        /// Confirm recovery without the interactive y/N prompt
+        #[arg(long)]
+        yes: bool,
+        /// Emit the stable native recovery response as JSON (requires --yes)
+        #[arg(long, requires = "yes")]
+        json: bool,
+    },
     /// Compose the enabled loadout into one deployment against the game
     Apply {
         /// Game root (the folder containing G1R/)
@@ -106,8 +136,11 @@ pub enum MgrAction {
         library: Option<PathBuf>,
         #[arg(long)]
         loadout: Option<PathBuf>,
+        /// Emit the full native status report, including bounded owned-path evidence, as JSON
+        #[arg(long)]
+        json: bool,
     },
-    /// Undeploy everything the manager has active (restore pristine)
+    /// Undeploy the active Manager deployment (never removes a Studio deploy)
     Reset {
         /// Game root (the folder containing G1R/)
         #[arg(long)]
@@ -223,6 +256,11 @@ pub fn run(action: MgrAction) -> Result<()> {
                 })?;
 
             println!("removed {id}: {removed}");
+            if removed {
+                println!(
+                    "library and loadout updated; run 'gore mgr apply' to update any deployed game"
+                );
+            }
             Ok(())
         }
 
@@ -280,13 +318,49 @@ pub fn run(action: MgrAction) -> Result<()> {
             let conflicts = store.analyze();
 
             if conflicts.is_empty() {
-                println!("no conflicts");
+                println!("no recognized conflicts");
             } else {
                 for c in &conflicts {
                     println!("{}", format_conflict(c));
                 }
             }
+            if let Some(warning) = coverage_warning(&store) {
+                println!("warning: {warning}");
+            }
             Ok(())
+        }
+
+        MgrAction::Preflight {
+            game,
+            library,
+            loadout,
+            json,
+        } => {
+            let game = gore_loc::config::game_root(game)?;
+            let (lib, ld_path) = store_paths(library, loadout)?;
+            let report = mgr::preflight::preflight_v1(&game, &lib, &ld_path);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "preflight": report,
+                    }))?
+                );
+            } else {
+                print_preflight(&report);
+            }
+            Ok(())
+        }
+
+        MgrAction::Recover {
+            game,
+            expected_guard_id,
+            yes,
+            json,
+        } => {
+            let game = gore_loc::config::game_root(game)?;
+            recover_selected_manager_install(&game, &expected_guard_id, yes, json)
         }
 
         MgrAction::Apply {
@@ -334,18 +408,42 @@ pub fn run(action: MgrAction) -> Result<()> {
             game,
             library,
             loadout,
+            json,
         } => {
             let game = gore_loc::config::game_root(game)?;
             let (lib, ld_path) = store_paths(library, loadout)?;
             let store = StoreSnapshot::open(&lib, &ld_path).map_err(|e| anyhow::anyhow!("{e}"))?;
-            let st = store.status(&game).map_err(|e| anyhow::anyhow!("{e}"))?;
-            println!("{}", describe_status(&game, &st));
+            let report = store
+                .status_report(&game)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "status": report,
+                    }))?
+                );
+            } else {
+                println!("{}", describe_status(&game, &report.status));
+            }
             Ok(())
         }
 
         MgrAction::Reset { game } => {
             let game = gore_loc::config::game_root(game)?;
-            let removed = undeploy_all(&game).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let removed = match undeploy_manager_only(&game) {
+                Ok(removed) => removed,
+                Err(error) => {
+                    let message = error.to_string();
+                    if let Some(name) = message.strip_prefix("STUDIO_DEPLOY_ACTIVE:") {
+                        anyhow::bail!(
+                            "refusing: a studio deploy is active ({name}) — undeploy it from Mod Studio"
+                        );
+                    }
+                    return Err(anyhow::anyhow!(message)).context("resetting manager deployment");
+                }
+            };
             if removed {
                 println!("reset: undeployed the active manager deployment");
             } else {
@@ -354,6 +452,183 @@ pub fn run(action: MgrAction) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn print_preflight(report: &mgr::preflight::ManagerPreflightV1) {
+    for check in &report.checks {
+        println!(
+            "{:?}: {:?} code={} action={} — {}",
+            check.id, check.state, check.code, check.action, check.detail
+        );
+        if let Some(token) = &check.action_token {
+            println!("  recovery token: {token}");
+        }
+        for item in &check.items {
+            println!("  {item}");
+        }
+    }
+}
+
+fn validate_recovery_selection(
+    readiness: &ManagerInstallRecoveryReadiness,
+    expected_guard_id: &str,
+) -> Result<()> {
+    match readiness {
+        ManagerInstallRecoveryReadiness::AbandonedManager { guard_id }
+            if guard_id == expected_guard_id =>
+        {
+            Ok(())
+        }
+        ManagerInstallRecoveryReadiness::AbandonedManager { .. } => anyhow::bail!(
+            "recovery selection changed; run 'gore mgr preflight' again and use its exact token"
+        ),
+        ManagerInstallRecoveryReadiness::Missing => {
+            anyhow::bail!("no abandoned Manager mutation is available for recovery")
+        }
+        ManagerInstallRecoveryReadiness::Active => anyhow::bail!(
+            "recovery blocked: a GORE installation change is active; wait for it to finish"
+        ),
+        ManagerInstallRecoveryReadiness::CompileOrAmbiguous => anyhow::bail!(
+            "recovery blocked: script-build recovery or an unclear lock owner requires recovery help"
+        ),
+        ManagerInstallRecoveryReadiness::Invalid => anyhow::bail!(
+            "recovery blocked: GORE could not inspect the installation lock safely"
+        ),
+    }
+}
+
+fn recover_selected_manager_install(
+    game_root: &std::path::Path,
+    expected_guard_id: &str,
+    yes: bool,
+    json: bool,
+) -> Result<()> {
+    if expected_guard_id.is_empty() {
+        anyhow::bail!("--expected-guard-id must not be empty");
+    }
+    if expected_guard_id.len() > 512 {
+        anyhow::bail!("--expected-guard-id exceeds its 512-byte limit");
+    }
+
+    let readiness = gore_mod::probe_manager_install_recovery(game_root);
+    validate_recovery_selection(&readiness, expected_guard_id)?;
+
+    if !yes {
+        println!("Recover this exact abandoned Manager installation change?");
+        println!("  game: {}", game_root.display());
+        println!("  recovery token: {expected_guard_id}");
+        println!(
+            "Recovery may restore the recorded pristine state or preserve a change that already completed."
+        );
+        print!("Proceed? [y/N] ");
+        std::io::stdout()
+            .flush()
+            .context("flushing recovery prompt")?;
+        let mut answer = String::new();
+        std::io::stdin()
+            .read_line(&mut answer)
+            .context("reading recovery confirmation")?;
+        if !answer.trim().eq_ignore_ascii_case("y") {
+            println!("Aborted.");
+            return Ok(());
+        }
+    }
+
+    let outcome = gore_mod::recover_manager_install(game_root, expected_guard_id)
+        .map_err(|error| anyhow::anyhow!("{error}"))
+        .context("recovering the selected Manager installation change")?;
+    let completed = recovery_outcome_completed(outcome);
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "ok": completed,
+                "outcome": outcome,
+            }))?
+        );
+    } else if completed {
+        println!("{}", describe_recovery_outcome(outcome));
+    }
+    if completed {
+        Ok(())
+    } else {
+        anyhow::bail!(describe_recovery_outcome(outcome))
+    }
+}
+
+fn recovery_outcome_completed(outcome: ManagerInstallRecoveryOutcome) -> bool {
+    matches!(
+        outcome,
+        ManagerInstallRecoveryOutcome::AlreadyClean
+            | ManagerInstallRecoveryOutcome::PreMutationLockCleared
+            | ManagerInstallRecoveryOutcome::RecoveredToPristine
+            | ManagerInstallRecoveryOutcome::CompletedApplyPreserved
+            | ManagerInstallRecoveryOutcome::CompletedUndeployConfirmed
+    )
+}
+
+fn describe_recovery_outcome(outcome: ManagerInstallRecoveryOutcome) -> &'static str {
+    match outcome {
+        ManagerInstallRecoveryOutcome::AlreadyClean => {
+            "recovery: the selected installation change is already clean"
+        }
+        ManagerInstallRecoveryOutcome::Busy => {
+            "recovery not performed: another installation change became active"
+        }
+        ManagerInstallRecoveryOutcome::PreMutationLockCleared => {
+            "recovery complete: the abandoned pre-mutation lock was cleared"
+        }
+        ManagerInstallRecoveryOutcome::RecoveredToPristine => {
+            "recovery complete: the installation was restored to its recorded pristine state"
+        }
+        ManagerInstallRecoveryOutcome::CompletedApplyPreserved => {
+            "recovery complete: the already-completed Manager apply was preserved"
+        }
+        ManagerInstallRecoveryOutcome::CompletedUndeployConfirmed => {
+            "recovery complete: the already-completed Manager reset was confirmed"
+        }
+        ManagerInstallRecoveryOutcome::CompileRecoveryRequired => {
+            "recovery not performed: script-build recovery is required"
+        }
+        ManagerInstallRecoveryOutcome::InspectionFailed => {
+            "recovery not performed: the installation could not be inspected safely"
+        }
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct CoverageGaps {
+    partial: usize,
+    advisory: usize,
+    opaque: usize,
+}
+
+fn coverage_gaps(store: &StoreSnapshot) -> CoverageGaps {
+    let mut gaps = CoverageGaps::default();
+    for selected in store.loadout().entries.iter().filter(|entry| entry.enabled) {
+        let Some(meta) = store.mods().iter().find(|meta| meta.id == selected.id) else {
+            continue;
+        };
+        for component in &meta.components {
+            match component.footprint_coverage() {
+                FootprintCoverage::Exact => {}
+                FootprintCoverage::Partial => gaps.partial += 1,
+                FootprintCoverage::Advisory => gaps.advisory += 1,
+                FootprintCoverage::Opaque => gaps.opaque += 1,
+            }
+        }
+    }
+    gaps
+}
+
+fn coverage_warning(store: &StoreSnapshot) -> Option<String> {
+    let gaps = coverage_gaps(store);
+    (gaps != CoverageGaps::default()).then(|| {
+        format!(
+            "conflict analysis is incomplete for enabled components (partial={}, advisory={}, opaque={})",
+            gaps.partial, gaps.advisory, gaps.opaque
+        )
+    })
 }
 
 fn format_conflict(conflict: &Conflict) -> String {
@@ -446,9 +721,9 @@ fn describe_recovery_status(readiness: &ManagerInstallRecoveryReadiness) -> Stri
                 .to_string()
         }
         ManagerInstallRecoveryReadiness::AbandonedManager { .. } => {
-            "recovery required: an interrupted Manager change was abandoned (open the Mod Manager \
-             app and choose Recover; the CLI does not currently perform this recovery; do not \
-             delete lock files; run reset/undeploy only after recovery)"
+            "recovery required: an interrupted Manager change was abandoned (run 'gore mgr \
+             preflight' to obtain its exact token, then 'gore mgr recover --expected-guard-id \
+             <TOKEN>'; do not delete lock files or run reset before recovery)"
                 .to_string()
         }
         ManagerInstallRecoveryReadiness::CompileOrAmbiguous => {
@@ -530,9 +805,9 @@ mod tests {
             describe_recovery_status(&ManagerInstallRecoveryReadiness::AbandonedManager {
                 guard_id: "opaque-test-token".into(),
             });
-        assert!(abandoned.contains("choose Recover"), "{abandoned}");
-        assert!(abandoned.contains("CLI does not currently"), "{abandoned}");
-        assert!(abandoned.contains("only after recovery"), "{abandoned}");
+        assert!(abandoned.contains("gore mgr preflight"), "{abandoned}");
+        assert!(abandoned.contains("gore mgr recover"), "{abandoned}");
+        assert!(abandoned.contains("exact token"), "{abandoned}");
         assert!(!abandoned.contains("opaque-test-token"), "{abandoned}");
 
         let compile =
@@ -543,6 +818,26 @@ mod tests {
         let invalid = describe_recovery_status(&ManagerInstallRecoveryReadiness::Invalid);
         assert!(invalid.contains("could not inspect"), "{invalid}");
         assert!(invalid.contains("do not delete lock files"), "{invalid}");
+    }
+
+    #[test]
+    fn only_completed_recovery_outcomes_are_cli_successes() {
+        for outcome in [
+            ManagerInstallRecoveryOutcome::AlreadyClean,
+            ManagerInstallRecoveryOutcome::PreMutationLockCleared,
+            ManagerInstallRecoveryOutcome::RecoveredToPristine,
+            ManagerInstallRecoveryOutcome::CompletedApplyPreserved,
+            ManagerInstallRecoveryOutcome::CompletedUndeployConfirmed,
+        ] {
+            assert!(recovery_outcome_completed(outcome), "{outcome:?}");
+        }
+        for outcome in [
+            ManagerInstallRecoveryOutcome::Busy,
+            ManagerInstallRecoveryOutcome::CompileRecoveryRequired,
+            ManagerInstallRecoveryOutcome::InspectionFailed,
+        ] {
+            assert!(!recovery_outcome_completed(outcome), "{outcome:?}");
+        }
     }
 
     #[test]
@@ -587,5 +882,41 @@ mod tests {
         std::fs::remove_file(&lock).unwrap();
 
         assert_eq!(describe_status(game, &nothing), "nothing deployed");
+    }
+
+    #[test]
+    fn recovery_selection_accepts_only_the_exact_abandoned_manager_token() {
+        assert!(validate_recovery_selection(
+            &ManagerInstallRecoveryReadiness::AbandonedManager {
+                guard_id: "selected-token".into(),
+            },
+            "selected-token",
+        )
+        .is_ok());
+
+        let changed = validate_recovery_selection(
+            &ManagerInstallRecoveryReadiness::AbandonedManager {
+                guard_id: "new-token".into(),
+            },
+            "selected-token",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(changed.contains("selection changed"), "{changed}");
+
+        for (readiness, expected) in [
+            (ManagerInstallRecoveryReadiness::Missing, "no abandoned"),
+            (ManagerInstallRecoveryReadiness::Active, "active"),
+            (
+                ManagerInstallRecoveryReadiness::CompileOrAmbiguous,
+                "script-build recovery",
+            ),
+            (ManagerInstallRecoveryReadiness::Invalid, "inspect"),
+        ] {
+            let error = validate_recovery_selection(&readiness, "selected-token")
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(expected), "got {error:?}");
+        }
     }
 }

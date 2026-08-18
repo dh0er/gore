@@ -209,6 +209,20 @@ target the same module, the later loadout entry is the displayed and deployed
 winner. A complete raw cache is a base rather than a winner over compatible
 module patches; those patches are applied on top of it in either order.
 
+Prepared minis and raw extracted minis intentionally encode private
+StaticNames operands differently. A prepared mini addresses a private row after
+the pristine pool; a raw mini uses its compact local row. The loadout composer
+now preserves that distinction, reuses matching names, and fails closed if a
+prepared operand has no row. Do not rewrite those numeric operands by hand; the
+wire-level contract is in [`gore-as/FORMAT.md`](../../crates/gore-as/FORMAT.md#staticnames-indices-in-raw-and-prepared-minis).
+
+This composition path has one current live observation. On 2026-08-18 the
+GORE-authored Viper fixture rendered `[Gore probe] UI fixture`; `UE4SS.log`
+recorded `ARMED`, `CHOICE_PASS`, and `RENDER_PASS` with `exact_count=1`. The run
+used the PR #91-fixed app-local Core DLL. It was not a genuine third-party
+AngelScript mod or a three-way script conflict, and no save was written during
+the check. See the [Manager evidence boundary](mod-manager.md#evidence-boundary).
+
 The `-o` form of `compile` leaves the install exactly as it was, so the live
 `PrecompiledScript_Shipping.Cache` is still the pristine cache these commands
 use as `vanilla.Cache`.

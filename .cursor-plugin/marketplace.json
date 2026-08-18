@@ -5,15 +5,15 @@
     "name": "Daniel Hoer"
   },
   "metadata": {
-    "description": "GORE, the modding toolkit for Gothic 1 Remake: the MCP server that exposes every gore CLI command, and the workflow knowledge that goes with it.",
-    "version": "0.2.0",
+    "description": "GORE for Gothic 1 Remake: author mods and safely run the complete Mod Manager lifecycle through the CLI-backed MCP server and workflow skill.",
+    "version": "0.3.0",
     "pluginRoot": "plugins"
   },
   "plugins": [
     {
       "name": "gore",
       "source": "gore",
-      "description": "Mod Gothic 1 Remake from your assistant: textures, localized text, dialog, audio, voice-over, item values and AngelScript, built into one bundle and deployed as a unit."
+      "description": "Author Gothic 1 Remake mods or safely import, enable, order, analyze, preflight, apply, check status, recover, remove and reset GORE or external mods."
     }
   ]
 }

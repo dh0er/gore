@@ -125,8 +125,10 @@ What each check reads — and therefore what it can and cannot prove — is in t
 | edit your saved progress | [Save Editor](../../apps/save-editor/README.md) |
 | hand-write custom Lua behavior | [gore-lua](../../lua/README.md) |
 
-The Flutter GUIs call the exact same Rust crates as the CLI through a
-`dart:ffi` bridge. The CLI is always the most complete surface.
+The Flutter GUIs call the same Rust engine as the CLI through a `dart:ffi`
+bridge. Use the CLI for expert and automated workflows; use a GUI when its
+guided presentation is more useful. They share contracts and state rather than
+maintaining separate implementations.
 
 ## How each domain becomes a mod
 

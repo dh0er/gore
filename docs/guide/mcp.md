@@ -7,7 +7,7 @@ check a load order for conflicts.
 
 Every tool call runs a real `gore` subcommand as a child process and returns its
 output, with the exact command line shown first — whatever the agent did, you can
-re-run it in a shell yourself. All 82 leaf commands are reachable, and this guide
+re-run it in a shell yourself. All 87 leaf commands are reachable, and this guide
 ships inside the binary so the agent can read it before acting.
 
 ## Setup
@@ -169,13 +169,25 @@ The decision is made **per subcommand**, not per tool.
 | | What it covers | Examples |
 |---|---|---|
 | Runs straight away | Reading, and commands writing to a free path outside the game installation | `texture list`, `loc export` to a new file, `as decompile`, `voice extract` |
-| Asks you first, whatever is on disk | Changing the game installation, deleting user content, or replacing a shared catalog — nothing you pass can make these harmless | `mod deploy`, `mod undeploy`, `mgr apply`, `mgr reset`, `mgr remove`, `mgr import`, `texture deploy`, `texture undeploy`, `texture replace`, `gen`, `deploy-shared`, `loc extract`, `audio restore` |
+| Asks you first, whatever is on disk | Changing the game installation, deleting or replacing Manager-library content, deleting other user content, or replacing a shared catalog — nothing you pass can make these harmless | `mod deploy`, `mod undeploy`, `mgr apply`, `mgr reset`, `mgr recover`, `mgr remove`, `mgr import`, `texture deploy`, `texture undeploy`, `texture replace`, `gen`, `deploy-shared`, `loc extract`, `audio restore` |
 | Asks you only when something is in the way | Overwriting an output file that already exists, writing into a directory that already holds files, rebuilding a bundle folder that is there, or rewriting a file in place | `catalog dump` onto an existing file, `texture index` without an output path, `loc import` without an output path, `mod build` over an existing bundle, `stubs`, `audio extract` and `as emit-all` into a non-empty directory |
 | Asks you first | Starting the game to compile AngelScript | `as compile`, `as compile-module` |
 
 Many commands sidestep the question entirely: passing an output argument turns an
 in-place rewrite into a new file. `loc import --out new.lcache` runs straight
 away; omitting `--out` overwrites the game's own file and asks.
+
+Three Manager snapshot calls are a deliberate exception to the simple
+read/write wording: `mgr list`, `mgr analyze`, and `mgr status` may finish an
+interrupted library replacement and persist the canonical reconciliation of a
+valid loadout. They remain ungated because that repair is part of opening
+authoritative Manager-owned state, but the MCP annotations do not call them
+read-only. `mgr preflight` is the separate genuinely read-only inspection.
+
+`mgr enable`, `mgr disable`, and `mgr order` are another explicit Manager-state
+class: they update the reversible target loadout immediately, are labelled
+`updates Manager loadout`, and intentionally remain ungated. They do not touch
+the game until a separately confirmed `mgr apply`.
 
 ### Which clients can ask
 
@@ -249,7 +261,7 @@ approval layer — you can answer once at startup instead:
 
 | Flag | Environment variable | Effect |
 |---|---|---|
-| `--allow-write` | `GORE_MCP_ALLOW_WRITE` | Installation changes and in-place rewrites run without asking |
+| `--allow-write` | `GORE_MCP_ALLOW_WRITE` | Installation changes, Manager-library mutations, deletions, and in-place rewrites run without asking |
 | `--allow-game-launch` | `GORE_MCP_ALLOW_GAME_LAUNCH` | The same for starting the game. Compiling needs **both**, because it also stages files in the installation |
 | `--no-consent-prompts` | `GORE_MCP_NO_CONSENT_PROMPTS` | Never ask, and refuse anything that would need it. The strict posture, for a server exposed to an agent whose calls nobody reviews. It cannot be combined with the two above — that would be asking for a looser and a stricter server at once, and the server refuses to start rather than pick one |
 
@@ -264,7 +276,8 @@ maps both permissions through it.
 
 In Claude Code you never touch a variable: the plugin declares them under
 `userConfig`, so enabling it asks you, in a dialog, whether GORE may change the
-game without confirming each time. Leave both off unless you have a reason.
+game, replace Manager-library content, or perform another protected write
+without confirming each time. Leave both off unless you have a reason.
 `${user_config.…}` is a Claude Code substitution. Codex reads the direct
 `.mcp.json` map and Cursor reads the wrapped `mcp.json` map; both pass the
 placeholder text through untouched, which the server reads as "not set" rather
@@ -317,8 +330,11 @@ line:
   cannot be checked *and* the folder cannot either, the command asks outright:
   `gen` (target folder named inside the `overrides.toml` it reads),
   `texture replace` (cooked files under a path derived from the asset name,
-  deleting a stale `.ubulk`), and `mgr import` (re-importing the same mod
-  deletes the payload of the entry it replaces).
+  deleting a stale `.ubulk`), and `mgr import`. The latter resolves a verified
+  existing entry by entry id, source identity, or content identity; a changed
+  match replaces that library payload during import, while an unchanged match
+  is a no-op. The consent gate runs before that identity decision, so import
+  still asks up front.
   Every check here happens before the command starts, so it is a decision point
   and not a lock: a file created *while* a command runs is still overwritten.
   Closing that window would mean making these commands refuse to re-run at all,
@@ -358,14 +374,16 @@ Two more flags tune behaviour rather than permissions:
 
 ## The tools
 
-Twelve tools mirror the CLI's command families; each takes a `subcommand` plus
-its arguments. Two more are specific to the server.
+Fourteen tools mirror the CLI's command families; each takes a `subcommand`
+plus its arguments. Two more are specific to the server.
 
 | Tool | Covers | Guide |
 |---|---|---|
 | `gore_guide` | Search and read these pages | — |
 | `gore_help` | `gore <cmd> --help` for any command | [cli-reference](cli-reference.md) |
 | `gore_config` | `config` | [getting-started](getting-started.md) |
+| `gore_doctor` | `doctor` | [getting-started](getting-started.md) |
+| `gore_find` | `find` | [find](find.md) |
 | `gore_catalog` | `dump` · `stubs` · `catalog` · `story-catalog` · `location-catalog` · `gui-model` · `sync` · `dump-mod` | [catalogs](catalogs-and-models.md) |
 | `gore_location` | `location` | [catalogs](catalogs-and-models.md) |
 | `gore_project` | `scaffold` · `gen` · `package` · `deploy-shared` | [items](items.md) |
@@ -378,7 +396,7 @@ its arguments. Two more are specific to the server.
 | `gore_mgr` | `mgr` | [mod-manager](mod-manager.md) |
 | `gore_as` | `as` | [scripts](scripts.md) |
 
-Twelve tools rather than 82 keeps a client's tool list navigable while still
+Sixteen tools rather than 87 keeps a client's tool list navigable while still
 covering every command. `gore_catalog` and `gore_project` have no matching CLI
 subcommand — they group top-level commands that belong to one workflow.
 

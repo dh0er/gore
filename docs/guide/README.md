@@ -36,7 +36,7 @@ Everything you need to mod Gothic 1 Remake with GORE. Start with
 | Page | What it covers |
 |---|---|
 | [Bundling & deploying](bundles.md) | One spec → one mod that deploys and undeploys as a unit |
-| [Running many mods](mod-manager.md) | `gore mgr`: library, load order, conflicts, composed apply |
+| [Running many mods](mod-manager.md) | `gore mgr`: library, load order, conflict evidence, preflight/recovery, Apply and Reset |
 
 ## Also
 

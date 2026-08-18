@@ -131,6 +131,12 @@ pub enum Class {
     Read,
     /// Creates new files. Never touches the game installation or an existing input.
     Write,
+    /// Opens the Mod Manager Store and may persist its automatic reconciliation. Ungated.
+    ManagerReconcile,
+    /// Intentionally updates reversible Mod Manager loadout state. Ungated.
+    ManagerEdit,
+    /// Rewrites the protected Mod Manager library/loadout state without touching the game install.
+    ManagerWrite,
     /// Modifies the game installation, or rewrites an existing file in place.
     Mutate,
     /// Undoes or discards work wholesale.
@@ -142,7 +148,7 @@ pub enum Class {
 impl Class {
     /// Whether `--allow-write` is needed.
     pub fn needs_write_permission(&self) -> bool {
-        matches!(self, Class::Mutate | Class::Destructive)
+        matches!(self, Class::ManagerWrite | Class::Mutate | Class::Destructive)
     }
 
     /// Whether `--allow-game-launch` is needed.
@@ -154,6 +160,9 @@ impl Class {
         match self {
             Class::Read => "read-only",
             Class::Write => "writes new files",
+            Class::ManagerReconcile => "may reconcile Manager state",
+            Class::ManagerEdit => "updates Manager loadout",
+            Class::ManagerWrite => "WRITES MANAGER STATE — needs --allow-write",
             Class::Mutate => "MODIFIES THE INSTALL — needs --allow-write",
             Class::Destructive => "DESTRUCTIVE — needs --allow-write",
             // Both flags, not one: `requirements` marks every GameLaunch command as a write too,
@@ -310,6 +319,15 @@ impl Safety {
     pub const fn write() -> Self {
         Self::of(Class::Write)
     }
+    pub const fn manager_reconcile() -> Self {
+        Self::of(Class::ManagerReconcile)
+    }
+    pub const fn manager_edit() -> Self {
+        Self::of(Class::ManagerEdit)
+    }
+    pub const fn manager_write() -> Self {
+        Self::of(Class::ManagerWrite)
+    }
     pub const fn mutate() -> Self {
         Self::of(Class::Mutate)
     }
@@ -406,7 +424,10 @@ impl Safety {
             self.in_place_without.is_some_and(|escape| !args.contains_key(escape));
         Requirements {
             write: rewrites_in_place
-                || matches!(self.base, Class::Mutate | Class::Destructive | Class::GameLaunch),
+                || matches!(
+                    self.base,
+                    Class::ManagerWrite | Class::Mutate | Class::Destructive | Class::GameLaunch
+                ),
             game_launch: matches!(self.base, Class::GameLaunch),
             rewrites_in_place,
         }
@@ -462,11 +483,11 @@ pub struct CommandSpec {
     pub guide: Option<&'static str>,
     /// Why *this* command needs a person to agree, completing "`gore <path>` …".
     ///
-    /// Required of every [`Class::Mutate`] and [`Class::Destructive`] command, and checked by a
-    /// test in this module. One sentence used to answer for all of them — "changes the game
-    /// installation or the shared catalogs the tools read" — and for several it was simply untrue:
-    /// `audio extract` aimed at a temp directory changes neither, and an assistant that had read
-    /// the arguments had to contradict its own server in front of the user.
+    /// Required of every [`Class::ManagerWrite`], [`Class::Mutate`], and [`Class::Destructive`]
+    /// command, and checked by a test in this module. One sentence used to answer for all of them —
+    /// "changes the game installation or the shared catalogs the tools read" — and for several it
+    /// was simply untrue: `audio extract` aimed at a temp directory changes neither, and an
+    /// assistant that had read the arguments had to contradict its own server in front of the user.
     ///
     /// The true reason was never missing, only unpublished: it is the comment above each of these
     /// entries, explaining what the command overwrites and why the gate cannot preflight it. This
@@ -622,7 +643,7 @@ impl GroupSpec {
 
 /// Wall-clock caps. Three tiers rather than a number per command: the distinction that matters is
 /// "prints something", "rewrites some files" and "walks the entire game", and inventing a precise
-/// budget for each of 82 commands would be false precision.
+/// budget for each of 87 commands would be false precision.
 pub const T_FAST: u64 = 60;
 pub const T_NORMAL: u64 = 300;
 pub const T_LONG: u64 = 1800;
@@ -662,7 +683,7 @@ pub const GROUPS: &[GroupSpec] = &[
 ///
 /// A literal, not a computed value: it is a claim about the CLI, and the integration test compares
 /// it against what clap actually exposes. Changing it should be a deliberate act.
-pub const EXPECTED_LEAF_COUNT: usize = 85;
+pub const EXPECTED_LEAF_COUNT: usize = 87;
 
 pub fn group(tool: &str) -> Option<&'static GroupSpec> {
     GROUPS.iter().find(|group| group.tool == tool)
@@ -932,8 +953,16 @@ mod tests {
         // The same fact is stated in three places — this label, the instructions primer, and the
         // refusal message — and it has now been wrong in each of them once. A command that needs
         // write permission must say so wherever it says anything.
-        for class in [Class::Read, Class::Write, Class::Mutate, Class::Destructive, Class::GameLaunch]
-        {
+        for class in [
+            Class::Read,
+            Class::Write,
+            Class::ManagerReconcile,
+            Class::ManagerEdit,
+            Class::ManagerWrite,
+            Class::Mutate,
+            Class::Destructive,
+            Class::GameLaunch,
+        ] {
             let label = class.label();
             assert_eq!(
                 label.contains("--allow-write"),
@@ -1224,7 +1253,10 @@ mod tests {
         // is wrong is worse than a gate that is strict.
         for group in GROUPS {
             for command in group.commands {
-                if matches!(command.safety.base, Class::Mutate | Class::Destructive) {
+                if matches!(
+                    command.safety.base,
+                    Class::ManagerWrite | Class::Mutate | Class::Destructive
+                ) {
                     assert!(
                         command.gated_because.is_some(),
                         "`gore {} {}` is gated outright but states no reason. Add \

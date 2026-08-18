@@ -318,4 +318,40 @@ mod tests {
         assert!(note.contains("`out`"));
         assert!(note.contains("--allow-write"));
     }
+
+    #[test]
+    fn manager_import_is_a_protected_state_write_not_an_install_mutation() {
+        let command = spec::group("gore_mgr").unwrap().command("import").unwrap();
+        let note = safety_note(&command.safety);
+
+        assert_eq!(note, "WRITES MANAGER STATE — needs --allow-write");
+        assert!(!note.contains("INSTALL"), "{note}");
+
+        let description = tool("gore_mgr")["description"].as_str().unwrap().to_string();
+        let import = description
+            .split_once("\nimport —")
+            .and_then(|(_, tail)| tail.split_once("\nlist —").map(|(section, _)| section))
+            .expect("rendered import section");
+        assert!(import.contains(&format!("[{note}]")), "{import}");
+    }
+
+    #[test]
+    fn authoritative_manager_reads_disclose_ungated_reconciliation() {
+        let manager = spec::group("gore_mgr").unwrap();
+        for sub in ["list", "analyze", "status"] {
+            let command = manager.command(sub).unwrap();
+            assert_eq!(safety_note(&command.safety), "may reconcile Manager state", "{sub}");
+            assert!(!command.safety.requirements(&serde_json::Map::new()).write, "{sub}");
+        }
+    }
+
+    #[test]
+    fn reversible_manager_edits_are_accurately_labeled_but_ungated() {
+        let manager = spec::group("gore_mgr").unwrap();
+        for sub in ["enable", "disable", "order"] {
+            let command = manager.command(sub).unwrap();
+            assert_eq!(safety_note(&command.safety), "updates Manager loadout", "{sub}");
+            assert!(!command.safety.requirements(&serde_json::Map::new()).write, "{sub}");
+        }
+    }
 }

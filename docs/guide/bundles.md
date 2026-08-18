@@ -1,8 +1,9 @@
 # Bundling & deploying
 
-A **bundle** combines every domain — item overrides, localized text, audio,
-voice archives, textures, scripts, and dialog topics — into one mod that
-deploys and undeploys as a unit. This is the same engine
+A **bundle** combines every deployable domain — item overrides, localized text,
+audio, voice archives, textures/assets, loose or packed files, scripts, and
+dialog topics — into one mod that deploys and undeploys as a unit. This is the
+same engine
 [Mod Studio](../../apps/mod-studio/README.md) drives.
 
 ## The build spec
@@ -121,10 +122,12 @@ What deploy does per domain:
 
 The offline half is routine and re-checked on every test run against a temporary
 game root: a deploy writes the files it names, and an undeploy restores the
-backups and deletes the containers it owns. Whether that survives contact with
-the game was checked once, by hand, on 2026-08-07 — Gothic 1 Remake at Steam
-BuildID 24539464, `gore` built from commit `90940340`, with each mod's effect
-picked so it could not be misread, and a person looking or listening.
+backups and deletes the containers it owns. That boundary was first checked by
+hand on 2026-08-07 — Gothic 1 Remake at Steam BuildID 24539464, `gore` built
+from commit `90940340`, with each mod's effect picked so it could not be
+misread, and a person looking or listening. A later Manager campaign added
+genuine third-party, numeric-container-order, and live composed-script evidence
+described [below](#running-several-mods-at-once).
 
 One bundle carrying `overrides`, `loc_edits` and a `texture` deployed as a unit
 and took effect in a single launch. The main-menu logo was magenta, the edited
@@ -292,13 +295,20 @@ and conflict detection, use [`gore mgr`](mod-manager.md) or the
 [Mod Manager](../../apps/mod-manager/README.md) app, which consume the same
 bundles.
 
-That side was exercised on the same install, on the same day: two bundles
-editing one localization id, `gore mgr analyze` naming the winner, and the game
-showing the mod it named — then the reverse after a reorder. The details are in
-[the manager's evidence boundary](mod-manager.md#evidence-boundary). It goes
-exactly one conflict kind deep: a soft localization clash between two bundles.
-Texture-versus-texture container precedence, script splices and three-way
-conflicts were never checked against a running game.
+That side now has two manual evidence points on the same maintainer's install.
+The 2026-08-07 run checked a soft localization clash in both directions. The
+2026-08-18 run used genuine Nexus mods #244, #512, #269, and Attack Input V4;
+numeric #244/#512 container priority matched the displayed order in both
+directions, a new game and an existing save loaded, and the tested
+enable/disable/reorder/Reset paths behaved as expected. A GORE-authored Viper
+AngelScript fixture also composed and rendered with `ARMED`, `CHOICE_PASS`, and
+`RENDER_PASS` plus `exact_count=1`.
+
+The details and restoration boundary are in
+[the manager's evidence boundary](mod-manager.md#evidence-boundary). The script
+probe used the PR #91-fixed app-local Core DLL and was not a third-party
+AngelScript mod; no three-way script conflict was checked. #269 was disabled
+for that probe after a separate off-game-thread crash in its own UE4SS Lua loop.
 
 ## Other helpers
 

@@ -144,9 +144,10 @@ pub fn instructions(opts: &Options, policy: Policy) -> String {
 /// already been wrong once — it still listed `mod build`, `stubs`, `audio extract` and `as emit-all`
 /// after those four learned to check their destination and ask only when something is in the way.
 ///
-/// The bar is deliberately narrow: `Class::Mutate` and worse, which is the tier that asks no matter
-/// what it is handed. Commands that ask only about an occupied destination are covered by the
-/// sentence above this list, and naming them here would tell a model to avoid calls that are free.
+/// The bar is deliberately narrow: protected Manager-state writes, installation mutations, and
+/// destructive operations, which ask no matter what they are handed. Commands that ask only about
+/// an occupied destination are covered by the sentence above this list, and naming them here would
+/// tell a model to avoid calls that are free.
 ///
 /// `GameLaunch` is excluded because the line below this one is about exactly those, by name.
 fn always_gated() -> Vec<String> {
@@ -154,7 +155,10 @@ fn always_gated() -> Vec<String> {
         .iter()
         .flat_map(|group| group.commands.iter().map(move |command| (group, command)))
         .filter(|(_, command)| {
-            matches!(command.safety.base, Class::Mutate | Class::Destructive)
+            matches!(
+                command.safety.base,
+                Class::ManagerWrite | Class::Mutate | Class::Destructive
+            )
         })
         .map(|(group, command)| match group.shape {
             GroupShape::Nested => format!("{} {}", group.cli, command.sub),
@@ -237,7 +241,7 @@ TOOLS
   gore_texture   Textures in the IoStore containers: list, extract, replace, pack, deploy.
   gore_asset     Cooked DataAssets: receipt-sealed, byte-exact edits.
   gore_mod       Build one unified mod bundle and deploy or undeploy it as a single unit.
-  gore_mgr       Run several mods at once: library, load order, conflict report, composed apply.
+  gore_mgr       Manage a loadout end to end: import, order, preflight, recover, apply, status, reset.
   gore_as        AngelScript cache: inspect, decompile, patch defaults, recompile modules.
 
 Each of the last fourteen wraps a family of subcommands. Choose one with `subcommand` and put its

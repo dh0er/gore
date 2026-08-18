@@ -21,21 +21,30 @@ portable builds are deliberately updater-free.
 
 - **Import** into a local library: built mod-bundle folders/zips (with a root
   `gore-mod.json`), foreign mod zips/folders, loose `_P.pak` files, IoStore
-  triplets (`.utoc`/`.ucas`/`.pak`), UE4SS Lua mod folders, and raw game-file
-  replacements.
+  pairs (`.utoc`/`.ucas`, with an optional same-stem `.pak`), UE4SS Lua mod
+  folders, and raw `.lcache`, `.bank`, or `PrecompiledScript*.Cache` game-file
+  replacements. Extract `.7z` and `.rar` downloads first. Multipart or
+  incomplete IoStore sets and unknown, unsafe, or corrupt inputs are refused
+  without publishing a partial library entry or changing the loadout.
 - **Enable/disable**, **remove**, and **drag to reorder** mods in the load order
   (later wins). Removing a library entry updates the target loadout; if that
   mod is already deployed, choose **Apply** afterwards to update the game.
-- **Detect recognized conflicts** across mods — localization, audio,
-  texture/asset, item overrides (CDO), scripts, and raw-file replacements — and
-  show intended winners. Each component is marked Exact, Partial, Advisory, or
-  Opaque so incomplete target knowledge stays visible; these grades do not
-  claim the game's runtime priority is proven.
+- **Detect recognized conflicts** across mods — localization, audio, voice
+  archives, texture/asset containers, item overrides (CDO), scripts, loose and
+  packed game-file claims, and raw-file replacements — and show intended
+  winners. Loose-file versus packed-file precedence is advisory, and an opaque
+  UE4SS component cannot produce a complete target inventory. Each component
+  is marked Exact, Partial, Advisory, or Opaque so incomplete knowledge stays
+  visible; these grades do not claim the game's runtime priority is proven.
 - **Apply** declaratively: full-recompute the modded state from a pristine base
-  and deploy the whole enabled set (backups first), or **undeploy all** to
-  restore.
+  and deploy the whole enabled set (backups first), or use the normal
+  **Reset/Undeploy** action to restore a validated Manager-owned deployment. A
+  Mod Studio deployment is preserved unless you explicitly choose and confirm
+  the separate **Take over** workflow below.
 - **Recover an interrupted Manager change** after confirmation when the native
-  setup check can identify a clearly abandoned Manager operation. Active
+  setup check can identify a clearly abandoned Manager operation. The app binds
+  its action to that exact report; the equivalent expert route is `gore mgr
+  preflight` followed by `gore mgr recover --expected-guard-id <TOKEN>`. Active
   changes stay on the wait path. Script-build recovery and recovery data that
   GORE cannot identify stay in recovery help. Do not delete the installation
   lock by hand; check the status again before using Undeploy.
@@ -46,6 +55,32 @@ portable builds are deliberately updater-free.
   cleanup action.
 - **Take over** a Mod Studio test-deploy so both tools do not fight over the
   install.
+
+## Real-install evidence
+
+On 2026-08-18 one packaged real-install campaign exercised four genuine Nexus
+mods: Main Menu Replacer — Remake (#244), Mainmenu Sleeper Enhanced (#512),
+Gothic UI Reposition (#269), and Attack Input V4. Numeric container priorities
+were observed in both order directions: `#244 -> #512` showed the Sleeper /
+Gothic-II menu, while `#512 -> #244` showed the red Remake artwork. A new game
+and an existing save loaded, and the tested enable, disable, reorder, Apply, and
+Reset paths behaved as expected.
+
+The same campaign rendered the GORE-authored Viper choice `[Gore probe] UI
+fixture`; `UE4SS.log` recorded `ARMED`, `CHOICE_PASS`, and `RENDER_PASS` with
+`exact_count=1`. That is live AngelScript composition evidence, but not evidence
+for a third-party AngelScript mod or a three-way script conflict: this probe used
+the PR #91-fixed app-local Core DLL. #269 was disabled for the probe after an
+earlier crash was isolated to its own UE4SS Lua loop calling `FindAllOf` off the
+game thread; no GORE or AngelScript frame was present. No save was written by
+the probe.
+
+After testing, the captured loadout was restored byte-for-byte, all temporary
+campaign entries and game-tree payloads were removed, the original signed Core
+DLL was restored, and the original four-mod deployment reported in sync. This
+is one person and one Windows installation. Clean-Windows portable, installer,
+recovery, Reset, and uninstall acceptance remains open, so 0.1.0 is not yet a
+published release.
 
 ## What it can not do
 

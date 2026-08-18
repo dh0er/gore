@@ -15,8 +15,9 @@
 | **[gore-lua](lua/README.md)** | Small Lua helper library that ships into the game, for hand-written UE4SS mods. | 🚧 Work in progress |
 | **[Assistant plugin](plugins/gore/README.md)** | The MCP server and the modding skill, installed into Claude Code, Codex or Cursor in one step. | ⚗️ Experimental use |
 
-The Flutter GUIs reuse the exact same Rust crates as the CLI through a
-`dart:ffi` bridge — the CLI is always the most complete surface.
+The Flutter GUIs reuse the same Rust engine as the CLI through a `dart:ffi`
+bridge. The CLI is the expert and automation surface; the GUIs package those
+contracts into guided workflows instead of maintaining a second engine.
 
 ## 📊 Status
 
@@ -29,7 +30,7 @@ The Flutter GUIs reuse the exact same Rust crates as the CLI through a
 | [Textures](docs/guide/textures.md) | Full | Replace textures | A few, like the mouse cursors, are stored somewhere this cannot reach |
 | [DataAssets](docs/guide/dataassets.md) | Partly | Edit cooked game data | Only assets the engine describes natively; Blueprint ones are refused |
 | [Scripts](docs/guide/scripts.md) | Partly | Read the game's script code, change it, add your own | Reverse-engineered and lossy — recompiled code is not always identical |
-| [Mods & load order](docs/guide/bundles.md) | Full | Ship all of the above as one mod, run many together, and install mods that GORE did not build — plain zips, pak files, UE4SS mod folders | Nobody else's mod has been through it: the one end-to-end test used a file GORE made itself |
+| [Mods & load order](docs/guide/bundles.md) | Full | Ship all of the above as one mod, run many together, and install mods that GORE did not build — plain zips, pak files, UE4SS mod folders | Four Nexus mods have run through one real-install campaign; third-party AngelScript and three-way script conflicts remain unqualified |
 
 GORE will not edit your saves — that is the
 [Save Editor](apps/save-editor/README.md) — and everything above was seen by one
@@ -140,7 +141,7 @@ Everything lives in [`docs/`](docs/README.md).
 | 🖼️ [Textures](docs/guide/textures.md) · 📦 [DataAssets](docs/guide/dataassets.md) | Additive UE5 IoStore Zen triplets |
 | 📜 [Scripts](docs/guide/scripts.md) | Decompile, recompile, and splice the AngelScript cache |
 | 📦 [Bundling & deploying](docs/guide/bundles.md) | One spec → one mod that deploys as a unit |
-| 🧩 [Running many mods](docs/guide/mod-manager.md) | `gore mgr`: library, load order, conflicts |
+| 🧩 [Running many mods](docs/guide/mod-manager.md) | `gore mgr`: library, load order, conflict evidence, preflight/recovery, Apply and Reset |
 | ⌨️ [CLI reference](docs/guide/cli-reference.md) | Every command, subcommand, and flag |
 | 🤖 [AI assistants](docs/guide/mcp.md) | Install the plugin, or wire the MCP server up by hand; what gets confirmed with you |
 | 🖥️ [Mod Studio](docs/guide/mod-studio.md) | The no-code GUI: NPCs, quests, voice, project backups |

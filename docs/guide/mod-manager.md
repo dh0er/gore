@@ -9,25 +9,36 @@ library and loadout files.
 ## Library and loadout
 
 The library is the set of mods you have imported. The loadout is what is
-enabled and in which order. Both default to a shared per-user location; every
-subcommand accepts `--library <DIR>` and `--loadout <FILE>` to work on a
-different set.
+enabled and in which order. Both default to a shared per-user location. Every
+library/loadout subcommand accepts `--library <DIR>` and `--loadout <FILE>`;
+when overriding them, pass both together so one library is never paired with an
+unintended loadout. `reset` and token-bound `recover` work only from ownership
+or recovery evidence in the game installation and accept neither option.
 
 ```powershell
 gore mgr import C:\Downloads\SomeMod.zip   # folder, .zip, or a single game file
 gore mgr list                             # library joined to loadout state
-gore mgr remove <ID>                      # drop from library and loadout
+gore mgr remove <ID>                      # drop from library and target loadout
 ```
+
+`remove` does not rewrite an already deployed game installation. If the entry
+was active, run `apply` afterwards to deploy the updated target loadout.
 
 `import` accepts built GORE bundles (a folder or zip with a root
 `gore-mod.json`), foreign mod zips and folders, loose `_P.pak` files, IoStore
-triplets (`.utoc`/`.ucas`/`.pak`), UE4SS Lua mod folders, and raw game-file
-replacements. `list` prints the entry ids the other commands take.
+pairs (`.utoc`/`.ucas`) with an optional same-stem `.pak`, UE4SS Lua mod
+folders, and raw `.lcache`, `.bank`, or `PrecompiledScript*.Cache` game-file
+replacements. Extract `.7z` and `.rar` downloads before importing them.
+Partitioned/multipart IoStore members are unsupported; an incomplete pair,
+unknown content, unsafe path, or corrupt input is refused without publishing a
+partial library entry or changing the loadout. `list` prints the entry ids the
+other commands take.
 
-The foreign path has been walked once end to end against a real install: on
-BuildID 24539464 a triplet produced by `gore asset pack` — not a GORE bundle,
-with no `gore-mod.json` anywhere in it — was imported, classified as a foreign
-triplet, and applied with a load-order filename prefix.
+Both GORE-produced foreign inputs and genuine downloads have crossed the real
+install boundary. The 2026-08-18 campaign applied Nexus #244 Main Menu Replacer
+— Remake, #512 Mainmenu Sleeper Enhanced, #269 Gothic UI Reposition, and Attack
+Input V4. That proves those exact packages on one installation, not every
+archive shape or a third-party AngelScript mod.
 
 ### Stable import identity and native result
 
@@ -178,10 +189,10 @@ mods, same id, nothing rebuilt.
 gore mgr analyze
 ```
 
-Reports conflicts among the **enabled** mods across localization, audio,
-texture/asset, item overrides (CDO), scripts, and raw-file replacements, and
-which mod the analyzed loadout evidence marks as the intended winner for each
-recognized target.
+Reports conflicts among the **enabled** mods across localization, audio, voice
+archives, texture/asset containers, item overrides (CDO), scripts, loose and
+packed game-file claims, and raw-file replacements, and which mod the analyzed
+loadout evidence marks as the intended winner for each recognized target.
 
 The Manager app qualifies that result per component with derived footprint
 coverage. **Exact** means the component metadata gives conflict analysis a
@@ -192,6 +203,11 @@ describe target knowledge only; even Exact does not prove the game's runtime
 priority. If any enabled component is not Exact, a zero-result analysis is
 therefore shown as "no recognized conflicts" with an incomplete-knowledge
 warning, never as proof that the loadout is conflict-free.
+
+The CLI uses the same wording. When no recognized conflict rows exist but any
+enabled footprint is Partial, Advisory, or Opaque, it prints the coverage-gap
+warning and counts for those grades instead of the unqualified phrase "no
+conflicts".
 
 The same view spells out the intended order: low priority is listed first and
 later mods have higher intended priority. That order predicts winners only
@@ -221,14 +237,18 @@ manager cannot prove what they touch, so it cannot rule out a conflict with
 them.
 
 A soft localization clash has been watched resolve in game in both order
-directions. The #244/#512 main-menu container clash was also observed in both
-directions with the old equal-priority names: `gm000` won both times, exposing
-the ordering bug. The new numeric priorities have not yet been confirmed in a
-running game. Script splices and three-way conflicts also remain untested there.
+directions. An earlier #244/#512 main-menu run with equal-priority names let
+`gm000` win both directions and exposed the ordering bug. After migration to
+numeric priorities, the 2026-08-18 campaign confirmed the corrected behavior:
+`#244 -> #512` showed the Sleeper/Gothic-II menu and `#512 -> #244` showed the
+red Remake artwork. A GORE-authored AngelScript fixture also composed and
+rendered live, but no third-party AngelScript mod or three-way script conflict
+has been qualified.
 
 ## Apply
 
 ```powershell
+gore mgr preflight --game "$GAME" # read-only setup and recovery evidence
 gore mgr apply  --game "$GAME"    # compose the enabled loadout into one deployment
 gore mgr status --game "$GAME"    # is the install in sync with the target loadout?
 gore mgr reset  --game "$GAME"    # undeploy everything the manager has active
@@ -244,12 +264,31 @@ schema marker is reported as changes pending even when its loadout is unchanged.
 The next Apply migrates only its receipt- and hash-owned old names; Reset then
 cleans the new names through the same ownership evidence.
 
-`reset` restores the pristine install.
+`reset` restores the pristine install only when the validated deployment owner
+is Manager. It rechecks that ownership in the protected mutation path and
+refuses a Studio-owned deployment without changing it.
+
+`preflight` is read-only. It returns seven fixed-order checks for the game root,
+install, loadout, deployment, install mutation, UE4SS, and write access. Its
+`--json` envelope is:
+
+```text
+{ "ok": true, "preflight": { "format": 1, "checks": [<seven check objects>] } }
+```
+
+Only a check whose action is `recover_manager_mutation` carries an
+`action_token`; that token names one exact abandoned Manager operation and is
+not general cleanup authority.
+
+`status --json` emits `{ "ok": true, "status": { ... } }` with the full native
+status report. Its optional `manager_owned` groups are the same bounded,
+record-derived path evidence described below; absence is not an empty ownership
+claim.
 
 ### Interrupted Manager changes
 
 An interrupted Apply or Reset can leave an installation lock together with
-recovery data. The Mod Manager app distinguishes three cases:
+recovery data. Preflight and the Mod Manager app distinguish three cases:
 
 - If the Manager operation is still active, wait for it to finish and check
   again.
@@ -264,9 +303,27 @@ recovery data. The Mod Manager app distinguishes three cases:
   operation created it, Manager does not change the installation and shows the
   recovery guidance instead.
 
-Do not delete installation lock files by hand. This confirmation flow is a Mod
-Manager app action; `gore mgr status` and `gore doctor` only report the next
-step and do not perform this recovery.
+Do not delete installation lock files by hand. The app offers the confirmation
+flow directly. The equivalent CLI sequence copies the exact `action_token` from
+preflight and supplies it as the expected guard:
+
+```powershell
+gore mgr preflight --game "$GAME" --json
+gore mgr recover --game "$GAME" --expected-guard-id <TOKEN>
+```
+
+`recover` probes before writing and refuses missing, still-active,
+compiler-owned, ambiguous, invalid, or changed recovery state. The guard token
+is required, is bounded to 512 bytes, and must still match exactly. By default
+the CLI shows the planned recovery and requires an exact `y`/`N` answer;
+`--yes` is the explicit non-interactive approval. `--json` requires `--yes` and
+returns `{ "ok": <BOOL>, "outcome": "..." }` after the authoritative recovery
+result. Busy, compiler-recovery, and inspection-failure outcomes set `ok` to
+`false` and exit nonzero so automation cannot continue as if recovery ran.
+`gore mgr preflight` and `gore doctor` remain strictly read-only.
+`gore mgr status` never performs install recovery, but opening its authoritative
+Store snapshot may persist the same valid loadout reconciliation as `list` and
+`analyze`.
 
 The Mod Manager app's deployment-details dialog can expand **Recorded ownership
 evidence** when the same validated deploy-record snapshot has the exact owner
@@ -293,24 +350,43 @@ prove deterministic files, owned cleanup, and receipt state. Those checks do
 not prove that Unreal mounts one pak ahead of another, that the game reads the
 selected bytes, or that any runtime behavior changed.
 
-One session has gone past that line. On 2026-08-07, against Gothic 1 Remake at
-Steam BuildID 24539464 with `gore` built from commit `90940340`, a real install
-was imported into, enabled, analyzed, applied, launched, reordered, re-applied
-and reset by hand. The two-mod localization conflict resolved on screen the way
-`analyze` had named it, in both order directions; a foreign `gore asset pack`
-triplet imported and applied; and `reset` left the install pristine, verified on
-disk afterwards — `~mods\` empty, not one `*.gore-bak` anywhere, no deploy
-record, no mutation lock, and every rewritten file back at its original byte
-count, the numbers being the ones in
+Two manually observed campaigns have gone past that line on one maintainer's
+installation. The first, on 2026-08-07 against Steam BuildID 24539464 with
+`gore` built from commit `90940340`, imported, enabled, analyzed, applied,
+launched, reordered, re-applied, and reset GORE-produced inputs. The two-mod
+localization conflict resolved on screen the way `analyze` named it in both
+directions; a foreign `gore asset pack` triplet applied; and Reset left the
+installation pristine on disk — `~mods\` empty, no `*.gore-bak`, deploy record,
+or mutation lock, and every rewritten file restored to its original byte count.
+The detailed counts remain in
 [bundles](bundles.md#what-is-proven-and-by-what).
 
-That is one person, one install, one build, one sitting. It moves import, apply,
-reorder, reset and the localization conflict from "deterministic offline" to
-"seen working once on the real game", and it leaves every other conflict kind
-where it was. Nothing re-runs it, and nothing in the toolkit observes the
-screen.
+The second campaign, on 2026-08-18, used a packaged Manager built from the PR
+#90 merge and four genuine Nexus mods: #244 Main Menu Replacer — Remake, #512
+Mainmenu Sleeper Enhanced, #269 Gothic UI Reposition, and Attack Input V4. It
+observed the corrected numeric container priorities in both #244/#512 order
+directions, loaded a new game and an existing save, and exercised the tested
+enable, disable, reorder, Apply, and Reset paths. It also rendered the
+GORE-authored Viper choice `[Gore probe] UI fixture`; `UE4SS.log` recorded
+`ARMED`, `CHOICE_PASS`, and `RENDER_PASS` with `exact_count=1`. That script
+probe used the PR #91-fixed app-local Core DLL, so it qualifies that GORE
+fixture and composition path only — not a genuine third-party AngelScript mod
+or a three-way script conflict. #269 was disabled for the probe after its own
+UE4SS Lua loop had crashed while calling `FindAllOf` off the game thread; no
+GORE or AngelScript frame was present, and no save was written during the
+probe.
 
-Neither the offline checks nor that session grants any authority to modify a
+Postflight restored the captured loadout byte-for-byte, removed every temporary
+campaign entry and game-tree payload, restored the original signed Core DLL,
+and reported the original four-mod deployment in sync. It did not reset that
+user baseline to a pristine install. These remain manual observations by one
+person on one installation; nothing in the toolkit observes the screen.
+
+The separate clean-Windows portable, installer, recovery, Reset, and uninstall
+acceptance pass remains open. The real-install campaign is not evidence for
+that packaging boundary.
+
+Neither the offline checks nor these sessions grant any authority to modify a
 real installation, launch the game, or read or mutate a save; those steps
 require separate qualified safety gates.
 
@@ -318,9 +394,12 @@ require separate qualified safety gates.
 
 | Flag | Commands | Meaning |
 |---|---|---|
-| `--library <DIR>` | all except `reset` | Library dir. Default: the shared per-user library. |
-| `--loadout <FILE>` | all except `reset` | Loadout file. Default: the shared per-user loadout. |
-| `--game <PATH>` | `apply`, `status`, `reset` | Game root containing `G1R\`. Falls back to the configured path. |
+| `--library <DIR>` | all except `reset`, `recover` | Library dir. Default: the shared per-user library. Supply it together with `--loadout`. |
+| `--loadout <FILE>` | all except `reset`, `recover` | Loadout file. Default: the shared per-user loadout. Supply it together with `--library`. |
+| `--game <PATH>` | `apply`, `status`, `reset`, `preflight`, `recover` | Game root containing `G1R\`. Falls back to the configured path. |
+| `--expected-guard-id <TOKEN>` | `recover` | Exact `action_token` from the current abandoned-Manager preflight check; required, max 512 bytes. |
+| `--yes` | `recover` | Approve the exact token-bound recovery without the interactive `y`/`N` prompt; required with `--json`. |
+| `--json` | `preflight`, `recover`, `status` | Emit one machine-readable result document. |
 
 ## Related
 
