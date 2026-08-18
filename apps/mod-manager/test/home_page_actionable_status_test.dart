@@ -295,6 +295,7 @@ void main() {
       core.calls.where((call) => call.command == 'mgr_apply'),
       hasLength(1),
     );
+    expect(tester.takeException(), isNull);
 
     await tester.tap(find.byType(ExpansionTile));
     await tester.pumpAndSettle();
@@ -584,36 +585,42 @@ void main() {
     },
   );
 
-  testWidgets('last Apply banner caps warnings while details retain all', (
-    tester,
-  ) async {
-    final warnings = [for (var i = 0; i < 80; i++) 'Warning $i'];
-    final core = _HomeCore({
-      'state': 'changes_pending',
-      'deployed': <Object?>[],
-      'target': [
-        {'id': 'a', 'enabled': true},
-      ],
-    }, applyWarnings: warnings);
-    await tester.pumpWidget(_home(core));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('apply-loadout-action')));
-    await tester.pumpAndSettle();
+  testWidgets(
+    'last Apply banner summarizes warnings while details retain all',
+    (tester) async {
+      final warnings = [for (var i = 0; i < 80; i++) 'Warning $i'];
+      final core = _HomeCore({
+        'state': 'changes_pending',
+        'deployed': <Object?>[],
+        'target': [
+          {'id': 'a', 'enabled': true},
+        ],
+      }, applyWarnings: warnings);
+      await tester.pumpWidget(_home(core));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('apply-loadout-action')));
+      await tester.pumpAndSettle();
 
-    expect(find.text('Warning 0'), findsOneWidget);
-    expect(find.text('Warning 2'), findsOneWidget);
-    expect(find.text('Warning 3'), findsNothing);
-    expect(find.text('+77 more'), findsOneWidget);
+      final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+      expect(
+        find.text(l10n.applyReportAppliedWithWarnings(2, warnings.length)),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Warning 0'), findsNothing);
+      expect(find.textContaining('+77 more'), findsNothing);
 
-    await tester.tap(find.byKey(const ValueKey('status-details-trigger')));
-    await tester.pumpAndSettle();
-    final warningsList = tester.widget<ListView>(
-      find.byKey(const ValueKey('status-details-list-warnings')),
-    );
-    final delegate =
-        warningsList.childrenDelegate as SliverChildBuilderDelegate;
-    expect(delegate.estimatedChildCount, warnings.length);
-  });
+      await tester.tap(
+        find.byKey(const ValueKey('apply-warning-details-action')),
+      );
+      await tester.pumpAndSettle();
+      final warningsList = tester.widget<ListView>(
+        find.byKey(const ValueKey('status-details-list-warnings')),
+      );
+      final delegate =
+          warningsList.childrenDelegate as SliverChildBuilderDelegate;
+      expect(delegate.estimatedChildCount, warnings.length);
+    },
+  );
 
   testWidgets('no-root status details route to Settings without a mutation', (
     tester,

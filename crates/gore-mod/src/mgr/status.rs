@@ -10,11 +10,12 @@
 //!   4. a deployed live/backup file drifted [`ManagerStatus::GameUpdated`] (Steam verified/updated
 //!      a file we wrote, or a pristine backup is no longer trustworthy; the deployment is stale
 //!      regardless of the loadout)
-//!   5. deployed loadout == target AND every enabled mod's library fingerprint still matches the
-//!      one recorded at deploy .......... [`ManagerStatus::InSync`]
-//!   6. otherwise ....................... [`ManagerStatus::ChangesPending`] (loadout differs, OR a
-//!      same-id mod was re-imported/updated so its content fingerprint no longer matches — the
-//!      deployed bytes are stale even though the id set is unchanged)
+//!   5. deployed loadout == target, any owned Unreal containers use the current priority schema,
+//!      AND every enabled mod's library fingerprint still matches the one recorded at deploy
+//!      ................................ [`ManagerStatus::InSync`]
+//!   6. otherwise ....................... [`ManagerStatus::ChangesPending`] (loadout differs, an
+//!      owned container needs naming migration, OR a same-id mod was re-imported/updated so its
+//!      content fingerprint no longer matches — the deployed bytes are stale)
 //!
 //! Pure read-only: it reads the record, verifies the recorded live files and pristine backups, and
 //! reads each enabled mod's library sidecar to fingerprint it; it never writes.
@@ -55,7 +56,7 @@ pub enum ManagerStatus {
     StudioDeployActive { mod_name: String },
     /// The deployed loadout matches the target; no re-apply needed.
     InSync { loadout: Vec<LoadoutEntry> },
-    /// The deployed loadout differs from the target — a re-apply would change the game.
+    /// The deployed loadout, library content, or Manager container schema needs a re-apply.
     ChangesPending {
         deployed: Vec<LoadoutEntry>,
         target: Vec<LoadoutEntry>,
@@ -768,6 +769,20 @@ fn status_report_with_failure_policy(
         });
     }
 
+    // Old Manager container names gave every loadout slot the same Unreal patch priority. Even
+    // with matching loadout/library fingerprints, that deployment is not in sync with current
+    // ordering semantics until Apply replaces the receipt-owned containers under current names.
+    // Studio records returned above, and Manager records without containers need no migration.
+    if manager_container_priority_migration_required(&record) {
+        return Ok(ManagerStatusReport {
+            status: ManagerStatus::ChangesPending {
+                deployed: record.loadout,
+                target: target_enabled,
+            },
+            manager_owned,
+        });
+    }
+
     // Loadout ids/order/enabled all match. But a mod can be re-imported UNDER THE SAME ID (an
     // update) — its components/bytes change while its id (and thus the loadout) does not, so the
     // check above can't see it. Compare each enabled target mod's CURRENT library fingerprint to
@@ -809,6 +824,13 @@ fn status_report_with_failure_policy(
         },
         manager_owned,
     })
+}
+
+fn manager_container_priority_migration_required(record: &crate::DeployRecord) -> bool {
+    record.owner == "manager"
+        && (!record.managed_paks.is_empty() || !record.texture_triplets.is_empty())
+        && record.manager_container_priority_schema
+            != Some(crate::MANAGER_CONTAINER_PRIORITY_SCHEMA)
 }
 
 /// Read `<library_dir>/<id>/gore-manager-meta.json` and compute its content [`ModEntryMeta::fingerprint`].
@@ -892,6 +914,33 @@ mod tests {
     fn write_record(game: &Path, rec: &DeployRecord) {
         std::fs::create_dir_all(game).unwrap();
         std::fs::write(record_path(game), serde_json::to_vec(rec).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn priority_schema_migration_only_applies_to_manager_container_records() {
+        let mut record = DeployRecord {
+            owner: "manager".into(),
+            managed_paks: vec!["C:/game/G1R/Content/Paks/~mods/old.pak".into()],
+            ..Default::default()
+        };
+        assert!(manager_container_priority_migration_required(&record));
+
+        record.manager_container_priority_schema = Some(crate::MANAGER_CONTAINER_PRIORITY_SCHEMA);
+        assert!(!manager_container_priority_migration_required(&record));
+
+        record.manager_container_priority_schema = Some(0);
+        assert!(manager_container_priority_migration_required(&record));
+
+        record.managed_paks.clear();
+        record.texture_triplets = vec!["C:/game/G1R/Content/Paks/~mods/old.utoc".into()];
+        assert!(manager_container_priority_migration_required(&record));
+
+        record.owner.clear();
+        assert!(!manager_container_priority_migration_required(&record));
+
+        record.owner = "manager".into();
+        record.texture_triplets.clear();
+        assert!(!manager_container_priority_migration_required(&record));
     }
 
     #[test]
@@ -1979,7 +2028,7 @@ mod tests {
         let lib = tmp.path().join("lib");
         let mods = game.join("G1R/Content/Paks/~mods");
         std::fs::create_dir_all(&mods).unwrap();
-        let pak = mods.join("zzz_gm000_foo_P.pak");
+        let pak = mods.join("zzz_gm000_foo_1_P.pak");
         std::fs::write(&pak, b"PAK").unwrap();
         // A matching library meta so the fingerprint check also passes.
         let fp = write_lib_meta(&lib, &lib_meta_with("mod-a", "a"));
@@ -1988,6 +2037,7 @@ mod tests {
             mod_name: "manager".into(),
             owner: "manager".into(),
             loadout: deployed.clone(),
+            manager_container_priority_schema: Some(crate::MANAGER_CONTAINER_PRIORITY_SCHEMA),
             managed_paks: vec![pak.display().to_string()],
             deployed_hashes: BTreeMap::from([(
                 pak.display().to_string(),

@@ -158,9 +158,11 @@ gore mgr order   <ID> <POS>    # 0 is composed first
 
 Position `0` is composed first; later entries are selected or reported as the
 intended conflict winners. `<POS>` is clamped to the last slot. For additive
-paks, this ordering controls the filenames the manager writes; it is not by
-itself proof of Unreal's runtime mount priority. At most 1,000 entries may be
-enabled at once, matching the closed `gm000` through `gm999` filename range.
+paks and IoStore triplets, `gm000` through `gm999` keeps Manager-owned targets
+unique and the final numeric suffix gives Unreal patch priorities `1` through
+`1000`. A later enabled entry therefore receives a strictly higher patch
+priority. At most 1,000 entries may be enabled at once, matching both closed
+ranges.
 
 The direction reads backwards the first time, so it is worth saying twice, the
 way the command's own help says it: `0 = mounts first, loses conflicts`. Going
@@ -193,8 +195,8 @@ warning, never as proof that the loadout is conflict-free.
 
 The same view spells out the intended order: low priority is listed first and
 later mods have higher intended priority. That order predicts winners only
-where the analyzer has the corresponding evidence; it does not turn container
-filename order into a runtime guarantee.
+where the analyzer has the corresponding evidence. Numeric container priority
+does not make opaque targets or interactions outside that evidence predictable.
 
 Localization is reported **per language**: the target is `<id>|<language>`, so
 two mods editing one id collide once for every language key they both write, and
@@ -218,11 +220,11 @@ Script mods that do not declare their CDO targets are treated as opaque — the
 manager cannot prove what they touch, so it cannot rule out a conflict with
 them.
 
-Everything else this section describes is still the manager's stated intent
-rather than an observed outcome. Exactly one conflict kind has been watched
-resolve in game: a soft localization clash between two bundles, in both order
-directions. Texture-versus-texture container precedence, script splices, and
-three-way conflicts have never been checked against a running game at all.
+A soft localization clash has been watched resolve in game in both order
+directions. The #244/#512 main-menu container clash was also observed in both
+directions with the old equal-priority names: `gm000` won both times, exposing
+the ordering bug. The new numeric priorities have not yet been confirmed in a
+running game. Script splices and three-way conflicts also remain untested there.
 
 ## Apply
 
@@ -236,6 +238,11 @@ gore mgr reset  --game "$GAME"    # undeploy everything the manager has active
 base and deploys the whole enabled set, backups first. It is not an incremental
 patch on top of whatever happened to be installed, which is what makes
 disabling a mod in the middle of the order safe.
+
+An older Manager deployment that owns containers but lacks the numeric-priority
+schema marker is reported as changes pending even when its loadout is unchanged.
+The next Apply migrates only its receipt- and hash-owned old names; Reset then
+cleans the new names through the same ownership evidence.
 
 `reset` restores the pristine install.
 

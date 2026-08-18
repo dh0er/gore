@@ -254,7 +254,10 @@ is not the same as having been produced against the build it ran on:
 Because `pack` does not deploy, the triplet went into the game through
 [`gore mgr`](mod-manager.md), which classified it as a foreign IoStore triplet
 rather than a GORE bundle, imported it, and applied it under the load-order name
-`zzz_gm000_GoreSettingsRowTall_P.*`. In game, under Main Menu ->
+`zzz_gm000_GoreSettingsRowTall_P.*`. That is the legacy Manager name used for
+this historical observation; current Manager builds add the numeric Unreal
+priority directly before `_P` (slot zero becomes
+`zzz_gm000_GoreSettingsRowTall_1_P.*`). In game, under Main Menu ->
 Einstellungen -> Anzeige, the settings rows were dramatically taller, the
 dropdown controls rendered as tall rectangles, and the page layout was visibly
 broken. One person looked at the screen, once. There is no screenshot, and

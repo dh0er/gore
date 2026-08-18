@@ -53,11 +53,115 @@ class AppLocalizationsEs extends AppLocalizations {
       'No se pudieron copiar los detalles técnicos. Inténtalo de nuevo.';
 
   @override
-  String get preflightAttention => 'La configuración necesita atención.';
+  String get preflightAttention => 'GORE todavía no puede continuar.';
 
   @override
-  String get preflightUnavailable =>
-      'El diagnóstico de configuración no está disponible.';
+  String get preflightGameRunning =>
+      'Gothic sigue abierto. Cierra el juego antes de cambiar los mods.';
+
+  @override
+  String get managerOperationFailed => 'La operación del gestor ha fallado.';
+
+  @override
+  String get libraryOperationFailed => 'No se pudo actualizar la biblioteca.';
+
+  @override
+  String get conflictsUnavailable => 'No se pudieron comprobar los conflictos.';
+
+  @override
+  String applyReportAppliedWithWarnings(int applied, int warnings) {
+    return 'Aplicados: $applied. Advertencias: $warnings.';
+  }
+
+  @override
+  String get modDetailKind => 'Tipo';
+
+  @override
+  String get modDetailVersion => 'Versión';
+
+  @override
+  String get modDetailAuthor => 'Autor';
+
+  @override
+  String get modDetailSource => 'Origen';
+
+  @override
+  String get modDetailImported => 'Importado';
+
+  @override
+  String get componentLocalization => 'Texto';
+
+  @override
+  String get componentAudio => 'Audio';
+
+  @override
+  String get componentAngelScript => 'AngelScript';
+
+  @override
+  String get componentTexture => 'Textura';
+
+  @override
+  String get componentKindLocalizationPatch => 'Parche de texto';
+
+  @override
+  String get componentKindAudioPatch => 'Parche de audio';
+
+  @override
+  String get componentKindAngelScriptPatch => 'Parche de AngelScript';
+
+  @override
+  String get componentKindTexturePatch => 'Parche de texturas';
+
+  @override
+  String get componentKindLoosePak => 'PAK suelto';
+
+  @override
+  String get componentKindTriplet => 'Triplete PAK';
+
+  @override
+  String get componentKindUe4ssLua => 'Lua de UE4SS';
+
+  @override
+  String get componentKindRawFile => 'Archivo sin procesar';
+
+  @override
+  String get componentKindFilePatch => 'Parche de archivo';
+
+  @override
+  String get componentKindPakFilePatch => 'Parche de archivo PAK';
+
+  @override
+  String get componentKindVoiceArchivePatch => 'Parche de archivo de voz';
+
+  @override
+  String get conflictKindLocalization => 'Texto';
+
+  @override
+  String get conflictKindAudio => 'Audio';
+
+  @override
+  String get conflictKindAsset => 'Recurso';
+
+  @override
+  String get conflictKindCdo => 'CDO';
+
+  @override
+  String get conflictKindUe4ssUnknown => 'UE4SS desconocido';
+
+  @override
+  String get conflictKindScriptModule => 'Módulo de script';
+
+  @override
+  String get conflictKindVoiceArchive => 'Archivo de voz';
+
+  @override
+  String get conflictKindRawFile => 'Archivo sin procesar';
+
+  @override
+  String get conflictKindLooseFile => 'Archivo suelto';
+
+  @override
+  String get preflightUnavailable => 'GORE no pudo comprobar la instalación.';
 
   @override
   String get preflightRetry => 'Comprobar de nuevo';
@@ -457,18 +561,18 @@ class AppLocalizationsEs extends AppLocalizations {
   }
 
   @override
-  String removeModFailed(String name, String error) {
-    return 'No se pudo quitar «$name»: $error';
+  String removeModFailed(String name) {
+    return 'No se pudo quitar «$name».';
   }
 
   @override
-  String removeModPartialFailure(String name, String error) {
-    return 'Se quitó «$name», pero el procesamiento posterior notificó un error. Se volvió a cargar el estado de la biblioteca: $error';
+  String removeModPartialFailure(String name) {
+    return 'Se quitó «$name», pero no se pudo actualizar la biblioteca por completo.';
   }
 
   @override
-  String removeModOutcomeUnknown(String name, String error) {
-    return 'No se pudo verificar si se quitó «$name»: $error — Actualiza para comprobar el estado de la biblioteca.';
+  String removeModOutcomeUnknown(String name) {
+    return 'No se pudo comprobar si se quitó «$name».';
   }
 
   @override

@@ -498,7 +498,9 @@ fn mgr_pak_file_patch_reorders_and_resets_in_a_temp_game() {
                 path.file_name()
                     .and_then(|name| name.to_str())
                     .is_some_and(|name| {
-                        name.starts_with("zzz_gm") && name.ends_with("_files_P.pak")
+                        name.starts_with("zzz_gm")
+                            && name.contains("_files_")
+                            && name.ends_with("_P.pak")
                     })
             })
             .collect::<Vec<_>>();
@@ -517,12 +519,22 @@ fn mgr_pak_file_patch_reorders_and_resets_in_a_temp_game() {
             .cloned()
             .unwrap_or_else(|| panic!("missing {prefix:?} in {paths:?}"))
     };
+    let patch_priority = |path: &Path| {
+        path.file_stem()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_suffix("_P"))
+            .and_then(|name| name.rsplit_once('_'))
+            .and_then(|(_, priority)| priority.parse::<usize>().ok())
+            .unwrap_or_else(|| panic!("missing numeric patch priority in {}", path.display()))
+    };
 
     apply();
     let first = manager_paks();
     assert_eq!(first.len(), 2);
     let alpha_slot_0 = find_slot(&first, 0, &alpha);
     let bravo_slot_1 = find_slot(&first, 1, &bravo);
+    assert_eq!(patch_priority(&alpha_slot_0), 1);
+    assert_eq!(patch_priority(&bravo_slot_1), 2);
     let alpha_archive = std::fs::read(&alpha_slot_0).unwrap();
     let bravo_archive = std::fs::read(&bravo_slot_1).unwrap();
     assert_ne!(alpha_archive, bravo_archive);
@@ -553,6 +565,8 @@ fn mgr_pak_file_patch_reorders_and_resets_in_a_temp_game() {
     assert_eq!(reordered.len(), 2);
     let bravo_slot_0 = find_slot(&reordered, 0, &bravo);
     let alpha_slot_1 = find_slot(&reordered, 1, &alpha);
+    assert_eq!(patch_priority(&bravo_slot_0), 1);
+    assert_eq!(patch_priority(&alpha_slot_1), 2);
     assert_eq!(std::fs::read(&bravo_slot_0).unwrap(), bravo_archive);
     assert_eq!(std::fs::read(&alpha_slot_1).unwrap(), alpha_archive);
     assert!(!alpha_slot_0.exists(), "old alpha slot must be removed");

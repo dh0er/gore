@@ -10,6 +10,7 @@ import 'app/ui/window_chrome.dart';
 import 'conflicts/ui/conflict_panel.dart';
 import 'core/diagnostic_text.dart';
 import 'core/mgr_ffi.dart';
+import 'core/technical_details.dart';
 import 'l10n/app_localizations.dart';
 import 'library/domain/conflicts_provider.dart';
 import 'library/domain/library_notifier.dart';
@@ -1220,6 +1221,7 @@ class _ModsTab extends ConsumerWidget {
         _InfoBanner(
           status: status,
           preflight: preflight,
+          refreshAll: () => _refreshAll(ref, expectedRoot: gameRoot),
           libraryRefreshFocusNode: libraryRefreshFocusNode,
           queueRefreshFocus: queueRefreshFocus,
           openSettings: () => _openSettings(context),
@@ -1469,6 +1471,7 @@ class _InfoBanner extends ConsumerWidget {
   const _InfoBanner({
     required this.status,
     required this.preflight,
+    required this.refreshAll,
     required this.libraryRefreshFocusNode,
     required this.queueRefreshFocus,
     required this.openSettings,
@@ -1484,6 +1487,7 @@ class _InfoBanner extends ConsumerWidget {
 
   final StatusState status;
   final PreflightState preflight;
+  final Future<void> Function() refreshAll;
   final FocusNode libraryRefreshFocusNode;
   final VoidCallback queueRefreshFocus;
   final VoidCallback openSettings;
@@ -1543,26 +1547,28 @@ class _InfoBanner extends ConsumerWidget {
     final finding = preflight.authoritative
         ? preflight.report?.primarySetupFinding
         : null;
-    if (preflight.candidateRoot != null && preflight.error != null) {
-      final message = _withDiagnostic(
-        l10n.preflightUnavailable,
-        preflight.error,
-      );
+    final preflightUnavailable =
+        preflight.candidateRoot != null && preflight.error != null;
+    if (preflightUnavailable) {
       children.add(
         _line(
           theme,
           Icons.error_outline,
-          message,
+          l10n.preflightUnavailable,
           theme.colorScheme.error,
           key: const ValueKey('preflight-unavailable'),
           liveRegion: true,
           maxLines: 2,
-          action: _preflightRetryAction(l10n, ref, refreshBlocked),
+          action: _technicalDetailsAndAction(
+            preflight.error!,
+            const ValueKey('preflight-technical-details-action'),
+            _preflightRetryAction(l10n, ref, refreshBlocked),
+          ),
         ),
       );
     } else if (finding != null) {
       final isProblem = finding.state == PreflightStateKind.problem;
-      final message = _withDiagnostic(l10n.preflightAttention, finding.detail);
+      final message = _preflightFindingMessage(l10n, finding);
       children.add(
         _line(
           theme,
@@ -1572,101 +1578,111 @@ class _InfoBanner extends ConsumerWidget {
           key: const ValueKey('preflight-setup-finding'),
           liveRegion: true,
           maxLines: 2,
-          action: _preflightAction(
-            context,
-            l10n,
-            ref,
-            preflight,
-            finding,
-            refreshBlocked,
+          action: _technicalDetailsAndAction(
+            finding.detail,
+            const ValueKey('preflight-technical-details-action'),
+            _preflightAction(
+              context,
+              l10n,
+              ref,
+              preflight,
+              finding,
+              refreshBlocked,
+            ),
           ),
         ),
       );
     }
 
     // Errors: a "no game path" sentinel maps to the friendly hint (already
-    // shown above), other errors surface verbatim.
-    if (status.error != null && status.error != StatusNotifier.noGamePath) {
+    // shown above). Other failures stay friendly here; native detail remains
+    // available in the status dialog.
+    if (!preflightUnavailable &&
+        finding == null &&
+        status.error != null &&
+        status.error != StatusNotifier.noGamePath) {
       children.add(
         _line(
           theme,
           Icons.error_outline,
-          status.error!,
-          theme.colorScheme.error,
-        ),
-      );
-    }
-    if (library.error != null) {
-      final error = _boundedDiagnostic(library.error!);
-      children.add(
-        _line(
-          theme,
-          Icons.error_outline,
-          error,
+          l10n.managerOperationFailed,
           theme.colorScheme.error,
           action: TextButton.icon(
-            key: const ValueKey('library-refresh-action'),
-            focusNode: libraryRefreshFocusNode,
-            onPressed: refreshBlocked
-                ? null
-                : () async {
-                    if (ref.read(libraryProvider).busy ||
-                        ref.read(statusProvider).busy ||
-                        ref.read(preflightProvider).busy ||
-                        ref.read(conflictsProvider).isLoading) {
-                      return;
-                    }
-                    await ref.read(libraryProvider.notifier).refresh();
-                    if (!context.mounted) return;
-                    final refreshed = ref.read(libraryProvider);
-                    if (refreshed.error != null) {
-                      queueRefreshFocus();
-                    }
-                  },
-            icon: const Icon(Icons.refresh),
-            label: Text(l10n.refreshAction),
+            key: const ValueKey('status-error-details-action'),
+            onPressed: openStatusDetails,
+            icon: const Icon(Icons.fact_check_outlined),
+            label: Text(l10n.preflightReviewStatus),
           ),
         ),
       );
     }
-    if (!library.authoritative && library.error != null) {
+    if (library.error != null) {
       children.add(
         _line(
           theme,
-          Icons.warning_amber_rounded,
-          l10n.libraryStateUnknown,
+          Icons.error_outline,
+          library.authoritative
+              ? l10n.libraryOperationFailed
+              : l10n.libraryStateUnknown,
           theme.colorScheme.error,
+          action: _technicalDetailsAndAction(
+            library.error!,
+            const ValueKey('library-technical-details-action'),
+            TextButton.icon(
+              key: const ValueKey('library-refresh-action'),
+              focusNode: libraryRefreshFocusNode,
+              onPressed: refreshBlocked
+                  ? null
+                  : () async {
+                      if (ref.read(libraryProvider).busy ||
+                          ref.read(statusProvider).busy ||
+                          ref.read(preflightProvider).busy ||
+                          ref.read(conflictsProvider).isLoading) {
+                        return;
+                      }
+                      await ref.read(libraryProvider.notifier).refresh();
+                      if (!context.mounted) return;
+                      final refreshed = ref.read(libraryProvider);
+                      if (refreshed.error != null) {
+                        queueRefreshFocus();
+                      }
+                    },
+              icon: const Icon(Icons.refresh),
+              label: Text(l10n.refreshAction),
+            ),
+          ),
         ),
       );
     }
 
     final report = status.lastReport;
     if (report != null) {
+      final hasWarnings = report.warnings.isNotEmpty;
       children.add(
         _line(
           theme,
-          Icons.check_circle_outline,
-          l10n.applyReportApplied(report.applied.length),
-          theme.colorScheme.onSurfaceVariant,
+          hasWarnings
+              ? Icons.warning_amber_rounded
+              : Icons.check_circle_outline,
+          hasWarnings
+              ? l10n.applyReportAppliedWithWarnings(
+                  report.applied.length,
+                  report.warnings.length,
+                )
+              : l10n.applyReportApplied(report.applied.length),
+          hasWarnings
+              ? Colors.amber.shade800
+              : theme.colorScheme.onSurfaceVariant,
+          action: hasWarnings
+              ? IconButton(
+                  key: const ValueKey('apply-warning-details-action'),
+                  onPressed: openStatusDetails,
+                  tooltip: l10n.preflightReviewStatus,
+                  icon: const Icon(Icons.fact_check_outlined),
+                )
+              : null,
         ),
       );
-      const maxWarningsInBanner = 3;
-      for (final w in report.warnings.take(maxWarningsInBanner)) {
-        children.add(
-          _line(theme, Icons.warning_amber_rounded, w, Colors.amber.shade800),
-        );
-      }
-      final remainingWarnings = report.warnings.length - maxWarningsInBanner;
-      if (remainingWarnings > 0) {
-        children.add(
-          _line(
-            theme,
-            Icons.more_horiz,
-            l10n.targetsMore(remainingWarnings),
-            Colors.amber.shade800,
-          ),
-        );
-      }
     }
 
     if (children.isEmpty) return const SizedBox.shrink();
@@ -1731,6 +1747,11 @@ class _InfoBanner extends ConsumerWidget {
               ),
         icon: const Icon(Icons.restore_outlined),
         label: Text(l10n.recoveryAction),
+      ),
+      PreflightActionKind.closeGame => _preflightFullRefreshAction(
+        l10n,
+        ref,
+        blocked,
       ),
       PreflightActionKind.recoverDeployment ||
       PreflightActionKind.removeStudioDeployment ||
@@ -1943,7 +1964,6 @@ class _InfoBanner extends ConsumerWidget {
     final recoveryError = outcome == null
         ? ref.read(statusProvider).error
         : null;
-
     // Recovery can settle at several valid endpoints. Reload every Manager
     // projection from Native before reporting the structured outcome.
     await ref.read(libraryProvider.notifier).refresh();
@@ -1984,14 +2004,25 @@ class _InfoBanner extends ConsumerWidget {
       return;
     }
     final message = outcome == null
-        ? _withDiagnostic(
-            AppLocalizations.of(context).managerRecoveryFailed,
-            recoveryError,
-          )
-        : _managerRecoveryMessage(AppLocalizations.of(context), outcome);
+        ? l10n.managerRecoveryFailed
+        : _managerRecoveryMessage(l10n, outcome);
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          action: recoveryError == null
+              ? null
+              : SnackBarAction(
+                  key: const ValueKey(
+                    'manager-recovery-technical-details-action',
+                  ),
+                  label: l10n.coreTechnicalDetails,
+                  onPressed: () =>
+                      showTechnicalDetailsDialog(context, recoveryError),
+                ),
+        ),
+      );
   }
 
   String _managerRecoveryMessage(
@@ -2043,12 +2074,42 @@ class _InfoBanner extends ConsumerWidget {
     );
   }
 
-  String _withDiagnostic(String friendly, String? raw) {
-    final bounded = boundedDiagnosticText(raw, 512);
-    final value = bounded.value;
-    if (value == null) return friendly;
-    return '$friendly $value${bounded.truncated ? '…' : ''}';
+  Widget _preflightFullRefreshAction(
+    AppLocalizations l10n,
+    WidgetRef ref,
+    bool blocked,
+  ) {
+    return TextButton.icon(
+      key: const ValueKey('preflight-retry-action'),
+      focusNode: preflightRetryFocusNode,
+      onPressed: blocked
+          ? null
+          : () async {
+              if (ref.read(libraryProvider).busy ||
+                  ref.read(statusProvider).busy ||
+                  ref.read(preflightProvider).busy ||
+                  ref.read(conflictsProvider).isLoading) {
+                return;
+              }
+              final current = ref.read(preflightProvider);
+              rememberPreflightRetryFocus(
+                current.candidateRoot,
+                current.generation + 1,
+              );
+              await refreshAll();
+            },
+      icon: const Icon(Icons.refresh),
+      label: Text(l10n.preflightRetry),
+    );
   }
+
+  String _preflightFindingMessage(
+    AppLocalizations l10n,
+    PreflightCheckView finding,
+  ) => switch (finding.code) {
+    'game_process_running' => l10n.preflightGameRunning,
+    _ => l10n.preflightAttention,
+  };
 
   String _boundedDiagnostic(String raw) {
     final bounded = boundedDiagnosticText(raw, 512);
@@ -2057,6 +2118,18 @@ class _InfoBanner extends ConsumerWidget {
       null => '—',
     };
   }
+
+  Widget _technicalDetailsAndAction(
+    String detail,
+    Key detailsKey,
+    Widget primaryAction,
+  ) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      TechnicalDetailsIconButton(key: detailsKey, detail: detail),
+      primaryAction,
+    ],
+  );
 
   Widget _line(
     ThemeData theme,

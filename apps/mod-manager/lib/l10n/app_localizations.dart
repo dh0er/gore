@@ -191,13 +191,217 @@ abstract class AppLocalizations {
   /// No description provided for @preflightAttention.
   ///
   /// In en, this message translates to:
-  /// **'Setup needs attention.'**
+  /// **'GORE cannot continue yet.'**
   String get preflightAttention;
+
+  /// No description provided for @preflightGameRunning.
+  ///
+  /// In en, this message translates to:
+  /// **'Gothic is still running. Close the game before changing mods.'**
+  String get preflightGameRunning;
+
+  /// No description provided for @managerOperationFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The Manager operation failed.'**
+  String get managerOperationFailed;
+
+  /// No description provided for @libraryOperationFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The library could not be refreshed.'**
+  String get libraryOperationFailed;
+
+  /// No description provided for @conflictsUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Conflicts could not be checked.'**
+  String get conflictsUnavailable;
+
+  /// No description provided for @applyReportAppliedWithWarnings.
+  ///
+  /// In en, this message translates to:
+  /// **'Applied: {applied}. Warnings: {warnings}.'**
+  String applyReportAppliedWithWarnings(int applied, int warnings);
+
+  /// No description provided for @modDetailKind.
+  ///
+  /// In en, this message translates to:
+  /// **'Kind'**
+  String get modDetailKind;
+
+  /// No description provided for @modDetailVersion.
+  ///
+  /// In en, this message translates to:
+  /// **'Version'**
+  String get modDetailVersion;
+
+  /// No description provided for @modDetailAuthor.
+  ///
+  /// In en, this message translates to:
+  /// **'Author'**
+  String get modDetailAuthor;
+
+  /// No description provided for @modDetailSource.
+  ///
+  /// In en, this message translates to:
+  /// **'Source'**
+  String get modDetailSource;
+
+  /// No description provided for @modDetailImported.
+  ///
+  /// In en, this message translates to:
+  /// **'Imported'**
+  String get modDetailImported;
+
+  /// No description provided for @componentLocalization.
+  ///
+  /// In en, this message translates to:
+  /// **'Text'**
+  String get componentLocalization;
+
+  /// No description provided for @componentAudio.
+  ///
+  /// In en, this message translates to:
+  /// **'Audio'**
+  String get componentAudio;
+
+  /// No description provided for @componentAngelScript.
+  ///
+  /// In en, this message translates to:
+  /// **'AngelScript'**
+  String get componentAngelScript;
+
+  /// No description provided for @componentTexture.
+  ///
+  /// In en, this message translates to:
+  /// **'Texture'**
+  String get componentTexture;
+
+  /// No description provided for @componentKindLocalizationPatch.
+  ///
+  /// In en, this message translates to:
+  /// **'Localization patch'**
+  String get componentKindLocalizationPatch;
+
+  /// No description provided for @componentKindAudioPatch.
+  ///
+  /// In en, this message translates to:
+  /// **'Audio patch'**
+  String get componentKindAudioPatch;
+
+  /// No description provided for @componentKindAngelScriptPatch.
+  ///
+  /// In en, this message translates to:
+  /// **'AngelScript patch'**
+  String get componentKindAngelScriptPatch;
+
+  /// No description provided for @componentKindTexturePatch.
+  ///
+  /// In en, this message translates to:
+  /// **'Texture patch'**
+  String get componentKindTexturePatch;
+
+  /// No description provided for @componentKindLoosePak.
+  ///
+  /// In en, this message translates to:
+  /// **'Loose PAK'**
+  String get componentKindLoosePak;
+
+  /// No description provided for @componentKindTriplet.
+  ///
+  /// In en, this message translates to:
+  /// **'PAK triplet'**
+  String get componentKindTriplet;
+
+  /// No description provided for @componentKindUe4ssLua.
+  ///
+  /// In en, this message translates to:
+  /// **'UE4SS Lua'**
+  String get componentKindUe4ssLua;
+
+  /// No description provided for @componentKindRawFile.
+  ///
+  /// In en, this message translates to:
+  /// **'Raw file'**
+  String get componentKindRawFile;
+
+  /// No description provided for @componentKindFilePatch.
+  ///
+  /// In en, this message translates to:
+  /// **'File patch'**
+  String get componentKindFilePatch;
+
+  /// No description provided for @componentKindPakFilePatch.
+  ///
+  /// In en, this message translates to:
+  /// **'PAK file patch'**
+  String get componentKindPakFilePatch;
+
+  /// No description provided for @componentKindVoiceArchivePatch.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice archive patch'**
+  String get componentKindVoiceArchivePatch;
+
+  /// No description provided for @conflictKindLocalization.
+  ///
+  /// In en, this message translates to:
+  /// **'Localization'**
+  String get conflictKindLocalization;
+
+  /// No description provided for @conflictKindAudio.
+  ///
+  /// In en, this message translates to:
+  /// **'Audio'**
+  String get conflictKindAudio;
+
+  /// No description provided for @conflictKindAsset.
+  ///
+  /// In en, this message translates to:
+  /// **'Asset'**
+  String get conflictKindAsset;
+
+  /// No description provided for @conflictKindCdo.
+  ///
+  /// In en, this message translates to:
+  /// **'CDO'**
+  String get conflictKindCdo;
+
+  /// No description provided for @conflictKindUe4ssUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'Unknown UE4SS'**
+  String get conflictKindUe4ssUnknown;
+
+  /// No description provided for @conflictKindScriptModule.
+  ///
+  /// In en, this message translates to:
+  /// **'Script module'**
+  String get conflictKindScriptModule;
+
+  /// No description provided for @conflictKindVoiceArchive.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice archive'**
+  String get conflictKindVoiceArchive;
+
+  /// No description provided for @conflictKindRawFile.
+  ///
+  /// In en, this message translates to:
+  /// **'Raw file'**
+  String get conflictKindRawFile;
+
+  /// No description provided for @conflictKindLooseFile.
+  ///
+  /// In en, this message translates to:
+  /// **'Loose file'**
+  String get conflictKindLooseFile;
 
   /// No description provided for @preflightUnavailable.
   ///
   /// In en, this message translates to:
-  /// **'Setup diagnosis is unavailable.'**
+  /// **'GORE could not check the installation.'**
   String get preflightUnavailable;
 
   /// No description provided for @preflightRetry.
@@ -851,20 +1055,20 @@ abstract class AppLocalizations {
   /// No description provided for @removeModFailed.
   ///
   /// In en, this message translates to:
-  /// **'Could not remove “{name}”: {error}'**
-  String removeModFailed(String name, String error);
+  /// **'Could not remove “{name}”'**
+  String removeModFailed(String name);
 
   /// No description provided for @removeModPartialFailure.
   ///
   /// In en, this message translates to:
-  /// **'Removed “{name}”, but follow-up processing reported an error. The library state was reloaded: {error}'**
-  String removeModPartialFailure(String name, String error);
+  /// **'Removed “{name}”, but the library could not be updated completely.'**
+  String removeModPartialFailure(String name);
 
   /// No description provided for @removeModOutcomeUnknown.
   ///
   /// In en, this message translates to:
-  /// **'Could not verify whether “{name}” was removed: {error} — Refresh to check the library state.'**
-  String removeModOutcomeUnknown(String name, String error);
+  /// **'Could not verify whether “{name}” was removed.'**
+  String removeModOutcomeUnknown(String name);
 
   /// No description provided for @libraryStateUnknown.
   ///

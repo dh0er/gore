@@ -53,10 +53,115 @@ class AppLocalizationsEn extends AppLocalizations {
       'Technical details could not be copied. Try again.';
 
   @override
-  String get preflightAttention => 'Setup needs attention.';
+  String get preflightAttention => 'GORE cannot continue yet.';
 
   @override
-  String get preflightUnavailable => 'Setup diagnosis is unavailable.';
+  String get preflightGameRunning =>
+      'Gothic is still running. Close the game before changing mods.';
+
+  @override
+  String get managerOperationFailed => 'The Manager operation failed.';
+
+  @override
+  String get libraryOperationFailed => 'The library could not be refreshed.';
+
+  @override
+  String get conflictsUnavailable => 'Conflicts could not be checked.';
+
+  @override
+  String applyReportAppliedWithWarnings(int applied, int warnings) {
+    return 'Applied: $applied. Warnings: $warnings.';
+  }
+
+  @override
+  String get modDetailKind => 'Kind';
+
+  @override
+  String get modDetailVersion => 'Version';
+
+  @override
+  String get modDetailAuthor => 'Author';
+
+  @override
+  String get modDetailSource => 'Source';
+
+  @override
+  String get modDetailImported => 'Imported';
+
+  @override
+  String get componentLocalization => 'Text';
+
+  @override
+  String get componentAudio => 'Audio';
+
+  @override
+  String get componentAngelScript => 'AngelScript';
+
+  @override
+  String get componentTexture => 'Texture';
+
+  @override
+  String get componentKindLocalizationPatch => 'Localization patch';
+
+  @override
+  String get componentKindAudioPatch => 'Audio patch';
+
+  @override
+  String get componentKindAngelScriptPatch => 'AngelScript patch';
+
+  @override
+  String get componentKindTexturePatch => 'Texture patch';
+
+  @override
+  String get componentKindLoosePak => 'Loose PAK';
+
+  @override
+  String get componentKindTriplet => 'PAK triplet';
+
+  @override
+  String get componentKindUe4ssLua => 'UE4SS Lua';
+
+  @override
+  String get componentKindRawFile => 'Raw file';
+
+  @override
+  String get componentKindFilePatch => 'File patch';
+
+  @override
+  String get componentKindPakFilePatch => 'PAK file patch';
+
+  @override
+  String get componentKindVoiceArchivePatch => 'Voice archive patch';
+
+  @override
+  String get conflictKindLocalization => 'Localization';
+
+  @override
+  String get conflictKindAudio => 'Audio';
+
+  @override
+  String get conflictKindAsset => 'Asset';
+
+  @override
+  String get conflictKindCdo => 'CDO';
+
+  @override
+  String get conflictKindUe4ssUnknown => 'Unknown UE4SS';
+
+  @override
+  String get conflictKindScriptModule => 'Script module';
+
+  @override
+  String get conflictKindVoiceArchive => 'Voice archive';
+
+  @override
+  String get conflictKindRawFile => 'Raw file';
+
+  @override
+  String get conflictKindLooseFile => 'Loose file';
+
+  @override
+  String get preflightUnavailable => 'GORE could not check the installation.';
 
   @override
   String get preflightRetry => 'Check again';
@@ -452,18 +557,18 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String removeModFailed(String name, String error) {
-    return 'Could not remove “$name”: $error';
+  String removeModFailed(String name) {
+    return 'Could not remove “$name”';
   }
 
   @override
-  String removeModPartialFailure(String name, String error) {
-    return 'Removed “$name”, but follow-up processing reported an error. The library state was reloaded: $error';
+  String removeModPartialFailure(String name) {
+    return 'Removed “$name”, but the library could not be updated completely.';
   }
 
   @override
-  String removeModOutcomeUnknown(String name, String error) {
-    return 'Could not verify whether “$name” was removed: $error — Refresh to check the library state.';
+  String removeModOutcomeUnknown(String name) {
+    return 'Could not verify whether “$name” was removed.';
   }
 
   @override

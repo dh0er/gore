@@ -53,12 +53,116 @@ class AppLocalizationsFr extends AppLocalizations {
       'Impossible de copier les détails techniques. Réessayez.';
 
   @override
-  String get preflightAttention =>
-      'La configuration nécessite votre attention.';
+  String get preflightAttention => 'GORE ne peut pas encore continuer.';
 
   @override
-  String get preflightUnavailable =>
-      'Le diagnostic de configuration est indisponible.';
+  String get preflightGameRunning =>
+      'Gothic est toujours ouvert. Fermez le jeu avant de modifier les mods.';
+
+  @override
+  String get managerOperationFailed => 'L’opération du gestionnaire a échoué.';
+
+  @override
+  String get libraryOperationFailed =>
+      'La bibliothèque n’a pas pu être actualisée.';
+
+  @override
+  String get conflictsUnavailable => 'Les conflits n’ont pas pu être vérifiés.';
+
+  @override
+  String applyReportAppliedWithWarnings(int applied, int warnings) {
+    return 'Appliqués : $applied. Avertissements : $warnings.';
+  }
+
+  @override
+  String get modDetailKind => 'Type';
+
+  @override
+  String get modDetailVersion => 'Version';
+
+  @override
+  String get modDetailAuthor => 'Auteur';
+
+  @override
+  String get modDetailSource => 'Source';
+
+  @override
+  String get modDetailImported => 'Importé';
+
+  @override
+  String get componentLocalization => 'Texte';
+
+  @override
+  String get componentAudio => 'Audio';
+
+  @override
+  String get componentAngelScript => 'AngelScript';
+
+  @override
+  String get componentTexture => 'Texture';
+
+  @override
+  String get componentKindLocalizationPatch => 'Correctif de texte';
+
+  @override
+  String get componentKindAudioPatch => 'Correctif audio';
+
+  @override
+  String get componentKindAngelScriptPatch => 'Correctif AngelScript';
+
+  @override
+  String get componentKindTexturePatch => 'Correctif de texture';
+
+  @override
+  String get componentKindLoosePak => 'PAK libre';
+
+  @override
+  String get componentKindTriplet => 'Triplet PAK';
+
+  @override
+  String get componentKindUe4ssLua => 'Lua UE4SS';
+
+  @override
+  String get componentKindRawFile => 'Fichier brut';
+
+  @override
+  String get componentKindFilePatch => 'Correctif de fichier';
+
+  @override
+  String get componentKindPakFilePatch => 'Correctif de fichier PAK';
+
+  @override
+  String get componentKindVoiceArchivePatch => 'Correctif d’archive vocale';
+
+  @override
+  String get conflictKindLocalization => 'Texte';
+
+  @override
+  String get conflictKindAudio => 'Audio';
+
+  @override
+  String get conflictKindAsset => 'Ressource';
+
+  @override
+  String get conflictKindCdo => 'CDO';
+
+  @override
+  String get conflictKindUe4ssUnknown => 'UE4SS inconnu';
+
+  @override
+  String get conflictKindScriptModule => 'Module de script';
+
+  @override
+  String get conflictKindVoiceArchive => 'Archive vocale';
+
+  @override
+  String get conflictKindRawFile => 'Fichier brut';
+
+  @override
+  String get conflictKindLooseFile => 'Fichier libre';
+
+  @override
+  String get preflightUnavailable => 'GORE n’a pas pu vérifier l’installation.';
 
   @override
   String get preflightRetry => 'Vérifier à nouveau';
@@ -459,18 +563,18 @@ class AppLocalizationsFr extends AppLocalizations {
   }
 
   @override
-  String removeModFailed(String name, String error) {
-    return 'Impossible de retirer « $name » : $error';
+  String removeModFailed(String name) {
+    return 'Impossible de retirer « $name ».';
   }
 
   @override
-  String removeModPartialFailure(String name, String error) {
-    return '« $name » a été retiré, mais le traitement suivant a signalé une erreur. L’état de la bibliothèque a été rechargé : $error';
+  String removeModPartialFailure(String name) {
+    return '« $name » a été retiré, mais la bibliothèque n’a pas pu être entièrement actualisée.';
   }
 
   @override
-  String removeModOutcomeUnknown(String name, String error) {
-    return 'Impossible de vérifier si « $name » a été retiré : $error — Actualisez pour vérifier l’état de la bibliothèque.';
+  String removeModOutcomeUnknown(String name) {
+    return 'Impossible de vérifier si « $name » a été retiré.';
   }
 
   @override

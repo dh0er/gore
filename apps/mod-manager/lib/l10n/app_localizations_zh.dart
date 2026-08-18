@@ -48,10 +48,114 @@ class AppLocalizationsZh extends AppLocalizations {
   String get coreTechnicalDetailsCopyFailed => '无法复制技术详细信息。请重试。';
 
   @override
-  String get preflightAttention => '设置需要处理。';
+  String get preflightAttention => 'GORE 暂时无法继续。';
 
   @override
-  String get preflightUnavailable => '设置诊断不可用。';
+  String get preflightGameRunning => 'Gothic 仍在运行。请先关闭游戏，再更改模组。';
+
+  @override
+  String get managerOperationFailed => '管理器操作失败。';
+
+  @override
+  String get libraryOperationFailed => '无法刷新模组库。';
+
+  @override
+  String get conflictsUnavailable => '无法检查冲突。';
+
+  @override
+  String applyReportAppliedWithWarnings(int applied, int warnings) {
+    return '已应用：$applied。警告：$warnings。';
+  }
+
+  @override
+  String get modDetailKind => '类型';
+
+  @override
+  String get modDetailVersion => '版本';
+
+  @override
+  String get modDetailAuthor => '作者';
+
+  @override
+  String get modDetailSource => '来源';
+
+  @override
+  String get modDetailImported => '导入时间';
+
+  @override
+  String get componentLocalization => '文本';
+
+  @override
+  String get componentAudio => '音频';
+
+  @override
+  String get componentAngelScript => 'AngelScript';
+
+  @override
+  String get componentTexture => '纹理';
+
+  @override
+  String get componentKindLocalizationPatch => '文本补丁';
+
+  @override
+  String get componentKindAudioPatch => '音频补丁';
+
+  @override
+  String get componentKindAngelScriptPatch => 'AngelScript 补丁';
+
+  @override
+  String get componentKindTexturePatch => '纹理补丁';
+
+  @override
+  String get componentKindLoosePak => '独立 PAK';
+
+  @override
+  String get componentKindTriplet => 'PAK 三件套';
+
+  @override
+  String get componentKindUe4ssLua => 'UE4SS Lua';
+
+  @override
+  String get componentKindRawFile => '原始文件';
+
+  @override
+  String get componentKindFilePatch => '文件补丁';
+
+  @override
+  String get componentKindPakFilePatch => 'PAK 文件补丁';
+
+  @override
+  String get componentKindVoiceArchivePatch => '语音存档补丁';
+
+  @override
+  String get conflictKindLocalization => '文本';
+
+  @override
+  String get conflictKindAudio => '音频';
+
+  @override
+  String get conflictKindAsset => '资源';
+
+  @override
+  String get conflictKindCdo => 'CDO';
+
+  @override
+  String get conflictKindUe4ssUnknown => '未知 UE4SS';
+
+  @override
+  String get conflictKindScriptModule => '脚本模块';
+
+  @override
+  String get conflictKindVoiceArchive => '语音存档';
+
+  @override
+  String get conflictKindRawFile => '原始文件';
+
+  @override
+  String get conflictKindLooseFile => '独立文件';
+
+  @override
+  String get preflightUnavailable => 'GORE 无法检查游戏安装。';
 
   @override
   String get preflightRetry => '重新检查';
@@ -418,18 +522,18 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
-  String removeModFailed(String name, String error) {
-    return '无法移除“$name”：$error';
+  String removeModFailed(String name) {
+    return '无法移除“$name”。';
   }
 
   @override
-  String removeModPartialFailure(String name, String error) {
-    return '已移除“$name”，但后续处理报告了错误。库状态已重新加载：$error';
+  String removeModPartialFailure(String name) {
+    return '已移除“$name”，但无法完整刷新模组库。';
   }
 
   @override
-  String removeModOutcomeUnknown(String name, String error) {
-    return '无法验证是否已移除“$name”：$error；请刷新以检查库状态。';
+  String removeModOutcomeUnknown(String name) {
+    return '无法确认是否已移除“$name”。';
   }
 
   @override
@@ -585,10 +689,114 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get coreTechnicalDetailsCopyFailed => '无法复制技术详细信息。请重试。';
 
   @override
-  String get preflightAttention => '设置需要处理。';
+  String get preflightAttention => 'GORE 暂时无法继续。';
 
   @override
-  String get preflightUnavailable => '设置诊断不可用。';
+  String get preflightGameRunning => 'Gothic 仍在运行。请先关闭游戏，再更改模组。';
+
+  @override
+  String get managerOperationFailed => '管理器操作失败。';
+
+  @override
+  String get libraryOperationFailed => '无法刷新模组库。';
+
+  @override
+  String get conflictsUnavailable => '无法检查冲突。';
+
+  @override
+  String applyReportAppliedWithWarnings(int applied, int warnings) {
+    return '已应用：$applied。警告：$warnings。';
+  }
+
+  @override
+  String get modDetailKind => '类型';
+
+  @override
+  String get modDetailVersion => '版本';
+
+  @override
+  String get modDetailAuthor => '作者';
+
+  @override
+  String get modDetailSource => '来源';
+
+  @override
+  String get modDetailImported => '导入时间';
+
+  @override
+  String get componentLocalization => '文本';
+
+  @override
+  String get componentAudio => '音频';
+
+  @override
+  String get componentAngelScript => 'AngelScript';
+
+  @override
+  String get componentTexture => '纹理';
+
+  @override
+  String get componentKindLocalizationPatch => '文本补丁';
+
+  @override
+  String get componentKindAudioPatch => '音频补丁';
+
+  @override
+  String get componentKindAngelScriptPatch => 'AngelScript 补丁';
+
+  @override
+  String get componentKindTexturePatch => '纹理补丁';
+
+  @override
+  String get componentKindLoosePak => '独立 PAK';
+
+  @override
+  String get componentKindTriplet => 'PAK 三件套';
+
+  @override
+  String get componentKindUe4ssLua => 'UE4SS Lua';
+
+  @override
+  String get componentKindRawFile => '原始文件';
+
+  @override
+  String get componentKindFilePatch => '文件补丁';
+
+  @override
+  String get componentKindPakFilePatch => 'PAK 文件补丁';
+
+  @override
+  String get componentKindVoiceArchivePatch => '语音存档补丁';
+
+  @override
+  String get conflictKindLocalization => '文本';
+
+  @override
+  String get conflictKindAudio => '音频';
+
+  @override
+  String get conflictKindAsset => '资源';
+
+  @override
+  String get conflictKindCdo => 'CDO';
+
+  @override
+  String get conflictKindUe4ssUnknown => '未知 UE4SS';
+
+  @override
+  String get conflictKindScriptModule => '脚本模块';
+
+  @override
+  String get conflictKindVoiceArchive => '语音存档';
+
+  @override
+  String get conflictKindRawFile => '原始文件';
+
+  @override
+  String get conflictKindLooseFile => '独立文件';
+
+  @override
+  String get preflightUnavailable => 'GORE 无法检查游戏安装。';
 
   @override
   String get preflightRetry => '重新检查';
@@ -955,18 +1163,18 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   }
 
   @override
-  String removeModFailed(String name, String error) {
-    return '无法移除“$name”：$error';
+  String removeModFailed(String name) {
+    return '无法移除“$name”。';
   }
 
   @override
-  String removeModPartialFailure(String name, String error) {
-    return '已移除“$name”，但后续处理报告了错误。库状态已重新加载：$error';
+  String removeModPartialFailure(String name) {
+    return '已移除“$name”，但无法完整刷新模组库。';
   }
 
   @override
-  String removeModOutcomeUnknown(String name, String error) {
-    return '无法验证是否已移除“$name”：$error；请刷新以检查库状态。';
+  String removeModOutcomeUnknown(String name) {
+    return '无法确认是否已移除“$name”。';
   }
 
   @override

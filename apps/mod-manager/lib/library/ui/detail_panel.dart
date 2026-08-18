@@ -106,33 +106,27 @@ class DetailPanel extends ConsumerWidget {
         if (focusStillBelongsToRemovedMod()) {
           queueRefreshFocusAfterRemove?.call(mod.id);
         }
-        if (after.error case final error?) {
-          _announceRemove(
-            context,
-            l10n.removeModOutcomeUnknown(displayName, error),
-          );
+        if (after.error != null) {
+          _announceRemove(context, l10n.removeModOutcomeUnknown(displayName));
         }
         return;
       }
       if (ref.read(selectedModProvider) == mod.id) {
         ref.read(selectedModProvider.notifier).state = null;
       }
-      if (after.error case final error?) {
+      if (after.error != null) {
         if (focusStillBelongsToRemovedMod()) {
           queueRefreshFocusAfterRemove?.call(mod.id);
         }
-        _announceRemove(
-          context,
-          l10n.removeModPartialFailure(displayName, error),
-        );
+        _announceRemove(context, l10n.removeModPartialFailure(displayName));
       } else {
         if (focusStillBelongsToRemovedMod()) {
           queueImportFocusAfterRemove?.call(mod.id);
         }
         _announceRemove(context, l10n.removeModSuccess(displayName));
       }
-    } else if (after.error case final error?) {
-      _announceRemove(context, l10n.removeModFailed(displayName, error));
+    } else if (after.error != null) {
+      _announceRemove(context, l10n.removeModFailed(displayName));
     }
   }
 
@@ -178,13 +172,15 @@ class DetailPanel extends ConsumerWidget {
           style: theme.textTheme.titleMedium,
         ),
         const SizedBox(height: 8),
-        _MetaRow(label: 'kind', value: kindLabel(l10n, mod.kind)),
+        _MetaRow(label: l10n.modDetailKind, value: kindLabel(l10n, mod.kind)),
         if (mod.version != null)
-          _MetaRow(label: 'version', value: mod.version!),
-        if (mod.author != null) _MetaRow(label: 'author', value: mod.author!),
-        if (mod.source != null) _MetaRow(label: 'source', value: mod.source!),
+          _MetaRow(label: l10n.modDetailVersion, value: mod.version!),
+        if (mod.author != null)
+          _MetaRow(label: l10n.modDetailAuthor, value: mod.author!),
+        if (mod.source != null)
+          _MetaRow(label: l10n.modDetailSource, value: mod.source!),
         if (mod.importedAt != null)
-          _MetaRow(label: 'imported', value: mod.importedAt!),
+          _MetaRow(label: l10n.modDetailImported, value: mod.importedAt!),
         const Divider(height: 24),
 
         // --- Components -------------------------------------------------
@@ -271,6 +267,11 @@ class _ComponentRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final localizedKind = componentKindLabel(l10n, component.kind);
+    final displayLabel = component.displayLabel;
+    final heading = displayLabel == component.kind
+        ? localizedKind
+        : '$localizedKind · $displayLabel';
     final targets = <String>[
       ...component.targets,
       if (component.rawFileTarget case final target?) _rawTargetLabel(target),
@@ -292,7 +293,7 @@ class _ComponentRow extends StatelessWidget {
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  '${component.kind} · ${component.displayLabel}',
+                  heading,
                   style: theme.textTheme.bodySmall,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -434,7 +435,8 @@ class ConflictRow extends StatelessWidget {
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  '${conflict.kind} · ${conflict.target}',
+                  '${conflictKindLabel(l10n, conflict.kind)} · '
+                  '${conflict.target}',
                   style: theme.textTheme.bodySmall,
                   overflow: TextOverflow.ellipsis,
                 ),

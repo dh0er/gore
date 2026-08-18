@@ -53,11 +53,119 @@ class AppLocalizationsIt extends AppLocalizations {
       'Impossibile copiare i dettagli tecnici. Riprova.';
 
   @override
-  String get preflightAttention => 'La configurazione richiede attenzione.';
+  String get preflightAttention => 'GORE non può ancora continuare.';
+
+  @override
+  String get preflightGameRunning =>
+      'Gothic è ancora aperto. Chiudi il gioco prima di modificare le mod.';
+
+  @override
+  String get managerOperationFailed =>
+      'L’operazione del gestore non è riuscita.';
+
+  @override
+  String get libraryOperationFailed =>
+      'Non è stato possibile aggiornare la libreria.';
+
+  @override
+  String get conflictsUnavailable =>
+      'Non è stato possibile verificare i conflitti.';
+
+  @override
+  String applyReportAppliedWithWarnings(int applied, int warnings) {
+    return 'Applicati: $applied. Avvisi: $warnings.';
+  }
+
+  @override
+  String get modDetailKind => 'Tipo';
+
+  @override
+  String get modDetailVersion => 'Versione';
+
+  @override
+  String get modDetailAuthor => 'Autore';
+
+  @override
+  String get modDetailSource => 'Origine';
+
+  @override
+  String get modDetailImported => 'Importato';
+
+  @override
+  String get componentLocalization => 'Testo';
+
+  @override
+  String get componentAudio => 'Audio';
+
+  @override
+  String get componentAngelScript => 'AngelScript';
+
+  @override
+  String get componentTexture => 'Texture';
+
+  @override
+  String get componentKindLocalizationPatch => 'Patch di testo';
+
+  @override
+  String get componentKindAudioPatch => 'Patch audio';
+
+  @override
+  String get componentKindAngelScriptPatch => 'Patch AngelScript';
+
+  @override
+  String get componentKindTexturePatch => 'Patch texture';
+
+  @override
+  String get componentKindLoosePak => 'PAK libero';
+
+  @override
+  String get componentKindTriplet => 'Tripletta PAK';
+
+  @override
+  String get componentKindUe4ssLua => 'Lua UE4SS';
+
+  @override
+  String get componentKindRawFile => 'File non elaborato';
+
+  @override
+  String get componentKindFilePatch => 'Patch file';
+
+  @override
+  String get componentKindPakFilePatch => 'Patch file PAK';
+
+  @override
+  String get componentKindVoiceArchivePatch => 'Patch archivio vocale';
+
+  @override
+  String get conflictKindLocalization => 'Testo';
+
+  @override
+  String get conflictKindAudio => 'Audio';
+
+  @override
+  String get conflictKindAsset => 'Risorsa';
+
+  @override
+  String get conflictKindCdo => 'CDO';
+
+  @override
+  String get conflictKindUe4ssUnknown => 'UE4SS sconosciuto';
+
+  @override
+  String get conflictKindScriptModule => 'Modulo script';
+
+  @override
+  String get conflictKindVoiceArchive => 'Archivio vocale';
+
+  @override
+  String get conflictKindRawFile => 'File non elaborato';
+
+  @override
+  String get conflictKindLooseFile => 'File libero';
 
   @override
   String get preflightUnavailable =>
-      'La diagnosi della configurazione non è disponibile.';
+      'GORE non ha potuto verificare l’installazione.';
 
   @override
   String get preflightRetry => 'Controlla di nuovo';
@@ -458,18 +566,18 @@ class AppLocalizationsIt extends AppLocalizations {
   }
 
   @override
-  String removeModFailed(String name, String error) {
-    return 'Impossibile rimuovere il mod «$name»: $error';
+  String removeModFailed(String name) {
+    return 'Impossibile rimuovere il mod «$name».';
   }
 
   @override
-  String removeModPartialFailure(String name, String error) {
-    return 'Il mod «$name» è stato rimosso, ma l’elaborazione successiva ha segnalato un errore. Lo stato della libreria è stato ricaricato: $error';
+  String removeModPartialFailure(String name) {
+    return 'Il mod «$name» è stato rimosso, ma non è stato possibile aggiornare completamente la libreria.';
   }
 
   @override
-  String removeModOutcomeUnknown(String name, String error) {
-    return 'Non è stato possibile verificare se il mod «$name» è stato rimosso: $error — Aggiorna per controllare lo stato della libreria.';
+  String removeModOutcomeUnknown(String name) {
+    return 'Non è stato possibile verificare se il mod «$name» è stato rimosso.';
   }
 
   @override
