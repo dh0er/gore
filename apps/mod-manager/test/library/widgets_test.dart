@@ -257,7 +257,7 @@ String _makeGameExe() {
   );
 }
 
-Widget _appWith(GoreCoreFfiService fake, {String? exePath}) {
+Widget _appWith(GoreCoreFfiService fake, {String? exePath, Locale? locale}) {
   return ProviderScope(
     overrides: [
       coreServiceProvider.overrideWithValue(fake),
@@ -265,6 +265,7 @@ Widget _appWith(GoreCoreFfiService fake, {String? exePath}) {
         sharedConfigProvider.overrideWithValue(_fixedSharedConfig(exePath)),
     ],
     child: MaterialApp(
+      locale: locale,
       localizationsDelegates: const [
         AppLocalizations.delegate,
         GlobalMaterialLocalizations.delegate,
@@ -370,6 +371,128 @@ void main() {
     expect(find.text('Loud Pack'), findsOneWidget);
     // The hard conflict surfaces a red warning badge on each of the two mods.
     expect(find.byIcon(Icons.warning_amber_rounded), findsWidgets);
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is Tooltip &&
+            widget.message ==
+                '${l10n.sevHard}: 1 · ${l10n.sevSoft}: 0 · '
+                    '${l10n.sevInfo}: 0',
+      ),
+      findsNWidgets(2),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('analyze error is localized with bounded technical detail', (
+    tester,
+  ) async {
+    const raw = 'mgr_analyze: native conflict inspection failed';
+    final fake = FakeGoreCoreFfiService(
+      responses: {
+        'mgr_library_list': _libraryList(),
+        'mgr_analyze': {
+          'ok': false,
+          'error': {'code': 'ANALYZE_FAILED', 'message': raw},
+        },
+        'mgr_status': {
+          'ok': true,
+          'status': {'state': 'nothing_deployed'},
+        },
+      },
+    );
+    await tester.pumpWidget(_appWith(fake, locale: const Locale('de')));
+    await tester.pumpAndSettle();
+
+    final l10n = await AppLocalizations.delegate.load(const Locale('de'));
+    await tester.tap(find.text(l10n.conflictsTitle(0)).first);
+    await tester.pumpAndSettle();
+
+    expect(find.text(l10n.conflictsUnavailable), findsOneWidget);
+    expect(
+      find.textContaining('native conflict inspection failed'),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('conflict-technical-details-action')),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('conflict-technical-details-action')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('native conflict inspection failed'),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('German detail labels and component chips are localized', (
+    tester,
+  ) async {
+    final library = _libraryList();
+    final mods = library['mods']! as List<Object?>;
+    final first = mods.first! as Map<String, Object?>;
+    first['source'] = 'C:/Mods/BetterTorches.goremod';
+    first['imported_at'] = '2026-08-18T12:00:00Z';
+    final components = first['components']! as List<Object?>;
+    final firstComponent = components.first! as Map<String, Object?>;
+    firstComponent['type'] = 'texture_patch';
+    firstComponent.remove('rel');
+    components.add({
+      'type': 'raw_file',
+      'target_file': {
+        'bank': {'name': 'SFX'},
+      },
+    });
+    final fake = FakeGoreCoreFfiService(
+      responses: {
+        'mgr_library_list': library,
+        'mgr_analyze': {
+          'ok': true,
+          'conflicts': [
+            {
+              'kind': 'ue4ss_unknown',
+              'target': 'opaque-script-footprint',
+              'mods': ['mod-a', 'mod-b'],
+              'severity': 'info',
+            },
+          ],
+        },
+        'mgr_status': {
+          'ok': true,
+          'status': {'state': 'nothing_deployed'},
+        },
+      },
+    );
+    await tester.pumpWidget(_appWith(fake, locale: const Locale('de')));
+    await tester.pumpAndSettle();
+
+    final l10n = await AppLocalizations.delegate.load(const Locale('de'));
+    expect(find.text('${l10n.componentTexture} 1'), findsOneWidget);
+    await tester.tap(find.text('Better Torches').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text(l10n.modDetailKind), findsOneWidget);
+    expect(find.text(l10n.modDetailVersion), findsOneWidget);
+    expect(find.text(l10n.modDetailAuthor), findsOneWidget);
+    expect(find.text(l10n.modDetailSource), findsOneWidget);
+    expect(find.text(l10n.modDetailImported), findsOneWidget);
+    expect(find.text(l10n.componentKindTexturePatch), findsOneWidget);
+    expect(find.text(l10n.componentKindRawFile), findsWidgets);
+    expect(find.textContaining('texture_patch'), findsNothing);
+    expect(find.textContaining('raw_file'), findsNothing);
+    expect(find.text('Kind'), findsNothing);
+    expect(find.text('Author'), findsNothing);
+    expect(find.text('Source'), findsNothing);
+    expect(find.text('Imported'), findsNothing);
+
+    await tester.tap(find.text(l10n.conflictsTitle(1)).first);
+    await tester.pumpAndSettle();
+    expect(find.textContaining(l10n.conflictKindUe4ssUnknown), findsOneWidget);
+    expect(find.textContaining('ue4ss_unknown'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -490,11 +613,22 @@ void main() {
     expect(container.read(selectedModProvider), 'mod-a');
     expect(find.text('Better Torches'), findsWidgets);
     expect(find.byKey(const ValueKey('remove-mod-action')), findsOneWidget);
-    expect(find.textContaining('remove failed'), findsWidgets);
-    _expectRemoveAnnouncement(
-      tester,
-      l10n.removeModFailed('Better Torches', 'mgr_remove: remove failed'),
+    expect(find.textContaining('remove failed'), findsNothing);
+    expect(find.text(l10n.libraryOperationFailed), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('library-technical-details-action')),
+      findsOneWidget,
     );
+    await tester.tap(
+      find.byKey(const ValueKey('library-technical-details-action')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('mgr_remove: remove failed'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey('technical-details-close-action')),
+    );
+    await tester.pumpAndSettle();
+    _expectRemoveAnnouncement(tester, l10n.removeModFailed('Better Torches'));
     expect(
       core.calls.where((call) => call.command == 'mgr_remove'),
       hasLength(1),
@@ -544,11 +678,10 @@ void main() {
       expect(refreshButton.focusNode?.hasFocus, isTrue);
       _expectRemoveAnnouncement(
         tester,
-        l10n.removeModPartialFailure(
-          'Better Torches',
-          'mgr_remove: loadout update failed',
-        ),
+        l10n.removeModPartialFailure('Better Torches'),
       );
+      expect(find.textContaining('loadout update failed'), findsNothing);
+      expect(find.text(l10n.libraryOperationFailed), findsOneWidget);
 
       await tester.tap(find.byKey(const ValueKey('library-refresh-action')));
       await tester.pumpAndSettle();
@@ -641,11 +774,10 @@ void main() {
       expect(find.text(l10n.noConflicts), findsNothing);
       _expectRemoveAnnouncement(
         tester,
-        l10n.removeModOutcomeUnknown(
-          'Better Torches',
-          'mgr_remove: loadout update failed',
-        ),
+        l10n.removeModOutcomeUnknown('Better Torches'),
       );
+      expect(find.textContaining('loadout update failed'), findsNothing);
+      expect(find.text(l10n.libraryStateUnknown), findsOneWidget);
       final refreshButton = tester.widget<TextButton>(
         find.byKey(const ValueKey('library-refresh-action')),
       );

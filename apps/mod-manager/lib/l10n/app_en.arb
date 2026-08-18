@@ -12,8 +12,48 @@
   "coreCopyTechnicalDetails": "Copy technical details",
   "coreTechnicalDetailsCopied": "Technical details copied",
   "coreTechnicalDetailsCopyFailed": "Technical details could not be copied. Try again.",
-  "preflightAttention": "Setup needs attention.",
-  "preflightUnavailable": "Setup diagnosis is unavailable.",
+  "preflightAttention": "GORE cannot continue yet.",
+  "preflightGameRunning": "Gothic is still running. Close the game before changing mods.",
+  "managerOperationFailed": "The Manager operation failed.",
+  "libraryOperationFailed": "The library could not be refreshed.",
+  "conflictsUnavailable": "Conflicts could not be checked.",
+  "applyReportAppliedWithWarnings": "Applied: {applied}. Warnings: {warnings}.",
+  "@applyReportAppliedWithWarnings": {
+    "placeholders": {
+      "applied": { "type": "int" },
+      "warnings": { "type": "int" }
+    }
+  },
+  "modDetailKind": "Kind",
+  "modDetailVersion": "Version",
+  "modDetailAuthor": "Author",
+  "modDetailSource": "Source",
+  "modDetailImported": "Imported",
+  "componentLocalization": "Text",
+  "componentAudio": "Audio",
+  "componentAngelScript": "AngelScript",
+  "componentTexture": "Texture",
+  "componentKindLocalizationPatch": "Localization patch",
+  "componentKindAudioPatch": "Audio patch",
+  "componentKindAngelScriptPatch": "AngelScript patch",
+  "componentKindTexturePatch": "Texture patch",
+  "componentKindLoosePak": "Loose PAK",
+  "componentKindTriplet": "PAK triplet",
+  "componentKindUe4ssLua": "UE4SS Lua",
+  "componentKindRawFile": "Raw file",
+  "componentKindFilePatch": "File patch",
+  "componentKindPakFilePatch": "PAK file patch",
+  "componentKindVoiceArchivePatch": "Voice archive patch",
+  "conflictKindLocalization": "Localization",
+  "conflictKindAudio": "Audio",
+  "conflictKindAsset": "Asset",
+  "conflictKindCdo": "CDO",
+  "conflictKindUe4ssUnknown": "Unknown UE4SS",
+  "conflictKindScriptModule": "Script module",
+  "conflictKindVoiceArchive": "Voice archive",
+  "conflictKindRawFile": "Raw file",
+  "conflictKindLooseFile": "Loose file",
+  "preflightUnavailable": "GORE could not check the installation.",
   "preflightRetry": "Check again",
   "preflightReviewStatus": "Review status",
   "preflightReviewRecovery": "Recovery help",
@@ -200,35 +240,26 @@
       }
     }
   },
-  "removeModFailed": "Could not remove “{name}”: {error}",
+  "removeModFailed": "Could not remove “{name}”",
   "@removeModFailed": {
     "placeholders": {
       "name": {
         "type": "String"
-      },
-      "error": {
-        "type": "String"
       }
     }
   },
-  "removeModPartialFailure": "Removed “{name}”, but follow-up processing reported an error. The library state was reloaded: {error}",
+  "removeModPartialFailure": "Removed “{name}”, but the library could not be updated completely.",
   "@removeModPartialFailure": {
     "placeholders": {
       "name": {
         "type": "String"
-      },
-      "error": {
-        "type": "String"
       }
     }
   },
-  "removeModOutcomeUnknown": "Could not verify whether “{name}” was removed: {error} — Refresh to check the library state.",
+  "removeModOutcomeUnknown": "Could not verify whether “{name}” was removed.",
   "@removeModOutcomeUnknown": {
     "placeholders": {
       "name": {
-        "type": "String"
-      },
-      "error": {
         "type": "String"
       }
     }

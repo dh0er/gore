@@ -13,6 +13,7 @@ import 'package:gore_manager/core/providers.dart';
 import 'package:gore_manager/home_page.dart';
 import 'package:gore_manager/l10n/app_localizations.dart';
 import 'package:gore_manager/preflight/domain/preflight_notifier.dart';
+import 'package:gore_manager/status/domain/status_notifier.dart';
 import 'package:gore_manager/status/ui/status_details_dialog.dart';
 import 'package:path/path.dart' as p;
 
@@ -98,12 +99,16 @@ class _PreflightCore implements GoreCoreFfiService {
   _PreflightCore({
     Map<String, Object?>? preflight,
     this.status = const {'state': 'nothing_deployed'},
+    this.statusError,
   }) : preflight = preflight ?? _preflight();
 
   Map<String, Object?> preflight;
   Map<String, Object?> status;
+  String? statusError;
   String recoveryOutcome = 'recovered_to_pristine';
   String? recoveryError;
+  String? applyError;
+  Map<String, Object?>? preflightAfterApply;
   bool blockNextPreflight = false;
   Completer<Map<String, Object?>>? blockedPreflight;
   bool blockNextRecovery = false;
@@ -141,10 +146,16 @@ class _PreflightCore implements GoreCoreFfiService {
         },
       },
       'mgr_analyze' => {'ok': true, 'conflicts': <Object?>[]},
-      'mgr_status' => {'ok': true, 'status': status},
+      'mgr_status' =>
+        statusError == null
+            ? {'ok': true, 'status': status}
+            : {
+                'ok': false,
+                'error': {'code': 'STATUS_FAILED', 'message': statusError},
+              },
       'mgr_preflight_v1' => await _runPreflight(),
       'mgr_recover_install_v1' => await _runRecovery(),
-      'mgr_apply' => {'ok': true, 'report': const {}},
+      'mgr_apply' => _runApply(),
       'mgr_undeploy_all' => {'ok': true, 'removed': true},
       _ => {'ok': true},
     };
@@ -173,6 +184,17 @@ class _PreflightCore implements GoreCoreFfiService {
     final blocked = Completer<Map<String, Object?>>();
     blockedRecovery = blocked;
     return blocked.future;
+  }
+
+  Map<String, Object?> _runApply() {
+    if (preflightAfterApply case final next?) preflight = next;
+    if (applyError case final message?) {
+      return {
+        'ok': false,
+        'error': {'code': 'APPLY_FAILED', 'message': message},
+      };
+    }
+    return {'ok': true, 'report': const {}};
   }
 
   int count(String command) =>
@@ -236,7 +258,7 @@ void main() {
     );
   });
 
-  testWidgets('invalid persisted selection is diagnosed natively unchanged', (
+  testWidgets('invalid persisted selection has localized primary diagnostics', (
     tester,
   ) async {
     const invalid = 'C:/missing/not-the-game.exe';
@@ -257,14 +279,27 @@ void main() {
       (call) => call.command == 'mgr_preflight_v1',
     );
     expect(call.payload, {'game_root': invalid});
+    expect(find.text('GORE kann gerade nicht fortfahren.'), findsOneWidget);
     expect(
-      find.textContaining('Die Einrichtung benötigt Aufmerksamkeit.'),
+      find.textContaining('The selected installation does not exist.'),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('preflight-technical-details-action')),
       findsOneWidget,
     );
+    await tester.tap(
+      find.byKey(const ValueKey('preflight-technical-details-action')),
+    );
+    await tester.pumpAndSettle();
     expect(
       find.textContaining('The selected installation does not exist.'),
       findsOneWidget,
     );
+    await tester.tap(
+      find.byKey(const ValueKey('technical-details-close-action')),
+    );
+    await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey('preflight-settings-action')),
       findsOneWidget,
@@ -305,7 +340,11 @@ void main() {
       find.textContaining('A is stale and must never appear.'),
       findsNothing,
     );
-    expect(find.textContaining('B is current.'), findsOneWidget);
+    expect(find.textContaining('B is current.'), findsNothing);
+    final current = ProviderScope.containerOf(
+      tester.element(find.byType(HomePage)),
+    ).read(preflightProvider);
+    expect(current.report?.primarySetupFinding?.detail, 'B is current.');
     final roots = core.calls
         .where((call) => call.command == 'mgr_preflight_v1')
         .map((call) => call.payload['game_root'])
@@ -379,11 +418,21 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const ValueKey('preflight-unavailable')), findsOneWidget);
+    expect(find.text('GORE could not check the installation.'), findsOneWidget);
+    expect(find.textContaining('raw native detail'), findsNothing);
     expect(
-      find.textContaining('Setup diagnosis is unavailable.'),
+      find.byKey(const ValueKey('preflight-technical-details-action')),
       findsOneWidget,
     );
+    await tester.tap(
+      find.byKey(const ValueKey('preflight-technical-details-action')),
+    );
+    await tester.pumpAndSettle();
     expect(find.textContaining('raw native detail'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey('technical-details-close-action')),
+    );
+    await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey('preflight-retry-action')),
       findsOneWidget,
@@ -394,6 +443,48 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('preflight-unavailable')), findsNothing);
   });
+
+  testWidgets(
+    'unavailable preflight suppresses a simultaneous status error banner',
+    (tester) async {
+      const preflightRaw = 'native preflight inspection failed';
+      const statusRaw = 'native status inspection failed';
+      final core = _PreflightCore(
+        preflight: {
+          'ok': false,
+          'error': {'code': 'INSPECTION_FAILED', 'message': preflightRaw},
+        },
+        statusError: statusRaw,
+      );
+      await tester.pumpWidget(_home(core, locale: const Locale('de')));
+      await tester.pumpAndSettle();
+
+      final l10n = await AppLocalizations.delegate.load(const Locale('de'));
+      expect(find.text(l10n.preflightUnavailable), findsOneWidget);
+      expect(find.text(l10n.managerOperationFailed), findsNothing);
+      expect(
+        find.byKey(const ValueKey('status-error-details-action')),
+        findsNothing,
+      );
+      expect(find.textContaining(preflightRaw), findsNothing);
+      expect(find.textContaining(statusRaw), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('status-details-trigger')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining(statusRaw), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey('status-details-action-close')),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byKey(const ValueKey('preflight-technical-details-action')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining(preflightRaw), findsOneWidget);
+      expect(find.textContaining(statusRaw), findsNothing);
+    },
+  );
 
   testWidgets('failed keyboard Retry restores focus to the recreated action', (
     tester,
@@ -521,24 +612,88 @@ void main() {
     expect(retry.focusNode!.hasFocus, isFalse);
   });
 
+  testWidgets('diagnostic detail is not part of the primary setup message', (
+    tester,
+  ) async {
+    const detail = '\u202E\u0085raw native detail';
+    final core = _PreflightCore(
+      preflight: _preflight(findingId: 'install', findingDetail: detail),
+    );
+    await tester.pumpWidget(_home(core));
+    await tester.pumpAndSettle();
+
+    expect(find.text('GORE cannot continue yet.'), findsOneWidget);
+    expect(find.textContaining('raw native detail'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('preflight-technical-details-action')),
+      findsOneWidget,
+    );
+  });
+
   testWidgets(
-    'diagnostic detail strips controls and truncates on rune bounds',
+    'running game shows one localized message and Retry clears the Apply error',
     (tester) async {
-      final detail = '\u202E\u0085${List.filled(509, 'x').join()}😀TAIL';
-      final core = _PreflightCore(
-        preflight: _preflight(findingId: 'install', findingDetail: detail),
-      );
-      await tester.pumpWidget(_home(core));
+      tester.view.physicalSize = const Size(1100, 700);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      const rawError =
+          'INSTALL_MUTATION_BLOCKED: G1R-Win64-Shipping.exe is running; '
+          'close the game before changing its installation';
+      final core = _PreflightCore()
+        ..applyError = rawError
+        ..preflightAfterApply = _preflight(
+          findingId: 'install_mutation',
+          findingCode: 'game_process_running',
+          findingAction: 'close_game',
+          findingDetail: 'the shipping game process is running',
+        );
+      await tester.pumpWidget(_home(core, locale: const Locale('de')));
       await tester.pumpAndSettle();
 
-      final text = tester.widget<Text>(
-        find.textContaining('Setup needs attention.'),
+      await tester.tap(find.byKey(const ValueKey('apply-loadout-action')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text(
+          'Gothic läuft noch. Schließe das Spiel, bevor du Mods änderst.',
+        ),
+        findsOneWidget,
       );
-      expect(text.data, isNot(contains('\u202E')));
-      expect(text.data, isNot(contains('\u0085')));
-      expect(text.data, contains('😀…'));
-      expect(text.data, isNot(contains('TAIL')));
-      expect(text.data, isNot(contains('\uFFFD')));
+      expect(find.textContaining('shipping game process'), findsNothing);
+      expect(find.textContaining('mgr_apply:'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('preflight-technical-details-action')),
+        findsOneWidget,
+      );
+      expect(find.byIcon(Icons.error_outline), findsOneWidget);
+
+      core.preflight = _preflight();
+      final libraryCalls = core.count('mgr_library_list');
+      final statusCalls = core.count('mgr_status');
+      final preflightCalls = core.count('mgr_preflight_v1');
+      await tester.tap(find.byKey(const ValueKey('preflight-retry-action')));
+      await tester.pumpAndSettle();
+
+      expect(core.count('mgr_library_list'), libraryCalls + 1);
+      expect(core.count('mgr_status'), statusCalls + 1);
+      expect(core.count('mgr_preflight_v1'), preflightCalls + 1);
+      expect(
+        find.byKey(const ValueKey('preflight-setup-finding')),
+        findsNothing,
+      );
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(HomePage)),
+      );
+      expect(container.read(statusProvider).error, isNull);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const ValueKey('apply-loadout-action')),
+            )
+            .onPressed,
+        isNotNull,
+      );
     },
   );
 
@@ -554,7 +709,11 @@ void main() {
     await tester.pumpWidget(_home(core));
     await tester.pumpAndSettle();
     expect(core.count('mgr_preflight_v1'), 1);
-    expect(find.textContaining('Old install evidence.'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('preflight-setup-finding')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Old install evidence.'), findsNothing);
 
     core.preflight = _preflight();
     await tester.tap(find.byKey(const ValueKey('apply-loadout-action')));
@@ -917,45 +1076,58 @@ void main() {
     expect(core.count('mgr_recover_install_v1'), 1);
   });
 
-  testWidgets(
-    'failed manager recovery survives reload as a localized bounded error',
-    (tester) async {
-      final core =
-          _PreflightCore(
-              preflight: _preflight(
-                findingId: 'install_mutation',
-                findingCode: 'manager_mutation_recovery_required',
-                findingAction: 'recover_manager_mutation',
-                findingActionToken: 'guard-a-17',
-              ),
-            )
-            ..recoveryError =
-                'recovery refused\n${List<String>.filled(700, 'x').join()}';
-      await tester.pumpWidget(_home(core));
-      await tester.pumpAndSettle();
+  testWidgets('failed manager recovery survives reload as a localized error', (
+    tester,
+  ) async {
+    final core =
+        _PreflightCore(
+            preflight: _preflight(
+              findingId: 'install_mutation',
+              findingCode: 'manager_mutation_recovery_required',
+              findingAction: 'recover_manager_mutation',
+              findingActionToken: 'guard-a-17',
+            ),
+          )
+          ..recoveryError =
+              'recovery refused\n${List<String>.filled(700, 'x').join()}';
+    await tester.pumpWidget(_home(core));
+    await tester.pumpAndSettle();
 
-      await tester.tap(
-        find.byKey(const ValueKey('preflight-manager-recovery-action')),
-      );
-      await tester.pumpAndSettle();
-      core.preflight = _preflight();
-      await tester.tap(
-        find.byKey(const ValueKey('preflight-manager-recovery-confirm')),
-      );
-      await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('preflight-manager-recovery-action')),
+    );
+    await tester.pumpAndSettle();
+    core.preflight = _preflight();
+    await tester.tap(
+      find.byKey(const ValueKey('preflight-manager-recovery-confirm')),
+    );
+    await tester.pumpAndSettle();
 
-      final feedback = tester.widget<Text>(
-        find.textContaining('Recovery could not be completed'),
-      );
-      expect(feedback.data, contains('recovery refused x'));
-      expect(feedback.data, isNot(contains('\n')));
-      expect(feedback.data, endsWith('…'));
-      expect(core.count('mgr_library_list'), greaterThan(1));
-      expect(core.count('mgr_status'), greaterThan(1));
-      expect(core.count('mgr_preflight_v1'), greaterThan(1));
-      expect(core.count('mgr_analyze'), greaterThan(1));
-    },
-  );
+    expect(
+      find.text(
+        'Recovery could not be completed. GORE tried to check the '
+        'installation again, but its current state may be unknown. Review '
+        'the status before trying again.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('recovery refused'), findsNothing);
+    await tester.tap(
+      find.byKey(const ValueKey('manager-recovery-technical-details-action')),
+    );
+    await tester.pumpAndSettle();
+    final diagnostic = tester
+        .widget<SelectableText>(
+          find.byKey(const ValueKey('technical-details-content')),
+        )
+        .data!;
+    expect(diagnostic, isNot(contains('\n')));
+    expect(diagnostic, endsWith('…'));
+    expect(core.count('mgr_library_list'), greaterThan(1));
+    expect(core.count('mgr_status'), greaterThan(1));
+    expect(core.count('mgr_preflight_v1'), greaterThan(1));
+    expect(core.count('mgr_analyze'), greaterThan(1));
+  });
 
   testWidgets('manager recovery awaits the requested preflight generation', (
     tester,
@@ -1259,7 +1431,11 @@ void main() {
         findsNothing,
       );
       expect(find.textContaining('A-recovery'), findsNothing);
-      expect(find.textContaining('B recovery is current.'), findsOneWidget);
+      expect(find.textContaining('B recovery is current.'), findsNothing);
+      expect(
+        container.read(preflightProvider).report?.primarySetupFinding?.detail,
+        'B recovery is current.',
+      );
       expect(core.count('mgr_apply'), 0);
       expect(core.count('mgr_undeploy_all'), 0);
     },
@@ -1377,12 +1553,12 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     final semantics = tester.ensureSemantics();
 
+    final detail = 'unsafe\n\u202E${List<String>.filled(700, 'x').join()}';
     final core = _PreflightCore(
       preflight: _preflight(
         findingId: 'ue4ss',
         findingAction: 'verify_ue4ss_proxy',
-        findingDetail:
-            'The configured UE4SS loader could not be verified for this enabled script mod.',
+        findingDetail: detail,
       ),
     );
     await tester.pumpWidget(
@@ -1401,6 +1577,53 @@ void main() {
       find.byKey(const ValueKey('preflight-setup-finding')),
     );
     expect(node.flagsCollection.isLiveRegion, isTrue);
+
+    final details = find.byKey(
+      const ValueKey('preflight-technical-details-action'),
+    );
+    expect(details, findsOneWidget);
+    expect(
+      tester.getRect(details).overlaps(Offset.zero & tester.view.physicalSize),
+      isTrue,
+    );
+    final detailsControl = find.descendant(
+      of: details,
+      matching: find.byType(IconButton),
+    );
+    final detailsButton = tester.widget<IconButton>(detailsControl);
+    final detailsSemantics = find.bySemanticsLabel('Technical details');
+    expect(detailsSemantics, findsOneWidget);
+    final detailsNode = tester.getSemantics(detailsSemantics);
+    expect(detailsNode.label, 'Technical details');
+    expect(detailsNode.flagsCollection.isButton, isTrue);
+    expect(find.textContaining('unsafe'), findsNothing);
+
+    detailsButton.focusNode!.requestFocus();
+    await tester.pump();
+    expect(detailsButton.focusNode!.hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('technical-details-dialog')),
+      findsOneWidget,
+    );
+    final rendered = tester
+        .widget<SelectableText>(
+          find.byKey(const ValueKey('technical-details-content')),
+        )
+        .data!;
+    expect(rendered, startsWith('unsafe '));
+    expect(rendered, isNot(contains('\n')));
+    expect(rendered, isNot(contains('\u202E')));
+    expect(rendered, endsWith('…'));
+    expect(rendered.runes.length, lessThanOrEqualTo(513));
+    final close = find.byKey(const ValueKey('technical-details-close-action'));
+    expect(
+      tester.getRect(close).overlaps(Offset.zero & tester.view.physicalSize),
+      isTrue,
+    );
+    expect(tester.takeException(), isNull);
     semantics.dispose();
   });
 

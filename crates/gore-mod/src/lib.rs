@@ -3261,6 +3261,12 @@ pub struct FileCleanupClaim {
     pub restore_hash: Option<String>,
 }
 
+/// Current on-disk naming/priority schema for Manager-owned Unreal containers.
+///
+/// Manager records that own containers but lack this marker predate the explicit numeric patch
+/// priority immediately before `_P` and must be re-applied before status may report `InSync`.
+pub(crate) const MANAGER_CONTAINER_PRIORITY_SCHEMA: u32 = 1;
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct DeployRecord {
     /// Localization edits this deploy could not write, each naming the id and language. Carried
@@ -3346,6 +3352,11 @@ pub struct DeployRecord {
     /// leaves this empty. Undeploy removes each entry with the same semantics as `ue4ss_mod_dir`.
     #[serde(default)]
     pub ue4ss_mod_dirs: Vec<String>,
+    /// Manager only: naming/priority schema used for additive Unreal containers. Old records omit
+    /// this field; status treats an absent or non-current marker as requiring re-apply only when
+    /// this Manager record actually owns a pak or IoStore sidecar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manager_container_priority_schema: Option<u32>,
     /// Absolute dst paths of manager-installed pak/triplet files (loose paks, foreign
     /// triplets) in `~mods`. Pure additions like `texture_triplets`; undeploy deletes them.
     #[serde(default)]
@@ -8645,8 +8656,9 @@ fn prepare_pak_file_component(
         ));
     }
     // The pak name must be unique across DISTINCT mods and across several pak-file components in
-    // one bundle, for exactly the reasons the triplet name is. Keeping `files` non-numeric before
-    // `_P` also keeps `container_priority_key`'s `_<n>_P` version branch from firing on it.
+    // one bundle, for exactly the reasons the triplet name is. The shared single-mod output keeps
+    // `files` non-numeric before `_P`; Manager Apply adds its loadout-bound numeric priority only
+    // to the generated destination name.
     let pak_name = format!(
         "zzz_{}_{}_{}_files_P",
         sanitize(mod_name),

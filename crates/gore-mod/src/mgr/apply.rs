@@ -690,7 +690,7 @@ fn apply_loadout_with_limits(
     }
 
     // (3) Load the enabled entries' metadata, remembering each one's 0-based slot among the
-    //     ENABLED entries (drives per-mod `gm{idx:03}` naming / mount order).
+    //     ENABLED entries (drives per-mod `gm{idx:03}` naming and numeric patch priority).
     struct Loaded<'a> {
         idx: usize,
         entry: &'a LoadoutEntry,
@@ -808,16 +808,20 @@ fn apply_loadout_with_limits(
                         limits,
                         &mut budget,
                     )?;
-                    // Cook + pack a Zen triplet; `meta.id` gives cross-mod uniqueness of the pak name,
-                    // `tex_comp_idx` gives per-component uniqueness within a mod.
+                    // Cook + pack a Zen triplet. The manager name keeps the enabled slot visible
+                    // and unique, while the numeric suffix added to every destination below is the
+                    // part Unreal actually interprets as patch priority. The shared single-mod
+                    // builder intentionally keeps its existing names.
+                    let manager_name = format!("gm{:03}_{}", l.idx, l.meta.id);
                     let (triplets, temporary_root) = crate::prepare_texture_component(
                         snapshot.bundle_root(),
                         rel,
-                        &l.meta.id,
+                        &manager_name,
                         tex_comp_idx,
                         &gp,
                     )?;
-                    plan.texture_triplets.extend(triplets);
+                    plan.texture_triplets
+                        .extend(prioritize_generated_containers(triplets, l.idx)?);
                     plan.temporary_roots.push(temporary_root);
                     tex_comp_idx += 1;
                 }
@@ -828,7 +832,7 @@ fn apply_loadout_with_limits(
                     // front (before the deferred undeploy) so an incomplete/corrupt triplet fails
                     // here rather than mid-copy after the working deployment is already gone. The
                     // `.pak` stub is optional and copied below only if present.
-                    let stem = slot_pak_stem(rel_base, l.idx);
+                    let stem = slot_pak_stem(rel_base, l.idx)?;
                     for ext in ["utoc", "ucas", "pak"] {
                         let rel = format!("{rel_base}.{ext}");
                         validate_payload_rel(&rel, "triplet", limits)?;
@@ -848,7 +852,7 @@ fn apply_loadout_with_limits(
                         .file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or("pak");
-                    let stem = slot_stem(base, l.idx);
+                    let stem = slot_stem(base, l.idx)?;
                     let dst = mods_dir(&gp).join(format!("{stem}.pak"));
                     additive_sources.push(PendingAdditive {
                         entry: l.library_entry.clone(),
@@ -1126,19 +1130,20 @@ fn apply_loadout_with_limits(
                     // `meta.id` gives cross-mod uniqueness of the pak name, `pak_files_comp_idx`
                     // per-component uniqueness within a mod.
                     //
-                    // The `gm{idx:03}` prefix is what lets the LOADOUT decide who wins a contested
-                    // path. `~mods` containers mount in filename order — the same reason
-                    // `slot_stem` prefixes foreign paks — so a name built from the mod id alone
-                    // freezes the winner by id, and reordering the loadout changes nothing on disk
-                    // while `mgr analyze` goes on naming the last enabled claimant the winner.
+                    // The `gm{idx:03}` prefix keeps the generated filename unique and inspectable.
+                    // Unreal does not derive patch priority from that prefix: the numeric
+                    // `_<priority>_P` suffix added to the destination below is what makes a later
+                    // enabled loadout entry win a contested path.
+                    let manager_name = format!("gm{:03}_{}", l.idx, l.meta.id);
                     let (paks, temporary_root) = crate::prepare_pak_file_component(
                         snapshot.bundle_root(),
                         rel,
-                        &format!("gm{:03}_{}", l.idx, l.meta.id),
+                        &manager_name,
                         pak_files_comp_idx,
                         &gp,
                     )?;
-                    plan.texture_triplets.extend(paks);
+                    plan.texture_triplets
+                        .extend(prioritize_generated_containers(paks, l.idx)?);
                     plan.temporary_roots.push(temporary_root);
                     pak_files_comp_idx += 1;
                 }
@@ -1529,6 +1534,7 @@ fn apply_loadout_with_limits(
     let record = DeployRecord {
         owner: "manager".into(),
         mod_name: "<manager>".into(),
+        manager_container_priority_schema: Some(crate::MANAGER_CONTAINER_PRIORITY_SCHEMA),
         loadout: loaded
             .iter()
             .map(|l| LoadoutEntry {
@@ -1577,8 +1583,9 @@ fn mods_dir(gp: &crate::GamePaths) -> PathBuf {
 
 /// Slot-prefixed pak stem for a foreign triplet whose `rel_base` file stem may already carry the
 /// shipping `zzz_…_P` decoration: strip a leading `zzz_` and trailing `_P`, then re-wrap as
-/// `zzz_gm{idx:03}_{sanitized}_P` so paks sort by loadout slot in `~mods`.
-fn slot_pak_stem(rel_base: &str, idx: usize) -> String {
+/// `zzz_gm{idx:03}_{sanitized}_{idx + 1}_P`. The `gm` field keeps manager targets unique; only the
+/// final numeric field is interpreted by Unreal as patch priority.
+fn slot_pak_stem(rel_base: &str, idx: usize) -> crate::Result<String> {
     let raw = Path::new(rel_base)
         .file_stem()
         .and_then(|s| s.to_str())
@@ -1586,9 +1593,10 @@ fn slot_pak_stem(rel_base: &str, idx: usize) -> String {
     slot_stem(raw, idx)
 }
 
-/// Wrap `raw` (a bare mod/pak name) as the slot-prefixed `~mods` stem `zzz_gm{idx:03}_{clean}_P`,
-/// where `clean` has any leading `zzz_` / trailing `_P` stripped and is sanitized to a safe stem.
-fn slot_stem(raw: &str, idx: usize) -> String {
+/// Wrap `raw` (a bare mod/pak name) as the slot-prefixed `~mods` stem
+/// `zzz_gm{idx:03}_{clean}_{idx + 1}_P`, where `clean` has any leading `zzz_` / trailing `_P`
+/// stripped and is sanitized to a safe stem.
+fn slot_stem(raw: &str, idx: usize) -> crate::Result<String> {
     let mut s = raw;
     if let Some(rest) = s.strip_prefix("zzz_") {
         s = rest;
@@ -1596,7 +1604,62 @@ fn slot_stem(raw: &str, idx: usize) -> String {
     if let Some(rest) = s.strip_suffix("_P") {
         s = rest;
     }
-    format!("zzz_gm{:03}_{}_P", idx, sanitize_stem(s))
+    Ok(format!(
+        "zzz_gm{:03}_{}_{}_P",
+        idx,
+        sanitize_stem(s),
+        manager_patch_priority(idx)?
+    ))
+}
+
+/// Manager loadout indices are zero-based, while their Unreal patch versions are deliberately
+/// one-based. Loadout validation caps enabled entries at 1,000, but keep this helper fail-closed so
+/// future direct callers cannot wrap a `usize` into a low-priority filename.
+fn manager_patch_priority(idx: usize) -> crate::Result<usize> {
+    idx.checked_add(1)
+        .ok_or_else(|| ModError::Other("manager patch priority overflowed".into()))
+}
+
+/// The shared texture/pak-file builders keep their stable single-mod output names. Manager Apply
+/// changes only the generated *destination* name, inserting its strict loadout priority directly
+/// before `_P`; the temporary source and its lifetime stay untouched.
+fn prioritize_generated_containers(
+    containers: Vec<(PathBuf, PathBuf)>,
+    idx: usize,
+) -> crate::Result<Vec<(PathBuf, PathBuf)>> {
+    let priority = manager_patch_priority(idx)?;
+    containers
+        .into_iter()
+        .map(|(src, dst)| {
+            let extension = dst
+                .extension()
+                .and_then(|value| value.to_str())
+                .filter(|value| matches!(*value, "pak" | "utoc" | "ucas"))
+                .ok_or_else(|| {
+                    ModError::Other(format!(
+                        "generated manager container has an unsupported destination: {}",
+                        dst.display()
+                    ))
+                })?;
+            let stem = dst
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .ok_or_else(|| {
+                    ModError::Other(format!(
+                        "generated manager container has a non-portable destination: {}",
+                        dst.display()
+                    ))
+                })?;
+            let base = stem.strip_suffix("_P").ok_or_else(|| {
+                ModError::Other(format!(
+                    "generated manager container is missing its _P suffix: {}",
+                    dst.display()
+                ))
+            })?;
+            let prioritized = dst.with_file_name(format!("{base}_{priority}_P.{extension}"));
+            Ok((src, prioritized))
+        })
+        .collect()
 }
 
 /// Fold anything that isn't `[A-Za-z0-9_-]` to `_` (mirrors lib.rs `sanitize`), so a pak name can't
@@ -3256,23 +3319,88 @@ mod tests {
         assert_eq!(exported["goremod_language_alias"].len(), 1);
     }
 
-    /// Two loose-pak mods land in `~mods` under per-slot names `zzz_gm000_*_P.pak` and
-    /// `zzz_gm001_*_P.pak`, so mount order follows loadout order.
+    #[test]
+    fn manager_container_names_encode_strict_numeric_patch_priority() {
+        assert_eq!(
+            slot_stem("zzz_Alpha Menu_P", 0).unwrap(),
+            "zzz_gm000_Alpha_Menu_1_P"
+        );
+        assert_eq!(
+            slot_pak_stem("paks/Bravo_P", 1).unwrap(),
+            "zzz_gm001_Bravo_2_P"
+        );
+        assert_eq!(slot_stem("last_P", 999).unwrap(), "zzz_gm999_last_1000_P");
+        assert!(manager_patch_priority(usize::MAX).is_err());
+
+        let sources = [
+            PathBuf::from("temp/generated_tex_P.utoc"),
+            PathBuf::from("temp/generated_tex_P.ucas"),
+            PathBuf::from("temp/generated_tex_P.pak"),
+            PathBuf::from("temp/generated_files_P.pak"),
+        ];
+        let destinations = [
+            PathBuf::from("mods/zzz_gm001_mod_hash_0_tex_P.utoc"),
+            PathBuf::from("mods/zzz_gm001_mod_hash_0_tex_P.ucas"),
+            PathBuf::from("mods/zzz_gm001_mod_hash_0_tex_P.pak"),
+            PathBuf::from("mods/zzz_gm001_mod_hash_1_files_P.pak"),
+        ];
+        let generated = prioritize_generated_containers(
+            sources
+                .iter()
+                .cloned()
+                .zip(destinations.iter().cloned())
+                .collect(),
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            generated.iter().map(|(src, _)| src).collect::<Vec<_>>(),
+            sources.iter().collect::<Vec<_>>(),
+            "manager priority changes destinations, never retained temporary sources"
+        );
+        assert_eq!(
+            generated
+                .iter()
+                .map(|(_, dst)| dst.file_name().unwrap().to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            [
+                "zzz_gm001_mod_hash_0_tex_2_P.utoc",
+                "zzz_gm001_mod_hash_0_tex_2_P.ucas",
+                "zzz_gm001_mod_hash_0_tex_2_P.pak",
+                "zzz_gm001_mod_hash_1_files_2_P.pak",
+            ]
+        );
+    }
+
+    /// Two loose-pak mods receive strict Unreal numeric patch versions. Reversing the loadout
+    /// swaps both versions and payloads, removes every old manager target, and leaves unrelated
+    /// user files untouched.
     #[test]
     fn apply_orders_paks_by_slot() {
         let g = FakeGame::new();
         let a = g.add_pak_mod("mod-a", "Alpha", "alpha_P", b"PAK-A");
         let b = g.add_pak_mod("mod-b", "Bravo", "bravo_P", b"PAK-B");
+        let unrelated = g.mods().join("user-owned.pak");
+        fs::write(&unrelated, b"KEEP").unwrap();
         let lo = loadout(&[(&a, true), (&b, true)]);
 
         apply_loadout(&g.root, &g.lib, &lo).unwrap();
 
-        let a_dst = g.mods().join("zzz_gm000_alpha_P.pak");
-        let b_dst = g.mods().join("zzz_gm001_bravo_P.pak");
+        let a_dst = g.mods().join("zzz_gm000_alpha_1_P.pak");
+        let b_dst = g.mods().join("zzz_gm001_bravo_2_P.pak");
         assert!(a_dst.is_file(), "slot-0 pak missing: {}", a_dst.display());
         assert!(b_dst.is_file(), "slot-1 pak missing: {}", b_dst.display());
         assert_eq!(fs::read(&a_dst).unwrap(), b"PAK-A");
         assert_eq!(fs::read(&b_dst).unwrap(), b"PAK-B");
+
+        apply_loadout(&g.root, &g.lib, &loadout(&[(&b, true), (&a, true)])).unwrap();
+        let b_reordered = g.mods().join("zzz_gm000_bravo_1_P.pak");
+        let a_reordered = g.mods().join("zzz_gm001_alpha_2_P.pak");
+        assert_eq!(fs::read(&b_reordered).unwrap(), b"PAK-B");
+        assert_eq!(fs::read(&a_reordered).unwrap(), b"PAK-A");
+        assert!(!a_dst.exists(), "old Alpha priority survived reapply");
+        assert!(!b_dst.exists(), "old Bravo priority survived reapply");
+        assert_eq!(fs::read(&unrelated).unwrap(), b"KEEP");
     }
 
     #[test]
@@ -3294,7 +3422,7 @@ mod tests {
 
         apply_loadout(&g.root, &g.lib, &loadout(&[(&triplet, true)])).unwrap();
 
-        let stem = "zzz_gm000_container_P";
+        let stem = "zzz_gm000_container_1_P";
         assert_eq!(
             fs::read(g.mods().join(format!("{stem}.utoc"))).unwrap(),
             b"UTOC"
@@ -3306,6 +3434,143 @@ mod tests {
         assert!(!g.mods().join(format!("{stem}.pak")).exists());
     }
 
+    #[test]
+    fn apply_triplet_reorder_swaps_numeric_priority_for_every_sidecar() {
+        let g = FakeGame::new();
+        let add_triplet = |id: &str, label: &str| {
+            let rel_base = format!("paks/zzz_{label}_P");
+            g.add_mod(
+                id,
+                label,
+                vec![ComponentInfo::Triplet {
+                    rel_base: rel_base.clone(),
+                    targets: Vec::new(),
+                }],
+                |dir| {
+                    fs::create_dir_all(dir.join("paks")).unwrap();
+                    for extension in ["utoc", "ucas", "pak"] {
+                        fs::write(
+                            dir.join(format!("{rel_base}.{extension}")),
+                            format!("{label}-{extension}"),
+                        )
+                        .unwrap();
+                    }
+                },
+            )
+        };
+        let alpha = add_triplet("triplet-alpha", "alpha");
+        let bravo = add_triplet("triplet-bravo", "bravo");
+        let unrelated = g.mods().join("user-owned.pak");
+        fs::write(&unrelated, b"KEEP").unwrap();
+        let assert_triplet = |stem: &str, label: &str| {
+            for extension in ["utoc", "ucas", "pak"] {
+                assert_eq!(
+                    fs::read(g.mods().join(format!("{stem}.{extension}"))).unwrap(),
+                    format!("{label}-{extension}").as_bytes(),
+                    "{label} {extension} did not follow its loadout priority"
+                );
+            }
+        };
+        let paths_for = |stem: &str| {
+            ["utoc", "ucas", "pak"].map(|extension| g.mods().join(format!("{stem}.{extension}")))
+        };
+
+        apply_loadout(&g.root, &g.lib, &loadout(&[(&alpha, true), (&bravo, true)])).unwrap();
+
+        let alpha_first = "zzz_gm000_alpha_1_P";
+        let bravo_second = "zzz_gm001_bravo_2_P";
+        assert_triplet(alpha_first, "alpha");
+        assert_triplet(bravo_second, "bravo");
+        let old_paths = [paths_for(alpha_first), paths_for(bravo_second)].concat();
+
+        apply_loadout(&g.root, &g.lib, &loadout(&[(&bravo, true), (&alpha, true)])).unwrap();
+
+        assert_triplet("zzz_gm000_bravo_1_P", "bravo");
+        assert_triplet("zzz_gm001_alpha_2_P", "alpha");
+        for old in old_paths {
+            assert!(
+                !old.exists(),
+                "old triplet sidecar survived: {}",
+                old.display()
+            );
+        }
+        assert_eq!(fs::read(&unrelated).unwrap(), b"KEEP");
+    }
+
+    #[test]
+    fn reapply_migrates_recorded_legacy_manager_name_and_reset_cleans_new_name() {
+        let g = FakeGame::new();
+        let id = g.add_pak_mod("mod-a", "Alpha", "alpha_P", b"PAK-A");
+        let meta: ModEntryMeta = serde_json::from_slice(
+            &fs::read(g.lib.join(&id).join(META_FILE)).unwrap(),
+        )
+        .unwrap();
+        let legacy = g.mods().join("zzz_gm000_alpha_P.pak");
+        fs::write(&legacy, b"OLD-MANAGER-PAK").unwrap();
+        let unrelated = g.mods().join("user-owned.pak");
+        fs::write(&unrelated, b"KEEP").unwrap();
+        let legacy_key = legacy.display().to_string();
+        let legacy_record = DeployRecord {
+            owner: "manager".into(),
+            loadout: loadout(&[(&id, true)]).entries,
+            managed_paks: vec![legacy_key.clone()],
+            // Manager records mirror additive files for older readers.
+            texture_triplets: vec![legacy_key.clone()],
+            deployed_hashes: BTreeMap::from([(
+                legacy_key.clone(),
+                crate::sha256_file(&legacy).unwrap(),
+            )]),
+            deployed_fingerprints: BTreeMap::from([(id.clone(), meta.fingerprint())]),
+            ..Default::default()
+        };
+        fs::write(
+            crate::record_path(&g.root),
+            serde_json::to_vec(&legacy_record).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            crate::mgr::status::status(&g.root, &g.lib, &loadout(&[(&id, true)])).unwrap(),
+            crate::mgr::status::ManagerStatus::ChangesPending {
+                deployed: loadout(&[(&id, true)]).entries,
+                target: loadout(&[(&id, true)]).entries,
+            },
+            "matching legacy loadout and fingerprints still need the naming migration"
+        );
+
+        apply_loadout(&g.root, &g.lib, &loadout(&[(&id, true)])).unwrap();
+
+        let current = g.mods().join("zzz_gm000_alpha_1_P.pak");
+        assert_eq!(fs::read(&current).unwrap(), b"PAK-A");
+        assert!(!legacy.exists(), "recorded legacy name survived reapply");
+        let record = crate::read_record(&g.root).unwrap().unwrap().record;
+        assert!(record
+            .managed_paks
+            .iter()
+            .any(|path| crate::same_path(&current, path)));
+        assert!(!record
+            .managed_paks
+            .iter()
+            .any(|path| crate::same_path(&legacy, path)));
+        assert_eq!(
+            record.manager_container_priority_schema,
+            Some(crate::MANAGER_CONTAINER_PRIORITY_SCHEMA)
+        );
+        assert_eq!(
+            crate::mgr::status::status(&g.root, &g.lib, &loadout(&[(&id, true)])).unwrap(),
+            crate::mgr::status::ManagerStatus::InSync {
+                loadout: loadout(&[(&id, true)]).entries,
+            }
+        );
+        assert_eq!(fs::read(&unrelated).unwrap(), b"KEEP");
+
+        assert!(undeploy_all(&g.root).unwrap());
+        assert!(!current.exists(), "Reset left the prioritized manager pak");
+        assert!(!legacy.exists(), "Reset recreated the legacy manager pak");
+        assert_eq!(fs::read(&unrelated).unwrap(), b"KEEP");
+        assert!(!crate::record_path(&g.root).exists());
+    }
+
     /// A self-colliding new loadout (two components mapping to the SAME deploy dst) must be rejected
     /// BEFORE the active deployment is torn down, so a failed apply stays non-destructive.
     #[test]
@@ -3314,10 +3579,11 @@ mod tests {
         // A clean deployment we expect to survive the later failed apply.
         let a = g.add_pak_mod("mod-a", "Alpha", "alpha_P", b"PAK-A");
         apply_loadout(&g.root, &g.lib, &loadout(&[(&a, true)])).unwrap();
-        let a_dst = g.mods().join("zzz_gm000_alpha_P.pak");
+        let a_dst = g.mods().join("zzz_gm000_alpha_1_P.pak");
         assert!(a_dst.is_file(), "precondition: slot-0 pak deployed");
 
-        // A mod with two loose paks whose file stems collide → both map to zzz_gm000_dup_P.pak.
+        // A mod with two loose paks whose file stems collide → both map to
+        // zzz_gm000_dup_1_P.pak.
         let c = g.add_mod(
             "mod-c",
             "Clash",
@@ -3385,7 +3651,7 @@ mod tests {
             "record loadout = enabled snapshot in order"
         );
         assert_eq!(rec.managed_paks.len(), 1, "one managed pak recorded");
-        assert!(rec.managed_paks[0].ends_with("zzz_gm000_alpha_P.pak"));
+        assert!(rec.managed_paks[0].ends_with("zzz_gm000_alpha_1_P.pak"));
     }
 
     #[test]
@@ -3399,7 +3665,7 @@ mod tests {
         fs::write(&sidecar, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
 
         apply_loadout(&g.root, &g.lib, &loadout(&[(&id, true)])).unwrap();
-        assert!(g.mods().join("zzz_gm000_alpha_P.pak").is_file());
+        assert!(g.mods().join("zzz_gm000_alpha_1_P.pak").is_file());
     }
 
     /// A re-apply that fails while BUILDING the plan (a mod with an undecodable payload) must not
@@ -3901,7 +4167,7 @@ mod tests {
 
         let manager_name = format!("gm000_{id}");
         let pak_name = format!(
-            "zzz_{manager_name}_{}_0_files_P.pak",
+            "zzz_{manager_name}_{}_0_files_1_P.pak",
             crate::name_hash(&manager_name)
         );
         let pak = game.mods().join(pak_name);
@@ -3954,16 +4220,21 @@ mod tests {
         let pak_name = |slot: usize, id: &str, component: usize| {
             let manager_name = format!("gm{slot:03}_{id}");
             format!(
-                "zzz_{manager_name}_{}_{}_files_P.pak",
+                "zzz_{manager_name}_{}_{}_files_{}_P.pak",
                 crate::name_hash(&manager_name),
-                component
+                component,
+                slot + 1
             )
         };
         let manager_paks = || {
             let mut names = fs::read_dir(game.mods())
                 .unwrap()
                 .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-                .filter(|name| name.starts_with("zzz_gm") && name.ends_with("_files_P.pak"))
+                .filter(|name| {
+                    name.starts_with("zzz_gm")
+                        && name.contains("_files_")
+                        && name.ends_with("_P.pak")
+                })
                 .collect::<Vec<_>>();
             names.sort();
             names
@@ -4082,7 +4353,7 @@ mod tests {
             read_loc(&fs::read(g.lcache()).unwrap(), "itfo_cheese"),
             "Brie"
         );
-        assert!(g.mods().join("zzz_gm000_alpha_P.pak").is_file());
+        assert!(g.mods().join("zzz_gm000_alpha_1_P.pak").is_file());
 
         // Disable mod-b and re-apply: pristine base → only mod-a's Gouda, mod-a's pak now slot 0.
         apply_loadout(&g.root, &g.lib, &loadout(&[(&a, true), (&b, false)])).unwrap();
@@ -4092,7 +4363,7 @@ mod tests {
             "must recompute from pristine, not merge onto stale Brie"
         );
         // mod-a stays slot 0 (still the first ENABLED entry).
-        assert!(g.mods().join("zzz_gm000_alpha_P.pak").is_file());
+        assert!(g.mods().join("zzz_gm000_alpha_1_P.pak").is_file());
         // No orphan from mod-b (it never shipped a pak) and nothing left over.
         let entries: Vec<_> = fs::read_dir(g.mods())
             .unwrap()

@@ -15,6 +15,42 @@ String kindLabel(AppLocalizations l10n, String kind) {
   };
 }
 
+/// Human label for a deployable component wire tag. Unknown future tags stay
+/// visible as their raw value so a newer core never produces a blank row.
+String componentKindLabel(AppLocalizations l10n, String kind) {
+  return switch (kind) {
+    'loc_patch' => l10n.componentKindLocalizationPatch,
+    'audio_patch' => l10n.componentKindAudioPatch,
+    'angel_script_patch' => l10n.componentKindAngelScriptPatch,
+    'texture_patch' => l10n.componentKindTexturePatch,
+    'loose_pak' => l10n.componentKindLoosePak,
+    'triplet' => l10n.componentKindTriplet,
+    'ue4ss_lua' => l10n.componentKindUe4ssLua,
+    'raw_file' => l10n.componentKindRawFile,
+    'file_patch' => l10n.componentKindFilePatch,
+    'pak_file_patch' => l10n.componentKindPakFilePatch,
+    'voice_archive_patch' => l10n.componentKindVoiceArchivePatch,
+    _ => kind,
+  };
+}
+
+/// Human label for a conflict-analyzer wire tag. Unknown future tags fall back
+/// to the raw value for forward-compatible diagnostics.
+String conflictKindLabel(AppLocalizations l10n, String kind) {
+  return switch (kind) {
+    'loc' => l10n.conflictKindLocalization,
+    'audio' => l10n.conflictKindAudio,
+    'asset' => l10n.conflictKindAsset,
+    'cdo' => l10n.conflictKindCdo,
+    'ue4ss_unknown' => l10n.conflictKindUe4ssUnknown,
+    'script_module' => l10n.conflictKindScriptModule,
+    'voice_archive' => l10n.conflictKindVoiceArchive,
+    'raw_file' => l10n.conflictKindRawFile,
+    'loose_file' => l10n.conflictKindLooseFile,
+    _ => kind,
+  };
+}
+
 /// Human label for a conflict severity tag. Unknown severities fall back to the
 /// raw tag.
 String severityLabel(AppLocalizations l10n, String severity) {
@@ -67,7 +103,10 @@ class ComponentChip {
 /// Buckets, in stable display order: loc / audio / AS (AngelScript) / tex /
 /// pak / triplet / ue4ss / raw. Unknown component kinds are grouped under their
 /// raw tag so a newer DLL still surfaces something.
-List<ComponentChip> componentChips(List<ComponentView> components) {
+List<ComponentChip> componentChips(
+  AppLocalizations l10n,
+  List<ComponentView> components,
+) {
   // Preserve first-seen order of buckets while summing target counts.
   final order = <String>[];
   final counts = <String, int>{};
@@ -105,12 +144,27 @@ List<ComponentChip> componentChips(List<ComponentView> components) {
     }
   }
 
+  String labelFor(String bucket) => switch (bucket) {
+    'loc' => l10n.componentLocalization,
+    'audio' => l10n.componentAudio,
+    'AS' => l10n.componentAngelScript,
+    'tex' => l10n.componentTexture,
+    'pak' => l10n.componentKindLoosePak,
+    'triplet' => l10n.componentKindTriplet,
+    'ue4ss' => l10n.componentKindUe4ssLua,
+    'raw' => l10n.componentKindRawFile,
+    'file_patch' => l10n.componentKindFilePatch,
+    'pak_file_patch' => l10n.componentKindPakFilePatch,
+    'voice_archive_patch' => l10n.componentKindVoiceArchivePatch,
+    _ => bucket,
+  };
+
   return [
     for (final bucket in order)
       ComponentChip(
         countable.contains(bucket) && counts[bucket]! > 0
-            ? '$bucket ${counts[bucket]}'
-            : bucket,
+            ? '${labelFor(bucket)} ${counts[bucket]}'
+            : labelFor(bucket),
       ),
   ];
 }

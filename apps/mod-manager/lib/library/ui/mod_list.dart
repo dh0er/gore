@@ -144,7 +144,7 @@ class _ModTile extends StatelessWidget {
       if (mod.version != null) 'v${mod.version}',
       if (mod.author != null) mod.author!,
     ];
-    final chips = componentChips(mod.components);
+    final chips = componentChips(l10n, mod.components);
 
     return Material(
       color: selected ? scheme.secondaryContainer : Colors.transparent,
@@ -246,6 +246,7 @@ class ConflictBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (summary.isEmpty) return const SizedBox.shrink();
+    final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
     final (Color color, int count) = summary.hard > 0
         ? (scheme.error, summary.hard)
@@ -253,7 +254,10 @@ class ConflictBadge extends StatelessWidget {
         ? (Colors.amber.shade700, summary.soft)
         : (scheme.onSurfaceVariant, summary.info);
     return Tooltip(
-      message: 'H${summary.hard} S${summary.soft} I${summary.info}',
+      message:
+          '${l10n.sevHard}: ${summary.hard} · '
+          '${l10n.sevSoft}: ${summary.soft} · '
+          '${l10n.sevInfo}: ${summary.info}',
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
         decoration: BoxDecoration(

@@ -53,10 +53,116 @@ class AppLocalizationsRu extends AppLocalizations {
       'Не удалось скопировать технические сведения. Повторите попытку.';
 
   @override
-  String get preflightAttention => 'Настройка требует внимания.';
+  String get preflightAttention => 'GORE пока не может продолжить.';
 
   @override
-  String get preflightUnavailable => 'Диагностика настройки недоступна.';
+  String get preflightGameRunning =>
+      'Gothic всё ещё запущен. Закройте игру, прежде чем изменять моды.';
+
+  @override
+  String get managerOperationFailed =>
+      'Операция менеджера завершилась ошибкой.';
+
+  @override
+  String get libraryOperationFailed => 'Не удалось обновить библиотеку.';
+
+  @override
+  String get conflictsUnavailable => 'Не удалось проверить конфликты.';
+
+  @override
+  String applyReportAppliedWithWarnings(int applied, int warnings) {
+    return 'Применено: $applied. Предупреждения: $warnings.';
+  }
+
+  @override
+  String get modDetailKind => 'Тип';
+
+  @override
+  String get modDetailVersion => 'Версия';
+
+  @override
+  String get modDetailAuthor => 'Автор';
+
+  @override
+  String get modDetailSource => 'Источник';
+
+  @override
+  String get modDetailImported => 'Импортирован';
+
+  @override
+  String get componentLocalization => 'Текст';
+
+  @override
+  String get componentAudio => 'Аудио';
+
+  @override
+  String get componentAngelScript => 'AngelScript';
+
+  @override
+  String get componentTexture => 'Текстура';
+
+  @override
+  String get componentKindLocalizationPatch => 'Текстовый патч';
+
+  @override
+  String get componentKindAudioPatch => 'Аудиопатч';
+
+  @override
+  String get componentKindAngelScriptPatch => 'Патч AngelScript';
+
+  @override
+  String get componentKindTexturePatch => 'Патч текстур';
+
+  @override
+  String get componentKindLoosePak => 'Отдельный PAK';
+
+  @override
+  String get componentKindTriplet => 'Триплет PAK';
+
+  @override
+  String get componentKindUe4ssLua => 'Lua UE4SS';
+
+  @override
+  String get componentKindRawFile => 'Необработанный файл';
+
+  @override
+  String get componentKindFilePatch => 'Патч файла';
+
+  @override
+  String get componentKindPakFilePatch => 'Патч файла PAK';
+
+  @override
+  String get componentKindVoiceArchivePatch => 'Патч голосового архива';
+
+  @override
+  String get conflictKindLocalization => 'Текст';
+
+  @override
+  String get conflictKindAudio => 'Аудио';
+
+  @override
+  String get conflictKindAsset => 'Ресурс';
+
+  @override
+  String get conflictKindCdo => 'CDO';
+
+  @override
+  String get conflictKindUe4ssUnknown => 'Неизвестный UE4SS';
+
+  @override
+  String get conflictKindScriptModule => 'Модуль скрипта';
+
+  @override
+  String get conflictKindVoiceArchive => 'Голосовой архив';
+
+  @override
+  String get conflictKindRawFile => 'Необработанный файл';
+
+  @override
+  String get conflictKindLooseFile => 'Отдельный файл';
+
+  @override
+  String get preflightUnavailable => 'GORE не удалось проверить установку.';
 
   @override
   String get preflightRetry => 'Проверить снова';
@@ -456,18 +562,18 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
-  String removeModFailed(String name, String error) {
-    return 'Не удалось удалить мод «$name»: $error';
+  String removeModFailed(String name) {
+    return 'Не удалось удалить мод «$name».';
   }
 
   @override
-  String removeModPartialFailure(String name, String error) {
-    return 'Мод «$name» удалён, но последующая обработка сообщила об ошибке. Состояние библиотеки было перечитано: $error';
+  String removeModPartialFailure(String name) {
+    return 'Мод «$name» удалён, но библиотеку не удалось полностью обновить.';
   }
 
   @override
-  String removeModOutcomeUnknown(String name, String error) {
-    return 'Не удалось проверить, был ли удалён мод «$name»: $error — Обновите состояние библиотеки для проверки.';
+  String removeModOutcomeUnknown(String name) {
+    return 'Не удалось проверить, был ли удалён мод «$name».';
   }
 
   @override

@@ -1009,15 +1009,26 @@ void main() {
 
     await _chooseFolder(tester);
 
-    final banner = tester
-        .widgetList<Text>(find.byType(Text))
-        .map((text) => text.data)
-        .whereType<String>()
-        .firstWhere((text) => text.startsWith('mgr_library_list: unsafe'));
-    expect(banner, startsWith('mgr_library_list: unsafe reload'));
-    expect(banner, isNot(contains('\n')));
-    expect(banner, isNot(contains('\u202E')));
-    expect(banner, endsWith('…'));
-    expect(banner.runes.length, lessThanOrEqualTo(513));
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    expect(find.text(l10n.libraryStateUnknown), findsOneWidget);
+    expect(find.textContaining('mgr_library_list: unsafe'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('library-technical-details-action')),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('library-technical-details-action')),
+    );
+    await tester.pumpAndSettle();
+    final diagnostic = tester
+        .widget<SelectableText>(
+          find.byKey(const ValueKey('technical-details-content')),
+        )
+        .data!;
+    expect(diagnostic, startsWith('mgr_library_list: unsafe reload'));
+    expect(diagnostic, isNot(contains('\n')));
+    expect(diagnostic, isNot(contains('\u202E')));
+    expect(diagnostic, endsWith('…'));
+    expect(diagnostic.runes.length, lessThanOrEqualTo(513));
   });
 }

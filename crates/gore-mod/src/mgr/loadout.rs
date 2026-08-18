@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Manager-owned filenames encode enabled loadout positions as `gm000` through `gm999`.
-/// Keeping the enabled set within that closed range preserves lexicographic slot order.
+/// Manager-owned filenames encode enabled loadout positions as `gm000` through `gm999` and Unreal
+/// patch priorities as `1` through `1000` directly before `_P`.
 const MAX_ENABLED_ENTRIES: usize = 1_000;
 
 /// The persisted loadout. `entries` is ordered — position IS the mount order.
@@ -54,7 +54,7 @@ impl Loadout {
                 enabled_entries += 1;
                 if enabled_entries > MAX_ENABLED_ENTRIES {
                     return Err(crate::ModError::Other(format!(
-                        "loadout enables more than {MAX_ENABLED_ENTRIES} entries; manager slot filenames support gm000 through gm999"
+                        "loadout enables more than {MAX_ENABLED_ENTRIES} entries; manager slot filenames support gm000 through gm999 (patch priorities 1 through 1000)"
                     )));
                 }
             }

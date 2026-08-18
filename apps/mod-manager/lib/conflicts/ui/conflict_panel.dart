@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/technical_details.dart';
 import '../../l10n/app_localizations.dart';
 import '../../library/domain/conflicts_provider.dart';
 import '../../library/domain/library_notifier.dart';
@@ -40,15 +41,27 @@ class ConflictPanel extends ConsumerWidget {
         padding: EdgeInsets.all(16),
         child: Center(child: CircularProgressIndicator()),
       ),
-      error: (err, _) => Padding(
-        padding: const EdgeInsets.all(16),
-        child: Text(
-          '$err',
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.error,
+      error: (error, _) {
+        return Padding(
+          padding: const EdgeInsetsDirectional.fromSTEB(16, 4, 4, 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  l10n.conflictsUnavailable,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.error,
+                  ),
+                ),
+              ),
+              TechnicalDetailsIconButton(
+                key: const ValueKey('conflict-technical-details-action'),
+                detail: '$error',
+              ),
+            ],
           ),
-        ),
-      ),
+        );
+      },
       data: (conflicts) {
         if (conflicts.isEmpty) {
           return ListView(
