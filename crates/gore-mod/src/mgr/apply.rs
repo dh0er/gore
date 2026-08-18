@@ -3509,7 +3509,7 @@ mod tests {
         fs::write(&legacy, b"OLD-MANAGER-PAK").unwrap();
         let unrelated = g.mods().join("user-owned.pak");
         fs::write(&unrelated, b"KEEP").unwrap();
-        let legacy_key = legacy.display().to_string();
+        let legacy_key = fs::canonicalize(&legacy).unwrap().display().to_string();
         let legacy_record = DeployRecord {
             owner: "manager".into(),
             loadout: loadout(&[(&id, true)]).entries,
