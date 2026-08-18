@@ -1,8 +1,7 @@
 # GORE Mod Manager
 
-> **Early Alpha release candidate:** no Mod Manager release has been published
-> yet. Local and CI-built packages are for acceptance testing on a test
-> installation; keep your own backups and expect rough edges.
+> **Early Alpha 0.1.0:** this first public prerelease is intended for testing on
+> a non-critical installation; keep your own backups and expect rough edges.
 > For the established expert workflow, use the
 > [`gore` CLI](../../docs/guide/README.md).
 
@@ -79,8 +78,8 @@ After testing, the captured loadout was restored byte-for-byte, all temporary
 campaign entries and game-tree payloads were removed, the original signed Core
 DLL was restored, and the original four-mod deployment reported in sync. This
 is one person and one Windows installation. Clean-Windows portable, installer,
-recovery, Reset, and uninstall acceptance remains open, so 0.1.0 is not yet a
-published release.
+recovery, Reset, and uninstall acceptance remains open as a known Early Alpha
+limitation.
 
 ## What it can not do
 
