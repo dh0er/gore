@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.1.0] - 2026-08-18
 
-- First Early Alpha release. The real-install workflow has completed one
+- First experimental release. The real-install workflow has completed one
   acceptance campaign. Clean-Windows portable, installer, recovery, Reset, and
   uninstall acceptance remains a known limitation of this prerelease.
 - Complete Manager lifecycle: import, inspect, enable, disable, reorder, remove,
