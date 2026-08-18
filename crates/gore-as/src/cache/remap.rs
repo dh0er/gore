@@ -8055,6 +8055,53 @@ fn plan_static_names(
     Ok(())
 }
 
+/// Prepared minis already encode their private StaticNames rows as absolute indices immediately
+/// after the pristine pool. The loadout-wide second pass must therefore resolve
+/// `base.static_names.len() + local_row`, not reinterpret that absolute operand as a local row in
+/// the mini's compact T6 table.
+fn plan_prepared_static_names(
+    plan: &mut NewSymbolPlan,
+    prepared: &TailMetadata,
+    base: &TailMetadata,
+) -> Result<(), RemapError> {
+    let base_len = base.static_names.len() as i64;
+    let base_by_name: HashMap<&str, i64> = base
+        .static_names
+        .iter()
+        .map(|row| (row.name.as_str(), row.index as i64))
+        .collect();
+    let prepared_by_source: HashMap<i64, &StaticRowMeta> = prepared
+        .static_names
+        .iter()
+        .map(|row| (base_len + row.index as i64, row))
+        .collect();
+    let mut new_by_name: HashMap<String, i64> = HashMap::new();
+    let mut used: Vec<i64> = plan.used_static_indices.iter().copied().collect();
+    used.sort_unstable();
+    for raw in used {
+        if raw >= 0 && raw < base_len {
+            plan.static_indices.insert(raw, raw);
+            continue;
+        }
+        let row = prepared_by_source
+            .get(&raw)
+            .copied()
+            .ok_or(RemapError::MissingStaticName(raw))?;
+        let final_index = if let Some(&base_index) = base_by_name.get(row.name.as_str()) {
+            base_index
+        } else if let Some(&selected) = new_by_name.get(&row.name) {
+            selected
+        } else {
+            let index = base_len + plan.selected_static_rows.len() as i64;
+            plan.selected_static_rows.push(row.index);
+            new_by_name.insert(row.name.clone(), index);
+            index
+        };
+        plan.static_indices.insert(raw, final_index);
+    }
+    Ok(())
+}
+
 fn property_key(type_id: i32, member_offset: i32) -> i64 {
     ((type_id as i64) << 1) | ((member_offset as i64) << 33) | 1
 }
@@ -8599,6 +8646,7 @@ fn finish_new_symbol_remap(
     pristine_header: &[u8],
     base: &AllowNewBaseContext,
     analyzed: AnalyzedNewSymbolMini,
+    prepared_static_names: bool,
 ) -> Result<(Vec<u8>, RemapCounts), RemapError> {
     let AnalyzedNewSymbolMini {
         regen,
@@ -8610,7 +8658,11 @@ fn finish_new_symbol_remap(
         mut comparison_budget,
     } = analyzed;
 
-    plan_static_names(&mut plan, &meta, &base.meta)?;
+    if prepared_static_names {
+        plan_prepared_static_names(&mut plan, &meta, &base.meta)?;
+    } else {
+        plan_static_names(&mut plan, &meta, &base.meta)?;
+    }
     plan_properties(&mut plan, &meta, &base.meta, &targets, &regen, &base.syms)?;
     let selected_property_indices: HashSet<usize> = plan
         .selected_properties
@@ -8968,7 +9020,13 @@ pub(super) fn remap_module_to_base_with_loadout_plan(
         &analyzed.spans,
         loadout,
     )?;
-    finish_new_symbol_remap(extracted_mini, &loadout.pristine_header, base, analyzed)
+    finish_new_symbol_remap(
+        extracted_mini,
+        &loadout.pristine_header,
+        base,
+        analyzed,
+        true,
+    )
 }
 
 fn remap_module_allow_new(
@@ -8991,7 +9049,7 @@ fn remap_module_allow_new(
         &analyzed.regen,
         &base_context.syms,
     )?;
-    finish_new_symbol_remap(extracted_mini, base, &base_context, analyzed)
+    finish_new_symbol_remap(extracted_mini, base, &base_context, analyzed, false)
 }
 
 /// Public entry: rewrite `extracted_mini`'s module bytecode refs to `base`'s keys, returning a
