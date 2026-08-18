@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-18
+
 First release. Command-line toolkit for modding Gothic 1 Remake.
 
 - `mod` — build and transactionally deploy one bundle containing item
