@@ -1,7 +1,7 @@
 # GORE Mod Manager
 
-> **Experimental 0.1.0:** this first public prerelease is intended for testing on
-> a non-critical installation; keep your own backups and expect rough edges.
+> **Experimental 0.2.0:** this prerelease is intended for testing on a
+> non-critical installation; keep your own backups and expect rough edges.
 > For the established expert workflow, use the
 > [`gore` CLI](../../docs/guide/README.md).
 

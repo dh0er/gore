@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-20
+
 - Start the game from the Manager.
 - Update settings: automatic checks can be turned off, and checked on demand.
   The portable build now checks too.
