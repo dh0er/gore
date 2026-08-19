@@ -155,6 +155,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A cast reads the call it casts, a value the source built at a call site is
   written there, and an enum field is passed as itself.
 
+### Added
+
+- `dialog` — read the game's dialog trees offline: `list` the conversations,
+  print one NPC's whole `tree` with its options, conditions, lines, effects and
+  sub-menus, `show` a single topic, or `export` everything as JSON. Text comes
+  from the shared localization catalog; `--lang` picks the language.
+- `dialog text` — one conversation's lines as a `gore loc import` edits
+  document, each under the localization column the game actually reads.
+- `gore_dialog` MCP tool for the same five subcommands.
+
 ## [0.1.0] - 2026-08-18
 
 First release. Command-line toolkit for modding Gothic 1 Remake.

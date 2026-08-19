@@ -33,6 +33,10 @@ evidence behind it ([voice.md](voice.md)).
 
 ## Diego source shape and current boundary
 
+Read the NPC's existing conversation first — `gore dialog tree <npc>` prints
+every option it already has, with the classes to derive from and the
+localization keys its lines use ([Reading dialog trees](dialog-trees.md)).
+
 Derive from the existing conversation root for the target NPC. This exact
 caption pattern avoids relying on the currently lossy decompilation of the
 game's localization helper:
@@ -183,6 +187,8 @@ therefore be tested on a disposable save with semantic before/after inspection.
 
 ## Related
 
+- [Reading dialog trees](dialog-trees.md) — what the NPC already says, and which
+  option a new one should sit next to
 - [Scripts (AngelScript)](scripts.md)
 - [Text & dialogs](text-and-dialogs.md)
 - [Dialog runtime internals](../reference/dialog-runtime.md)

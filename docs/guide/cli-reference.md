@@ -18,6 +18,7 @@ gore --version
 | `mcp` | `serve` · `tools` | Serve the whole CLI over the Model Context Protocol (stdio JSON-RPC) for AI assistants. | [mcp](mcp.md) |
 | `guide` | `search` · `html` | Search this guide and the reference from a shell, or render the guide into one self-contained HTML file. | [below](#guide) |
 | `find` | — | Search the bundled catalogs and the effect register: class names, ids, categories, display names, and what an id does in game. | [find](find.md) |
+| `dialog` | `list` · `tree` · `show` · `text` · `export` | Read the game's dialog trees out of the installed script cache: options, conditions, lines, effects, sub-menus. | [dialog-trees](dialog-trees.md) |
 | `gen` | — | Compile `overrides.toml` → a UE4SS Lua override mod. | [items](items.md) |
 | `mod` | `build` · `inspect` · `deploy` · `undeploy` | Build, validate, inspect, deploy, or undeploy a unified bundle. | [bundles](bundles.md) |
 | `mgr` | `import` · `list` · `remove` · `enable` · `disable` · `order` · `analyze` · `preflight` · `recover` · `apply` · `status` · `reset` | Multi-mod manager: library, load order, readiness/recovery, conflicts, composed deployment, status and Reset. | [mod-manager](mod-manager.md) |
@@ -146,6 +147,31 @@ detail in [Finding things](find.md).
 
 **Exit code 0 whether or not anything matched.** An empty result is an answer,
 and failing would bury the line explaining what was not searched.
+
+## `dialog`
+
+`gore dialog <list|tree|show|text|export> [OPTIONS]`
+
+| Subcommand | Flags | Meaning |
+|---|---|---|
+| `list` | `[FILTER]` | The conversations the game ships: participants, topic count, module. `FILTER` keeps the ones whose participant or module contains it. |
+| `tree` | `<NPC>` · `--lang` · `--depth <N>` · `--ids` | One NPC's complete dialog tree: options in menu order, their rules and `IsVisible` checks, the lines each side speaks, the effects, and nested sub-menus. |
+| `show` | `<TOPIC>` · `--lang` | One topic class in full, with class names and localization keys. |
+| `text` | `<NPC>` · `--lang` · `--out <FILE>` | That conversation's lines as a `gore loc import` edits document, each under the column the game actually reads. |
+| `export` | `--out <DIR>` | One JSON file per conversation. |
+
+Every subcommand also takes `--cache <PATH>` to read an exact script cache and
+`--game <ROOT>` to pick the install; without either, the configured game path is
+used, then Steam auto-detect. `list`, `tree` and `show` take `--json`.
+
+`--lang` takes a language family (`german`, `english`) and reads the newest
+populated column of it, or an exact column name (`german_new`) to pin one. Text
+comes from the shared catalog, so it needs `gore loc extract` once; without it
+lines print as their localization keys and the output says so.
+
+**Read-only.** Nothing is written, deployed or launched, and the tree describes
+what the cache declares rather than what a given save would show. Full detail in
+[Reading dialog trees](dialog-trees.md).
 
 ## `gen`
 

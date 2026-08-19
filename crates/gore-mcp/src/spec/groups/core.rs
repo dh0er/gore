@@ -546,6 +546,199 @@ pub const LOCATION: GroupSpec = GroupSpec {
 };
 
 // ---------------------------------------------------------------------------------------------
+// gore_dialog
+// ---------------------------------------------------------------------------------------------
+
+/// Shared by every leaf: which cache to read, and where the game is.
+const DIALOG_CACHE_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "cache",
+        Long("cache"),
+        Path,
+        "Exact script cache to read. Defaults to the one in the resolved game install",
+        false,
+    )
+    .with_default("the script cache of the resolved game install"),
+    ArgSpec::new(
+        "game",
+        Long("game"),
+        Path,
+        "Game install root (the folder containing `G1R/`)",
+        false,
+    )
+    .with_default("the configured game path, then Steam auto-detect"),
+];
+
+const DIALOG_LIST_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "filter",
+        Positional { order: 0 },
+        Str,
+        "Keep only conversations whose participant or module contains this text",
+        false,
+    ),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
+const DIALOG_TREE_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "npc",
+        Positional { order: 0 },
+        Str,
+        "Participant identifier (`om_stt_viper_302`), part of one, or a module name",
+        true,
+    ),
+    ArgSpec::new(
+        "lang",
+        Long("lang"),
+        Str,
+        "Localization column, or a language family (`german`, `english`)",
+        false,
+    )
+    .with_default("english"),
+    ArgSpec::new(
+        "depth",
+        Long("depth"),
+        Int {
+            min: Some(0),
+            max: None,
+        },
+        "Stop after this much sub-dialog nesting",
+        false,
+    ),
+    ArgSpec::new(
+        "ids",
+        crate::spec::ArgForm::Switch("ids"),
+        crate::spec::ArgKind::Bool,
+        "Print class names and localization keys next to the text",
+        false,
+    ),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
+const DIALOG_SHOW_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "topic",
+        Positional { order: 0 },
+        Str,
+        "Topic class name, with or without the generated `U` prefix",
+        true,
+    ),
+    ArgSpec::new(
+        "lang",
+        Long("lang"),
+        Str,
+        "Localization column, or a language family (`german`, `english`)",
+        false,
+    )
+    .with_default("english"),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
+const DIALOG_EXPORT_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Output directory. Created if absent; existing files are overwritten",
+        true,
+    ),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
+const DIALOG_TEXT_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "npc",
+        Positional { order: 0 },
+        Str,
+        "Participant identifier (`om_stt_viper_302`), part of one, or a module name",
+        true,
+    ),
+    ArgSpec::new(
+        "lang",
+        Long("lang"),
+        Str,
+        "Localization column, or a language family (`german`, `english`)",
+        false,
+    )
+    .with_default("german"),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Output edits JSON, ready for `gore loc import --edits`",
+        true,
+    ),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
+const DIALOG_COMMANDS: &[CommandSpec] = &[
+    CommandSpec::new(
+        "list",
+        "List the conversations the game ships, with their participants and size",
+        DIALOG_LIST_ARGS,
+        Safety::read(),
+        T_NORMAL,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("dialog-trees"),
+    CommandSpec::new(
+        "tree",
+        "Print one NPC's complete dialog tree",
+        DIALOG_TREE_ARGS,
+        Safety::read(),
+        T_NORMAL,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("dialog-trees"),
+    CommandSpec::new(
+        "show",
+        "Print one topic in full: caption, rules, visibility, and body",
+        DIALOG_SHOW_ARGS,
+        Safety::read(),
+        T_NORMAL,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("dialog-trees"),
+    // One edits document at a path the caller picks, overwritten if it is already there.
+    CommandSpec::new(
+        "text",
+        "Write one NPC's dialog text as a `gore loc import` edits document",
+        DIALOG_TEXT_ARGS,
+        Safety::write_truncating(&["out"]),
+        T_NORMAL,
+    )
+    .guide("dialog-trees"),
+    // One JSON file per conversation, named after the module, in a directory the caller picks.
+    // Nothing else is touched, and the game install is only read.
+    CommandSpec::new(
+        "export",
+        "Write every conversation to a directory, one JSON file each",
+        DIALOG_EXPORT_ARGS,
+        Safety::write().writes_into(&["out"]),
+        T_NORMAL,
+    )
+    .guide("dialog-trees"),
+];
+
+pub const DIALOG: GroupSpec = GroupSpec {
+    tool: "gore_dialog",
+    title: "gore dialog reader",
+    cli: "dialog",
+    summary: "Read the game's dialog trees out of the installed script cache: every option an NPC \
+              offers, what unlocks or hides it, the lines each side speaks with their localized \
+              text, the effects a choice applies, and which sub-menu it opens. Offline and \
+              read-only — it reports what the cache declares, not what a given save would show.",
+    shape: GroupShape::Nested,
+    commands: DIALOG_COMMANDS,
+};
+
+// ---------------------------------------------------------------------------------------------
 // gore_project  (synthetic: making and shipping a UE4SS Lua mod)
 // ---------------------------------------------------------------------------------------------
 

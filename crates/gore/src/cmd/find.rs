@@ -221,6 +221,11 @@ impl NameIndex {
         self.names.get(&id.to_lowercase()).map(Vec::as_slice)
     }
 
+    /// The localized spellings of one id, for a sibling command that picks its own column.
+    pub(crate) fn names_for(&self, id: &str) -> Option<&[Name]> {
+        self.get(id)
+    }
+
     /// How many CATALOG ROWS this index can name — the honest coverage number,
     /// which is well short of all of them (knowledge ids have no loc entry at
     /// all, and some 47 item classes are unnamed in every language).

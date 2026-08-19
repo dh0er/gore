@@ -4,6 +4,7 @@ pub mod audio;
 pub mod catalog;
 pub mod config;
 pub mod deploy_shared;
+pub mod dialog;
 pub mod doctor;
 pub mod dump;
 pub mod dump_mod;

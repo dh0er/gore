@@ -402,6 +402,7 @@ to the server.
 | `gore_catalog` | `dump` · `stubs` · `catalog` · `story-catalog` · `location-catalog` · `gui-model` · `sync` · `dump-mod` | [catalogs](catalogs-and-models.md) |
 | `gore_location` | `location` | [catalogs](catalogs-and-models.md) |
 | `gore_project` | `scaffold` · `gen` · `package` · `deploy-shared` | [items](items.md) |
+| `gore_dialog` | `dialog` | [dialog-trees](dialog-trees.md) |
 | `gore_loc` | `loc` | [text-and-dialogs](text-and-dialogs.md) |
 | `gore_audio` | `audio` | [audio](audio.md) |
 | `gore_voice` | `voice` | [voice](voice.md) |
