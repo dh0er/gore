@@ -27,7 +27,7 @@ AppId={{F2B9C4A7-8D63-4F1E-A0C5-7E3B6D2A91F4}
 AppName=GORE Mod Studio
 AppVersion={#AppVersion}
 AppVerName=GORE Mod Studio {#AppVersion}
-AppPublisher=dh0er
+AppPublisher=Daniel Hoer
 DefaultDirName={autopf}\gore-mod
 DefaultGroupName=GORE Mod Studio
 ; Per-user installs work without elevation; the dialog lets the user pick

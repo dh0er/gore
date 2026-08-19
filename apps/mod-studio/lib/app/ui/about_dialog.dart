@@ -8,7 +8,7 @@ const _githubUrl = 'https://github.com/dh0er/gore';
 
 const String _gitSha = String.fromEnvironment('GIT_SHA', defaultValue: 'dev');
 
-const aboutCopyrightNotice = '© 2026 GORE contributors';
+const aboutCopyrightNotice = '© 2026 Daniel Hoer';
 const aboutLicenseNotice = 'Licensed under the MIT License.';
 
 String aboutVersionLabel(PackageInfo? info) =>

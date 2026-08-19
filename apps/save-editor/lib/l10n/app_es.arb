@@ -428,7 +428,7 @@
   "yes": "sí",
   "no": "no",
   "aboutVersion": "Versión {version} ({sha})",
-  "aboutCopyright": "© 2026 colaboradores de GORE",
+  "aboutCopyright": "© 2026 Daniel Hoer",
   "aboutLicense": "Distribuido bajo la licencia MIT.",
   "difficultyTitle": "Dificultad — {profile}",
   "difficultyNoProfile": "Sin perfil",

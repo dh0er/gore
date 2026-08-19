@@ -42,7 +42,7 @@
   "close": "Cerrar",
   "about": "Acerca de",
   "aboutVersion": "Version {version} ({sha})",
-  "aboutCopyright": "© 2026 colaboradores de GORE",
+  "aboutCopyright": "© 2026 Daniel Hoer",
   "aboutLicense": "Distribuido bajo la licencia MIT.",
   "categoryMeleeWeapons": "Armas cuerpo a cuerpo",
   "categoryRangedWeapons": "Armas a distancia",
