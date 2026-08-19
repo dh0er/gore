@@ -66,15 +66,17 @@ const _exeTail = ['G1R', 'Binaries', 'Win64', 'G1R-Win64-Shipping.exe'];
 
 /// The game executable to launch, or null when it cannot be found.
 ///
-/// The configured path is either the install root or the exe itself (see
-/// [gameRootFromExe]), so accept a working exe as-is and otherwise rebuild it
-/// from the resolved root. Returns null when the file is not there, so callers
-/// can disable the action instead of failing at spawn time.
+/// Always rebuilt from the resolved install root (see [gameRootFromExe]), never
+/// taken from the configured path directly: that path may be any `.exe` the
+/// file picker allowed, and `G1R/Binaries/Win64` holds more than one. Launching
+/// whatever was picked could start a helper binary instead of the game.
+/// Rebuilding still resolves correctly when the real game exe was picked, since
+/// the root walk climbs out of `Binaries/Win64` either way.
+///
+/// Returns null when the executable is not there, so callers can disable the
+/// action instead of failing at spawn time.
 String? gameExecutableFor(String? path) {
   if (path == null || path.trim().isEmpty) return null;
-  if (p.extension(path).toLowerCase() == '.exe' && File(path).existsSync()) {
-    return path;
-  }
   final root = gameRootFromExe(path);
   if (root == null) return null;
   final exe = p.joinAll([root, ..._exeTail]);

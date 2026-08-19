@@ -89,12 +89,34 @@ void main() {
       expect(gameExecutableFor(exe), exe);
     });
 
+    test('never launches a sibling executable', () {
+      // The picker accepts any .exe, and Binaries/Win64 holds more than the
+      // game; picking a helper there must still resolve to the game.
+      final root = _fakeInstall();
+      final helper = p.joinAll([
+        root,
+        'G1R',
+        'Binaries',
+        'Win64',
+        'CrashReportClient.exe',
+      ]);
+      File(helper).writeAsStringSync('');
+      expect(gameExecutableFor(helper), p.joinAll([root, ..._exeTail]));
+    });
+
     test('is null when there is nothing to launch', () {
       expect(gameExecutableFor(null), isNull);
       expect(gameExecutableFor('   '), isNull);
       // A real install layout whose executable is missing must not be reported
       // as launchable; the button stays disabled instead of failing on click.
       expect(gameExecutableFor(_fakeInstall(withExe: false)), isNull);
+      // An .exe that exists but sits outside an install resolves to no root.
+      final stray = p.join(
+        Directory.systemTemp.createTempSync('gore_stray').path,
+        'Something.exe',
+      );
+      File(stray).writeAsStringSync('');
+      expect(gameExecutableFor(stray), isNull);
     });
   });
 
