@@ -1598,6 +1598,16 @@ impl<'a> PreparedEmit<'a> {
         self
     }
 
+    /// The path this module is emitted at, relative to the compiler's `Script/` tree.
+    ///
+    /// This is the value `compile-module --op edit` demands as `--rel-path`, so callers that
+    /// prepare an edit read it here instead of growing a second path policy.
+    pub fn module_relative_path(&self, module_index: usize) -> Option<&str> {
+        self.layout
+            .get(module_index)
+            .map(|layout| layout.relative.as_str())
+    }
+
     pub fn emit_module(&self, module_index: usize) -> Result<String, EmitAllError> {
         let module = self
             .mods

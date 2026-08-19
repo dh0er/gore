@@ -166,7 +166,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `dialog new-topic` — scaffold a new root-level dialog option: the AngelScript
   source derived from that conversation's own topic base, and a build spec with
   the participant and registration sentinel filled in from the cache.
-- `gore_dialog` MCP tool for the same six subcommands.
+- `dialog checkout` / `check` / `stage` — edit a shipped conversation's own
+  AngelScript: take the module out as the compiler emits it, rewrite what its
+  options do, and have the edit checked offline against everything the recompile
+  path requires before spending a compile on it.
+- `gore_dialog` MCP tool for the same nine subcommands.
 
 ## [0.1.0] - 2026-08-18
 

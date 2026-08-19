@@ -189,3 +189,103 @@ fn nothing_is_read_away_silently() {
         total.steps
     );
 }
+
+/// A checkout nobody has touched must read as carryable, for every conversation the game ships.
+///
+/// This is the scanner's real test. It has to survive every shape 283 shipped modules put in
+/// front of it — nested braces in a body, a class with no members, a free function beside the
+/// classes — and a false positive here would send an author hunting for a problem that is not
+/// there.
+#[test]
+fn an_untouched_checkout_of_every_conversation_is_carryable() {
+    let Some(bytes) = real_cache() else {
+        eprintln!("skip: set GORE_AS_REAL_CACHE");
+        return;
+    };
+    let graph = dialog::build(&bytes).expect("dialog");
+    let known = dialog::known_names(&bytes).expect("known names");
+
+    let names: Vec<&str> = graph
+        .conversations
+        .iter()
+        .map(|conversation| conversation.module.as_str())
+        .collect();
+    let taken = dialog::checkout_many(&bytes, &names, None).expect("checkout");
+
+    let mut checked = 0usize;
+    let mut complaints = Vec::new();
+    for module in &taken {
+        let report = dialog::verify(&module.source, &module.source, &known);
+        checked += 1;
+        if !report.unchanged {
+            complaints.push(format!("{}: a checkout differs from itself", module.module));
+        }
+        for violation in &report.violations {
+            complaints.push(format!("{}: {}", module.module, violation.explain()));
+        }
+        if !report.changed.is_empty() {
+            complaints.push(format!(
+                "{}: {} method(s) reported as rewritten in an untouched checkout",
+                module.module,
+                report.changed.len()
+            ));
+        }
+    }
+
+    eprintln!("{checked} conversation modules checked out and verified");
+    assert!(checked > 200, "only {checked} modules were checked");
+    assert!(
+        complaints.is_empty(),
+        "{} complaint(s) about untouched checkouts:\n{}",
+        complaints.len(),
+        complaints
+            .iter()
+            .take(10)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+/// Every topic class the tree reports is a class an edited module may name, and every
+/// localization key it prints is a literal such a module may use. Without that, the checker would
+/// refuse edits that only reuse what the conversation already says.
+#[test]
+fn the_names_a_tree_prints_are_names_an_edit_may_use() {
+    let Some(bytes) = real_cache() else {
+        eprintln!("skip: set GORE_AS_REAL_CACHE");
+        return;
+    };
+    let graph = dialog::build(&bytes).expect("dialog");
+    let known = dialog::known_names(&bytes).expect("known names");
+
+    let mut missing_types = 0usize;
+    let mut missing_strings = 0usize;
+    for conversation in &graph.conversations {
+        for topic in &conversation.topics {
+            if !known.types.contains(&topic.class) {
+                missing_types += 1;
+            }
+            if let Some(key) = topic.caption.loc_key() {
+                if !known.strings.contains(key) {
+                    missing_strings += 1;
+                }
+            }
+            for step in &topic.act {
+                if let StepKind::Say {
+                    loc_key: Some(key), ..
+                } = &step.kind
+                {
+                    if !known.strings.contains(key) {
+                        missing_strings += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(missing_types, 0, "topic classes absent from the name index");
+    assert_eq!(
+        missing_strings, 0,
+        "localization keys absent from the string index"
+    );
+}

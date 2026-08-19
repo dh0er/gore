@@ -8,10 +8,15 @@
 //! Nothing here writes, deploys, or launches anything, and nothing here reports what the game
 //! would show in a given save state: the tree is what the cache declares.
 
+pub mod edit;
 pub mod extract;
 pub mod graph;
 pub mod model;
 
+pub use edit::{
+    checkout, checkout_many, known_names, read_outline, verify, ChangedBody, Checkout, ClassOutline, EditReport,
+    KnownNames, SourceOutline, Violation,
+};
 pub use graph::{build, DialogError};
 pub use model::{
     Arg, Caption, Check, CheckSource, Conversation, Coverage, DialogGraph, Guard, Rule, RuleKind,

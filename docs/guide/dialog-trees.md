@@ -12,12 +12,13 @@ gore dialog tree brannok --lang german    # in German
 gore dialog show ChoiceStt302ViperMelt    # one option in full
 gore dialog text viper -o viper.json      # its lines, ready to edit and re-import
 gore dialog new-topic viper --caption-key K --mod-name MyMod -o MyMod   # a new option
+gore dialog checkout viper -o work        # its AngelScript, to change what an option does
 gore dialog export -o dialog\             # every conversation as JSON
 ```
 
 Everything here works offline. It needs the game installed — that is where the
 script cache lives — but only ever reads it: no command on this page launches
-the game, writes into the install, or touches a save. The three that produce
+the game, writes into the install, or touches a save. The commands that produce
 something write it where you point them.
 
 ## What a tree looks like
@@ -158,9 +159,99 @@ own compiler, so it needs the game installed and takes a couple of minutes;
 what that path proves and what it does not is
 [Dialog authoring](dialog-authoring.md).
 
-This adds an option to the **root** menu. Putting one inside an existing
-sub-menu means changing the vanilla conversation module itself, which is a
-different and unproven operation.
+This adds an option to the **root** menu. Changing what the existing options do
+is a different operation — [editing the module](#changing-what-an-option-does)
+— and a genuinely new option inside a sub-menu is reachable by neither.
+
+## Changing what an option does
+
+Wording lives in the localization cache; behaviour lives in the script cache.
+To change behaviour you edit the conversation's own AngelScript and recompile
+that one module.
+
+```powershell
+gore dialog checkout om_stt_viper_302 -o work    # take the module out
+# edit work\Conversation_OM_STT_VIPER_302.as
+gore dialog check work                           # will this survive the trip back?
+gore dialog stage work --mod-name ViperEdit      # write the build spec
+```
+
+`checkout` writes the exact source the compiler itself would emit for that
+module, an untouched copy under `pristine\`, and a manifest binding the edit to
+that exact game build.
+
+### What you may change, and what you may not
+
+An edited module has to come back onto the shipping cache, and two mechanisms
+decide what survives. The compiler-generated defaults — caption, priority,
+rules, flags — are carried back from the shipped module byte-for-byte, which
+only works while every surrounding identity is unchanged. And the recompiled
+module is remapped *strictly* onto the base cache's keyspace, so it can only
+name things that build already has.
+
+| | |
+|---|---|
+| **You may change** | what a method does: spoken lines, effects, their order and their branches; the `IsVisible` test; which existing topics a `Subdialog` offers |
+| **You may not** | add, remove, rename or reorder classes or methods; change a signature or a member variable; write a `default` statement; name a type or a text id the build does not already have |
+
+Those are not house rules, they are the conditions under which the recompile
+path accepts the result. Every one of them would otherwise surface as a refusal
+*after* a two-minute compile, so `check` asks the same questions offline against
+the same cache:
+
+```
+this edit cannot be carried back:
+  - line 216: a `default` statement. Captions, priority, rules and flags are carried back from
+    the shipped module unchanged, so they cannot be edited here
+  - class UChoiceStt302ViperInvented is new. An edited module has to keep exactly the classes it
+    shipped with; a new topic needs its own module
+  - the literal "MY_BRAND_NEW_LINE" is not in this cache's string table. An edited module can
+    only use text ids the game already ships; a brand-new one needs its own module
+```
+
+A clean edit names the methods it rewrote:
+
+```
+this edit can be carried back. Rewritten:
+  - UChoiceBrannok119230::void Act_Implementation()
+```
+
+`check` compares against the cache the checkout was taken from and refuses if
+the game has been updated since — a new build changes every identity the edit is
+checked against.
+
+### What this reaches
+
+Re-pointing a line at different text the game already ships, reordering what an
+option says, adding or removing an effect, changing when an option is visible,
+and adding an **existing** topic to a sub-menu — a `Subdialog` call lists its
+options as arguments with empty slots to spare, so extending one is an ordinary
+body edit.
+
+What it does not reach: a genuinely new option inside a sub-menu. That needs a
+new class, and a new class can neither go into an edited module (identity drift)
+nor be named from one (strict remap). New options are root-level, through
+[`new-topic`](#adding-an-option).
+
+### Then compile it
+
+`stage` writes `spec.json` and prints the two commands, with `--op edit` and without
+`--allow-new-symbols`:
+
+```powershell
+gore as compile-module --op edit --module Story.G1R.Conversation.Conversation_BC_BAN_BRANNOK_863 `
+  --rel-path Story/G1R/Conversation/Conversation_BC_BAN_BRANNOK_863.as `
+  --source work\Conversation_BC_BAN_BRANNOK_863.as --work-dir .gore-as-work `
+  -o work\ViperEdit.mini.Cache
+gore mod build --spec work\spec.json -o build
+```
+
+Passing `--allow-new-symbols` here is refused by design: strict remapping is
+exactly what lets the shipped captions and rules come back unchanged.
+
+`check` reads the shipped module, not your syntax. It cannot tell you that your
+AngelScript parses — only the compile step can, and that is the step that takes
+the minutes.
 
 ## Conditions, in the game's own vocabulary
 

@@ -3,7 +3,11 @@
 //! Everything here works offline and only ever reads the installation. The tree comes out of the
 //! shipping script cache; the text comes out of the shared localization catalog that `gore loc
 //! extract` writes. Nothing here launches the game, writes into the install, touches a save, or
-//! deploys; `text`, `new-topic` and `export` write only where they are pointed.
+//! deploys; the commands that produce something write only where they are pointed.
+//!
+//! `checkout`/`check`/`stage` prepare an edit to a shipped conversation module and say offline
+//! whether the recompile path could carry it back. They stop at the compiler's door: producing
+//! the mini-cache is `gore as compile-module`, and shipping it is `gore mod`.
 //!
 //! What the cache declares is not the same as what a player sees: a topic's rules and its
 //! `IsVisible` override decide that per save state, and this command deliberately reports both
@@ -119,6 +123,42 @@ pub enum DialogAction {
         #[arg(long)]
         game: Option<PathBuf>,
     },
+    /// Take one conversation's AngelScript out of the cache so its bodies can be rewritten
+    Checkout {
+        /// Participant identifier (`om_stt_viper_302`), part of one, or a module name
+        npc: String,
+        /// Working directory for the source, its pristine copy, and the manifest
+        #[arg(short = 'o', long)]
+        out: PathBuf,
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        #[arg(long)]
+        game: Option<PathBuf>,
+    },
+    /// Check an edited conversation against what the recompile path can carry back
+    Check {
+        /// The directory `checkout` wrote
+        dir: PathBuf,
+        /// Emit one JSON document instead of the human-readable verdict
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        #[arg(long)]
+        game: Option<PathBuf>,
+    },
+    /// Write the build spec for a checked edit and print the commands that compile it
+    Stage {
+        /// The directory `checkout` wrote
+        dir: PathBuf,
+        /// Mod name for the bundle this edit ships in
+        #[arg(long, default_value = "MyDialogEdit")]
+        mod_name: String,
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        #[arg(long)]
+        game: Option<PathBuf>,
+    },
     /// Write every conversation to a directory, one JSON file each
     Export {
         /// Output directory. Created if absent; existing files are overwritten
@@ -181,6 +221,24 @@ pub fn run(action: DialogAction) -> Result<()> {
             cache,
             game,
         }),
+        DialogAction::Checkout {
+            npc,
+            out,
+            cache,
+            game,
+        } => checkout(&npc, &out, cache, game),
+        DialogAction::Check {
+            dir,
+            json,
+            cache,
+            game,
+        } => check(&dir, json, cache, game),
+        DialogAction::Stage {
+            dir,
+            mod_name,
+            cache,
+            game,
+        } => stage(&dir, &mod_name, cache, game),
         DialogAction::Export { out, cache, game } => export(&out, cache, game),
     }
 }
@@ -960,6 +1018,253 @@ fn text_edits(
         "edit the file, then: gore loc import --edits {}",
         out.display()
     );
+    Ok(())
+}
+
+// ─── checkout / check / stage ────────────────────────────────────────────────
+
+/// What `checkout` records so `check` and `stage` need no arguments beyond the directory.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct EditManifest {
+    /// The Modules TMap key, for `compile-module --module`.
+    module: String,
+    /// Where the compiler expects the file, for `compile-module --rel-path`.
+    relative_path: String,
+    /// The editable file, relative to the working directory.
+    source_file: String,
+    /// The untouched copy, relative to the working directory.
+    pristine_file: String,
+    participant: String,
+    /// The exact cache this edit is bound to. A game update invalidates the whole contract.
+    cache_sha256: String,
+}
+
+const MANIFEST_NAME: &str = "gore-dialog-edit.json";
+
+fn digest_of(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest: [u8; 32] = Sha256::digest(bytes).into();
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// The Binds cache beside the script cache, resolved the way the compiler resolves it, so an
+/// emitted checkout is byte-identical to the tree the compiler will build.
+fn native_api(cache_path: &std::path::Path) -> Option<gore_as::cache::binds::NativeApi> {
+    let path = match std::env::var_os("GORE_AS_BINDS") {
+        Some(path) => PathBuf::from(path),
+        None => cache_path.parent()?.join("Binds.Cache"),
+    };
+    gore_as::cache::binds::NativeApi::load(&path)
+}
+
+fn checkout(npc: &str, out: &PathBuf, cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<()> {
+    let (path, bytes) = read_cache(cache, game)?;
+    let graph = dialog::build(&bytes).context("reading dialog from the script cache")?;
+    let conversation = resolve_one(&graph, npc)?;
+    if conversation.topics.is_empty() {
+        bail!(
+            "{} declares no topics, so there is nothing to edit",
+            participant_label(conversation)
+        );
+    }
+
+    let taken = dialog::checkout(&bytes, &conversation.module, native_api(&path))
+        .with_context(|| format!("taking {} out of the cache", conversation.module))?;
+    let leaf = taken
+        .relative_path
+        .rsplit('/')
+        .next()
+        .unwrap_or("module.as")
+        .to_owned();
+
+    fs::create_dir_all(out.join("pristine"))
+        .with_context(|| format!("creating {}", out.display()))?;
+    let source_file = out.join(&leaf);
+    let pristine_file = out.join("pristine").join(&leaf);
+    fs::write(&source_file, &taken.source)
+        .with_context(|| format!("writing {}", source_file.display()))?;
+    fs::write(&pristine_file, &taken.source)
+        .with_context(|| format!("writing {}", pristine_file.display()))?;
+
+    let manifest = EditManifest {
+        module: taken.module.clone(),
+        relative_path: taken.relative_path.clone(),
+        source_file: leaf.clone(),
+        pristine_file: format!("pristine/{leaf}"),
+        participant: participant_label(conversation),
+        cache_sha256: digest_of(&bytes),
+    };
+    let manifest_path = out.join(MANIFEST_NAME);
+    fs::write(
+        &manifest_path,
+        format!("{}\n", serde_json::to_string_pretty(&manifest)?),
+    )
+    .with_context(|| format!("writing {}", manifest_path.display()))?;
+
+    println!("{} — {}", manifest.participant, taken.module);
+    println!("edit    {}", source_file.display());
+    println!("as-was  {}", pristine_file.display());
+    println!();
+    println!("you may change: what a method does — spoken lines, effects, their order and");
+    println!("                branches, the `IsVisible` test, and which existing topics a");
+    println!("                `Subdialog` offers");
+    println!("you may not:    add, remove, rename or reorder classes and methods; change a");
+    println!("                signature or a member variable; write a `default` statement;");
+    println!("                name a type or a text id this game build does not already have");
+    println!();
+    println!("then: gore dialog check {}", out.display());
+    Ok(())
+}
+
+/// Read the manifest and re-derive everything the check needs from the same cache.
+fn open_edit(
+    dir: &PathBuf,
+    cache: Option<PathBuf>,
+    game: Option<PathBuf>,
+) -> Result<(EditManifest, dialog::EditReport, PathBuf)> {
+    let manifest_path = dir.join(MANIFEST_NAME);
+    let manifest: EditManifest = serde_json::from_str(
+        &fs::read_to_string(&manifest_path)
+            .with_context(|| format!("reading {}", manifest_path.display()))?,
+    )
+    .with_context(|| format!("parsing {}", manifest_path.display()))?;
+
+    let (path, bytes) = read_cache(cache, game)?;
+    let digest = digest_of(&bytes);
+    if digest != manifest.cache_sha256 {
+        bail!(
+            "this edit was taken from a different script cache ({}…, now {}…). A game update \
+             changes every identity the edit is checked against; take a fresh checkout",
+            &manifest.cache_sha256[..12.min(manifest.cache_sha256.len())],
+            &digest[..12.min(digest.len())]
+        );
+    }
+
+    let taken = dialog::checkout(&bytes, &manifest.module, native_api(&path))
+        .with_context(|| format!("re-reading {}", manifest.module))?;
+    let source_path = dir.join(&manifest.source_file);
+    let authored = fs::read_to_string(&source_path)
+        .with_context(|| format!("reading {}", source_path.display()))?;
+    let known = dialog::known_names(&bytes).context("collecting the cache's names")?;
+    let report = dialog::verify(&taken.source, &authored, &known);
+    Ok((manifest, report, source_path))
+}
+
+fn check(dir: &PathBuf, json: bool, cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<()> {
+    let (manifest, report, source_path) = open_edit(dir, cache, game)?;
+
+    if json {
+        let document = serde_json::json!({
+            "module": manifest.module,
+            "participant": manifest.participant,
+            "unchanged": report.unchanged,
+            "carryable": report.is_carryable(),
+            "changed": report.changed.iter().map(|body| {
+                serde_json::json!({ "class": body.class, "member": body.member })
+            }).collect::<Vec<_>>(),
+            "violations": report.violations.iter().map(|violation| violation.explain())
+                .collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&document)?);
+        return if report.is_carryable() {
+            Ok(())
+        } else {
+            bail!("{} problem(s)", report.violations.len())
+        };
+    }
+
+    println!("{} — {}", manifest.participant, manifest.module);
+    println!("{}", source_path.display());
+    println!();
+
+    if !report.violations.is_empty() {
+        println!("this edit cannot be carried back:");
+        for violation in &report.violations {
+            println!("  - {}", violation.explain());
+        }
+        println!();
+        bail!(
+            "{} problem(s); nothing was compiled",
+            report.violations.len()
+        );
+    }
+
+    if report.unchanged {
+        println!("nothing changed yet — the file is still the one the game ships");
+        return Ok(());
+    }
+
+    println!("this edit can be carried back. Rewritten:");
+    for body in &report.changed {
+        println!("  - {}::{}", body.class, body.member);
+    }
+    println!();
+    println!("checked offline against the shipped module. The compiler still has the last word");
+    println!(
+        "on whether the source parses; run it with `gore dialog stage {}`",
+        dir.display()
+    );
+    Ok(())
+}
+
+fn stage(
+    dir: &PathBuf,
+    mod_name: &str,
+    cache: Option<PathBuf>,
+    game: Option<PathBuf>,
+) -> Result<()> {
+    let (manifest, report, source_path) = open_edit(dir, cache, game)?;
+    if !report.is_carryable() {
+        for violation in &report.violations {
+            println!("  - {}", violation.explain());
+        }
+        bail!(
+            "{} problem(s); run `gore dialog check {}` for the detail",
+            report.violations.len(),
+            dir.display()
+        );
+    }
+    if report.unchanged {
+        bail!("the file is unchanged, so there is nothing to build");
+    }
+
+    let mini = format!("{mod_name}.mini.Cache");
+    let spec = serde_json::json!({
+        "meta": { "name": mod_name, "version": "0.1.0", "author": "" },
+        "scripts": [{
+            "op": "edit",
+            "module_name": manifest.module,
+            "mini_cache": mini,
+        }],
+    });
+    let spec_path = dir.join("spec.json");
+    fs::write(
+        &spec_path,
+        format!("{}\n", serde_json::to_string_pretty(&spec)?),
+    )
+    .with_context(|| format!("writing {}", spec_path.display()))?;
+
+    println!("wrote {}", spec_path.display());
+    println!();
+    println!("rewritten:");
+    for body in &report.changed {
+        println!("  - {}::{}", body.class, body.member);
+    }
+    println!();
+    println!("next:");
+    println!(
+        "  gore as compile-module --op edit --module {} --rel-path {} \\\n\
+         \x20   --source {} --work-dir .gore-as-work -o {}",
+        manifest.module,
+        manifest.relative_path,
+        source_path.display(),
+        dir.join(&mini).display()
+    );
+    println!("  gore mod build --spec {} -o build", spec_path.display());
+    println!("  gore mod deploy --bundle build/{mod_name}");
+    println!();
+    println!("no `--allow-new-symbols`: an edited module is remapped strictly onto this exact");
+    println!("cache, which is what lets its captions and rules come back unchanged");
     Ok(())
 }
 

@@ -18,7 +18,7 @@ gore --version
 | `mcp` | `serve` · `tools` | Serve the whole CLI over the Model Context Protocol (stdio JSON-RPC) for AI assistants. | [mcp](mcp.md) |
 | `guide` | `search` · `html` | Search this guide and the reference from a shell, or render the guide into one self-contained HTML file. | [below](#guide) |
 | `find` | — | Search the bundled catalogs and the effect register: class names, ids, categories, display names, and what an id does in game. | [find](find.md) |
-| `dialog` | `list` · `tree` · `show` · `text` · `new-topic` · `export` | Read the game's dialog trees out of the installed script cache: options, conditions, lines, effects, sub-menus. | [dialog-trees](dialog-trees.md) |
+| `dialog` | `list` · `tree` · `show` · `text` · `new-topic` · `checkout` · `check` · `stage` · `export` | Read the game's dialog trees out of the installed script cache: options, conditions, lines, effects, sub-menus. | [dialog-trees](dialog-trees.md) |
 | `gen` | — | Compile `overrides.toml` → a UE4SS Lua override mod. | [items](items.md) |
 | `mod` | `build` · `inspect` · `deploy` · `undeploy` | Build, validate, inspect, deploy, or undeploy a unified bundle. | [bundles](bundles.md) |
 | `mgr` | `import` · `list` · `remove` · `enable` · `disable` · `order` · `analyze` · `preflight` · `recover` · `apply` · `status` · `reset` | Multi-mod manager: library, load order, readiness/recovery, conflicts, composed deployment, status and Reset. | [mod-manager](mod-manager.md) |
@@ -150,7 +150,7 @@ and failing would bury the line explaining what was not searched.
 
 ## `dialog`
 
-`gore dialog <list|tree|show|text|new-topic|export> [OPTIONS]`
+`gore dialog <list|tree|show|text|new-topic|checkout|check|stage|export> [OPTIONS]`
 
 | Subcommand | Flags | Meaning |
 |---|---|---|
@@ -159,6 +159,9 @@ and failing would bury the line explaining what was not searched.
 | `show` | `<TOPIC>` · `--lang` | One topic class in full, with class names and localization keys. |
 | `text` | `<NPC>` · `--lang` · `--out <FILE>` | That conversation's lines as a `gore loc import` edits document, each under the column the game actually reads. |
 | `new-topic` | `<NPC>` · `--caption`/`--caption-key` · `--class` · `--mod-name` · `--out <DIR>` | Scaffold a new root-level option: the AngelScript source, derived from that conversation's topic base, and a build spec with the participant and a sentinel filled in. |
+| `checkout` | `<NPC>` · `--out <DIR>` | The conversation module's AngelScript, exactly as the compiler emits it, plus an untouched copy and a manifest bound to this game build. |
+| `check` | `<DIR>` | Whether an edited module can be carried back onto the cache, and which method bodies it rewrites. Offline; no compile. |
+| `stage` | `<DIR>` · `--mod-name` | The build spec for a checked edit, and the `compile-module --op edit` command that produces its mini-cache. |
 | `export` | `--out <DIR>` | One JSON file per conversation. |
 
 Every subcommand also takes `--cache <PATH>` to read an exact script cache and
@@ -170,8 +173,12 @@ populated column of it, or an exact column name (`german_new`) to pin one. Text
 comes from the shared catalog, so it needs `gore loc extract` once; without it
 lines print as their localization keys and the output says so.
 
-`new-topic` writes two files and reads the install; it compiles and deploys
-nothing. What the compile-and-deploy path that follows it proves is in
+`new-topic`, `checkout` and `stage` write files and read the install; they
+compile and deploy nothing. `check` is read-only, and answers offline the same
+questions the recompile path would answer after a two-minute compile: an edited
+module may rewrite method bodies, but may not change its classes, its methods,
+their signatures, its member variables or its defaults, and may only name types
+and text ids this game build already carries. What the compile-and-deploy path that follows it proves is in
 [Dialog authoring](dialog-authoring.md).
 
 **Read-only apart from the files it is asked to write.** Nothing is deployed or

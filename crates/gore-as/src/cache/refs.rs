@@ -1371,6 +1371,17 @@ impl RefResolver {
         self.global_ns.get(&ptr).map(|s| s.as_str())
     }
     /// True if the global at `ptr` is actually a string literal (Name = the text).
+    /// Every string literal the cache's tables carry.
+    ///
+    /// A strict base-keyspace remap can only resolve strings that are already here, so an edit
+    /// that introduces a brand-new literal cannot be carried back onto this cache. Callers use
+    /// this to say so before a compile rather than after one.
+    pub(super) fn string_globals(&self) -> impl Iterator<Item = &str> {
+        self.global_is_string
+            .iter()
+            .filter_map(|pointer| self.global_by_ptr.get(pointer).map(String::as_str))
+    }
+
     pub fn global_is_string(&self, ptr: i64) -> bool {
         self.global_is_string.contains(&ptr)
     }

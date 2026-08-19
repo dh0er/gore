@@ -650,6 +650,57 @@ const DIALOG_EXPORT_ARGS: &[ArgSpec] = &[
     DIALOG_CACHE_ARGS[1],
 ];
 
+const DIALOG_CHECKOUT_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "npc",
+        Positional { order: 0 },
+        Str,
+        "Participant identifier (`om_stt_viper_302`), part of one, or a module name",
+        true,
+    ),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Working directory for the source, its pristine copy, and the manifest",
+        true,
+    ),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
+const DIALOG_CHECK_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "dir",
+        Positional { order: 0 },
+        Path,
+        "The directory `checkout` wrote",
+        true,
+    ),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
+const DIALOG_STAGE_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "dir",
+        Positional { order: 0 },
+        Path,
+        "The directory `checkout` wrote",
+        true,
+    ),
+    ArgSpec::new(
+        "mod_name",
+        Long("mod-name"),
+        Str,
+        "Mod name for the bundle this edit ships in",
+        false,
+    )
+    .with_default("MyDialogEdit"),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
 const DIALOG_TEXT_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "npc",
@@ -760,6 +811,34 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
         "Write one NPC's dialog text as a `gore loc import` edits document",
         DIALOG_TEXT_ARGS,
         Safety::write_truncating(&["out"]),
+        T_NORMAL,
+    )
+    .guide("dialog-trees"),
+    // The module's source, an untouched copy of it, and a manifest, under a directory the caller
+    // picks. The game install is only read.
+    CommandSpec::new(
+        "checkout",
+        "Take one conversation's AngelScript out of the cache so its bodies can be rewritten",
+        DIALOG_CHECKOUT_ARGS,
+        Safety::write().writes_into(&["out"]),
+        T_NORMAL,
+    )
+    .guide("dialog-trees"),
+    CommandSpec::new(
+        "check",
+        "Check an edited conversation against what the recompile path can carry back",
+        DIALOG_CHECK_ARGS,
+        Safety::read(),
+        T_NORMAL,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("dialog-trees"),
+    // One build spec inside the directory `checkout` already created.
+    CommandSpec::new(
+        "stage",
+        "Write the build spec for a checked edit and print the commands that compile it",
+        DIALOG_STAGE_ARGS,
+        Safety::write().writes_into(&["dir"]),
         T_NORMAL,
     )
     .guide("dialog-trees"),
