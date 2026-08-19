@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import os
 import posixpath
 import re
 import sys
@@ -20,6 +21,26 @@ from typing import Iterable, Mapping, Sequence
 ROOT = Path(__file__).resolve().parent.parent
 CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_PATH = ROOT / ".github" / "workflows" / "release.yml"
+
+README_PATH = ROOT / "README.md"
+
+DOWNLOAD_HEADING = "## ⬇️ Downloads"
+DOWNLOAD_HEADER = "| Tool | Version | Release page |"
+RELEASE_TAG_URL = "https://github.com/dh0er/gore/releases/tag/"
+# The README download table is written by hand, so it is pinned to the tag it
+# names. Locally that only proves the row is self-consistent; on a release-tag
+# push GITHUB_REF_NAME also proves the row was bumped for the tag being built.
+DOWNLOAD_TOOLS: dict[str, str] = {
+    "CLI": "gore-cli",
+    "Mod Manager": "gore-mod-manager",
+    "Save Editor": "gore-save-editor",
+}
+UNRELEASED_PRODUCTS = {"gore-mod-studio"}
+
+_DOWNLOAD_ROW = re.compile(
+    r"^\| \*\*(?P<tool>[^*]+)\*\* \| (?P<version>[0-9]+\.[0-9]+\.[0-9]+) \| "
+    r"\[(?P<label>[^\]]+)\]\((?P<url>[^)]+)\) \|$"
+)
 
 REUSABLE_CI = "./.github/workflows/ci.yml"
 QUALITY_JOB = "quality-gates"
@@ -1276,6 +1297,88 @@ def validate_appcast_key_resources(
     return problems
 
 
+def validate_download_table(
+    readme_text: str, ref_name: str | None = None
+) -> list[str]:
+    """Keep README's download table pinned to real, current release tags."""
+    problems: list[str] = []
+
+    uncovered = set(PRODUCTS) - set(DOWNLOAD_TOOLS.values()) - UNRELEASED_PRODUCTS
+    for product in sorted(uncovered):
+        problems.append(
+            f"README.md: release product {product} is neither in the download "
+            f"table nor listed as unreleased"
+        )
+
+    lines = readme_text.splitlines()
+    try:
+        start = lines.index(DOWNLOAD_HEADING)
+    except ValueError:
+        return problems + [f"README.md: missing {DOWNLOAD_HEADING!r} section"]
+
+    section: list[str] = []
+    for line in lines[start + 1 :]:
+        if line.startswith("## "):
+            break
+        section.append(line)
+
+    table = [line for line in section if line.startswith("|")]
+    if not table or table[0] != DOWNLOAD_HEADER:
+        return problems + [
+            f"README.md: download table must start with {DOWNLOAD_HEADER!r}"
+        ]
+
+    versions: dict[str, str] = {}
+    for line in table[2:]:
+        match = _DOWNLOAD_ROW.match(line)
+        if match is None:
+            problems.append(f"README.md: unreadable download row {line!r}")
+            continue
+        tool = match.group("tool")
+        product = DOWNLOAD_TOOLS.get(tool)
+        if product is None:
+            problems.append(f"README.md: unknown download tool {tool!r}")
+            continue
+        if tool in versions:
+            problems.append(f"README.md: duplicate download row for {tool!r}")
+            continue
+        version = match.group("version")
+        versions[tool] = version
+        tag = f"{PRODUCTS[product].tag_prefix}{version}"
+        if match.group("label") != tag:
+            problems.append(
+                f"README.md: {tool} link text must be the release tag {tag}"
+            )
+        if match.group("url") != f"{RELEASE_TAG_URL}{tag}":
+            problems.append(
+                f"README.md: {tool} must link to {RELEASE_TAG_URL}{tag}"
+            )
+
+    for tool in DOWNLOAD_TOOLS:
+        if tool not in versions:
+            problems.append(f"README.md: download table has no {tool} row")
+
+    if ref_name:
+        for tool, product in DOWNLOAD_TOOLS.items():
+            prefix = PRODUCTS[product].tag_prefix
+            if not ref_name.startswith(prefix):
+                continue
+            tagged = ref_name[len(prefix) :]
+            if tool in versions and versions[tool] != tagged:
+                problems.append(
+                    f"README.md: {tool} download row says {versions[tool]} but "
+                    f"the release tag is {ref_name}"
+                )
+        for product in sorted(UNRELEASED_PRODUCTS):
+            if ref_name.startswith(PRODUCTS[product].tag_prefix):
+                problems.append(
+                    f"README.md: {product} is released as {ref_name} and must "
+                    f"move out of the unreleased list into the download table"
+                )
+
+    return problems
+
+
 def main() -> int:
     try:
         ci_text = CI_PATH.read_text(encoding="utf-8")
@@ -1284,12 +1387,16 @@ def main() -> int:
             product: (ROOT / contract.runner_rc).read_text(encoding="utf-8")
             for product, contract in APPCAST_KEYS.items()
         }
+        readme_text = README_PATH.read_text(encoding="utf-8")
     except OSError as error:
         print(f"release workflow check could not read its inputs: {error}", file=sys.stderr)
         return 1
 
     problems = validate_workflows(ci_text, release_text)
     problems.extend(validate_appcast_key_resources(runner_resources))
+    problems.extend(
+        validate_download_table(readme_text, os.environ.get("GITHUB_REF_NAME"))
+    )
     if problems:
         for problem in problems:
             print(problem, file=sys.stderr)

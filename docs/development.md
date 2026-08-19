@@ -92,6 +92,14 @@ app or the game was launched, a game installation was modified or restored, a
 save was safe, or any gameplay/runtime behavior worked. It grants no install,
 game-write, save-write, deployment, or runtime authority.
 
+The README download table is written by hand, one pinned release tag per
+product, because GitHub has no per-product "latest" URL — `releases/latest` is
+owned by `gore-save-editor`. Bump that table in the same commit the release tag
+points at. `scripts/check_release_workflow.py` checks that every row links to
+its own tag and, when it runs from a release-tag push, that the row for the
+product being released names that exact tag; a stale table fails the gate before
+anything is published.
+
 `python build.py gore-cli dist` also stages the user guide into the CLI zip:
 every `docs/guide/*.md` is copied to `docs/` beside `gore.exe`, and links that
 leave the guide tree (component READMEs, crates, `docs/reference/`) are rewritten

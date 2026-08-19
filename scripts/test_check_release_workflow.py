@@ -7,14 +7,19 @@ import unittest
 
 from check_release_workflow import (
     APPCAST_KEYS,
+    DOWNLOAD_TOOLS,
     PRODUCTS,
     PUBLISH_GUARD,
+    UNRELEASED_PRODUCTS,
     validate_appcast_key_resources,
+    validate_download_table,
     validate_workflows,
 )
 
 
 ROOT = Path(__file__).resolve().parent.parent
+
+CLI_ROW_PATTERN = "(?m)^" + re.escape("| **CLI** |") + ".*" + chr(10)
 
 
 def replace_once(text: str, old: str, new: str) -> str:
@@ -51,6 +56,93 @@ def remove_job(text: str, job: str) -> str:
     if count != 1:
         raise AssertionError(f"job {job!r} not found")
     return changed
+
+
+class DownloadTableContractTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    def assert_invalid(self, readme: str, ref: str | None, mentions: str) -> None:
+        problems = validate_download_table(readme, ref)
+        self.assertTrue(problems, "mutated README unexpectedly passed")
+        self.assertTrue(
+            any(mentions in problem for problem in problems),
+            f"no problem mentioned {mentions!r}: {problems}",
+        )
+
+    def test_current_readme_passes(self) -> None:
+        self.assertEqual(validate_download_table(self.readme), [])
+
+    def test_every_release_product_is_covered(self) -> None:
+        self.assertEqual(
+            set(PRODUCTS), set(DOWNLOAD_TOOLS.values()) | UNRELEASED_PRODUCTS
+        )
+
+    def test_release_tag_must_match_the_advertised_version(self) -> None:
+        self.assertEqual(
+            validate_download_table(self.readme, "gore-save-editor-v1.3.0"), []
+        )
+        self.assert_invalid(
+            self.readme, "gore-save-editor-v1.4.0", "the release tag is"
+        )
+
+    def test_releasing_an_unreleased_product_requires_a_row(self) -> None:
+        self.assert_invalid(
+            self.readme,
+            "gore-mod-studio-v0.1.0",
+            "must move out of the unreleased list",
+        )
+
+    def test_link_must_point_at_its_own_release_tag(self) -> None:
+        self.assert_invalid(
+            replace_once(
+                self.readme,
+                "releases/tag/gore-cli-v0.1.0)",
+                "releases/tag/gore-cli-v0.2.0)",
+            ),
+            None,
+            "CLI must link to",
+        )
+
+    def test_link_text_must_be_the_release_tag(self) -> None:
+        self.assert_invalid(
+            replace_once(self.readme, "[gore-cli-v0.1.0]", "[latest]"),
+            None,
+            "link text must be the release tag",
+        )
+
+    def test_every_tool_needs_a_row(self) -> None:
+        readme = re.sub(CLI_ROW_PATTERN, "", self.readme, count=1)
+        self.assert_invalid(readme, None, "no CLI row")
+
+    def test_download_section_and_header_are_pinned(self) -> None:
+        self.assert_invalid(
+            replace_once(self.readme, "## ⬇️ Downloads", "## Downloads"),
+            None,
+            "missing '## ⬇️ Downloads' section",
+        )
+        self.assert_invalid(
+            replace_once(
+                self.readme,
+                "| Tool | Version | Release page |",
+                "| Tool | Release page | Version |",
+            ),
+            None,
+            "download table must start with",
+        )
+
+    def test_unreadable_and_unknown_rows_fail_closed(self) -> None:
+        self.assert_invalid(
+            replace_once(self.readme, "| **CLI** | 0.1.0 |", "| **CLI** | v0.1.0 |"),
+            None,
+            "unreadable download row",
+        )
+        self.assert_invalid(
+            replace_once(self.readme, "| **CLI** |", "| **gore.exe** |"),
+            None,
+            "unknown download tool",
+        )
 
 
 class ReleaseWorkflowContractTest(unittest.TestCase):

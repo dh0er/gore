@@ -19,6 +19,18 @@ The Flutter GUIs reuse the same Rust engine as the CLI through a `dart:ffi`
 bridge. The CLI is the expert and automation surface; the GUIs package those
 contracts into guided workflows instead of maintaining a second engine.
 
+## ⬇️ Downloads
+
+| Tool | Version | Release page |
+|---|---|---|
+| **CLI** | 0.1.0 | [gore-cli-v0.1.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.1.0) |
+| **Mod Manager** | 0.1.0 | [gore-mod-manager-v0.1.0](https://github.com/dh0er/gore/releases/tag/gore-mod-manager-v0.1.0) |
+| **Save Editor** | 1.3.0 | [gore-save-editor-v1.3.0](https://github.com/dh0er/gore/releases/tag/gore-save-editor-v1.3.0) |
+
+Every release page lists its own assets and changes. The full history is on the
+[releases page](https://github.com/dh0er/gore/releases). Mod Studio has no
+release yet — build it from source.
+
 ## 📊 Status
 
 | Area | Status | What you can do | The catch |
