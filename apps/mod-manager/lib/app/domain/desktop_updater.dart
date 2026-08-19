@@ -33,6 +33,12 @@ bool? _innoInstalled;
 bool _feedConfigured = false;
 Timer? _portableTimer;
 
+/// True while a portable check is running, including while its dialog is
+/// waiting for the user. [_runPortableCheck] awaits that dialog, so without
+/// this an unattended machine would stack one more modal — and one more
+/// network request — every hour the prompt goes unanswered.
+bool _portableCheckActive = false;
+
 /// Inno Setup always places an uninstaller (unins*.exe) next to the app;
 /// the portable zip ships without one. Distinguishes the installed copy
 /// (WinSparkle can replace it in place) from the portable copy (user copies
@@ -153,6 +159,16 @@ bool _isNewer(String latest, String current) {
 /// open the releases page in the browser. When [silentIfNoUpdate] is false
 /// (manual check), also reports the up-to-date and failure cases.
 Future<void> _runPortableCheck({required bool silentIfNoUpdate}) async {
+  if (_portableCheckActive) return;
+  _portableCheckActive = true;
+  try {
+    await _runPortableCheckOnce(silentIfNoUpdate: silentIfNoUpdate);
+  } finally {
+    _portableCheckActive = false;
+  }
+}
+
+Future<void> _runPortableCheckOnce({required bool silentIfNoUpdate}) async {
   // Do every await up front so the context, once captured, is used without
   // an async gap (avoids stale-context use after the widget tree changes).
   final latest = await _fetchLatestVersion();
