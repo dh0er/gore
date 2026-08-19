@@ -233,6 +233,12 @@ new class, and a new class can neither go into an edited module (identity drift)
 nor be named from one (strict remap). New options are root-level, through
 [`new-topic`](#adding-an-option).
 
+The nearest thing that does work is putting an existing topic into a menu it is
+not offered in and rewriting what it says — new content in a sub-menu, in a
+class the game already has. It is the same topic everywhere it appears, so it
+changes the other menu that offers it too; `gore dialog tree` shows where that
+is before you decide.
+
 ### Then compile it
 
 `stage` writes `spec.json` and prints the two commands, with `--op edit` and without
