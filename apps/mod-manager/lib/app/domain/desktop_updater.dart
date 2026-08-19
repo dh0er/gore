@@ -1,47 +1,67 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:auto_updater/auto_updater.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import '../../l10n/app_localizations.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
+import 'package:url_launcher/url_launcher.dart';
 
-/// CI keeps a fixed `gore-mod-manager-appcast` release whose
-/// appcast-windows.xml asset it overwrites on every gore-mod-manager release,
-/// so this URL is stable regardless of which product released most recently.
-/// Every GORE app uses this same fixed-tag scheme; none of them depends on the
-/// repo's "latest" pointer.
+/// Stable URL: CI keeps a fixed `gore-mod-manager-appcast` release whose single
+/// asset it overwrites on every release, so this feed is independent of which
+/// product happens to hold the repo's "latest" pointer.
 const _appcastUrl =
     'https://github.com/dh0er/gore/releases/download/gore-mod-manager-appcast/appcast-windows.xml';
 
+/// Where the portable build sends users to grab the new build. Pinned to the
+/// advertised version's own release, which lists both the installer and the
+/// portable zip — `releases/latest` would send them to whichever product
+/// released most recently.
+String _releasePageUrl(String version) =>
+    'https://github.com/dh0er/gore/releases/tag/gore-mod-manager-v$version';
+
 const _checkIntervalSeconds = 3600;
+
+/// Attached to the app's MaterialApp so a background update check (which has
+/// no widget context of its own) can still surface a dialog.
+final updaterNavigatorKey = GlobalKey<NavigatorState>();
 
 bool? _innoInstalled;
 bool _feedConfigured = false;
+Timer? _portableTimer;
 
 /// Inno Setup always places an uninstaller (unins*.exe) next to the app;
-/// the portable zip ships without one. Limits update prompts to installed
-/// copies — a portable build must stay self-contained.
+/// the portable zip ships without one. Distinguishes the installed copy
+/// (WinSparkle can replace it in place) from the portable copy (user copies
+/// the new files over the old ones).
 bool _isInnoInstalled() {
   try {
     return File(Platform.resolvedExecutable).parent.listSync().any(
-          (entry) =>
-              entry is File &&
-              p.basename(entry.path).toLowerCase().startsWith('unins') &&
-              entry.path.toLowerCase().endsWith('.exe'),
-        );
+      (entry) =>
+          entry is File &&
+          p.basename(entry.path).toLowerCase().startsWith('unins') &&
+          entry.path.toLowerCase().endsWith('.exe'),
+    );
   } catch (error) {
     debugPrint('gore-manager updater install check failed: $error');
     return false;
   }
 }
 
-/// True when this build can offer updates: Windows release build installed
-/// via the Inno installer. Dev runs and the portable zip stay update-free.
-bool get isDesktopUpdaterAvailable {
-  if (!kReleaseMode || !Platform.isWindows) {
-    return false;
-  }
-  return _innoInstalled ??= _isInnoInstalled();
-}
+/// True for the installed (Inno) build, which updates itself via WinSparkle.
+/// False for the portable zip, which checks-and-points-to-download instead.
+bool get isInstalledBuild => _innoInstalled ??= _isInnoInstalled();
+
+/// True when this build can check for updates at all: any Windows release
+/// build, installed or portable. Dev runs stay update-free.
+bool get isUpdateCheckAvailable => kReleaseMode && Platform.isWindows;
+
+// --------------------------------------------------------------------------- #
+// WinSparkle path (installed build only): silent download + install + relaunch.
+// --------------------------------------------------------------------------- #
 
 /// WinSparkle's shutdown callback only asks the app to quit; nothing closes
 /// the process for us. Exiting here releases gore_manager.exe so the Inno
@@ -71,12 +91,12 @@ class _UpdaterQuitListener with UpdaterListener {
 }
 
 /// Sets the feed URL (which initializes WinSparkle) once. Returns false when
-/// updates are unavailable for this build.
+/// this is not the installed build.
 Future<bool> _ensureFeedConfigured() async {
   if (_feedConfigured) {
     return true;
   }
-  if (!isDesktopUpdaterAvailable) {
+  if (!isUpdateCheckAvailable || !isInstalledBuild) {
     return false;
   }
   autoUpdater.addListener(_UpdaterQuitListener());
@@ -85,13 +105,157 @@ Future<bool> _ensureFeedConfigured() async {
   return true;
 }
 
-/// Initializes WinSparkle-based auto-updates. Best-effort: failures are
-/// logged and never block startup. No-op when [isDesktopUpdaterAvailable]
-/// is false.
+// --------------------------------------------------------------------------- #
+// Portable path: fetch the appcast, compare versions, point at the download.
+// --------------------------------------------------------------------------- #
+
+/// Fetches and parses the appcast. Returns the advertised version, or null on
+/// any failure (network, redirect, malformed feed). The appcast is the same
+/// signed feed WinSparkle reads; here we only need the version string.
+Future<String?> _fetchLatestVersion() async {
+  final client = HttpClient();
+  try {
+    final request = await client.getUrl(Uri.parse(_appcastUrl));
+    final response = await request.close();
+    if (response.statusCode != HttpStatus.ok) {
+      return null;
+    }
+    final body = await response.transform(utf8.decoder).join();
+    final match = RegExp(
+      r'<sparkle:version>\s*([^<\s]+)\s*</sparkle:version>',
+    ).firstMatch(body);
+    return match?.group(1);
+  } catch (error) {
+    debugPrint('gore-manager portable update check failed: $error');
+    return null;
+  } finally {
+    client.close(force: true);
+  }
+}
+
+/// Compares dotted numeric versions (e.g. "0.4.0"). Returns true when
+/// [latest] is strictly newer than [current]. Non-numeric or missing
+/// components are treated as 0, so "0.4" < "0.4.1".
+bool _isNewer(String latest, String current) {
+  final a = latest.split('.');
+  final b = current.split('.');
+  for (var i = 0; i < (a.length > b.length ? a.length : b.length); i++) {
+    final x = i < a.length ? int.tryParse(a[i]) ?? 0 : 0;
+    final y = i < b.length ? int.tryParse(b[i]) ?? 0 : 0;
+    if (x != y) {
+      return x > y;
+    }
+  }
+  return false;
+}
+
+/// Runs a portable check. When an update exists, shows a dialog offering to
+/// open the releases page in the browser. When [silentIfNoUpdate] is false
+/// (manual check), also reports the up-to-date and failure cases.
+Future<void> _runPortableCheck({required bool silentIfNoUpdate}) async {
+  // Do every await up front so the context, once captured, is used without
+  // an async gap (avoids stale-context use after the widget tree changes).
+  final latest = await _fetchLatestVersion();
+  final current = (await PackageInfo.fromPlatform()).version;
+
+  final context = updaterNavigatorKey.currentContext;
+  if (context == null || !context.mounted) {
+    return;
+  }
+  final l10n = AppLocalizations.of(context);
+
+  if (latest == null) {
+    if (!silentIfNoUpdate) {
+      await _showInfoDialog(context, l10n.updateCheckFailed);
+    }
+    return;
+  }
+
+  if (!_isNewer(latest, current)) {
+    if (!silentIfNoUpdate) {
+      await _showInfoDialog(context, l10n.updateUpToDate);
+    }
+    return;
+  }
+
+  // A silent (background) check may have been in flight when the user turned
+  // auto-check off; the cancelled timer leaves _portableTimer null. Don't
+  // surface an unsolicited dialog in that case. Manual checks always show.
+  if (silentIfNoUpdate && _portableTimer == null) {
+    return;
+  }
+
+  await _showUpdateAvailableDialog(context, version: latest, current: current);
+}
+
+Future<void> _showInfoDialog(BuildContext context, String message) {
+  final l10n = AppLocalizations.of(context);
+  return showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(l10n.updatesTitle),
+      content: Text(message),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(l10n.commonOk),
+        ),
+      ],
+    ),
+  );
+}
+
+Future<void> _showUpdateAvailableDialog(
+  BuildContext context, {
+  required String version,
+  required String current,
+}) {
+  final l10n = AppLocalizations.of(context);
+  return showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(l10n.updateAvailableTitle),
+      content: Text(l10n.updateAvailableMessage(version, current)),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(l10n.updateLater),
+        ),
+        FilledButton(
+          onPressed: () {
+            Navigator.of(context).pop();
+            unawaited(
+              launchUrl(
+                Uri.parse(_releasePageUrl(version)),
+                mode: LaunchMode.externalApplication,
+              ),
+            );
+          },
+          child: Text(l10n.updateDownload),
+        ),
+      ],
+    ),
+  );
+}
+
+// --------------------------------------------------------------------------- #
+// Public API: branches on installed vs portable; the UI stays agnostic.
+// --------------------------------------------------------------------------- #
+
+/// Startup check. Best-effort: failures are logged and never block startup.
+/// No-op when checks are unavailable (dev) or the user disabled auto-check.
 ///
-/// Call only after the main window is shown — WinSparkle attaches its
-/// update UI to the existing window.
-Future<void> initDesktopUpdater() async {
+/// Installed build: WinSparkle attaches its update UI to the existing window,
+/// so call only after the main window is shown. Portable build: polls the
+/// appcast in the background and shows a Flutter dialog if an update exists.
+Future<void> initDesktopUpdater({required bool autoCheckEnabled}) async {
+  if (!autoCheckEnabled || !isUpdateCheckAvailable) {
+    return;
+  }
+  if (!isInstalledBuild) {
+    unawaited(_pollPortablePeriodically());
+    return;
+  }
   try {
     if (!await _ensureFeedConfigured()) {
       return;
@@ -105,9 +269,40 @@ Future<void> initDesktopUpdater() async {
   }
 }
 
-/// User-triggered check: always shows WinSparkle's dialog, including the
-/// "you're up to date" case.
+/// Portable background poll: one check now, then every hour. WinSparkle owns
+/// its own scheduler; for portable we run a plain timer loop. Guarded so a
+/// re-enable can't stack a second loop; [_stopPortablePolling] cancels it.
+Future<void> _pollPortablePeriodically() async {
+  if (_portableTimer != null) {
+    return;
+  }
+  _portableTimer = Timer.periodic(
+    const Duration(seconds: _checkIntervalSeconds),
+    (_) {
+      unawaited(_runPortableCheck(silentIfNoUpdate: true));
+    },
+  );
+  await _runPortableCheck(silentIfNoUpdate: true);
+}
+
+/// Stops the portable background poll so disabling auto-check takes effect
+/// immediately, matching WinSparkle's interval-0 behavior on the installed
+/// build.
+void _stopPortablePolling() {
+  _portableTimer?.cancel();
+  _portableTimer = null;
+}
+
+/// User-triggered check: always reports the result, including the up-to-date
+/// and failure cases. Works even while automatic checks are off.
 Future<void> checkForUpdatesManually() async {
+  if (!isUpdateCheckAvailable) {
+    return;
+  }
+  if (!isInstalledBuild) {
+    await _runPortableCheck(silentIfNoUpdate: false);
+    return;
+  }
   try {
     if (!await _ensureFeedConfigured()) {
       return;
@@ -115,5 +310,36 @@ Future<void> checkForUpdatesManually() async {
     await autoUpdater.checkForUpdates();
   } catch (error) {
     debugPrint('gore-manager manual update check failed: $error');
+  }
+}
+
+/// Applies the auto-check setting at runtime. Installed: interval 0 stops
+/// WinSparkle's scheduled checks; re-enabling restores the interval and
+/// checks once. Portable: starts the background poll on enable and cancels
+/// the running poll on disable, so the change takes effect immediately.
+Future<void> setAutoUpdateCheckEnabled(bool enabled) async {
+  if (!isUpdateCheckAvailable) {
+    return;
+  }
+  if (!isInstalledBuild) {
+    if (enabled) {
+      unawaited(_pollPortablePeriodically());
+    } else {
+      _stopPortablePolling();
+    }
+    return;
+  }
+  try {
+    if (!await _ensureFeedConfigured()) {
+      return;
+    }
+    await autoUpdater.setScheduledCheckInterval(
+      enabled ? _checkIntervalSeconds : 0,
+    );
+    if (enabled) {
+      await autoUpdater.checkForUpdates(inBackground: true);
+    }
+  } catch (error) {
+    debugPrint('gore-manager updater toggle failed: $error');
   }
 }

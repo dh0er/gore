@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gore_manager/app/domain/ui_settings.dart';
 import 'package:gore_manager/conflicts/ui/conflict_panel.dart';
 import 'package:gore_manager/core/core_service.dart';
 import 'package:gore_manager/core/providers.dart';
@@ -17,6 +18,12 @@ Map<String, Object?> _libraryList() => {
       'kind': 'foreign_mixed',
       'name': 'External Mixed Pack',
       'components': [
+        {
+          'type': 'loc_patch',
+          'rel': 'loc/dialog',
+          'targets': ['NPC_Diego_01|german'],
+          'coverage': 'exact',
+        },
         {
           'type': 'raw_file',
           'rel': 'raw/SFX.bank',
@@ -95,21 +102,17 @@ void main() {
   test('coverage copy is generated for all 12 supported locales', () async {
     expect(AppLocalizations.supportedLocales, hasLength(12));
     final english = await AppLocalizations.delegate.load(const Locale('en'));
-    expect(english.conflictWinner, 'intended winner');
+    expect(english.conflictWinner, 'wins');
     final chinese = await AppLocalizations.delegate.load(const Locale('zh'));
-    expect(chinese.conflictWinner, '预期生效');
+    expect(chinese.conflictWinner, '生效');
     for (final locale in AppLocalizations.supportedLocales) {
       final l10n = await AppLocalizations.delegate.load(locale);
       expect(
         [
-          l10n.footprintCoverageExact,
-          l10n.footprintCoveragePartial,
-          l10n.footprintCoverageAdvisory,
-          l10n.footprintCoverageOpaque,
-          l10n.footprintCoverageExactLabel,
-          l10n.footprintCoveragePartialLabel,
-          l10n.footprintCoverageAdvisoryLabel,
-          l10n.footprintCoverageOpaqueLabel,
+          l10n.footprintTargetsExact,
+          l10n.footprintTargetsPartial,
+          l10n.footprintTargetsAdvisory,
+          l10n.footprintTargetsOpaque,
           l10n.footprintCoverageScope,
           l10n.loadOrderDirection,
           l10n.conflictCoverageIncomplete,
@@ -131,28 +134,43 @@ void main() {
       final container = ProviderScope.containerOf(
         tester.element(find.byType(DetailPanel)),
       );
+      container.read(advancedDetailsProvider.notifier).set(true);
       container.read(selectedModProvider.notifier).state = 'External.Mixed';
       await tester.pumpAndSettle();
 
       final l10n = await AppLocalizations.delegate.load(const Locale('en'));
-      expect(find.text(l10n.footprintCoverageExactLabel), findsOneWidget);
+      // The grade heads the list it grades, so it reads as one sentence.
+      expect(find.text(l10n.footprintTargetsExact), findsOneWidget);
+      // It must sit above the list it introduces, or it anchors nothing. The
+      // row's merged semantics carry it in that same reading order.
+      expect(
+        tester.getRect(find.text(l10n.footprintTargetsExact)).top,
+        lessThan(tester.getRect(find.text('NPC_Diego_01|german')).top),
+      );
       expect(
         tester
-            .getSemantics(
-              find.byKey(const ValueKey('component-footprint-coverage-0')),
-            )
-            .label,
-        l10n.footprintCoverageExact,
+            .getSemantics(find.text(l10n.footprintTargetsExact))
+            .label
+            .replaceAll(RegExp(r'\s+'), ' '),
+        contains(l10n.footprintTargetsExact),
+      );
+      // The raw_file below it is Exact too but has nothing to list, so it gets
+      // no dangling "the full list:" heading over empty space.
+      expect(
+        find.byKey(const ValueKey('component-footprint-coverage-1')),
+        findsNothing,
       );
       final scrollable = find.descendant(
         of: find.byType(DetailPanel),
         matching: find.byType(Scrollable),
       );
       for (final text in [
-        'bank:SFX',
-        l10n.footprintCoveragePartialLabel,
-        l10n.footprintCoverageAdvisoryLabel,
-        l10n.footprintCoverageOpaqueLabel,
+        // The destination names the row; the path is the advanced-only extra.
+        '${l10n.rawTargetSoundBankNamed('SFX')} · raw/SFX.bank',
+        l10n.footprintTargetsPartial,
+        l10n.footprintTargetsAdvisory,
+        // Nothing to list here, so this one is a statement, not a heading.
+        l10n.footprintTargetsOpaque,
       ]) {
         await tester.scrollUntilVisible(
           find.text(text),
@@ -174,6 +192,10 @@ void main() {
       await tester.pumpWidget(
         _app(const SizedBox(height: 72, child: ConflictPanel())),
       );
+      await tester.pumpAndSettle();
+      ProviderScope.containerOf(
+        tester.element(find.byType(ConflictPanel)),
+      ).read(advancedDetailsProvider.notifier).set(true);
       await tester.pumpAndSettle();
 
       final l10n = await AppLocalizations.delegate.load(const Locale('en'));

@@ -43,12 +43,35 @@ class ModList extends ConsumerWidget {
     ];
 
     if (rows.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(
-            l10n.actionImport,
-            style: Theme.of(context).textTheme.bodyMedium,
+      final theme = Theme.of(context);
+      // Scrollable so the empty state still fits a short pane at large text
+      // scales instead of overflowing.
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.extension_outlined,
+                size: 40,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                l10n.libraryEmptyTitle,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.titleMedium,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                l10n.libraryEmptyBody,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
           ),
         ),
       );
@@ -164,20 +187,14 @@ class _ModTile extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            mod.name.isEmpty ? mod.id : mod.name,
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              color: enabled ? null : scheme.onSurfaceVariant,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        _KindChip(label: kindLabel(l10n, mod.kind)),
-                      ],
+                    // No packaging chip here: it repeated what the component
+                    // chips below already say, in different words.
+                    Text(
+                      mod.name.isEmpty ? mod.id : mod.name,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        color: enabled ? null : scheme.onSurfaceVariant,
+                      ),
+                      overflow: TextOverflow.ellipsis,
                     ),
                     if (subtitleParts.isNotEmpty)
                       Padding(
@@ -199,16 +216,6 @@ class _ModTile extends StatelessWidget {
                             for (final chip in chips)
                               _ComponentChipWidget(label: chip.label),
                           ],
-                        ),
-                      ),
-                    if (!enabled)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 2),
-                        child: Text(
-                          l10n.modDisabledHint,
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                          ),
                         ),
                       ),
                   ],
@@ -253,11 +260,15 @@ class ConflictBadge extends StatelessWidget {
         : summary.soft > 0
         ? (Colors.amber.shade700, summary.soft)
         : (scheme.onSurfaceVariant, summary.info);
+    // Only name the severities this mod actually has; a "Warning: 0" bucket is
+    // noise on a badge that already exists because something is non-zero.
+    final parts = <String>[
+      if (summary.hard > 0) '${l10n.sevHard}: ${summary.hard}',
+      if (summary.soft > 0) '${l10n.sevSoft}: ${summary.soft}',
+      if (summary.info > 0) '${l10n.sevInfo}: ${summary.info}',
+    ];
     return Tooltip(
-      message:
-          '${l10n.sevHard}: ${summary.hard} · '
-          '${l10n.sevSoft}: ${summary.soft} · '
-          '${l10n.sevInfo}: ${summary.info}',
+      message: parts.join(' · '),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
         decoration: BoxDecoration(
@@ -280,27 +291,6 @@ class ConflictBadge extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _KindChip extends StatelessWidget {
-  const _KindChip({required this.label});
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
       ),
     );
   }

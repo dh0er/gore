@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'app/domain/game_launcher.dart';
 import 'app/domain/ui_settings.dart';
 import 'app/game_paths.dart';
 import 'app/ui/about_dialog.dart';
@@ -139,6 +140,24 @@ class _HomePageState extends ConsumerState<HomePage> {
     bool fallbackToStatus,
   })?
   _preflightRetryFocusRequest;
+
+  Future<void> _startGame(BuildContext context) async {
+    final exe = gameExecutableFor(ref.read(gameExePathProvider));
+    if (exe == null) return;
+    final launched = await ref.read(gameLauncherProvider)(exe);
+    if (launched || !context.mounted) return;
+    final l10n = AppLocalizations.of(context);
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            l10n.startGameFailed,
+            key: const ValueKey('start-game-failed'),
+          ),
+        ),
+      );
+  }
 
   String? get _gameRoot => gameRootFromExe(ref.read(gameExePathProvider));
 
@@ -383,7 +402,11 @@ class _HomePageState extends ConsumerState<HomePage> {
           library.modById(outcome.entry.id) != null) {
         ref.read(selectedModProvider.notifier).state = outcome.entry.id;
       }
-      showImportSuccessFeedback(context, outcome);
+      showImportSuccessFeedback(
+        context,
+        outcome,
+        showMatchReason: ref.read(advancedDetailsProvider),
+      );
     } finally {
       if (mounted) setState(() => _importRequestActive = false);
     }
@@ -544,6 +567,20 @@ class _HomePageState extends ConsumerState<HomePage> {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
+    final media = MediaQuery.of(context);
+    // The title bar is a plain Row with no room to give: at narrow widths or
+    // large text the zoom chip would push the window buttons off the edge.
+    // Settings still shows the same percentage, so dropping it costs nothing.
+    final textScale = media.textScaler.scale(1);
+    final showZoomIndicator = media.size.width >= 720 && textScale <= 1.35;
+    final startGameCompact = media.size.width < 760 || textScale > 1.35;
+    final gameExe = gameExecutableFor(ref.watch(gameExePathProvider));
+    final startGameBusy =
+        ref.watch(libraryProvider).busy ||
+        ref.watch(statusProvider).busy ||
+        ref.watch(preflightProvider).busy ||
+        ref.watch(conflictsProvider).isLoading;
+    final canStartGame = gameExe != null && !startGameBusy;
 
     return Scaffold(
       appBar: AppBar(
@@ -564,6 +601,41 @@ class _HomePageState extends ConsumerState<HomePage> {
         centerTitle: false,
         scrolledUnderElevation: 0,
         actions: [
+          // The whole UI scales with Ctrl +/-, which is easy to trigger by
+          // accident; showing the current factor makes that visible and
+          // recoverable instead of leaving the app mysteriously large.
+          if (showZoomIndicator) ...[
+            Tooltip(
+              message: l10n.zoomTip,
+              child: Container(
+                key: const ValueKey('ui-scale-indicator'),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.zoom_in,
+                      size: 16,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${(ref.watch(uiScaleProvider) * 100).round()}%',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
           IconButton(
             icon: Icon(isDark ? Icons.light_mode : Icons.dark_mode),
             tooltip: isDark ? l10n.lightMode : l10n.darkMode,
@@ -627,6 +699,54 @@ class _HomePageState extends ConsumerState<HomePage> {
                         ),
                       ],
                     ),
+                  ),
+                  // Far end of the tab row: the full window width to sit in,
+                  // and outside the TabBarView so it stays put on either tab.
+                  // Disabled while a Manager operation is writing to the
+                  // installation: starting the game against a half-written
+                  // game directory is the one genuinely unsafe moment.
+                  Padding(
+                    padding: const EdgeInsetsDirectional.only(start: 8, end: 8),
+                    child: startGameCompact
+                        // The TabBar shares this row and only scrolls, so a
+                        // full-width button here would push the tabs out of
+                        // reach. The glyph keeps the action without the cost.
+                        ? Semantics(
+                            label: l10n.actionStartGame,
+                            button: true,
+                            child: IconButton.filled(
+                              key: const ValueKey('start-game-action'),
+                              onPressed: canStartGame
+                                  ? () => _startGame(context)
+                                  : null,
+                              tooltip:
+                                  '${l10n.actionStartGame} — '
+                                  '${l10n.startGameTooltip}',
+                              icon: const Icon(Icons.play_arrow),
+                            ),
+                          )
+                        : Tooltip(
+                            message: l10n.startGameTooltip,
+                            child: FilledButton.icon(
+                              key: const ValueKey('start-game-action'),
+                              onPressed: canStartGame
+                                  ? () => _startGame(context)
+                                  : null,
+                              icon: const Icon(Icons.play_arrow, size: 22),
+                              style: FilledButton.styleFrom(
+                                minimumSize: const Size(0, 40),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 18,
+                                ),
+                                textStyle: theme.textTheme.titleSmall,
+                              ),
+                              label: Text(
+                                l10n.actionStartGame,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ),
                   ),
                 ],
               ),
@@ -973,6 +1093,7 @@ class _ModsTab extends ConsumerWidget {
             currentRoot: gameRoot,
             library: library,
             operationsBusy: operationsBusy,
+            showManagedFiles: dialogRef.watch(advancedDetailsProvider),
             applyEnabled:
                 applyEnabled && !preflight.busy && !conflicts.isLoading,
             deploymentRecoveryGeneration: _deploymentRecoveryGeneration(
@@ -1101,7 +1222,7 @@ class _ModsTab extends ConsumerWidget {
       child: FilledButton.icon(
         key: const ValueKey('apply-loadout-action'),
         onPressed: applyEnabled ? () => _apply(context, ref, gameRoot!) : null,
-        icon: const Icon(Icons.play_arrow),
+        icon: const Icon(Icons.install_desktop),
         label: Text(
           l10n.actionApply,
           maxLines: 1,

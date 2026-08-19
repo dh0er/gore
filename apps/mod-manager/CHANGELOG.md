@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Start the game from the Manager.
+- Update settings: automatic checks can be turned off, and checked on demand.
+  The portable build now checks too.
+- New "Advanced details" setting, off by default. It holds the technical layer:
+  per-component targets, how far the conflict check can be trusted, the import
+  source and match reason, and the files GORE manages.
+- UI improvements throughout: plain-language wording instead of engineer terms,
+  one word per concept, real empty states, readable and copyable long paths,
+  fewer permanent caveats, and the current UI scale in the title bar.
+
 ## [0.1.0] - 2026-08-18
 
 - First experimental release. The real-install workflow has completed one

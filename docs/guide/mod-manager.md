@@ -194,23 +194,26 @@ archives, texture/asset containers, item overrides (CDO), scripts, loose and
 packed game-file claims, and raw-file replacements, and which mod the analyzed
 loadout evidence marks as the intended winner for each recognized target.
 
-The Manager app qualifies that result per component with derived footprint
-coverage. **Exact** means the component metadata gives conflict analysis a
-complete target list. **Partial** means the listed targets are known but the
-component can affect more. **Advisory** targets are useful hints rather than an
-exhaustive inventory, and **Opaque** means the targets are unknown. These grades
-describe target knowledge only; even Exact does not prove the game's runtime
-priority. If any enabled component is not Exact, a zero-result analysis is
-therefore shown as "no recognized conflicts" with an incomplete-knowledge
-warning, never as proof that the loadout is conflict-free.
+The Manager app qualifies that result per component by heading the affected-
+entry list with how far it can be trusted: "the full list", "there may be more",
+"hints, not proof", or — when nothing can be listed — "GORE cannot tell what
+this changes". The grade is worded as part of that heading rather than as a
+standalone badge, because a lone adjective on a row reads as a verdict on the
+mod. These grades describe target knowledge only; even a full list does not
+prove the game's runtime priority. If any enabled component is not Complete, a zero-result
+analysis is therefore shown as "no conflicts found" with an
+incomplete-knowledge warning, never as proof that the loadout is conflict-free.
+The grades themselves are shown while **Advanced details** is on in Settings;
+the incomplete-knowledge warning always appears when it applies.
 
-The CLI uses the same wording. When no recognized conflict rows exist but any
-enabled footprint is Partial, Advisory, or Opaque, it prints the coverage-gap
+The CLI reports the same four grades under their wire names (`exact`,
+`partial`, `advisory`, `opaque`). When no recognized conflict rows exist but any
+enabled footprint is partial, advisory, or opaque, it prints the coverage-gap
 warning and counts for those grades instead of the unqualified phrase "no
 conflicts".
 
-The same view spells out the intended order: low priority is listed first and
-later mods have higher intended priority. That order predicts winners only
+The same view spells out the intended order — mods further down the list
+override the ones above them — while **Advanced details** is on. That order predicts winners only
 where the analyzer has the corresponding evidence. Numeric container priority
 does not make opaque targets or interactions outside that evidence predictable.
 
@@ -325,11 +328,11 @@ result. Busy, compiler-recovery, and inspection-failure outcomes set `ok` to
 Store snapshot may persist the same valid loadout reconciliation as `list` and
 `analyze`.
 
-The Mod Manager app's deployment-details dialog can expand **Recorded ownership
-evidence** when the same validated deploy-record snapshot has the exact owner
-`manager`. It groups the recorded paths as replaced live files, pristine
-backups, additive pak/container files, UE4SS directories, and recovery
-files/holders. The section is absent for no deployment, Studio ownership, and
+The Mod Manager app's status-details dialog can expand **Files GORE manages**
+when the same validated deploy-record snapshot has the exact owner `manager` and
+**Advanced details** is on in Settings. It groups the recorded paths as replaced
+game files, backups of the originals, added mod files, UE4SS directories, and
+repair files. The section is absent for no deployment, Studio ownership, and
 unknown/future status. A Manager recovery record still shows the recovery group,
 including the validated deploy-record path, even when it names no other path.
 

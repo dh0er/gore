@@ -279,7 +279,10 @@ void main() {
       (call) => call.command == 'mgr_preflight_v1',
     );
     expect(call.payload, {'game_root': invalid});
-    expect(find.text('GORE kann gerade nicht fortfahren.'), findsOneWidget);
+    expect(
+      find.text('Bevor Mods geändert werden können, ist noch etwas zu tun.'),
+      findsOneWidget,
+    );
     expect(
       find.textContaining('The selected installation does not exist.'),
       findsNothing,
@@ -418,7 +421,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const ValueKey('preflight-unavailable')), findsOneWidget);
-    expect(find.text('GORE could not check the installation.'), findsOneWidget);
+    expect(
+      find.text('The game installation could not be checked.'),
+      findsOneWidget,
+    );
     expect(find.textContaining('raw native detail'), findsNothing);
     expect(
       find.byKey(const ValueKey('preflight-technical-details-action')),
@@ -622,7 +628,10 @@ void main() {
     await tester.pumpWidget(_home(core));
     await tester.pumpAndSettle();
 
-    expect(find.text('GORE cannot continue yet.'), findsOneWidget);
+    expect(
+      find.text('Something needs your attention before mods can change.'),
+      findsOneWidget,
+    );
     expect(find.textContaining('raw native detail'), findsNothing);
     expect(
       find.byKey(const ValueKey('preflight-technical-details-action')),
@@ -768,7 +777,7 @@ void main() {
       find.byKey(const ValueKey('status-details-action-recover')),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Recover'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Repair'));
     await tester.pumpAndSettle();
 
     expect(core.count('mgr_undeploy_all'), 1);
@@ -857,7 +866,7 @@ void main() {
       container.read(preflightProvider.notifier).retry();
       await tester.pumpAndSettle();
 
-      await tester.tap(find.widgetWithText(FilledButton, 'Recover'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Repair'));
       await tester.pumpAndSettle();
 
       expect(core.count('mgr_undeploy_all'), 0);
@@ -885,7 +894,7 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('preflight-status-action')));
     await tester.pumpAndSettle();
-    expect(find.textContaining('Deployment:'), findsOneWidget);
+    expect(find.textContaining('Status:'), findsOneWidget);
     expect(core.count('mgr_apply'), 0);
     expect(core.count('mgr_undeploy_all'), 0);
   });
@@ -930,7 +939,7 @@ void main() {
         find.byKey(const ValueKey('preflight-install-recovery-dialog')),
         findsOneWidget,
       );
-      expect(find.text('Installation recovery'), findsOneWidget);
+      expect(find.text('Interrupted installation'), findsOneWidget);
       expect(find.textContaining('.gore-as-compile-recovery'), findsOneWidget);
       expect(core.count('mgr_apply'), 0);
       expect(core.count('mgr_undeploy_all'), 0);
@@ -979,7 +988,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.textContaining('Savegames are never changed'),
+        find.textContaining('savegames are never touched'),
         findsOneWidget,
       );
 
@@ -1005,10 +1014,7 @@ void main() {
         greaterThan(initialPreflightReads),
       );
       expect(core.count('mgr_analyze'), greaterThan(initialConflictReads));
-      expect(
-        find.textContaining('recorded baseline state was restored'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('back to its earlier state'), findsOneWidget);
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
         'mod-manager-status-details',
@@ -1068,11 +1074,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('operation is active again'), findsWidgets);
-    expect(
-      find.textContaining('recorded baseline state was restored'),
-      findsNothing,
-    );
+    expect(find.textContaining('job is running again'), findsWidgets);
+    expect(find.textContaining('back to its earlier state'), findsNothing);
     expect(core.count('mgr_recover_install_v1'), 1);
   });
 
@@ -1105,9 +1108,8 @@ void main() {
 
     expect(
       find.text(
-        'Recovery could not be completed. GORE tried to check the '
-        'installation again, but its current state may be unknown. Review '
-        'the status before trying again.',
+        'The repair could not be finished. Check the status before trying '
+        'again.',
       ),
       findsOneWidget,
     );
@@ -1160,20 +1162,14 @@ void main() {
     }
     await tester.pump();
 
-    expect(
-      find.textContaining('recorded baseline state was restored'),
-      findsNothing,
-    );
+    expect(find.textContaining('back to its earlier state'), findsNothing);
     expect(core.count('mgr_preflight_v1'), initialPreflightReads + 1);
 
     core.blockedPreflight!.complete(interrupted);
     await tester.pumpAndSettle();
 
     expect(core.count('mgr_preflight_v1'), initialPreflightReads + 2);
-    expect(
-      find.textContaining('recorded baseline state was restored'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('back to its earlier state'), findsOneWidget);
     expect(action.focusNode!.hasFocus, isTrue);
   });
 
@@ -1663,7 +1659,7 @@ void main() {
       find.byKey(const ValueKey('preflight-install-recovery-dialog')),
       findsOneWidget,
     );
-    expect(find.text('Installation recovery'), findsOneWidget);
+    expect(find.text('Interrupted installation'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

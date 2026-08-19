@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../app/domain/ui_settings.dart';
+import '../../core/diagnostic_text.dart';
 import '../../l10n/app_localizations.dart';
 import '../../preflight/domain/preflight_notifier.dart';
 import '../../status/domain/status_notifier.dart';
@@ -13,9 +15,34 @@ import 'mod_list.dart';
 /// How many footprint targets to list before collapsing into a "+N more" line.
 const _kTargetCap = 50;
 
+/// Readable local date+time for an ISO-8601 import timestamp.
+///
+/// Native records full precision (`2026-08-13T13:53:55.883181Z`), which is a
+/// machine format: a reader wants to know the day, not the microsecond. Falls
+/// back to the raw value when it cannot be parsed, so a future format is shown
+/// rather than dropped.
+String formatImportedAt(
+  MaterialLocalizations material,
+  String raw, {
+  required bool alwaysUse24HourFormat,
+}) {
+  final parsed = DateTime.tryParse(raw);
+  if (parsed == null) return raw;
+  final local = parsed.toLocal();
+  final time = material.formatTimeOfDay(
+    TimeOfDay.fromDateTime(local),
+    alwaysUse24HourFormat: alwaysUse24HourFormat,
+  );
+  // Short, not medium: medium drops the year, and a mod imported
+  // last year would then read as if it arrived last week.
+  return '${material.formatShortDate(local)}, $time';
+}
+
 /// The right-hand detail pane for the currently selected mod: metadata rows,
-/// its components (each with the footprint targets it claims, capped), and the
-/// conflicts it participates in with the winning mod highlighted.
+/// what it changes, and the conflicts it participates in with the winning mod
+/// highlighted. The technical layer of a component — the footprint targets it
+/// claims (capped) and its coverage grade — only appears while
+/// [advancedDetailsProvider] is on.
 class DetailPanel extends ConsumerWidget {
   const DetailPanel({
     super.key,
@@ -143,7 +170,8 @@ class DetailPanel extends ConsumerWidget {
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Text(
-            l10n.tabMods,
+            l10n.detailEmptyHint,
+            textAlign: TextAlign.center,
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -153,6 +181,7 @@ class DetailPanel extends ConsumerWidget {
     }
 
     final conflicts = ref.watch(conflictsProvider);
+    final advanced = ref.watch(advancedDetailsProvider);
     final status = ref.watch(statusProvider);
     final preflight = ref.watch(preflightProvider);
     final removeBlocked =
@@ -172,22 +201,42 @@ class DetailPanel extends ConsumerWidget {
           style: theme.textTheme.titleMedium,
         ),
         const SizedBox(height: 8),
-        _MetaRow(label: l10n.modDetailKind, value: kindLabel(l10n, mod.kind)),
+        // How the mod was packaged is a fact about the download, not about the
+        // game; the component rows below already say what it changes.
+        if (advanced)
+          _MetaRow(label: l10n.modDetailKind, value: kindLabel(l10n, mod.kind)),
         if (mod.version != null)
           _MetaRow(label: l10n.modDetailVersion, value: mod.version!),
         if (mod.author != null)
           _MetaRow(label: l10n.modDetailAuthor, value: mod.author!),
-        if (mod.source != null)
-          _MetaRow(label: l10n.modDetailSource, value: mod.source!),
+        if (advanced && mod.source != null)
+          _MetaRow(
+            label: l10n.modDetailSource,
+            value: displayPath(mod.source!),
+          ),
         if (mod.importedAt != null)
-          _MetaRow(label: l10n.modDetailImported, value: mod.importedAt!),
+          _MetaRow(
+            label: l10n.modDetailImported,
+            value: formatImportedAt(
+              MaterialLocalizations.of(context),
+              mod.importedAt!,
+              alwaysUse24HourFormat: MediaQuery.of(
+                context,
+              ).alwaysUse24HourFormat,
+            ),
+          ),
         const Divider(height: 24),
 
         // --- Components -------------------------------------------------
         Text(l10n.componentsTitle, style: theme.textTheme.titleSmall),
         const SizedBox(height: 4),
         for (var i = 0; i < mod.components.length; i++)
-          _ComponentRow(component: mod.components[i], index: i, l10n: l10n),
+          _ComponentRow(
+            component: mod.components[i],
+            index: i,
+            l10n: l10n,
+            advanced: advanced,
+          ),
 
         // --- Conflicts for this mod -------------------------------------
         if (myConflicts.isNotEmpty) ...[
@@ -259,147 +308,119 @@ class _ComponentRow extends StatelessWidget {
     required this.component,
     required this.index,
     required this.l10n,
+    required this.advanced,
   });
   final ComponentView component;
   final int index;
   final AppLocalizations l10n;
 
+  /// Plain view shows only what a component is. The raw target list and the
+  /// coverage grade are the technical layer and stay hidden until asked for.
+  final bool advanced;
+
+  /// One line naming what this component is, specific enough to tell two rows
+  /// of the same kind apart.
+  ///
+  /// A `raw_file` replaces one game-wide file wholesale, so it is named by its
+  /// destination ("all game text") rather than by the word "file". Everything
+  /// else is named by the kind plus whatever identifies this instance: the
+  /// script name, or the file name it ships (the full relative path only in the
+  /// advanced view, where the path is the point).
+  String _heading() {
+    if (component.rawFileTarget case final target?) {
+      if (rawFileTargetLabel(l10n, target) case final destination?) {
+        return advanced && component.rel != null
+            ? '$destination · ${component.rel}'
+            : destination;
+      }
+    }
+    final label = advanced
+        ? componentKindLabel(l10n, component.kind)
+        : componentPlainLabel(l10n, component);
+    final detail = advanced
+        ? component.displayLabel
+        : component.name ?? _fileName(component.rel);
+    return detail == null || detail == component.kind
+        ? label
+        : '$label · $detail';
+  }
+
+  /// Last path segment of [path]; null when there is nothing useful to show.
+  static String? _fileName(String? path) {
+    if (path == null || path.isEmpty) return null;
+    final segments = path.split(RegExp(r'[/\\]'))
+      ..removeWhere((segment) => segment.isEmpty);
+    return segments.isEmpty ? null : segments.last;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final localizedKind = componentKindLabel(l10n, component.kind);
-    final displayLabel = component.displayLabel;
-    final heading = displayLabel == component.kind
-        ? localizedKind
-        : '$localizedKind · $displayLabel';
-    final targets = <String>[
-      ...component.targets,
-      if (component.rawFileTarget case final target?) _rawTargetLabel(target),
-    ];
+    final heading = _heading();
+    final targets = advanced ? component.targets : const <String>[];
     final shown = targets.take(_kTargetCap).toList();
     final extra = targets.length - shown.length;
+    final muted = theme.textTheme.labelSmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
+    // Opaque has nothing to list, so its note stands alone; the other grades
+    // only make sense as the heading of the list they describe.
+    final showTargetsNote =
+        advanced &&
+        (shown.isNotEmpty || component.coverage == FootprintCoverage.opaque);
+    // One SelectionArea over the whole row: headings and paths stay copyable
+    // without SelectableText's private Scrollable, which would make "the
+    // DetailPanel's scrollable" ambiguous for callers and tests alike.
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.widgets_outlined,
-                size: 14,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-              const SizedBox(width: 6),
-              Expanded(
+      child: SelectionArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Icon(
+                    Icons.widgets_outlined,
+                    size: 14,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                // Wraps instead of truncating: a clipped path is unreadable and
+                // uncopyable, and the panel scrolls anyway.
+                Expanded(
+                  child: Text(heading, style: theme.textTheme.bodySmall),
+                ),
+              ],
+            ),
+            if (showTargetsNote)
+              Padding(
+                padding: const EdgeInsets.only(left: 20, top: 4),
                 child: Text(
-                  heading,
-                  style: theme.textTheme.bodySmall,
-                  overflow: TextOverflow.ellipsis,
+                  footprintTargetsLabel(l10n, component.coverage),
+                  key: ValueKey('component-footprint-coverage-$index'),
+                  style: muted,
                 ),
               ),
-              const SizedBox(width: 6),
-              _FootprintCoverageBadge(
-                coverage: component.coverage,
-                index: index,
-                l10n: l10n,
-              ),
-            ],
-          ),
-          if (shown.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(left: 20, top: 2),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (final t in shown)
-                    Text(
-                      t,
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
+            if (shown.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(left: 20, top: 2),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final t in shown) Text(t, style: muted),
+                    if (extra > 0)
+                      Text(
+                        l10n.targetsMore(extra),
+                        style: muted?.copyWith(fontStyle: FontStyle.italic),
                       ),
-                    ),
-                  if (extra > 0)
-                    Text(
-                      l10n.targetsMore(extra),
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-String _rawTargetLabel(RawFileTargetView target) {
-  if (target.kind == 'bank') {
-    final name = target.bankName;
-    return name == null ? target.kind : 'bank:$name';
-  }
-  return target.kind;
-}
-
-class _FootprintCoverageBadge extends StatelessWidget {
-  const _FootprintCoverageBadge({
-    required this.coverage,
-    required this.index,
-    required this.l10n,
-  });
-
-  final FootprintCoverage coverage;
-  final int index;
-  final AppLocalizations l10n;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final description = footprintCoverageLabel(l10n, coverage);
-    final label = footprintCoverageShortLabel(l10n, coverage);
-    final (Color background, Color foreground) = switch (coverage) {
-      FootprintCoverage.exact => (
-        scheme.secondaryContainer,
-        scheme.onSecondaryContainer,
-      ),
-      FootprintCoverage.partial => (
-        scheme.tertiaryContainer,
-        scheme.onTertiaryContainer,
-      ),
-      FootprintCoverage.advisory => (
-        scheme.surfaceContainerHighest,
-        scheme.onSurfaceVariant,
-      ),
-      FootprintCoverage.opaque => (
-        scheme.errorContainer,
-        scheme.onErrorContainer,
-      ),
-    };
-    return Tooltip(
-      message: description,
-      excludeFromSemantics: true,
-      child: Semantics(
-        key: ValueKey('component-footprint-coverage-$index'),
-        container: true,
-        label: description,
-        child: ExcludeSemantics(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-            decoration: BoxDecoration(
-              color: background,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Text(
-              label,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: foreground,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
+          ],
         ),
       ),
     );

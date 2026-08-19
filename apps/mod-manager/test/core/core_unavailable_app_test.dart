@@ -111,7 +111,7 @@ void main() {
     expect(find.byKey(const ValueKey('manager-overflow-action')), findsNothing);
     expect(find.byKey(const ValueKey('library-refresh-action')), findsNothing);
     expect(find.text('Apply'), findsNothing);
-    expect(find.text('Recover'), findsNothing);
+    expect(find.text('Repair'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 

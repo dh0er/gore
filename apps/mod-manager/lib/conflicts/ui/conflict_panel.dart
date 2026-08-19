@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../app/domain/ui_settings.dart';
 import '../../core/technical_details.dart';
 import '../../l10n/app_localizations.dart';
 import '../../library/domain/conflicts_provider.dart';
@@ -23,6 +24,7 @@ class ConflictPanel extends ConsumerWidget {
     final incompleteCoverage = ref.watch(
       enabledFootprintKnowledgeIncompleteProvider,
     );
+    final advanced = ref.watch(advancedDetailsProvider);
 
     if (!library.authoritative) {
       return Padding(
@@ -76,6 +78,7 @@ class ConflictPanel extends ConsumerWidget {
               const SizedBox(height: 12),
               _ConflictKnowledgeNote(
                 incompleteCoverage: incompleteCoverage,
+                advanced: advanced,
                 l10n: l10n,
               ),
             ],
@@ -110,6 +113,7 @@ class ConflictPanel extends ConsumerWidget {
             const SizedBox(height: 8),
             _ConflictKnowledgeNote(
               incompleteCoverage: incompleteCoverage,
+              advanced: advanced,
               l10n: l10n,
             ),
           ],
@@ -119,13 +123,22 @@ class ConflictPanel extends ConsumerWidget {
   }
 }
 
+/// Footnote under the conflict list.
+///
+/// The incomplete-knowledge warning is actionable, so it always shows when it
+/// applies. The two standing caveats (which direction load order runs, what the
+/// listed targets do and don't prove) are background reading — they only show
+/// while [advancedDetailsProvider] is on, so the plain view stays quiet when
+/// there is nothing to warn about.
 class _ConflictKnowledgeNote extends StatelessWidget {
   const _ConflictKnowledgeNote({
     required this.incompleteCoverage,
+    required this.advanced,
     required this.l10n,
   });
 
   final bool incompleteCoverage;
+  final bool advanced;
   final AppLocalizations l10n;
 
   @override
@@ -134,9 +147,12 @@ class _ConflictKnowledgeNote extends StatelessWidget {
     final scheme = theme.colorScheme;
     final lines = [
       if (incompleteCoverage) l10n.conflictCoverageIncomplete,
-      l10n.loadOrderDirection,
-      l10n.footprintCoverageScope,
+      if (advanced) l10n.loadOrderDirection,
+      if (advanced) l10n.footprintCoverageScope,
     ];
+    if (lines.isEmpty) {
+      return const SizedBox.shrink(key: ValueKey('conflict-knowledge-note'));
+    }
     final foreground = incompleteCoverage
         ? scheme.onTertiaryContainer
         : scheme.onSurfaceVariant;

@@ -13,8 +13,8 @@ whole enabled set to your install. It consumes the mod bundles Mod Studio (or
 
 It is a GUI over the same engine as [`gore mgr`](../../docs/guide/mod-manager.md),
 through the `dart:ffi` bridge (`gore_ffi.dll`), and shares that CLI's library
-and loadout files. Installer builds can check for updates through WinSparkle;
-portable builds are deliberately updater-free.
+and loadout files. Both packages check for updates; the installer updates
+itself, the portable zip points you at the download.
 
 ## What it can do
 
@@ -33,11 +33,14 @@ portable builds are deliberately updater-free.
   packed game-file claims, and raw-file replacements — and show intended
   winners. Loose-file versus packed-file precedence is advisory, and an opaque
   UE4SS component cannot produce a complete target inventory. Each component
-  is marked Exact, Partial, Advisory, or Opaque so incomplete knowledge stays
-  visible; these grades do not claim the game's runtime priority is proven.
+  is graded Complete, Partial, Estimated, or Unknown so incomplete knowledge
+  stays visible; these grades do not claim the game's runtime priority is
+  proven. The grades and the per-component target lists live behind the
+  **Advanced details** setting.
 - **Apply** declaratively: full-recompute the modded state from a pristine base
   and deploy the whole enabled set (backups first), or use the normal
-  **Reset/Undeploy** action to restore a validated Manager-owned deployment. A
+  **Remove all from game** action to restore a validated Manager-owned
+  deployment. A
   Mod Studio deployment is preserved unless you explicitly choose and confirm
   the separate **Take over** workflow below.
 - **Recover an interrupted Manager change** after confirmation when the native
@@ -46,14 +49,20 @@ portable builds are deliberately updater-free.
   preflight` followed by `gore mgr recover --expected-guard-id <TOKEN>`. Active
   changes stay on the wait path. Script-build recovery and recovery data that
   GORE cannot identify stay in recovery help. Do not delete the installation
-  lock by hand; check the status again before using Undeploy.
-- **Inspect recorded ownership evidence** in deployment details for an exact
-  Manager-owned record: replaced files, pristine backups, additive containers,
-  UE4SS directories, and recovery paths. These bounded, selectable paths are
-  record evidence only; they do not claim that a path still exists or grant a
-  cleanup action.
+  lock by hand; check the status again before removing mods from the game.
+- **Inspect the files GORE manages** in the status details for an exact
+  Manager-owned record: replaced files, backups of the originals, added mod
+  files, UE4SS directories, and repair paths. These bounded, selectable paths
+  are record evidence only; they do not claim that a path still exists or grant
+  a cleanup action. The record is shown while **Advanced details** is on.
+- **Turn Advanced details on or off** in Settings. Off by default, so the app
+  reads as a mod manager rather than a diagnostic tool; on, it adds the
+  technical layer described above plus the import source and match reason.
 - **Take over** a Mod Studio test-deploy so both tools do not fight over the
   install.
+- **Start the game** from the button at the far right of the tab row. It
+  resolves the executable from the configured game path and is disabled while a
+  Manager operation is writing to the installation.
 
 ## Real-install evidence
 
@@ -94,18 +103,22 @@ limitation.
 - The **installer** adds an uninstaller and enables best-effort WinSparkle
   update checks after launch. Updates download the next installer and update
   the existing install location in place.
-- The **portable zip** has no installer, uninstaller, or updater binaries.
-  Extract it to a normal writable folder, run `gore_manager.exe`, and replace
-  that extracted app folder manually when updating. “Portable” describes the
-  app package; user data is not stored beside the executable.
+- The **portable zip** has no installer, uninstaller, or updater binaries. It
+  still checks the same release feed and, when a newer version exists, offers
+  to open its download page; replace the extracted app folder yourself.
+  Extract it to a normal writable folder and run `gore_manager.exe`.
+  “Portable” describes the app package; user data is not stored beside the
+  executable.
+- Both checks can be turned off, and run on demand, under **Settings →
+  Updates**.
 - Both packages normally share `%LOCALAPPDATA%\gore\mod-manager\` for the
   imported mod library and loadout, `%LOCALAPPDATA%\gore\config.json` for
   shared GORE settings such as the selected game, and
   `%LOCALAPPDATA%\gore\gore-manager\` for Manager-only UI preferences. If
   `%LOCALAPPDATA%` is unavailable, the app uses the same relative paths under
   `%APPDATA%` instead.
-- Before uninstalling or deleting a portable copy, use **Undeploy** if Manager
-  has applied mods. Removing the app does not undo a deployment in the game
+- Before uninstalling or deleting a portable copy, use **Remove all from
+  game** if Manager has applied mods. Removing the app does not undo a deployment in the game
   directory. The installer uninstaller removes the installed app and its
   normal `%LOCALAPPDATA%` UI preferences; it intentionally preserves the
   shared config, imported library, and loadout. In the `%APPDATA%` fallback

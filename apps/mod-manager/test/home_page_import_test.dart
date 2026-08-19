@@ -475,12 +475,12 @@ void main() {
           'updated' => l10n.importOutcomeUpdated(outcome.name),
           _ => l10n.importOutcomeUnchanged(outcome.name),
         };
+        // The plain confirmation says what happened; why Native matched an
+        // existing entry is advanced detail and stays off by default.
+        expect(find.text(dispositionText), findsOneWidget);
         expect(
-          find.text(
-            '$dispositionText '
-            '${l10n.importOutcomeMatchedBy(outcome.matchedBy)}',
-          ),
-          findsOneWidget,
+          find.textContaining(l10n.importOutcomeMatchedBy(outcome.matchedBy)),
+          findsNothing,
         );
         expect(find.textContaining('Untrusted wire name'), findsNothing);
         expect(_snackLiveRegions(), findsOneWidget);

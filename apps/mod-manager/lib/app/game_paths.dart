@@ -61,6 +61,26 @@ String? diagnosticGameRootCandidate(String? path) {
   return path;
 }
 
+/// Path segments of the game executable below the install root.
+const _exeTail = ['G1R', 'Binaries', 'Win64', 'G1R-Win64-Shipping.exe'];
+
+/// The game executable to launch, or null when it cannot be found.
+///
+/// The configured path is either the install root or the exe itself (see
+/// [gameRootFromExe]), so accept a working exe as-is and otherwise rebuild it
+/// from the resolved root. Returns null when the file is not there, so callers
+/// can disable the action instead of failing at spawn time.
+String? gameExecutableFor(String? path) {
+  if (path == null || path.trim().isEmpty) return null;
+  if (p.extension(path).toLowerCase() == '.exe' && File(path).existsSync()) {
+    return path;
+  }
+  final root = gameRootFromExe(path);
+  if (root == null) return null;
+  final exe = p.joinAll([root, ..._exeTail]);
+  return File(exe).existsSync() ? exe : null;
+}
+
 /// The loose FMOD bank directory, or null if the game root can't be resolved.
 String? fmodDesktopDir(String? exePath) {
   final root = gameRootFromExe(exePath);

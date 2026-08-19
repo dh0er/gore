@@ -46,6 +46,7 @@ class StatusDetailsDialog extends StatelessWidget {
     required this.library,
     required this.operationsBusy,
     required this.applyEnabled,
+    this.showManagedFiles = false,
     this.deploymentRecoveryGeneration,
     super.key,
   });
@@ -55,6 +56,11 @@ class StatusDetailsDialog extends StatelessWidget {
   final LibraryState library;
   final bool operationsBusy;
   final bool applyEnabled;
+
+  /// Whether to append the recorded manager-owned path groups. That record is
+  /// support evidence, not something a player acts on, so it follows the
+  /// advanced-details setting.
+  final bool showManagedFiles;
   final int? deploymentRecoveryGeneration;
 
   @override
@@ -118,7 +124,7 @@ class StatusDetailsDialog extends StatelessWidget {
             context,
             keyName: 'drifted',
             title: l10n.statusDetailsDriftedFiles,
-            values: drifted,
+            values: [for (final path in drifted) displayPath(path)],
             emptyText: l10n.statusDetailsUnavailable,
             selectable: true,
           ),
@@ -130,7 +136,7 @@ class StatusDetailsDialog extends StatelessWidget {
       });
     }
 
-    final managerOwned = status?.managerOwned;
+    final managerOwned = showManagedFiles ? status?.managerOwned : null;
     if (!studioActive && managerOwned != null) {
       content.addAll([
         const SizedBox(height: 16),
@@ -314,6 +320,9 @@ class StatusDetailsDialog extends StatelessWidget {
     return ExpansionTile(
       key: const ValueKey('status-details-manager-owned'),
       initiallyExpanded: false,
+      // ExpansionTile centres its expanded children by default. Groups whose
+      // rows fill the width hide that; an empty group visibly floats.
+      expandedCrossAxisAlignment: CrossAxisAlignment.start,
       tilePadding: EdgeInsets.zero,
       childrenPadding: const EdgeInsetsDirectional.only(
         start: 16,
@@ -381,7 +390,7 @@ class StatusDetailsDialog extends StatelessWidget {
     for (final path in group.items) {
       final sanitized = boundedDiagnosticText(path, _maxOwnedPathRunes);
       if (!sanitized.truncated && sanitized.value != null) {
-        values.add(sanitized.value!);
+        values.add(displayPath(sanitized.value!));
       }
     }
     final hidden = values.length < group.total;

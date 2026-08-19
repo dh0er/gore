@@ -217,7 +217,7 @@ void main() {
           find.byKey(const ValueKey('status-details-dialog')),
           findsOneWidget,
         );
-        expect(find.text('Deployed load order'), findsOneWidget);
+        expect(find.text('Mods in the game'), findsOneWidget);
 
         await tester.tap(
           find.byKey(const ValueKey('status-details-action-close')),
@@ -417,7 +417,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       find.text(
-        'Recover the interrupted deployment and remove any partially deployed files?',
+        'Repair the interrupted change and remove any half-installed files?',
       ),
       findsOneWidget,
     );
@@ -429,7 +429,7 @@ void main() {
     );
     container.read(gameExePathProvider.notifier).set(_exeB);
     await tester.pump();
-    await tester.tap(find.widgetWithText(FilledButton, 'Recover'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Repair'));
     await tester.pump();
 
     expect(
@@ -452,10 +452,10 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('manager-overflow-action')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Undeploy all').last);
+    await tester.tap(find.text('Remove all from game').last);
     await tester.pumpAndSettle();
     expect(
-      find.text('Remove everything the manager deployed from the game?'),
+      find.text('Remove every mod the Manager installed from the game?'),
       findsOneWidget,
     );
 
@@ -468,7 +468,7 @@ void main() {
       container.read(statusProvider.notifier).refresh(gameRootFromExe(_exeA)),
     );
     await tester.pump();
-    await tester.tap(find.widgetWithText(FilledButton, 'Undeploy all'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Remove all from game'));
     await tester.pump();
 
     expect(
@@ -491,7 +491,7 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('manager-overflow-action')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Undeploy all').last);
+    await tester.tap(find.text('Remove all from game').last);
     await tester.pumpAndSettle();
 
     final pending = Completer<Map<String, Object?>>();
@@ -501,7 +501,7 @@ void main() {
     );
     container.read(gameExePathProvider.notifier).set(_exeB);
     await tester.pump();
-    await tester.tap(find.widgetWithText(FilledButton, 'Undeploy all'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Remove all from game'));
     await tester.pump();
 
     expect(
@@ -533,11 +533,11 @@ void main() {
     observer.onPop = () {
       container.read(gameExePathProvider.notifier).set(_exeB);
     };
-    await tester.tap(find.text('Undeploy all').last);
+    await tester.tap(find.text('Remove all from game').last);
     await tester.pump(const Duration(seconds: 1));
 
     expect(
-      find.text('Remove everything the manager deployed from the game?'),
+      find.text('Remove every mod the Manager installed from the game?'),
       findsNothing,
     );
     expect(
@@ -569,13 +569,13 @@ void main() {
         find.byKey(const ValueKey('manager-operation-progress')),
         findsNothing,
       );
-      expect(find.text('Undeploy all'), findsOneWidget);
+      expect(find.text('Remove all from game'), findsOneWidget);
 
-      await tester.tap(find.text('Undeploy all'));
+      await tester.tap(find.text('Remove all from game'));
       await tester.pumpAndSettle();
 
       expect(
-        find.text('Remove everything the manager deployed from the game?'),
+        find.text('Remove every mod the Manager installed from the game?'),
         findsNothing,
       );
       expect(
@@ -635,7 +635,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Game executable'), findsOneWidget);
+    expect(find.text('Gothic installation'), findsOneWidget);
     final picker = tester.widget<OutlinedButton>(
       find.byKey(const ValueKey('settings-game-exe-pick')),
     );

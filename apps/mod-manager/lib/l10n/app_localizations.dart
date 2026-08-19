@@ -119,49 +119,49 @@ abstract class AppLocalizations {
   /// No description provided for @coreBlockedTitle.
   ///
   /// In en, this message translates to:
-  /// **'Mod Manager unavailable'**
+  /// **'Mod Manager can\'t start'**
   String get coreBlockedTitle;
 
   /// No description provided for @coreDllMissingMessage.
   ///
   /// In en, this message translates to:
-  /// **'The required gore_ffi.dll was not found.'**
+  /// **'A required program file is missing (gore_ffi.dll).'**
   String get coreDllMissingMessage;
 
   /// No description provided for @coreDllLoadFailedMessage.
   ///
   /// In en, this message translates to:
-  /// **'The native GORE Core library could not be loaded.'**
+  /// **'A required program file could not be loaded.'**
   String get coreDllLoadFailedMessage;
 
   /// No description provided for @coreVerificationFailedMessage.
   ///
   /// In en, this message translates to:
-  /// **'The native GORE Core library could not be verified.'**
+  /// **'A required program file could not be verified.'**
   String get coreVerificationFailedMessage;
 
   /// No description provided for @coreManagerTooOldMessage.
   ///
   /// In en, this message translates to:
-  /// **'This GORE Core version is newer than the Mod Manager. Update the Mod Manager.'**
+  /// **'The program files are newer than the Mod Manager. Update the Mod Manager.'**
   String get coreManagerTooOldMessage;
 
   /// No description provided for @coreNativeTooOldMessage.
   ///
   /// In en, this message translates to:
-  /// **'This GORE Core version is older than the Mod Manager. Update or repair the complete Mod Manager installation.'**
+  /// **'The program files are older than the Mod Manager. Reinstall the Mod Manager.'**
   String get coreNativeTooOldMessage;
 
   /// No description provided for @coreCommandsMissingMessage.
   ///
   /// In en, this message translates to:
-  /// **'The GORE Core library does not provide all commands required by this Mod Manager.'**
+  /// **'The program files are missing features this Mod Manager needs.'**
   String get coreCommandsMissingMessage;
 
   /// No description provided for @coreBlockedRepairHint.
   ///
   /// In en, this message translates to:
-  /// **'Update or repair the complete Mod Manager package, then restart the app.'**
+  /// **'Reinstall or repair the Mod Manager, then start it again.'**
   String get coreBlockedRepairHint;
 
   /// No description provided for @coreTechnicalDetails.
@@ -191,7 +191,7 @@ abstract class AppLocalizations {
   /// No description provided for @preflightAttention.
   ///
   /// In en, this message translates to:
-  /// **'GORE cannot continue yet.'**
+  /// **'Something needs your attention before mods can change.'**
   String get preflightAttention;
 
   /// No description provided for @preflightGameRunning.
@@ -203,13 +203,13 @@ abstract class AppLocalizations {
   /// No description provided for @managerOperationFailed.
   ///
   /// In en, this message translates to:
-  /// **'The Manager operation failed.'**
+  /// **'The operation failed.'**
   String get managerOperationFailed;
 
   /// No description provided for @libraryOperationFailed.
   ///
   /// In en, this message translates to:
-  /// **'The library could not be refreshed.'**
+  /// **'The mod list could not be loaded.'**
   String get libraryOperationFailed;
 
   /// No description provided for @conflictsUnavailable.
@@ -227,7 +227,7 @@ abstract class AppLocalizations {
   /// No description provided for @modDetailKind.
   ///
   /// In en, this message translates to:
-  /// **'Kind'**
+  /// **'Type'**
   String get modDetailKind;
 
   /// No description provided for @modDetailVersion.
@@ -263,145 +263,181 @@ abstract class AppLocalizations {
   /// No description provided for @componentAudio.
   ///
   /// In en, this message translates to:
-  /// **'Audio'**
+  /// **'Sound'**
   String get componentAudio;
 
   /// No description provided for @componentAngelScript.
   ///
   /// In en, this message translates to:
-  /// **'AngelScript'**
+  /// **'Scripts'**
   String get componentAngelScript;
 
   /// No description provided for @componentTexture.
   ///
   /// In en, this message translates to:
-  /// **'Texture'**
+  /// **'Textures'**
   String get componentTexture;
+
+  /// No description provided for @componentGameFiles.
+  ///
+  /// In en, this message translates to:
+  /// **'Game files'**
+  String get componentGameFiles;
+
+  /// No description provided for @componentVoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice'**
+  String get componentVoice;
 
   /// No description provided for @componentKindLocalizationPatch.
   ///
   /// In en, this message translates to:
-  /// **'Localization patch'**
+  /// **'Text changes'**
   String get componentKindLocalizationPatch;
 
   /// No description provided for @componentKindAudioPatch.
   ///
   /// In en, this message translates to:
-  /// **'Audio patch'**
+  /// **'Sound changes'**
   String get componentKindAudioPatch;
 
   /// No description provided for @componentKindAngelScriptPatch.
   ///
   /// In en, this message translates to:
-  /// **'AngelScript patch'**
+  /// **'Script changes'**
   String get componentKindAngelScriptPatch;
 
   /// No description provided for @componentKindTexturePatch.
   ///
   /// In en, this message translates to:
-  /// **'Texture patch'**
+  /// **'Texture changes'**
   String get componentKindTexturePatch;
 
   /// No description provided for @componentKindLoosePak.
   ///
   /// In en, this message translates to:
-  /// **'Loose PAK'**
+  /// **'PAK file'**
   String get componentKindLoosePak;
 
   /// No description provided for @componentKindTriplet.
   ///
   /// In en, this message translates to:
-  /// **'PAK triplet'**
+  /// **'IoStore container'**
   String get componentKindTriplet;
 
   /// No description provided for @componentKindUe4ssLua.
   ///
   /// In en, this message translates to:
-  /// **'UE4SS Lua'**
+  /// **'UE4SS script'**
   String get componentKindUe4ssLua;
 
   /// No description provided for @componentKindRawFile.
   ///
   /// In en, this message translates to:
-  /// **'Raw file'**
+  /// **'File'**
   String get componentKindRawFile;
 
   /// No description provided for @componentKindFilePatch.
   ///
   /// In en, this message translates to:
-  /// **'File patch'**
+  /// **'Replaced game file'**
   String get componentKindFilePatch;
 
   /// No description provided for @componentKindPakFilePatch.
   ///
   /// In en, this message translates to:
-  /// **'PAK file patch'**
+  /// **'Game file from a ~mods PAK'**
   String get componentKindPakFilePatch;
 
   /// No description provided for @componentKindVoiceArchivePatch.
   ///
   /// In en, this message translates to:
-  /// **'Voice archive patch'**
+  /// **'Voice lines'**
   String get componentKindVoiceArchivePatch;
+
+  /// No description provided for @rawTargetGameText.
+  ///
+  /// In en, this message translates to:
+  /// **'All game text'**
+  String get rawTargetGameText;
+
+  /// No description provided for @rawTargetGameScripts.
+  ///
+  /// In en, this message translates to:
+  /// **'All game scripts'**
+  String get rawTargetGameScripts;
+
+  /// No description provided for @rawTargetSoundBank.
+  ///
+  /// In en, this message translates to:
+  /// **'Sound bank'**
+  String get rawTargetSoundBank;
+
+  /// No description provided for @rawTargetSoundBankNamed.
+  ///
+  /// In en, this message translates to:
+  /// **'Sound bank: {name}'**
+  String rawTargetSoundBankNamed(String name);
 
   /// No description provided for @conflictKindLocalization.
   ///
   /// In en, this message translates to:
-  /// **'Localization'**
+  /// **'Text'**
   String get conflictKindLocalization;
 
   /// No description provided for @conflictKindAudio.
   ///
   /// In en, this message translates to:
-  /// **'Audio'**
+  /// **'Sound'**
   String get conflictKindAudio;
 
   /// No description provided for @conflictKindAsset.
   ///
   /// In en, this message translates to:
-  /// **'Asset'**
+  /// **'Game data'**
   String get conflictKindAsset;
 
   /// No description provided for @conflictKindCdo.
   ///
   /// In en, this message translates to:
-  /// **'CDO'**
+  /// **'Object values'**
   String get conflictKindCdo;
 
   /// No description provided for @conflictKindUe4ssUnknown.
   ///
   /// In en, this message translates to:
-  /// **'Unknown UE4SS'**
+  /// **'UE4SS (unclear)'**
   String get conflictKindUe4ssUnknown;
 
   /// No description provided for @conflictKindScriptModule.
   ///
   /// In en, this message translates to:
-  /// **'Script module'**
+  /// **'Game script'**
   String get conflictKindScriptModule;
 
   /// No description provided for @conflictKindVoiceArchive.
   ///
   /// In en, this message translates to:
-  /// **'Voice archive'**
+  /// **'Voice lines'**
   String get conflictKindVoiceArchive;
 
   /// No description provided for @conflictKindRawFile.
   ///
   /// In en, this message translates to:
-  /// **'Raw file'**
+  /// **'File'**
   String get conflictKindRawFile;
 
   /// No description provided for @conflictKindLooseFile.
   ///
   /// In en, this message translates to:
-  /// **'Loose file'**
+  /// **'Game file'**
   String get conflictKindLooseFile;
 
   /// No description provided for @preflightUnavailable.
   ///
   /// In en, this message translates to:
-  /// **'GORE could not check the installation.'**
+  /// **'The game installation could not be checked.'**
   String get preflightUnavailable;
 
   /// No description provided for @preflightRetry.
@@ -413,103 +449,103 @@ abstract class AppLocalizations {
   /// No description provided for @preflightReviewStatus.
   ///
   /// In en, this message translates to:
-  /// **'Review status'**
+  /// **'Show status'**
   String get preflightReviewStatus;
 
   /// No description provided for @preflightReviewRecovery.
   ///
   /// In en, this message translates to:
-  /// **'Recovery help'**
+  /// **'Show help'**
   String get preflightReviewRecovery;
 
   /// No description provided for @installRecoveryTitle.
   ///
   /// In en, this message translates to:
-  /// **'Installation recovery'**
+  /// **'Interrupted installation'**
   String get installRecoveryTitle;
 
   /// No description provided for @installRecoveryBody.
   ///
   /// In en, this message translates to:
-  /// **'GORE found recovery data for an installation or script build. The related operation may still be running, or the data may be left over from an operation that has ended. GORE cannot safely repair this automatically.'**
+  /// **'GORE found leftover data from an installation or a script build. That job may still be running, or it ended and left this behind. GORE cannot clean it up safely on its own.'**
   String get installRecoveryBody;
 
   /// No description provided for @installRecoverySteps.
   ///
   /// In en, this message translates to:
-  /// **'If the related operation is still running, wait for it to finish. Do not stop it or delete any lock files. Only after you are sure that no related operation is running, follow README.txt in the recovery folder below. If no folder is listed or you are unsure, leave the recovery data unchanged and get help. Then check again.'**
+  /// **'If the job is still running, wait for it to finish — do not stop it and do not delete any files. Once you are sure nothing is running, follow README.txt in the folder below and check again. If no folder is listed or you are unsure, leave everything as it is and ask for help.'**
   String get installRecoverySteps;
 
   /// No description provided for @installRecoveryEvidence.
   ///
   /// In en, this message translates to:
-  /// **'Detected recovery data'**
+  /// **'What GORE found'**
   String get installRecoveryEvidence;
 
   /// No description provided for @managerRecoveryTitle.
   ///
   /// In en, this message translates to:
-  /// **'Recover interrupted Manager change'**
+  /// **'Repair interrupted change'**
   String get managerRecoveryTitle;
 
   /// No description provided for @managerRecoveryConfirm.
   ///
   /// In en, this message translates to:
-  /// **'GORE found a clearly interrupted Manager change. Continue only if you want GORE to verify the recorded operation and restore the installation to a known state. Savegames are never changed.'**
+  /// **'GORE found an interrupted change and can put the game back into a known state. Your savegames are never touched.'**
   String get managerRecoveryConfirm;
 
   /// No description provided for @managerRecoveryAlreadyClean.
   ///
   /// In en, this message translates to:
-  /// **'The interrupted change was already resolved. The installation was checked again.'**
+  /// **'Nothing left to repair. The status was checked again.'**
   String get managerRecoveryAlreadyClean;
 
   /// No description provided for @managerRecoveryBusy.
   ///
   /// In en, this message translates to:
-  /// **'The operation is active again. Nothing was changed; wait for it to finish and check again.'**
+  /// **'The job is running again. Nothing was changed — wait for it to finish.'**
   String get managerRecoveryBusy;
 
   /// No description provided for @managerRecoveryLockCleared.
   ///
   /// In en, this message translates to:
-  /// **'The interrupted operation had not changed the installation. Its obsolete lock was removed safely.'**
+  /// **'The interrupted job had not changed anything yet. It was cleaned up.'**
   String get managerRecoveryLockCleared;
 
   /// No description provided for @managerRecoveryRestoredPristine.
   ///
   /// In en, this message translates to:
-  /// **'The interrupted change was rolled back and the installation\'s recorded baseline state was restored.'**
+  /// **'The change was rolled back. The game is back to its earlier state.'**
   String get managerRecoveryRestoredPristine;
 
   /// No description provided for @managerRecoveryApplyPreserved.
   ///
   /// In en, this message translates to:
-  /// **'Apply had already completed. The recorded state was preserved, and the status was checked again.'**
+  /// **'Apply had already finished. Nothing was lost.'**
   String get managerRecoveryApplyPreserved;
 
   /// No description provided for @managerRecoveryUndeployConfirmed.
   ///
   /// In en, this message translates to:
-  /// **'Removal had completed. Remaining transaction data was cleaned up, and the status was checked again.'**
+  /// **'The removal had already finished. Leftovers were cleaned up.'**
   String get managerRecoveryUndeployConfirmed;
 
   /// No description provided for @managerRecoveryCompileRequired.
   ///
   /// In en, this message translates to:
-  /// **'This belongs to script-build recovery, so Manager left it unchanged. Review the recovery help.'**
+  /// **'This belongs to a script build, so nothing was changed. Open the repair help.'**
   String get managerRecoveryCompileRequired;
 
   /// No description provided for @managerRecoveryInspectionFailed.
   ///
   /// In en, this message translates to:
-  /// **'GORE could not verify the interrupted operation safely. Nothing was changed; review the current recovery details.'**
+  /// **'GORE could not check the interrupted job safely. Nothing was changed.'**
   String get managerRecoveryInspectionFailed;
 
   /// No description provided for @managerRecoveryFailed.
   ///
   /// In en, this message translates to:
-  /// **'Recovery could not be completed. GORE tried to check the installation again, but its current state may be unknown. Review the status before trying again.'**
+  /// **'The repair could not be finished. Check the status before trying again.'**
   String get managerRecoveryFailed;
 
   /// Deployment status is unavailable or uses an unsupported future state.
@@ -521,49 +557,49 @@ abstract class AppLocalizations {
   /// No description provided for @statusDetailsTitle.
   ///
   /// In en, this message translates to:
-  /// **'Deployment: {status}'**
+  /// **'Status: {status}'**
   String statusDetailsTitle(String status);
 
   /// No description provided for @statusDetailsOpen.
   ///
   /// In en, this message translates to:
-  /// **'Show deployment details: {status}'**
+  /// **'Show details: {status}'**
   String statusDetailsOpen(String status);
 
   /// No description provided for @statusDetailsNoRoot.
   ///
   /// In en, this message translates to:
-  /// **'Choose a game installation in Settings to inspect its deployment status.'**
+  /// **'Choose your Gothic installation in Settings first.'**
   String get statusDetailsNoRoot;
 
   /// No description provided for @statusDetailsNoDeployment.
   ///
   /// In en, this message translates to:
-  /// **'No Manager deployment is installed for this game.'**
+  /// **'No mods are installed in the game right now.'**
   String get statusDetailsNoDeployment;
 
   /// No description provided for @statusDetailsInSyncDescription.
   ///
   /// In en, this message translates to:
-  /// **'The deployed mods match the current loadout.'**
+  /// **'The game has exactly the mods you ticked here.'**
   String get statusDetailsInSyncDescription;
 
   /// No description provided for @statusDetailsDeployedLoadout.
   ///
   /// In en, this message translates to:
-  /// **'Deployed load order'**
+  /// **'Mods in the game'**
   String get statusDetailsDeployedLoadout;
 
   /// No description provided for @statusDetailsChangesDescription.
   ///
   /// In en, this message translates to:
-  /// **'The current deployment differs from what Apply will install.'**
+  /// **'Your selection differs from what is in the game.'**
   String get statusDetailsChangesDescription;
 
   /// No description provided for @statusDetailsCurrentlyDeployed.
   ///
   /// In en, this message translates to:
-  /// **'Currently deployed'**
+  /// **'In the game now'**
   String get statusDetailsCurrentlyDeployed;
 
   /// No description provided for @statusDetailsAfterApply.
@@ -575,19 +611,19 @@ abstract class AppLocalizations {
   /// No description provided for @statusDetailsGameUpdatedDescription.
   ///
   /// In en, this message translates to:
-  /// **'Game files changed after the last deployment. Reapply the loadout to restore the Manager-owned files.'**
+  /// **'The game was updated and overwrote mod files. Apply again to put them back.'**
   String get statusDetailsGameUpdatedDescription;
 
   /// No description provided for @statusDetailsDriftedFiles.
   ///
   /// In en, this message translates to:
-  /// **'Changed files'**
+  /// **'Affected files'**
   String get statusDetailsDriftedFiles;
 
   /// No description provided for @statusDetailsStudioDescription.
   ///
   /// In en, this message translates to:
-  /// **'Mod Studio currently owns this game installation. Take over before applying a Manager loadout.'**
+  /// **'Mod Studio currently has mods in this game. Take the game over before the Manager applies yours.'**
   String get statusDetailsStudioDescription;
 
   /// No description provided for @statusDetailsStudioMod.
@@ -599,31 +635,31 @@ abstract class AppLocalizations {
   /// No description provided for @statusDetailsStudioNameUnknown.
   ///
   /// In en, this message translates to:
-  /// **'Studio did not report a mod name.'**
+  /// **'Mod Studio did not report a name.'**
   String get statusDetailsStudioNameUnknown;
 
   /// No description provided for @statusDetailsRecoveryDescription.
   ///
   /// In en, this message translates to:
-  /// **'A deployment was interrupted. Recover it before applying or removing Manager mods.'**
+  /// **'A change was interrupted. Repair it before changing mods.'**
   String get statusDetailsRecoveryDescription;
 
   /// No description provided for @statusDetailsUnknownDescription.
   ///
   /// In en, this message translates to:
-  /// **'Deployment status could not be verified. Refresh before applying mods.'**
+  /// **'The status could not be read. Refresh first.'**
   String get statusDetailsUnknownDescription;
 
   /// No description provided for @statusDetailsUnavailable.
   ///
   /// In en, this message translates to:
-  /// **'The installed core did not provide these details.'**
+  /// **'No details available.'**
   String get statusDetailsUnavailable;
 
   /// No description provided for @statusDetailsEmptyLoadout.
   ///
   /// In en, this message translates to:
-  /// **'No mods in this loadout.'**
+  /// **'No mods.'**
   String get statusDetailsEmptyLoadout;
 
   /// No description provided for @statusDetailsLastError.
@@ -665,31 +701,31 @@ abstract class AppLocalizations {
   /// No description provided for @recoveryAction.
   ///
   /// In en, this message translates to:
-  /// **'Recover'**
+  /// **'Repair'**
   String get recoveryAction;
 
   /// No description provided for @recoveryRequiredConfirm.
   ///
   /// In en, this message translates to:
-  /// **'Recover the interrupted deployment and remove any partially deployed files?'**
+  /// **'Repair the interrupted change and remove any half-installed files?'**
   String get recoveryRequiredConfirm;
 
   /// No description provided for @statusRecoveryRequired.
   ///
   /// In en, this message translates to:
-  /// **'Recovery required'**
+  /// **'Repair needed'**
   String get statusRecoveryRequired;
 
   /// No description provided for @statusDetailsOwnershipTitle.
   ///
   /// In en, this message translates to:
-  /// **'Recorded ownership evidence'**
+  /// **'Files GORE manages'**
   String get statusDetailsOwnershipTitle;
 
   /// No description provided for @statusDetailsOwnershipDescription.
   ///
   /// In en, this message translates to:
-  /// **'Paths recorded in the Manager deploy record. They do not prove that those paths still exist.'**
+  /// **'Recorded when mods were applied — not a check that the files still exist.'**
   String get statusDetailsOwnershipDescription;
 
   /// No description provided for @statusDetailsOwnershipLive.
@@ -701,13 +737,13 @@ abstract class AppLocalizations {
   /// No description provided for @statusDetailsOwnershipBackups.
   ///
   /// In en, this message translates to:
-  /// **'Pristine backups'**
+  /// **'Backups of the originals'**
   String get statusDetailsOwnershipBackups;
 
   /// No description provided for @statusDetailsOwnershipAdditive.
   ///
   /// In en, this message translates to:
-  /// **'Added pak and container files'**
+  /// **'Added mod files'**
   String get statusDetailsOwnershipAdditive;
 
   /// No description provided for @statusDetailsOwnershipUe4ss.
@@ -719,19 +755,19 @@ abstract class AppLocalizations {
   /// No description provided for @statusDetailsOwnershipRecovery.
   ///
   /// In en, this message translates to:
-  /// **'Recovery files and holders'**
+  /// **'Repair files'**
   String get statusDetailsOwnershipRecovery;
 
   /// No description provided for @statusDetailsOwnershipEmpty.
   ///
   /// In en, this message translates to:
-  /// **'No paths recorded in this group.'**
+  /// **'Nothing recorded here.'**
   String get statusDetailsOwnershipEmpty;
 
   /// No description provided for @statusDetailsOwnershipShown.
   ///
   /// In en, this message translates to:
-  /// **'{shown} of {total} recorded paths shown.'**
+  /// **'Showing {shown} of {total} paths.'**
   String statusDetailsOwnershipShown(int shown, int total);
 
   /// No description provided for @appTitle.
@@ -755,7 +791,7 @@ abstract class AppLocalizations {
   /// No description provided for @settingsGameExe.
   ///
   /// In en, this message translates to:
-  /// **'Game executable'**
+  /// **'Gothic installation'**
   String get settingsGameExe;
 
   /// No description provided for @settingsGameExePick.
@@ -770,34 +806,124 @@ abstract class AppLocalizations {
   /// **'Language'**
   String get settingsLanguage;
 
+  /// No description provided for @libraryEmptyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No mods yet'**
+  String get libraryEmptyTitle;
+
+  /// No description provided for @libraryEmptyBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Import a folder or a mod file to get started.'**
+  String get libraryEmptyBody;
+
+  /// No description provided for @detailEmptyHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Pick a mod to see what it changes.'**
+  String get detailEmptyHint;
+
+  /// No description provided for @settingsAdvanced.
+  ///
+  /// In en, this message translates to:
+  /// **'Advanced details'**
+  String get settingsAdvanced;
+
+  /// No description provided for @settingsAdvancedHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Show the technical side: affected entries, how reliable the conflict check is, and the files GORE manages.'**
+  String get settingsAdvancedHint;
+
+  /// No description provided for @updatesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Updates'**
+  String get updatesTitle;
+
+  /// No description provided for @checkForUpdatesAutomatically.
+  ///
+  /// In en, this message translates to:
+  /// **'Check for updates automatically'**
+  String get checkForUpdatesAutomatically;
+
+  /// No description provided for @checkForUpdatesNow.
+  ///
+  /// In en, this message translates to:
+  /// **'Check for updates now'**
+  String get checkForUpdatesNow;
+
+  /// No description provided for @updatesPortableNotice.
+  ///
+  /// In en, this message translates to:
+  /// **'The portable version opens the download page in your browser. Replace your existing files with the new download.'**
+  String get updatesPortableNotice;
+
+  /// No description provided for @updateCheckFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not check for updates. Please try again later.'**
+  String get updateCheckFailed;
+
+  /// No description provided for @updateUpToDate.
+  ///
+  /// In en, this message translates to:
+  /// **'You are using the latest version.'**
+  String get updateUpToDate;
+
+  /// No description provided for @updateAvailableTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Update available'**
+  String get updateAvailableTitle;
+
+  /// No description provided for @updateAvailableMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Version {version} is available. You have {current}.'**
+  String updateAvailableMessage(String version, String current);
+
+  /// No description provided for @updateLater.
+  ///
+  /// In en, this message translates to:
+  /// **'Later'**
+  String get updateLater;
+
+  /// No description provided for @updateDownload.
+  ///
+  /// In en, this message translates to:
+  /// **'Download'**
+  String get updateDownload;
+
   /// No description provided for @statusInSync.
   ///
   /// In en, this message translates to:
-  /// **'In sync'**
+  /// **'Up to date'**
   String get statusInSync;
 
   /// No description provided for @statusChangesPending.
   ///
   /// In en, this message translates to:
-  /// **'Changes pending'**
+  /// **'Not applied yet'**
   String get statusChangesPending;
 
   /// No description provided for @statusGameUpdated.
   ///
   /// In en, this message translates to:
-  /// **'Game updated'**
+  /// **'Game was updated'**
   String get statusGameUpdated;
 
   /// No description provided for @statusStudioDeploy.
   ///
   /// In en, this message translates to:
-  /// **'Studio deployment active'**
+  /// **'Mod Studio active'**
   String get statusStudioDeploy;
 
   /// No description provided for @statusNothingDeployed.
   ///
   /// In en, this message translates to:
-  /// **'Nothing deployed'**
+  /// **'No mods in game'**
   String get statusNothingDeployed;
 
   /// No description provided for @actionImport.
@@ -812,11 +938,23 @@ abstract class AppLocalizations {
   /// **'Apply'**
   String get actionApply;
 
-  /// No description provided for @actionUndeployAll.
+  /// No description provided for @actionStartGame.
   ///
   /// In en, this message translates to:
-  /// **'Undeploy all'**
-  String get actionUndeployAll;
+  /// **'Start game'**
+  String get actionStartGame;
+
+  /// No description provided for @startGameTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Launch Gothic with the mods currently in the game'**
+  String get startGameTooltip;
+
+  /// No description provided for @startGameFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Gothic could not be started. Check the game installation in Settings.'**
+  String get startGameFailed;
 
   /// No description provided for @commonCancel.
   ///
@@ -845,85 +983,85 @@ abstract class AppLocalizations {
   /// No description provided for @importOutcomeCreated.
   ///
   /// In en, this message translates to:
-  /// **'Added “{name}” to the library.'**
+  /// **'Added “{name}”.'**
   String importOutcomeCreated(String name);
 
   /// No description provided for @importOutcomeUpdated.
   ///
   /// In en, this message translates to:
-  /// **'Updated “{name}” in the library.'**
+  /// **'Updated “{name}”.'**
   String importOutcomeUpdated(String name);
 
   /// No description provided for @importOutcomeUnchanged.
   ///
   /// In en, this message translates to:
-  /// **'“{name}” is already in the library.'**
+  /// **'“{name}” is already in your list.'**
   String importOutcomeUnchanged(String name);
 
   /// No description provided for @importOutcomeMatchedBy.
   ///
   /// In en, this message translates to:
-  /// **'{method, select, none {No existing library entry was matched.} source {Matched by the same import source.} content {Matched by verified identical content.} entry_id {Matched by mod ID.} other {Match details are unavailable.}}'**
+  /// **'{method, select, none {No existing mod matched.} source {Matched by the same import source.} content {Matched by verified identical content.} entry_id {Matched by mod ID.} other {Match details are unavailable.}}'**
   String importOutcomeMatchedBy(String method);
 
   /// No description provided for @importRefusalDuplicateAmbiguous.
   ///
   /// In en, this message translates to:
-  /// **'This import matches more than one library entry. Review or remove the duplicates, then try again.'**
+  /// **'This matches more than one mod you already have. Remove the duplicates, then try again.'**
   String get importRefusalDuplicateAmbiguous;
 
   /// No description provided for @importRefusalIdentityConflict.
   ///
   /// In en, this message translates to:
-  /// **'The import source and its content match different library entries. Review or remove the conflicting entries, then try again.'**
+  /// **'The source and the contents match two different mods you already have. Sort those out, then try again.'**
   String get importRefusalIdentityConflict;
 
   /// No description provided for @importFailed.
   ///
   /// In en, this message translates to:
-  /// **'The import could not be completed. Supported sources: folders, ZIP, loose *_P.pak files, complete .utoc/.ucas sets (optional .pak), .lcache, .bank, and PrecompiledScript*.Cache. Extract .7z or .rar first, then import the folder. The source may be unsupported, corrupt, or incomplete. The mod may already have been added or updated; refresh and check the library before trying again.'**
+  /// **'This could not be imported. Supported: folders, ZIP archives and single mod files (*_P.pak, .utoc/.ucas, .lcache, .bank, PrecompiledScript*.Cache). Extract .7z or .rar first, then import the folder. It may already have been added or updated — refresh your list before trying again.'**
   String get importFailed;
 
   /// No description provided for @importPickerFailed.
   ///
   /// In en, this message translates to:
-  /// **'The file or folder picker could not be opened. No import was started. Try again.'**
+  /// **'The file picker could not be opened. Nothing was imported.'**
   String get importPickerFailed;
 
   /// No description provided for @importOutcomeUnknown.
   ///
   /// In en, this message translates to:
-  /// **'The import result could not be verified. Choose Refresh to check the library.'**
+  /// **'The result is unclear. Refresh to check your mod list.'**
   String get importOutcomeUnknown;
 
   /// No description provided for @applyTooltip.
   ///
   /// In en, this message translates to:
-  /// **'Apply the loadout to the game'**
+  /// **'Install the ticked mods into the game'**
   String get applyTooltip;
 
   /// No description provided for @undeployAllAction.
   ///
   /// In en, this message translates to:
-  /// **'Undeploy all'**
+  /// **'Remove all from game'**
   String get undeployAllAction;
 
   /// No description provided for @undeployAllConfirm.
   ///
   /// In en, this message translates to:
-  /// **'Remove everything the manager deployed from the game?'**
+  /// **'Remove every mod the Manager installed from the game?'**
   String get undeployAllConfirm;
 
   /// No description provided for @takeOverTitle.
   ///
   /// In en, this message translates to:
-  /// **'Studio deployment active'**
+  /// **'Mod Studio is active'**
   String get takeOverTitle;
 
   /// No description provided for @takeOverBody.
   ///
   /// In en, this message translates to:
-  /// **'mod-studio has deployed a mod to the game. Take over so the manager can apply this loadout?'**
+  /// **'Mod Studio currently has a mod in the game. Take over so the Manager can apply your selection?'**
   String get takeOverBody;
 
   /// No description provided for @takeOverAction.
@@ -941,97 +1079,73 @@ abstract class AppLocalizations {
   /// No description provided for @conflictsTitle.
   ///
   /// In en, this message translates to:
-  /// **'Findings ({count})'**
+  /// **'Conflicts ({count})'**
   String conflictsTitle(int count);
 
   /// Labels the mod expected to win by intended Manager load order, not a proven runtime outcome.
   ///
   /// In en, this message translates to:
-  /// **'intended winner'**
+  /// **'wins'**
   String get conflictWinner;
 
   /// No description provided for @noConflicts.
   ///
   /// In en, this message translates to:
-  /// **'No recognized conflicts.'**
+  /// **'No conflicts found.'**
   String get noConflicts;
 
   /// No description provided for @conflictCoverageIncomplete.
   ///
   /// In en, this message translates to:
-  /// **'Conflict knowledge is incomplete for enabled mods; additional conflicts may exist.'**
+  /// **'Some mods can\'t be checked completely, so there may be more conflicts.'**
   String get conflictCoverageIncomplete;
 
   /// No description provided for @loadOrderDirection.
   ///
   /// In en, this message translates to:
-  /// **'Load order: lower priority first; later mods have higher intended priority.'**
+  /// **'Mods further down the list override the ones above them.'**
   String get loadOrderDirection;
 
   /// No description provided for @footprintCoverageScope.
   ///
   /// In en, this message translates to:
-  /// **'Coverage describes recognized conflict targets only; it does not prove runtime priority.'**
+  /// **'Only known conflict targets are listed. This is no guarantee of what happens in game.'**
   String get footprintCoverageScope;
 
-  /// No description provided for @footprintCoverageExact.
+  /// No description provided for @footprintTargetsExact.
   ///
   /// In en, this message translates to:
-  /// **'Exact — the component\'s conflict-target list is complete.'**
-  String get footprintCoverageExact;
+  /// **'Affected entries — the full list:'**
+  String get footprintTargetsExact;
 
-  /// No description provided for @footprintCoveragePartial.
+  /// No description provided for @footprintTargetsPartial.
   ///
   /// In en, this message translates to:
-  /// **'Partial — listed conflict targets are known, but the component can affect more.'**
-  String get footprintCoveragePartial;
+  /// **'Affected entries — there may be more:'**
+  String get footprintTargetsPartial;
 
-  /// No description provided for @footprintCoverageAdvisory.
+  /// No description provided for @footprintTargetsAdvisory.
   ///
   /// In en, this message translates to:
-  /// **'Advisory — listed targets are hints, not exhaustive proof.'**
-  String get footprintCoverageAdvisory;
+  /// **'Probably affected entries — hints, not proof:'**
+  String get footprintTargetsAdvisory;
 
-  /// No description provided for @footprintCoverageOpaque.
+  /// No description provided for @footprintTargetsOpaque.
   ///
   /// In en, this message translates to:
-  /// **'Opaque — the component\'s conflict targets are unknown.'**
-  String get footprintCoverageOpaque;
-
-  /// No description provided for @footprintCoverageExactLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'Exact'**
-  String get footprintCoverageExactLabel;
-
-  /// No description provided for @footprintCoveragePartialLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'Partial'**
-  String get footprintCoveragePartialLabel;
-
-  /// No description provided for @footprintCoverageAdvisoryLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'Advisory'**
-  String get footprintCoverageAdvisoryLabel;
-
-  /// No description provided for @footprintCoverageOpaqueLabel.
-  ///
-  /// In en, this message translates to:
-  /// **'Opaque'**
-  String get footprintCoverageOpaqueLabel;
+  /// **'GORE cannot tell what this changes.'**
+  String get footprintTargetsOpaque;
 
   /// No description provided for @conflictsUnverified.
   ///
   /// In en, this message translates to:
-  /// **'Conflicts are unverified until the library state is refreshed.'**
+  /// **'Conflicts unknown — refresh first.'**
   String get conflictsUnverified;
 
   /// No description provided for @componentsTitle.
   ///
   /// In en, this message translates to:
-  /// **'Components'**
+  /// **'What this mod changes'**
   String get componentsTitle;
 
   /// No description provided for @targetsMore.
@@ -1043,37 +1157,37 @@ abstract class AppLocalizations {
   /// No description provided for @removeModDeploymentHint.
   ///
   /// In en, this message translates to:
-  /// **'Removing it from the library does not change an existing deployment immediately. If the mod is already deployed, choose Apply afterwards to update the game installation.'**
+  /// **'This only removes it from your list. If it is installed in the game, choose Apply afterwards.'**
   String get removeModDeploymentHint;
 
   /// No description provided for @removeModSuccess.
   ///
   /// In en, this message translates to:
-  /// **'Removed “{name}” from the library.'**
+  /// **'Removed “{name}”.'**
   String removeModSuccess(String name);
 
   /// No description provided for @removeModFailed.
   ///
   /// In en, this message translates to:
-  /// **'Could not remove “{name}”'**
+  /// **'Could not remove “{name}”.'**
   String removeModFailed(String name);
 
   /// No description provided for @removeModPartialFailure.
   ///
   /// In en, this message translates to:
-  /// **'Removed “{name}”, but the library could not be updated completely.'**
+  /// **'Removed “{name}”, but the list could not be fully updated.'**
   String removeModPartialFailure(String name);
 
   /// No description provided for @removeModOutcomeUnknown.
   ///
   /// In en, this message translates to:
-  /// **'Could not verify whether “{name}” was removed.'**
+  /// **'Could not confirm whether “{name}” was removed.'**
   String removeModOutcomeUnknown(String name);
 
   /// No description provided for @libraryStateUnknown.
   ///
   /// In en, this message translates to:
-  /// **'The library state could not be verified. Choose Refresh before changing or applying mods.'**
+  /// **'The mod list is out of date. Refresh before changing or applying mods.'**
   String get libraryStateUnknown;
 
   /// No description provided for @removeModAction.
@@ -1085,13 +1199,13 @@ abstract class AppLocalizations {
   /// No description provided for @removeModConfirm.
   ///
   /// In en, this message translates to:
-  /// **'Remove “{name}” from the library?'**
+  /// **'Remove “{name}” from your list?'**
   String removeModConfirm(String name);
 
   /// No description provided for @errorSetGamePath.
   ///
   /// In en, this message translates to:
-  /// **'Set the game path in Settings first.'**
+  /// **'Choose your Gothic installation in Settings first.'**
   String get errorSetGamePath;
 
   /// No description provided for @applyReportApplied.
@@ -1099,12 +1213,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Applied {count} mods.'**
   String applyReportApplied(int count);
-
-  /// No description provided for @warningsTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Warnings'**
-  String get warningsTitle;
 
   /// No description provided for @modDisabledHint.
   ///
@@ -1115,19 +1223,19 @@ abstract class AppLocalizations {
   /// No description provided for @kindGoremod.
   ///
   /// In en, this message translates to:
-  /// **'goremod'**
+  /// **'GORE bundle'**
   String get kindGoremod;
 
   /// No description provided for @kindTriplet.
   ///
   /// In en, this message translates to:
-  /// **'triplet'**
+  /// **'IoStore mod'**
   String get kindTriplet;
 
   /// No description provided for @kindPak.
   ///
   /// In en, this message translates to:
-  /// **'pak'**
+  /// **'PAK mod'**
   String get kindPak;
 
   /// No description provided for @kindUe4ss.
@@ -1139,31 +1247,31 @@ abstract class AppLocalizations {
   /// No description provided for @kindRawfile.
   ///
   /// In en, this message translates to:
-  /// **'raw file'**
+  /// **'Whole-file replacement'**
   String get kindRawfile;
 
   /// No description provided for @kindMixed.
   ///
   /// In en, this message translates to:
-  /// **'mixed'**
+  /// **'Mixed'**
   String get kindMixed;
 
   /// No description provided for @sevHard.
   ///
   /// In en, this message translates to:
-  /// **'hard'**
+  /// **'Conflict'**
   String get sevHard;
 
   /// No description provided for @sevSoft.
   ///
   /// In en, this message translates to:
-  /// **'soft'**
+  /// **'Warning'**
   String get sevSoft;
 
   /// No description provided for @sevInfo.
   ///
   /// In en, this message translates to:
-  /// **'info'**
+  /// **'Note'**
   String get sevInfo;
 
   /// No description provided for @aboutVersion.
@@ -1181,7 +1289,7 @@ abstract class AppLocalizations {
   /// No description provided for @aboutCopyright.
   ///
   /// In en, this message translates to:
-  /// **'© 2026 GORE contributors'**
+  /// **'© 2026 Daniel Hoer'**
   String get aboutCopyright;
 
   /// No description provided for @aboutLicense.
@@ -1223,7 +1331,7 @@ abstract class AppLocalizations {
   /// No description provided for @uiScale.
   ///
   /// In en, this message translates to:
-  /// **'UI scale'**
+  /// **'Display size'**
   String get uiScale;
 
   /// No description provided for @resetZoomTooltip.

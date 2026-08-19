@@ -1,21 +1,21 @@
 {
   "@@locale": "en",
-  "coreBlockedTitle": "Mod Manager unavailable",
-  "coreDllMissingMessage": "The required gore_ffi.dll was not found.",
-  "coreDllLoadFailedMessage": "The native GORE Core library could not be loaded.",
-  "coreVerificationFailedMessage": "The native GORE Core library could not be verified.",
-  "coreManagerTooOldMessage": "This GORE Core version is newer than the Mod Manager. Update the Mod Manager.",
-  "coreNativeTooOldMessage": "This GORE Core version is older than the Mod Manager. Update or repair the complete Mod Manager installation.",
-  "coreCommandsMissingMessage": "The GORE Core library does not provide all commands required by this Mod Manager.",
-  "coreBlockedRepairHint": "Update or repair the complete Mod Manager package, then restart the app.",
+  "coreBlockedTitle": "Mod Manager can't start",
+  "coreDllMissingMessage": "A required program file is missing (gore_ffi.dll).",
+  "coreDllLoadFailedMessage": "A required program file could not be loaded.",
+  "coreVerificationFailedMessage": "A required program file could not be verified.",
+  "coreManagerTooOldMessage": "The program files are newer than the Mod Manager. Update the Mod Manager.",
+  "coreNativeTooOldMessage": "The program files are older than the Mod Manager. Reinstall the Mod Manager.",
+  "coreCommandsMissingMessage": "The program files are missing features this Mod Manager needs.",
+  "coreBlockedRepairHint": "Reinstall or repair the Mod Manager, then start it again.",
   "coreTechnicalDetails": "Technical details",
   "coreCopyTechnicalDetails": "Copy technical details",
   "coreTechnicalDetailsCopied": "Technical details copied",
   "coreTechnicalDetailsCopyFailed": "Technical details could not be copied. Try again.",
-  "preflightAttention": "GORE cannot continue yet.",
+  "preflightAttention": "Something needs your attention before mods can change.",
   "preflightGameRunning": "Gothic is still running. Close the game before changing mods.",
-  "managerOperationFailed": "The Manager operation failed.",
-  "libraryOperationFailed": "The library could not be refreshed.",
+  "managerOperationFailed": "The operation failed.",
+  "libraryOperationFailed": "The mod list could not be loaded.",
   "conflictsUnavailable": "Conflicts could not be checked.",
   "applyReportAppliedWithWarnings": "Applied: {applied}. Warnings: {warnings}.",
   "@applyReportAppliedWithWarnings": {
@@ -24,59 +24,72 @@
       "warnings": { "type": "int" }
     }
   },
-  "modDetailKind": "Kind",
+  "modDetailKind": "Type",
   "modDetailVersion": "Version",
   "modDetailAuthor": "Author",
   "modDetailSource": "Source",
   "modDetailImported": "Imported",
   "componentLocalization": "Text",
-  "componentAudio": "Audio",
-  "componentAngelScript": "AngelScript",
-  "componentTexture": "Texture",
-  "componentKindLocalizationPatch": "Localization patch",
-  "componentKindAudioPatch": "Audio patch",
-  "componentKindAngelScriptPatch": "AngelScript patch",
-  "componentKindTexturePatch": "Texture patch",
-  "componentKindLoosePak": "Loose PAK",
-  "componentKindTriplet": "PAK triplet",
-  "componentKindUe4ssLua": "UE4SS Lua",
-  "componentKindRawFile": "Raw file",
-  "componentKindFilePatch": "File patch",
-  "componentKindPakFilePatch": "PAK file patch",
-  "componentKindVoiceArchivePatch": "Voice archive patch",
-  "conflictKindLocalization": "Localization",
-  "conflictKindAudio": "Audio",
-  "conflictKindAsset": "Asset",
-  "conflictKindCdo": "CDO",
-  "conflictKindUe4ssUnknown": "Unknown UE4SS",
-  "conflictKindScriptModule": "Script module",
-  "conflictKindVoiceArchive": "Voice archive",
-  "conflictKindRawFile": "Raw file",
-  "conflictKindLooseFile": "Loose file",
-  "preflightUnavailable": "GORE could not check the installation.",
+  "componentAudio": "Sound",
+  "componentAngelScript": "Scripts",
+  "componentTexture": "Textures",
+  "componentGameFiles": "Game files",
+  "componentVoice": "Voice",
+  "componentKindLocalizationPatch": "Text changes",
+  "componentKindAudioPatch": "Sound changes",
+  "componentKindAngelScriptPatch": "Script changes",
+  "componentKindTexturePatch": "Texture changes",
+  "componentKindLoosePak": "PAK file",
+  "componentKindTriplet": "IoStore container",
+  "componentKindUe4ssLua": "UE4SS script",
+  "componentKindRawFile": "File",
+  "componentKindFilePatch": "Replaced game file",
+  "componentKindPakFilePatch": "Game file from a ~mods PAK",
+  "componentKindVoiceArchivePatch": "Voice lines",
+  "rawTargetGameText": "All game text",
+  "rawTargetGameScripts": "All game scripts",
+  "rawTargetSoundBank": "Sound bank",
+  "rawTargetSoundBankNamed": "Sound bank: {name}",
+  "@rawTargetSoundBankNamed": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "conflictKindLocalization": "Text",
+  "conflictKindAudio": "Sound",
+  "conflictKindAsset": "Game data",
+  "conflictKindCdo": "Object values",
+  "conflictKindUe4ssUnknown": "UE4SS (unclear)",
+  "conflictKindScriptModule": "Game script",
+  "conflictKindVoiceArchive": "Voice lines",
+  "conflictKindRawFile": "File",
+  "conflictKindLooseFile": "Game file",
+  "preflightUnavailable": "The game installation could not be checked.",
   "preflightRetry": "Check again",
-  "preflightReviewStatus": "Review status",
-  "preflightReviewRecovery": "Recovery help",
-  "installRecoveryTitle": "Installation recovery",
-  "installRecoveryBody": "GORE found recovery data for an installation or script build. The related operation may still be running, or the data may be left over from an operation that has ended. GORE cannot safely repair this automatically.",
-  "installRecoverySteps": "If the related operation is still running, wait for it to finish. Do not stop it or delete any lock files. Only after you are sure that no related operation is running, follow README.txt in the recovery folder below. If no folder is listed or you are unsure, leave the recovery data unchanged and get help. Then check again.",
-  "installRecoveryEvidence": "Detected recovery data",
-  "managerRecoveryTitle": "Recover interrupted Manager change",
-  "managerRecoveryConfirm": "GORE found a clearly interrupted Manager change. Continue only if you want GORE to verify the recorded operation and restore the installation to a known state. Savegames are never changed.",
-  "managerRecoveryAlreadyClean": "The interrupted change was already resolved. The installation was checked again.",
-  "managerRecoveryBusy": "The operation is active again. Nothing was changed; wait for it to finish and check again.",
-  "managerRecoveryLockCleared": "The interrupted operation had not changed the installation. Its obsolete lock was removed safely.",
-  "managerRecoveryRestoredPristine": "The interrupted change was rolled back and the installation's recorded baseline state was restored.",
-  "managerRecoveryApplyPreserved": "Apply had already completed. The recorded state was preserved, and the status was checked again.",
-  "managerRecoveryUndeployConfirmed": "Removal had completed. Remaining transaction data was cleaned up, and the status was checked again.",
-  "managerRecoveryCompileRequired": "This belongs to script-build recovery, so Manager left it unchanged. Review the recovery help.",
-  "managerRecoveryInspectionFailed": "GORE could not verify the interrupted operation safely. Nothing was changed; review the current recovery details.",
-  "managerRecoveryFailed": "Recovery could not be completed. GORE tried to check the installation again, but its current state may be unknown. Review the status before trying again.",
+  "preflightReviewStatus": "Show status",
+  "preflightReviewRecovery": "Show help",
+  "installRecoveryTitle": "Interrupted installation",
+  "installRecoveryBody": "GORE found leftover data from an installation or a script build. That job may still be running, or it ended and left this behind. GORE cannot clean it up safely on its own.",
+  "installRecoverySteps": "If the job is still running, wait for it to finish — do not stop it and do not delete any files. Once you are sure nothing is running, follow README.txt in the folder below and check again. If no folder is listed or you are unsure, leave everything as it is and ask for help.",
+  "installRecoveryEvidence": "What GORE found",
+  "managerRecoveryTitle": "Repair interrupted change",
+  "managerRecoveryConfirm": "GORE found an interrupted change and can put the game back into a known state. Your savegames are never touched.",
+  "managerRecoveryAlreadyClean": "Nothing left to repair. The status was checked again.",
+  "managerRecoveryBusy": "The job is running again. Nothing was changed — wait for it to finish.",
+  "managerRecoveryLockCleared": "The interrupted job had not changed anything yet. It was cleaned up.",
+  "managerRecoveryRestoredPristine": "The change was rolled back. The game is back to its earlier state.",
+  "managerRecoveryApplyPreserved": "Apply had already finished. Nothing was lost.",
+  "managerRecoveryUndeployConfirmed": "The removal had already finished. Leftovers were cleaned up.",
+  "managerRecoveryCompileRequired": "This belongs to a script build, so nothing was changed. Open the repair help.",
+  "managerRecoveryInspectionFailed": "GORE could not check the interrupted job safely. Nothing was changed.",
+  "managerRecoveryFailed": "The repair could not be finished. Check the status before trying again.",
   "statusUnknown": "Unknown",
   "@statusUnknown": {
     "description": "Deployment status is unavailable or uses an unsupported future state."
   },
-  "statusDetailsTitle": "Deployment: {status}",
+  "statusDetailsTitle": "Status: {status}",
   "@statusDetailsTitle": {
     "placeholders": {
       "status": {
@@ -84,7 +97,7 @@
       }
     }
   },
-  "statusDetailsOpen": "Show deployment details: {status}",
+  "statusDetailsOpen": "Show details: {status}",
   "@statusDetailsOpen": {
     "placeholders": {
       "status": {
@@ -92,16 +105,16 @@
       }
     }
   },
-  "statusDetailsNoRoot": "Choose a game installation in Settings to inspect its deployment status.",
-  "statusDetailsNoDeployment": "No Manager deployment is installed for this game.",
-  "statusDetailsInSyncDescription": "The deployed mods match the current loadout.",
-  "statusDetailsDeployedLoadout": "Deployed load order",
-  "statusDetailsChangesDescription": "The current deployment differs from what Apply will install.",
-  "statusDetailsCurrentlyDeployed": "Currently deployed",
+  "statusDetailsNoRoot": "Choose your Gothic installation in Settings first.",
+  "statusDetailsNoDeployment": "No mods are installed in the game right now.",
+  "statusDetailsInSyncDescription": "The game has exactly the mods you ticked here.",
+  "statusDetailsDeployedLoadout": "Mods in the game",
+  "statusDetailsChangesDescription": "Your selection differs from what is in the game.",
+  "statusDetailsCurrentlyDeployed": "In the game now",
   "statusDetailsAfterApply": "After Apply",
-  "statusDetailsGameUpdatedDescription": "Game files changed after the last deployment. Reapply the loadout to restore the Manager-owned files.",
-  "statusDetailsDriftedFiles": "Changed files",
-  "statusDetailsStudioDescription": "Mod Studio currently owns this game installation. Take over before applying a Manager loadout.",
+  "statusDetailsGameUpdatedDescription": "The game was updated and overwrote mod files. Apply again to put them back.",
+  "statusDetailsDriftedFiles": "Affected files",
+  "statusDetailsStudioDescription": "Mod Studio currently has mods in this game. Take the game over before the Manager applies yours.",
   "statusDetailsStudioMod": "Studio mod: {name}",
   "@statusDetailsStudioMod": {
     "placeholders": {
@@ -110,29 +123,29 @@
       }
     }
   },
-  "statusDetailsStudioNameUnknown": "Studio did not report a mod name.",
-  "statusDetailsRecoveryDescription": "A deployment was interrupted. Recover it before applying or removing Manager mods.",
-  "statusDetailsUnknownDescription": "Deployment status could not be verified. Refresh before applying mods.",
-  "statusDetailsUnavailable": "The installed core did not provide these details.",
-  "statusDetailsEmptyLoadout": "No mods in this loadout.",
+  "statusDetailsStudioNameUnknown": "Mod Studio did not report a name.",
+  "statusDetailsRecoveryDescription": "A change was interrupted. Repair it before changing mods.",
+  "statusDetailsUnknownDescription": "The status could not be read. Refresh first.",
+  "statusDetailsUnavailable": "No details available.",
+  "statusDetailsEmptyLoadout": "No mods.",
   "statusDetailsLastError": "Last error",
   "statusDetailsLastApply": "Last Apply",
   "statusDetailsAppliedMods": "Applied mods",
   "statusDetailsWarnings": "Warnings",
   "statusDetailsReapply": "Reapply",
   "statusDetailsOpenSettings": "Open Settings",
-  "recoveryAction": "Recover",
-  "recoveryRequiredConfirm": "Recover the interrupted deployment and remove any partially deployed files?",
-  "statusRecoveryRequired": "Recovery required",
-  "statusDetailsOwnershipTitle": "Recorded ownership evidence",
-  "statusDetailsOwnershipDescription": "Paths recorded in the Manager deploy record. They do not prove that those paths still exist.",
+  "recoveryAction": "Repair",
+  "recoveryRequiredConfirm": "Repair the interrupted change and remove any half-installed files?",
+  "statusRecoveryRequired": "Repair needed",
+  "statusDetailsOwnershipTitle": "Files GORE manages",
+  "statusDetailsOwnershipDescription": "Recorded when mods were applied — not a check that the files still exist.",
   "statusDetailsOwnershipLive": "Replaced game files",
-  "statusDetailsOwnershipBackups": "Pristine backups",
-  "statusDetailsOwnershipAdditive": "Added pak and container files",
+  "statusDetailsOwnershipBackups": "Backups of the originals",
+  "statusDetailsOwnershipAdditive": "Added mod files",
   "statusDetailsOwnershipUe4ss": "UE4SS mod directories",
-  "statusDetailsOwnershipRecovery": "Recovery files and holders",
-  "statusDetailsOwnershipEmpty": "No paths recorded in this group.",
-  "statusDetailsOwnershipShown": "{shown} of {total} recorded paths shown.",
+  "statusDetailsOwnershipRecovery": "Repair files",
+  "statusDetailsOwnershipEmpty": "Nothing recorded here.",
+  "statusDetailsOwnershipShown": "Showing {shown} of {total} paths.",
   "@statusDetailsOwnershipShown": {
     "placeholders": {
       "shown": {
@@ -146,58 +159,85 @@
   "appTitle": "GORE Mod Manager",
   "tabMods": "Mods",
   "tabSettings": "Settings",
-  "settingsGameExe": "Game executable",
+  "settingsGameExe": "Gothic installation",
   "settingsGameExePick": "Choose…",
   "settingsLanguage": "Language",
-  "statusInSync": "In sync",
-  "statusChangesPending": "Changes pending",
-  "statusGameUpdated": "Game updated",
-  "statusStudioDeploy": "Studio deployment active",
-  "statusNothingDeployed": "Nothing deployed",
+  "libraryEmptyTitle": "No mods yet",
+  "libraryEmptyBody": "Import a folder or a mod file to get started.",
+  "detailEmptyHint": "Pick a mod to see what it changes.",
+  "settingsAdvanced": "Advanced details",
+  "settingsAdvancedHint": "Show the technical side: affected entries, how reliable the conflict check is, and the files GORE manages.",
+  "updatesTitle": "Updates",
+  "checkForUpdatesAutomatically": "Check for updates automatically",
+  "checkForUpdatesNow": "Check for updates now",
+  "updatesPortableNotice": "The portable version opens the download page in your browser. Replace your existing files with the new download.",
+  "updateCheckFailed": "Could not check for updates. Please try again later.",
+  "updateUpToDate": "You are using the latest version.",
+  "updateAvailableTitle": "Update available",
+  "updateAvailableMessage": "Version {version} is available. You have {current}.",
+  "@updateAvailableMessage": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      },
+      "current": {
+        "type": "String"
+      }
+    }
+  },
+  "updateLater": "Later",
+  "updateDownload": "Download",
+  "statusInSync": "Up to date",
+  "statusChangesPending": "Not applied yet",
+  "statusGameUpdated": "Game was updated",
+  "statusStudioDeploy": "Mod Studio active",
+  "statusNothingDeployed": "No mods in game",
   "actionImport": "Import",
   "actionApply": "Apply",
-  "actionUndeployAll": "Undeploy all",
+  "actionStartGame": "Start game",
+  "startGameTooltip": "Launch Gothic with the mods currently in the game",
+  "startGameFailed": "Gothic could not be started. Check the game installation in Settings.",
   "commonCancel": "Cancel",
   "commonOk": "OK",
   "importFolder": "Import folder…",
   "importFile": "Import file…",
-  "importOutcomeCreated": "Added “{name}” to the library.",
+  "importOutcomeCreated": "Added “{name}”.",
   "@importOutcomeCreated": {
     "placeholders": {
       "name": { "type": "String" }
     }
   },
-  "importOutcomeUpdated": "Updated “{name}” in the library.",
+  "importOutcomeUpdated": "Updated “{name}”.",
   "@importOutcomeUpdated": {
     "placeholders": {
       "name": { "type": "String" }
     }
   },
-  "importOutcomeUnchanged": "“{name}” is already in the library.",
+  "importOutcomeUnchanged": "“{name}” is already in your list.",
   "@importOutcomeUnchanged": {
     "placeholders": {
       "name": { "type": "String" }
     }
   },
-  "importOutcomeMatchedBy": "{method, select, none {No existing library entry was matched.} source {Matched by the same import source.} content {Matched by verified identical content.} entry_id {Matched by mod ID.} other {Match details are unavailable.}}",
+  "importOutcomeMatchedBy": "{method, select, none {No existing mod matched.} source {Matched by the same import source.} content {Matched by verified identical content.} entry_id {Matched by mod ID.} other {Match details are unavailable.}}",
   "@importOutcomeMatchedBy": {
     "placeholders": {
       "method": { "type": "String" }
     }
   },
-  "importRefusalDuplicateAmbiguous": "This import matches more than one library entry. Review or remove the duplicates, then try again.",
-  "importRefusalIdentityConflict": "The import source and its content match different library entries. Review or remove the conflicting entries, then try again.",
-  "importFailed": "The import could not be completed. Supported sources: folders, ZIP, loose *_P.pak files, complete .utoc/.ucas sets (optional .pak), .lcache, .bank, and PrecompiledScript*.Cache. Extract .7z or .rar first, then import the folder. The source may be unsupported, corrupt, or incomplete. The mod may already have been added or updated; refresh and check the library before trying again.",
-  "importPickerFailed": "The file or folder picker could not be opened. No import was started. Try again.",
-  "importOutcomeUnknown": "The import result could not be verified. Choose Refresh to check the library.",
-  "applyTooltip": "Apply the loadout to the game",
-  "undeployAllAction": "Undeploy all",
-  "undeployAllConfirm": "Remove everything the manager deployed from the game?",
-  "takeOverTitle": "Studio deployment active",
-  "takeOverBody": "mod-studio has deployed a mod to the game. Take over so the manager can apply this loadout?",
+  "importRefusalDuplicateAmbiguous": "This matches more than one mod you already have. Remove the duplicates, then try again.",
+  "importRefusalIdentityConflict": "The source and the contents match two different mods you already have. Sort those out, then try again.",
+  "importFailed": "This could not be imported. Supported: folders, ZIP archives and single mod files (*_P.pak, .utoc/.ucas, .lcache, .bank, PrecompiledScript*.Cache). Extract .7z or .rar first, then import the folder. It may already have been added or updated — refresh your list before trying again.",
+  "importPickerFailed": "The file picker could not be opened. Nothing was imported.",
+  "importOutcomeUnknown": "The result is unclear. Refresh to check your mod list.",
+  "applyTooltip": "Install the ticked mods into the game",
+  "undeployAllAction": "Remove all from game",
+  "undeployAllConfirm": "Remove every mod the Manager installed from the game?",
+  "takeOverTitle": "Mod Studio is active",
+  "takeOverBody": "Mod Studio currently has a mod in the game. Take over so the Manager can apply your selection?",
   "takeOverAction": "Take over",
   "refreshAction": "Refresh",
-  "conflictsTitle": "Findings ({count})",
+  "conflictsTitle": "Conflicts ({count})",
   "@conflictsTitle": {
     "placeholders": {
       "count": {
@@ -205,24 +245,20 @@
       }
     }
   },
-  "conflictWinner": "intended winner",
+  "conflictWinner": "wins",
   "@conflictWinner": {
     "description": "Labels the mod expected to win by intended Manager load order, not a proven runtime outcome."
   },
-  "noConflicts": "No recognized conflicts.",
-  "conflictCoverageIncomplete": "Conflict knowledge is incomplete for enabled mods; additional conflicts may exist.",
-  "loadOrderDirection": "Load order: lower priority first; later mods have higher intended priority.",
-  "footprintCoverageScope": "Coverage describes recognized conflict targets only; it does not prove runtime priority.",
-  "footprintCoverageExact": "Exact — the component's conflict-target list is complete.",
-  "footprintCoveragePartial": "Partial — listed conflict targets are known, but the component can affect more.",
-  "footprintCoverageAdvisory": "Advisory — listed targets are hints, not exhaustive proof.",
-  "footprintCoverageOpaque": "Opaque — the component's conflict targets are unknown.",
-  "footprintCoverageExactLabel": "Exact",
-  "footprintCoveragePartialLabel": "Partial",
-  "footprintCoverageAdvisoryLabel": "Advisory",
-  "footprintCoverageOpaqueLabel": "Opaque",
-  "conflictsUnverified": "Conflicts are unverified until the library state is refreshed.",
-  "componentsTitle": "Components",
+  "noConflicts": "No conflicts found.",
+  "conflictCoverageIncomplete": "Some mods can't be checked completely, so there may be more conflicts.",
+  "loadOrderDirection": "Mods further down the list override the ones above them.",
+  "footprintCoverageScope": "Only known conflict targets are listed. This is no guarantee of what happens in game.",
+  "footprintTargetsExact": "Affected entries — the full list:",
+  "footprintTargetsPartial": "Affected entries — there may be more:",
+  "footprintTargetsAdvisory": "Probably affected entries — hints, not proof:",
+  "footprintTargetsOpaque": "GORE cannot tell what this changes.",
+  "conflictsUnverified": "Conflicts unknown — refresh first.",
+  "componentsTitle": "What this mod changes",
   "targetsMore": "+{count} more",
   "@targetsMore": {
     "placeholders": {
@@ -231,8 +267,8 @@
       }
     }
   },
-  "removeModDeploymentHint": "Removing it from the library does not change an existing deployment immediately. If the mod is already deployed, choose Apply afterwards to update the game installation.",
-  "removeModSuccess": "Removed “{name}” from the library.",
+  "removeModDeploymentHint": "This only removes it from your list. If it is installed in the game, choose Apply afterwards.",
+  "removeModSuccess": "Removed “{name}”.",
   "@removeModSuccess": {
     "placeholders": {
       "name": {
@@ -240,7 +276,7 @@
       }
     }
   },
-  "removeModFailed": "Could not remove “{name}”",
+  "removeModFailed": "Could not remove “{name}”.",
   "@removeModFailed": {
     "placeholders": {
       "name": {
@@ -248,7 +284,7 @@
       }
     }
   },
-  "removeModPartialFailure": "Removed “{name}”, but the library could not be updated completely.",
+  "removeModPartialFailure": "Removed “{name}”, but the list could not be fully updated.",
   "@removeModPartialFailure": {
     "placeholders": {
       "name": {
@@ -256,7 +292,7 @@
       }
     }
   },
-  "removeModOutcomeUnknown": "Could not verify whether “{name}” was removed.",
+  "removeModOutcomeUnknown": "Could not confirm whether “{name}” was removed.",
   "@removeModOutcomeUnknown": {
     "placeholders": {
       "name": {
@@ -264,9 +300,9 @@
       }
     }
   },
-  "libraryStateUnknown": "The library state could not be verified. Choose Refresh before changing or applying mods.",
+  "libraryStateUnknown": "The mod list is out of date. Refresh before changing or applying mods.",
   "removeModAction": "Remove",
-  "removeModConfirm": "Remove “{name}” from the library?",
+  "removeModConfirm": "Remove “{name}” from your list?",
   "@removeModConfirm": {
     "placeholders": {
       "name": {
@@ -274,7 +310,7 @@
       }
     }
   },
-  "errorSetGamePath": "Set the game path in Settings first.",
+  "errorSetGamePath": "Choose your Gothic installation in Settings first.",
   "applyReportApplied": "Applied {count} mods.",
   "@applyReportApplied": {
     "placeholders": {
@@ -283,17 +319,16 @@
       }
     }
   },
-  "warningsTitle": "Warnings",
   "modDisabledHint": "Disabled",
-  "kindGoremod": "goremod",
-  "kindTriplet": "triplet",
-  "kindPak": "pak",
+  "kindGoremod": "GORE bundle",
+  "kindTriplet": "IoStore mod",
+  "kindPak": "PAK mod",
   "kindUe4ss": "UE4SS",
-  "kindRawfile": "raw file",
-  "kindMixed": "mixed",
-  "sevHard": "hard",
-  "sevSoft": "soft",
-  "sevInfo": "info",
+  "kindRawfile": "Whole-file replacement",
+  "kindMixed": "Mixed",
+  "sevHard": "Conflict",
+  "sevSoft": "Warning",
+  "sevInfo": "Note",
   "aboutVersion": "Version {version} ({sha})",
   "@aboutVersion": {
     "placeholders": {
@@ -306,14 +341,14 @@
     }
   },
   "about": "About",
-  "aboutCopyright": "© 2026 GORE contributors",
+  "aboutCopyright": "© 2026 Daniel Hoer",
   "aboutLicense": "Licensed under the MIT License.",
   "appearanceTitle": "Appearance",
   "theme": "Theme",
   "themeLight": "Light",
   "themeDark": "Dark",
   "themeSystem": "System",
-  "uiScale": "UI scale",
+  "uiScale": "Display size",
   "resetZoomTooltip": "Reset zoom (Ctrl+0)",
   "zoomTip": "Tip: Ctrl + / Ctrl - changes the zoom anywhere in the app.",
   "lightMode": "Light mode",

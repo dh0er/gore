@@ -9,35 +9,35 @@ class AppLocalizationsRu extends AppLocalizations {
   AppLocalizationsRu([String locale = 'ru']) : super(locale);
 
   @override
-  String get coreBlockedTitle => 'Mod Manager недоступен';
+  String get coreBlockedTitle => 'Mod Manager не может запуститься';
 
   @override
   String get coreDllMissingMessage =>
-      'Не найден необходимый файл gore_ffi.dll.';
+      'Отсутствует нужный файл программы (gore_ffi.dll).';
 
   @override
   String get coreDllLoadFailedMessage =>
-      'Не удалось загрузить нативную библиотеку GORE Core.';
+      'Не удалось загрузить нужный файл программы.';
 
   @override
   String get coreVerificationFailedMessage =>
-      'Не удалось проверить нативную библиотеку GORE Core.';
+      'Не удалось проверить нужный файл программы.';
 
   @override
   String get coreManagerTooOldMessage =>
-      'Эта версия GORE Core новее, чем Mod Manager. Обновите Mod Manager.';
+      'Файлы программы новее, чем Mod Manager. Обновите Mod Manager.';
 
   @override
   String get coreNativeTooOldMessage =>
-      'Эта версия GORE Core старее, чем Mod Manager. Обновите или восстановите полную установку Mod Manager.';
+      'Файлы программы старее, чем Mod Manager. Переустановите Mod Manager.';
 
   @override
   String get coreCommandsMissingMessage =>
-      'Библиотека GORE Core не предоставляет все команды, необходимые этому Mod Manager.';
+      'В файлах программы нет функций, которые нужны этому Mod Manager.';
 
   @override
   String get coreBlockedRepairHint =>
-      'Обновите или восстановите полный пакет Mod Manager, затем перезапустите приложение.';
+      'Переустановите или восстановите Mod Manager, затем запустите его снова.';
 
   @override
   String get coreTechnicalDetails => 'Технические сведения';
@@ -53,18 +53,18 @@ class AppLocalizationsRu extends AppLocalizations {
       'Не удалось скопировать технические сведения. Повторите попытку.';
 
   @override
-  String get preflightAttention => 'GORE пока не может продолжить.';
+  String get preflightAttention =>
+      'Прежде чем менять моды, нужно кое-что решить.';
 
   @override
   String get preflightGameRunning =>
       'Gothic всё ещё запущен. Закройте игру, прежде чем изменять моды.';
 
   @override
-  String get managerOperationFailed =>
-      'Операция менеджера завершилась ошибкой.';
+  String get managerOperationFailed => 'Операция не удалась.';
 
   @override
-  String get libraryOperationFailed => 'Не удалось обновить библиотеку.';
+  String get libraryOperationFailed => 'Не удалось загрузить список модов.';
 
   @override
   String get conflictsUnavailable => 'Не удалось проверить конфликты.';
@@ -90,195 +90,213 @@ class AppLocalizationsRu extends AppLocalizations {
   String get modDetailImported => 'Импортирован';
 
   @override
-  String get componentLocalization => 'Текст';
+  String get componentLocalization => 'Тексты';
 
   @override
-  String get componentAudio => 'Аудио';
+  String get componentAudio => 'Звук';
 
   @override
-  String get componentAngelScript => 'AngelScript';
+  String get componentAngelScript => 'Скрипты';
 
   @override
-  String get componentTexture => 'Текстура';
+  String get componentTexture => 'Текстуры';
 
   @override
-  String get componentKindLocalizationPatch => 'Текстовый патч';
+  String get componentGameFiles => 'Игровые файлы';
 
   @override
-  String get componentKindAudioPatch => 'Аудиопатч';
+  String get componentVoice => 'Озвучка';
 
   @override
-  String get componentKindAngelScriptPatch => 'Патч AngelScript';
+  String get componentKindLocalizationPatch => 'Изменения текстов';
 
   @override
-  String get componentKindTexturePatch => 'Патч текстур';
+  String get componentKindAudioPatch => 'Изменения звука';
 
   @override
-  String get componentKindLoosePak => 'Отдельный PAK';
+  String get componentKindAngelScriptPatch => 'Изменения скриптов';
 
   @override
-  String get componentKindTriplet => 'Триплет PAK';
+  String get componentKindTexturePatch => 'Изменения текстур';
 
   @override
-  String get componentKindUe4ssLua => 'Lua UE4SS';
+  String get componentKindLoosePak => 'Файл PAK';
 
   @override
-  String get componentKindRawFile => 'Необработанный файл';
+  String get componentKindTriplet => 'Контейнер IoStore';
 
   @override
-  String get componentKindFilePatch => 'Патч файла';
+  String get componentKindUe4ssLua => 'Скрипт UE4SS';
 
   @override
-  String get componentKindPakFilePatch => 'Патч файла PAK';
+  String get componentKindRawFile => 'Файл';
 
   @override
-  String get componentKindVoiceArchivePatch => 'Патч голосового архива';
+  String get componentKindFilePatch => 'Заменённый игровой файл';
 
   @override
-  String get conflictKindLocalization => 'Текст';
+  String get componentKindPakFilePatch => 'Игровой файл из PAK в ~mods';
 
   @override
-  String get conflictKindAudio => 'Аудио';
+  String get componentKindVoiceArchivePatch => 'Озвучка';
 
   @override
-  String get conflictKindAsset => 'Ресурс';
+  String get rawTargetGameText => 'Все игровые тексты';
 
   @override
-  String get conflictKindCdo => 'CDO';
+  String get rawTargetGameScripts => 'Все игровые скрипты';
 
   @override
-  String get conflictKindUe4ssUnknown => 'Неизвестный UE4SS';
+  String get rawTargetSoundBank => 'Банк звуков';
 
   @override
-  String get conflictKindScriptModule => 'Модуль скрипта';
+  String rawTargetSoundBankNamed(String name) {
+    return 'Банк звуков: $name';
+  }
 
   @override
-  String get conflictKindVoiceArchive => 'Голосовой архив';
+  String get conflictKindLocalization => 'Тексты';
 
   @override
-  String get conflictKindRawFile => 'Необработанный файл';
+  String get conflictKindAudio => 'Звук';
 
   @override
-  String get conflictKindLooseFile => 'Отдельный файл';
+  String get conflictKindAsset => 'Игровые данные';
 
   @override
-  String get preflightUnavailable => 'GORE не удалось проверить установку.';
+  String get conflictKindCdo => 'Значения объектов';
+
+  @override
+  String get conflictKindUe4ssUnknown => 'UE4SS (неясно)';
+
+  @override
+  String get conflictKindScriptModule => 'Игровой скрипт';
+
+  @override
+  String get conflictKindVoiceArchive => 'Озвучка';
+
+  @override
+  String get conflictKindRawFile => 'Файл';
+
+  @override
+  String get conflictKindLooseFile => 'Игровой файл';
+
+  @override
+  String get preflightUnavailable => 'Не удалось проверить установку игры.';
 
   @override
   String get preflightRetry => 'Проверить снова';
 
   @override
-  String get preflightReviewStatus => 'Проверить состояние';
+  String get preflightReviewStatus => 'Показать состояние';
 
   @override
-  String get preflightReviewRecovery => 'Помощь';
+  String get preflightReviewRecovery => 'Показать справку';
 
   @override
-  String get installRecoveryTitle => 'Восстановление установки';
+  String get installRecoveryTitle => 'Прерванная установка';
 
   @override
   String get installRecoveryBody =>
-      'GORE обнаружил данные восстановления, связанные с установкой или сборкой скриптов. Соответствующая операция может всё ещё выполняться, либо эти данные могли остаться после её завершения. GORE не может безопасно исправить это автоматически.';
+      'GORE нашёл остатки от установки или сборки скриптов. Эта задача может ещё выполняться, а может уже завершилась и оставила это после себя. GORE не может безопасно убрать это сам.';
 
   @override
   String get installRecoverySteps =>
-      'Если соответствующая операция ещё выполняется, дождитесь её завершения. Не останавливайте её и не удаляйте файлы блокировки. Следуйте инструкциям в файле README.txt в указанной ниже папке восстановления только после того, как убедитесь, что никакие связанные операции больше не выполняются. Если папка не указана или вы не уверены, оставьте данные восстановления без изменений и обратитесь за помощью. Затем проверьте снова.';
+      'Если задача ещё выполняется, дождитесь её завершения — не останавливайте её и не удаляйте файлы. Убедившись, что ничего не работает, следуйте README.txt в папке ниже и проверьте снова. Если папка не указана или вы не уверены, ничего не трогайте и обратитесь за помощью.';
 
   @override
-  String get installRecoveryEvidence => 'Обнаруженные данные восстановления';
+  String get installRecoveryEvidence => 'Что нашёл GORE';
 
   @override
-  String get managerRecoveryTitle =>
-      'Восстановить прерванную операцию Менеджера';
+  String get managerRecoveryTitle => 'Восстановить прерванное изменение';
 
   @override
   String get managerRecoveryConfirm =>
-      'GORE обнаружил явно прерванную операцию Менеджера. Продолжайте, только если хотите, чтобы GORE проверил записанную операцию и вернул установку в известное состояние. Сохранения игры никогда не изменяются.';
+      'GORE нашёл прерванное изменение и может вернуть игру в известное состояние. Ваши сохранения никогда не затрагиваются.';
 
   @override
   String get managerRecoveryAlreadyClean =>
-      'Прерванная операция уже была устранена. Установка проверена повторно.';
+      'Восстанавливать было нечего. Состояние проверено заново.';
 
   @override
   String get managerRecoveryBusy =>
-      'Операция снова активна. Ничего не изменено; дождитесь её завершения и проверьте снова.';
+      'Задача снова выполняется. Ничего не изменено — дождитесь завершения.';
 
   @override
   String get managerRecoveryLockCleared =>
-      'Прерванная операция ещё не изменила установку. Устаревшая блокировка безопасно удалена.';
+      'Прерванная задача ещё ничего не изменила. Всё убрано.';
 
   @override
   String get managerRecoveryRestoredPristine =>
-      'Прерванное изменение отменено, а записанное исходное состояние установки восстановлено.';
+      'Изменение отменено. Игра вернулась в прежнее состояние.';
 
   @override
   String get managerRecoveryApplyPreserved =>
-      'Применение уже завершилось. Записанное состояние сохранено, а статус проверен повторно.';
+      'Применение уже завершилось. Ничего не потеряно.';
 
   @override
   String get managerRecoveryUndeployConfirmed =>
-      'Удаление завершилось. Оставшиеся данные транзакции очищены, а статус проверен повторно.';
+      'Удаление уже завершилось. Остатки убраны.';
 
   @override
   String get managerRecoveryCompileRequired =>
-      'Это относится к восстановлению сборки скриптов. Менеджер ничего не изменил; откройте справку по восстановлению.';
+      'Это относится к сборке скриптов, поэтому ничего не изменено. Откройте справку по восстановлению.';
 
   @override
   String get managerRecoveryInspectionFailed =>
-      'GORE не смог безопасно проверить прерванную операцию. Ничего не изменено; просмотрите текущие сведения о восстановлении.';
+      'GORE не смог безопасно проверить прерванную задачу. Ничего не изменено.';
 
   @override
   String get managerRecoveryFailed =>
-      'Не удалось завершить восстановление. GORE попытался повторно проверить установку, но её текущее состояние может быть неизвестно. Перед новой попыткой просмотрите состояние.';
+      'Восстановление не удалось завершить. Проверьте состояние, прежде чем пробовать снова.';
 
   @override
   String get statusUnknown => 'Неизвестно';
 
   @override
   String statusDetailsTitle(String status) {
-    return 'Развёртывание: $status';
+    return 'Состояние: $status';
   }
 
   @override
   String statusDetailsOpen(String status) {
-    return 'Показать сведения о развёртывании: $status';
+    return 'Показать подробности: $status';
   }
 
   @override
   String get statusDetailsNoRoot =>
-      'Выберите установку игры в настройках, чтобы проверить состояние развёртывания.';
+      'Сначала выберите установку Gothic в настройках.';
 
   @override
-  String get statusDetailsNoDeployment =>
-      'Для этой игры нет развёртывания менеджера.';
+  String get statusDetailsNoDeployment => 'Сейчас в игре нет модов.';
 
   @override
   String get statusDetailsInSyncDescription =>
-      'Развёрнутые моды соответствуют текущему набору.';
+      'В игре ровно те моды, которые отмечены здесь.';
 
   @override
-  String get statusDetailsDeployedLoadout => 'Развёрнутый порядок загрузки';
+  String get statusDetailsDeployedLoadout => 'Моды в игре';
 
   @override
   String get statusDetailsChangesDescription =>
-      'Текущее развёртывание отличается от того, что установит команда «Применить».';
+      'Ваш выбор отличается от того, что стоит в игре.';
 
   @override
-  String get statusDetailsCurrentlyDeployed => 'Сейчас развёрнуто';
+  String get statusDetailsCurrentlyDeployed => 'Сейчас в игре';
 
   @override
   String get statusDetailsAfterApply => 'После применения';
 
   @override
   String get statusDetailsGameUpdatedDescription =>
-      'После последнего развёртывания файлы игры изменились. Примените набор повторно, чтобы восстановить файлы менеджера.';
+      'Игра обновилась и перезаписала файлы модов. Примените ещё раз, чтобы вернуть их.';
 
   @override
-  String get statusDetailsDriftedFiles => 'Изменённые файлы';
+  String get statusDetailsDriftedFiles => 'Затронутые файлы';
 
   @override
   String get statusDetailsStudioDescription =>
-      'Сейчас этой установкой игры управляет Mod Studio. Перехватите управление перед применением набора менеджера.';
+      'Сейчас моды в этой игре ставит Mod Studio. Перехватите игру, прежде чем Manager применит ваши.';
 
   @override
   String statusDetailsStudioMod(String name) {
@@ -286,22 +304,22 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
-  String get statusDetailsStudioNameUnknown => 'Studio не сообщило имя мода.';
+  String get statusDetailsStudioNameUnknown =>
+      'Mod Studio не сообщила название.';
 
   @override
   String get statusDetailsRecoveryDescription =>
-      'Развёртывание было прервано. Восстановите его перед применением или удалением модов менеджера.';
+      'Изменение прервалось. Восстановите его, прежде чем менять моды.';
 
   @override
   String get statusDetailsUnknownDescription =>
-      'Не удалось проверить состояние развёртывания. Обновите его перед применением модов.';
+      'Не удалось прочитать состояние. Сначала обновите.';
 
   @override
-  String get statusDetailsUnavailable =>
-      'Установленное ядро не предоставило эти сведения.';
+  String get statusDetailsUnavailable => 'Подробностей нет.';
 
   @override
-  String get statusDetailsEmptyLoadout => 'В этом наборе нет модов.';
+  String get statusDetailsEmptyLoadout => 'Модов нет.';
 
   @override
   String get statusDetailsLastError => 'Последняя ошибка';
@@ -326,42 +344,39 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get recoveryRequiredConfirm =>
-      'Восстановить прерванное развёртывание и удалить частично развёрнутые файлы?';
+      'Восстановить прерванное изменение и убрать наполовину установленные файлы?';
 
   @override
-  String get statusRecoveryRequired => 'Требуется восстановление';
+  String get statusRecoveryRequired => 'Нужно восстановление';
 
   @override
-  String get statusDetailsOwnershipTitle => 'Записанные свидетельства владения';
+  String get statusDetailsOwnershipTitle => 'Файлы под управлением GORE';
 
   @override
   String get statusDetailsOwnershipDescription =>
-      'Пути из записи развёртывания Менеджера. Они не подтверждают, что эти пути существуют сейчас.';
+      'Записано при применении модов — это не проверка того, что файлы ещё на месте.';
 
   @override
   String get statusDetailsOwnershipLive => 'Заменённые файлы игры';
 
   @override
-  String get statusDetailsOwnershipBackups => 'Резервные копии исходных файлов';
+  String get statusDetailsOwnershipBackups => 'Резервные копии оригиналов';
 
   @override
-  String get statusDetailsOwnershipAdditive =>
-      'Добавленные pak-файлы и контейнеры';
+  String get statusDetailsOwnershipAdditive => 'Добавленные файлы модов';
 
   @override
   String get statusDetailsOwnershipUe4ss => 'Каталоги модов UE4SS';
 
   @override
-  String get statusDetailsOwnershipRecovery =>
-      'Файлы и расположения восстановления';
+  String get statusDetailsOwnershipRecovery => 'Файлы восстановления';
 
   @override
-  String get statusDetailsOwnershipEmpty =>
-      'В этой группе нет записанных путей.';
+  String get statusDetailsOwnershipEmpty => 'Здесь ничего не записано.';
 
   @override
   String statusDetailsOwnershipShown(int shown, int total) {
-    return 'Показано $shown из $total записанных путей.';
+    return 'Показано $shown из $total путей.';
   }
 
   @override
@@ -374,7 +389,7 @@ class AppLocalizationsRu extends AppLocalizations {
   String get tabSettings => 'Настройки';
 
   @override
-  String get settingsGameExe => 'Исполняемый файл игры';
+  String get settingsGameExe => 'Установка Gothic';
 
   @override
   String get settingsGameExePick => 'Выбрать…';
@@ -383,19 +398,71 @@ class AppLocalizationsRu extends AppLocalizations {
   String get settingsLanguage => 'Язык';
 
   @override
-  String get statusInSync => 'Синхронизировано';
+  String get libraryEmptyTitle => 'Модов пока нет';
 
   @override
-  String get statusChangesPending => 'Есть неприменённые изменения';
+  String get libraryEmptyBody =>
+      'Импортируйте папку или файл мода, чтобы начать.';
 
   @override
-  String get statusGameUpdated => 'Игра обновлена';
+  String get detailEmptyHint => 'Выберите мод, чтобы увидеть, что он меняет.';
 
   @override
-  String get statusStudioDeploy => 'Активно развёртывание Studio';
+  String get settingsAdvanced => 'Подробности для продвинутых';
 
   @override
-  String get statusNothingDeployed => 'Ничего не развёрнуто';
+  String get settingsAdvancedHint =>
+      'Показывает техническую сторону: затронутые записи, надёжность проверки конфликтов и файлы под управлением GORE.';
+
+  @override
+  String get updatesTitle => 'Обновления';
+
+  @override
+  String get checkForUpdatesAutomatically =>
+      'Автоматически проверять обновления';
+
+  @override
+  String get checkForUpdatesNow => 'Проверить обновления сейчас';
+
+  @override
+  String get updatesPortableNotice =>
+      'Портативная версия открывает страницу загрузки в браузере. Замените имеющиеся файлы новой загрузкой.';
+
+  @override
+  String get updateCheckFailed =>
+      'Не удалось проверить обновления. Повторите попытку позже.';
+
+  @override
+  String get updateUpToDate => 'У вас последняя версия.';
+
+  @override
+  String get updateAvailableTitle => 'Доступно обновление';
+
+  @override
+  String updateAvailableMessage(String version, String current) {
+    return 'Доступна версия $version. У вас $current.';
+  }
+
+  @override
+  String get updateLater => 'Позже';
+
+  @override
+  String get updateDownload => 'Скачать';
+
+  @override
+  String get statusInSync => 'Всё актуально';
+
+  @override
+  String get statusChangesPending => 'Не применено';
+
+  @override
+  String get statusGameUpdated => 'Игра обновилась';
+
+  @override
+  String get statusStudioDeploy => 'Активна Mod Studio';
+
+  @override
+  String get statusNothingDeployed => 'В игре нет модов';
 
   @override
   String get actionImport => 'Импортировать';
@@ -404,7 +471,15 @@ class AppLocalizationsRu extends AppLocalizations {
   String get actionApply => 'Применить';
 
   @override
-  String get actionUndeployAll => 'Убрать всё из игры';
+  String get actionStartGame => 'Запустить игру';
+
+  @override
+  String get startGameTooltip =>
+      'Запустить Gothic с модами, которые сейчас в игре';
+
+  @override
+  String get startGameFailed =>
+      'Не удалось запустить Gothic. Проверьте установку игры в настройках.';
 
   @override
   String get commonCancel => 'Отмена';
@@ -420,68 +495,67 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String importOutcomeCreated(String name) {
-    return 'Мод «$name» добавлен в библиотеку.';
+    return '«$name» добавлен.';
   }
 
   @override
   String importOutcomeUpdated(String name) {
-    return 'Мод «$name» обновлён в библиотеке.';
+    return '«$name» обновлён.';
   }
 
   @override
   String importOutcomeUnchanged(String name) {
-    return 'Мод «$name» уже есть в библиотеке.';
+    return '«$name» уже есть в вашем списке.';
   }
 
   @override
   String importOutcomeMatchedBy(String method) {
     String _temp0 = intl.Intl.selectLogic(method, {
-      'none': 'Совпадений с существующими записями библиотеки нет.',
+      'none': 'Совпадений с имеющимися модами нет.',
       'source': 'Совпадение по тому же источнику импорта.',
-      'content':
-          'Совпадение по содержимому, идентичность которого подтверждена.',
-      'entry_id': 'Совпадение по идентификатору мода.',
-      'other': 'Сведения о совпадении недоступны.',
+      'content': 'Совпадение по подтверждённо одинаковому содержимому.',
+      'entry_id': 'Совпадение по ID мода.',
+      'other': 'Подробностей о совпадении нет.',
     });
     return '$_temp0';
   }
 
   @override
   String get importRefusalDuplicateAmbiguous =>
-      'Этот импорт соответствует нескольким записям библиотеки. Проверьте или удалите дубликаты и повторите попытку.';
+      'Это совпадает сразу с несколькими вашими модами. Удалите дубликаты и попробуйте снова.';
 
   @override
   String get importRefusalIdentityConflict =>
-      'Источник импорта и его содержимое соответствуют разным записям библиотеки. Проверьте или удалите конфликтующие записи и повторите попытку.';
+      'Источник и содержимое совпадают с двумя разными вашими модами. Разберитесь с ними и попробуйте снова.';
 
   @override
   String get importFailed =>
-      'Не удалось завершить импорт. Поддерживаемые источники: папки, ZIP, отдельные файлы *_P.pak, полные наборы .utoc/.ucas (необязательный .pak), .lcache, .bank и PrecompiledScript*.Cache. Сначала распакуйте архив .7z или .rar, затем импортируйте папку. Источник может не поддерживаться, быть повреждённым или неполным. Возможно, мод уже добавлен или обновлён; обновите и проверьте библиотеку перед повторной попыткой.';
+      'Это не удалось импортировать. Поддерживаются папки, ZIP-архивы и отдельные файлы модов (*_P.pak, .utoc/.ucas, .lcache, .bank, PrecompiledScript*.Cache). Сначала распакуйте .7z или .rar, затем импортируйте папку. Мод всё же мог быть добавлен или обновлён — обновите список, прежде чем пробовать снова.';
 
   @override
   String get importPickerFailed =>
-      'Не удалось открыть окно выбора файла или папки. Импорт не был запущен. Повторите попытку.';
+      'Не удалось открыть выбор файлов. Ничего не импортировано.';
 
   @override
   String get importOutcomeUnknown =>
-      'Не удалось проверить результат импорта. Нажмите «Обновить», чтобы проверить библиотеку.';
+      'Результат неясен. Обновите, чтобы проверить список модов.';
 
   @override
-  String get applyTooltip => 'Применить набор модов к игре';
+  String get applyTooltip => 'Установить отмеченные моды в игру';
 
   @override
   String get undeployAllAction => 'Убрать всё из игры';
 
   @override
   String get undeployAllConfirm =>
-      'Удалить из игры всё, что развернул менеджер?';
+      'Убрать из игры все моды, установленные Manager?';
 
   @override
-  String get takeOverTitle => 'Активно развёртывание Studio';
+  String get takeOverTitle => 'Mod Studio активна';
 
   @override
   String get takeOverBody =>
-      'mod-studio развернуло мод в игре. Перехватить управление, чтобы менеджер применил этот набор?';
+      'Сейчас мод в игре стоит от Mod Studio. Перехватить управление, чтобы Manager применил ваш выбор?';
 
   @override
   String get takeOverAction => 'Перехватить';
@@ -491,61 +565,47 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String conflictsTitle(int count) {
-    return 'Результаты ($count)';
+    return 'Конфликты ($count)';
   }
 
   @override
-  String get conflictWinner => 'предполагаемый победитель';
+  String get conflictWinner => 'побеждает';
 
   @override
-  String get noConflicts => 'Распознанные конфликты отсутствуют.';
+  String get noConflicts => 'Конфликтов не найдено.';
 
   @override
   String get conflictCoverageIncomplete =>
-      'Сведения о конфликтах включённых модов неполны; возможны дополнительные конфликты.';
+      'Некоторые моды нельзя проверить полностью, поэтому конфликтов может быть больше.';
 
   @override
   String get loadOrderDirection =>
-      'Порядок загрузки: сначала низкий приоритет; более поздние моды имеют более высокий предполагаемый приоритет.';
+      'Моды ниже по списку перекрывают те, что выше.';
 
   @override
   String get footprintCoverageScope =>
-      'Покрытие описывает только распознанные цели конфликтов и не доказывает приоритет во время выполнения.';
+      'Перечислены только известные цели конфликтов. Это не гарантия того, что будет в игре.';
 
   @override
-  String get footprintCoverageExact =>
-      'Точное — список целей конфликтов компонента полон.';
+  String get footprintTargetsExact => 'Затронутые записи — полный список:';
 
   @override
-  String get footprintCoveragePartial =>
-      'Частичное — указанные цели известны, но компонент может затрагивать и другие.';
+  String get footprintTargetsPartial =>
+      'Затронутые записи — могут быть и другие:';
 
   @override
-  String get footprintCoverageAdvisory =>
-      'Ориентировочное — указанные цели являются подсказками, а не исчерпывающим доказательством.';
+  String get footprintTargetsAdvisory =>
+      'Вероятно затронутые записи — подсказки, а не доказательство:';
 
   @override
-  String get footprintCoverageOpaque =>
-      'Непрозрачное — цели конфликтов компонента неизвестны.';
+  String get footprintTargetsOpaque =>
+      'GORE не может определить, что здесь меняется.';
 
   @override
-  String get footprintCoverageExactLabel => 'Точное';
+  String get conflictsUnverified => 'Конфликты неизвестны — сначала обновите.';
 
   @override
-  String get footprintCoveragePartialLabel => 'Частичное';
-
-  @override
-  String get footprintCoverageAdvisoryLabel => 'Ориентировочное';
-
-  @override
-  String get footprintCoverageOpaqueLabel => 'Непрозрачное';
-
-  @override
-  String get conflictsUnverified =>
-      'Конфликты не проверены, пока состояние библиотеки не обновлено.';
-
-  @override
-  String get componentsTitle => 'Компоненты';
+  String get componentsTitle => 'Что меняет этот мод';
 
   @override
   String targetsMore(int count) {
@@ -554,42 +614,43 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get removeModDeploymentHint =>
-      'Удаление из библиотеки не изменит существующее развёртывание сразу. Если мод уже развёрнут, затем нажмите «Применить», чтобы обновить установленную игру.';
+      'Это уберёт его только из вашего списка. Если он установлен в игре, затем нажмите «Применить».';
 
   @override
   String removeModSuccess(String name) {
-    return 'Мод «$name» удалён из библиотеки.';
+    return '«$name» удалён.';
   }
 
   @override
   String removeModFailed(String name) {
-    return 'Не удалось удалить мод «$name».';
+    return 'Не удалось удалить «$name».';
   }
 
   @override
   String removeModPartialFailure(String name) {
-    return 'Мод «$name» удалён, но библиотеку не удалось полностью обновить.';
+    return '«$name» удалён, но список не удалось обновить полностью.';
   }
 
   @override
   String removeModOutcomeUnknown(String name) {
-    return 'Не удалось проверить, был ли удалён мод «$name».';
+    return 'Не удалось подтвердить, был ли удалён «$name».';
   }
 
   @override
   String get libraryStateUnknown =>
-      'Не удалось проверить состояние библиотеки. Нажмите «Обновить» перед изменением или применением модов.';
+      'Список модов устарел. Обновите его, прежде чем менять или применять моды.';
 
   @override
   String get removeModAction => 'Удалить';
 
   @override
   String removeModConfirm(String name) {
-    return 'Удалить «$name» из библиотеки?';
+    return 'Удалить «$name» из вашего списка?';
   }
 
   @override
-  String get errorSetGamePath => 'Сначала укажите путь к игре в настройках.';
+  String get errorSetGamePath =>
+      'Сначала выберите установку Gothic в настройках.';
 
   @override
   String applyReportApplied(int count) {
@@ -597,37 +658,34 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
-  String get warningsTitle => 'Предупреждения';
-
-  @override
   String get modDisabledHint => 'Отключён';
 
   @override
-  String get kindGoremod => 'goremod';
+  String get kindGoremod => 'Пакет GORE';
 
   @override
-  String get kindTriplet => 'triplet';
+  String get kindTriplet => 'Мод IoStore';
 
   @override
-  String get kindPak => 'pak';
+  String get kindPak => 'Мод PAK';
 
   @override
   String get kindUe4ss => 'UE4SS';
 
   @override
-  String get kindRawfile => 'сырой файл';
+  String get kindRawfile => 'Замена файлов целиком';
 
   @override
-  String get kindMixed => 'смешанный';
+  String get kindMixed => 'Смешанный';
 
   @override
-  String get sevHard => 'серьёзный';
+  String get sevHard => 'Конфликт';
 
   @override
-  String get sevSoft => 'лёгкий';
+  String get sevSoft => 'Предупреждение';
 
   @override
-  String get sevInfo => 'инфо';
+  String get sevInfo => 'Заметка';
 
   @override
   String aboutVersion(String version, String sha) {
@@ -638,7 +696,7 @@ class AppLocalizationsRu extends AppLocalizations {
   String get about => 'О программе';
 
   @override
-  String get aboutCopyright => '© 2026 участники проекта GORE';
+  String get aboutCopyright => '© 2026 Daniel Hoer';
 
   @override
   String get aboutLicense => 'Распространяется по лицензии MIT.';
@@ -659,7 +717,7 @@ class AppLocalizationsRu extends AppLocalizations {
   String get themeSystem => 'Системная';
 
   @override
-  String get uiScale => 'Масштаб интерфейса';
+  String get uiScale => 'Размер интерфейса';
 
   @override
   String get resetZoomTooltip => 'Сбросить масштаб (Ctrl+0)';
