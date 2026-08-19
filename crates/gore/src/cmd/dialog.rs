@@ -1,8 +1,9 @@
 //! `gore dialog` — read the game's dialog trees.
 //!
-//! Everything here is offline and read-only. The tree comes out of the installed shipping script
-//! cache; the text comes out of the shared localization catalog that `gore loc extract` writes.
-//! Neither the game nor a save is touched, and nothing is deployed.
+//! Everything here works offline and only ever reads the installation. The tree comes out of the
+//! shipping script cache; the text comes out of the shared localization catalog that `gore loc
+//! extract` writes. Nothing here launches the game, writes into the install, touches a save, or
+//! deploys; `text`, `new-topic` and `export` write only where they are pointed.
 //!
 //! What the cache declares is not the same as what a player sees: a topic's rules and its
 //! `IsVisible` override decide that per save state, and this command deliberately reports both
@@ -90,6 +91,34 @@ pub enum DialogAction {
         #[arg(long)]
         game: Option<PathBuf>,
     },
+    /// Scaffold a new dialog option for one NPC: the AngelScript source and a build spec
+    NewTopic {
+        /// Participant identifier (`om_stt_viper_302`), part of one, or a module name
+        npc: String,
+        /// The menu text, as an untranslated literal
+        #[arg(
+            long,
+            conflicts_with = "caption_key",
+            required_unless_present = "caption_key"
+        )]
+        caption: Option<String>,
+        /// The menu text's localization key, for a translatable option
+        #[arg(long)]
+        caption_key: Option<String>,
+        /// AngelScript class name for the new option
+        #[arg(long)]
+        class: Option<String>,
+        /// Mod name, used for the module, the file path, and the bundle
+        #[arg(long, default_value = "MyDialogMod")]
+        mod_name: String,
+        /// Output directory for the source and the build spec
+        #[arg(short = 'o', long)]
+        out: PathBuf,
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        #[arg(long)]
+        game: Option<PathBuf>,
+    },
     /// Write every conversation to a directory, one JSON file each
     Export {
         /// Output directory. Created if absent; existing files are overwritten
@@ -133,6 +162,25 @@ pub fn run(action: DialogAction) -> Result<()> {
             cache,
             game,
         } => text_edits(&npc, &lang, &out, cache, game),
+        DialogAction::NewTopic {
+            npc,
+            caption,
+            caption_key,
+            class,
+            mod_name,
+            out,
+            cache,
+            game,
+        } => new_topic(NewTopicRequest {
+            npc,
+            caption,
+            caption_key,
+            class,
+            mod_name,
+            out,
+            cache,
+            game,
+        }),
         DialogAction::Export { out, cache, game } => export(&out, cache, game),
     }
 }
@@ -155,9 +203,14 @@ fn cache_path(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<PathBuf> 
     Ok(paths.script_cache)
 }
 
-fn read_graph(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<DialogGraph> {
+fn read_cache(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<(PathBuf, Vec<u8>)> {
     let path = cache_path(cache, game)?;
     let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+    Ok((path, bytes))
+}
+
+fn read_graph(cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<DialogGraph> {
+    let (path, bytes) = read_cache(cache, game)?;
     dialog::build(&bytes).with_context(|| format!("reading dialog from {}", path.display()))
 }
 
@@ -910,6 +963,224 @@ fn text_edits(
     Ok(())
 }
 
+// ─── new-topic ───────────────────────────────────────────────────────────────
+
+pub struct NewTopicRequest {
+    pub npc: String,
+    pub caption: Option<String>,
+    pub caption_key: Option<String>,
+    pub class: Option<String>,
+    pub mod_name: String,
+    pub out: PathBuf,
+    pub cache: Option<PathBuf>,
+    pub game: Option<PathBuf>,
+}
+
+/// Keep only the characters an AngelScript identifier may carry.
+fn identifier(text: &str) -> String {
+    let mut out = String::new();
+    let mut capitalize = true;
+    for character in text.chars() {
+        if character.is_ascii_alphanumeric() {
+            if capitalize {
+                out.extend(character.to_uppercase());
+                capitalize = false;
+            } else {
+                out.push(character);
+            }
+        } else {
+            capitalize = true;
+        }
+    }
+    out
+}
+
+/// The vanilla topic that proves the live topic set belongs to this conversation.
+///
+/// The exit option is the right one: every conversation has it, it is always in the root menu,
+/// and it is never conditional. Falling back to the first root keeps a conversation with an
+/// unusual exit usable, and no conversation at all means there is nothing to attach to.
+fn sentinel_of(conversation: &Conversation) -> Option<&Topic> {
+    let roots: Vec<&Topic> = conversation
+        .roots
+        .iter()
+        .filter_map(|class| conversation.topic(class))
+        .collect();
+    roots
+        .iter()
+        .find(|topic| {
+            topic.act.len() == 1
+                && matches!(topic.act[0].kind, StepKind::EndConversation)
+                && matches!(topic.visibility, Visibility::Always)
+                && topic.rules.is_empty()
+        })
+        .or_else(|| roots.first())
+        .copied()
+}
+
+/// Every class the cache already declares, for a collision check on the authored name.
+fn declared_classes(bytes: &[u8]) -> Result<BTreeSet<String>> {
+    let modules = gore_as::cache::model::parse_modules(bytes)
+        .map_err(|error| anyhow::anyhow!("parsing the script cache: {error}"))?;
+    Ok(modules
+        .iter()
+        .flat_map(|module| module.classes.iter())
+        .map(|class| class.name.to_lowercase())
+        .collect())
+}
+
+fn new_topic(request: NewTopicRequest) -> Result<()> {
+    let (_, bytes) = read_cache(request.cache, request.game)?;
+    let graph = dialog::build(&bytes).context("reading dialog from the script cache")?;
+    let conversation = resolve_one(&graph, &request.npc)?;
+
+    let Some(root_class) = conversation.root_class.clone() else {
+        bail!(
+            "{} declares no dialog topics, so there is no base class to derive from",
+            participant_label(conversation)
+        );
+    };
+    let Some(sentinel) = sentinel_of(conversation) else {
+        bail!(
+            "{} has no root option to use as the registration sentinel",
+            participant_label(conversation)
+        );
+    };
+    let Some(participant) = conversation.npc_participants().next() else {
+        bail!("{} names no NPC participant", conversation.module);
+    };
+
+    let slug = identifier(&request.mod_name);
+    if slug.is_empty() {
+        bail!("--mod-name has to contain at least one letter or digit");
+    }
+    let class = match &request.class {
+        Some(name) => name.clone(),
+        None => format!("UChoice{slug}"),
+    };
+    if !class.starts_with('U') {
+        bail!("an AngelScript topic class name has to start with `U`, unlike {class:?}");
+    }
+    let declared = declared_classes(&bytes)?;
+    if declared.contains(&class.to_lowercase()) {
+        bail!("the cache already declares a class called {class:?}. Pass a different --class");
+    }
+
+    let module = format!("{}.Dialog", request.mod_name);
+    let rel_path = format!("{}/Dialog.as", request.mod_name);
+    let helper = format!("{}Caption", class.trim_start_matches('U'));
+    let caption_line = match (&request.caption, &request.caption_key) {
+        (Some(text), _) => format!(
+            "    default Caption = {helper}(n{});",
+            serde_json::to_string(text)?
+        ),
+        (_, Some(key)) => format!(
+            "    default Caption = LocText({});",
+            serde_json::to_string(key)?
+        ),
+        _ => bail!("pass --caption or --caption-key"),
+    };
+    let helper_block = if request.caption.is_some() {
+        format!(
+            "FText {helper}(const FName Text)\n{{\n    return FText::FromString(Text.ToString());\n}}\n\n"
+        )
+    } else {
+        String::new()
+    };
+
+    let source = format!(
+        "// Generated by `gore dialog new-topic` for {participant}.\n\
+         //\n\
+         // The class derives from the conversation's own topic base, so the engine treats it as\n\
+         // one of that NPC's options. The body below is the shape with runtime evidence behind\n\
+         // it: a caption, an always-visible option, and an act that ends the conversation.\n\
+         // Spoken lines, conditions and effects are yours to add — see\n\
+         // `gore dialog show <topic>` for how the game writes them.\n\
+         \n\
+         {helper_block}class {class} : {root_class}\n\
+         {{\n\
+         {caption_line}\n\
+         \x20   default PriorityRank = 2;\n\
+         \n\
+         \x20   UFUNCTION()\n\
+         \x20   bool IsVisible_Implementation()\n\
+         \x20   {{\n\
+         \x20       return true;\n\
+         \x20   }}\n\
+         \n\
+         \x20   UFUNCTION()\n\
+         \x20   void Act_Implementation()\n\
+         \x20   {{\n\
+         \x20       this.EndConversation();\n\
+         \x20   }}\n\
+         }}\n"
+    );
+
+    let spec = serde_json::json!({
+        "meta": {
+            "name": request.mod_name,
+            "version": "0.1.0",
+            "author": "",
+        },
+        "scripts": [{
+            "op": "add",
+            "module_name": module,
+            "mini_cache": format!("{module}.mini.Cache"),
+        }],
+        "dialog_topics": [{
+            "id": slug.to_lowercase(),
+            "participant_name": participant.to_lowercase(),
+            "topic_class": format!("/Script/Angelscript.{}", class.trim_start_matches('U')),
+            "sentinel_class": format!(
+                "/Script/Angelscript.{}",
+                sentinel.class.trim_start_matches('U')
+            ),
+        }],
+    });
+
+    let source_path = request.out.join(&request.mod_name).join("Dialog.as");
+    if let Some(parent) = source_path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
+    fs::write(&source_path, source)
+        .with_context(|| format!("writing {}", source_path.display()))?;
+    let spec_path = request.out.join("spec.json");
+    fs::write(
+        &spec_path,
+        format!("{}\n", serde_json::to_string_pretty(&spec)?),
+    )
+    .with_context(|| format!("writing {}", spec_path.display()))?;
+
+    if let Some(text) = &request.caption {
+        if !text.is_ascii() {
+            println!(
+                "note: {text:?} is an untranslated literal with non-ASCII characters, which no                  GORE run has compiled yet. --caption-key with a real localization id is the                  route with evidence behind it."
+            );
+        }
+    }
+    println!("wrote {}", source_path.display());
+    println!("wrote {}", spec_path.display());
+    println!();
+    println!("class     {class} : {root_class}");
+    println!("sentinel  {}", sentinel.class);
+    println!("next:");
+    println!(
+        "  gore as compile-module --op add --module {module} --rel-path {rel_path} \\\n\
+         \x20   --source {} --work-dir .gore-as-work --allow-new-symbols \\\n\
+         \x20   -o {}",
+        source_path.display(),
+        request.out.join(format!("{module}.mini.Cache")).display()
+    );
+    println!("  gore mod build --spec {} -o build", spec_path.display());
+    println!("  gore mod deploy --bundle build/{}", request.mod_name);
+    println!();
+    println!(
+        "the compile step drives the game's own compiler, so it needs the game installed and \
+         takes a couple of minutes"
+    );
+    Ok(())
+}
+
 // ─── export ──────────────────────────────────────────────────────────────────
 
 fn export(out: &PathBuf, cache: Option<PathBuf>, game: Option<PathBuf>) -> Result<()> {
@@ -1045,6 +1316,66 @@ mod tests {
             ordered_keys(&conversation),
             vec!["CAP_A".to_owned(), "CAP_B".to_owned()]
         );
+    }
+
+    #[test]
+    fn an_identifier_keeps_only_what_angelscript_accepts() {
+        assert_eq!(identifier("My Dialog Mod"), "MyDialogMod");
+        assert_eq!(identifier("viper-work_2"), "ViperWork2");
+        assert_eq!(
+            identifier("für"),
+            "FR",
+            "non-ascii is dropped, not transliterated"
+        );
+        assert_eq!(identifier("---"), "");
+    }
+
+    #[test]
+    fn the_exit_option_is_the_registration_sentinel() {
+        let conversation = Conversation {
+            module: "M".to_owned(),
+            root_class: Some("URoot".to_owned()),
+            participants: vec!["Hero".to_owned(), "NPC".to_owned()],
+            topics: vec![
+                topic("UTalk", "CAP_TALK", vec![say("LINE")]),
+                topic("UExit", "CAP_EXIT", vec![StepKind::EndConversation]),
+            ],
+            roots: vec!["UTalk".to_owned(), "UExit".to_owned()],
+            coverage: Default::default(),
+        };
+        assert_eq!(
+            sentinel_of(&conversation).map(|topic| topic.class.as_str()),
+            Some("UExit")
+        );
+    }
+
+    #[test]
+    fn without_an_exit_option_the_first_root_stands_in() {
+        let conversation = Conversation {
+            module: "M".to_owned(),
+            root_class: Some("URoot".to_owned()),
+            participants: vec!["Hero".to_owned(), "NPC".to_owned()],
+            topics: vec![topic("UTalk", "CAP_TALK", vec![say("LINE")])],
+            roots: vec!["UTalk".to_owned()],
+            coverage: Default::default(),
+        };
+        assert_eq!(
+            sentinel_of(&conversation).map(|topic| topic.class.as_str()),
+            Some("UTalk")
+        );
+    }
+
+    #[test]
+    fn a_conversation_without_topics_has_no_sentinel() {
+        let conversation = Conversation {
+            module: "M".to_owned(),
+            root_class: None,
+            participants: vec!["NPC".to_owned()],
+            topics: Vec::new(),
+            roots: Vec::new(),
+            coverage: Default::default(),
+        };
+        assert!(sentinel_of(&conversation).is_none());
     }
 
     #[test]

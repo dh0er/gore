@@ -36,6 +36,9 @@ evidence behind it ([voice.md](voice.md)).
 Read the NPC's existing conversation first — `gore dialog tree <npc>` prints
 every option it already has, with the classes to derive from and the
 localization keys its lines use ([Reading dialog trees](dialog-trees.md)).
+`gore dialog new-topic` writes the template below with the base class,
+participant and sentinel already filled in from that tree; the rest of this
+page is what happens to it afterwards.
 
 Derive from the existing conversation root for the target NPC. This exact
 caption pattern avoids relying on the currently lossy decompilation of the

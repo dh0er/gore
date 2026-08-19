@@ -163,7 +163,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   from the shared localization catalog; `--lang` picks the language.
 - `dialog text` — one conversation's lines as a `gore loc import` edits
   document, each under the localization column the game actually reads.
-- `gore_dialog` MCP tool for the same five subcommands.
+- `dialog new-topic` — scaffold a new root-level dialog option: the AngelScript
+  source derived from that conversation's own topic base, and a build spec with
+  the participant and registration sentinel filled in from the cache.
+- `gore_dialog` MCP tool for the same six subcommands.
 
 ## [0.1.0] - 2026-08-18
 

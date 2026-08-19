@@ -677,6 +677,55 @@ const DIALOG_TEXT_ARGS: &[ArgSpec] = &[
     DIALOG_CACHE_ARGS[1],
 ];
 
+const DIALOG_NEW_TOPIC_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "npc",
+        Positional { order: 0 },
+        Str,
+        "Participant identifier (`om_stt_viper_302`), part of one, or a module name",
+        true,
+    ),
+    ArgSpec::new(
+        "caption",
+        Long("caption"),
+        Str,
+        "The menu text, as an untranslated literal",
+        false,
+    ),
+    ArgSpec::new(
+        "caption_key",
+        Long("caption-key"),
+        Str,
+        "The menu text's localization key, for a translatable option",
+        false,
+    ),
+    ArgSpec::new(
+        "class",
+        Long("class"),
+        Str,
+        "AngelScript class name for the new option",
+        false,
+    )
+    .with_default("UChoice<mod name>"),
+    ArgSpec::new(
+        "mod_name",
+        Long("mod-name"),
+        Str,
+        "Mod name, used for the module, the file path, and the bundle",
+        false,
+    )
+    .with_default("MyDialogMod"),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Output directory for the source and the build spec",
+        true,
+    ),
+    DIALOG_CACHE_ARGS[0],
+    DIALOG_CACHE_ARGS[1],
+];
+
 const DIALOG_COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(
         "list",
@@ -713,6 +762,17 @@ const DIALOG_COMMANDS: &[CommandSpec] = &[
         Safety::write_truncating(&["out"]),
         T_NORMAL,
     )
+    .guide("dialog-trees"),
+    // Two new files under a directory the caller picks: the authored source and a build spec.
+    // Both are overwritten if they are already there, and the game install is only read.
+    CommandSpec::new(
+        "new-topic",
+        "Scaffold a new dialog option for one NPC: the AngelScript source and a build spec",
+        DIALOG_NEW_TOPIC_ARGS,
+        Safety::write().writes_into(&["out"]),
+        T_NORMAL,
+    )
+    .exactly_one(&[&["caption", "caption_key"]])
     .guide("dialog-trees"),
     // One JSON file per conversation, named after the module, in a directory the caller picks.
     // Nothing else is touched, and the game install is only read.

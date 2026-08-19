@@ -11,12 +11,14 @@ gore dialog tree om_stt_viper_302         # the whole tree
 gore dialog tree brannok --lang german    # in German
 gore dialog show ChoiceStt302ViperMelt    # one option in full
 gore dialog text viper -o viper.json      # its lines, ready to edit and re-import
+gore dialog new-topic viper --caption-key K --mod-name MyMod -o MyMod   # a new option
 gore dialog export -o dialog\             # every conversation as JSON
 ```
 
-Everything here is offline and read-only. It needs the game installed (that is
-where the script cache lives) but never launches it, never writes to it, and
-never touches a save.
+Everything here works offline. It needs the game installed — that is where the
+script cache lives — but only ever reads it: no command on this page launches
+the game, writes into the install, or touches a save. The three that produce
+something write it where you point them.
 
 ## What a tree looks like
 
@@ -115,6 +117,50 @@ entirely.
 
 This changes wording only. Which options exist, what unlocks them, and what
 they do live in the script cache, not in the localization cache.
+
+## Adding an option
+
+`gore dialog new-topic` writes the two files a new root-level option needs,
+with the identities filled in from the tree:
+
+```powershell
+gore dialog new-topic om_stt_viper_302 --caption-key STT_302_VIPER_WORK_INFO_15_01 `
+  --mod-name ViperWork -o ViperWork
+```
+
+```
+class     UChoiceViperWork : UTopic_Hero__OM_STT_VIPER_302
+sentinel  UChoiceStt302ViperExit
+```
+
+Those two lines are the part worth automating. The class has to derive from
+that conversation's own topic base, and the bundle's registration needs a
+*sentinel* — an existing vanilla topic that proves the live topic set belongs to
+this NPC. The command reads both out of the cache and picks the conversation's
+exit option as the sentinel, since every conversation has one and it is never
+conditional. It also refuses a class name the cache already declares.
+
+The generated `Dialog.as` is the shape with runtime evidence behind it: a
+caption, an always-visible option, and a body that ends the conversation.
+Spoken lines, conditions and effects are yours to write — `gore dialog show`
+prints how the game writes its own. The generated `spec.json` is a complete
+build spec, so the next two commands are the ordinary ones:
+
+```powershell
+gore as compile-module --op add --module ViperWork.Dialog `
+  --rel-path ViperWork/Dialog.as --source ViperWork\Dialog.as `
+  --work-dir .gore-as-work --allow-new-symbols -o ViperWork.Dialog.mini.Cache
+gore mod build --spec ViperWork\spec.json -o build
+```
+
+The command prints them with the paths filled in. Compiling drives the game's
+own compiler, so it needs the game installed and takes a couple of minutes;
+what that path proves and what it does not is
+[Dialog authoring](dialog-authoring.md).
+
+This adds an option to the **root** menu. Putting one inside an existing
+sub-menu means changing the vanilla conversation module itself, which is a
+different and unproven operation.
 
 ## Conditions, in the game's own vocabulary
 
