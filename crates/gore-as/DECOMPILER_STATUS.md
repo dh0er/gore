@@ -1,13 +1,82 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: complete body coverage for the measured 2026-07-12 build 24169431 baseline, but not
-lossless.** The current emitter reconstructs every ordinary function body it writes from the
-shipped cache. When it cannot prove that a body is correct, it still keeps the declaration and
-emits a clearly marked, signature-preserving stub instead of silently inventing logic; the measured
-24169431 cache has no such fallback body. This retained historical measurement is not a current-build
-qualification.
+**Status: every module decompiles, the whole tree recompiles, and 90.26% of it is byte-faithful.**
+The emitter reconstructs every function body it writes from the shipped cache; when it cannot
+prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
+stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
+every recompiled body is identical to vanilla — the section below says exactly how much is, how it
+was measured, and what is left.
 
-## Retained measured baseline
+## What is measured, and on what
+
+Measured 2026-08-20 against build `Build55_CL171864` (script cache SHA-256
+`D0AFAF909E62867FAEDC3678A1175F5E8DE5E784DC503A14FFBDE4726F297231`, GUID
+`be78fe0a46ac6643968597e85c7e5b3f`). This build is not one of the audited generations, so the
+numbers qualify the DECOMPILER, not the build.
+
+Everything except the splice test runs over the **whole corpus** — all 7,308 modules, all 164,604
+functions the vanilla and regenerated caches align:
+
+| Measurement | Scope | Result |
+|-------------|-------|--------|
+| Modules emitted, fallback stubs | full corpus | 7,308 modules, **0 stubs** |
+| Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
+| Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,604 functions | **90.26%** (`IDENTICAL`+`BENIGN`) |
+| Splice back (`extract-remap`) | **627-module random sample (8.6%)** | 625 (99.7%) |
+
+The splice test is the one sampled measurement: each run re-reads both 100+ MB caches (~3.4 s per
+module), so a full sweep takes about five hours. Partial sweeps of 999 and 627 modules on earlier
+builds of this work produced the same failure rate (0.3–0.5%).
+
+## What is left
+
+**16,040 functions (9.74%) recompile to bytecode that differs semantically**, spread over 1,949 of
+the 7,308 modules. A semantic difference means *not proven identical*, not *proven wrong*: the
+whole-tree compile proves the source type-checks, and `bytediff` normalizes away reference keys,
+jump absolutes, constant encodings and (opt-in) slot allocation before judging the rest.
+
+| Class | Functions |
+|-------|-----------|
+| Conversion-op count differs (enum↔int casts the emitter inserts) | 5,076 |
+| Residual divergence, unclassified | 10,467 |
+| Other classified hints | 497 |
+| **Total** | **16,040** |
+
+Cutting across those classes, 37 of them are `__InitDefaults`. By size of the divergence: 231 are three instructions or fewer, 981 are 4–10, 8,486 are 11–50, and
+6,342 are longer than 50 — those last are whole bodies with a different shape, and they are where
+the remaining work is. The 37 `__InitDefaults` are dominated by a float constant the language
+cannot spell: AngelScript has no infinity literal, so `+inf` is written as the largest finite float
+and comes back one ULP low.
+
+**Three functions are never emitted at all** (only-in-vanilla, everything else aligns):
+`UAICombatRoleSystem::FindRoleGroup`, `UG1RDialogTopic::GetG1R`, `UG1RQuest::GetG1R`.
+
+**Two of the 627 sampled modules cannot be spliced back.** One instantiates a
+`TSoftObjectPtr<AActor>` the base cache never had; the other iterates a `TArray` whose element type
+the base has no `Iterator` row for at all, through a NATIVE getter whose signature the emit run
+cannot see (it runs without `Binds.Cache`).
+
+**A caveat about the diagnostic view:** `gore as decompile` renders without local types or class
+fields, so it shows casts and dropped stores that the real `emit` path handles correctly. Never
+diagnose an emit problem from it — use `as emit` (and `GORE_AS_DEFAULTS_DEBUG=1` for defaults).
+
+Reproduce the whole-corpus numbers with:
+
+```text
+gore as emit-all <vanilla cache> <tree>
+gore as compile <tree> -o <regen cache> --game <install>
+gore as bytediff <vanilla cache> <regen cache> --norm-slots
+gore as bytediff <vanilla cache> <regen cache> --norm-slots --verdict semantic
+```
+
+and the sampled one by running `gore as extract-remap <regen cache> <module> <vanilla cache>` per
+module. The regen cache a `compile` run leaves in `<work-dir>/tree/regen.cache` works for that too,
+so the loop costs seconds per module instead of a game launch.
+
+## Retained measured baseline (historical, 2026-07-12)
+
+Kept for the record: the earlier build's numbers, superseded by the run above.
 
 Measured on 2026-07-12 against build 24169431, the then-current hotfix
 `PrecompiledScript_Shipping.Cache` (SHA-256
@@ -100,10 +169,7 @@ requires reconstructing its body manually or first extending the decompiler.
 
 ## Class defaults
 
-Measured on 2026-08-20 against build `Build55_CL171864` (script cache SHA-256
-`D0AFAF909E62867FAEDC3678A1175F5E8DE5E784DC503A14FFBDE4726F297231`, GUID
-`be78fe0a46ac6643968597e85c7e5b3f`) with the matching `Binds.Cache` loaded. This build is not one
-of the audited generations, so these numbers qualify the decompiler, not the build.
+Same run as "What is measured, and on what" above — full corpus, build `Build55_CL171864`.
 
 | Metric | Value |
 |--------|-------|
@@ -170,8 +236,9 @@ thumb: a type that has a copy constructor is declared with its initializer, a ty
 default constructor and an `opAssign` keeps the hoisted declaration and its assignment. Both
 shapes compile; only the one the base cache has a row for can be spliced back.
 
-Measured over a 627-module random sample, `extract-remap` against the base cache succeeds for 625
-(**99.7%**). The same measurement scored 43 of 60 before the identity work and 58 of 60 after it.
+Measured over the 627-module random sample (the one sampled measurement — see the top of this
+document), `extract-remap` against the base cache succeeds for 625 (**99.7%**). The same
+measurement scored 43 of 60 before the identity work and 58 of 60 after it.
 
 A method's RETURN `const` is part of its identity and is emitted again. It used to be stripped
 because the cache sets the flag inconsistently across an override family, and a family has to
@@ -240,12 +307,13 @@ as the largest finite float and comes back one ULP low.
 
 ## Root causes and next work
 
-1. **Generated defaults are retained; direct scalars have a narrow offline patch path.**
-   `compile-module --op edit` carries
-   existing `__InitDefaults` plus every emitter-omitted executable record only after exact
-   header/tail/reference, declaration/layout, method-table, and cache-wide collision proofs. An
-   authored CDO `default` token, new-symbol remap, unsupported `__*` shape, or any metadata drift
-   fails closed before publishing a mini-cache. `gore as default-sites` and `patch-default` can
+1. **Class defaults are authored; generated defaults are still the fallback, and direct scalars
+   keep their narrow offline patch path.** Every module in the shipped corpus writes its own
+   `default` statements, so an edit goes through the source. `compile-module --op edit` still
+   carries existing `__InitDefaults` plus every emitter-omitted executable record for a module
+   that authors none, and only after exact header/tail/reference, declaration/layout,
+   method-table, and cache-wide collision proofs. A new-symbol remap, unsupported `__*` shape, or
+   any metadata drift fails closed before publishing a mini-cache. `gore as default-sites` and `patch-default` can
    inspect and copy-on-write patch only a unique, branch-free
    `SetV{1,2,4,8} / LoadThisR / WRTV{1,2,4,8}` scalar assignment with exact field-type evidence
    (including parsed-kind proof for script enums),
@@ -255,9 +323,9 @@ as the largest finite float and comes back one ULP low.
    `patch-tag-map` can inspect and copy-on-write patch only an already-present entry in the sealed
    native `GameplayTag`-to-`float32` map shape; they cannot add a key or map, resize bytecode, or
    author arbitrary map defaults. See
-   [`docs/guide/angelscript-defaults.md`](../../docs/guide/angelscript-defaults.md). A faithful
-   source representation is still required before arbitrary class-default authoring can be
-   claimed; new modules may continue to use explicit defaults through `--op add`.
+   [`docs/guide/angelscript-defaults.md`](../../docs/guide/angelscript-defaults.md). That scalar
+   workflow is now the narrow path, not the only one: arbitrary class defaults are authored in
+   source and recompiled.
 2. **Whole-tree compiler gate -- passed for the then-current installed 1.0.3 hotfix.** The shipping
    build suppresses AngelScript diagnostics from
    stdout and UE file logs, so `gore as compile` now uses a hotfix-safe signature scan plus a sparse
