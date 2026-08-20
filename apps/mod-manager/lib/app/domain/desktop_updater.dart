@@ -170,20 +170,30 @@ bool _isNewer(String latest, String current) {
 /// open the releases page in the browser. When [silentIfNoUpdate] is false
 /// (manual check), also reports the up-to-date and failure cases.
 Future<void> _runPortableCheck({required bool silentIfNoUpdate}) async {
-  final active = _activePortableCheck;
-  if (active != null) {
-    // A background tick yields: its whole point is to be unobtrusive, and the
-    // running check already covers this hour. A manual check must not be
-    // dropped — the button promises a result — so it waits its turn instead.
-    if (silentIfNoUpdate) return;
+  // A background tick yields: its whole point is to be unobtrusive, and the
+  // running check already covers this hour.
+  if (silentIfNoUpdate && _activePortableCheck != null) return;
+  // A manual check must report a result, so it waits its turn rather than
+  // being dropped. It re-reads the slot after each wait: the Settings button
+  // stays enabled while a check runs, so a second click can queue on the same
+  // future, and both would otherwise wake up and start overlapping checks.
+  var active = _activePortableCheck;
+  while (active != null) {
     await active;
+    active = _activePortableCheck;
   }
-  final check = _runPortableCheckOnce(silentIfNoUpdate: silentIfNoUpdate);
-  _activePortableCheck = check;
+  // Claim the slot before the check's first suspension point. Assigning the
+  // check's own future would leave a gap — the async body runs up to its first
+  // await before returning — in which a second waiter could claim it too.
+  final done = Completer<void>();
+  _activePortableCheck = done.future;
   try {
-    await check;
+    await _runPortableCheckOnce(silentIfNoUpdate: silentIfNoUpdate);
   } finally {
-    if (identical(_activePortableCheck, check)) _activePortableCheck = null;
+    if (identical(_activePortableCheck, done.future)) {
+      _activePortableCheck = null;
+    }
+    done.complete();
   }
 }
 
