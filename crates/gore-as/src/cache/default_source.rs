@@ -37,10 +37,10 @@ pub(crate) enum DefaultsRecovery {
 /// const-store markers. None of them may survive into source.
 const SENTINELS: [char; 4] = ['\u{1}', '\u{2}', '\u{3}', '\u{4}'];
 
-/// Statement bound for one initializer. Temporary folding rescans the statement list, so cost
-/// grows with the square of this; the bodies beyond it are machine-generated tables, not
-/// authored defaults.
-const MAX_STATEMENTS: usize = 8_192;
+/// Statement bound for one initializer, overridable per run through
+/// `GORE_AS_MAX_DEFAULT_STATEMENTS`. The default covers the whole shipped corpus — the largest
+/// body is the main map's worldpoint table at ~190k statements.
+const MAX_STATEMENTS: usize = 200_000;
 
 /// Recover the default statements from a fully rendered `__InitDefaults` method — signature line,
 /// braces, hoisted local declarations and all, exactly as the function emitter produced it.
@@ -66,9 +66,13 @@ pub(crate) fn recover(rendered_method: &str) -> DefaultsRecovery {
             return DefaultsRecovery::Rejected(format!("statement is not terminated: {statement}"));
         }
     }
-    if statements.len() > MAX_STATEMENTS {
+    let max_statements = std::env::var("GORE_AS_MAX_DEFAULT_STATEMENTS")
+        .ok()
+        .and_then(|raw| raw.parse().ok())
+        .unwrap_or(MAX_STATEMENTS);
+    if statements.len() > max_statements {
         return DefaultsRecovery::Rejected(format!(
-            "body has {} statements, over the {MAX_STATEMENTS} recovery bound",
+            "body has {} statements, over the {max_statements} recovery bound",
             statements.len()
         ));
     }
@@ -194,39 +198,126 @@ fn is_temporary_name(name: &str) -> bool {
 /// Fold every `local_N = <expr>;` back into the single expression that consumes it, so the body
 /// becomes the sequence of source-level default statements that produced it. Runs to a fixpoint;
 /// a temporary that cannot be folded without changing evaluation is a rejection, never a guess.
+use std::collections::HashMap;
+
+/// Where each compiler temporary appears, so the fold does not have to re-scan the whole body for
+/// every one of them. Statements are only ever rewritten in place until the fold ends, so a
+/// statement's position is a stable key.
+struct TemporaryIndex {
+    /// name -> (statement index, occurrence count), ascending by index.
+    occurrences: HashMap<String, Vec<(usize, usize)>>,
+    /// name -> statement indices that DEFINE it, ascending.
+    definitions: HashMap<String, Vec<usize>>,
+}
+
+impl TemporaryIndex {
+    fn build(statements: &[String]) -> Self {
+        let mut occurrences: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
+        let mut definitions: HashMap<String, Vec<usize>> = HashMap::new();
+        for (index, statement) in statements.iter().enumerate() {
+            for (name, count) in temporary_occurrences(statement) {
+                occurrences.entry(name).or_default().push((index, count));
+            }
+            if let Some((name, _)) = temporary_definition(statement) {
+                definitions.entry(name.to_owned()).or_default().push(index);
+            }
+        }
+        Self {
+            occurrences,
+            definitions,
+        }
+    }
+
+    /// The next statement that redefines `name` after `from`, or `len`.
+    fn next_definition(&self, name: &str, from: usize, len: usize) -> usize {
+        self.definitions
+            .get(name)
+            .and_then(|indices| indices.iter().find(|index| **index > from).copied())
+            .unwrap_or(len)
+    }
+
+    /// Occurrences of `name` strictly between `from` and `until`.
+    fn uses_between(&self, name: &str, from: usize, until: usize) -> Vec<(usize, usize)> {
+        self.occurrences
+            .get(name)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter(|(index, _)| *index > from && *index < until)
+                    .copied()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Record that a statement changed from `before` to `after` at `index`. Folding a value in
+    /// carries that value's own temporaries along, so they have to be registered here.
+    fn refresh(&mut self, index: usize, before: &str, after: &str) {
+        self.forget(index, before);
+        for (name, count) in temporary_occurrences(after) {
+            let entries = self.occurrences.entry(name).or_default();
+            let at = entries.partition_point(|(other, _)| *other < index);
+            entries.insert(at, (index, count));
+        }
+    }
+
+    /// Drop the occurrences `statement` contributed at `index` — only the names it mentions are
+    /// touched, so a body with a hundred thousand temporaries stays linear.
+    fn forget(&mut self, index: usize, statement: &str) {
+        for (name, _) in temporary_occurrences(statement) {
+            if let Some(entries) = self.occurrences.get_mut(&name) {
+                entries.retain(|(other, _)| *other != index);
+            }
+        }
+    }
+}
+
+/// Every compiler temporary a statement mentions, with how often — string literals excluded.
+fn temporary_occurrences(statement: &str) -> Vec<(String, usize)> {
+    let mask = mask_literals(statement);
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    let mut index = 0usize;
+    while index + 6 <= mask.len() {
+        if &mask[index..index + 6] != b"local_" {
+            index += 1;
+            continue;
+        }
+        if index > 0 && is_word_byte(mask[index - 1]) {
+            index += 1;
+            continue;
+        }
+        let mut end = index;
+        while end < mask.len() && is_word_byte(mask[end]) {
+            end += 1;
+        }
+        let word = &statement[index..end];
+        if is_temporary_name(word) {
+            *counts.entry(word.to_owned()).or_default() += 1;
+        }
+        index = end.max(index + 1);
+    }
+    counts.into_iter().collect()
+}
+
 fn fold_temporaries(statements: &mut Vec<String>) -> Result<(), String> {
-    // Bound: every iteration removes exactly one statement.
-    for _ in 0..statements.len().saturating_add(1) {
-        let Some(index) = statements
-            .iter()
-            .position(|s| temporary_definition(s).is_some())
+    // One left-to-right pass: folding a definition only rewrites statements AFTER it, so a
+    // definition the cursor has passed can never become foldable again. A consumed definition is
+    // left as an empty string and dropped at the end — removing it from the middle of the vector
+    // instead made the pass quadratic, which is why the machine-generated map tables (200k
+    // statements) could not be recovered at all.
+    let mut occurrences = TemporaryIndex::build(statements);
+    let mut index = 0usize;
+    while index < statements.len() {
+        let Some((name, value)) = temporary_definition(&statements[index])
+            .map(|(name, value)| (name.to_string(), value.to_string()))
         else {
-            return Ok(());
+            index += 1;
+            continue;
         };
-        let (name, value) = temporary_definition(&statements[index])
-            .map(|(n, v)| (n.to_string(), v.to_string()))
-            .expect("position matched a definition");
         // Uses are only the ones before the temporary is redefined; a later definition owns the
-        // uses after it and is folded by its own iteration.
-        let mut region_end = statements.len();
-        for (offset, statement) in statements.iter().enumerate().skip(index + 1) {
-            if temporary_definition(statement).is_some_and(|(n, _)| n == name) {
-                region_end = offset;
-                break;
-            }
-        }
-        let mut uses = Vec::new();
-        for (offset, statement) in statements
-            .iter()
-            .enumerate()
-            .take(region_end)
-            .skip(index + 1)
-        {
-            let count = count_word(statement, &name);
-            if count > 0 {
-                uses.push((offset, count));
-            }
-        }
+        // uses after it and is folded when the cursor reaches it.
+        let region_end = occurrences.next_definition(&name, index, statements.len());
+        let mut uses = occurrences.uses_between(&name, index, region_end);
         // A redefinition may READ the temporary it redefines — `local_4 = local_4 * local_6;`
         // is how the compiler writes an in-place update. That read is a use of THIS definition,
         // and not counting it dropped this definition as a dead store and left the read
@@ -246,7 +337,9 @@ fn fold_temporaries(statements: &mut Vec<String>) -> Result<(), String> {
             if value.contains('(') {
                 return Err(format!("unused temporary `{name}` holds a call: {value}"));
             }
-            statements.remove(index);
+            occurrences.forget(index, &statements[index]);
+            statements[index].clear();
+            index += 1;
             continue;
         }
         if total > 1 && !is_literal(&value) {
@@ -268,7 +361,9 @@ fn fold_temporaries(statements: &mut Vec<String>) -> Result<(), String> {
                     .rsplit_once(" = ")
                     .expect("a definition splits at its assignment");
                 let rhs = replace_word(rhs, &name, &replacement);
-                statements[*offset] = format!("{head} = {rhs}");
+                let rewritten = format!("{head} = {rhs}");
+                occurrences.refresh(*offset, &statements[*offset], &rewritten);
+                statements[*offset] = rewritten;
                 continue;
             }
             let statement = &statements[*offset];
@@ -282,11 +377,16 @@ fn fold_temporaries(statements: &mut Vec<String>) -> Result<(), String> {
                     "temporary `{name}` is assigned through: {statement}"
                 ));
             }
-            statements[*offset] = replace_word(statement, &name, &replacement);
+            let rewritten = replace_word(statement, &name, &replacement);
+            occurrences.refresh(*offset, statement, &rewritten);
+            statements[*offset] = rewritten;
         }
-        statements.remove(index);
+        occurrences.forget(index, &statements[index]);
+        statements[index].clear();
+        index += 1;
     }
-    Err("temporary folding did not converge".into())
+    statements.retain(|statement| !statement.is_empty());
+    Ok(())
 }
 
 /// `local_4 = <expr>;` -> `("local_4", "<expr>")`. Only a WHOLE temporary is a definition:

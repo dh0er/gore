@@ -430,7 +430,17 @@ const INIT_DEFAULTS: &str = "__InitDefaults";
 /// Largest `__InitDefaults` bytecode, in dwords, that default-statement recovery will attempt.
 /// Recovery is superlinear in statement count, and the few initializers above this bound are
 /// machine-generated world/voice tables rather than authored defaults.
-const MAX_INIT_DEFAULTS_DWORDS: usize = 65_536;
+const MAX_INIT_DEFAULTS_DWORDS: usize = 1_000_000;
+
+/// The recovery bound, overridable per run through `GORE_AS_MAX_DEFAULTS_DWORDS`. The default
+/// covers the whole shipped corpus, including the machine-generated main-map worldpoint table
+/// (852k dwords, the largest initializer in the game); lower it for a faster emit.
+fn max_init_defaults_dwords() -> usize {
+    std::env::var("GORE_AS_MAX_DEFAULTS_DWORDS")
+        .ok()
+        .and_then(|raw| raw.parse().ok())
+        .unwrap_or(MAX_INIT_DEFAULTS_DWORDS)
+}
 
 /// Recover the class-scope `default` statements of every class in a module.
 ///
@@ -462,11 +472,12 @@ fn recover_module_defaults<'a>(
         // voice-table initializers are enormous (the largest is 389k instructions of unrolled
         // `AddWorldPoint`/`AddWorldPosition` calls); recovering them would dominate emit time
         // for tables no one hand-authors. They fall back to the byte-exact carry.
-        if init.bytecode.len() > MAX_INIT_DEFAULTS_DWORDS {
+        let bound = max_init_defaults_dwords();
+        if init.bytecode.len() > bound {
             return (
                 HashMap::new(),
                 Some(format!(
-                    "{} (initializer is {} dwords, over the {MAX_INIT_DEFAULTS_DWORDS} recovery bound)",
+                    "{} (initializer is {} dwords, over the {bound} recovery bound)",
                     c.name,
                     init.bytecode.len()
                 )),
@@ -485,6 +496,9 @@ fn recover_module_defaults<'a>(
             Some(&fields),
             Some(&c.name),
         );
+        if std::env::var_os("GORE_AS_DEFAULTS_DEBUG").is_some() {
+            eprintln!("[defaults] ---- {} ----", c.name);
+        }
         match recover_defaults(&rendered) {
             DefaultsRecovery::Recovered(statements) => {
                 if let Some(lost) = statements

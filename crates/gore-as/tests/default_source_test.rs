@@ -56,7 +56,7 @@ fn module(classes: Vec<Class>) -> Module {
 #[test]
 fn an_initializer_over_the_recovery_bound_suppresses_the_whole_module_and_says_so() {
     // Far past the bound; the size gate answers before anything tries to disassemble it.
-    let huge = init_defaults(vec![0; 200_000]);
+    let huge = init_defaults(vec![0; 2_000_000]);
     let target = module(vec![
         class_with("USmall", Vec::new()),
         class_with("UHuge", vec![huge]),

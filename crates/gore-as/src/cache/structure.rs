@@ -3831,7 +3831,35 @@ fn block_stmts_in(
                             // Gate (c): arg count matches the ctor's declared param count (no
                             // spurious leftover operands on the stack).
                             let count_ok = params.map(|p| p.len() == args.len()).unwrap_or(false);
-                            if !args.is_empty() && (!any_psf_arg || proven_psf_copy) && count_ok {
+                            // Gate (b) exists because a PSF arg MAY be an unrecovered pending
+                            // call result. When this block has already WRITTEN that slot, it is
+                            // nothing of the sort — it is a plain local, and dropping the
+                            // construct loses a real value (`Texts.Add(FVoiceLine(local_4, …))`
+                            // vanished, leaving `local_4` unread and the module's defaults
+                            // frozen). Multi-parameter only: a one-parameter construct from a
+                            // same-typed PSF slot is the copy behaviour that `proven_psf_copy`
+                            // already rules on.
+                            // A one-parameter construct from a DIFFERENT type is a conversion
+                            // (`TSoftObjectPtr<X>(FSoftObjectPath)`), not the copy behaviour the
+                            // strict rule guards; a same-typed one stays with `proven_psf_copy`.
+                            let converts = params
+                                .and_then(|p| p.first())
+                                .map(|only| only.base_name(ctx.refs) != ty)
+                                .unwrap_or(false);
+                            let psf_args_written_here = (params.map(|p| p.len()).unwrap_or(0) >= 2
+                                || converts)
+                                && args.iter().filter(|a| a.is_psf).all(|a| {
+                                    out.iter().any(|statement| {
+                                        statement
+                                            .trim_start()
+                                            .strip_prefix(a.s.as_str())
+                                            .is_some_and(|rest| rest.starts_with(" = "))
+                                    })
+                                });
+                            if !args.is_empty()
+                                && (!any_psf_arg || proven_psf_copy || psf_args_written_here)
+                                && count_ok
+                            {
                                 let rendered = render_args(&args, params, ctx.refs, None);
                                 // Gate (d): a definite arg-type mismatch -> drop (keep prior
                                 // behaviour: slot unwritten) rather than emit the `\u{2}` sentinel
