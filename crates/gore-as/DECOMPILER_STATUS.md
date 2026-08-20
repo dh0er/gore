@@ -116,7 +116,8 @@ of the audited generations, so these numbers qualify the decompiler, not the bui
 
 The whole emitted tree recompiles with no errors, and `gore as bytediff --norm-slots` reports 0
 module-level alignment loss, 3 only-in-vanilla functions, no only-in-regen ones, and B1 **90.26%**
-over all 164,604 aligned functions — up from 88.78% before the body work below.
+over all 164,604 aligned functions — up from 88.78% before the body work below, with 16,040
+semantic differences left against 18,288.
 
 Editing an existing module's defaults and splicing it back works. Getting there needed five
 identity fixes, because a decompiled module is only re-splicable when every symbol it references
@@ -171,13 +172,23 @@ shapes compile; only the one the base cache has a row for can be spliced back.
 
 Measured over a 627-module random sample, `extract-remap` against the base cache succeeds for 625
 (**99.7%**). The same measurement scored 43 of 60 before the identity work and 58 of 60 after it.
-Both remaining failures are the one `const` the emitter deliberately drops: a return type's
-`const` is stripped because the cache sets that flag inconsistently across an override family
-(restoring it costs 41 "Can't implicitly convert from 'const X' to 'X'" errors, because the
-locals that receive those values are typed without it), and a local typed from such a return
-loses it too — which picks the non-const `Iterator()` overload and, with it, a template
-instantiation the base cache does not have. `GORE_AS_REMAP_DIAG=1` prints the two identities
-behind any unresolved or ambiguous reference.
+
+Both remaining failures are the same missing piece — const-correct types — from two sides.
+
+- A method's RETURN `const` is stripped, because the cache sets that flag inconsistently across
+  an override family ("must have the same return type as in the base class"). Restoring it was
+  measured twice: on its own it costs 41 "Can't implicitly convert from 'const X' to 'X'" errors,
+  because the locals that receive those values are typed without it; carrying the qualifier into
+  those locals as well costs 59 — the conversions the local-typing channels do not reach, plus
+  locals the body later reassigns.
+- A local typed from such a return loses the qualifier too, and a non-const receiver picks a
+  different `Iterator()` overload — a template instantiation the base cache never recorded.
+  Iterating the getter's result instead of the local was measured as well: it fixes that module
+  and breaks another one the same way, and neither the return type's reference flag nor its const
+  flag predicts which. The local the structurer recovered from the bytecode stays.
+
+Const-correct local inference is the real fix for both and is not attempted here.
+`GORE_AS_REMAP_DIAG=1` prints the two identities behind any unresolved or ambiguous reference.
 
 Recovery is all-or-nothing per module, because `generated_defaults` can only carry an omitted
 `__InitDefaults` byte-exact for a module that authors no defaults at all. A module that recovered

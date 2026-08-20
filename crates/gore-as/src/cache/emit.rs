@@ -4726,7 +4726,7 @@ fn rewrite_foreach_loops(
     }
 
     if suppressed.is_empty() {
-        return (body.to_owned(), suppressed);
+        return inline_foreach_containers(body);
     }
     let mut out: Vec<String> = Vec::with_capacity(lines.len());
     for (n, line) in lines.iter().enumerate() {
@@ -4739,7 +4739,9 @@ fn rewrite_foreach_loops(
     if trailing_newline {
         joined.push('\n');
     }
-    (inline_foreach_containers(&joined), suppressed)
+    let (joined, inlined) = inline_foreach_containers(&joined);
+    suppressed.extend(inlined);
+    (joined, suppressed)
 }
 
 /// The structurer materializes the iterated container into its own slot. Vanilla iterated the
@@ -4747,11 +4749,11 @@ fn rewrite_foreach_loops(
 /// Inline it when the local is written once from a pure path, read only by the loop header, and
 /// the loop body never touches that path — so iterating the member instead of a copy of it cannot
 /// observe a mutation the copy would have hidden.
-fn inline_foreach_containers(body: &str) -> String {
+fn inline_foreach_containers(body: &str) -> (String, HashSet<i32>) {
     let lines: Vec<&str> = body.lines().collect();
     let mut drop_line = vec![false; lines.len()];
     let mut replace: Vec<Option<String>> = vec![None; lines.len()];
-    let mut changed = false;
+    let mut inlined: HashSet<i32> = HashSet::new();
 
     for i in 0..lines.len() {
         let trimmed = lines[i].trim();
@@ -4780,17 +4782,38 @@ fn inline_foreach_containers(body: &str) -> String {
         let Some(end) = matching_close(&lines, i + 1) else {
             continue;
         };
-        if lines[i + 1..=end].iter().any(|l| l.contains(&path)) {
+        // The loop body must not touch the container's own path: iterating the member (or the
+        // getter's result) instead of a copy of it would otherwise observe a mutation the copy
+        // hid. For a call that is the callee, plus a local receiver — `this` is deliberately not
+        // watched, since almost every body mentions it.
+        let callee = path.split('(').next().unwrap_or(&path);
+        let receiver = callee
+            .rsplit_once('.')
+            .map(|(head, _)| head)
+            .filter(|head| head.starts_with("local_"));
+        if lines[i + 1..=end]
+            .iter()
+            .any(|l| l.contains(callee) || receiver.is_some_and(|r| l.contains(r)))
+        {
             continue;
         }
+        let Some(slot) = container
+            .strip_prefix("local_")
+            .and_then(|rest| rest.parse::<i32>().ok())
+        else {
+            continue;
+        };
         let indent = leading_indent(lines[i]);
         replace[i] = Some(format!("{indent}for (auto {elem} : {path})"));
         drop_line[decl] = true;
-        changed = true;
+        // The local has no definition left anywhere, so its hoisted declaration has to go too —
+        // a bare declaration of a container type asks for a default constructor the base cache
+        // may not have, and the module stops being splicable over it.
+        inlined.insert(slot);
     }
 
-    if !changed {
-        return body.to_owned();
+    if inlined.is_empty() {
+        return (body.to_owned(), inlined);
     }
     let trailing_newline = body.ends_with('\n');
     let mut out: Vec<String> = Vec::with_capacity(lines.len());
@@ -4804,10 +4827,17 @@ fn inline_foreach_containers(body: &str) -> String {
     if trailing_newline {
         joined.push('\n');
     }
-    joined
+    (joined, inlined)
 }
 
-/// `TMap<A, B> local_N = this.m_Field;` -> the right-hand pure path.
+/// `TMap<A, B> local_N = this.m_Field;` -> the right-hand pure member path.
+///
+/// A CALL is deliberately not accepted here. Iterating a getter's result instead of the local the
+/// compiler materialized changes which `Iterator()` overload the recompile picks, and the pick is
+/// not decidable from the cache: for one module the call form is the one the base cache has a row
+/// for, for another it is the local form, and the return type's own reference/const flags predict
+/// neither. Both shapes were measured; the local form is the one the structurer recovered from the
+/// bytecode, so it stays.
 fn container_decl_path(line: &str, ident: &str) -> Option<String> {
     let trimmed = line.trim().strip_suffix(';')?;
     let (lhs, rhs) = trimmed.split_once(" = ")?;
@@ -5763,7 +5793,7 @@ mod source_shape_tests {
             "        }\n",
         );
         assert_eq!(
-            inline_foreach_containers(body),
+            inline_foreach_containers(body).0,
             concat!(
                 "        for (auto local_40 : this.m_Map)\n",
                 "        {\n",
@@ -5782,7 +5812,7 @@ mod source_shape_tests {
             "            this.m_Map.Remove(local_40.GetKey());\n",
             "        }\n",
         );
-        assert_eq!(inline_foreach_containers(body), body);
+        assert_eq!(inline_foreach_containers(body).0, body);
     }
 
     #[test]
