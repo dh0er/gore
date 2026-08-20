@@ -70,6 +70,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   chain they were written as.
 - A `Cast<>` comes back as a cast instead of the compiler's null-guarded
   if/else, and a bool field written from an int gets the bool form.
+- A method's `const` return type is written again, so an edited module keeps
+  that part of its identity; locals that receive such a value are declared
+  const to match.
 - A `default` statement whose call lost an argument is refused instead of
   written, so a module keeps its byte-exact defaults rather than quietly
   changing meaning.

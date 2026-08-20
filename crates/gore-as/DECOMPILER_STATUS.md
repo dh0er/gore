@@ -173,22 +173,28 @@ shapes compile; only the one the base cache has a row for can be spliced back.
 Measured over a 627-module random sample, `extract-remap` against the base cache succeeds for 625
 (**99.7%**). The same measurement scored 43 of 60 before the identity work and 58 of 60 after it.
 
-Both remaining failures are the same missing piece — const-correct types — from two sides.
+A method's RETURN `const` is part of its identity and is emitted again. It used to be stripped
+because the cache sets the flag inconsistently across an override family, and a family has to
+declare ONE return type. Two rules replace the blanket strip, and both read the cache rather than
+guess:
 
-- A method's RETURN `const` is stripped, because the cache sets that flag inconsistently across
-  an override family ("must have the same return type as in the base class"). Restoring it was
-  measured twice: on its own it costs 41 "Can't implicitly convert from 'const X' to 'X'" errors,
-  because the locals that receive those values are typed without it; carrying the qualifier into
-  those locals as well costs 59 — the conversions the local-typing channels do not reach, plus
-  locals the body later reassigns.
-- A local typed from such a return loses the qualifier too, and a non-const receiver picks a
-  different `Iterator()` overload — a template instantiation the base cache never recorded.
-  Iterating the getter's result instead of the local was measured as well: it fixes that module
-  and breaks another one the same way, and neither the return type's reference flag nor its const
-  flag predicts which. The local the structurer recovered from the bytecode stays.
+- A name whose recorded rows DISAGREE about the qualifier keeps the stripped form.
+- A name whose const result some caller cannot hold keeps it too. A caller stores an object
+  result with `STOREOBJ`; when that slot also takes a null store, a handle copy or a non-const
+  call, no single declaration can own it — and AngelScript offers no way to drop the qualifier at
+  a store ("No conversion from 'const X' to 'X' available", measured, including through a
+  `Cast<>`). The scan is one pass over every function's bytecode during index building.
 
-Const-correct local inference is the real fix for both and is not attempted here.
-`GORE_AS_REMAP_DIAG=1` prints the two identities behind any unresolved or ambiguous reference.
+A local that receives a const result is declared const, at the statement that gives it its value,
+because a const local cannot be hoisted. A slot the compiler re-used for several such results
+gets one declaration per result. That took the whole-tree compile from 41 errors to none, with 89
+const locals and 7 const-returning declarations restored.
+
+The two remaining sample failures are no longer about the qualifier. One instantiates a
+`TSoftObjectPtr<AActor>` the base cache never had; the other iterates a `TArray` whose element
+type the base has no `Iterator` row for at all, from a NATIVE getter whose signature the emit run
+cannot see (it runs without `Binds.Cache`). `GORE_AS_REMAP_DIAG=1` prints the two identities
+behind any unresolved or ambiguous reference.
 
 Recovery is all-or-nothing per module, because `generated_defaults` can only carry an omitted
 `__InitDefaults` byte-exact for a module that authors no defaults at all. A module that recovered
