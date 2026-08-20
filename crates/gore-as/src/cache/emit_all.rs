@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
+use super::disasm::disassemble;
 use super::model::{Func, Module};
 use super::refs::RefResolver;
 
@@ -127,6 +128,72 @@ fn empty_required_signatures() -> &'static BTreeMap<String, BTreeSet<ParameterSi
 
 /// Populate resolver inputs that preserve cache semantics without inventing emit-tree-only names.
 /// `as decompile` uses this path so its output continues to describe the inspected cache.
+/// Names whose const return SOME caller cannot hold. A caller stores an object result with
+/// `STOREOBJ`; if that slot also receives any other write — a null store, a handle copy, a call
+/// whose return is not const — then no single declaration can own it, and AngelScript has no way
+/// to drop the qualifier at the store ("No conversion from 'const X' to 'X' available"). Such a
+/// name keeps the stripped return type, exactly as before the qualifier was restored.
+fn unusable_const_returns(mods: &[Module], refs: &RefResolver) -> HashSet<String> {
+    let mut unusable = HashSet::new();
+    for module in mods {
+        let functions = module.functions.iter().chain(
+            module
+                .classes
+                .iter()
+                .flat_map(|class| class.methods.iter().chain(class.ctors.iter())),
+        );
+        for function in functions {
+            let Ok(instrs) = disassemble(&function.bytecode) else {
+                continue;
+            };
+            // slot -> the const-returning callee stored into it, and whether anything else wrote it
+            let mut const_source: HashMap<i32, String> = HashMap::new();
+            let mut written_otherwise: HashSet<i32> = HashSet::new();
+            for (index, ins) in instrs.iter().enumerate() {
+                let destination = match ins.op.name {
+                    "STOREOBJ" | "RefCpyV" | "ClrVPtr" | "LOADOBJ" => {
+                        ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0)
+                    }
+                    _ => continue,
+                };
+                if destination <= 0 {
+                    continue;
+                }
+                let producer = (ins.op.name == "STOREOBJ")
+                    .then(|| index.checked_sub(1).and_then(|j| instrs.get(j)))
+                    .flatten()
+                    .and_then(|previous| match previous.op.name {
+                        "CALL" | "CALLINTF" | "CALLBND" => {
+                            let id = previous.dwords.first().copied().unwrap_or(0) as i32;
+                            Some((refs.func_ret_by_id(id)?, refs.func_by_id(id)?))
+                        }
+                        "CALLSYS" | "Thiscall1" => {
+                            let ptr = previous.qwords.first().copied().unwrap_or(0) as i64;
+                            Some((refs.func_ret_by_ptr(ptr)?, refs.func_by_ptr(ptr)?))
+                        }
+                        _ => None,
+                    })
+                    .filter(|(ret, _)| ret.token == 5 && (ret.is_object_const || ret.is_read_only))
+                    .map(|(_, name)| name.to_owned());
+                match producer {
+                    Some(name) => {
+                        const_source.insert(destination, name);
+                    }
+                    None => {
+                        written_otherwise.insert(destination);
+                    }
+                }
+            }
+            for (slot, name) in const_source {
+                if written_otherwise.contains(&slot) {
+                    unusable.insert(name);
+                }
+            }
+        }
+    }
+    unusable
+}
+
 pub fn prepare_resolver_semantics(
     mods: &[Module],
     refs: &mut RefResolver,
@@ -212,6 +279,7 @@ pub fn prepare_resolver_semantics(
         }
     }
     refs.set_param_defaults(param_defaults);
+    refs.set_unusable_const_returns(unusable_const_returns(mods, refs));
     refs.add_method_names(
         mods.iter()
             .flat_map(|module| module.classes.iter())

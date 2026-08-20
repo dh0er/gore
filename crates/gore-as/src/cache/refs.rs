@@ -122,6 +122,12 @@ pub struct RefResolver {
     zero_arg_names: HashSet<String>,
     /// Every function name the cache records, so an unknown name can be told from a known one.
     known_func_names: HashSet<String>,
+    /// Function names whose const return no caller can hold (see `unusable_const_returns`).
+    unusable_const_return_names: HashSet<String>,
+    /// Function names whose recorded rows DISAGREE about a const return. Re-emitting the
+    /// qualifier for those breaks the language's "must have the same return type as in the base
+    /// class" rule, so they keep the stripped form.
+    inconsistent_const_return_names: HashSet<String>,
     /// `name/type` keys for one-parameter functions whose parameter accepts a TEMPORARY — by
     /// value, or by const reference. A name is recorded only when EVERY one-parameter row of it
     /// taking that type accepts one, so a single non-const-reference overload disqualifies it.
@@ -225,6 +231,7 @@ impl RefResolver {
         // type tables, which are still borrowed mutably here.
         let mut owned_methods: Vec<(i64, String, usize)> = Vec::new();
         let mut one_arg_params: Vec<(String, DataType, bool)> = Vec::new();
+        let mut const_returns: HashMap<String, bool> = HashMap::new();
         let function_reference_count = c.read_count("FunctionReferences")?;
         c.ensure_minimum_remaining(function_reference_count, 80, "FunctionReferences")?;
         for _ in 0..function_reference_count {
@@ -255,6 +262,16 @@ impl RefResolver {
             }
             if is_method && objtype != 0 {
                 owned_methods.push((objtype, name.clone(), params.len()));
+            }
+            let returns_const = ret.is_object_const || ret.is_read_only;
+            match const_returns.get(&name) {
+                Some(seen) if *seen != returns_const => {
+                    r.inconsistent_const_return_names.insert(name.clone());
+                }
+                None => {
+                    const_returns.insert(name.clone(), returns_const);
+                }
+                _ => {}
             }
             if let [only] = params.as_slice() {
                 // `!is_reference` is a by-value parameter; a reference one has to be const.
@@ -1012,6 +1029,18 @@ impl RefResolver {
         }
     }
 
+    /// Install the names whose const return some caller cannot hold.
+    pub fn set_unusable_const_returns(&mut self, names: HashSet<String>) {
+        self.unusable_const_return_names = names;
+    }
+
+    /// True when the cache's rows for `name` disagree about returning a const value. An override
+    /// family has to declare ONE return type, so a re-emitted qualifier would not compile.
+    pub fn const_return_is_inconsistent(&self, name: &str) -> bool {
+        self.inconsistent_const_return_names.contains(name)
+            || self.unusable_const_return_names.contains(name)
+    }
+
     /// True when every one-parameter `name` in the cache that takes `ty` takes it by value or by
     /// const reference — so a TEMPORARY may be written at that call site.
     pub fn one_arg_call_accepts_temporary(&self, name: &str, ty: &str) -> bool {
@@ -1270,6 +1299,17 @@ mod tests {
             .insert("TSubclassOf<UAIGroup_StateEvent>::$beh0/0".to_owned());
         assert!(refs.type_has_method("TSubclassOf<G1R::AIGroup::UAIGroup_StateEvent>", "$beh0", 0));
         assert!(!refs.type_has_method("TSubclassOf<UAIGroup_StateEvent>", "$beh0", 1));
+    }
+
+    #[test]
+    fn a_const_return_is_kept_unless_the_rows_disagree_or_a_caller_cannot_hold_it() {
+        let mut refs = RefResolver::default();
+        refs.inconsistent_const_return_names
+            .insert("GetRootNode".to_owned());
+        refs.set_unusable_const_returns(HashSet::from(["GetSpawnedActor".to_owned()]));
+        assert!(refs.const_return_is_inconsistent("GetRootNode"));
+        assert!(refs.const_return_is_inconsistent("GetSpawnedActor"));
+        assert!(!refs.const_return_is_inconsistent("GetSelectedItem"));
     }
 
     #[test]
