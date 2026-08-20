@@ -31,8 +31,8 @@ no longer omitted: its statements are written back as the class-scope `default` 
 were compiled from (see "Class defaults" below), so an item, NPC or config class decompiles with
 its data rather than as an empty shell. Existing-module edits still carry the proven base
 records, compiler wrappers, behavior functions, and full method tables byte-for-byte through the
-strict base-keyspace remap path, and an overlay that authors defaults is refused there — see
-"Class defaults" for why. Separately, the offline `default-sites` / `patch-default` path
+strict base-keyspace remap path; an overlay that authors defaults is spliced through the same path
+with the class defaults regenerated from the source instead of carried. Separately, the offline `default-sites` / `patch-default` path
 can change a uniquely proven, branch-free direct scalar assignment using a semantic selector and
 raw compare-and-swap guard. It cannot reconstruct or edit arbitrary class-default data. A fresh
 whole-tree game-compiler run reached
@@ -107,17 +107,16 @@ of the audited generations, so these numbers qualify the decompiler, not the bui
 
 | Metric | Value |
 |--------|-------|
-| Modules authoring their class defaults | 6,885 of 7,308 that have any |
-| Modules suppressed (recovery incomplete) | 32 |
-| `default` statements written | 206,146 |
+| Modules authoring their class defaults | 6,917 — every module that has any |
+| Modules suppressed (recovery incomplete) | 0 |
+| `default` statements written | 281,422 |
 | Vanilla `__InitDefaults` methods | 30,005 |
-| Aligned after recompile | 29,033 (972 unaligned, from the suppressed modules) |
-| Byte-faithful (`IDENTICAL`+`BENIGN`, `--norm-slots`) | 28,999 (**99.88%**) |
+| Aligned after recompile | 30,005 (**all of them**) |
+| Byte-faithful (`IDENTICAL`+`BENIGN`, `--norm-slots`) | 29,968 (**99.88%**) |
 
 The whole emitted tree recompiles with no errors, and `gore as bytediff --norm-slots` reports 0
-module-level alignment loss, no only-in-regen functions, and B1 **90.20%** over all 163,632
-aligned functions — up from 88.78% before the body work below, with 16,035 semantic differences
-left against 18,288.
+module-level alignment loss, 3 only-in-vanilla functions, no only-in-regen ones, and B1 **90.26%**
+over all 164,604 aligned functions — up from 88.78% before the body work below.
 
 Editing an existing module's defaults and splicing it back works. Getting there needed five
 identity fixes, because a decompiled module is only re-splicable when every symbol it references
@@ -182,25 +181,43 @@ behind any unresolved or ambiguous reference.
 
 Recovery is all-or-nothing per module, because `generated_defaults` can only carry an omitted
 `__InitDefaults` byte-exact for a module that authors no defaults at all. A module that recovered
-only some of its classes would silently drop the rest, so one unrecovered class suppresses the
-whole module and its header records the class and the reason. The 32 suppressed modules break
-down as: 25 whose bodies keep a compiler temporary that cannot fold, 2 machine-generated
-world/voice tables over the size bound, and 5 individually distinct shapes.
+only some of its classes would silently drop the rest, so one unrecovered class would suppress the
+whole module and its header would record the class and the reason. **No module in the shipped
+corpus is suppressed any more.** Closing the last of them needed six recovery fixes:
 
-The 25 unfoldable ones are fail-closed for a reason worth keeping: they are the bodies where a
-`double` member read is rendered through an `int()` cast, so authoring them would round a cost
-or a multiplier to a whole number. The numeric-kind inference has to be fixed before their
-defaults are worth writing.
+- An in-place update (`local_4 = local_4 * local_6;`) READS the definition above it. That read
+  was not counted as a use, so the definition was dropped as a dead store and the read dangled.
+- A default-constructed temporary passed as an argument is legal wherever the parameter takes it
+  by value or by const reference. Which calls those are is read off the cache's own parameter
+  table, over every one-parameter row of that name, so a single non-const-reference overload
+  disqualifies the name.
+- A multi-parameter or converting construct whose argument slot the block already wrote is a
+  real value, not the unrecovered pending result the drop rule was written for. The voice tables
+  lost every `Texts.Add(FVoicelineAssignment(...))` to that rule.
+- A `b<Upper>` field written from an int is a bool UPROPERTY by UHT's own rule, and its generated
+  accessor is `bool&`.
+- `Cast<T>(x)` lowers to a null-guarded diamond, and a `default` statement carries an expression,
+  not a block. `Cast<T>(nullptr)` is itself null, so the diamond folds back into the cast.
+- A namespaced return type (`AutomatedTest::UAIState_…`) starts with its NAMESPACE, so the
+  object-factory class-head test read `Au` and refused a genuine factory, leaving its `STOREOBJ`
+  slot unwritten.
 
-Every recovered statement is also checked against the cache's own function table: a rendered
-`Name()` whose function the cache knows only WITH parameters means an argument was lost, and the
-module is suppressed rather than written. That check found the fluent AI rule builders
+The two machine-generated main-map tables — 852k dwords of worldpoints, 105k of item spawns — are
+authored too. They were refused by a size bound that existed because temporary folding rescanned
+the whole statement list for every temporary; the fold now walks the statements once with an index
+of where each temporary occurs, which took the worldpoint table from 8m49s to 38s and made the
+whole-tree emit faster (58s). `GORE_AS_MAX_DEFAULTS_DWORDS` and `GORE_AS_MAX_DEFAULT_STATEMENTS`
+lower the bounds again for a faster emit.
+
+Every recovered statement is checked against the cache's own function table: a rendered `Name()`
+whose function the cache knows only WITH parameters means an argument was lost, and the module is
+suppressed rather than written. That check found the fluent AI rule builders
 (`Rules.Add(t).RequireTrue(a).RequireFalse(b).Then(r)`), where the structurer split the chain
 after the first link and the next link took a leftover argument as its receiver. That split is
 fixed — a temporary's destructor between two links no longer ends the statement — and the check
 stays as the general guard against any future dropped-argument shape.
 
-The 34 initializers that still differ after a faithful recompile are dominated by float constants
+The 37 initializers that still differ after a faithful recompile are dominated by float constants
 the emitter cannot spell: AngelScript has no infinity literal, so `+inf` (`0x7F800000`) is written
 as the largest finite float and comes back one ULP low.
 

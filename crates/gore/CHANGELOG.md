@@ -21,9 +21,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   another item's model.
 - Decompiled source keeps namespaces, `const` methods and parameter defaults, so
   quest, document and conversation modules can be edited and spliced at all.
+- Every module in the game writes its class defaults now, down to the main map's
+  worldpoint and item-spawn tables.
 - A fluent chain keeps its links: a temporary's destructor between two of them
   no longer ends the statement, so AI rule tables decompile as the one call
   chain they were written as.
+- A `Cast<>` comes back as a cast instead of the compiler's null-guarded
+  if/else, and a bool field written from an int gets the bool form.
 - A `default` statement whose call lost an argument is refused instead of
   written, so a module keeps its byte-exact defaults rather than quietly
   changing meaning.

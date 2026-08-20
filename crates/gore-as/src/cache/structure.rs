@@ -1404,8 +1404,11 @@ fn build_call(
             }
             // OBJECT factory: non-method (structurally: an in-place ctor is void and/or a method the
             // idiom-C arm consumed first), return type resolves to a real U/A class head, non-void.
+            // `bare_type_name` first: a namespaced return (`AutomatedTest::UAIState_Test_…`)
+            // starts with the NAMESPACE, so the class-head test read `Au` and refused a genuine
+            // factory — its `STOREOBJ` slot then stayed unwritten and every use of it dangled.
             let is_object_factory = !is_method
-                && matches!(ret_ty.map(tyhead), Some(rh) if
+                && matches!(ret_ty.map(tyhead).map(bare_type_name), Some(rh) if
                     matches!(rh.bytes().next(), Some(b'U') | Some(b'A'))
                     // U/A + uppercase-2nd-char = a real class head (rejects `uint`-ish primitives).
                     && rh.as_bytes().get(1).map(|c| c.is_ascii_uppercase()).unwrap_or(false)

@@ -497,7 +497,11 @@ fn recover_module_defaults<'a>(
             Some(&c.name),
         );
         if std::env::var_os("GORE_AS_DEFAULTS_DEBUG").is_some() {
-            eprintln!("[defaults] ---- {} ----", c.name);
+            eprintln!(
+                "[defaults] ---- {} ----
+{rendered}",
+                c.name
+            );
         }
         match recover_defaults(&rendered) {
             DefaultsRecovery::Recovered(statements) => {
@@ -1186,6 +1190,7 @@ fn emit_function_ctor(
     let (body, _) = rewrite_value_temporaries(&body, &inferred_locals);
     let body = drop_dead_stores(&body);
     let body = rewrite_operator_calls(&body);
+    let body = fold_cast_diamonds(&body);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
     // (a wrong type just becomes a compile error the in-game loop force-stubs, rather than the
     // whole function stubbing on an undeclared identifier).
@@ -4362,6 +4367,78 @@ fn rewrite_value_temporaries(body: &str, locals: &BTreeMap<i32, String>) -> (Str
     rewrite_adjacent_value_temporaries(body, &candidates)
 }
 
+/// `Cast<T>(x)` lowers to a null-guarded diamond: the compiler tests the source, casts inside the
+/// branch and leaves the destination null otherwise. Written back as that diamond, a class
+/// default cannot be authored at all (a `default` statement carries an expression, not a block),
+/// and every ordinary body carries seven lines where the source had one. `Cast<T>(nullptr)` is
+/// itself null, so folding the diamond back into the cast is exactly what the compiler undid.
+fn fold_cast_diamonds(body: &str) -> String {
+    if !body.contains("Cast<") {
+        return body.to_owned();
+    }
+    let trailing_newline = body.ends_with('\n');
+    let lines: Vec<&str> = body.lines().collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut at = 0usize;
+    while at < lines.len() {
+        match cast_diamond(&lines[at..]) {
+            Some((consumed, folded)) => {
+                out.push(folded);
+                at += consumed;
+            }
+            None => {
+                out.push(lines[at].to_owned());
+                at += 1;
+            }
+        }
+    }
+    let mut joined = out.join("\n");
+    if trailing_newline {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// Matches the seven-line (or eight, with an explicit null store) diamond at the head of `lines`
+/// and returns how many lines it spans plus the single statement that replaces them.
+fn cast_diamond(lines: &[&str]) -> Option<(usize, String)> {
+    if lines.len() < 7 {
+        return None;
+    }
+    let indent = leading_indent(lines[0]);
+    let guard = lines[0]
+        .trim()
+        .strip_prefix("if (")?
+        .strip_suffix(" != nullptr)")?;
+    if lines[1].trim() != "{" || lines[3].trim() != "}" || lines[4].trim() != "else" {
+        return None;
+    }
+    if lines[5].trim() != "{" {
+        return None;
+    }
+    let assignment = lines[2].trim().strip_suffix(';')?;
+    let (destination, cast) = assignment.split_once(" = ")?;
+    if !cast.starts_with("Cast<") || !cast.ends_with(&format!("({guard})")) {
+        return None;
+    }
+    // The else branch must leave the destination null — either by saying nothing (a bare object
+    // declaration is already null) or by storing null explicitly.
+    let (span, closing) = match lines[6].trim() {
+        "}" => (7, 6),
+        _ if lines.len() > 7
+            && lines[6].trim() == format!("{destination} = nullptr;")
+            && lines[7].trim() == "}" =>
+        {
+            (8, 7)
+        }
+        _ => return None,
+    };
+    if lines[closing].trim() != "}" {
+        return None;
+    }
+    Some((span, format!("{indent}{assignment};")))
+}
+
 /// AngelScript's binary operators are methods, and the structurer recovers the method: the AI
 /// rule tables come back as `FAssessmentBits(A).opOr(B)` where the source wrote `A | B`. The two
 /// compile to the same code, but only the operator form is a shape a class-scope `default`
@@ -5548,8 +5625,8 @@ mod indirect_numeric_edge_tests {
 #[cfg(test)]
 mod source_shape_tests {
     use super::{
-        drop_dead_stores, inline_foreach_containers, produced_only_by_calls, rewrite_foreach_loops,
-        rewrite_operator_calls, rewrite_value_temporaries,
+        drop_dead_stores, fold_cast_diamonds, inline_foreach_containers, produced_only_by_calls,
+        rewrite_foreach_loops, rewrite_operator_calls, rewrite_value_temporaries,
     };
     use crate::cache::refs::RefResolver;
     use std::collections::BTreeMap;
@@ -5706,6 +5783,60 @@ mod source_shape_tests {
             "        }\n",
         );
         assert_eq!(inline_foreach_containers(body), body);
+    }
+
+    #[test]
+    fn folds_the_null_guarded_cast_back_into_the_cast() {
+        let body = concat!(
+            "        if (local_4 != nullptr)
+",
+            "        {
+",
+            "            local_6 = Cast<UPlayerConfig>(local_4);
+",
+            "        }
+",
+            "        else
+",
+            "        {
+",
+            "        }
+",
+            "        this.CharacterConfig = local_6;
+",
+        );
+        assert_eq!(
+            fold_cast_diamonds(body),
+            concat!(
+                "        local_6 = Cast<UPlayerConfig>(local_4);
+",
+                "        this.CharacterConfig = local_6;
+",
+            )
+        );
+    }
+
+    #[test]
+    fn keeps_a_guarded_block_that_is_not_the_cast_idiom() {
+        let body = concat!(
+            "        if (local_4 != nullptr)
+",
+            "        {
+",
+            "            local_6 = Cast<UPlayerConfig>(local_4);
+",
+            "        }
+",
+            "        else
+",
+            "        {
+",
+            "            this.Fallback();
+",
+            "        }
+",
+        );
+        assert_eq!(fold_cast_diamonds(body), body);
     }
 
     #[test]
