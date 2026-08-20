@@ -65,10 +65,12 @@ old copies are dropped rather than carried. An overlay that declares defaults fo
 only some of a module's classes is refused, because the classes it left out would
 lose theirs silently.
 
-Recovery is all-or-nothing per module: if one class in a module cannot be
-recovered in full, the module's header says so by name and reason, and none of
-its defaults are written. Nothing is lost either way — a module without authored
-defaults keeps them byte-exact when it is recompiled.
+Every module in the shipped game writes its defaults, down to the main map's
+worldpoint and item-spawn tables. Recovery stays all-or-nothing per module: if a
+class in some future build cannot be recovered in full, the module's header says
+so by name and reason and none of its defaults are written. Nothing is lost
+either way — a module without authored defaults keeps them byte-exact when it is
+recompiled.
 
 ## Recompiling: standalone first, game fallback
 
@@ -280,6 +282,11 @@ it against the intended pristine base first.
 When a remap refuses a module — `unresolved`, or `ambiguous` — the message names the symbol but
 not what differs about it. `GORE_AS_REMAP_DIAG=1` prints the regenerated and the base identity
 side by side; they differ in exactly one field, and that field is the answer.
+
+When a module's header says its class defaults were not authored,
+`GORE_AS_DEFAULTS_DEBUG=1` prints the recovered method and the statements the recovery works on,
+per class. `GORE_AS_MAX_DEFAULTS_DWORDS` and `GORE_AS_MAX_DEFAULT_STATEMENTS` lower the recovery
+bounds when a fast emit matters more than the two machine-generated map tables.
 
 `--allow-new-symbols` is deliberately opt-in. Existing references are still
 mapped back to the vanilla cache; only rows for classes, functions, and names
