@@ -72,6 +72,10 @@ so by name and reason and none of its defaults are written. Nothing is lost
 either way — a module without authored defaults keeps them byte-exact when it is
 recompiled.
 
+How much of the decompiled tree is proven identical to the shipping cache — and which of those
+numbers come from the whole corpus rather than a sample — is written down in the repository, in
+`crates/gore-as/DECOMPILER_STATUS.md`.
+
 ## Recompiling: the game is the compiler
 
 There is no standalone AngelScript compiler for this game. The shipping
