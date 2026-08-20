@@ -174,6 +174,42 @@ pub fn prepare_resolver_semantics(
         })
         .collect();
     refs.set_class_fields(fields);
+    let non_const = mods
+        .iter()
+        .flat_map(|module| &module.classes)
+        .map(|class| {
+            let methods = class
+                .methods
+                .iter()
+                .filter(|method| !method.is_const_method())
+                .map(|method| method.name.clone())
+                .collect::<HashSet<_>>();
+            (class.name.clone(), methods)
+        })
+        .collect();
+    refs.set_non_const_methods(non_const);
+    let mut param_defaults = HashMap::new();
+    for module in mods {
+        for function in &module.functions {
+            if function.param_defaults.iter().any(|d| !d.is_empty()) {
+                param_defaults.insert(
+                    (String::new(), function.name.clone()),
+                    function.param_defaults.clone(),
+                );
+            }
+        }
+        for class in &module.classes {
+            for method in class.methods.iter().chain(class.ctors.iter()) {
+                if method.param_defaults.iter().any(|d| !d.is_empty()) {
+                    param_defaults.insert(
+                        (class.name.clone(), method.name.clone()),
+                        method.param_defaults.clone(),
+                    );
+                }
+            }
+        }
+    }
+    refs.set_param_defaults(param_defaults);
     refs.add_method_names(
         mods.iter()
             .flat_map(|module| module.classes.iter())
@@ -242,7 +278,11 @@ fn emitted_free_functions<'a>(module: &'a Module, refs: &RefResolver) -> Vec<(&'
         })
         .filter_map(|function| {
             let params = free_param_signature(function, refs);
-            let signature = format!("{}({params})", function.name);
+            // The collision key carries the NAMESPACE. Two same-named free functions in
+            // different namespaces are already distinct declarations that a qualified call
+            // reaches unambiguously; renaming them would only invent a symbol the base cache
+            // does not have. Only a genuine global-scope clash still needs the rename.
+            let signature = format!("{}::{}({params})", function.namespace, function.name);
             seen.insert(signature.clone())
                 .then_some((function, signature))
         })
@@ -432,7 +472,13 @@ fn free_function_rename_plan(
             let name = plan
                 .renamed(module_index, &function.name)
                 .unwrap_or(&function.name);
-            let signature = format!("{name}({})", free_param_signature(function, refs));
+            // Same key as the plan: a namespace is part of the declaration's identity, so two
+            // same-named functions in different namespaces are not a duplicate.
+            let signature = format!(
+                "{}::{name}({})",
+                function.namespace,
+                free_param_signature(function, refs)
+            );
             if let Some(previous) = final_signatures.insert(signature.clone(), module_index) {
                 return Err(format!(
                     "free-function signature {signature} remains duplicated in modules {:?} and {:?}",
@@ -1401,6 +1447,7 @@ pub struct PreparedEmit<'a> {
     refs: &'a RefResolver,
     rename_plan: FreeFunctionRenamePlan,
     layout: Vec<ModuleLayout>,
+    class_defaults: bool,
 }
 
 impl<'a> PreparedEmit<'a> {
@@ -1417,10 +1464,19 @@ impl<'a> PreparedEmit<'a> {
             refs,
             rename_plan,
             layout,
+            class_defaults: false,
         })
     }
 
     /// Emit one module using the same full-cache resolver and collision plan as `emit_tree`.
+    /// Write class `default` statements. OFF unless opted into: emitted source is also hashed
+    /// into sealed evidence and fed back to the compiler, and both need the historical shape.
+    /// Turn it on for source a person is going to read.
+    pub fn with_class_defaults(mut self, class_defaults: bool) -> Self {
+        self.class_defaults = class_defaults;
+        self
+    }
+
     pub fn emit_module(&self, module_index: usize) -> Result<String, EmitAllError> {
         let module = self
             .mods
@@ -1429,7 +1485,7 @@ impl<'a> PreparedEmit<'a> {
                 index: module_index,
                 modules: self.mods.len(),
             })?;
-        let source = super::emit::emit_module(module, self.refs);
+        let source = super::emit::emit_module_with(module, self.refs, self.class_defaults);
         Ok(self
             .rename_plan
             .rewrite_emitted_module(module_index, &source))

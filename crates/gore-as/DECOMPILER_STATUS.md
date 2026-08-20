@@ -26,11 +26,13 @@ Measured on 2026-07-12 against build 24169431, the then-current hotfix
 The counts describe functions that `emit-all` emits. A non-stub body is one the structurer could
 render; this percentage is **not** a semantic byte-faithfulness score. Deep argument/dataflow
 mistakes can exist in otherwise complete-looking source and are measured separately by the
-semantic `bytediff` oracle and game compiler. Compiler-generated special functions such
-as `__InitDefaults` are intentionally omitted from editable source. Existing-module edits can now
-carry the proven base records, compiler wrappers, behavior functions, and full method tables
-byte-for-byte through the strict base-keyspace remap path, but authored source changes to those
-defaults are deliberately refused. Separately, the offline `default-sites` / `patch-default` path
+semantic `bytediff` oracle and game compiler. The compiler-generated `__InitDefaults` method is
+no longer omitted: its statements are written back as the class-scope `default` statements they
+were compiled from (see "Class defaults" below), so an item, NPC or config class decompiles with
+its data rather than as an empty shell. Existing-module edits still carry the proven base
+records, compiler wrappers, behavior functions, and full method tables byte-for-byte through the
+strict base-keyspace remap path, and an overlay that authors defaults is refused there — see
+"Class defaults" for why. Separately, the offline `default-sites` / `patch-default` path
 can change a uniquely proven, branch-free direct scalar assignment using a semantic selector and
 raw compare-and-swap guard. It cannot reconstruct or edit arbitrary class-default data. A fresh
 whole-tree game-compiler run reached
@@ -95,6 +97,71 @@ bool DoesEntryApplyToCurrentSituation_Implementation()
 
 A stub is therefore safe and visible, but it is not a faithful implementation. Editing one
 requires reconstructing its body manually or first extending the decompiler.
+
+## Class defaults
+
+Measured on 2026-08-19 against build `Build55_CL171864` (script cache SHA-256
+`D0AFAF909E62867FAEDC3678A1175F5E8DE5E784DC503A14FFBDE4726F297231`, GUID
+`be78fe0a46ac6643968597e85c7e5b3f`) with the matching `Binds.Cache` loaded. This build is not one
+of the audited generations, so these numbers qualify the decompiler, not the build.
+
+| Metric | Value |
+|--------|-------|
+| Modules authoring their class defaults | 6,814 of 7,308 that have any |
+| Modules suppressed (recovery incomplete) | 103 |
+| `default` statements written | 203,977 |
+| Vanilla `__InitDefaults` methods | 30,005 |
+| Aligned after recompile | 28,694 (1,311 unaligned, from the suppressed modules) |
+| Byte-faithful (`IDENTICAL`+`BENIGN`, `--norm-slots`) | 28,659 (**99.88%**) |
+
+The whole emitted tree recompiles: `gore as compile` produced a structurally valid 116,284,667-byte
+cache, and `gore as bytediff --norm-slots` reports 0 module-level alignment loss, 11 only-in-regen
+functions, and B1 88.78% over all 163,296 aligned functions. The rest of the corpus is unchanged by
+this work (18,288 non-`__InitDefaults` semantic differences, against 19,794 in the retained 07-12
+baseline).
+
+Editing an existing module's defaults and splicing it back works. Getting there needed five
+identity fixes, because a decompiled module is only re-splicable when every symbol it references
+still composes to the identity the base cache recorded:
+
+- **StaticNames.** `STR` and the `PshC4` before `__STATIC_NAME` carry an index into the T6 name
+  pool, and the strict remap left them alone — a regen assigns its own pool, so every `FName` in
+  a recompiled module silently denoted a different name. A sword's mesh came back as a scroll's.
+  They are now remapped by text, and a name the base lacks fails closed.
+- **Namespaces.** The emitter dropped them, so `UQuest_NewCamp` — declared in `G1R::Quest` —
+  recompiled as a global-scope class that matched nothing. 1,503 modules are affected, including
+  every quest, document and conversation. Declarations now reopen their namespace and references
+  are qualified.
+- **`const` methods.** The qualifier is part of a method's identity. It used to be re-emitted
+  only for ~20 allowlisted methods because a blanket restore once cost 636 compile errors; on the
+  current tree all 6,247 restore with a single family failing, which a body check now covers.
+- **Class references.** `PshGPtr __StaticType_X` is the bare class name; rendering it as
+  `X::StaticClass()` made the compiler generate `StaticClass` functions the base never had.
+- **Parameter defaults.** They are recorded in the cache and were skipped; declarations carry
+  them again and calls omit arguments that only restate them.
+
+The collision-rename workaround disappeared with the namespaces: the emitter no longer invents
+`_g1234`-suffixed symbols that the base cache cannot know.
+
+Measured over a 60-module random sample, `extract-remap` against the base cache succeeds for 58
+(97%); before this work the same sample scored 43. The two remaining failures, and 7 of 25
+conversation modules, are a body-fidelity class rather than an identity one: the recovered body
+default-constructs a `TSubclassOf` temporary where vanilla converted one from a `UClass`, so it
+references a `$beh0()` behaviour the base lacks. `GORE_AS_REMAP_DIAG=1` prints the two identities
+behind any unresolved or ambiguous reference.
+
+Recovery is all-or-nothing per module, because `generated_defaults` can only carry an omitted
+`__InitDefaults` byte-exact for a module that authors no defaults at all. A module that recovered
+only some of its classes would silently drop the rest, so one unrecovered class suppresses the
+whole module and its header records the class and the reason. The 103 suppressed modules break
+down as: 35 fluent rule builders whose recovered statements still spell out operator overloads
+(`a.opOr(b)`), 32 whose bodies keep a compiler temporary that cannot fold, 28 that pass `this` as
+an argument, 2 machine-generated world/voice tables over the size bound, 1 with control flow, and
+a handful of individually distinct shapes.
+
+The 35 initializers that still differ after a faithful recompile are dominated by float constants
+the emitter cannot spell: AngelScript has no infinity literal, so `+inf` (`0x7F800000`) is written
+as the largest finite float and comes back one ULP low.
 
 ## Root causes and next work
 

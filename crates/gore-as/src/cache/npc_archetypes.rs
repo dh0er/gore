@@ -2065,6 +2065,7 @@ mod tests {
         Func {
             name: name.to_owned(),
             namespace: String::new(),
+            param_defaults: Vec::new(),
             ret: DataType::default(),
             params: Vec::<Param>::new(),
             bytecode,
@@ -2077,6 +2078,7 @@ mod tests {
     fn class(name: &str, super_class: Option<&str>, methods: Vec<Func>) -> Class {
         Class {
             name: name.to_owned(),
+            namespace: String::new(),
             super_class: super_class.map(str::to_owned),
             fields: Vec::<Field>::new(),
             methods,

@@ -34,53 +34,45 @@ fn force_stub_set() -> &'static HashSet<String> {
     })
 }
 
-/// Batch-23b (specs/const-safety.md §5): the minimal body-const-safe set — the only methods
-/// whose vanilla `const` qualifier (asTRAIT_CONST) is re-emitted. Each entry is individually
-/// in-game-verified (batch-21 all-const capture as the per-method oracle: its RECOVERED body
-/// produces no new diagnostics under a read-only `this`), and the set is closed under
-/// own-class `this`-callees and script overrides. Keys are exact `Class::Method` — never
-/// bare names (GetCrimeProcessingSubsystem/GetSortLayer exist on unrelated classes that must
-/// stay non-const). Do NOT const-qualify anything outside this set even if is_const_method()
-/// is true — that was batch-21 (+636 regression, JOURNAL LESSON #4).
-static CONST_SAFE: &[&str] = &[
-    "UGameplayAbility_CharacterAI_Gothic::GetCrimeProcessingSubsystem",
-    "UGameplayAbility_CharacterAI_Gothic::GetSensedLivingHostiles",
-    "UGameplayAbility_CharacterAI_Gothic::GetSensedLivingEnemies",
-    "UGameplayAbility_CharacterAI_Gothic::IsCharacterConsideredAThreat",
-    "UGameplayAbility_CharacterAI_Gothic::IsInSameTerritoryOrCombatRadiusAsOtherCharacter",
-    "UGameplayAbility_CharacterAI_Gothic::IsWeaponConsideredAThreat",
-    "UGameplayAbility_CharacterAI_Gothic::IsCharacterInCombatRadius",
-    "UGameplayAbility_CreatureAI::IsCharacterConsideredAThreat",
-    "UGameplayAbility_CreatureAI::IsWeaponConsideredAThreat",
-    "FAttackMoveData::GetCombatMove",
-    "FAttackMoveData::GetWeight",
-    "FItemPickupHandle::GetDroppedBy",
-    "FItemPickupHandle::GetReason",
-    "UCBT_Node::GetSortLayer",
-    "UCBT_Tree::GetSortLayer",
-    "UCBT_Decorator::GetSortLayer",
-    // batch-30a (C7, specs/batch29-errortail.md §7): the documented const-safety.md §5
-    // UNSAFE residue. Its body artifact `local_38 = this;` (const `this` copied into a
-    // non-const local) is const-LEGAL now that FAttackInfo is emitted as a `struct`
-    // (asOBJ_VALUE): the copy is a value read through the generated const&in opAssign,
-    // not a const-handle escape. Un-stubs the two AddAttack callers' read-only errors.
-    "FAttackInfo::GetAttackMoveData",
-    // batch-31e: the capture.batch30-0705 OnItemPickedUp regression (3907:40 "Non-const
-    // method call on read-only object reference") is `ItemPickupHandle.GetClass()` on the
-    // `const FItemPickupHandle&inout` PARAM — surfaced by 30a's struct emission of
-    // FItemPickupHandle (value semantics enforce receiver constness), NOT by C6a const
-    // propagation (the module emits zero const locals; the receiver's constness is the
-    // vanilla signature's). Vanilla compiled this exact call on the const param, so
-    // vanilla's GetClass was const; the recovered body (`return this._Class;`, a pure
-    // field read) is trivially body-const-safe, satisfying the §5 oracle discipline.
-    "FItemPickupHandle::GetClass",
-];
-
-fn const_safe_set() -> &'static HashSet<&'static str> {
-    static S: OnceLock<HashSet<&'static str>> = OnceLock::new();
-    S.get_or_init(|| CONST_SAFE.iter().copied().collect())
+/// A method's `const` qualifier (asTRAIT_CONST) is part of its identity in the cache's
+/// FunctionReferences table, so dropping it produces a DIFFERENT symbol and every reference to
+/// it fails to resolve when the module is remapped back onto the base cache. It is therefore
+/// re-emitted for every method the cache marks const, EXCEPT where the recovered body would no
+/// longer compile under a read-only receiver.
+///
+/// This replaced a hand-maintained allowlist of ~20 individually verified methods. That list
+/// existed because a blanket re-emit once cost 636 in-game compile errors, but the recovered
+/// bodies have improved since: on the current tree, restoring all 6,247 qualifiers costs a
+/// single family, which the body check below covers exactly.
+/// True when the recovered body calls a NON-const method on `this`, which a `const` receiver
+/// cannot do ("Non-const method call on read-only object reference").
+///
+/// The cache's own const flag says what the ORIGINAL body was allowed to do; the recovered body
+/// can differ — most often by calling a helper through `this` that the original reached some
+/// other way. Checking the body keeps the qualifier wherever it still holds instead of falling
+/// back to a hand-maintained list.
+fn body_calls_non_const_method(body: &str, class_name: Option<&str>, refs: &RefResolver) -> bool {
+    let Some(class) = class_name else {
+        return false;
+    };
+    let bytes = body.as_bytes();
+    let mut index = 0usize;
+    while let Some(found) = body[index..].find("this.") {
+        let start = index + found + "this.".len();
+        let mut end = start;
+        while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+            end += 1;
+        }
+        // Only a CALL constrains the receiver; a member read is fine on a const object.
+        if bytes.get(end) == Some(&b'(') && refs.calls_non_const_method(class, &body[start..end]) {
+            return true;
+        }
+        index = end.max(start);
+    }
+    false
 }
 
+use super::default_source::{recover as recover_defaults, DefaultsRecovery};
 use super::disasm::disassemble;
 use super::model::{Class, Func, Module};
 use super::refs::RefResolver;
@@ -142,7 +134,25 @@ pub(crate) fn emitted_body_count(m: &Module, refs: &RefResolver) -> usize {
 }
 
 /// Emit a whole module as recompilable AngelScript.
+/// Emit one module WITHOUT class `default` statements.
+///
+/// This is the shape every existing consumer expects: the compile baseline, the sealed NPC
+/// archetype evidence, the qualification digests, and the source Mod Studio hands to its edit
+/// flow all either hash this text or feed it back to the compiler. Writing defaults is opted
+/// INTO through [`emit_module_with`], so no caller acquires them by accident.
 pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
+    emit_module_with(m, refs, false)
+}
+
+/// Emit one module.
+///
+/// `class_defaults` writes the class-scope `default` statements recovered from the generated
+/// `__InitDefaults` — everything an item, NPC or config class is made of. It is OFF by default
+/// everywhere, because a module that authors defaults makes the compiler regenerate that
+/// method, and the remap behind `compile-module --op edit` does not yet follow the references
+/// the regenerated body introduces; source that is going to be hashed or recompiled must keep
+/// the historical shape. `gore as emit` / `emit-all` turn it on for the human reading it.
+pub fn emit_module_with(m: &Module, refs: &RefResolver, class_defaults: bool) -> String {
     let mut s = String::new();
     let _ = writeln!(s, "// gore-as decompiled module: {} ({})", m.name, m.file);
     let _ = writeln!(
@@ -150,7 +160,9 @@ pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
         "// NOTE: local names + string literals are not stored in the cache.\n"
     );
 
+    let mut namespaces = NamespaceWriter::default();
     for e in &m.enums {
+        namespaces.enter(&mut s, &e.namespace);
         let _ = writeln!(s, "enum {}", e.name);
         let _ = writeln!(s, "{{");
         let mut expect = 0i32;
@@ -165,19 +177,25 @@ pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
         let _ = writeln!(s, "}}\n");
     }
 
+    // A global declared inside a namespace must be re-declared inside one, because every
+    // reference site renders it qualified (`Location::Spawnpoint`) — emitting the declaration at
+    // global scope makes the compiler reject the reference with "Unknown scope 'Location'".
     for g in &m.globals {
         if g.name.starts_with("__") {
             continue; // generator-synthesized (e.g. __StaticType_X)
         }
+        let namespace = g.namespace.as_str();
+        namespaces.enter(&mut s, namespace);
+        let indent = if namespace.is_empty() { "" } else { "    " };
         let base = g.ty.base_name(refs);
         if !is_primitive(&base) && !is_enum(&base) {
             // AngelScript globals MUST be const, but an FName/F-struct can't take `= 0`.
             // FName constants are almost always named after their value -> `n"Name"`; other
             // structs get a default-constructed const (their real value isn't recoverable).
             if base == "FName" {
-                let _ = writeln!(s, "const FName {0} = n\"{0}\";", g.name);
+                let _ = writeln!(s, "{indent}const FName {0} = n\"{0}\";", g.name);
             } else {
-                let _ = writeln!(s, "const {base} {} = {base}();", g.name);
+                let _ = writeln!(s, "{indent}const {base} {} = {base}();", g.name);
             }
             continue;
         }
@@ -188,9 +206,9 @@ pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
         };
         // AngelScript rejects implicit int->enum, so an enum const must be cast: `EType(1)`.
         if is_enum(&base) {
-            let _ = writeln!(s, "const {base} {} = {base}({inner});", g.name);
+            let _ = writeln!(s, "{indent}const {base} {} = {base}({inner});", g.name);
         } else {
-            let _ = writeln!(s, "const {base} {} = {inner};", g.name);
+            let _ = writeln!(s, "{indent}const {base} {} = {inner};", g.name);
         }
     }
     if !m.globals.is_empty() {
@@ -215,14 +233,36 @@ pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
         })
         .collect();
 
+    let (module_defaults, defaults_note) = if class_defaults {
+        recover_module_defaults(m, refs)
+    } else {
+        (HashMap::new(), None)
+    };
+    if let Some(note) = &defaults_note {
+        let _ = writeln!(
+            s,
+            "// NOTE: class defaults are not authored in this module: {note}."
+        );
+        let _ = writeln!(
+            s,
+            "// They are carried over byte-exact when this module is recompiled.\n"
+        );
+    }
+
     for c in &m.classes {
         // batch-24c: a compiler-generated delegate/event wrapper class re-emits as its ORIGINAL
         // one-line declaration (the verbatim class can never compile — see the detector's doc).
+        namespaces.enter(&mut s, &c.namespace);
         if let Some(decl) = delegate_wrapper_decl(c, refs) {
             s.push_str(&decl);
             continue;
         }
-        emit_class(&mut s, c, refs);
+        emit_class(
+            &mut s,
+            c,
+            refs,
+            module_defaults.get(c.name.as_str()).map(Vec::as_slice),
+        );
     }
 
     // free functions = module.functions that aren't generator-synthesized accessors
@@ -234,8 +274,10 @@ pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
         if !seen_free.insert(format!("{}({})", f.name, param_sig(f, refs))) {
             continue; // duplicate signature -> "function ... already exists"
         }
+        namespaces.enter(&mut s, &f.namespace);
         emit_function(&mut s, f, refs, false, false, 0);
     }
+    namespaces.close(&mut s);
     s
 }
 
@@ -324,7 +366,168 @@ fn delegate_wrapper_decl(c: &Class, refs: &RefResolver) -> Option<String> {
     ))
 }
 
-fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
+/// Qualify a rendered declaration type with its namespace when the name alone would not resolve.
+///
+/// Most type strings already come from `DataType::render`, which qualifies. A local's type can
+/// also be inferred from a call owner or a construct behaviour, and those channels only ever had
+/// the bare name — which silently declares an `Unknown` local as soon as the type lives in a
+/// namespace. Only the head is qualified; template arguments render through their own path.
+fn qualify_decl_type(ty: &str, refs: &RefResolver) -> String {
+    if ty.contains("::") {
+        return ty.to_string();
+    }
+    let (head, rest) = match ty.split_once('<') {
+        Some((head, rest)) => (head, Some(rest)),
+        None => (ty, None),
+    };
+    let Some(namespace) = refs.type_ns_by_name(head) else {
+        return ty.to_string();
+    };
+    match rest {
+        Some(rest) => format!("{namespace}::{head}<{rest}"),
+        None => format!("{namespace}::{head}"),
+    }
+}
+
+/// Tracks which AngelScript namespace block is currently open while a module is written.
+///
+/// A declaration's namespace is part of its identity in the cache's reference tables, so a
+/// recompile that drops it produces a DIFFERENT symbol: `UQuest_NewCamp`, declared in
+/// `G1R::Quest`, came back as a global-scope class and every reference to it then failed to
+/// resolve against the base cache. Declaration ORDER is preserved (it maps onto the cache's
+/// tables), so the block opens and closes as the namespace changes rather than grouping
+/// declarations by namespace.
+#[derive(Default)]
+struct NamespaceWriter<'a> {
+    open: Option<&'a str>,
+}
+
+impl<'a> NamespaceWriter<'a> {
+    /// Enter `namespace`, closing whatever else was open. An empty name is global scope.
+    fn enter(&mut self, s: &mut String, namespace: &'a str) {
+        if self.open == Some(namespace) {
+            return;
+        }
+        self.close(s);
+        if !namespace.is_empty() {
+            let _ = writeln!(s, "namespace {namespace}");
+            let _ = writeln!(s, "{{");
+        }
+        self.open = Some(namespace);
+    }
+
+    fn close(&mut self, s: &mut String) {
+        if self.open.is_some_and(|namespace| !namespace.is_empty()) {
+            let _ = writeln!(s, "}}");
+        }
+        self.open = None;
+    }
+}
+
+/// Name of the one compiler-generated method that holds a class's default statements.
+const INIT_DEFAULTS: &str = "__InitDefaults";
+
+/// Largest `__InitDefaults` bytecode, in dwords, that default-statement recovery will attempt.
+/// Recovery is superlinear in statement count, and the few initializers above this bound are
+/// machine-generated world/voice tables rather than authored defaults.
+const MAX_INIT_DEFAULTS_DWORDS: usize = 65_536;
+
+/// Recover the class-scope `default` statements of every class in a module.
+///
+/// All-or-nothing per MODULE, deliberately. `generated_defaults` can carry an omitted
+/// `__InitDefaults` record through a recompile byte-exact, but only for a module whose authored
+/// source declares no defaults at all — once the source authors one, the compiler regenerates
+/// the method from that source and the carried copy would be stale. A module authoring SOME of
+/// its defaults would therefore silently drop the rest, which is game data loss. So one class
+/// that cannot be recovered suppresses the whole module, which lands it back on the byte-exact
+/// carry-through.
+///
+/// Returns the per-class statements plus, when the module was suppressed, the reason to record
+/// in the emitted header.
+fn recover_module_defaults<'a>(
+    m: &'a Module,
+    refs: &RefResolver,
+) -> (HashMap<&'a str, Vec<String>>, Option<String>) {
+    let mut recovered: HashMap<&str, Vec<String>> = HashMap::new();
+    for c in &m.classes {
+        // A delegate/event wrapper re-emits as its original one-line declaration, so it has no
+        // class body to hold statements.
+        if delegate_wrapper_decl(c, refs).is_some() {
+            continue;
+        }
+        let Some(init) = c.methods.iter().find(|f| f.name == INIT_DEFAULTS) else {
+            continue;
+        };
+        // Cost gate, checked before the expensive render. A handful of generated manager and
+        // voice-table initializers are enormous (the largest is 389k instructions of unrolled
+        // `AddWorldPoint`/`AddWorldPosition` calls); recovering them would dominate emit time
+        // for tables no one hand-authors. They fall back to the byte-exact carry.
+        if init.bytecode.len() > MAX_INIT_DEFAULTS_DWORDS {
+            return (
+                HashMap::new(),
+                Some(format!(
+                    "{} (initializer is {} dwords, over the {MAX_INIT_DEFAULTS_DWORDS} recovery bound)",
+                    c.name,
+                    init.bytecode.len()
+                )),
+            );
+        }
+        let fields = class_field_types(c, refs);
+        let mut rendered = String::new();
+        emit_function_ctor(
+            &mut rendered,
+            init,
+            refs,
+            true,
+            false,
+            1,
+            None,
+            Some(&fields),
+            Some(&c.name),
+        );
+        match recover_defaults(&rendered) {
+            DefaultsRecovery::Recovered(statements) => {
+                recovered.insert(c.name.as_str(), statements);
+            }
+            DefaultsRecovery::Rejected(reason) => {
+                return (HashMap::new(), Some(format!("{} ({reason})", c.name)));
+            }
+        }
+    }
+    (recovered, None)
+}
+
+/// Field name -> base type name for a class, including every INHERITED script field, so the body
+/// renderer can type `this.field = <int>` stores and cast them. Own fields win a name collision
+/// (shadowing is illegal in AngelScript anyway); the super walk is cycle-bounded.
+///
+/// Batch-21 Class B residue: the own-fields map left e.g. `this.RoleCategoryContainers.opIndex(
+/// <int>)` (field declared on the super class) untyped, so the container-subtype enum-key wrap
+/// never fired.
+fn class_field_types(c: &Class, refs: &RefResolver) -> HashMap<String, String> {
+    let mut field_types: HashMap<String, String> = c
+        .fields
+        .iter()
+        .map(|f| (f.name.clone(), f.ty.base_name(refs)))
+        .collect();
+    let mut cur = c
+        .super_class
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    for _ in 0..64 {
+        let Some(sup) = cur else { break };
+        if let Some(fs) = refs.class_field_types(&sup) {
+            for (k, v) in fs {
+                field_types.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+        }
+        cur = refs.class_super_of(&sup).map(|s| s.to_string());
+    }
+    field_types
+}
+
+fn emit_class(s: &mut String, c: &Class, refs: &RefResolver, defaults: Option<&[String]>) {
     // batch-30a (C6b, specs/batch29-errortail.md §6): the cache Class record's asOBJ_*
     // Flags discriminate script VALUE types (asOBJ_VALUE, 0x2 — vanilla `struct`) from
     // reference types (asOBJ_REF, 0x1 — vanilla `class`). Emitting the 46 value types as
@@ -365,27 +568,18 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver) {
     if !c.fields.is_empty() {
         s.push('\n');
     }
-    let super_name = c.super_class.as_deref().filter(|s| !s.is_empty());
-    // field name -> base type name, so the decompiler can cast `this.field = <int>` assignments.
-    let mut field_types: HashMap<String, String> = c
-        .fields
-        .iter()
-        .map(|f| (f.name.clone(), f.ty.base_name(refs)))
-        .collect();
-    // Batch-21 Class B residue: fold in INHERITED fields by walking the script hierarchy —
-    // the own-fields map left e.g. `this.RoleCategoryContainers.opIndex(<int>)` (field declared
-    // on the super class) untyped, so the container-subtype enum-key wrap never fired. Own
-    // fields win on a name collision (shadowing is illegal in AS anyway). Walk is cycle-bounded.
-    let mut cur = super_name.map(|s| s.to_string());
-    for _ in 0..64 {
-        let Some(sup) = cur else { break };
-        if let Some(fs) = refs.class_field_types(&sup) {
-            for (k, v) in fs {
-                field_types.entry(k.clone()).or_insert_with(|| v.clone());
-            }
+    // Class-scope default statements, recovered from the compiler-generated `__InitDefaults`.
+    // They carry everything a data class IS (name, value, damage, icon, tags), so a class
+    // without them decompiles to an empty shell. Written before the constructors, matching the
+    // layout the game's own AngelScript source generator uses.
+    if let Some(statements) = defaults.filter(|d| !d.is_empty()) {
+        for statement in statements {
+            let _ = writeln!(s, "    default {statement}");
         }
-        cur = refs.class_super_of(&sup).map(|s| s.to_string());
+        s.push('\n');
     }
+    let super_name = c.super_class.as_deref().filter(|s| !s.is_empty());
+    let field_types = class_field_types(c, refs);
     for ctor in &c.ctors {
         emit_function_ctor(
             s,
@@ -723,6 +917,16 @@ fn emit_function_ctor(
     // head (`TArrayConstIterator local_N;`) — a template-arity error that makes the local
     // `Unknown`. Derive `<T>` from the `Iterator()` call's container receiver; applied AFTER
     // the member pass so the composed type wins over the bare member-derived head.
+    // Qualify every inferred local type ONCE, before the body renderer sees the map: the body's
+    // `Cast<T>` renders and the hoisted declaration have to name the same type, and several
+    // inference channels (call owner, construct behaviour) only ever carried the bare name.
+    let mut local_types: HashMap<i32, String> = local_types
+        .into_iter()
+        .map(|(slot, ty)| {
+            let qualified = qualify_decl_type(&ty, refs);
+            (slot, qualified)
+        })
+        .collect();
     let iter_overrides = infer_iterator_types(f, &fc, refs, fields, &local_types);
     for (slot, ty) in &iter_overrides {
         local_types.insert(*slot, ty.clone());
@@ -1149,7 +1353,9 @@ fn emit_function_ctor(
         // 150 -> 2763). Batch-23b: emit the qualifier ONLY for the per-method body-const-
         // safety-verified set (specs/const-safety.md); everything else stays non-const and
         // keeps its caller-side residue.
-        let constq = if is_method && f.is_const_method() && const_safe_set().contains(qid.as_str())
+        let constq = if is_method
+            && f.is_const_method()
+            && !body_calls_non_const_method(&body, class_name, refs)
         {
             " const"
         } else {
@@ -1187,6 +1393,8 @@ fn emit_function_ctor(
         // proof used for inferred enums. Everything else gets an explicit default initializer so
         // the game's warnings-as-errors policy cannot reject a branch-only first write.
         for (slot, ty) in &locals {
+            let qualified = qualify_decl_type(ty, refs);
+            let ty = &qualified;
             if suppressed.contains(slot)
                 || na_suppressed.contains(slot)
                 || iter_suppressed.contains(slot)
@@ -1337,7 +1545,18 @@ fn render_params(f: &Func, refs: &RefResolver) -> String {
             } else {
                 p.name.clone()
             };
-            format!("{ty} {amp}{nm}")
+            // A parameter's DEFAULT is part of the declaration, not of the function's identity
+            // in the cache tables. Rendering it back is what makes a call that omits the
+            // argument legal — and omitting it is what the call site does, because spelling the
+            // default out compiles into construct behaviours vanilla never had. The cache
+            // stores the text tokenized (`FGameplayTagContainer ( )`), so pack it.
+            let default = f
+                .param_defaults
+                .get(i)
+                .filter(|value| !value.is_empty())
+                .map(|value| format!(" = {}", super::refs::pack_tokens(value)))
+                .unwrap_or_default();
+            format!("{ty} {amp}{nm}{default}")
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -4306,7 +4525,7 @@ fn writes_int64(n: &str) -> bool {
 
 /// Heuristic: a UE enum type name (`E` + uppercase), which is int-castable like a primitive.
 fn is_enum(ty: &str) -> bool {
-    let b = ty.as_bytes();
+    let b = super::structure::bare_type_name(ty).as_bytes();
     b.len() >= 2 && b[0] == b'E' && b[1].is_ascii_uppercase()
 }
 

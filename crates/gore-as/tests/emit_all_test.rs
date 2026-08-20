@@ -18,6 +18,7 @@ fn function(name: &str, namespace: &str, params: Vec<Param>) -> Func {
     Func {
         name: name.into(),
         namespace: namespace.into(),
+        param_defaults: Vec::new(),
         ret: primitive(0x52),
         params,
         bytecode: Vec::new(),
@@ -56,6 +57,7 @@ fn collision_plan_matches_emitted_functions_and_reference_modifiers() {
     let mirror = || function("Mirror", "Owner", Vec::new());
     let owner = || Class {
         name: "Owner".into(),
+        namespace: String::new(),
         super_class: None,
         fields: Vec::new(),
         methods: vec![function("Mirror", "Owner", Vec::new())],
@@ -268,6 +270,7 @@ fn overlay_scanner_is_comment_safe_and_understands_class_members_and_handles() {
     let mut modules = direction_collision_modules();
     modules[0].classes.push(Class {
         name: "VanillaClass".into(),
+        namespace: String::new(),
         super_class: None,
         fields: Vec::new(),
         methods: vec![function("Shared", "VanillaClass", Vec::new())],
@@ -487,6 +490,7 @@ fn full_tree_resolver_preparation_includes_classes_fields_and_unreferenced_metho
     let method = Func {
         name: "ShadowedName".into(),
         namespace: String::new(),
+        param_defaults: Vec::new(),
         ret: DataType {
             token: 0x52,
             ..DataType::default()
@@ -504,6 +508,7 @@ fn full_tree_resolver_preparation_includes_classes_fields_and_unreferenced_metho
         classes: vec![
             Class {
                 name: "UBaseFixture".into(),
+                namespace: String::new(),
                 super_class: None,
                 fields: vec![Field {
                     name: "Count".into(),
@@ -516,6 +521,7 @@ fn full_tree_resolver_preparation_includes_classes_fields_and_unreferenced_metho
             },
             Class {
                 name: "UChildFixture".into(),
+                namespace: String::new(),
                 super_class: Some("UBaseFixture".into()),
                 fields: Vec::new(),
                 methods: Vec::new(),

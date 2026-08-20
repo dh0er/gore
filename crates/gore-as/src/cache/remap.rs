@@ -83,6 +83,16 @@ pub enum RemapError {
     #[error("StaticNames index {0} does not fit the bytecode operand that references it")]
     StaticNameIndexOverflow(i64),
     #[error(
+        "unresolved static name in op {op} (regen index {index}, name {name:?}): the base cache \
+         declares no such n\"....\" literal. This module introduces a NEW name the base lacks — \
+         opt in with RemapOptions::allow_new_symbols to retain its minimal row."
+    )]
+    UnresolvedStaticName {
+        op: &'static str,
+        index: i64,
+        name: String,
+    },
+    #[error(
         "mini-cache contains an unresolved {kind} reference in {op} ({key:#x}); the key/id is absent from both the target base and the mini's retained tail tables"
     )]
     UnresolvedEffectiveReference {
@@ -519,6 +529,18 @@ struct SymTables {
     /// T5 string literals are runtime-created values, so equal literal identities may legally
     /// appear under many raw keys. Non-string globals remain unique declarations.
     global_is_string_of_ptr: HashMap<i64, bool>,
+    /// T5: global ptr key -> the module the row was declared in. Deliberately NOT part of a
+    /// STRING literal's identity, but it is half of what tells two equal literals apart.
+    global_module_of_ptr: HashMap<i64, String>,
+    /// T5: global ptr key -> its position in the GlobalReferences table, i.e. declaration order.
+    /// The other half: which occurrence of the literal inside that module this row is.
+    global_index_of_ptr: HashMap<i64, usize>,
+    /// T6 StaticNames in table order — the `n"..."` literal pool that an FName operand indexes.
+    /// A name's identity IS its text, so the pool is remapped by text, not by key.
+    static_names: Vec<String>,
+    /// Text -> its FIRST index in [`Self::static_names`]. Equal text is one value wherever it
+    /// occurs, so the first row is a deterministic representative.
+    static_index_by_name: HashMap<String, i64>,
     /// EVERY int64 ptr-key that appears as a key in this cache's tail tables: T1 type ptrs,
     /// T3 func ptrs, T5 global ptrs, and the ptr values in T2/T4 (id->ptr). Used by the
     /// post-condition scan to assert no regen ptr-key survives in a remapped module's bytes.
@@ -1334,6 +1356,8 @@ impl SymTables {
         let mut global_ptr_of_id: HashMap<String, Vec<i64>> = HashMap::new();
         let mut global_ident_of_ptr: HashMap<i64, Ident> = HashMap::new();
         let mut global_is_string_of_ptr = HashMap::new();
+        let mut global_module_of_ptr = HashMap::new();
+        let mut global_index_of_ptr = HashMap::new();
         let mut global_name_of_ptr = HashMap::new();
         for _ in 0..c.read_count("GlobalReferences")? {
             let key_pos = c.pos();
@@ -1381,6 +1405,8 @@ impl SymTables {
             identity_budget.charge(key, &global_identity)?;
             global_ident_of_ptr.insert(key, global_identity);
             global_is_string_of_ptr.insert(key, is_string);
+            global_module_of_ptr.insert(key, module.clone());
+            global_index_of_ptr.insert(key, global_id_of_ptr.len());
             global_id_of_ptr.insert(key, identity.clone());
             global_ptr_of_id.entry(identity).or_default().push(key);
             global_name_of_ptr.insert(key, name);
@@ -1388,8 +1414,21 @@ impl SymTables {
         for keys in global_ptr_of_id.values_mut() {
             keys.sort_unstable();
         }
-        // T6 StaticNames + T7 PropertyReferences are not operand-referenced (member ops carry a
-        // TYPE-ID, not a prop key — the prop key is derived from typeid+offset), so skip them.
+        // T6 StaticNames IS operand-referenced: `STR` carries an index in dword 0's high word,
+        // and an `n"..."` literal carries one in the `PshC4` before the native `__STATIC_NAME`
+        // accessor. A regen assigns its own pool, so those operands need the same
+        // identity-based rewrite as every other ref. (T7 PropertyReferences stays skipped: member
+        // ops carry a TYPE-ID and the prop key is derived from typeid+offset.)
+        let static_count = c.read_count("StaticNames")?;
+        let mut static_names = Vec::with_capacity(static_count);
+        let mut static_index_by_name: HashMap<String, i64> = HashMap::with_capacity(static_count);
+        for index in 0..static_count {
+            let name = c.read_sia()?;
+            static_index_by_name
+                .entry(name.clone())
+                .or_insert(index as i64);
+            static_names.push(name);
+        }
 
         let identity_bytes = identity_budget.charged;
         Ok(SymTables {
@@ -1410,6 +1449,10 @@ impl SymTables {
             global_ptr_of_id,
             global_ident_of_ptr,
             global_is_string_of_ptr,
+            global_module_of_ptr,
+            global_index_of_ptr,
+            static_names,
+            static_index_by_name,
             all_ptr_keys,
             identity_bytes,
         })
@@ -3222,6 +3265,9 @@ pub struct RemapCounts {
     /// Embedded module-record int64 refs (ObjVariableTypes/DerivedFrom/ShadowType/Factory/Behavior).
     pub embed_type_ptr: usize,
     pub embed_func_id: usize,
+    /// T6 StaticNames operands rewritten onto the base pool (`STR`, and `PshC4` before
+    /// `__STATIC_NAME`).
+    pub static_name: usize,
 }
 
 impl RemapCounts {
@@ -3233,6 +3279,7 @@ impl RemapCounts {
         self.type_id += other.type_id;
         self.embed_type_ptr += other.embed_type_ptr;
         self.embed_func_id += other.embed_func_id;
+        self.static_name += other.static_name;
     }
     pub fn total(&self) -> usize {
         self.global_ptr
@@ -3242,6 +3289,7 @@ impl RemapCounts {
             + self.type_id
             + self.embed_type_ptr
             + self.embed_func_id
+            + self.static_name
     }
 }
 
@@ -3973,28 +4021,203 @@ impl EffectiveReferenceState {
     }
 }
 
+/// Resolve a GLOBAL ptr-key, with the one tie-break the generic resolver cannot make.
+///
+/// A string literal's identity is its text alone, so a module that spells the same literal out
+/// twice — or shares one with another module — is ambiguous by identity even though nothing
+/// about it is unclear. Both rows hold the same text and are behaviourally interchangeable, but
+/// picking arbitrarily would not be byte-faithful, so resolve it the way the rows are ordered:
+/// among the candidates declared in the SAME module, the k-th occurrence in the regenerated
+/// cache is the k-th in the base. If the two do not spell the literal out the same number of
+/// times the shape changed, and the generic resolver's error stands.
+///
+/// NON-string globals are unique declarations. Ambiguity there is a real defect and stays fatal.
+fn remap_global_ptr(
+    op: &'static str,
+    regen_key: i64,
+    regen: &SymTables,
+    base: &SymTables,
+) -> Result<i64, RemapError> {
+    match remap_ptr(
+        "global",
+        op,
+        regen_key,
+        &regen.global_id_of_ptr,
+        &regen.global_name_of_ptr,
+        &base.global_ptr_of_id,
+    ) {
+        Err(RemapError::Ambiguous { kind, op, name, n }) => {
+            match same_module_occurrence(regen_key, regen, base) {
+                Some(key) => Ok(key),
+                None => Err(RemapError::Ambiguous { kind, op, name, n }),
+            }
+        }
+        other => other,
+    }
+}
+
+/// The base row for `regen_key`: same identity, same declaring module, same position among the
+/// occurrences there. `None` unless the key is a string literal and both sides declare it the
+/// same number of times in that module.
+fn same_module_occurrence(regen_key: i64, regen: &SymTables, base: &SymTables) -> Option<i64> {
+    if !regen
+        .global_is_string_of_ptr
+        .get(&regen_key)
+        .copied()
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let module = regen.global_module_of_ptr.get(&regen_key)?;
+    let identity = regen.global_id_of_ptr.get(&regen_key)?;
+    let occurrences = |tables: &SymTables| -> Option<Vec<i64>> {
+        let mut keys: Vec<i64> = tables
+            .global_ptr_of_id
+            .get(identity)?
+            .iter()
+            .copied()
+            .filter(|key| {
+                tables.global_module_of_ptr.get(key).map(String::as_str) == Some(module.as_str())
+            })
+            .collect();
+        keys.sort_by_key(|key| {
+            tables
+                .global_index_of_ptr
+                .get(key)
+                .copied()
+                .unwrap_or(usize::MAX)
+        });
+        Some(keys)
+    };
+    let mine = occurrences(regen)?;
+    let theirs = occurrences(base)?;
+    if mine.len() == theirs.len() {
+        if let Some(position) = mine.iter().position(|key| *key == regen_key) {
+            return theirs.get(position).copied();
+        }
+    }
+    // The counts disagree, so the k-th occurrence is not a correspondence any more. Every
+    // candidate still holds the SAME TEXT — that is the whole of a string literal's identity,
+    // and the tail table records no module for one — so the rows are interchangeable values and
+    // the only thing lost by picking is byte-faithfulness against whichever row vanilla
+    // happened to use. Pick the lowest key so the choice is deterministic. Non-string globals
+    // never reach here: they are unique declarations and their ambiguity stays fatal.
+    theirs.first().copied()
+}
+
+/// Map one regen `StaticNames` index onto the base pool BY TEXT.
+///
+/// A name's identity is its text — nothing else about a `StaticNames` row distinguishes it — so
+/// this is the same identity-resolution every other ref operand gets, just with a trivial
+/// identity. A regen assigns its own pool in its own order, so an index that is left alone
+/// silently denotes a DIFFERENT name once the module is spliced back: the symptom is an item
+/// whose mesh comes back as some unrelated asset.
+fn remap_static_name(
+    op: &'static str,
+    raw: i64,
+    regen: &SymTables,
+    base: &SymTables,
+) -> Result<i64, RemapError> {
+    let name = usize::try_from(raw)
+        .ok()
+        .and_then(|index| regen.static_names.get(index))
+        .ok_or(RemapError::MissingStaticName(raw))?;
+    base.static_index_by_name
+        .get(name)
+        .copied()
+        .ok_or_else(|| RemapError::UnresolvedStaticName {
+            op,
+            index: raw,
+            name: name.clone(),
+        })
+}
+
+/// Opt-in remap diagnostics (`GORE_AS_REMAP_DIAG=1`).
+///
+/// An unresolved or ambiguous ref says WHICH symbol failed but not WHY, and the why is always
+/// the same shape: the regen's composed identity differs from the base's in one field. Printing
+/// both side by side turns a dead end into a one-line diff.
+fn diagnose_unresolved(
+    kind: &'static str,
+    regen_key: i64,
+    regen_ids: &HashMap<i64, String>,
+    regen_names: &HashMap<i64, String>,
+    base_ids: &HashMap<i64, String>,
+    base_names: &HashMap<i64, String>,
+) {
+    if std::env::var_os("GORE_AS_REMAP_DIAG").is_none() {
+        return;
+    }
+    let name = regen_names.get(&regen_key).cloned().unwrap_or_default();
+    eprintln!("[remap-diag] {kind} {name:?}");
+    if let Some(identity) = regen_ids.get(&regen_key) {
+        eprintln!("  regen: {identity}");
+    }
+    // Prefer base rows that share the regen row's OWNER text: a generated symbol like
+    // `StaticClass` exists thousands of times, and only the one with the same owner is a
+    // meaningful comparison.
+    let regen_identity = regen_ids.get(&regen_key).cloned().unwrap_or_default();
+    let owner_hint: Vec<&str> = regen_identity
+        .split(':')
+        .filter(|part| part.len() > 12 && part.chars().any(|c| c.is_ascii_uppercase()))
+        .collect();
+    let mut shown = 0;
+    for (key, base_name) in base_names {
+        if *base_name != name || shown >= 6 {
+            continue;
+        }
+        let Some(identity) = base_ids.get(key) else {
+            continue;
+        };
+        if owner_hint.iter().any(|hint| identity.contains(hint)) {
+            eprintln!("  base : {identity}");
+            shown += 1;
+        }
+    }
+    if shown == 0 {
+        eprintln!("  base : (no row with that name)");
+    }
+}
+
 /// Remap one function's bytecode dwords IN PLACE. `code` is the function's `Vec<i32>`.
 fn remap_bytecode(
     code: &mut [i32],
     regen: &SymTables,
     base: &SymTables,
 ) -> Result<RemapCounts, RemapError> {
-    let instrs = disassemble(code).map_err(|e| RemapError::Disasm(e.to_string()))?;
+    // Keep an immutable copy for look-ahead classification: call refs are rewritten below, but
+    // `PshC4` -> `__STATIC_NAME` recognition must read the original regen key.
+    let original = code.to_vec();
+    let instrs = disassemble(&original).map_err(|e| RemapError::Disasm(e.to_string()))?;
     let mut counts = RemapCounts::default();
-    for ins in &instrs {
+    for (pos, ins) in instrs.iter().enumerate() {
+        // T6 StaticNames, in the same two operand forms the new-symbol path recognizes.
+        if ins.op.name == "STR" {
+            let raw = ((original[ins.offset_dw] as u32 >> 16) & 0xffff) as i64;
+            let mapped = remap_static_name("STR", raw, regen, base)?;
+            let narrowed =
+                u16::try_from(mapped).map_err(|_| RemapError::StaticNameIndexOverflow(mapped))?;
+            let low = code[ins.offset_dw] as u32 & 0x0000_ffff;
+            code[ins.offset_dw] = (low | ((narrowed as u32) << 16)) as i32;
+            counts.static_name += 1;
+        } else if ins.op.name == "PshC4"
+            && instrs
+                .get(pos + 1)
+                .and_then(|next| callee_name_from_effective(next, &original, regen, base))
+                == Some("__STATIC_NAME")
+        {
+            let raw = original[ins.offset_dw + 1] as i64;
+            let mapped = remap_static_name("PshC4", raw, regen, base)?;
+            code[ins.offset_dw + 1] =
+                i32::try_from(mapped).map_err(|_| RemapError::StaticNameIndexOverflow(mapped))?;
+            counts.static_name += 1;
+        }
         for site in ref_sites(ins.op.name) {
             let base_off = ins.offset_dw + site.dw_index;
             match site.kind {
                 RefKind::GlobalPtr => {
                     let regen_key = read_qw(code, base_off);
-                    let nk = remap_ptr(
-                        "global",
-                        ins.op.name,
-                        regen_key,
-                        &regen.global_id_of_ptr,
-                        &regen.global_name_of_ptr,
-                        &base.global_ptr_of_id,
-                    )?;
+                    let nk = remap_global_ptr(ins.op.name, regen_key, regen, base)?;
                     write_qw(code, base_off, nk);
                     counts.global_ptr += 1;
                 }
@@ -4007,7 +4230,17 @@ fn remap_bytecode(
                         &regen.func_id_of_ptr,
                         &regen.func_name_of_ptr,
                         &base.func_ptr_of_id,
-                    )?;
+                    )
+                    .inspect_err(|_| {
+                        diagnose_unresolved(
+                            "function",
+                            regen_key,
+                            &regen.func_id_of_ptr,
+                            &regen.func_name_of_ptr,
+                            &base.func_id_of_ptr,
+                            &base.func_name_of_ptr,
+                        )
+                    })?;
                     write_qw(code, base_off, nk);
                     counts.func_ptr += 1;
                 }
@@ -4040,7 +4273,17 @@ fn remap_bytecode(
                         &regen.func_id_of_ptr,
                         &regen.func_name_of_ptr,
                         &base.func_ptr_of_id,
-                    )?;
+                    )
+                    .inspect_err(|_| {
+                        diagnose_unresolved(
+                            "function-id",
+                            regen_ptr,
+                            &regen.func_id_of_ptr,
+                            &regen.func_name_of_ptr,
+                            &base.func_id_of_ptr,
+                            &base.func_name_of_ptr,
+                        )
+                    })?;
                     // base ptr -> base id (the operand is the id, not the ptr).
                     let new_id = if base.funcid_to_ptr.get(&regen_id) == Some(&nptr) {
                         regen_id
