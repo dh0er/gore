@@ -694,6 +694,13 @@ fn emit_function_ctor(
     // Strip a leading `const` from the return type: a return-by-value `const` is meaningless in
     // AngelScript, and the cache sets the const flag inconsistently between a base method and its
     // override -> "must have the same return type as in the base class". Stripping makes them match.
+    // Strip a leading `const` from the return type: a return-by-value `const` is meaningless in
+    // AngelScript, and the cache sets the const flag inconsistently between a base method and its
+    // override -> "must have the same return type as in the base class". Stripping makes them match.
+    // Restoring it was measured (2026-08-20): the const then has to reach every local that
+    // receives such a value, and doing that costs 59 compile errors — conversions into locals
+    // that are typed without it, and const locals the body later reassigns. The two modules a
+    // sample of 627 cannot splice because of this are the price.
     let ret = f.ret.render(refs).trim_start_matches("const ").to_string();
     let params = render_params(f, refs);
     // NOTE: the signature is written AFTER the body is computed (below) — the ref-return `&`
