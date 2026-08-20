@@ -70,6 +70,7 @@ class _DialogHarness extends StatelessWidget {
     required this.operationsBusy,
     required this.onResult,
     this.library,
+    this.showManagedFiles = false,
     this.deploymentRecoveryGeneration,
     this.textScaler = TextScaler.noScaling,
   });
@@ -79,6 +80,7 @@ class _DialogHarness extends StatelessWidget {
   final bool applyEnabled;
   final bool operationsBusy;
   final LibraryState? library;
+  final bool showManagedFiles;
   final int? deploymentRecoveryGeneration;
   final ValueChanged<StatusDetailsResult?> onResult;
   final TextScaler textScaler;
@@ -112,6 +114,7 @@ class _DialogHarness extends StatelessWidget {
                       library: library ?? _library,
                       operationsBusy: operationsBusy,
                       applyEnabled: applyEnabled,
+                      showManagedFiles: showManagedFiles,
                       deploymentRecoveryGeneration:
                           deploymentRecoveryGeneration,
                     ),
@@ -134,6 +137,7 @@ Future<StatusDetailsResult?> _open(
   bool applyEnabled = true,
   bool operationsBusy = false,
   LibraryState? library,
+  bool showManagedFiles = false,
   int? deploymentRecoveryGeneration,
   TextScaler textScaler = TextScaler.noScaling,
 }) async {
@@ -145,6 +149,7 @@ Future<StatusDetailsResult?> _open(
       applyEnabled: applyEnabled,
       operationsBusy: operationsBusy,
       library: library,
+      showManagedFiles: showManagedFiles,
       deploymentRecoveryGeneration: deploymentRecoveryGeneration,
       textScaler: textScaler,
       onResult: (value) => result = value,
@@ -174,7 +179,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.text('No Manager deployment is installed for this game.'),
+      find.text('No mods are installed in the game right now.'),
       findsOneWidget,
     );
     await tester.tap(find.byKey(const ValueKey('status-details-action-apply')));
@@ -235,9 +240,10 @@ void main() {
             recoveryTotal: 3,
           ),
         }),
+        showManagedFiles: true,
       );
 
-      expect(find.text('Recorded ownership evidence'), findsOneWidget);
+      expect(find.text('Files GORE manages'), findsOneWidget);
       expect(find.text('C:/game/G1R/safe evil .bin'), findsNothing);
       expect(find.textContaining('\u202e'), findsNothing);
 
@@ -248,18 +254,18 @@ void main() {
 
       for (final heading in [
         'Replaced game files',
-        'Pristine backups',
-        'Added pak and container files',
+        'Backups of the originals',
+        'Added mod files',
         'UE4SS mod directories',
-        'Recovery files and holders',
+        'Repair files',
       ]) {
         expect(find.text(heading), findsOneWidget);
       }
       expect(find.text('C:/game/G1R/safe evil .bin'), findsOneWidget);
       expect(find.text('C:/game/G1R/original.bin.gore-bak'), findsOneWidget);
       expect(find.text('C:/game/gore-mod.deployed.json'), findsOneWidget);
-      expect(find.text('No paths recorded in this group.'), findsNWidgets(2));
-      expect(find.text('1 of 3 recorded paths shown.'), findsOneWidget);
+      expect(find.text('Nothing recorded here.'), findsNWidgets(2));
+      expect(find.text('Showing 1 of 3 paths.'), findsOneWidget);
       expect(
         find.descendant(
           of: find.byKey(const ValueKey('status-details-owned-live-0')),
@@ -269,6 +275,40 @@ void main() {
       );
     },
   );
+
+  testWidgets('owned paths are readable and left-aligned', (tester) async {
+    await _open(
+      tester,
+      _state({
+        'state': 'in_sync',
+        'loadout': <Object?>[],
+        'manager_owned': _ownedEvidence(
+          live: ['\\\\?\\C:\\Games\\Gothic\\SFX.bank'],
+        ),
+      }),
+      showManagedFiles: true,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('status-details-manager-owned')),
+    );
+    await tester.pumpAndSettle();
+
+    // The extended-length marker is a file-system detail, not something to read.
+    expect(find.text('C:\\Games\\Gothic\\SFX.bank'), findsOneWidget);
+    expect(find.textContaining('\\\\?\\'), findsNothing);
+
+    // An empty group has no full-width row to hide ExpansionTile's default
+    // centring, so it used to float in the middle of the dialog.
+    final group = find.byKey(
+      const ValueKey('status-details-group-owned-ue4ss'),
+    );
+    final groupRect = tester.getRect(group);
+    final expansion = tester.getRect(
+      find.byKey(const ValueKey('status-details-manager-owned')),
+    );
+    expect(groupRect.left, lessThan(expansion.center.dx));
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'fully hidden ownership group reports truncation without claiming empty',
@@ -283,6 +323,7 @@ void main() {
             recoveryTotal: 2,
           ),
         }),
+        showManagedFiles: true,
       );
 
       await tester.tap(
@@ -296,14 +337,14 @@ void main() {
       expect(
         find.descendant(
           of: recovery,
-          matching: find.text('No paths recorded in this group.'),
+          matching: find.text('Nothing recorded here.'),
         ),
         findsNothing,
       );
       expect(
         find.descendant(
           of: recovery,
-          matching: find.text('0 of 2 recorded paths shown.'),
+          matching: find.text('Showing 0 of 2 paths.'),
         ),
         findsOneWidget,
       );
@@ -381,7 +422,7 @@ void main() {
         applyEnabled: false,
       );
 
-      expect(find.text('Currently deployed'), findsOneWidget);
+      expect(find.text('In the game now'), findsOneWidget);
       expect(find.text('After Apply'), findsOneWidget);
       expect(find.text('Alpha'), findsOneWidget);
       expect(find.text('Beta'), findsOneWidget);
@@ -402,11 +443,8 @@ void main() {
       applyEnabled: false,
     );
 
-    expect(
-      find.text('The installed core did not provide these details.'),
-      findsNWidgets(2),
-    );
-    expect(find.text('No mods in this loadout.'), findsNothing);
+    expect(find.text('No details available.'), findsNWidgets(2));
+    expect(find.text('No mods.'), findsNothing);
   });
 
   testWidgets('game updated lists drifted paths and returns Reapply', (
@@ -479,6 +517,7 @@ void main() {
         currentRoot: _root,
         applyEnabled: false,
         operationsBusy: false,
+        showManagedFiles: true,
         deploymentRecoveryGeneration: 17,
         onResult: (value) => result = value,
       ),
@@ -518,30 +557,29 @@ void main() {
     },
   );
 
-  testWidgets('unknown and errored states retain technical detail and Refresh', (
-    tester,
-  ) async {
-    await _open(
-      tester,
-      _state({'state': 'future_state'}, error: 'native detail'),
-    );
+  testWidgets(
+    'unknown and errored states retain technical detail and Refresh',
+    (tester) async {
+      await _open(
+        tester,
+        _state({'state': 'future_state'}, error: 'native detail'),
+      );
 
-    expect(
-      find.text(
-        'Deployment status could not be verified. Refresh before applying mods.',
-      ),
-      findsOneWidget,
-    );
-    expect(find.text('native detail'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('status-details-action-refresh')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey('status-details-action-apply')),
-      findsNothing,
-    );
-  });
+      expect(
+        find.text('The status could not be read. Refresh first.'),
+        findsOneWidget,
+      );
+      expect(find.text('native detail'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('status-details-action-refresh')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('status-details-action-apply')),
+        findsNothing,
+      );
+    },
+  );
 
   testWidgets('non-authoritative library offers Refresh for known status', (
     tester,
@@ -587,7 +625,7 @@ void main() {
         applyEnabled: false,
       );
 
-      expect(find.text('Deployment: Studio deployment active'), findsOneWidget);
+      expect(find.text('Status: Mod Studio active'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('status-details-action-refresh')),
         findsOneWidget,
@@ -615,7 +653,7 @@ void main() {
       );
 
       expect(
-        find.text('No Manager deployment is installed for this game.'),
+        find.text('No mods are installed in the game right now.'),
         findsOneWidget,
       );
       expect(
@@ -649,7 +687,7 @@ void main() {
     expect(find.text('old-root native detail'), findsNothing);
     expect(find.text('Old root mod'), findsNothing);
     expect(find.text('Old root warning'), findsNothing);
-    expect(find.text('Recorded ownership evidence'), findsNothing);
+    expect(find.text('Files GORE manages'), findsNothing);
     expect(find.text('C:/old-root-owned.bin'), findsNothing);
     expect(
       find.byKey(const ValueKey('status-details-action-refresh')),
@@ -667,13 +705,11 @@ void main() {
     );
 
     expect(
-      find.text(
-        'Deployment status could not be verified. Refresh before applying mods.',
-      ),
+      find.text('The status could not be read. Refresh first.'),
       findsOneWidget,
     );
     expect(
-      find.text('No Manager deployment is installed for this game.'),
+      find.text('No mods are installed in the game right now.'),
       findsNothing,
     );
     expect(
@@ -822,6 +858,7 @@ void main() {
         'loadout': <Object?>[],
         'manager_owned': _ownedEvidence(live: paths),
       }),
+      showManagedFiles: true,
       textScaler: const TextScaler.linear(2),
     );
     final expansion = find.byKey(

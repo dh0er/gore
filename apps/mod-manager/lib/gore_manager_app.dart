@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'app/domain/desktop_updater.dart';
 import 'app/domain/ui_settings.dart';
 import 'app/ui/ui_scale_root.dart';
 import 'core/core_service.dart';
@@ -26,6 +27,9 @@ class GoreManagerApp extends ConsumerWidget {
     };
     return MaterialApp(
       title: 'gore-manager',
+      // A background update check has no widget context of its own; this key
+      // gives it one to show its dialog from.
+      navigatorKey: updaterNavigatorKey,
       debugShowCheckedModeBanner: false,
       theme: buildGoreManagerTheme(),
       darkTheme: buildGoreManagerDarkTheme(),

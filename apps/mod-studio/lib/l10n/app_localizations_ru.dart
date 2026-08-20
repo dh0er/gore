@@ -170,7 +170,7 @@ class AppLocalizationsRu extends AppLocalizations {
   }
 
   @override
-  String get aboutCopyright => '© 2026 участники проекта GORE';
+  String get aboutCopyright => '© 2026 Daniel Hoer';
 
   @override
   String get aboutLicense => 'Распространяется по лицензии MIT.';

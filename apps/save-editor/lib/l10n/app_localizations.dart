@@ -2819,7 +2819,7 @@ abstract class AppLocalizations {
   /// No description provided for @aboutCopyright.
   ///
   /// In en, this message translates to:
-  /// **'© 2026 GORE contributors'**
+  /// **'© 2026 Daniel Hoer'**
   String get aboutCopyright;
 
   /// No description provided for @aboutLicense.

@@ -48,7 +48,10 @@ Future<void> main() async {
   // WinSparkle attaches its update UI to the main window, so initialize it
   // only after the first frame; earlier init can show an unowned dialog.
   WidgetsBinding.instance.addPostFrameCallback((_) {
-    unawaited(initDesktopUpdater());
+    final autoCheckEnabled = JsonFileUiSettingsStore.defaultForPlatform()
+        .read()
+        .autoUpdateCheck;
+    unawaited(initDesktopUpdater(autoCheckEnabled: autoCheckEnabled));
   });
 }
 

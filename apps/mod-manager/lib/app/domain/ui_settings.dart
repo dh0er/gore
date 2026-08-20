@@ -14,6 +14,8 @@ class UiSettings {
     this.appLocale,
     this.themeMode = ThemeMode.light,
     this.uiScale = 1.0,
+    this.advancedDetails = false,
+    this.autoUpdateCheck = true,
     this.windowSize,
     this.windowMaximized = false,
   });
@@ -36,6 +38,9 @@ class UiSettings {
         final num value => UiScaleNotifier.clampScale(value.toDouble()),
         _ => 1.0,
       },
+      advancedDetails: json['advancedDetails'] == true,
+      // Absent means "not yet chosen", and the default is on.
+      autoUpdateCheck: json['autoUpdateCheck'] != false,
       windowSize: switch ((json['windowWidth'], json['windowHeight'])) {
         (final num width, final num height) when width > 0 && height > 0 =>
           Size(width.toDouble(), height.toDouble()),
@@ -56,6 +61,14 @@ class UiSettings {
   /// Whole-UI zoom factor applied by [UiScaleRoot] (0.5–2.0). Default 1.0.
   final double uiScale;
 
+  /// Whether the technical layer of the UI is shown (per-component conflict
+  /// targets, coverage grades, the managed-file record, import match reasons).
+  /// Off by default: the plain view is the one most players want.
+  final bool advancedDetails;
+
+  /// Whether the app checks for its own updates in the background. Default on.
+  final bool autoUpdateCheck;
+
   /// Last known window size in logical pixels; null until first persisted.
   final Size? windowSize;
   final bool windowMaximized;
@@ -64,6 +77,8 @@ class UiSettings {
     String? appLocale,
     ThemeMode? themeMode,
     double? uiScale,
+    bool? advancedDetails,
+    bool? autoUpdateCheck,
     Size? windowSize,
     bool? windowMaximized,
   }) {
@@ -71,6 +86,8 @@ class UiSettings {
       appLocale: appLocale ?? this.appLocale,
       themeMode: themeMode ?? this.themeMode,
       uiScale: uiScale ?? this.uiScale,
+      advancedDetails: advancedDetails ?? this.advancedDetails,
+      autoUpdateCheck: autoUpdateCheck ?? this.autoUpdateCheck,
       windowSize: windowSize ?? this.windowSize,
       windowMaximized: windowMaximized ?? this.windowMaximized,
     );
@@ -84,6 +101,8 @@ class UiSettings {
       ThemeMode.light => 'light',
     },
     'uiScale': uiScale,
+    'advancedDetails': advancedDetails,
+    'autoUpdateCheck': autoUpdateCheck,
     if (windowSize case final size?) ...{
       'windowWidth': size.width,
       'windowHeight': size.height,
@@ -226,10 +245,11 @@ final sharedConfigProvider = Provider<SharedConfig>((ref) {
 /// Path to the game's executable (.exe), or null if unset. Used to derive the
 /// game root for deploys. Persisted (in the shared `config.json`) so the
 /// choice survives restarts and is shared with the `gore` CLI and other apps.
-final gameExePathProvider =
-    StateNotifierProvider<GameExePathNotifier, String?>((ref) {
-  return GameExePathNotifier(ref.watch(sharedConfigProvider));
-});
+final gameExePathProvider = StateNotifierProvider<GameExePathNotifier, String?>(
+  (ref) {
+    return GameExePathNotifier(ref.watch(sharedConfigProvider));
+  },
+);
 
 class GameExePathNotifier extends StateNotifier<String?> {
   GameExePathNotifier(this._config) : super(_config.gamePath());
@@ -249,19 +269,18 @@ class GameExePathNotifier extends StateNotifier<String?> {
 
 /// Selected app/game language code (one of [kGameLangs.code]). Drives the
 /// MaterialApp locale. Persisted so the choice survives restarts.
-final localeProvider =
-    StateNotifierProvider<LocaleNotifier, String>((ref) {
+final localeProvider = StateNotifierProvider<LocaleNotifier, String>((ref) {
   return LocaleNotifier(ref.watch(uiSettingsStoreProvider));
 });
 
 class LocaleNotifier extends StateNotifier<String> {
   LocaleNotifier(this._store)
-      : super(
-          _store.read().appLocale ??
-              deviceLanguageCode(
-                WidgetsBinding.instance.platformDispatcher.locales,
-              ),
-        );
+    : super(
+        _store.read().appLocale ??
+            deviceLanguageCode(
+              WidgetsBinding.instance.platformDispatcher.locales,
+            ),
+      );
 
   final UiSettingsStore _store;
 
@@ -273,8 +292,9 @@ class LocaleNotifier extends StateNotifier<String> {
 
 /// Selected theme mode (light/dark/system). Persisted so the choice survives
 /// restarts. Defaults to [ThemeMode.light].
-final themeModeProvider =
-    StateNotifierProvider<ThemeModeNotifier, ThemeMode>((ref) {
+final themeModeProvider = StateNotifierProvider<ThemeModeNotifier, ThemeMode>((
+  ref,
+) {
   return ThemeModeNotifier(ref.watch(uiSettingsStoreProvider));
 });
 
@@ -314,4 +334,40 @@ class UiScaleNotifier extends StateNotifier<double> {
   void increase({double step = 0.05}) => set(state + step);
   void decrease({double step = 0.05}) => set(state - step);
   void reset() => set(1.0);
+}
+
+/// Whether the UI shows its technical layer (see [UiSettings.advancedDetails]).
+/// Persisted so the choice survives restarts. Defaults to false.
+final advancedDetailsProvider =
+    StateNotifierProvider<AdvancedDetailsNotifier, bool>((ref) {
+      return AdvancedDetailsNotifier(ref.watch(uiSettingsStoreProvider));
+    });
+
+class AdvancedDetailsNotifier extends StateNotifier<bool> {
+  AdvancedDetailsNotifier(this._store) : super(_store.read().advancedDetails);
+
+  final UiSettingsStore _store;
+
+  void set(bool value) {
+    state = value;
+    _store.write(_store.read().copyWith(advancedDetails: value));
+  }
+}
+
+/// Whether the app checks for its own updates in the background. Persisted so
+/// the choice survives restarts; read at startup before any window exists.
+final autoUpdateCheckProvider =
+    StateNotifierProvider<AutoUpdateCheckNotifier, bool>((ref) {
+      return AutoUpdateCheckNotifier(ref.watch(uiSettingsStoreProvider));
+    });
+
+class AutoUpdateCheckNotifier extends StateNotifier<bool> {
+  AutoUpdateCheckNotifier(this._store) : super(_store.read().autoUpdateCheck);
+
+  final UiSettingsStore _store;
+
+  void set(bool value) {
+    state = value;
+    _store.write(_store.read().copyWith(autoUpdateCheck: value));
+  }
 }

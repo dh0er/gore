@@ -9,31 +9,30 @@ class AppLocalizationsZh extends AppLocalizations {
   AppLocalizationsZh([String locale = 'zh']) : super(locale);
 
   @override
-  String get coreBlockedTitle => 'Mod Manager 不可用';
+  String get coreBlockedTitle => 'Mod Manager 无法启动';
 
   @override
-  String get coreDllMissingMessage => '未找到所需的 gore_ffi.dll 文件。';
+  String get coreDllMissingMessage => '缺少必需的程序文件 (gore_ffi.dll)。';
 
   @override
-  String get coreDllLoadFailedMessage => '无法加载 GORE Core 原生库。';
+  String get coreDllLoadFailedMessage => '无法加载必需的程序文件。';
 
   @override
-  String get coreVerificationFailedMessage => '无法验证 GORE Core 原生库。';
+  String get coreVerificationFailedMessage => '无法校验必需的程序文件。';
 
   @override
   String get coreManagerTooOldMessage =>
-      '此 GORE Core 版本比 Mod Manager 更新。请更新 Mod Manager。';
+      '程序文件比 Mod Manager 更新。请更新 Mod Manager。';
 
   @override
   String get coreNativeTooOldMessage =>
-      '此 GORE Core 版本比 Mod Manager 更旧。请更新或修复完整的 Mod Manager 安装。';
+      '程序文件比 Mod Manager 更旧。请重新安装 Mod Manager。';
 
   @override
-  String get coreCommandsMissingMessage =>
-      'GORE Core 库未提供此 Mod Manager 所需的全部命令。';
+  String get coreCommandsMissingMessage => '程序文件缺少此 Mod Manager 需要的功能。';
 
   @override
-  String get coreBlockedRepairHint => '请更新或修复完整的 Mod Manager 软件包，然后重新启动应用。';
+  String get coreBlockedRepairHint => '请重新安装或修复 Mod Manager，然后再次启动。';
 
   @override
   String get coreTechnicalDetails => '技术详细信息';
@@ -48,16 +47,16 @@ class AppLocalizationsZh extends AppLocalizations {
   String get coreTechnicalDetailsCopyFailed => '无法复制技术详细信息。请重试。';
 
   @override
-  String get preflightAttention => 'GORE 暂时无法继续。';
+  String get preflightAttention => '更改模组前，还有一件事需要处理。';
 
   @override
   String get preflightGameRunning => 'Gothic 仍在运行。请先关闭游戏，再更改模组。';
 
   @override
-  String get managerOperationFailed => '管理器操作失败。';
+  String get managerOperationFailed => '操作失败。';
 
   @override
-  String get libraryOperationFailed => '无法刷新模组库。';
+  String get libraryOperationFailed => '无法加载模组列表。';
 
   @override
   String get conflictsUnavailable => '无法检查冲突。';
@@ -86,180 +85,197 @@ class AppLocalizationsZh extends AppLocalizations {
   String get componentLocalization => '文本';
 
   @override
-  String get componentAudio => '音频';
+  String get componentAudio => '音效';
 
   @override
-  String get componentAngelScript => 'AngelScript';
+  String get componentAngelScript => '脚本';
 
   @override
-  String get componentTexture => '纹理';
+  String get componentTexture => '贴图';
 
   @override
-  String get componentKindLocalizationPatch => '文本补丁';
+  String get componentGameFiles => '游戏文件';
 
   @override
-  String get componentKindAudioPatch => '音频补丁';
+  String get componentVoice => '配音';
 
   @override
-  String get componentKindAngelScriptPatch => 'AngelScript 补丁';
+  String get componentKindLocalizationPatch => '文本改动';
 
   @override
-  String get componentKindTexturePatch => '纹理补丁';
+  String get componentKindAudioPatch => '音效改动';
 
   @override
-  String get componentKindLoosePak => '独立 PAK';
+  String get componentKindAngelScriptPatch => '脚本改动';
 
   @override
-  String get componentKindTriplet => 'PAK 三件套';
+  String get componentKindTexturePatch => '贴图改动';
 
   @override
-  String get componentKindUe4ssLua => 'UE4SS Lua';
+  String get componentKindLoosePak => 'PAK 文件';
 
   @override
-  String get componentKindRawFile => '原始文件';
+  String get componentKindTriplet => 'IoStore 容器';
 
   @override
-  String get componentKindFilePatch => '文件补丁';
+  String get componentKindUe4ssLua => 'UE4SS 脚本';
 
   @override
-  String get componentKindPakFilePatch => 'PAK 文件补丁';
+  String get componentKindRawFile => '文件';
 
   @override
-  String get componentKindVoiceArchivePatch => '语音存档补丁';
+  String get componentKindFilePatch => '被替换的游戏文件';
+
+  @override
+  String get componentKindPakFilePatch => '来自 ~mods PAK 的游戏文件';
+
+  @override
+  String get componentKindVoiceArchivePatch => '配音';
+
+  @override
+  String get rawTargetGameText => '全部游戏文本';
+
+  @override
+  String get rawTargetGameScripts => '全部游戏脚本';
+
+  @override
+  String get rawTargetSoundBank => '音效库';
+
+  @override
+  String rawTargetSoundBankNamed(String name) {
+    return '音效库：$name';
+  }
 
   @override
   String get conflictKindLocalization => '文本';
 
   @override
-  String get conflictKindAudio => '音频';
+  String get conflictKindAudio => '音效';
 
   @override
-  String get conflictKindAsset => '资源';
+  String get conflictKindAsset => '游戏数据';
 
   @override
-  String get conflictKindCdo => 'CDO';
+  String get conflictKindCdo => '对象数值';
 
   @override
-  String get conflictKindUe4ssUnknown => '未知 UE4SS';
+  String get conflictKindUe4ssUnknown => 'UE4SS（不明）';
 
   @override
-  String get conflictKindScriptModule => '脚本模块';
+  String get conflictKindScriptModule => '游戏脚本';
 
   @override
-  String get conflictKindVoiceArchive => '语音存档';
+  String get conflictKindVoiceArchive => '配音';
 
   @override
-  String get conflictKindRawFile => '原始文件';
+  String get conflictKindRawFile => '文件';
 
   @override
-  String get conflictKindLooseFile => '独立文件';
+  String get conflictKindLooseFile => '游戏文件';
 
   @override
-  String get preflightUnavailable => 'GORE 无法检查游戏安装。';
+  String get preflightUnavailable => '无法检查游戏安装。';
 
   @override
   String get preflightRetry => '重新检查';
 
   @override
-  String get preflightReviewStatus => '检查状态';
+  String get preflightReviewStatus => '查看状态';
 
   @override
-  String get preflightReviewRecovery => '恢复帮助';
+  String get preflightReviewRecovery => '查看帮助';
 
   @override
-  String get installRecoveryTitle => '恢复安装';
+  String get installRecoveryTitle => '被中断的安装';
 
   @override
   String get installRecoveryBody =>
-      'GORE 检测到与安装或脚本构建有关的恢复数据。相关操作可能仍在运行，也可能已经结束但留下了这些数据。GORE 无法安全地自动修复。';
+      'GORE 发现了一次安装或脚本编译留下的数据。该任务可能仍在运行，也可能已经结束并留下了这些数据。GORE 无法安全地自行清理。';
 
   @override
   String get installRecoverySteps =>
-      '如果相关操作仍在运行，请等待它完成。不要终止该操作，也不要删除任何锁文件。只有在确认没有相关操作仍在运行后，才按照下方恢复文件夹中的 README.txt 操作。如果未列出文件夹或无法确定，请保持恢复数据不变并寻求帮助。然后重新检查。';
+      '如果任务仍在运行，请等它结束——不要终止它，也不要删除任何文件。确认没有任务在运行后，按下面文件夹中的 README.txt 操作，然后重新检查。如果没有列出文件夹或你不确定，请保持原样并寻求帮助。';
 
   @override
-  String get installRecoveryEvidence => '检测到的恢复数据';
+  String get installRecoveryEvidence => 'GORE 发现的内容';
 
   @override
-  String get managerRecoveryTitle => '恢复中断的管理器操作';
+  String get managerRecoveryTitle => '修复被中断的更改';
 
   @override
   String get managerRecoveryConfirm =>
-      'GORE 检测到一个明确中断的管理器操作。仅当你希望 GORE 核对已记录的操作并将安装恢复到已知状态时才继续。游戏存档绝不会被修改。';
+      'GORE 发现了一次被中断的更改，可以把游戏恢复到已知状态。你的存档绝不会被改动。';
 
   @override
-  String get managerRecoveryAlreadyClean => '中断的操作已被处理。安装已重新检查。';
+  String get managerRecoveryAlreadyClean => '没有需要修复的内容。已重新检查状态。';
 
   @override
-  String get managerRecoveryBusy => '该操作再次处于活动状态。未进行任何更改；请等待其完成后重新检查。';
+  String get managerRecoveryBusy => '任务又在运行了。未做任何更改，请等它结束。';
 
   @override
-  String get managerRecoveryLockCleared => '中断的操作尚未更改安装。其过时的锁已安全移除。';
+  String get managerRecoveryLockCleared => '被中断的任务尚未改动任何内容，已清理完毕。';
 
   @override
-  String get managerRecoveryRestoredPristine => '已回滚中断的更改，并恢复了记录的安装基准状态。';
+  String get managerRecoveryRestoredPristine => '更改已回滚，游戏已恢复到之前的状态。';
 
   @override
-  String get managerRecoveryApplyPreserved => '应用已经完成。已保留记录的状态，并重新检查了当前状态。';
+  String get managerRecoveryApplyPreserved => '应用已经完成，没有丢失任何内容。';
 
   @override
-  String get managerRecoveryUndeployConfirmed => '移除已经完成。已清理剩余的事务数据，并重新检查了状态。';
+  String get managerRecoveryUndeployConfirmed => '移除已经完成，残留内容已清理。';
 
   @override
-  String get managerRecoveryCompileRequired => '这属于脚本构建恢复。管理器未进行更改；请查看恢复帮助。';
+  String get managerRecoveryCompileRequired => '这属于一次脚本编译，因此未做任何更改。请打开修复帮助。';
 
   @override
-  String get managerRecoveryInspectionFailed =>
-      'GORE 无法安全核对中断的操作。未进行任何更改；请查看当前恢复详情。';
+  String get managerRecoveryInspectionFailed => 'GORE 无法安全检查被中断的任务，未做任何更改。';
 
   @override
-  String get managerRecoveryFailed =>
-      '无法完成恢复。GORE 已尝试重新检查安装，但当前状态可能未知。请先查看状态，再重试。';
+  String get managerRecoveryFailed => '修复未能完成。请先查看状态再重试。';
 
   @override
   String get statusUnknown => '未知';
 
   @override
   String statusDetailsTitle(String status) {
-    return '部署：$status';
+    return '状态：$status';
   }
 
   @override
   String statusDetailsOpen(String status) {
-    return '显示部署详情：$status';
+    return '显示详情：$status';
   }
 
   @override
-  String get statusDetailsNoRoot => '请在设置中选择游戏安装位置以查看部署状态。';
+  String get statusDetailsNoRoot => '请先在设置中选择你的 Gothic 安装目录。';
 
   @override
-  String get statusDetailsNoDeployment => '此游戏没有管理器部署。';
+  String get statusDetailsNoDeployment => '游戏中当前没有安装任何模组。';
 
   @override
-  String get statusDetailsInSyncDescription => '已部署模组与当前配置一致。';
+  String get statusDetailsInSyncDescription => '游戏中的模组与此处勾选的完全一致。';
 
   @override
-  String get statusDetailsDeployedLoadout => '已部署的加载顺序';
+  String get statusDetailsDeployedLoadout => '游戏中的模组';
 
   @override
-  String get statusDetailsChangesDescription => '当前部署与应用后将安装的内容不同。';
+  String get statusDetailsChangesDescription => '你的选择与游戏中的内容不一致。';
 
   @override
-  String get statusDetailsCurrentlyDeployed => '当前部署';
+  String get statusDetailsCurrentlyDeployed => '当前游戏中';
 
   @override
-  String get statusDetailsAfterApply => '应用后';
+  String get statusDetailsAfterApply => '应用之后';
 
   @override
-  String get statusDetailsGameUpdatedDescription =>
-      '自上次部署后，游戏文件已更改。请重新应用配置以恢复管理器拥有的文件。';
+  String get statusDetailsGameUpdatedDescription => '游戏更新覆盖了模组文件。请再次应用以恢复。';
 
   @override
-  String get statusDetailsDriftedFiles => '已更改的文件';
+  String get statusDetailsDriftedFiles => '受影响的文件';
 
   @override
   String get statusDetailsStudioDescription =>
-      'Mod Studio 当前控制此游戏安装。应用管理器配置前请先接管。';
+      'Mod Studio 目前在这个游戏里放了模组。请先接管游戏，再让管理器应用你的模组。';
 
   @override
   String statusDetailsStudioMod(String name) {
@@ -267,19 +283,19 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
-  String get statusDetailsStudioNameUnknown => 'Studio 未报告模组名称。';
+  String get statusDetailsStudioNameUnknown => 'Mod Studio 未提供名称。';
 
   @override
-  String get statusDetailsRecoveryDescription => '部署被中断。应用或移除管理器模组前请先恢复。';
+  String get statusDetailsRecoveryDescription => '有一次更改被中断。请先修复，再更改模组。';
 
   @override
-  String get statusDetailsUnknownDescription => '无法验证部署状态。应用模组前请刷新。';
+  String get statusDetailsUnknownDescription => '无法读取状态。请先刷新。';
 
   @override
-  String get statusDetailsUnavailable => '已安装的核心未提供这些详情。';
+  String get statusDetailsUnavailable => '没有可用的详情。';
 
   @override
-  String get statusDetailsEmptyLoadout => '此配置中没有模组。';
+  String get statusDetailsEmptyLoadout => '没有模组。';
 
   @override
   String get statusDetailsLastError => '上次错误';
@@ -300,42 +316,41 @@ class AppLocalizationsZh extends AppLocalizations {
   String get statusDetailsOpenSettings => '打开设置';
 
   @override
-  String get recoveryAction => '恢复';
+  String get recoveryAction => '修复';
 
   @override
-  String get recoveryRequiredConfirm => '恢复中断的部署并移除已部分部署的文件吗？';
+  String get recoveryRequiredConfirm => '修复被中断的更改并删除安装了一半的文件？';
 
   @override
-  String get statusRecoveryRequired => '需要恢复';
+  String get statusRecoveryRequired => '需要修复';
 
   @override
-  String get statusDetailsOwnershipTitle => '已记录的所有权证据';
+  String get statusDetailsOwnershipTitle => 'GORE 管理的文件';
 
   @override
-  String get statusDetailsOwnershipDescription =>
-      '管理器部署记录中保存的路径。这不表示这些路径当前仍然存在。';
+  String get statusDetailsOwnershipDescription => '在应用模组时记录，并不代表这些文件现在仍然存在。';
 
   @override
   String get statusDetailsOwnershipLive => '已替换的游戏文件';
 
   @override
-  String get statusDetailsOwnershipBackups => '原始文件备份';
+  String get statusDetailsOwnershipBackups => '原始文件的备份';
 
   @override
-  String get statusDetailsOwnershipAdditive => '新增的 pak 和容器文件';
+  String get statusDetailsOwnershipAdditive => '新增的模组文件';
 
   @override
   String get statusDetailsOwnershipUe4ss => 'UE4SS 模组目录';
 
   @override
-  String get statusDetailsOwnershipRecovery => '恢复文件和保留位置';
+  String get statusDetailsOwnershipRecovery => '修复文件';
 
   @override
-  String get statusDetailsOwnershipEmpty => '此组中没有记录的路径。';
+  String get statusDetailsOwnershipEmpty => '这里没有记录。';
 
   @override
   String statusDetailsOwnershipShown(int shown, int total) {
-    return '显示了 $total 条已记录路径中的 $shown 条。';
+    return '显示 $total 条路径中的 $shown 条。';
   }
 
   @override
@@ -348,7 +363,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get tabSettings => '设置';
 
   @override
-  String get settingsGameExe => '游戏可执行文件';
+  String get settingsGameExe => 'Gothic 安装目录';
 
   @override
   String get settingsGameExePick => '选择…';
@@ -357,19 +372,71 @@ class AppLocalizationsZh extends AppLocalizations {
   String get settingsLanguage => '语言';
 
   @override
-  String get statusInSync => '已同步';
+  String get libraryEmptyTitle => '还没有模组';
 
   @override
-  String get statusChangesPending => '有待应用的更改';
+  String get libraryEmptyBody => '导入一个文件夹或模组文件即可开始。';
+
+  @override
+  String get detailEmptyHint => '选择一个模组，查看它会改动什么。';
+
+  @override
+  String get settingsAdvanced => '高级详情';
+
+  @override
+  String get settingsAdvancedHint => '显示技术信息：受影响的条目、冲突检查的可靠程度，以及 GORE 管理的文件。';
+
+  @override
+  String get updatesTitle => '更新';
+
+  @override
+  String get checkForUpdatesAutomatically => '自动检查更新';
+
+  @override
+  String get checkForUpdatesNow => '立即检查更新';
+
+  @override
+  String get updatesPortableNotice => '便携版会在浏览器中打开下载页面。请用新下载的文件替换现有文件。';
+
+  @override
+  String get updateCheckFailed => '无法检查更新，请稍后再试。';
+
+  @override
+  String get updateUpToDate => '你正在使用最新版本。';
+
+  @override
+  String get updateAvailableTitle => '有可用更新';
+
+  @override
+  String updateAvailableMessage(String version, String current) {
+    return '版本 $version 可用，你当前是 $current。';
+  }
+
+  @override
+  String get updateLater => '稍后';
+
+  @override
+  String get updateDownload => '下载';
+
+  @override
+  String updateOpenFailed(String url) {
+    return '无法打开下载页面。你可以通过 $url 访问。';
+  }
+
+  @override
+  String get statusInSync => '已是最新';
+
+  @override
+  String get statusChangesPending => '尚未应用';
 
   @override
   String get statusGameUpdated => '游戏已更新';
 
   @override
-  String get statusStudioDeploy => 'Studio 部署已激活';
+  String get statusStudioDeploy => 'Mod Studio 正在使用';
 
   @override
-  String get statusNothingDeployed => '尚未部署任何内容';
+  String get statusNothingDeployed => '游戏中没有模组';
 
   @override
   String get actionImport => '导入';
@@ -378,7 +445,13 @@ class AppLocalizationsZh extends AppLocalizations {
   String get actionApply => '应用';
 
   @override
-  String get actionUndeployAll => '撤销全部部署';
+  String get actionStartGame => '启动游戏';
+
+  @override
+  String get startGameTooltip => '用当前游戏中的模组启动 Gothic';
+
+  @override
+  String get startGameFailed => '无法启动 Gothic。请在设置中检查游戏安装。';
 
   @override
   String get commonCancel => '取消';
@@ -394,62 +467,61 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String importOutcomeCreated(String name) {
-    return '已将“$name”添加到库中。';
+    return '已添加“$name”。';
   }
 
   @override
   String importOutcomeUpdated(String name) {
-    return '已更新库中的“$name”。';
+    return '已更新“$name”。';
   }
 
   @override
   String importOutcomeUnchanged(String name) {
-    return '“$name”已在库中。';
+    return '“$name”已在你的列表中。';
   }
 
   @override
   String importOutcomeMatchedBy(String method) {
     String _temp0 = intl.Intl.selectLogic(method, {
-      'none': '未匹配到现有库条目。',
-      'source': '根据相同的导入来源匹配。',
-      'content': '根据经验证相同的内容匹配。',
-      'entry_id': '根据模组 ID 匹配。',
-      'other': '匹配详情不可用。',
+      'none': '没有匹配到已有模组。',
+      'source': '按相同的导入来源匹配。',
+      'content': '按已验证的相同内容匹配。',
+      'entry_id': '按模组 ID 匹配。',
+      'other': '没有匹配详情。',
     });
     return '$_temp0';
   }
 
   @override
-  String get importRefusalDuplicateAmbiguous => '此导入匹配多个库条目。请检查或移除重复条目，然后重试。';
+  String get importRefusalDuplicateAmbiguous => '这与你已有的多个模组重复。请删除重复项后重试。';
 
   @override
-  String get importRefusalIdentityConflict =>
-      '导入来源及其内容匹配到不同的库条目。请检查或移除冲突条目，然后重试。';
+  String get importRefusalIdentityConflict => '来源和内容分别对应你已有的两个不同模组。请先理清后重试。';
 
   @override
   String get importFailed =>
-      '无法完成导入。支持的来源：文件夹、ZIP、独立的 *_P.pak、完整的 .utoc/.ucas 组合（.pak 可选）、.lcache、.bank 和 PrecompiledScript*.Cache。请先解压 .7z 或 .rar，再导入文件夹。来源可能不受支持、已损坏或不完整。模组可能已被添加或更新；请刷新并检查库状态，然后重试。';
+      '无法导入。支持文件夹、ZIP 压缩包和单个模组文件（*_P.pak、.utoc/.ucas、.lcache、.bank、PrecompiledScript*.Cache）。请先解压 .7z 或 .rar，再导入文件夹。该模组仍可能已被添加或更新——请先刷新列表再重试。';
 
   @override
-  String get importPickerFailed => '无法打开文件或文件夹选择器。导入尚未开始。请重试。';
+  String get importPickerFailed => '无法打开文件选择器，未导入任何内容。';
 
   @override
-  String get importOutcomeUnknown => '无法验证导入结果。请选择“刷新”以检查库状态。';
+  String get importOutcomeUnknown => '结果不明确。请刷新以检查你的模组列表。';
 
   @override
-  String get applyTooltip => '将模组配置应用到游戏';
+  String get applyTooltip => '把勾选的模组装进游戏';
 
   @override
-  String get undeployAllAction => '撤销全部部署';
+  String get undeployAllAction => '从游戏中移除全部';
 
   @override
-  String get undeployAllConfirm => '从游戏中移除管理器部署的全部内容？';
+  String get undeployAllConfirm => '从游戏中移除管理器安装的所有模组？';
 
   @override
-  String get takeOverTitle => 'Studio 部署已激活';
+  String get takeOverTitle => 'Mod Studio 正在使用';
 
   @override
-  String get takeOverBody => 'mod-studio 已向游戏部署了一个模组。是否接管以便管理器应用此配置？';
+  String get takeOverBody => 'Mod Studio 目前在游戏里放了一个模组。接管后由管理器应用你的选择？';
 
   @override
   String get takeOverAction => '接管';
@@ -459,53 +531,41 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String conflictsTitle(int count) {
-    return '检测结果 ($count)';
+    return '冲突 ($count)';
   }
 
   @override
-  String get conflictWinner => '预期生效';
+  String get conflictWinner => '生效';
 
   @override
-  String get noConflicts => '未识别到冲突。';
+  String get noConflicts => '未发现冲突。';
 
   @override
-  String get conflictCoverageIncomplete => '已启用模组的冲突信息不完整，可能还存在其他冲突。';
+  String get conflictCoverageIncomplete => '部分模组无法完全检查，可能还有其他冲突。';
 
   @override
-  String get loadOrderDirection => '加载顺序：低优先级在前，后面的模组具有更高的预期优先级。';
+  String get loadOrderDirection => '列表中靠下的模组会覆盖靠上的模组。';
 
   @override
-  String get footprintCoverageScope => '覆盖度仅描述已识别的冲突目标，不能证明运行时优先级。';
+  String get footprintCoverageScope => '仅列出已知的冲突目标，不保证游戏中的实际结果。';
 
   @override
-  String get footprintCoverageExact => '精确 — 组件的冲突目标列表完整。';
+  String get footprintTargetsExact => '受影响的条目 — 完整列表：';
 
   @override
-  String get footprintCoveragePartial => '部分 — 已列出的冲突目标是已知的，但组件可能影响更多目标。';
+  String get footprintTargetsPartial => '受影响的条目 — 可能还有更多：';
 
   @override
-  String get footprintCoverageAdvisory => '参考 — 已列出的目标只是线索，并非完整证明。';
+  String get footprintTargetsAdvisory => '可能受影响的条目 — 只是线索，并非确证：';
 
   @override
-  String get footprintCoverageOpaque => '不透明 — 组件的冲突目标未知。';
+  String get footprintTargetsOpaque => 'GORE 无法判断这里改动了什么。';
 
   @override
-  String get footprintCoverageExactLabel => '精确';
+  String get conflictsUnverified => '冲突未知，请先刷新。';
 
   @override
-  String get footprintCoveragePartialLabel => '部分';
-
-  @override
-  String get footprintCoverageAdvisoryLabel => '参考';
-
-  @override
-  String get footprintCoverageOpaqueLabel => '不透明';
-
-  @override
-  String get conflictsUnverified => '在刷新库状态之前，冲突尚未验证。';
-
-  @override
-  String get componentsTitle => '组件';
+  String get componentsTitle => '这个模组会改动什么';
 
   @override
   String targetsMore(int count) {
@@ -513,12 +573,11 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
-  String get removeModDeploymentHint =>
-      '从库中移除不会立即更改现有部署。如果该模组已部署，请随后选择“应用”以更新游戏安装。';
+  String get removeModDeploymentHint => '这只会把它从你的列表中移除。如果它已装进游戏，请随后选择“应用”。';
 
   @override
   String removeModSuccess(String name) {
-    return '已从库中移除“$name”。';
+    return '已移除“$name”。';
   }
 
   @override
@@ -528,27 +587,27 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String removeModPartialFailure(String name) {
-    return '已移除“$name”，但无法完整刷新模组库。';
+    return '已移除“$name”，但列表未能完全更新。';
   }
 
   @override
   String removeModOutcomeUnknown(String name) {
-    return '无法确认是否已移除“$name”。';
+    return '无法确认“$name”是否已被移除。';
   }
 
   @override
-  String get libraryStateUnknown => '无法验证库状态。请在更改或应用模组前选择“刷新”。';
+  String get libraryStateUnknown => '模组列表已过期。请先刷新，再更改或应用模组。';
 
   @override
   String get removeModAction => '移除';
 
   @override
   String removeModConfirm(String name) {
-    return '从库中移除“$name”？';
+    return '从你的列表中移除“$name”？';
   }
 
   @override
-  String get errorSetGamePath => '请先在设置中指定游戏路径。';
+  String get errorSetGamePath => '请先在设置中选择你的 Gothic 安装目录。';
 
   @override
   String applyReportApplied(int count) {
@@ -556,37 +615,34 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
-  String get warningsTitle => '警告';
-
-  @override
   String get modDisabledHint => '已禁用';
 
   @override
-  String get kindGoremod => 'goremod';
+  String get kindGoremod => 'GORE 包';
 
   @override
-  String get kindTriplet => 'triplet';
+  String get kindTriplet => 'IoStore 模组';
 
   @override
-  String get kindPak => 'pak';
+  String get kindPak => 'PAK 模组';
 
   @override
   String get kindUe4ss => 'UE4SS';
 
   @override
-  String get kindRawfile => '原始文件';
+  String get kindRawfile => '整文件替换';
 
   @override
   String get kindMixed => '混合';
 
   @override
-  String get sevHard => '严重';
+  String get sevHard => '冲突';
 
   @override
-  String get sevSoft => '轻微';
+  String get sevSoft => '警告';
 
   @override
-  String get sevInfo => '信息';
+  String get sevInfo => '提示';
 
   @override
   String aboutVersion(String version, String sha) {
@@ -597,7 +653,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get about => '关于';
 
   @override
-  String get aboutCopyright => '© 2026 GORE 贡献者';
+  String get aboutCopyright => '© 2026 Daniel Hoer';
 
   @override
   String get aboutLicense => '基于 MIT 许可证授权。';
@@ -618,7 +674,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get themeSystem => '跟随系统';
 
   @override
-  String get uiScale => '界面缩放';
+  String get uiScale => '显示大小';
 
   @override
   String get resetZoomTooltip => '重置缩放（Ctrl+0）';
@@ -650,31 +706,30 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   AppLocalizationsZhHans() : super('zh_Hans');
 
   @override
-  String get coreBlockedTitle => 'Mod Manager 不可用';
+  String get coreBlockedTitle => 'Mod Manager 无法启动';
 
   @override
-  String get coreDllMissingMessage => '未找到所需的 gore_ffi.dll 文件。';
+  String get coreDllMissingMessage => '缺少必需的程序文件 (gore_ffi.dll)。';
 
   @override
-  String get coreDllLoadFailedMessage => '无法加载 GORE Core 原生库。';
+  String get coreDllLoadFailedMessage => '无法加载必需的程序文件。';
 
   @override
-  String get coreVerificationFailedMessage => '无法验证 GORE Core 原生库。';
+  String get coreVerificationFailedMessage => '无法校验必需的程序文件。';
 
   @override
   String get coreManagerTooOldMessage =>
-      '此 GORE Core 版本比 Mod Manager 更新。请更新 Mod Manager。';
+      '程序文件比 Mod Manager 更新。请更新 Mod Manager。';
 
   @override
   String get coreNativeTooOldMessage =>
-      '此 GORE Core 版本比 Mod Manager 更旧。请更新或修复完整的 Mod Manager 安装。';
+      '程序文件比 Mod Manager 更旧。请重新安装 Mod Manager。';
 
   @override
-  String get coreCommandsMissingMessage =>
-      'GORE Core 库未提供此 Mod Manager 所需的全部命令。';
+  String get coreCommandsMissingMessage => '程序文件缺少此 Mod Manager 需要的功能。';
 
   @override
-  String get coreBlockedRepairHint => '请更新或修复完整的 Mod Manager 软件包，然后重新启动应用。';
+  String get coreBlockedRepairHint => '请重新安装或修复 Mod Manager，然后再次启动。';
 
   @override
   String get coreTechnicalDetails => '技术详细信息';
@@ -689,16 +744,16 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get coreTechnicalDetailsCopyFailed => '无法复制技术详细信息。请重试。';
 
   @override
-  String get preflightAttention => 'GORE 暂时无法继续。';
+  String get preflightAttention => '更改模组前，还有一件事需要处理。';
 
   @override
   String get preflightGameRunning => 'Gothic 仍在运行。请先关闭游戏，再更改模组。';
 
   @override
-  String get managerOperationFailed => '管理器操作失败。';
+  String get managerOperationFailed => '操作失败。';
 
   @override
-  String get libraryOperationFailed => '无法刷新模组库。';
+  String get libraryOperationFailed => '无法加载模组列表。';
 
   @override
   String get conflictsUnavailable => '无法检查冲突。';
@@ -727,180 +782,197 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get componentLocalization => '文本';
 
   @override
-  String get componentAudio => '音频';
+  String get componentAudio => '音效';
 
   @override
-  String get componentAngelScript => 'AngelScript';
+  String get componentAngelScript => '脚本';
 
   @override
-  String get componentTexture => '纹理';
+  String get componentTexture => '贴图';
 
   @override
-  String get componentKindLocalizationPatch => '文本补丁';
+  String get componentGameFiles => '游戏文件';
 
   @override
-  String get componentKindAudioPatch => '音频补丁';
+  String get componentVoice => '配音';
 
   @override
-  String get componentKindAngelScriptPatch => 'AngelScript 补丁';
+  String get componentKindLocalizationPatch => '文本改动';
 
   @override
-  String get componentKindTexturePatch => '纹理补丁';
+  String get componentKindAudioPatch => '音效改动';
 
   @override
-  String get componentKindLoosePak => '独立 PAK';
+  String get componentKindAngelScriptPatch => '脚本改动';
 
   @override
-  String get componentKindTriplet => 'PAK 三件套';
+  String get componentKindTexturePatch => '贴图改动';
 
   @override
-  String get componentKindUe4ssLua => 'UE4SS Lua';
+  String get componentKindLoosePak => 'PAK 文件';
 
   @override
-  String get componentKindRawFile => '原始文件';
+  String get componentKindTriplet => 'IoStore 容器';
 
   @override
-  String get componentKindFilePatch => '文件补丁';
+  String get componentKindUe4ssLua => 'UE4SS 脚本';
 
   @override
-  String get componentKindPakFilePatch => 'PAK 文件补丁';
+  String get componentKindRawFile => '文件';
 
   @override
-  String get componentKindVoiceArchivePatch => '语音存档补丁';
+  String get componentKindFilePatch => '被替换的游戏文件';
+
+  @override
+  String get componentKindPakFilePatch => '来自 ~mods PAK 的游戏文件';
+
+  @override
+  String get componentKindVoiceArchivePatch => '配音';
+
+  @override
+  String get rawTargetGameText => '全部游戏文本';
+
+  @override
+  String get rawTargetGameScripts => '全部游戏脚本';
+
+  @override
+  String get rawTargetSoundBank => '音效库';
+
+  @override
+  String rawTargetSoundBankNamed(String name) {
+    return '音效库：$name';
+  }
 
   @override
   String get conflictKindLocalization => '文本';
 
   @override
-  String get conflictKindAudio => '音频';
+  String get conflictKindAudio => '音效';
 
   @override
-  String get conflictKindAsset => '资源';
+  String get conflictKindAsset => '游戏数据';
 
   @override
-  String get conflictKindCdo => 'CDO';
+  String get conflictKindCdo => '对象数值';
 
   @override
-  String get conflictKindUe4ssUnknown => '未知 UE4SS';
+  String get conflictKindUe4ssUnknown => 'UE4SS（不明）';
 
   @override
-  String get conflictKindScriptModule => '脚本模块';
+  String get conflictKindScriptModule => '游戏脚本';
 
   @override
-  String get conflictKindVoiceArchive => '语音存档';
+  String get conflictKindVoiceArchive => '配音';
 
   @override
-  String get conflictKindRawFile => '原始文件';
+  String get conflictKindRawFile => '文件';
 
   @override
-  String get conflictKindLooseFile => '独立文件';
+  String get conflictKindLooseFile => '游戏文件';
 
   @override
-  String get preflightUnavailable => 'GORE 无法检查游戏安装。';
+  String get preflightUnavailable => '无法检查游戏安装。';
 
   @override
   String get preflightRetry => '重新检查';
 
   @override
-  String get preflightReviewStatus => '检查状态';
+  String get preflightReviewStatus => '查看状态';
 
   @override
-  String get preflightReviewRecovery => '恢复帮助';
+  String get preflightReviewRecovery => '查看帮助';
 
   @override
-  String get installRecoveryTitle => '恢复安装';
+  String get installRecoveryTitle => '被中断的安装';
 
   @override
   String get installRecoveryBody =>
-      'GORE 检测到与安装或脚本构建有关的恢复数据。相关操作可能仍在运行，也可能已经结束但留下了这些数据。GORE 无法安全地自动修复。';
+      'GORE 发现了一次安装或脚本编译留下的数据。该任务可能仍在运行，也可能已经结束并留下了这些数据。GORE 无法安全地自行清理。';
 
   @override
   String get installRecoverySteps =>
-      '如果相关操作仍在运行，请等待它完成。不要终止该操作，也不要删除任何锁文件。只有在确认没有相关操作仍在运行后，才按照下方恢复文件夹中的 README.txt 操作。如果未列出文件夹或无法确定，请保持恢复数据不变并寻求帮助。然后重新检查。';
+      '如果任务仍在运行，请等它结束——不要终止它，也不要删除任何文件。确认没有任务在运行后，按下面文件夹中的 README.txt 操作，然后重新检查。如果没有列出文件夹或你不确定，请保持原样并寻求帮助。';
 
   @override
-  String get installRecoveryEvidence => '检测到的恢复数据';
+  String get installRecoveryEvidence => 'GORE 发现的内容';
 
   @override
-  String get managerRecoveryTitle => '恢复中断的管理器操作';
+  String get managerRecoveryTitle => '修复被中断的更改';
 
   @override
   String get managerRecoveryConfirm =>
-      'GORE 检测到一个明确中断的管理器操作。仅当你希望 GORE 核对已记录的操作并将安装恢复到已知状态时才继续。游戏存档绝不会被修改。';
+      'GORE 发现了一次被中断的更改，可以把游戏恢复到已知状态。你的存档绝不会被改动。';
 
   @override
-  String get managerRecoveryAlreadyClean => '中断的操作已被处理。安装已重新检查。';
+  String get managerRecoveryAlreadyClean => '没有需要修复的内容。已重新检查状态。';
 
   @override
-  String get managerRecoveryBusy => '该操作再次处于活动状态。未进行任何更改；请等待其完成后重新检查。';
+  String get managerRecoveryBusy => '任务又在运行了。未做任何更改，请等它结束。';
 
   @override
-  String get managerRecoveryLockCleared => '中断的操作尚未更改安装。其过时的锁已安全移除。';
+  String get managerRecoveryLockCleared => '被中断的任务尚未改动任何内容，已清理完毕。';
 
   @override
-  String get managerRecoveryRestoredPristine => '已回滚中断的更改，并恢复了记录的安装基准状态。';
+  String get managerRecoveryRestoredPristine => '更改已回滚，游戏已恢复到之前的状态。';
 
   @override
-  String get managerRecoveryApplyPreserved => '应用已经完成。已保留记录的状态，并重新检查了当前状态。';
+  String get managerRecoveryApplyPreserved => '应用已经完成，没有丢失任何内容。';
 
   @override
-  String get managerRecoveryUndeployConfirmed => '移除已经完成。已清理剩余的事务数据，并重新检查了状态。';
+  String get managerRecoveryUndeployConfirmed => '移除已经完成，残留内容已清理。';
 
   @override
-  String get managerRecoveryCompileRequired => '这属于脚本构建恢复。管理器未进行更改；请查看恢复帮助。';
+  String get managerRecoveryCompileRequired => '这属于一次脚本编译，因此未做任何更改。请打开修复帮助。';
 
   @override
-  String get managerRecoveryInspectionFailed =>
-      'GORE 无法安全核对中断的操作。未进行任何更改；请查看当前恢复详情。';
+  String get managerRecoveryInspectionFailed => 'GORE 无法安全检查被中断的任务，未做任何更改。';
 
   @override
-  String get managerRecoveryFailed =>
-      '无法完成恢复。GORE 已尝试重新检查安装，但当前状态可能未知。请先查看状态，再重试。';
+  String get managerRecoveryFailed => '修复未能完成。请先查看状态再重试。';
 
   @override
   String get statusUnknown => '未知';
 
   @override
   String statusDetailsTitle(String status) {
-    return '部署：$status';
+    return '状态：$status';
   }
 
   @override
   String statusDetailsOpen(String status) {
-    return '显示部署详情：$status';
+    return '显示详情：$status';
   }
 
   @override
-  String get statusDetailsNoRoot => '请在设置中选择游戏安装位置以查看部署状态。';
+  String get statusDetailsNoRoot => '请先在设置中选择你的 Gothic 安装目录。';
 
   @override
-  String get statusDetailsNoDeployment => '此游戏没有管理器部署。';
+  String get statusDetailsNoDeployment => '游戏中当前没有安装任何模组。';
 
   @override
-  String get statusDetailsInSyncDescription => '已部署模组与当前配置一致。';
+  String get statusDetailsInSyncDescription => '游戏中的模组与此处勾选的完全一致。';
 
   @override
-  String get statusDetailsDeployedLoadout => '已部署的加载顺序';
+  String get statusDetailsDeployedLoadout => '游戏中的模组';
 
   @override
-  String get statusDetailsChangesDescription => '当前部署与应用后将安装的内容不同。';
+  String get statusDetailsChangesDescription => '你的选择与游戏中的内容不一致。';
 
   @override
-  String get statusDetailsCurrentlyDeployed => '当前部署';
+  String get statusDetailsCurrentlyDeployed => '当前游戏中';
 
   @override
-  String get statusDetailsAfterApply => '应用后';
+  String get statusDetailsAfterApply => '应用之后';
 
   @override
-  String get statusDetailsGameUpdatedDescription =>
-      '自上次部署后，游戏文件已更改。请重新应用配置以恢复管理器拥有的文件。';
+  String get statusDetailsGameUpdatedDescription => '游戏更新覆盖了模组文件。请再次应用以恢复。';
 
   @override
-  String get statusDetailsDriftedFiles => '已更改的文件';
+  String get statusDetailsDriftedFiles => '受影响的文件';
 
   @override
   String get statusDetailsStudioDescription =>
-      'Mod Studio 当前控制此游戏安装。应用管理器配置前请先接管。';
+      'Mod Studio 目前在这个游戏里放了模组。请先接管游戏，再让管理器应用你的模组。';
 
   @override
   String statusDetailsStudioMod(String name) {
@@ -908,19 +980,19 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   }
 
   @override
-  String get statusDetailsStudioNameUnknown => 'Studio 未报告模组名称。';
+  String get statusDetailsStudioNameUnknown => 'Mod Studio 未提供名称。';
 
   @override
-  String get statusDetailsRecoveryDescription => '部署被中断。应用或移除管理器模组前请先恢复。';
+  String get statusDetailsRecoveryDescription => '有一次更改被中断。请先修复，再更改模组。';
 
   @override
-  String get statusDetailsUnknownDescription => '无法验证部署状态。应用模组前请刷新。';
+  String get statusDetailsUnknownDescription => '无法读取状态。请先刷新。';
 
   @override
-  String get statusDetailsUnavailable => '已安装的核心未提供这些详情。';
+  String get statusDetailsUnavailable => '没有可用的详情。';
 
   @override
-  String get statusDetailsEmptyLoadout => '此配置中没有模组。';
+  String get statusDetailsEmptyLoadout => '没有模组。';
 
   @override
   String get statusDetailsLastError => '上次错误';
@@ -941,42 +1013,41 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get statusDetailsOpenSettings => '打开设置';
 
   @override
-  String get recoveryAction => '恢复';
+  String get recoveryAction => '修复';
 
   @override
-  String get recoveryRequiredConfirm => '恢复中断的部署并移除已部分部署的文件吗？';
+  String get recoveryRequiredConfirm => '修复被中断的更改并删除安装了一半的文件？';
 
   @override
-  String get statusRecoveryRequired => '需要恢复';
+  String get statusRecoveryRequired => '需要修复';
 
   @override
-  String get statusDetailsOwnershipTitle => '已记录的所有权证据';
+  String get statusDetailsOwnershipTitle => 'GORE 管理的文件';
 
   @override
-  String get statusDetailsOwnershipDescription =>
-      '管理器部署记录中保存的路径。这不表示这些路径当前仍然存在。';
+  String get statusDetailsOwnershipDescription => '在应用模组时记录，并不代表这些文件现在仍然存在。';
 
   @override
   String get statusDetailsOwnershipLive => '已替换的游戏文件';
 
   @override
-  String get statusDetailsOwnershipBackups => '原始文件备份';
+  String get statusDetailsOwnershipBackups => '原始文件的备份';
 
   @override
-  String get statusDetailsOwnershipAdditive => '新增的 pak 和容器文件';
+  String get statusDetailsOwnershipAdditive => '新增的模组文件';
 
   @override
   String get statusDetailsOwnershipUe4ss => 'UE4SS 模组目录';
 
   @override
-  String get statusDetailsOwnershipRecovery => '恢复文件和保留位置';
+  String get statusDetailsOwnershipRecovery => '修复文件';
 
   @override
-  String get statusDetailsOwnershipEmpty => '此组中没有记录的路径。';
+  String get statusDetailsOwnershipEmpty => '这里没有记录。';
 
   @override
   String statusDetailsOwnershipShown(int shown, int total) {
-    return '显示了 $total 条已记录路径中的 $shown 条。';
+    return '显示 $total 条路径中的 $shown 条。';
   }
 
   @override
@@ -989,7 +1060,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get tabSettings => '设置';
 
   @override
-  String get settingsGameExe => '游戏可执行文件';
+  String get settingsGameExe => 'Gothic 安装目录';
 
   @override
   String get settingsGameExePick => '选择…';
@@ -998,19 +1069,71 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get settingsLanguage => '语言';
 
   @override
-  String get statusInSync => '已同步';
+  String get libraryEmptyTitle => '还没有模组';
 
   @override
-  String get statusChangesPending => '有待应用的更改';
+  String get libraryEmptyBody => '导入一个文件夹或模组文件即可开始。';
+
+  @override
+  String get detailEmptyHint => '选择一个模组，查看它会改动什么。';
+
+  @override
+  String get settingsAdvanced => '高级详情';
+
+  @override
+  String get settingsAdvancedHint => '显示技术信息：受影响的条目、冲突检查的可靠程度，以及 GORE 管理的文件。';
+
+  @override
+  String get updatesTitle => '更新';
+
+  @override
+  String get checkForUpdatesAutomatically => '自动检查更新';
+
+  @override
+  String get checkForUpdatesNow => '立即检查更新';
+
+  @override
+  String get updatesPortableNotice => '便携版会在浏览器中打开下载页面。请用新下载的文件替换现有文件。';
+
+  @override
+  String get updateCheckFailed => '无法检查更新，请稍后再试。';
+
+  @override
+  String get updateUpToDate => '你正在使用最新版本。';
+
+  @override
+  String get updateAvailableTitle => '有可用更新';
+
+  @override
+  String updateAvailableMessage(String version, String current) {
+    return '版本 $version 可用，你当前是 $current。';
+  }
+
+  @override
+  String get updateLater => '稍后';
+
+  @override
+  String get updateDownload => '下载';
+
+  @override
+  String updateOpenFailed(String url) {
+    return '无法打开下载页面。你可以通过 $url 访问。';
+  }
+
+  @override
+  String get statusInSync => '已是最新';
+
+  @override
+  String get statusChangesPending => '尚未应用';
 
   @override
   String get statusGameUpdated => '游戏已更新';
 
   @override
-  String get statusStudioDeploy => 'Studio 部署已激活';
+  String get statusStudioDeploy => 'Mod Studio 正在使用';
 
   @override
-  String get statusNothingDeployed => '尚未部署任何内容';
+  String get statusNothingDeployed => '游戏中没有模组';
 
   @override
   String get actionImport => '导入';
@@ -1019,7 +1142,13 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get actionApply => '应用';
 
   @override
-  String get actionUndeployAll => '撤销全部部署';
+  String get actionStartGame => '启动游戏';
+
+  @override
+  String get startGameTooltip => '用当前游戏中的模组启动 Gothic';
+
+  @override
+  String get startGameFailed => '无法启动 Gothic。请在设置中检查游戏安装。';
 
   @override
   String get commonCancel => '取消';
@@ -1035,62 +1164,61 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String importOutcomeCreated(String name) {
-    return '已将“$name”添加到库中。';
+    return '已添加“$name”。';
   }
 
   @override
   String importOutcomeUpdated(String name) {
-    return '已更新库中的“$name”。';
+    return '已更新“$name”。';
   }
 
   @override
   String importOutcomeUnchanged(String name) {
-    return '“$name”已在库中。';
+    return '“$name”已在你的列表中。';
   }
 
   @override
   String importOutcomeMatchedBy(String method) {
     String _temp0 = intl.Intl.selectLogic(method, {
-      'none': '未匹配到现有库条目。',
-      'source': '根据相同的导入来源匹配。',
-      'content': '根据经验证相同的内容匹配。',
-      'entry_id': '根据模组 ID 匹配。',
-      'other': '匹配详情不可用。',
+      'none': '没有匹配到已有模组。',
+      'source': '按相同的导入来源匹配。',
+      'content': '按已验证的相同内容匹配。',
+      'entry_id': '按模组 ID 匹配。',
+      'other': '没有匹配详情。',
     });
     return '$_temp0';
   }
 
   @override
-  String get importRefusalDuplicateAmbiguous => '此导入匹配多个库条目。请检查或移除重复条目，然后重试。';
+  String get importRefusalDuplicateAmbiguous => '这与你已有的多个模组重复。请删除重复项后重试。';
 
   @override
-  String get importRefusalIdentityConflict =>
-      '导入来源及其内容匹配到不同的库条目。请检查或移除冲突条目，然后重试。';
+  String get importRefusalIdentityConflict => '来源和内容分别对应你已有的两个不同模组。请先理清后重试。';
 
   @override
   String get importFailed =>
-      '无法完成导入。支持的来源：文件夹、ZIP、独立的 *_P.pak、完整的 .utoc/.ucas 组合（.pak 可选）、.lcache、.bank 和 PrecompiledScript*.Cache。请先解压 .7z 或 .rar，再导入文件夹。来源可能不受支持、已损坏或不完整。模组可能已被添加或更新；请刷新并检查库状态，然后重试。';
+      '无法导入。支持文件夹、ZIP 压缩包和单个模组文件（*_P.pak、.utoc/.ucas、.lcache、.bank、PrecompiledScript*.Cache）。请先解压 .7z 或 .rar，再导入文件夹。该模组仍可能已被添加或更新——请先刷新列表再重试。';
 
   @override
-  String get importPickerFailed => '无法打开文件或文件夹选择器。导入尚未开始。请重试。';
+  String get importPickerFailed => '无法打开文件选择器，未导入任何内容。';
 
   @override
-  String get importOutcomeUnknown => '无法验证导入结果。请选择“刷新”以检查库状态。';
+  String get importOutcomeUnknown => '结果不明确。请刷新以检查你的模组列表。';
 
   @override
-  String get applyTooltip => '将模组配置应用到游戏';
+  String get applyTooltip => '把勾选的模组装进游戏';
 
   @override
-  String get undeployAllAction => '撤销全部部署';
+  String get undeployAllAction => '从游戏中移除全部';
 
   @override
-  String get undeployAllConfirm => '从游戏中移除管理器部署的全部内容？';
+  String get undeployAllConfirm => '从游戏中移除管理器安装的所有模组？';
 
   @override
-  String get takeOverTitle => 'Studio 部署已激活';
+  String get takeOverTitle => 'Mod Studio 正在使用';
 
   @override
-  String get takeOverBody => 'mod-studio 已向游戏部署了一个模组。是否接管以便管理器应用此配置？';
+  String get takeOverBody => 'Mod Studio 目前在游戏里放了一个模组。接管后由管理器应用你的选择？';
 
   @override
   String get takeOverAction => '接管';
@@ -1100,53 +1228,41 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String conflictsTitle(int count) {
-    return '检测结果 ($count)';
+    return '冲突 ($count)';
   }
 
   @override
-  String get conflictWinner => '预期生效';
+  String get conflictWinner => '生效';
 
   @override
-  String get noConflicts => '未识别到冲突。';
+  String get noConflicts => '未发现冲突。';
 
   @override
-  String get conflictCoverageIncomplete => '已启用模组的冲突信息不完整，可能还存在其他冲突。';
+  String get conflictCoverageIncomplete => '部分模组无法完全检查，可能还有其他冲突。';
 
   @override
-  String get loadOrderDirection => '加载顺序：低优先级在前，后面的模组具有更高的预期优先级。';
+  String get loadOrderDirection => '列表中靠下的模组会覆盖靠上的模组。';
 
   @override
-  String get footprintCoverageScope => '覆盖度仅描述已识别的冲突目标，不能证明运行时优先级。';
+  String get footprintCoverageScope => '仅列出已知的冲突目标，不保证游戏中的实际结果。';
 
   @override
-  String get footprintCoverageExact => '精确 — 组件的冲突目标列表完整。';
+  String get footprintTargetsExact => '受影响的条目 — 完整列表：';
 
   @override
-  String get footprintCoveragePartial => '部分 — 已列出的冲突目标是已知的，但组件可能影响更多目标。';
+  String get footprintTargetsPartial => '受影响的条目 — 可能还有更多：';
 
   @override
-  String get footprintCoverageAdvisory => '参考 — 已列出的目标只是线索，并非完整证明。';
+  String get footprintTargetsAdvisory => '可能受影响的条目 — 只是线索，并非确证：';
 
   @override
-  String get footprintCoverageOpaque => '不透明 — 组件的冲突目标未知。';
+  String get footprintTargetsOpaque => 'GORE 无法判断这里改动了什么。';
 
   @override
-  String get footprintCoverageExactLabel => '精确';
+  String get conflictsUnverified => '冲突未知，请先刷新。';
 
   @override
-  String get footprintCoveragePartialLabel => '部分';
-
-  @override
-  String get footprintCoverageAdvisoryLabel => '参考';
-
-  @override
-  String get footprintCoverageOpaqueLabel => '不透明';
-
-  @override
-  String get conflictsUnverified => '在刷新库状态之前，冲突尚未验证。';
-
-  @override
-  String get componentsTitle => '组件';
+  String get componentsTitle => '这个模组会改动什么';
 
   @override
   String targetsMore(int count) {
@@ -1154,12 +1270,11 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   }
 
   @override
-  String get removeModDeploymentHint =>
-      '从库中移除不会立即更改现有部署。如果该模组已部署，请随后选择“应用”以更新游戏安装。';
+  String get removeModDeploymentHint => '这只会把它从你的列表中移除。如果它已装进游戏，请随后选择“应用”。';
 
   @override
   String removeModSuccess(String name) {
-    return '已从库中移除“$name”。';
+    return '已移除“$name”。';
   }
 
   @override
@@ -1169,27 +1284,27 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String removeModPartialFailure(String name) {
-    return '已移除“$name”，但无法完整刷新模组库。';
+    return '已移除“$name”，但列表未能完全更新。';
   }
 
   @override
   String removeModOutcomeUnknown(String name) {
-    return '无法确认是否已移除“$name”。';
+    return '无法确认“$name”是否已被移除。';
   }
 
   @override
-  String get libraryStateUnknown => '无法验证库状态。请在更改或应用模组前选择“刷新”。';
+  String get libraryStateUnknown => '模组列表已过期。请先刷新，再更改或应用模组。';
 
   @override
   String get removeModAction => '移除';
 
   @override
   String removeModConfirm(String name) {
-    return '从库中移除“$name”？';
+    return '从你的列表中移除“$name”？';
   }
 
   @override
-  String get errorSetGamePath => '请先在设置中指定游戏路径。';
+  String get errorSetGamePath => '请先在设置中选择你的 Gothic 安装目录。';
 
   @override
   String applyReportApplied(int count) {
@@ -1197,37 +1312,34 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   }
 
   @override
-  String get warningsTitle => '警告';
-
-  @override
   String get modDisabledHint => '已禁用';
 
   @override
-  String get kindGoremod => 'goremod';
+  String get kindGoremod => 'GORE 包';
 
   @override
-  String get kindTriplet => 'triplet';
+  String get kindTriplet => 'IoStore 模组';
 
   @override
-  String get kindPak => 'pak';
+  String get kindPak => 'PAK 模组';
 
   @override
   String get kindUe4ss => 'UE4SS';
 
   @override
-  String get kindRawfile => '原始文件';
+  String get kindRawfile => '整文件替换';
 
   @override
   String get kindMixed => '混合';
 
   @override
-  String get sevHard => '严重';
+  String get sevHard => '冲突';
 
   @override
-  String get sevSoft => '轻微';
+  String get sevSoft => '警告';
 
   @override
-  String get sevInfo => '信息';
+  String get sevInfo => '提示';
 
   @override
   String aboutVersion(String version, String sha) {
@@ -1238,7 +1350,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get about => '关于';
 
   @override
-  String get aboutCopyright => '© 2026 GORE 贡献者';
+  String get aboutCopyright => '© 2026 Daniel Hoer';
 
   @override
   String get aboutLicense => '基于 MIT 许可证授权。';
@@ -1259,7 +1371,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get themeSystem => '跟随系统';
 
   @override
-  String get uiScale => '界面缩放';
+  String get uiScale => '显示大小';
 
   @override
   String get resetZoomTooltip => '重置缩放（Ctrl+0）';

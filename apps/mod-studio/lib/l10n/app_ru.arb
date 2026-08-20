@@ -42,7 +42,7 @@
   "close": "Закрыть",
   "about": "О программе",
   "aboutVersion": "Version {version} ({sha})",
-  "aboutCopyright": "© 2026 участники проекта GORE",
+  "aboutCopyright": "© 2026 Daniel Hoer",
   "aboutLicense": "Распространяется по лицензии MIT.",
   "categoryMeleeWeapons": "Оружие ближнего боя",
   "categoryRangedWeapons": "Оружие дальнего боя",

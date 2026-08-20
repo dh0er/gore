@@ -15,8 +15,37 @@ String kindLabel(AppLocalizations l10n, String kind) {
   };
 }
 
-/// Human label for a deployable component wire tag. Unknown future tags stay
-/// visible as their raw value so a newer core never produces a blank row.
+/// The one word a player sees for a component: what part of the game it
+/// touches, not which container format carried it.
+///
+/// Four wire kinds — `loose_pak`, `triplet`, `file_patch`, `pak_file_patch` —
+/// collapse to a single "game files". They differ only in packaging and in
+/// whether the file is overwritten or shadowed from an additive pak; the core
+/// even points `file_patch` and `pak_file_patch` at the same destinations. Use
+/// [componentKindLabel] where that mechanism is the point.
+String componentPlainLabel(AppLocalizations l10n, ComponentView component) {
+  if (component.rawFileTarget case final target?) {
+    if (rawFileTargetLabel(l10n, target) case final label?) return label;
+  }
+  return switch (component.kind) {
+    'loc_patch' => l10n.componentLocalization,
+    'audio_patch' => l10n.componentAudio,
+    'angel_script_patch' => l10n.componentAngelScript,
+    'texture_patch' => l10n.componentTexture,
+    'voice_archive_patch' => l10n.componentVoice,
+    'ue4ss_lua' => l10n.componentKindUe4ssLua,
+    'loose_pak' ||
+    'triplet' ||
+    'file_patch' ||
+    'pak_file_patch' => l10n.componentGameFiles,
+    _ => componentKindLabel(l10n, component.kind),
+  };
+}
+
+/// Precise label for a deployable component wire tag, naming the exact
+/// mechanism. Shown in the advanced view only — the plain view uses
+/// [componentPlainLabel]. Unknown future tags stay visible as their raw value
+/// so a newer core never produces a blank row.
 String componentKindLabel(AppLocalizations l10n, String kind) {
   return switch (kind) {
     'loc_patch' => l10n.componentKindLocalizationPatch,
@@ -31,6 +60,22 @@ String componentKindLabel(AppLocalizations l10n, String kind) {
     'pak_file_patch' => l10n.componentKindPakFilePatch,
     'voice_archive_patch' => l10n.componentKindVoiceArchivePatch,
     _ => kind,
+  };
+}
+
+/// What a `raw_file` component actually replaces. These are wholesale swaps of
+/// one game-wide file, so naming the destination ("all game text") is the only
+/// label that tells a player anything; the bare component kind does not.
+/// Returns null for an unrecognized destination so the caller can fall back.
+String? rawFileTargetLabel(AppLocalizations l10n, RawFileTargetView target) {
+  return switch (target.kind) {
+    'lcache' => l10n.rawTargetGameText,
+    'script_cache' => l10n.rawTargetGameScripts,
+    'bank' => switch (target.bankName) {
+      final name? when name.isNotEmpty => l10n.rawTargetSoundBankNamed(name),
+      _ => l10n.rawTargetSoundBank,
+    },
+    _ => null,
   };
 }
 
@@ -62,30 +107,21 @@ String severityLabel(AppLocalizations l10n, String severity) {
   };
 }
 
-/// Human explanation for one derived conflict-footprint coverage grade.
-String footprintCoverageLabel(
+/// Heading for the list of entries a component affects, carrying its coverage
+/// grade as part of the sentence.
+///
+/// A grade only means something next to the thing it grades: a lone "estimated"
+/// on a row reads as a verdict on the mod. `opaque` has no list at all, so its
+/// text is a statement rather than a heading.
+String footprintTargetsLabel(
   AppLocalizations l10n,
   FootprintCoverage coverage,
 ) {
   return switch (coverage) {
-    FootprintCoverage.exact => l10n.footprintCoverageExact,
-    FootprintCoverage.partial => l10n.footprintCoveragePartial,
-    FootprintCoverage.advisory => l10n.footprintCoverageAdvisory,
-    FootprintCoverage.opaque => l10n.footprintCoverageOpaque,
-  };
-}
-
-/// Compact localized category for the per-component badge. The adjacent
-/// tooltip/semantic label uses [footprintCoverageLabel] for the full meaning.
-String footprintCoverageShortLabel(
-  AppLocalizations l10n,
-  FootprintCoverage coverage,
-) {
-  return switch (coverage) {
-    FootprintCoverage.exact => l10n.footprintCoverageExactLabel,
-    FootprintCoverage.partial => l10n.footprintCoveragePartialLabel,
-    FootprintCoverage.advisory => l10n.footprintCoverageAdvisoryLabel,
-    FootprintCoverage.opaque => l10n.footprintCoverageOpaqueLabel,
+    FootprintCoverage.exact => l10n.footprintTargetsExact,
+    FootprintCoverage.partial => l10n.footprintTargetsPartial,
+    FootprintCoverage.advisory => l10n.footprintTargetsAdvisory,
+    FootprintCoverage.opaque => l10n.footprintTargetsOpaque,
   };
 }
 
@@ -111,7 +147,7 @@ List<ComponentChip> componentChips(
   final order = <String>[];
   final counts = <String, int>{};
   // Whether a bucket should show its target count at all.
-  const countable = {'loc', 'audio', 'AS', 'tex', 'triplet'};
+  const countable = {'loc', 'audio', 'AS', 'tex', 'voice'};
 
   void add(String bucket, int targets) {
     if (!counts.containsKey(bucket)) {
@@ -131,14 +167,20 @@ List<ComponentChip> componentChips(
         add('AS', c.targets.length);
       case 'texture_patch':
         add('tex', c.targets.length);
-      case 'loose_pak':
-        add('pak', c.targets.length);
-      case 'triplet':
-        add('triplet', c.targets.length);
+      case 'voice_archive_patch':
+        add('voice', c.targets.length);
       case 'ue4ss_lua':
         add('ue4ss', c.targets.length);
+      case 'loose_pak' || 'triplet' || 'file_patch' || 'pak_file_patch':
+        add('files', c.targets.length);
       case 'raw_file':
-        add('raw', 0);
+        // A wholesale swap belongs to the content class it replaces.
+        add(switch (c.rawFileTarget?.kind) {
+          'lcache' => 'loc',
+          'script_cache' => 'AS',
+          'bank' => 'audio',
+          _ => 'files',
+        }, 0);
       default:
         add(c.kind, c.targets.length);
     }
@@ -149,14 +191,10 @@ List<ComponentChip> componentChips(
     'audio' => l10n.componentAudio,
     'AS' => l10n.componentAngelScript,
     'tex' => l10n.componentTexture,
-    'pak' => l10n.componentKindLoosePak,
-    'triplet' => l10n.componentKindTriplet,
+    'voice' => l10n.componentVoice,
     'ue4ss' => l10n.componentKindUe4ssLua,
-    'raw' => l10n.componentKindRawFile,
-    'file_patch' => l10n.componentKindFilePatch,
-    'pak_file_patch' => l10n.componentKindPakFilePatch,
-    'voice_archive_patch' => l10n.componentKindVoiceArchivePatch,
-    _ => bucket,
+    'files' => l10n.componentGameFiles,
+    _ => componentKindLabel(l10n, bucket),
   };
 
   return [

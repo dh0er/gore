@@ -109,8 +109,8 @@ OutputBaseFilename={#OutputBaseName}
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 LicenseFile=..\\..\\..\\LICENSE
-VersionInfoCompany=dh0er
-VersionInfoCopyright=Copyright (C) 2026 dh0er. All rights reserved.
+VersionInfoCompany=Daniel Hoer
+VersionInfoCopyright=Copyright (C) 2026 Daniel Hoer. All rights reserved.
 VersionInfoDescription=GORE Mod Manager Setup
 VersionInfoOriginalFileName={#OutputBaseName}.exe
 VersionInfoProductName=GORE Mod Manager
@@ -512,10 +512,10 @@ class ModManagerReleaseContractTest(unittest.TestCase):
                 for field, value in canonical.items()
             },
             {
-                "CompanyName": 55,
+                "CompanyName": 49,
                 "FileDescription": 38,
                 "FileVersion": 15,
-                "LegalCopyright": 56,
+                "LegalCopyright": 50,
                 "OriginalFilename": 18,
                 "ProductName": 44,
                 "ProductVersion": 45,
@@ -541,12 +541,12 @@ class ModManagerReleaseContractTest(unittest.TestCase):
                     self.assert_problem(problems, field)
 
         for label, field, value in (
-            ("non-space suffix", "CompanyName", "dh0er X"),
+            ("non-space suffix", "CompanyName", "Daniel Hoer X"),
             ("internal mismatch", "ProductName", "GORE  Mod Manager   "),
             (
                 "unconverted copyright",
                 "LegalCopyright",
-                "Copyright (C) 2026 dh0er. All rights reserved.   ",
+                "Copyright (C) 2026 Daniel Hoer. All rights reserved.   ",
             ),
         ):
             with self.subTest(label=label):
@@ -572,17 +572,17 @@ class ModManagerReleaseContractTest(unittest.TestCase):
         problems = verifier.verify_release(
             fixture.root, VERSION, version_info_reader=padded_app_metadata
         )
-        self.assert_problem(problems, "portable zip app: CompanyName='dh0er '")
-        self.assert_problem(problems, "installer source app: CompanyName='dh0er '")
+        self.assert_problem(problems, "portable zip app: CompanyName='Daniel Hoer '")
+        self.assert_problem(problems, "installer source app: CompanyName='Daniel Hoer '")
 
     def test_repository_metadata_and_installer_recipe_are_not_templates(self) -> None:
         runner = (
             ROOT / "apps" / "mod-manager" / "windows" / "runner" / "Runner.rc"
         ).read_text(encoding="utf-8")
         self.assertNotIn("com.example", runner)
-        self.assertIn('VALUE "CompanyName", "dh0er"', runner)
+        self.assertIn('VALUE "CompanyName", "Daniel Hoer"', runner)
         self.assertIn(
-            'VALUE "LegalCopyright", "Copyright (C) 2026 dh0er. All rights reserved."',
+            'VALUE "LegalCopyright", "Copyright (C) 2026 Daniel Hoer. All rights reserved."',
             runner,
         )
 

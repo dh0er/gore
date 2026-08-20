@@ -81,11 +81,13 @@ void main() {
     );
     expect(
       l10n.preflightUnavailable,
-      'GORE konnte die Installation nicht prüfen.',
+      'Die Spielinstallation konnte nicht geprüft werden.',
     );
     expect(l10n.componentKindLoosePak, 'PAK-Datei');
     expect(l10n.componentKindTriplet, 'IoStore-Container');
-    expect(l10n.conflictKindUe4ssUnknown, 'Unklare UE4SS-Auswirkung');
+    // The plain view never shows that container word at all.
+    expect(l10n.componentGameFiles, 'Spieldateien');
+    expect(l10n.conflictKindUe4ssUnknown, 'UE4SS (unklar)');
     expect(l10n.conflictKindLooseFile, 'Spieldatei');
   });
 

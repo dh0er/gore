@@ -1531,7 +1531,7 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
-  String get aboutCopyright => '© 2026 GORE 贡献者';
+  String get aboutCopyright => '© 2026 Daniel Hoer';
 
   @override
   String get aboutLicense => '基于 MIT 许可证授权。';
@@ -4320,7 +4320,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   }
 
   @override
-  String get aboutCopyright => '© 2026 GORE 贡献者';
+  String get aboutCopyright => '© 2026 Daniel Hoer';
 
   @override
   String get aboutLicense => '基于 MIT 许可证授权。';

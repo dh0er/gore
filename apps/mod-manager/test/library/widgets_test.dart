@@ -374,11 +374,7 @@ void main() {
     final l10n = await AppLocalizations.delegate.load(const Locale('en'));
     expect(
       find.byWidgetPredicate(
-        (widget) =>
-            widget is Tooltip &&
-            widget.message ==
-                '${l10n.sevHard}: 1 · ${l10n.sevSoft}: 0 · '
-                    '${l10n.sevInfo}: 0',
+        (widget) => widget is Tooltip && widget.message == '${l10n.sevHard}: 1',
       ),
       findsNWidgets(2),
     );
@@ -475,13 +471,15 @@ void main() {
     await tester.tap(find.text('Better Torches').first);
     await tester.pumpAndSettle();
 
-    expect(find.text(l10n.modDetailKind), findsOneWidget);
+    // Packaging is advanced detail; it duplicated the component chips.
+    expect(find.text(l10n.modDetailKind), findsNothing);
     expect(find.text(l10n.modDetailVersion), findsOneWidget);
     expect(find.text(l10n.modDetailAuthor), findsOneWidget);
-    expect(find.text(l10n.modDetailSource), findsOneWidget);
+    expect(find.text(l10n.modDetailSource), findsNothing);
     expect(find.text(l10n.modDetailImported), findsOneWidget);
-    expect(find.text(l10n.componentKindTexturePatch), findsOneWidget);
-    expect(find.text(l10n.componentKindRawFile), findsWidgets);
+    expect(find.text(l10n.componentTexture), findsOneWidget);
+    expect(find.text(l10n.rawTargetSoundBankNamed('SFX')), findsOneWidget);
+    expect(find.text(l10n.componentKindRawFile), findsNothing);
     expect(find.textContaining('texture_patch'), findsNothing);
     expect(find.textContaining('raw_file'), findsNothing);
     expect(find.text('Kind'), findsNothing);
@@ -1288,7 +1286,8 @@ void main() {
       find.widgetWithText(FilledButton, l10n.takeOverAction),
       findsOneWidget,
     );
-    expect(find.text(l10n.takeOverTitle), findsNWidgets(2));
+    expect(find.text(l10n.takeOverTitle), findsOneWidget);
+    expect(find.text(l10n.statusStudioDeploy), findsWidgets);
     expect(tester.takeException(), isNull);
   });
 

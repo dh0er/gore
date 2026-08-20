@@ -428,7 +428,7 @@
   "yes": "是",
   "no": "否",
   "aboutVersion": "版本 {version}（{sha}）",
-  "aboutCopyright": "© 2026 GORE 贡献者",
+  "aboutCopyright": "© 2026 Daniel Hoer",
   "aboutLicense": "基于 MIT 许可证授权。",
   "difficultyTitle": "难度 — {profile}",
   "difficultyNoProfile": "无存档配置",

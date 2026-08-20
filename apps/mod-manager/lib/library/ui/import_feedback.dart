@@ -26,7 +26,14 @@ String importDisplayName(ModEntryMetaView entry) {
   };
 }
 
-void showImportSuccessFeedback(BuildContext context, MgrImportOutcome outcome) {
+/// Confirms one import. [showMatchReason] appends why Native matched (or did
+/// not match) an existing entry — true only while advanced details are on,
+/// since the plain confirmation already says what happened.
+void showImportSuccessFeedback(
+  BuildContext context,
+  MgrImportOutcome outcome, {
+  bool showMatchReason = false,
+}) {
   final l10n = AppLocalizations.of(context);
   final name = importDisplayName(outcome.entry);
   final disposition = switch (outcome.disposition) {
@@ -36,8 +43,10 @@ void showImportSuccessFeedback(BuildContext context, MgrImportOutcome outcome) {
   };
   _showImportSnackBar(
     context,
-    message:
-        '$disposition ${l10n.importOutcomeMatchedBy(outcome.matchedBy.wireName)}',
+    message: showMatchReason
+        ? '$disposition '
+              '${l10n.importOutcomeMatchedBy(outcome.matchedBy.wireName)}'
+        : disposition,
   );
 }
 

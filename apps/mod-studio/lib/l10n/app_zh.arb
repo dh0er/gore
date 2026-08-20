@@ -42,7 +42,7 @@
   "close": "关闭",
   "about": "关于",
   "aboutVersion": "Version {version} ({sha})",
-  "aboutCopyright": "© 2026 GORE 贡献者",
+  "aboutCopyright": "© 2026 Daniel Hoer",
   "aboutLicense": "基于 MIT 许可证授权。",
   "categoryMeleeWeapons": "近战武器",
   "categoryRangedWeapons": "远程武器",

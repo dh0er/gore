@@ -26,7 +26,7 @@ AppId={{C7A35D8E-4B61-4E0D-9C0A-2F8B5D1E6A43}
 AppName=GORE Save Editor
 AppVersion={#AppVersion}
 AppVerName=GORE Save Editor {#AppVersion}
-AppPublisher=dh0er
+AppPublisher=Daniel Hoer
 DefaultDirName={autopf}\goresave
 DefaultGroupName=GORE Save Editor
 ; Per-user installs work without elevation; the dialog lets the user pick

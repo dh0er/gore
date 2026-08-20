@@ -5,10 +5,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/domain/ui_settings.dart';
 import '../../l10n/app_localizations.dart';
 import '../../loc/game_lang.dart';
+import 'update_settings.dart';
 
 /// The Settings tab: appearance (theme mode + UI scale), game executable path,
-/// and app/game language. Holds no local state — everything is wired to
-/// Riverpod providers so the panel can be rebuilt freely on tab switches.
+/// app/game language, and the advanced-details switch. Holds no local state —
+/// everything is wired to Riverpod providers so the panel can be rebuilt freely
+/// on tab switches.
 class SettingsTab extends ConsumerWidget {
   const SettingsTab({required this.gamePathFocusNode, super.key});
 
@@ -21,6 +23,7 @@ class SettingsTab extends ConsumerWidget {
     final currentLang = gameLangByCode(ref.watch(localeProvider));
     final themeMode = ref.watch(themeModeProvider);
     final uiScale = ref.watch(uiScaleProvider);
+    final advancedDetails = ref.watch(advancedDetailsProvider);
     final textTheme = Theme.of(context).textTheme;
 
     return Align(
@@ -221,6 +224,23 @@ class SettingsTab extends ConsumerWidget {
                       ),
                   ],
                 ),
+              ),
+            ),
+
+            // --- Updates -------------------------------------------------
+            const UpdateSettingsCard(),
+
+            // --- Advanced details ---------------------------------------
+            Card(
+              child: SwitchListTile(
+                key: const ValueKey('settings-advanced-details'),
+                secondary: const Icon(Icons.tune_outlined),
+                title: Text(l10n.settingsAdvanced),
+                subtitle: Text(l10n.settingsAdvancedHint),
+                isThreeLine: true,
+                value: advancedDetails,
+                onChanged: (value) =>
+                    ref.read(advancedDetailsProvider.notifier).set(value),
               ),
             ),
           ],

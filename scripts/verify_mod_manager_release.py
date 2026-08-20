@@ -59,17 +59,17 @@ REQUIRED_DATA_FILES = {
 }
 
 APP_METADATA = {
-    "CompanyName": "dh0er",
+    "CompanyName": "Daniel Hoer",
     "FileDescription": "GORE Mod Manager",
     "InternalName": "gore_manager",
-    "LegalCopyright": "Copyright (C) 2026 dh0er. All rights reserved.",
+    "LegalCopyright": "Copyright (C) 2026 Daniel Hoer. All rights reserved.",
     "OriginalFilename": "gore_manager.exe",
     "ProductName": "GORE Mod Manager",
 }
 INSTALLER_METADATA = {
-    "CompanyName": "dh0er",
+    "CompanyName": "Daniel Hoer",
     "FileDescription": "GORE Mod Manager Setup",
-    "LegalCopyright": "Copyright © 2026 dh0er. All rights reserved.",
+    "LegalCopyright": "Copyright © 2026 Daniel Hoer. All rights reserved.",
     "ProductName": "GORE Mod Manager",
 }
 INNO_INSTALLER_METADATA_WIDTHS = {
@@ -683,8 +683,8 @@ def _installer_recipe_contract(setup: Path, version: str, installer_name: str) -
         "ArchitecturesAllowed": "x64compatible",
         "ArchitecturesInstallIn64BitMode": "x64compatible",
         "LicenseFile": r"..\..\..\LICENSE",
-        "VersionInfoCompany": "dh0er",
-        "VersionInfoCopyright": "Copyright (C) 2026 dh0er. All rights reserved.",
+        "VersionInfoCompany": "Daniel Hoer",
+        "VersionInfoCopyright": "Copyright (C) 2026 Daniel Hoer. All rights reserved.",
         "VersionInfoDescription": "GORE Mod Manager Setup",
         "VersionInfoOriginalFileName": "{#OutputBaseName}.exe",
         "VersionInfoProductName": "GORE Mod Manager",

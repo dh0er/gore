@@ -170,7 +170,7 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String get aboutCopyright => '© 2026 GORE contributors';
+  String get aboutCopyright => '© 2026 Daniel Hoer';
 
   @override
   String get aboutLicense => 'Licensed under the MIT License.';
