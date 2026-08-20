@@ -25,6 +25,11 @@ String _releasePageUrl(String version) =>
 
 const _checkIntervalSeconds = 3600;
 
+/// Cap for each feed network step. Without it a stalled connection or a server
+/// that opens a response and never finishes it would hang the check forever,
+/// and with it the in-flight guard below.
+const _feedTimeout = Duration(seconds: 20);
+
 /// Attached to the app's MaterialApp so a background update check (which has
 /// no widget context of its own) can still surface a dialog.
 final updaterNavigatorKey = GlobalKey<NavigatorState>();
@@ -33,11 +38,11 @@ bool? _innoInstalled;
 bool _feedConfigured = false;
 Timer? _portableTimer;
 
-/// True while a portable check is running, including while its dialog is
-/// waiting for the user. [_runPortableCheck] awaits that dialog, so without
-/// this an unattended machine would stack one more modal — and one more
-/// network request — every hour the prompt goes unanswered.
-bool _portableCheckActive = false;
+/// The portable check currently running, including while its dialog waits for
+/// the user; null when none is. [_runPortableCheck] awaits that dialog, so
+/// without this an unattended machine would stack one more modal — and one
+/// more network request — every hour the prompt goes unanswered.
+Future<void>? _activePortableCheck;
 
 /// Inno Setup always places an uninstaller (unins*.exe) next to the app;
 /// the portable zip ships without one. Distinguishes the installed copy
@@ -119,14 +124,20 @@ Future<bool> _ensureFeedConfigured() async {
 /// any failure (network, redirect, malformed feed). The appcast is the same
 /// signed feed WinSparkle reads; here we only need the version string.
 Future<String?> _fetchLatestVersion() async {
-  final client = HttpClient();
+  final client = HttpClient()..connectionTimeout = _feedTimeout;
   try {
-    final request = await client.getUrl(Uri.parse(_appcastUrl));
-    final response = await request.close();
+    final request = await client
+        .getUrl(Uri.parse(_appcastUrl))
+        .timeout(_feedTimeout);
+    final response = await request.close().timeout(_feedTimeout);
     if (response.statusCode != HttpStatus.ok) {
       return null;
     }
-    final body = await response.transform(utf8.decoder).join();
+    // A response can stall mid-body, so bound the read as well as the connect.
+    final body = await response
+        .transform(utf8.decoder)
+        .join()
+        .timeout(_feedTimeout);
     final match = RegExp(
       r'<sparkle:version>\s*([^<\s]+)\s*</sparkle:version>',
     ).firstMatch(body);
@@ -159,16 +170,35 @@ bool _isNewer(String latest, String current) {
 /// open the releases page in the browser. When [silentIfNoUpdate] is false
 /// (manual check), also reports the up-to-date and failure cases.
 Future<void> _runPortableCheck({required bool silentIfNoUpdate}) async {
-  if (_portableCheckActive) return;
-  _portableCheckActive = true;
+  final active = _activePortableCheck;
+  if (active != null) {
+    // A background tick yields: its whole point is to be unobtrusive, and the
+    // running check already covers this hour. A manual check must not be
+    // dropped — the button promises a result — so it waits its turn instead.
+    if (silentIfNoUpdate) return;
+    await active;
+  }
+  final check = _runPortableCheckOnce(silentIfNoUpdate: silentIfNoUpdate);
+  _activePortableCheck = check;
   try {
-    await _runPortableCheckOnce(silentIfNoUpdate: silentIfNoUpdate);
+    await check;
   } finally {
-    _portableCheckActive = false;
+    if (identical(_activePortableCheck, check)) _activePortableCheck = null;
   }
 }
 
 Future<void> _runPortableCheckOnce({required bool silentIfNoUpdate}) async {
+  // Never throws: callers fire this without awaiting, and a manual check may
+  // await a background one — a failure there must not surface as an unhandled
+  // async error or be rethrown into the unrelated caller that waited for it.
+  try {
+    await _portableCheckBody(silentIfNoUpdate: silentIfNoUpdate);
+  } catch (error) {
+    debugPrint('gore-manager portable update check failed: $error');
+  }
+}
+
+Future<void> _portableCheckBody({required bool silentIfNoUpdate}) async {
   // Do every await up front so the context, once captured, is used without
   // an async gap (avoids stale-context use after the widget tree changes).
   final latest = await _fetchLatestVersion();
