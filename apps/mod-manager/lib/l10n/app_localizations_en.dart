@@ -451,6 +451,11 @@ class AppLocalizationsEn extends AppLocalizations {
   String get updateDownload => 'Download';
 
   @override
+  String updateOpenFailed(String url) {
+    return 'Could not open the download page. You can reach it at $url';
+  }
+
+  @override
   String get statusInSync => 'Up to date';
 
   @override

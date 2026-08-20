@@ -130,6 +130,7 @@
   "updateAvailableMessage": "Доступна версия {version}. У вас {current}.",
   "updateLater": "Позже",
   "updateDownload": "Скачать",
+  "updateOpenFailed": "Не удалось открыть страницу загрузки. Она доступна по адресу {url}",
   "statusInSync": "Всё актуально",
   "statusChangesPending": "Не применено",
   "statusGameUpdated": "Игра обновилась",

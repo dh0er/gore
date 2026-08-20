@@ -448,6 +448,11 @@ class AppLocalizationsPl extends AppLocalizations {
   String get updateDownload => 'Pobierz';
 
   @override
+  String updateOpenFailed(String url) {
+    return 'Nie udało się otworzyć strony pobierania. Znajdziesz ją pod $url';
+  }
+
+  @override
   String get statusInSync => 'Aktualne';
 
   @override

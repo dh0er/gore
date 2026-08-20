@@ -130,6 +130,7 @@
   "updateAvailableMessage": "A versão {version} está disponível. Tens a {current}.",
   "updateLater": "Mais tarde",
   "updateDownload": "Transferir",
+  "updateOpenFailed": "Não foi possível abrir a página de transferência. Podes aceder a ela em {url}",
   "statusInSync": "Atualizado",
   "statusChangesPending": "Não aplicado",
   "statusGameUpdated": "O jogo foi atualizado",

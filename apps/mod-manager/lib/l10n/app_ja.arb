@@ -130,6 +130,7 @@
   "updateAvailableMessage": "バージョン {version} が利用できます。現在は {current} です。",
   "updateLater": "後で",
   "updateDownload": "ダウンロード",
+  "updateOpenFailed": "ダウンロードページを開けませんでした。{url} からアクセスできます。",
   "statusInSync": "最新の状態",
   "statusChangesPending": "未適用",
   "statusGameUpdated": "ゲームが更新されました",

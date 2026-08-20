@@ -130,6 +130,7 @@
   "updateAvailableMessage": "La version {version} est disponible. Vous avez la {current}.",
   "updateLater": "Plus tard",
   "updateDownload": "Télécharger",
+  "updateOpenFailed": "Impossible d'ouvrir la page de téléchargement. Vous pouvez y accéder à {url}",
   "statusInSync": "À jour",
   "statusChangesPending": "Non appliqué",
   "statusGameUpdated": "Le jeu a été mis à jour",

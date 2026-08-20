@@ -419,6 +419,11 @@ class AppLocalizationsZh extends AppLocalizations {
   String get updateDownload => '下载';
 
   @override
+  String updateOpenFailed(String url) {
+    return '无法打开下载页面。你可以通过 $url 访问。';
+  }
+
+  @override
   String get statusInSync => '已是最新';
 
   @override
@@ -1109,6 +1114,11 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get updateDownload => '下载';
+
+  @override
+  String updateOpenFailed(String url) {
+    return '无法打开下载页面。你可以通过 $url 访问。';
+  }
 
   @override
   String get statusInSync => '已是最新';

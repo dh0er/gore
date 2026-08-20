@@ -130,6 +130,7 @@
   "updateAvailableMessage": "版本 {version} 可用，你当前是 {current}。",
   "updateLater": "稍后",
   "updateDownload": "下载",
+  "updateOpenFailed": "无法打开下载页面。你可以通过 {url} 访问。",
   "statusInSync": "已是最新",
   "statusChangesPending": "尚未应用",
   "statusGameUpdated": "游戏已更新",

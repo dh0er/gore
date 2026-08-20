@@ -896,6 +896,12 @@ abstract class AppLocalizations {
   /// **'Download'**
   String get updateDownload;
 
+  /// No description provided for @updateOpenFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not open the download page. You can reach it at {url}'**
+  String updateOpenFailed(String url);
+
   /// No description provided for @statusInSync.
   ///
   /// In en, this message translates to:

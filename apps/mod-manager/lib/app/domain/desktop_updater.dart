@@ -250,7 +250,7 @@ Future<void> _showInfoDialog(BuildContext context, String message) {
     context: context,
     builder: (context) => AlertDialog(
       title: Text(l10n.updatesTitle),
-      content: Text(message),
+      content: SelectionArea(child: Text(message)),
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
@@ -259,6 +259,21 @@ Future<void> _showInfoDialog(BuildContext context, String message) {
       ],
     ),
   );
+}
+
+/// Opens the release page in the user's browser. Returns false when the shell
+/// refused or failed — `launchUrl` reports both by returning false and by
+/// throwing — so the caller can say so rather than leave a dead button.
+Future<bool> _openReleasePage(String version) async {
+  try {
+    return await launchUrl(
+      Uri.parse(_releasePageUrl(version)),
+      mode: LaunchMode.externalApplication,
+    );
+  } catch (error) {
+    debugPrint('gore-manager could not open the release page: $error');
+    return false;
+  }
 }
 
 Future<void> _showUpdateAvailableDialog(
@@ -278,13 +293,19 @@ Future<void> _showUpdateAvailableDialog(
           child: Text(l10n.updateLater),
         ),
         FilledButton(
-          onPressed: () {
+          onPressed: () async {
             Navigator.of(context).pop();
-            unawaited(
-              launchUrl(
-                Uri.parse(_releasePageUrl(version)),
-                mode: LaunchMode.externalApplication,
-              ),
+            if (await _openReleasePage(version)) return;
+            // The dialog is gone by now, so report through the root navigator.
+            // Silently doing nothing is the one outcome a Download button must
+            // not have; the page address goes along so it stays reachable.
+            final root = updaterNavigatorKey.currentContext;
+            if (root == null || !root.mounted) return;
+            await _showInfoDialog(
+              root,
+              AppLocalizations.of(
+                root,
+              ).updateOpenFailed(_releasePageUrl(version)),
             );
           },
           child: Text(l10n.updateDownload),
