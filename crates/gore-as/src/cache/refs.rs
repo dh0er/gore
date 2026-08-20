@@ -19,6 +19,24 @@ use super::wire::{Cursor, WireError};
 /// Drop every space from a tokenized source snippet so it can be compared against a packed
 /// render. `FGameplayTag :: Empty` and `FGameplayTag::Empty` are the same default; a string
 /// literal is left alone, since spaces inside it are content.
+/// Drop namespace qualifiers from every identifier in a rendered type
+/// (`TSubclassOf<G1R::AIGroup::UAIGroup_StateEvent>` -> `TSubclassOf<UAIGroup_StateEvent>`).
+pub(crate) fn strip_namespaces(ty: &str) -> String {
+    let mut out = String::with_capacity(ty.len());
+    let mut token = String::new();
+    for ch in ty.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == ':' {
+            token.push(ch);
+            continue;
+        }
+        out.push_str(token.rsplit("::").next().unwrap_or(&token));
+        token.clear();
+        out.push(ch);
+    }
+    out.push_str(token.rsplit("::").next().unwrap_or(&token));
+    out
+}
+
 pub(crate) fn pack_tokens(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     let mut in_string = false;
@@ -66,6 +84,9 @@ pub struct RefResolver {
     type_ns_by_name: HashMap<String, Option<String>>,
     /// Class -> its methods that are NOT declared const (injected from the parsed modules).
     non_const_methods: HashMap<String, HashSet<String>>,
+    /// Class -> the `name/arity` keys it declares ITSELF (not inherited). An override calling
+    /// the method it overrides was written `Super::`, and rendering it as `this.` would recurse.
+    class_methods: HashMap<String, HashSet<String>>,
     /// `(owner, function)` -> the declared default argument of each parameter, normalized.
     /// An empty entry means that parameter has none. The owner is `""` for a free function.
     param_defaults: HashMap<(String, String), Vec<String>>,
@@ -98,6 +119,16 @@ pub struct RefResolver {
     class_fields: HashMap<String, HashMap<String, String>>,
     /// FunctionReferences parameter DataTypes (for arg-type-driven casts at call sites).
     func_params: HashMap<i64, Vec<DataType>>,
+    /// Function names the cache records with a callable no-argument form — either a row with no
+    /// parameters at all, or one whose every parameter carries a default. A rendered `X()` whose
+    /// name is known but has no such form is a call that LOST its arguments.
+    zero_arg_names: HashSet<String>,
+    /// Every function name the cache records, so an unknown name can be told from a known one.
+    known_func_names: HashSet<String>,
+    /// `Type<Sub>::name/arity` keys the cache's own function table records, namespaces stripped.
+    /// Whether a value type has a default constructor, a copy constructor or an `opAssign` is
+    /// what decides which SHAPE a local of it has to be written in.
+    type_methods: HashSet<String>,
     /// FunctionReferences return DataType.
     func_ret: HashMap<i64, DataType>,
     /// FunctionReferences owning class name (from the ObjectType ptr) — disambiguates native
@@ -189,6 +220,9 @@ impl RefResolver {
             r.typeid_to_ptr.insert(id, ptr);
         }
         // T3 FunctionReferences: int64 key + (Name, Module, Namespace, 3 bool, int64, params, ret)
+        // The owning-type keys are composed after the parse: composing one needs the finished
+        // type tables, which are still borrowed mutably here.
+        let mut owned_methods: Vec<(i64, String, usize)> = Vec::new();
         let function_reference_count = c.read_count("FunctionReferences")?;
         c.ensure_minimum_remaining(function_reference_count, 80, "FunctionReferences")?;
         for _ in 0..function_reference_count {
@@ -213,6 +247,13 @@ impl RefResolver {
             }
             // Always record params — even an empty list — so the call-site arg-count check
             // can stub a zero-param method that was decompiled with phantom args.
+            r.known_func_names.insert(name.clone());
+            if params.is_empty() {
+                r.zero_arg_names.insert(name.clone());
+            }
+            if is_method && objtype != 0 {
+                owned_methods.push((objtype, name.clone(), params.len()));
+            }
             r.func_params.insert(key, params);
             r.func_ret.insert(key, ret);
             if let Some(cls) = r.type_by_ptr.get(&objtype) {
@@ -279,6 +320,13 @@ impl RefResolver {
             }
             r.prop_by_key.insert(key, name);
             r.prop_type_id.insert(key, old_type_id);
+        }
+        for (objtype, name, arity) in owned_methods {
+            let Some(owner) = r.composed_type_name(objtype) else {
+                continue;
+            };
+            r.type_methods
+                .insert(format!("{}::{name}/{arity}", strip_namespaces(&owner)));
         }
         let _ = CacheHeader::SIZE; // (header parsed elsewhere)
         Ok(r)
@@ -907,6 +955,18 @@ impl RefResolver {
     pub fn set_non_const_methods(&mut self, by_class: HashMap<String, HashSet<String>>) {
         self.non_const_methods = by_class;
     }
+    /// Install `class -> its OWN declared `name/arity` keys` from the parsed modules.
+    pub fn set_class_methods(&mut self, by_class: HashMap<String, HashSet<String>>) {
+        self.class_methods = by_class;
+    }
+    /// True when `class` declares `method` with that many parameters itself — an OVERRIDE. A
+    /// same-named method with a different parameter count is an overload, and a call to the
+    /// ancestor's version resolves to the ancestor either way.
+    pub fn class_overrides_method(&self, class: &str, method: &str, arity: usize) -> bool {
+        self.class_methods
+            .get(class)
+            .is_some_and(|methods| methods.contains(&format!("{method}/{arity}")))
+    }
     /// Install `(owner, function) -> per-parameter default argument text` from the parsed
     /// modules. Whitespace is normalized on the way in: the cache stores the defaults
     /// TOKENIZED (`FGameplayTagContainer ( )`), the emitter renders them packed.
@@ -914,10 +974,40 @@ impl RefResolver {
         self.param_defaults = defaults
             .into_iter()
             .map(|(key, values)| {
-                let packed = values.iter().map(|value| pack_tokens(value)).collect();
+                let packed: Vec<String> = values.iter().map(|value| pack_tokens(value)).collect();
+                // A function whose every parameter has a default can be written with no
+                // arguments at all, so it is a legitimate `X()` at a call site.
+                if !packed.is_empty() && packed.iter().all(|value| !value.is_empty()) {
+                    self.zero_arg_names.insert(key.1.clone());
+                }
                 (key, packed)
             })
             .collect();
+    }
+
+    /// The owning type's name with its template subtypes (`TSubclassOf<UItemDefinition>`).
+    fn composed_type_name(&self, ptr: i64) -> Option<String> {
+        let base = self.type_by_ptr.get(&ptr)?.clone();
+        match self.type_subtypes(ptr) {
+            Some(subs) if !subs.is_empty() => {
+                let inner: Vec<String> = subs.iter().map(|s| s.base_name(self)).collect();
+                Some(format!("{base}<{}>", inner.join(", ")))
+            }
+            _ => Some(base),
+        }
+    }
+
+    /// True when the cache's own function table records `type::name` with that many parameters.
+    /// Namespaces are ignored on both sides — a rendered type carries them, the table does not.
+    pub fn type_has_method(&self, ty: &str, name: &str, arity: usize) -> bool {
+        self.type_methods
+            .contains(&format!("{}::{name}/{arity}", strip_namespaces(ty)))
+    }
+
+    /// True when a rendered `name()` can be a real call: the cache does not know the name at all
+    /// (nothing to check it against), or it knows a no-argument form of it.
+    pub fn zero_arg_call_is_plausible(&self, name: &str) -> bool {
+        !self.known_func_names.contains(name) || self.zero_arg_names.contains(name)
     }
     /// Declared default arguments of `owner::function`, if the cache recorded any. Walks the
     /// script hierarchy, because a call's target type is often a subclass of the declarer.
@@ -1156,6 +1246,36 @@ impl RefResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_type_key_ignores_namespaces_on_both_sides() {
+        assert_eq!(
+            strip_namespaces("TSubclassOf<G1R::AIGroup::UAIGroup_StateEvent>"),
+            "TSubclassOf<UAIGroup_StateEvent>"
+        );
+        assert_eq!(strip_namespaces("TMap<A, G1R::B>"), "TMap<A, B>");
+        assert_eq!(strip_namespaces("FVector"), "FVector");
+    }
+
+    #[test]
+    fn a_types_recorded_methods_are_found_through_its_namespaced_spelling() {
+        let mut refs = RefResolver::default();
+        refs.type_methods
+            .insert("TSubclassOf<UAIGroup_StateEvent>::$beh0/0".to_owned());
+        assert!(refs.type_has_method("TSubclassOf<G1R::AIGroup::UAIGroup_StateEvent>", "$beh0", 0));
+        assert!(!refs.type_has_method("TSubclassOf<UAIGroup_StateEvent>", "$beh0", 1));
+    }
+
+    #[test]
+    fn an_unknown_name_may_be_called_with_no_arguments_but_a_known_one_may_not() {
+        let mut refs = RefResolver::default();
+        refs.known_func_names.insert("RequireFalse".to_owned());
+        refs.known_func_names.insert("Num".to_owned());
+        refs.zero_arg_names.insert("Num".to_owned());
+        assert!(!refs.zero_arg_call_is_plausible("RequireFalse"));
+        assert!(refs.zero_arg_call_is_plausible("Num"));
+        assert!(refs.zero_arg_call_is_plausible("SomethingTheCacheNeverRecorded"));
+    }
 
     #[test]
     fn truncated_huge_tail_count_fails_before_resolver_allocation() {

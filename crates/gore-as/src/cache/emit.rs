@@ -487,6 +487,18 @@ fn recover_module_defaults<'a>(
         );
         match recover_defaults(&rendered) {
             DefaultsRecovery::Recovered(statements) => {
+                if let Some(lost) = statements
+                    .iter()
+                    .find_map(|statement| call_that_lost_its_arguments(statement, refs))
+                {
+                    return (
+                        HashMap::new(),
+                        Some(format!(
+                            "{} (call `{lost}()` has no no-argument form, so the recovered                              statement lost an argument)",
+                            c.name
+                        )),
+                    );
+                }
                 recovered.insert(c.name.as_str(), statements);
             }
             DefaultsRecovery::Rejected(reason) => {
@@ -504,6 +516,37 @@ fn recover_module_defaults<'a>(
 /// Batch-21 Class B residue: the own-fields map left e.g. `this.RoleCategoryContainers.opIndex(
 /// <int>)` (field declared on the super class) untyped, so the container-subtype enum-key wrap
 /// never fired.
+/// A rendered `Name()` whose function the cache knows only WITH parameters. The structurer lost
+/// the argument (the fluent AI-rule chains lose their receiver and argument together), and a
+/// `default` statement written from it would silently mean something else — so the class falls
+/// back to the byte-exact carry. A type name is a constructor, not a call, and is exempt.
+fn call_that_lost_its_arguments(statement: &str, refs: &RefResolver) -> Option<String> {
+    let bytes = statement.as_bytes();
+    let mut at = 0usize;
+    while let Some(found) = statement[at..].find("()") {
+        let end = at + found;
+        let mut start = end;
+        while start > 0 {
+            let b = bytes[start - 1];
+            if b.is_ascii_alphanumeric() || b == b'_' {
+                start -= 1;
+            } else {
+                break;
+            }
+        }
+        let name = &statement[start..end];
+        if !name.is_empty()
+            && !name.bytes().next().is_some_and(|b| b.is_ascii_digit())
+            && !refs.is_type_name(name)
+            && !refs.zero_arg_call_is_plausible(name)
+        {
+            return Some(name.to_owned());
+        }
+        at = end + 2;
+    }
+    None
+}
+
 fn class_field_types(c: &Class, refs: &RefResolver) -> HashMap<String, String> {
     let mut field_types: HashMap<String, String> = c
         .fields
@@ -1119,6 +1162,9 @@ fn emit_function_ctor(
             .collect();
         rewrite_adjacent_value_temporaries(&body, &candidates).0
     };
+    let (body, _) = rewrite_value_temporaries(&body, &inferred_locals);
+    let body = drop_dead_stores(&body);
+    let body = rewrite_operator_calls(&body);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
     // (a wrong type just becomes a compile error the in-game loop force-stubs, rather than the
     // whole function stubbing on an undeclared identifier).
@@ -1388,6 +1434,13 @@ fn emit_function_ctor(
         let body = rewrite_no_assign_residual_assigns(&body, &locals, &ret);
         // Iterator locals have no default ctor either; declare them at their `Iterator()` call.
         let (body, iter_suppressed) = rewrite_iterator_decl_init(&body, &locals);
+        // Same for value-type temporaries: declaring one bare and assigning afterwards asks for
+        // a default-construct behaviour AND an `opAssign`, and the base cache has neither.
+        // The iterator idiom is a range-for the compiler desugared; write it back as one. Runs
+        // BEFORE the value-type decl-init rewrite, which would otherwise give the loop element a
+        // declaration and hide the idiom.
+        let (body, foreach_suppressed) = rewrite_foreach_loops(&body, &locals, refs);
+        let (body, value_suppressed) = rewrite_value_decl_init(&body, &locals, refs);
         // Hoist local declarations. A primitive may stay bare only when its first source-level
         // reference is a top-level write-only assignment; this is the same definite-assignment
         // proof used for inferred enums. Everything else gets an explicit default initializer so
@@ -1398,6 +1451,8 @@ fn emit_function_ctor(
             if suppressed.contains(slot)
                 || na_suppressed.contains(slot)
                 || iter_suppressed.contains(slot)
+                || value_suppressed.contains(slot)
+                || foreach_suppressed.contains(slot)
             {
                 continue; // declared at its (rewritten) assignment/Iterator() site instead
             }
@@ -3893,6 +3948,24 @@ fn fold_adjacent_consumer(line: &str, ident: &str, rhs: &str) -> Option<String> 
         return Some(format!("{indent}{ident} = !({rhs});"));
     }
 
+    // `receiver.Method(local_N);` — a whole call statement whose sole argument is the folded
+    // value. The receiver is a pure member path, so running it before the producer instead of
+    // after cannot observe a different value, and no sibling argument can reorder.
+    if let Some(call) = trimmed.strip_suffix(';') {
+        let marker = format!("({ident})");
+        if let Some((prefix, suffix)) = call.split_once(&marker) {
+            if suffix.is_empty()
+                && count_ident(call, ident) == 1
+                && !prefix.is_empty()
+                && prefix
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.'))
+            {
+                return Some(format!("{indent}{prefix}({rhs});"));
+            }
+        }
+    }
+
     if let Some(rest) = trimmed
         .strip_prefix("if (")
         .and_then(|s| s.strip_suffix(')'))
@@ -4250,6 +4323,494 @@ fn rewrite_no_assign_residual_assigns(
 /// initialized (the original per-case iterators). ANY reference that doesn't fit this shape
 /// (read before assign, a bare read outside every assign's block) keeps the hoisted
 /// declaration — the status-quo error, never a broken reference.
+/// A value-struct temporary the source never named: the compiler put one call result in a slot
+/// and consumed it in the very next statement. Naming it forces a copy — `$beh0(const T&)` or
+/// `opAssign` — that the base cache has no row for, and the module stops being splicable. Fold
+/// every producer into its consumer; `rewrite_adjacent_value_temporaries` commits a slot only
+/// when every reference to it disappears, so a partial fold is impossible.
+fn rewrite_value_temporaries(body: &str, locals: &BTreeMap<i32, String>) -> (String, HashSet<i32>) {
+    let candidates: HashSet<i32> = locals
+        .iter()
+        .filter(|(_, ty)| is_value_struct_type(ty))
+        .map(|(slot, _)| *slot)
+        .filter(|slot| produced_only_by_calls(body, *slot))
+        .collect();
+    if candidates.is_empty() {
+        return (body.to_owned(), HashSet::new());
+    }
+    rewrite_adjacent_value_temporaries(body, &candidates)
+}
+
+/// AngelScript's binary operators are methods, and the structurer recovers the method: the AI
+/// rule tables come back as `FAssessmentBits(A).opOr(B)` where the source wrote `A | B`. The two
+/// compile to the same code, but only the operator form is a shape a class-scope `default`
+/// statement can carry. Rewrite the call back into its operator.
+fn rewrite_operator_calls(body: &str) -> String {
+    const OPERATORS: &[(&str, &str)] = &[
+        (".opOr(", "|"),
+        (".opAnd(", "&"),
+        (".opXor(", "^"),
+        (".opShl(", "<<"),
+        (".opShr(", ">>"),
+        (".opMod(", "%"),
+        // Not an infix operator: `opIndex` is subscript, rendered `recv[key]`.
+        (".opIndex(", "[]"),
+    ];
+    if !OPERATORS.iter().any(|(call, _)| body.contains(call)) {
+        return body.to_owned();
+    }
+    let trailing_newline = body.ends_with('\n');
+    let mut out: Vec<String> = Vec::new();
+    for line in body.lines() {
+        let mut line = line.to_owned();
+        let mut cursor = 0usize;
+        // Bound: each pass either rewrites one call (shortening the line) or advances the cursor.
+        while cursor < line.len() {
+            let Some((at, call, op)) = OPERATORS
+                .iter()
+                .filter_map(|(call, op)| {
+                    line[cursor..].find(call).map(|i| (cursor + i, *call, *op))
+                })
+                .min_by_key(|(at, _, _)| *at)
+            else {
+                break;
+            };
+            let open = at + call.len() - 1;
+            match (matching_paren(&line, open), expression_start(&line, at)) {
+                (Some(close), Some(start)) => {
+                    let folded = if op == "[]" {
+                        format!("{}[{}]", &line[start..at], &line[open + 1..close])
+                    } else {
+                        format!("({} {op} {})", &line[start..at], &line[open + 1..close])
+                    };
+                    line = format!("{}{folded}{}", &line[..start], &line[close + 1..]);
+                    cursor = start;
+                }
+                _ => cursor = open + 1,
+            }
+        }
+        out.push(line);
+    }
+    let mut joined = out.join("\n");
+    if trailing_newline {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// Index of the `)` closing the `(` at `open`, skipping string literals.
+fn matching_paren(line: &str, open: usize) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (i, b) in bytes.iter().enumerate().skip(open) {
+        if in_string {
+            match b {
+                _ if escaped => escaped = false,
+                b'\\' => escaped = true,
+                b'"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Start of the expression that ends at `end` — the receiver of the operator call. Walks back
+/// over one balanced call/index chain; a quote inside it means the receiver holds a string
+/// literal, where walking backwards cannot tell an opening quote from a closing one, so the
+/// rewrite is abandoned for that call.
+fn expression_start(line: &str, end: usize) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut i = end;
+    let mut depth = 0i32;
+    while i > 0 {
+        let b = bytes[i - 1];
+        match b {
+            b'"' => return None,
+            b')' | b']' => depth += 1,
+            b'(' | b'[' => {
+                if depth == 0 {
+                    break;
+                }
+                depth -= 1;
+            }
+            _ if depth > 0 => {}
+            _ if b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b':') => {}
+            _ => break,
+        }
+        i -= 1;
+    }
+    (i < end).then_some(i)
+}
+
+/// A store into a slot the rendered source never reads back: the structurer resolved the value at
+/// its use site (a float literal, say) and left the raw producer behind. The store is dead in the
+/// emitted source, and keeping it costs a local the original never declared. Drop it only when the
+/// right-hand side is a pure expression, so no call can be lost with it.
+fn drop_dead_stores(body: &str) -> String {
+    let trailing_newline = body.ends_with('\n');
+    let live = used_locals(body);
+    let mut dead: HashSet<i32> = HashSet::new();
+    for slot in live {
+        let ident = format!("local_{slot}");
+        let mut reads = 0usize;
+        let mut stores = 0usize;
+        for line in body.lines() {
+            let hits = count_ident(line, &ident);
+            if hits == 0 {
+                continue;
+            }
+            match assignment_rhs_for(line, &ident) {
+                Some(rhs) if is_simple_pure_expr(rhs) => stores += 1,
+                _ => reads += hits,
+            }
+        }
+        if reads == 0 && stores > 0 {
+            dead.insert(slot);
+        }
+    }
+    if dead.is_empty() {
+        return body.to_owned();
+    }
+    let mut out: Vec<&str> = Vec::new();
+    for line in body.lines() {
+        let drop_it = dead.iter().any(|slot| {
+            let ident = format!("local_{slot}");
+            assignment_rhs_for(line, &ident).is_some()
+        });
+        if !drop_it {
+            out.push(line);
+        }
+    }
+    let mut joined = out.join("\n");
+    if trailing_newline {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// Every store into the slot must be a call or constructor expression whose value already has the
+/// slot's declared type. A store of a bare literal is a declaration-site conversion — `FText x =
+/// "id";` — and folding the literal into the consumer would hand it the raw `FString` instead.
+fn produced_only_by_calls(body: &str, slot: i32) -> bool {
+    let ident = format!("local_{slot}");
+    let mut stores = 0usize;
+    for line in body.lines() {
+        let Some(rhs) = assignment_rhs_for(line, &ident) else {
+            continue;
+        };
+        stores += 1;
+        if !rhs.ends_with(')') || !rhs.contains('(') || rhs.starts_with('"') {
+            return false;
+        }
+    }
+    stores > 0
+}
+
+/// True when the base cache builds a value of this type the way the STRUCTURER recovered it —
+/// default-construct, then assign. Turning that into a declaration-with-initializer would ask
+/// for a copy constructor the cache has no row for, and the module would stop being splicable.
+/// The reverse case (no default constructor, no `opAssign`) is why the rewrite exists at all,
+/// so the cache's own function table decides which shape each type gets.
+fn constructs_by_assignment(ty: &str, refs: &RefResolver) -> bool {
+    // Not `bare_type_name`: it splits on the LAST `::`, which cuts a template's subtype apart
+    // (`TSubclassOf<G1R::X>` -> `X>`). `type_has_method` strips the namespaces itself.
+    let ty = ty.trim_start_matches("const ");
+    !refs.type_has_method(ty, "$beh0", 1)
+        && refs.type_has_method(ty, "$beh0", 0)
+        && refs.type_has_method(ty, "opAssign", 1)
+}
+
+fn is_value_struct_type(ty: &str) -> bool {
+    !is_primitive(ty)
+        && !ty.starts_with("const ")
+        && matches!(
+            super::structure::bare_type_name(ty).bytes().next(),
+            Some(b'F') | Some(b'T')
+        )
+}
+
+/// `Iterator()` / `CanProceed` / `Proceed()` is what `for (auto X : container)` desugars to. The
+/// structurer recovers that desugared shape faithfully, but writing it back out has to NAME the
+/// iterator, and a named iterator is copy-constructed — a `$beh0(const T&)` the base cache has no
+/// row for, which costs the module its splicability. Fold the idiom back into the range-for the
+/// source actually wrote. Returns the rewritten body plus the element slots whose hoisted
+/// declaration the loop header now owns.
+fn rewrite_foreach_loops(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+    refs: &RefResolver,
+) -> (String, HashSet<i32>) {
+    let trailing_newline = body.ends_with('\n');
+    let lines: Vec<&str> = body.lines().collect();
+    let mut drop_line = vec![false; lines.len()];
+    let mut replace: Vec<Option<String>> = vec![None; lines.len()];
+    let mut suppressed = HashSet::new();
+
+    for i in 0..lines.len() {
+        if i + 3 >= lines.len() || drop_line[i] {
+            continue;
+        }
+        let Some((iter, container)) = iterator_decl(lines[i]) else {
+            continue;
+        };
+        if lines[i + 1].trim() != format!("while (local_{iter}.CanProceed)")
+            || lines[i + 2].trim() != "{"
+        {
+            continue;
+        }
+        let Some(elem) = proceed_assignment(lines[i + 3], iter) else {
+            continue;
+        };
+        let Some(end) = matching_close(&lines, i + 2) else {
+            continue;
+        };
+        // The iterator may appear nowhere but the three idiom lines, and the element nowhere
+        // outside the loop body: the range-for scopes both, so any other reference would be to
+        // a name that no longer exists.
+        let iter_ident = format!("local_{iter}");
+        let elem_ident = format!("local_{elem}");
+        let iter_uses: usize = lines.iter().map(|l| count_ident(l, &iter_ident)).sum();
+        let elem_outside: usize = lines
+            .iter()
+            .enumerate()
+            .filter(|(n, _)| *n < i + 3 || *n > end)
+            .map(|(_, l)| count_ident(l, &elem_ident))
+            .sum();
+        if iter_uses != 3 || elem_outside != 0 {
+            continue;
+        }
+        // The range-for element is READ-ONLY. A body that writes through it, or calls a method
+        // the cache records as non-const, only compiles in the while-shape the structurer
+        // recovered — so that loop keeps it.
+        if element_is_written_through(
+            &lines[i + 4..end],
+            &elem_ident,
+            locals.get(&elem).map(String::as_str),
+            refs,
+        ) {
+            continue;
+        }
+        // A range-for element is not assignable, so every write to it inside the loop has to be
+        // the compiler's own handle release. One that is anything else means this is not the
+        // idiom it looks like, and the loop keeps its recovered while-shape.
+        let releases: Vec<usize> = (i + 4..end)
+            .filter(|n| assignment_rhs_for(lines[*n], &elem_ident).is_some())
+            .collect();
+        if releases
+            .iter()
+            .any(|n| assignment_rhs_for(lines[*n], &elem_ident) != Some("nullptr"))
+        {
+            continue;
+        }
+        let indent = leading_indent(lines[i]);
+        replace[i] = Some(format!("{indent}for (auto {elem_ident} : {container})"));
+        drop_line[i + 1] = true;
+        drop_line[i + 3] = true;
+        for n in releases {
+            drop_line[n] = true;
+        }
+        suppressed.insert(elem);
+    }
+
+    if suppressed.is_empty() {
+        return (body.to_owned(), suppressed);
+    }
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    for (n, line) in lines.iter().enumerate() {
+        if drop_line[n] {
+            continue;
+        }
+        out.push(replace[n].clone().unwrap_or_else(|| (*line).to_owned()));
+    }
+    let mut joined = out.join("\n");
+    if trailing_newline {
+        joined.push('\n');
+    }
+    (inline_foreach_containers(&joined), suppressed)
+}
+
+/// The structurer materializes the iterated container into its own slot. Vanilla iterated the
+/// member directly, and the extra slot costs a container copy the base cache has no behaviour for.
+/// Inline it when the local is written once from a pure path, read only by the loop header, and
+/// the loop body never touches that path — so iterating the member instead of a copy of it cannot
+/// observe a mutation the copy would have hidden.
+fn inline_foreach_containers(body: &str) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut drop_line = vec![false; lines.len()];
+    let mut replace: Vec<Option<String>> = vec![None; lines.len()];
+    let mut changed = false;
+
+    for i in 0..lines.len() {
+        let trimmed = lines[i].trim();
+        let Some(rest) = trimmed.strip_prefix("for (auto ") else {
+            continue;
+        };
+        let Some((elem, container)) = rest.strip_suffix(')').and_then(|r| r.split_once(" : "))
+        else {
+            continue;
+        };
+        if !container.starts_with("local_") {
+            continue;
+        }
+        let uses: usize = lines.iter().map(|l| count_ident(l, container)).sum();
+        if uses != 2 {
+            continue;
+        }
+        let Some((decl, path)) = lines
+            .iter()
+            .enumerate()
+            .find(|(n, l)| *n != i && count_ident(l, container) == 1)
+            .and_then(|(n, l)| container_decl_path(l, container).map(|p| (n, p)))
+        else {
+            continue;
+        };
+        let Some(end) = matching_close(&lines, i + 1) else {
+            continue;
+        };
+        if lines[i + 1..=end].iter().any(|l| l.contains(&path)) {
+            continue;
+        }
+        let indent = leading_indent(lines[i]);
+        replace[i] = Some(format!("{indent}for (auto {elem} : {path})"));
+        drop_line[decl] = true;
+        changed = true;
+    }
+
+    if !changed {
+        return body.to_owned();
+    }
+    let trailing_newline = body.ends_with('\n');
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    for (n, line) in lines.iter().enumerate() {
+        if drop_line[n] {
+            continue;
+        }
+        out.push(replace[n].clone().unwrap_or_else(|| (*line).to_owned()));
+    }
+    let mut joined = out.join("\n");
+    if trailing_newline {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// `TMap<A, B> local_N = this.m_Field;` -> the right-hand pure path.
+fn container_decl_path(line: &str, ident: &str) -> Option<String> {
+    let trimmed = line.trim().strip_suffix(';')?;
+    let (lhs, rhs) = trimmed.split_once(" = ")?;
+    if !lhs.ends_with(ident) || rhs.is_empty() {
+        return None;
+    }
+    rhs.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.'))
+        .then(|| rhs.to_owned())
+}
+
+/// True when the loop body writes through `ident` — assigns into it, calls through one of its
+/// fields, or calls a method the cache declares non-const on its type. Unknown (native) types
+/// answer only through the shape rules, which is why a field-then-call counts as a write.
+fn element_is_written_through(
+    body: &[&str],
+    ident: &str,
+    ty: Option<&str>,
+    refs: &RefResolver,
+) -> bool {
+    for line in body {
+        let trimmed = line.trim();
+        // The compiler's own handle release is not a source write; the rewrite drops it.
+        if trimmed == format!("{ident} = nullptr;") {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix(ident) {
+            let target = rest.split(" = ").next().unwrap_or(rest);
+            if rest.len() > target.len() && !target.contains('(') {
+                return true; // `local_E… = …;`
+            }
+        }
+        for at in super::structure::word_positions(line, ident) {
+            let rest = &line[at + ident.len()..];
+            let Some(call) = rest.find('(') else {
+                continue;
+            };
+            let path = &rest[..call];
+            if !path.starts_with('.') || path.contains([' ', ',', ')', '[']) {
+                continue;
+            }
+            let dots = path.bytes().filter(|b| *b == b'.').count();
+            if dots > 1 {
+                return true; // `local_E.Field.Method(…)` mutates through the field
+            }
+            let method = path.trim_start_matches('.');
+            if ty.is_some_and(|ty| {
+                refs.calls_non_const_method(super::structure::bare_type_name(ty), method)
+            }) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// `auto local_N = <pure path>.Iterator();` -> (N, container path).
+fn iterator_decl(line: &str) -> Option<(i32, String)> {
+    let rest = line.trim().strip_prefix("auto local_")?;
+    let (slot, rest) = rest.split_once(" = ")?;
+    let slot: i32 = slot.parse().ok()?;
+    let container = rest.strip_suffix(".Iterator();")?;
+    // A pure member path is evaluated once by the range-for exactly as it was by the call, so
+    // the fold cannot move an observable side effect.
+    if container.is_empty()
+        || !container
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.'))
+    {
+        return None;
+    }
+    Some((slot, container.to_owned()))
+}
+
+/// `local_E = local_I.Proceed();` / `auto local_E = local_I.Proceed();` -> E.
+fn proceed_assignment(line: &str, iter: i32) -> Option<i32> {
+    let trimmed = line.trim();
+    // The element may already carry a declaration (`auto`, or a value type the decl-init rewrite
+    // gave it in an earlier pass).
+    let trimmed = match trimmed.split_once(" local_") {
+        Some((head, _)) if !head.contains('(') && !head.contains('=') => &trimmed[head.len() + 1..],
+        _ => trimmed,
+    };
+    let rest = trimmed.strip_prefix("local_")?;
+    let (slot, rest) = rest.split_once(" = ")?;
+    let slot: i32 = slot.parse().ok()?;
+    (rest == format!("local_{iter}.Proceed();")).then_some(slot)
+}
+
+/// Index of the `}` closing the block whose `{` is at `open`.
+fn matching_close(lines: &[&str], open: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    for (n, line) in lines.iter().enumerate().skip(open) {
+        depth += brace_net(line);
+        if depth == 0 {
+            return Some(n);
+        }
+    }
+    None
+}
+
 fn rewrite_iterator_decl_init(
     body: &str,
     locals: &BTreeMap<i32, String>,
@@ -4266,10 +4827,54 @@ fn rewrite_iterator_decl_init(
                 | "TMapConstIterator"
         )
     };
+    // `auto`, not the inferred iterator head — see the render comment below.
+    rewrite_decl_at_assignment(body, locals, &is_iter, &|_| "auto".to_string())
+}
+
+/// A VALUE-type local (`F*`/`T*`) that is hoisted and then assigned costs two symbols vanilla
+/// does not have: a default-construct behaviour for the declaration and an `opAssign` for the
+/// store. Vanilla builds the value at the point of use, so declaring at the first assignment
+/// reproduces that and keeps the module splicable. Iterators are handled above; primitives,
+/// object handles and const locals are left alone.
+fn rewrite_value_decl_init(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+    refs: &RefResolver,
+) -> (String, HashSet<i32>) {
+    let is_value = |ty: &str| is_value_struct_type(ty) && !constructs_by_assignment(ty, refs);
+    rewrite_decl_at_assignment(body, locals, &is_value, &|ty| ty.to_string())
+}
+
+/// Shared engine for both: declare a local at the assignment that first gives it a value,
+/// renaming later independent assignment groups so each keeps its own scope. Bails for a slot
+/// whose first reference is a READ — that one has to stay hoisted.
+/// A line that DEFINES the local — a plain assignment or a declaration-with-initializer.
+fn is_definition_line(line: &str, ident: &str) -> bool {
+    let trimmed = line.trim_start();
+    count_ident(line, ident) == 1
+        && trimmed.ends_with(';')
+        && (trimmed.starts_with(&format!("{ident} = ")) || declares_and_initializes(trimmed, ident))
+}
+
+/// `TSubclassOf<UActorComponent> local_52 = …;` — a definition that already carries its own
+/// declaration head.
+fn declares_and_initializes(trimmed: &str, ident: &str) -> bool {
+    let Some((head, rest)) = trimmed.split_once(&format!(" {ident} = ")) else {
+        return false;
+    };
+    !head.is_empty() && !head.contains(['(', ')', '=', ',', '.']) && !rest.is_empty()
+}
+
+fn rewrite_decl_at_assignment(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+    want: &dyn Fn(&str) -> bool,
+    decl_head: &dyn Fn(&str) -> String,
+) -> (String, HashSet<i32>) {
     let mut suppressed: HashSet<i32> = HashSet::new();
     let mut out = body.to_string();
     for (slot, ty) in locals {
-        if !is_iter(ty) {
+        if !want(ty) {
             continue;
         }
         let ident = format!("local_{slot}");
@@ -4292,8 +4897,13 @@ fn rewrite_iterator_decl_init(
         while k < refs.len() {
             let i = refs[k];
             let t = lines[i].trim_start();
-            let is_assign =
-                count_ident(lines[i], &ident) == 1 && t.starts_with(&pat) && t.ends_with(';');
+            // An earlier pass may already have turned the FIRST definition into a
+            // declaration-with-initializer. That is still a definition, and refusing to see one
+            // left every LATER assignment as a bare `local_N = …` — an `opAssign` the base cache
+            // does not have for that type, which costs the module its splicability.
+            let is_assign = count_ident(lines[i], &ident) == 1
+                && (t.starts_with(&pat) || declares_and_initializes(t, &ident))
+                && t.ends_with(';');
             if !is_assign {
                 ok = false; // read before any in-block assignment — keep the hoist
                 break;
@@ -4301,7 +4911,11 @@ fn rewrite_iterator_decl_init(
             let (_, end) = block_span(&lines, i);
             let mut members: Vec<usize> = Vec::new();
             k += 1;
-            while k < refs.len() && refs[k] < end {
+            // Stop at the NEXT definition as well as at the block end: the compiler reuses one
+            // slot for two source temporaries in the same block, and swallowing the second
+            // definition as a member left it a bare `local_N = …` — an `opAssign` the base
+            // cache has no row for. It becomes its own group (and its own declaration) instead.
+            while k < refs.len() && refs[k] < end && !is_definition_line(lines[refs[k]], &ident) {
                 members.push(refs[k]);
                 k += 1;
             }
@@ -4319,7 +4933,9 @@ fn rewrite_iterator_decl_init(
         let mut new_names: HashMap<usize, String> = HashMap::new(); // line -> name for renames
         let mut decl_lines: HashSet<usize> = HashSet::new();
         for (g, (assign, members)) in groups.iter().enumerate() {
-            decl_lines.insert(*assign);
+            if !declares_and_initializes(lines[*assign].trim_start(), &ident) {
+                decl_lines.insert(*assign);
+            }
             if g > 0 {
                 let fresh = format!("{ident}_{}", g + 1);
                 new_names.insert(*assign, fresh.clone());
@@ -4337,7 +4953,8 @@ fn rewrite_iterator_decl_init(
             if decl_lines.contains(&i) {
                 let t = line.trim_start();
                 let indent = &line[..line.len() - t.len()];
-                let _ = writeln!(rewritten, "{indent}auto {t}");
+                let head = decl_head(ty);
+                let _ = writeln!(rewritten, "{indent}{head} {t}");
             } else {
                 rewritten.push_str(&line);
                 rewritten.push('\n');
@@ -4904,5 +5521,216 @@ mod indirect_numeric_edge_tests {
             assert_eq!(folded, body);
             assert!(eliminated.is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod source_shape_tests {
+    use super::{
+        drop_dead_stores, inline_foreach_containers, produced_only_by_calls, rewrite_foreach_loops,
+        rewrite_operator_calls, rewrite_value_temporaries,
+    };
+    use crate::cache::refs::RefResolver;
+    use std::collections::BTreeMap;
+
+    fn locals(pairs: &[(i32, &str)]) -> BTreeMap<i32, String> {
+        pairs
+            .iter()
+            .map(|(slot, ty)| (*slot, (*ty).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn folds_a_value_temporary_into_the_call_that_consumes_it() {
+        let body =
+            "    local_7 = this.MakeTransition(n\"Loop\");\n    this.Transitions.Add(local_7);\n";
+        let (out, gone) = rewrite_value_temporaries(body, &locals(&[(7, "FTransition")]));
+        assert_eq!(
+            out,
+            "    this.Transitions.Add(this.MakeTransition(n\"Loop\"));\n"
+        );
+        assert!(gone.contains(&7));
+    }
+
+    #[test]
+    fn keeps_a_temporary_whose_store_is_a_declaration_site_conversion() {
+        // `FText local_6 = "id";` converts; folding the literal would hand the consumer an FString.
+        let body = "    local_6 = \"UI_Hint1\";\n    this.TipText.Add(local_6);\n";
+        assert!(!produced_only_by_calls(body, 6));
+        let (out, gone) = rewrite_value_temporaries(body, &locals(&[(6, "FText")]));
+        assert_eq!(out, body);
+        assert!(gone.is_empty());
+    }
+
+    #[test]
+    fn rebuilds_the_range_for_the_compiler_desugared() {
+        let body = concat!(
+            "        auto local_6 = this.m_Arms.Iterator();\n",
+            "        while (local_6.CanProceed)\n",
+            "        {\n",
+            "            local_16 = local_6.Proceed();\n",
+            "            local_16.Cancel();\n",
+            "            local_16 = nullptr;\n",
+            "        }\n",
+        );
+        let (out, gone) =
+            rewrite_foreach_loops(body, &locals(&[(16, "AActor")]), &RefResolver::default());
+        assert_eq!(
+            out,
+            concat!(
+                "        for (auto local_16 : this.m_Arms)\n",
+                "        {\n",
+                "            local_16.Cancel();\n",
+                "        }\n",
+            )
+        );
+        assert!(gone.contains(&16));
+    }
+
+    #[test]
+    fn rebuilds_the_range_for_when_the_element_already_carries_a_declaration() {
+        let body = concat!(
+            "        auto local_8 = Loot.Iterator();
+",
+            "        while (local_8.CanProceed)
+",
+            "        {
+",
+            "            FItemVirtualData local_16 = local_8.Proceed();
+",
+            "            Use(local_16);
+",
+            "        }
+",
+        );
+        let (out, gone) = rewrite_foreach_loops(
+            body,
+            &locals(&[(16, "FItemVirtualData")]),
+            &RefResolver::default(),
+        );
+        assert_eq!(
+            out,
+            concat!(
+                "        for (auto local_16 : Loot)
+",
+                "        {
+",
+                "            Use(local_16);
+",
+                "        }
+",
+            )
+        );
+        assert!(gone.contains(&16));
+    }
+
+    #[test]
+    fn keeps_the_while_shape_when_the_element_is_written_with_a_value() {
+        let body = concat!(
+            "        auto local_6 = this.m_Arms.Iterator();\n",
+            "        while (local_6.CanProceed)\n",
+            "        {\n",
+            "            local_16 = local_6.Proceed();\n",
+            "            local_16 = OtherActor;\n",
+            "        }\n",
+        );
+        let (out, gone) =
+            rewrite_foreach_loops(body, &locals(&[(16, "AActor")]), &RefResolver::default());
+        assert_eq!(out, body);
+        assert!(gone.is_empty());
+    }
+
+    #[test]
+    fn keeps_the_while_shape_when_the_element_outlives_the_loop() {
+        let body = concat!(
+            "        auto local_6 = this.m_Arms.Iterator();\n",
+            "        while (local_6.CanProceed)\n",
+            "        {\n",
+            "            local_16 = local_6.Proceed();\n",
+            "        }\n",
+            "        return local_16;\n",
+        );
+        let (out, _) =
+            rewrite_foreach_loops(body, &locals(&[(16, "AActor")]), &RefResolver::default());
+        assert_eq!(out, body);
+    }
+
+    #[test]
+    fn iterates_the_member_instead_of_a_copy_of_it() {
+        let body = concat!(
+            "        TMap<A, B> local_20 = this.m_Map;\n",
+            "        for (auto local_40 : local_20)\n",
+            "        {\n",
+            "            this.Update(local_40.GetKey());\n",
+            "        }\n",
+        );
+        assert_eq!(
+            inline_foreach_containers(body),
+            concat!(
+                "        for (auto local_40 : this.m_Map)\n",
+                "        {\n",
+                "            this.Update(local_40.GetKey());\n",
+                "        }\n",
+            )
+        );
+    }
+
+    #[test]
+    fn keeps_the_copy_when_the_loop_body_touches_the_member() {
+        let body = concat!(
+            "        TMap<A, B> local_20 = this.m_Map;\n",
+            "        for (auto local_40 : local_20)\n",
+            "        {\n",
+            "            this.m_Map.Remove(local_40.GetKey());\n",
+            "        }\n",
+        );
+        assert_eq!(inline_foreach_containers(body), body);
+    }
+
+    #[test]
+    fn writes_a_recovered_operator_method_as_its_operator() {
+        let body = "    Rules.RequireFalse(FBits(A::One).opOr(A::Two).opOr(A::Three));
+";
+        assert_eq!(
+            rewrite_operator_calls(body),
+            "    Rules.RequireFalse(((FBits(A::One) | A::Two) | A::Three));
+"
+        );
+    }
+
+    #[test]
+    fn writes_a_recovered_index_operator_as_a_subscript() {
+        let body = "    this.Presets.opIndex(n\"Torch\").LightRadius = 350.0f;
+";
+        assert_eq!(
+            rewrite_operator_calls(body),
+            "    this.Presets[n\"Torch\"].LightRadius = 350.0f;
+"
+        );
+    }
+
+    #[test]
+    fn leaves_an_operator_call_whose_receiver_holds_a_string() {
+        let body = "    Set(Name(\"a)b\").opOr(X));
+";
+        assert_eq!(rewrite_operator_calls(body), body);
+    }
+
+    #[test]
+    fn drops_a_store_the_rendered_source_never_reads() {
+        let body = "    local_2 = 1045220557;\n    this.Weight = 0.2f;\n";
+        assert_eq!(drop_dead_stores(body), "    this.Weight = 0.2f;\n");
+    }
+
+    #[test]
+    fn keeps_a_store_whose_value_is_read_back() {
+        let body = "    local_2 = 3;\n    this.Weight = local_2;\n";
+        assert_eq!(drop_dead_stores(body), body);
+    }
+
+    #[test]
+    fn keeps_an_unread_store_that_could_have_run_a_call() {
+        let body = "    local_2 = this.Consume();\n    return;\n";
+        assert_eq!(drop_dead_stores(body), body);
     }
 }

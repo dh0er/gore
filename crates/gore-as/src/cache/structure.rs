@@ -1177,6 +1177,19 @@ fn build_call(
         fn head(s: &str) -> &str {
             s.split('<').next().unwrap_or(s)
         }
+        // A self-call that names an ANCESTOR's function while the current class declares that
+        // very method with the same arity is `Super::` — see the arm below. It has to be known
+        // HERE too: a struct-by-value return is rendered by the RVO probe further down, which
+        // would otherwise write `out = this.Method(...)` and recurse.
+        let is_super_call = recv.s == "this"
+            && match (target_owner, cur_class, params) {
+                (Some(owner), Some(cur), Some(declared)) => {
+                    owner != cur
+                        && refs.is_subclass(cur, owner)
+                        && (non_virtual || refs.class_overrides_method(cur, f, declared.len()))
+                }
+                _ => false,
+            };
         let is_operator = assign_op(f).is_some() || binop_method(f).is_some();
         if let Some(rh) = ret_ty.map(head).filter(|_| !is_operator && !ret_is_ref) {
             if matches!(
@@ -1208,6 +1221,12 @@ fn build_call(
                     // GetActorLocation()` instead of `out = recv.Iterator()` -> "No matching
                     // signatures". `this`-receivers render `this.Method()` (legal, matches the
                     // normal method-render path below).
+                    if is_super_call {
+                        return Some(format!(
+                            "{out} = Super::{f}({})",
+                            render_args(&a, params, refs, arg_defaults)
+                        ));
+                    }
                     return Some(format!(
                         "{out} = {}.{f}({})",
                         wrap_uobject_recv(&recv, target_owner, refs),
@@ -1284,16 +1303,16 @@ fn build_call(
         // BUG (a) — SUPER-CALL: a NON-VIRTUAL (`CALL`) dispatch on `this` to a method owned by a
         // STRICT ANCESTOR of the current class is a `Super::method()` call, not `this.method()`
         // (a genuine virtual self-call compiles to CALLINTF, never a CALL to the base func-id).
-        if non_virtual && recv.s == "this" {
-            if let (Some(owner), Some(cur)) = (target_owner, cur_class) {
-                if owner != cur && refs.is_subclass(cur, owner) {
-                    maybe_reverse_args(&mut a, params, refs); // super calls are reverse-pushed too
-                    return Some(format!(
-                        "Super::{f}({})",
-                        render_args(&a, params, refs, arg_defaults)
-                    ));
-                }
-            }
+        // A VIRTUAL (`CALLINTF`) self-call that names the ANCESTOR's function while the current
+        // class declares that very method is `Super::` too: a plain `this.` call would compile
+        // to the class's own override — infinite recursion, and a function identity the base
+        // cache does not have, which costs the module its splicability.
+        if is_super_call {
+            maybe_reverse_args(&mut a, params, refs); // super calls are reverse-pushed too
+            return Some(format!(
+                "Super::{f}({})",
+                render_args(&a, params, refs, arg_defaults)
+            ));
         }
         // a call whose name is a type = an in-place constructor (member struct default ctor) —
         // implicit in AS source, emit nothing.
@@ -2176,6 +2195,29 @@ fn binop_method(f: &str) -> Option<&'static str> {
         "opEquals" => "==",
         _ => return None,
     })
+}
+
+/// Whole-word occurrences of `word` in `text` (an identifier is not a substring of a longer one).
+fn count_word(text: &str, word: &str) -> usize {
+    word_positions(text, word).len()
+}
+
+pub(crate) fn word_positions(text: &str, word: &str) -> Vec<usize> {
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let bytes = text.as_bytes();
+    let mut found = Vec::new();
+    let mut at = 0usize;
+    while let Some(hit) = text[at..].find(word) {
+        let start = at + hit;
+        let end = start + word.len();
+        let before_ok = start == 0 || !is_word(bytes[start - 1]);
+        let after_ok = end == bytes.len() || !is_word(bytes[end]);
+        if before_ok && after_ok {
+            found.push(start);
+        }
+        at = end;
+    }
+    found
 }
 
 /// Emit `dst = rhs;` if a result is available (object store).
@@ -4895,8 +4937,39 @@ fn block_stmts_in(
         out.push(format!("{s};"));
     }
     out.retain(|s| !s.contains(UNRESOLVED)); // drop statements with an unresolved value
-                                             // no binary comparison but a bool value was tested -> use it as the branch condition so
-                                             // the jump renders `if (cond != 0)` instead of `if (? != ?)`.
+                                             // A temp that only ever held a DEFAULT-CONSTRUCTED value: `PSF t; CALLSYS $beh0(0-param)`
+                                             // builds it, and the construct behaviour has no source form of its own, so nothing declares
+                                             // `t` and every read of it dangles (`this.m_CameraBehaviour = local_40;` with no local_40).
+                                             // The Idiom-S arm above already recovers the `$beh0` copy-assign shape and consumes its
+                                             // record; what is left here is the RUNTIME `opAssign` shape and plain argument reads. Write
+                                             // the value where it is read — but only for a temp nothing else ever assigns, so the
+                                             // substituted `T()` is provably the only value it can hold.
+    for (slot, ty) in &default_ctor_temp {
+        let assigned = out.iter().any(|s| {
+            s.trim_start()
+                .strip_prefix(slot.as_str())
+                .is_some_and(|rest| rest.starts_with(" = "))
+        });
+        // A bare template head (`TArray`) is not a constructible type name, and a temporary
+        // cannot be passed by non-const reference or receive a non-const method call — so the
+        // substitution is limited to the one place it is provably a plain value: the right-hand
+        // side of a whole-value assignment.
+        if assigned || (ty.starts_with('T') && !ty.contains('<')) {
+            continue;
+        }
+        let value = format!("{ty}()");
+        for statement in out.iter_mut() {
+            let Some(lhs) = statement
+                .strip_suffix(&format!(" = {slot};"))
+                .filter(|lhs| count_word(lhs, slot) == 0)
+            else {
+                continue;
+            };
+            *statement = format!("{lhs} = {value};");
+        }
+    }
+    // no binary comparison but a bool value was tested -> use it as the branch condition so
+    // the jump renders `if (cond != 0)` instead of `if (? != ?)`.
     if cmp.is_none() {
         if let Some((c, is_bool)) = cond.take() {
             if !c.is_empty() && c != UNRESOLVED {

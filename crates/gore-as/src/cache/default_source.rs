@@ -78,11 +78,10 @@ pub(crate) fn recover(rendered_method: &str) -> DefaultsRecovery {
     let mut out = Vec::with_capacity(statements.len());
     for statement in statements {
         let stripped = strip_this(&statement);
-        if contains_word(&stripped, "this") {
-            return DefaultsRecovery::Rejected(format!(
-                "statement keeps a bare `this`: {stripped}"
-            ));
-        }
+        // A bare `this` SURVIVES into the default statement (`m_Collision.OnBeginOverlap
+        // .AddUFunction(this, n"Fn");`). It reads as the CDO there, which is what the generated
+        // initializer did with it in the first place, and the game compiler accepts it — the
+        // whole tree recompiles with these statements in place.
         if let Some(local) = first_temporary(&stripped) {
             return DefaultsRecovery::Rejected(format!("temporary `{local}` did not fold"));
         }
@@ -160,9 +159,29 @@ fn drop_trailing_return(statements: &mut Vec<String>) -> Result<(), String> {
 }
 
 /// A compiler temporary: the body renderer names frame slots `local_<frame offset>`.
+/// `TSubclassOf<UGA_Spell> local_6` — a declaration WITH an initializer defines the temporary
+/// exactly as a bare assignment does. The emitter prefers this form for value types (a bare
+/// declaration would ask for a default constructor the base cache may not have), so a defaults
+/// body reaches recovery full of them.
+fn declares_temporary(lhs: &str) -> bool {
+    let mut tokens = lhs.split_whitespace();
+    let Some(first) = tokens.next() else {
+        return false;
+    };
+    let Some(name) = tokens.last() else {
+        return false;
+    };
+    !first.contains(['.', '(', '[']) && !is_temporary_name(first) && is_temporary_name(name)
+}
+
 fn is_temporary_name(name: &str) -> bool {
-    name.strip_prefix("local_")
-        .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+    // `local_4` and the emitter's fresh name for a re-used slot, `local_4_2`.
+    name.strip_prefix("local_").is_some_and(|rest| {
+        !rest.is_empty()
+            && rest
+                .split('_')
+                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    })
 }
 
 /// Fold every `local_N = <expr>;` back into the single expression that consumes it, so the body
@@ -246,9 +265,10 @@ fn temporary_definition(statement: &str) -> Option<(&str, &str)> {
     let body = statement.strip_suffix(';')?;
     let (lhs, rhs) = split_top_level_assignment(body)?;
     let lhs = lhs.trim();
-    if !is_temporary_name(lhs) {
+    if !is_temporary_name(lhs) && !declares_temporary(lhs) {
         return None;
     }
+    let lhs = lhs.split_whitespace().last()?;
     let rhs = rhs.trim();
     if rhs.is_empty() {
         return None;
@@ -410,10 +430,6 @@ fn word_positions(text: &str, word: &str) -> Vec<usize> {
 
 fn count_word(text: &str, word: &str) -> usize {
     word_positions(text, word).len()
-}
-
-fn contains_word(text: &str, word: &str) -> bool {
-    !word_positions(text, word).is_empty()
 }
 
 fn starts_with_word(text: &str, word: &str) -> bool {
@@ -851,8 +867,13 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_this_argument_is_rejected() {
-        assert!(rejection(&["this.Register(this);", "return;"]).contains("bare `this`"));
+    fn a_bare_this_argument_is_kept() {
+        // `this` inside a default statement is the CDO — the same object the generated
+        // initializer wrote to — and the game compiler accepts it.
+        assert_eq!(
+            recovered(&["this.Register(this);", "return;"]),
+            vec!["Register(this);"]
+        );
     }
 
     #[test]

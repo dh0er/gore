@@ -100,25 +100,24 @@ requires reconstructing its body manually or first extending the decompiler.
 
 ## Class defaults
 
-Measured on 2026-08-19 against build `Build55_CL171864` (script cache SHA-256
+Measured on 2026-08-20 against build `Build55_CL171864` (script cache SHA-256
 `D0AFAF909E62867FAEDC3678A1175F5E8DE5E784DC503A14FFBDE4726F297231`, GUID
 `be78fe0a46ac6643968597e85c7e5b3f`) with the matching `Binds.Cache` loaded. This build is not one
 of the audited generations, so these numbers qualify the decompiler, not the build.
 
 | Metric | Value |
 |--------|-------|
-| Modules authoring their class defaults | 6,814 of 7,308 that have any |
-| Modules suppressed (recovery incomplete) | 103 |
-| `default` statements written | 203,977 |
+| Modules authoring their class defaults | 6,850 of 7,308 that have any |
+| Modules suppressed (recovery incomplete) | 67 |
+| `default` statements written | 204,344 |
 | Vanilla `__InitDefaults` methods | 30,005 |
-| Aligned after recompile | 28,694 (1,311 unaligned, from the suppressed modules) |
-| Byte-faithful (`IDENTICAL`+`BENIGN`, `--norm-slots`) | 28,659 (**99.88%**) |
+| Aligned after recompile | 28,665 (1,340 unaligned, from the suppressed modules) |
+| Byte-faithful (`IDENTICAL`+`BENIGN`, `--norm-slots`) | 28,631 (**99.88%**) |
 
-The whole emitted tree recompiles: `gore as compile` produced a structurally valid 116,284,667-byte
-cache, and `gore as bytediff --norm-slots` reports 0 module-level alignment loss, 11 only-in-regen
-functions, and B1 88.78% over all 163,296 aligned functions. The rest of the corpus is unchanged by
-this work (18,288 non-`__InitDefaults` semantic differences, against 19,794 in the retained 07-12
-baseline).
+The whole emitted tree recompiles: `gore as compile` produced a structurally valid 113,981,747-byte
+cache, and `gore as bytediff --norm-slots` reports 0 module-level alignment loss, no only-in-regen
+functions, and B1 **90.18%** over all 163,264 aligned functions — up from 88.78% before the body
+work below, with 16,035 semantic differences left against 18,288.
 
 Editing an existing module's defaults and splicing it back works. Getting there needed five
 identity fixes, because a decompiled module is only re-splicable when every symbol it references
@@ -143,23 +142,61 @@ still composes to the identity the base cache recorded:
 The collision-rename workaround disappeared with the namespaces: the emitter no longer invents
 `_g1234`-suffixed symbols that the base cache cannot know.
 
-Measured over a 60-module random sample, `extract-remap` against the base cache succeeds for 58
-(97%); before this work the same sample scored 43. The two remaining failures, and 7 of 25
-conversation modules, are a body-fidelity class rather than an identity one: the recovered body
-default-constructs a `TSubclassOf` temporary where vanilla converted one from a `UClass`, so it
-references a `$beh0()` behaviour the base lacks. `GORE_AS_REMAP_DIAG=1` prints the two identities
+Identity alone was not enough: a module also has to be re-rendered in a SHAPE whose recompilation
+references no symbol the base cache lacks. Six body-fidelity fixes closed that gap.
+
+- **A named value temporary.** `T t = f(); Use(t);` asks for a copy the base has no `$beh0` /
+  `opAssign` row for. The compiler never named it, so the emitter folds the producer into its
+  consumer — the transform commits only when every reference to the slot disappears, and a store
+  that carries a declaration-site conversion (`FText x = "id";`) is left alone.
+- **The range-for.** `Iterator()` / `CanProceed` / `Proceed()` is what `for (auto X : c)`
+  desugars to. Writing it back as a while-loop has to NAME the iterator, and a named iterator is
+  copy-constructed. The idiom is folded back into the range-for the source wrote — unless the
+  body writes through the element, which only the while-shape allows.
+- **The container copy.** The structurer materialized the iterated member into its own slot;
+  the loop now iterates the member, provided the body never touches that path.
+- **A re-used slot.** One VM slot carries two source temporaries; the second assignment stayed a
+  bare `local_N = …`. Each definition now gets its own declaration, the later ones under a fresh
+  name, and only while every reference stays inside that definition's block.
+- **A default-constructed temporary.** `PSF t; CALLSYS $beh0()` has no source form, so nothing
+  declared `t` and every read of it dangled. The value is written where it is read — restricted
+  to a whole-value assignment, the one position where a temporary is legal.
+- **`Super::`.** An override calling the method it overrides was rendered `this.Method(...)`,
+  which recompiles into infinite recursion and a function identity the base cache does not have.
+  A same-arity override of an ancestor's method now renders `Super::`.
+
+Which shape a value local takes is decided by the cache's own function table, not by a rule of
+thumb: a type that has a copy constructor is declared with its initializer, a type that has a
+default constructor and an `opAssign` keeps the hoisted declaration and its assignment. Both
+shapes compile; only the one the base cache has a row for can be spliced back.
+
+Measured over a 627-module random sample, `extract-remap` against the base cache succeeds for 625
+(**99.7%**). The same measurement scored 43 of 60 before the identity work and 58 of 60 after it.
+Both remaining failures are the one `const` the emitter deliberately drops: a return type's
+`const` is stripped because the cache sets that flag inconsistently across an override family
+(restoring it costs 41 "Can't implicitly convert from 'const X' to 'X'" errors, because the
+locals that receive those values are typed without it), and a local typed from such a return
+loses it too — which picks the non-const `Iterator()` overload and, with it, a template
+instantiation the base cache does not have. `GORE_AS_REMAP_DIAG=1` prints the two identities
 behind any unresolved or ambiguous reference.
 
 Recovery is all-or-nothing per module, because `generated_defaults` can only carry an omitted
 `__InitDefaults` byte-exact for a module that authors no defaults at all. A module that recovered
 only some of its classes would silently drop the rest, so one unrecovered class suppresses the
-whole module and its header records the class and the reason. The 103 suppressed modules break
-down as: 35 fluent rule builders whose recovered statements still spell out operator overloads
-(`a.opOr(b)`), 32 whose bodies keep a compiler temporary that cannot fold, 28 that pass `this` as
-an argument, 2 machine-generated world/voice tables over the size bound, 1 with control flow, and
-a handful of individually distinct shapes.
+whole module and its header records the class and the reason. The 67 suppressed modules break
+down as: 35 fluent AI rule builders (below), 25 whose bodies keep a compiler temporary that
+cannot fold, 2 machine-generated world/voice tables over the size bound, and 5 individually
+distinct shapes.
 
-The 35 initializers that still differ after a faithful recompile are dominated by float constants
+The 35 fluent builders are the one shape where the structurer is known to render a WRONG
+statement rather than an incomplete one: `Rules.Add(t).RequireTrue(a).RequireFalse(b).Then(r)` is
+split after the first link, and the next link takes a leftover argument as its receiver
+(`b.RequireFalse();`). They are caught rather than written: every recovered statement is checked
+against the cache's own function table, and a rendered `Name()` whose function the cache knows
+only WITH parameters means an argument was lost, which suppresses the module. That check is
+general — it fails closed for any future dropped-argument shape, not just this one.
+
+The 34 initializers that still differ after a faithful recompile are dominated by float constants
 the emitter cannot spell: AngelScript has no infinity literal, so `+inf` (`0x7F800000`) is written
 as the largest finite float and comes back one ULP low.
 

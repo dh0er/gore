@@ -63,6 +63,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   another item's model.
 - Decompiled source keeps namespaces, `const` methods and parameter defaults, so
   quest, document and conversation modules can be edited and spliced at all.
+- A `default` statement whose call lost an argument is refused instead of
+  written, so a module keeps its byte-exact defaults rather than quietly
+  changing meaning.
+- Decompiled bodies write the range-for the compiler desugared, fold the
+  temporaries it invented, drop stores nothing reads, and call `Super::` where
+  an override calls the method it overrides.
 - `as extract-remap` and `compile-module` resolve a repeated string literal
   instead of refusing the module.
 - `GORE_AS_REMAP_DIAG=1` prints the two identities behind an unresolved or

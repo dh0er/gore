@@ -188,6 +188,19 @@ pub fn prepare_resolver_semantics(
         })
         .collect();
     refs.set_non_const_methods(non_const);
+    let declared = mods
+        .iter()
+        .flat_map(|module| &module.classes)
+        .map(|class| {
+            let methods = class
+                .methods
+                .iter()
+                .map(|method| format!("{}/{}", method.name, method.params.len()))
+                .collect::<HashSet<_>>();
+            (class.name.clone(), methods)
+        })
+        .collect();
+    refs.set_class_methods(declared);
     let mut param_defaults = HashMap::new();
     for module in mods {
         for function in &module.functions {
