@@ -2220,6 +2220,39 @@ pub(crate) fn word_positions(text: &str, word: &str) -> Vec<usize> {
     found
 }
 
+/// `<receiver>.<Method>(<slot>);` — a one-argument call that takes the slot's type by value or by
+/// const reference, which is where a TEMPORARY is legal (`PursuedCrimes.Add(FCrimeSetup());`).
+/// The verdict comes from the cache's own parameter table, over every one-parameter row of that
+/// name: one non-const-reference overload disqualifies the whole name, so the substitution can
+/// never turn into "cannot pass a temporary into a non-const reference parameter".
+fn temporary_argument_call(
+    statement: &str,
+    slot: &str,
+    ty: &str,
+    value: &str,
+    refs: &RefResolver,
+) -> Option<String> {
+    let call = statement.strip_suffix(&format!("({slot});"))?;
+    let method = call.rsplit(['.', ':']).next()?;
+    if method.is_empty()
+        || !method
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    {
+        return None;
+    }
+    refs.one_arg_call_accepts_temporary(method, ty)
+        .then(|| format!("{call}({value});"))
+}
+
+/// UHT reserves the `b<Uppercase>` prefix for bool UPROPERTYs, so the last path segment of a
+/// member reference tells whether the field is one even when no type channel resolved it.
+fn is_ue_bool_field(reference: &str) -> bool {
+    let field = reference.rsplit(['.', ':']).next().unwrap_or("");
+    let bytes = field.as_bytes();
+    bytes.len() >= 2 && bytes[0] == b'b' && bytes[1].is_ascii_uppercase()
+}
+
 /// Emit `dst = rhs;` if a result is available (object store).
 fn flush_store(out: &mut Vec<String>, dst: String, rhs: Option<String>) {
     if let Some(r) = rhs {
@@ -3054,14 +3087,17 @@ fn block_stmts_in(
                     // (rhs still UNRESOLVED), only for a 1-byte write (bool/int8/uint8 width),
                     // only for an int-family source, and renders the same `(x != 0)` bool wrap the
                     // heuristic below produces for owner-typed fields — so no working store changes.
-                    if rhs == UNRESOLVED && n == "WRTV1" && looks_int(&raw) {
-                        let field_name = r.rsplit('.').next().unwrap_or("");
-                        let fb = field_name.as_bytes();
-                        let is_ue_bool =
-                            fb.len() >= 2 && fb[0] == b'b' && fb[1].is_ascii_uppercase();
-                        if is_ue_bool {
-                            rhs = format!("({raw} != 0)");
-                        }
+                    if rhs == UNRESOLVED && n == "WRTV1" && looks_int(&raw) && is_ue_bool_field(r) {
+                        rhs = format!("({raw} != 0)");
+                    }
+                    // Same convention, the other way round: the store was NOT dropped but the
+                    // constant was already resolved to an int LITERAL, so both wraps below (which
+                    // require an untransformed bare slot) skip it and `bRunning = 1` reaches the
+                    // compiler as "Can't implicitly convert from 'int' to 'bool&'". A `b<Upper>`
+                    // field is a bool UPROPERTY by UHT's own rule, so the literal takes the bool
+                    // form. Bounded to a 1-byte write of a plain integer literal.
+                    if n == "WRTV1" && is_int_literal(&rhs) && is_ue_bool_field(r) {
+                        rhs = format!("({rhs} != 0)");
                     }
                     // batch-25a (G2, specs/batch23-cantconvert.md): a 1-byte write to a NATIVE
                     // struct's field whose value type the in-crate native-field table resolves
@@ -3122,6 +3158,13 @@ fn block_stmts_in(
                             .map(is_enum_name)
                             .unwrap_or(false)
                     {
+                        rhs = format!("({rhs} != 0)");
+                    }
+                    // The mirror case: a KNOWN bool field written from an int LITERAL (the
+                    // `SetV1 w,1` folded into the store). The generated accessor is `bool&`, so
+                    // `= 1` is "Can't implicitly convert from 'int' to 'bool&'". A bool SOURCE
+                    // slot still stores bare — `bool != 0` would be the illegal form there.
+                    if n == "WRTV1" && target_is_bool && !source_is_bool && is_int_literal(&rhs) {
                         rhs = format!("({rhs} != 0)");
                     }
                     // Storing a slot into a NARROW native field warns twice ("signed to
@@ -4969,6 +5012,35 @@ fn block_stmts_in(
                                              // record; what is left here is the RUNTIME `opAssign` shape and plain argument reads. Write
                                              // the value where it is read — but only for a temp nothing else ever assigns, so the
                                              // substituted `T()` is provably the only value it can hold.
+                                             // A `b<Upper>` field written from an INT LITERAL: UHT reserves that prefix for bool
+                                             // UPROPERTYs, whose generated accessor is `bool&`, so `bRunning = 1;` is "Can't implicitly
+                                             // convert from 'int' to 'bool&'". The store reaches here through several different arms
+                                             // (member write, property setter, chained lvalue), so the form is corrected once, on the
+                                             // finished statement. Only a literal — a bare slot may itself be declared bool, where
+                                             // `local != 0` would be the illegal form.
+    for statement in out.iter_mut() {
+        let Some((target, rhs)) = statement
+            .strip_suffix(';')
+            .and_then(|line| line.rsplit_once(" = "))
+        else {
+            continue;
+        };
+        if !is_ue_bool_field(target) {
+            continue;
+        }
+        // An int LITERAL always needs the form. A bare slot needs it unless the slot is itself
+        // declared `bool`, where `local != 0` would be the illegal one.
+        let int_slot = rhs
+            .strip_prefix("local_")
+            .and_then(|rest| rest.parse::<i32>().ok())
+            .is_some_and(|slot| ctx.slot_type(slot).as_deref() != Some("bool"));
+        if is_int_literal(rhs) || int_slot {
+            *statement = format!("{target} = ({rhs} != 0);");
+        }
+    }
+    if std::env::var_os("GORE_AS_DEFAULTS_DEBUG").is_some() && !default_ctor_temp.is_empty() {
+        eprintln!("[ctor-temp] {default_ctor_temp:?}");
+    }
     for (slot, ty) in &default_ctor_temp {
         let assigned = out.iter().any(|s| {
             s.trim_start()
@@ -4984,13 +5056,20 @@ fn block_stmts_in(
         }
         let value = format!("{ty}()");
         for statement in out.iter_mut() {
-            let Some(lhs) = statement
+            if let Some(lhs) = statement
                 .strip_suffix(&format!(" = {slot};"))
                 .filter(|lhs| count_word(lhs, slot) == 0)
-            else {
+            {
+                *statement = format!("{lhs} = {value};");
                 continue;
-            };
-            *statement = format!("{lhs} = {value};");
+            }
+            // A container's own mutator takes its element by CONST reference, so a temporary is
+            // legal there too — `PursuedCrimes.Add(FCrimeEntry());` is what the source wrote.
+            // Proven per site from the receiver's own field type, never from the method name.
+            if let Some(rewritten) = temporary_argument_call(statement, slot, ty, &value, ctx.refs)
+            {
+                *statement = rewritten;
+            }
         }
     }
     // no binary comparison but a bool value was tested -> use it as the branch condition so
