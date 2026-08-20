@@ -14,9 +14,9 @@ void main() {
     expect(deviceLanguageCode([const Locale('pt', 'PT')]), 'pt-BR');
     expect(deviceLanguageCode([const Locale('zh', 'CN')]), 'zh-Hans');
     expect(
-      deviceLanguageCode([
-        const Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hant'),
-      ]),
+      deviceLanguageCode(
+        [const Locale.fromSubtags(languageCode: 'zh', scriptCode: 'Hant')],
+      ),
       'zh-Hans',
     );
   });

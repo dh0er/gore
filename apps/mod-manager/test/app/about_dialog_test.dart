@@ -21,9 +21,8 @@ void main() {
     expect(aboutVersionLabel(null), '');
   });
 
-  testWidgets('about dialog shows the product name, copyright and license', (
-    tester,
-  ) async {
+  testWidgets('about dialog shows the product name, copyright and license',
+      (tester) async {
     // PackageInfo.fromPlatform() needs a stubbed platform response in tests.
     PackageInfo.setMockInitialValues(
       appName: 'gore_manager',
