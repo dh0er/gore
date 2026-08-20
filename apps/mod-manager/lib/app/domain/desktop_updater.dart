@@ -36,13 +36,6 @@ final updaterNavigatorKey = GlobalKey<NavigatorState>();
 
 bool? _innoInstalled;
 bool _feedConfigured = false;
-Timer? _portableTimer;
-
-/// The portable check currently running, including while its dialog waits for
-/// the user; null when none is. [_runPortableCheck] awaits that dialog, so
-/// without this an unattended machine would stack one more modal — and one
-/// more network request — every hour the prompt goes unanswered.
-Future<void>? _activePortableCheck;
 
 /// Inno Setup always places an uninstaller (unins*.exe) next to the app;
 /// the portable zip ships without one. Distinguishes the installed copy
@@ -150,116 +143,201 @@ Future<String?> _fetchLatestVersion() async {
   }
 }
 
-/// Compares dotted numeric versions (e.g. "0.4.0"). Returns true when
-/// [latest] is strictly newer than [current]. Non-numeric or missing
-/// components are treated as 0, so "0.4" < "0.4.1".
-bool _isNewer(String latest, String current) {
+/// What a finished portable check has to tell the user.
+enum PortableUpdateReport { checkFailed, upToDate, downloadPageFailed }
+
+/// Everything outside this file that a portable check touches: the feed, this
+/// build's version, the two prompts, and the browser.
+///
+/// Injected because the interesting behaviour here is timing — a background
+/// tick meeting a manual click, a stalled feed, a prompt left unanswered — and
+/// none of that is reachable through the real network, real windows, and a
+/// release-mode-only entry point.
+@visibleForTesting
+class PortableUpdateHooks {
+  const PortableUpdateHooks({
+    required this.fetchLatestVersion,
+    required this.currentVersion,
+    required this.report,
+    required this.askDownload,
+    required this.openReleasePage,
+  });
+
+  /// The advertised version, or null when the feed could not be read.
+  final Future<String?> Function() fetchLatestVersion;
+  final Future<String> Function() currentVersion;
+
+  /// Tells the user how the check ended. [releaseUrl] is only meaningful for
+  /// [PortableUpdateReport.downloadPageFailed].
+  final Future<void> Function(PortableUpdateReport report, String releaseUrl)
+  report;
+
+  /// Shows the update prompt; true when the user chose Download.
+  final Future<bool> Function(String latest, String current) askDownload;
+
+  /// Opens the release page; false when the shell refused or failed.
+  final Future<bool> Function(String latest) openReleasePage;
+}
+
+/// Runs portable update checks, one at a time.
+///
+/// The whole point of this class is the queueing rules, which is why they live
+/// somewhere a test can reach:
+///  * a background tick yields to a running check — it exists to be
+///    unobtrusive, and the running check already covers this interval;
+///  * a manual check waits its turn and then runs, because the button promises
+///    a result; it re-reads the slot after each wait so two queued clicks
+///    cannot both wake up and start overlapping checks;
+///  * the slot is claimed before the check's first suspension point, since an
+///    async body runs up to its first await before returning its future;
+///  * a check never throws, because callers fire it unawaited and a manual
+///    check may be awaiting someone else's.
+@visibleForTesting
+class PortableUpdateChecker {
+  PortableUpdateChecker(
+    this.hooks, {
+    this.interval = const Duration(seconds: _checkIntervalSeconds),
+  });
+
+  final PortableUpdateHooks hooks;
+  final Duration interval;
+
+  Future<void>? _active;
+  Timer? _timer;
+
+  /// True while the background poll is armed.
+  bool get isPolling => _timer != null;
+
+  /// True while a check is running, including while its prompt is open.
+  @visibleForTesting
+  bool get isChecking => _active != null;
+
+  Future<void> run({required bool background}) async {
+    if (background && _active != null) return;
+    var active = _active;
+    while (active != null) {
+      await active;
+      active = _active;
+    }
+    final done = Completer<void>();
+    _active = done.future;
+    try {
+      await _runOnce(background: background);
+    } finally {
+      if (identical(_active, done.future)) _active = null;
+      done.complete();
+    }
+  }
+
+  Future<void> _runOnce({required bool background}) async {
+    try {
+      await _body(background: background);
+    } catch (error) {
+      debugPrint('gore-manager portable update check failed: $error');
+    }
+  }
+
+  Future<void> _body({required bool background}) async {
+    final latest = await hooks.fetchLatestVersion();
+    final current = await hooks.currentVersion();
+
+    if (latest == null) {
+      if (!background) {
+        await hooks.report(PortableUpdateReport.checkFailed, '');
+      }
+      return;
+    }
+    if (!isNewerVersion(latest, current)) {
+      if (!background) {
+        await hooks.report(PortableUpdateReport.upToDate, '');
+      }
+      return;
+    }
+    // Auto-check may have been switched off while this tick was fetching; a
+    // cancelled poll must not still produce an unsolicited prompt. A manual
+    // check always shows.
+    if (background && !isPolling) return;
+
+    if (!await hooks.askDownload(latest, current)) return;
+    // Still inside the lock: doing this in the prompt's own button callback
+    // would outlive the prompt, freeing the slot while the follow-up message
+    // is on screen.
+    if (await hooks.openReleasePage(latest)) return;
+    await hooks.report(
+      PortableUpdateReport.downloadPageFailed,
+      _releasePageUrl(latest),
+    );
+  }
+
+  /// One check now, then one per [interval]. Guarded so re-enabling cannot
+  /// stack a second poll.
+  Future<void> startPolling() async {
+    if (_timer != null) return;
+    _timer = Timer.periodic(interval, (_) {
+      unawaited(run(background: true));
+    });
+    await run(background: true);
+  }
+
+  /// Stops the poll so disabling auto-check takes effect immediately, matching
+  /// WinSparkle's interval-0 behaviour on the installed build.
+  void stopPolling() {
+    _timer?.cancel();
+    _timer = null;
+  }
+}
+
+/// Compares dotted numeric versions (e.g. "0.4.0"). Returns true when [latest]
+/// is strictly newer than [current]. Non-numeric or missing components count
+/// as 0, so "0.4" < "0.4.1".
+@visibleForTesting
+bool isNewerVersion(String latest, String current) {
   final a = latest.split('.');
   final b = current.split('.');
   for (var i = 0; i < (a.length > b.length ? a.length : b.length); i++) {
     final x = i < a.length ? int.tryParse(a[i]) ?? 0 : 0;
     final y = i < b.length ? int.tryParse(b[i]) ?? 0 : 0;
-    if (x != y) {
-      return x > y;
-    }
+    if (x != y) return x > y;
   }
   return false;
 }
 
-/// Runs a portable check. When an update exists, shows a dialog offering to
-/// open the releases page in the browser. When [silentIfNoUpdate] is false
-/// (manual check), also reports the up-to-date and failure cases.
-Future<void> _runPortableCheck({required bool silentIfNoUpdate}) async {
-  // A background tick yields: its whole point is to be unobtrusive, and the
-  // running check already covers this hour.
-  if (silentIfNoUpdate && _activePortableCheck != null) return;
-  // A manual check must report a result, so it waits its turn rather than
-  // being dropped. It re-reads the slot after each wait: the Settings button
-  // stays enabled while a check runs, so a second click can queue on the same
-  // future, and both would otherwise wake up and start overlapping checks.
-  var active = _activePortableCheck;
-  while (active != null) {
-    await active;
-    active = _activePortableCheck;
-  }
-  // Claim the slot before the check's first suspension point. Assigning the
-  // check's own future would leave a gap — the async body runs up to its first
-  // await before returning — in which a second waiter could claim it too.
-  final done = Completer<void>();
-  _activePortableCheck = done.future;
-  try {
-    await _runPortableCheckOnce(silentIfNoUpdate: silentIfNoUpdate);
-  } finally {
-    if (identical(_activePortableCheck, done.future)) {
-      _activePortableCheck = null;
-    }
-    done.complete();
-  }
-}
+/// Production wiring: real feed, real package info, real dialogs, real browser.
+final PortableUpdateHooks _realPortableHooks = PortableUpdateHooks(
+  fetchLatestVersion: _fetchLatestVersion,
+  currentVersion: () async => (await PackageInfo.fromPlatform()).version,
+  report: (report, releaseUrl) async {
+    final context = updaterNavigatorKey.currentContext;
+    if (context == null || !context.mounted) return;
+    final l10n = AppLocalizations.of(context);
+    await _showInfoDialog(context, switch (report) {
+      PortableUpdateReport.checkFailed => l10n.updateCheckFailed,
+      PortableUpdateReport.upToDate => l10n.updateUpToDate,
+      PortableUpdateReport.downloadPageFailed => l10n.updateOpenFailed(
+        releaseUrl,
+      ),
+    });
+  },
+  askDownload: (latest, current) async {
+    final context = updaterNavigatorKey.currentContext;
+    if (context == null || !context.mounted) return false;
+    return _showUpdateAvailableDialog(
+      context,
+      version: latest,
+      current: current,
+    );
+  },
+  openReleasePage: _openReleasePage,
+);
 
-Future<void> _runPortableCheckOnce({required bool silentIfNoUpdate}) async {
-  // Never throws: callers fire this without awaiting, and a manual check may
-  // await a background one — a failure there must not surface as an unhandled
-  // async error or be rethrown into the unrelated caller that waited for it.
-  try {
-    await _portableCheckBody(silentIfNoUpdate: silentIfNoUpdate);
-  } catch (error) {
-    debugPrint('gore-manager portable update check failed: $error');
-  }
-}
+PortableUpdateChecker _portable = PortableUpdateChecker(_realPortableHooks);
 
-Future<void> _portableCheckBody({required bool silentIfNoUpdate}) async {
-  // Do every await up front so the context, once captured, is used without
-  // an async gap (avoids stale-context use after the widget tree changes).
-  final latest = await _fetchLatestVersion();
-  final current = (await PackageInfo.fromPlatform()).version;
-
-  final context = updaterNavigatorKey.currentContext;
-  if (context == null || !context.mounted) {
-    return;
-  }
-  final l10n = AppLocalizations.of(context);
-
-  if (latest == null) {
-    if (!silentIfNoUpdate) {
-      await _showInfoDialog(context, l10n.updateCheckFailed);
-    }
-    return;
-  }
-
-  if (!_isNewer(latest, current)) {
-    if (!silentIfNoUpdate) {
-      await _showInfoDialog(context, l10n.updateUpToDate);
-    }
-    return;
-  }
-
-  // A silent (background) check may have been in flight when the user turned
-  // auto-check off; the cancelled timer leaves _portableTimer null. Don't
-  // surface an unsolicited dialog in that case. Manual checks always show.
-  if (silentIfNoUpdate && _portableTimer == null) {
-    return;
-  }
-
-  // Everything below still runs inside the active-check lock: doing it in the
-  // dialog's own button callback would outlive the dialog, releasing the lock
-  // while the follow-up prompt is still on screen.
-  if (!await _showUpdateAvailableDialog(
-    context,
-    version: latest,
-    current: current,
-  )) {
-    return;
-  }
-  if (await _openReleasePage(latest)) return;
-  final root = updaterNavigatorKey.currentContext;
-  if (root == null || !root.mounted) return;
-  // Silently doing nothing is the one outcome a Download button must not have;
-  // the page address goes along so it stays reachable.
-  await _showInfoDialog(
-    root,
-    AppLocalizations.of(root).updateOpenFailed(_releasePageUrl(latest)),
-  );
+/// Swaps the checker so tests can drive the queueing rules directly. Passing
+/// null restores the production wiring.
+@visibleForTesting
+void debugSetPortableUpdateChecker(PortableUpdateChecker? checker) {
+  _portable.stopPolling();
+  _portable = checker ?? PortableUpdateChecker(_realPortableHooks);
 }
 
 Future<void> _showInfoDialog(BuildContext context, String message) {
@@ -337,7 +415,7 @@ Future<void> initDesktopUpdater({required bool autoCheckEnabled}) async {
     return;
   }
   if (!isInstalledBuild) {
-    unawaited(_pollPortablePeriodically());
+    unawaited(_portable.startPolling());
     return;
   }
   try {
@@ -353,30 +431,6 @@ Future<void> initDesktopUpdater({required bool autoCheckEnabled}) async {
   }
 }
 
-/// Portable background poll: one check now, then every hour. WinSparkle owns
-/// its own scheduler; for portable we run a plain timer loop. Guarded so a
-/// re-enable can't stack a second loop; [_stopPortablePolling] cancels it.
-Future<void> _pollPortablePeriodically() async {
-  if (_portableTimer != null) {
-    return;
-  }
-  _portableTimer = Timer.periodic(
-    const Duration(seconds: _checkIntervalSeconds),
-    (_) {
-      unawaited(_runPortableCheck(silentIfNoUpdate: true));
-    },
-  );
-  await _runPortableCheck(silentIfNoUpdate: true);
-}
-
-/// Stops the portable background poll so disabling auto-check takes effect
-/// immediately, matching WinSparkle's interval-0 behavior on the installed
-/// build.
-void _stopPortablePolling() {
-  _portableTimer?.cancel();
-  _portableTimer = null;
-}
-
 /// User-triggered check: always reports the result, including the up-to-date
 /// and failure cases. Works even while automatic checks are off.
 Future<void> checkForUpdatesManually() async {
@@ -384,7 +438,7 @@ Future<void> checkForUpdatesManually() async {
     return;
   }
   if (!isInstalledBuild) {
-    await _runPortableCheck(silentIfNoUpdate: false);
+    await _portable.run(background: false);
     return;
   }
   try {
@@ -407,9 +461,9 @@ Future<void> setAutoUpdateCheckEnabled(bool enabled) async {
   }
   if (!isInstalledBuild) {
     if (enabled) {
-      unawaited(_pollPortablePeriodically());
+      unawaited(_portable.startPolling());
     } else {
-      _stopPortablePolling();
+      _portable.stopPolling();
     }
     return;
   }

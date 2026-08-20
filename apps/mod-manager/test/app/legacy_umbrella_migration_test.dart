@@ -7,11 +7,11 @@ import 'package:path/path.dart' as p;
 /// Points every platform's base-dir env var at [base] so `sharedDataDir`
 /// resolves under the temp dir no matter which OS runs the test.
 Map<String, String> _envFor(String base) => {
-      'LOCALAPPDATA': base,
-      'APPDATA': base,
-      'HOME': base,
-      'XDG_DATA_HOME': base,
-    };
+  'LOCALAPPDATA': base,
+  'APPDATA': base,
+  'HOME': base,
+  'XDG_DATA_HOME': base,
+};
 
 void main() {
   test('fills missing files from the legacy gore-tools umbrella', () {
@@ -41,8 +41,9 @@ void main() {
       reason: 'loc cache should be copied into the new umbrella',
     );
     expect(
-      File(p.join(newDir.path, 'gore-manager', 'ui_settings.json'))
-          .readAsStringSync(),
+      File(
+        p.join(newDir.path, 'gore-manager', 'ui_settings.json'),
+      ).readAsStringSync(),
       contains('"en"'),
       reason: 'existing newer settings must be preserved',
     );
@@ -77,8 +78,9 @@ void main() {
       ..createSync(recursive: true)
       ..writeAsStringSync('[]');
     // Marker already present: a prior migration ran.
-    File(p.join(newDir.path, '.migrated-from-gore-tools'))
-        .createSync(recursive: true);
+    File(
+      p.join(newDir.path, '.migrated-from-gore-tools'),
+    ).createSync(recursive: true);
 
     migrateLegacyUmbrellaDir(env);
 
