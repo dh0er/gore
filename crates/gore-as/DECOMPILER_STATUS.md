@@ -107,17 +107,17 @@ of the audited generations, so these numbers qualify the decompiler, not the bui
 
 | Metric | Value |
 |--------|-------|
-| Modules authoring their class defaults | 6,850 of 7,308 that have any |
-| Modules suppressed (recovery incomplete) | 67 |
-| `default` statements written | 204,344 |
+| Modules authoring their class defaults | 6,885 of 7,308 that have any |
+| Modules suppressed (recovery incomplete) | 32 |
+| `default` statements written | 206,146 |
 | Vanilla `__InitDefaults` methods | 30,005 |
-| Aligned after recompile | 28,665 (1,340 unaligned, from the suppressed modules) |
-| Byte-faithful (`IDENTICAL`+`BENIGN`, `--norm-slots`) | 28,631 (**99.88%**) |
+| Aligned after recompile | 29,033 (972 unaligned, from the suppressed modules) |
+| Byte-faithful (`IDENTICAL`+`BENIGN`, `--norm-slots`) | 28,999 (**99.88%**) |
 
-The whole emitted tree recompiles: `gore as compile` produced a structurally valid 113,981,747-byte
-cache, and `gore as bytediff --norm-slots` reports 0 module-level alignment loss, no only-in-regen
-functions, and B1 **90.18%** over all 163,264 aligned functions — up from 88.78% before the body
-work below, with 16,035 semantic differences left against 18,288.
+The whole emitted tree recompiles with no errors, and `gore as bytediff --norm-slots` reports 0
+module-level alignment loss, no only-in-regen functions, and B1 **90.20%** over all 163,632
+aligned functions — up from 88.78% before the body work below, with 16,035 semantic differences
+left against 18,288.
 
 Editing an existing module's defaults and splicing it back works. Getting there needed five
 identity fixes, because a decompiled module is only re-splicable when every symbol it references
@@ -183,18 +183,22 @@ behind any unresolved or ambiguous reference.
 Recovery is all-or-nothing per module, because `generated_defaults` can only carry an omitted
 `__InitDefaults` byte-exact for a module that authors no defaults at all. A module that recovered
 only some of its classes would silently drop the rest, so one unrecovered class suppresses the
-whole module and its header records the class and the reason. The 67 suppressed modules break
-down as: 35 fluent AI rule builders (below), 25 whose bodies keep a compiler temporary that
-cannot fold, 2 machine-generated world/voice tables over the size bound, and 5 individually
-distinct shapes.
+whole module and its header records the class and the reason. The 32 suppressed modules break
+down as: 25 whose bodies keep a compiler temporary that cannot fold, 2 machine-generated
+world/voice tables over the size bound, and 5 individually distinct shapes.
 
-The 35 fluent builders are the one shape where the structurer is known to render a WRONG
-statement rather than an incomplete one: `Rules.Add(t).RequireTrue(a).RequireFalse(b).Then(r)` is
-split after the first link, and the next link takes a leftover argument as its receiver
-(`b.RequireFalse();`). They are caught rather than written: every recovered statement is checked
-against the cache's own function table, and a rendered `Name()` whose function the cache knows
-only WITH parameters means an argument was lost, which suppresses the module. That check is
-general — it fails closed for any future dropped-argument shape, not just this one.
+The 25 unfoldable ones are fail-closed for a reason worth keeping: they are the bodies where a
+`double` member read is rendered through an `int()` cast, so authoring them would round a cost
+or a multiplier to a whole number. The numeric-kind inference has to be fixed before their
+defaults are worth writing.
+
+Every recovered statement is also checked against the cache's own function table: a rendered
+`Name()` whose function the cache knows only WITH parameters means an argument was lost, and the
+module is suppressed rather than written. That check found the fluent AI rule builders
+(`Rules.Add(t).RequireTrue(a).RequireFalse(b).Then(r)`), where the structurer split the chain
+after the first link and the next link took a leftover argument as its receiver. That split is
+fixed — a temporary's destructor between two links no longer ends the statement — and the check
+stays as the general guard against any future dropped-argument shape.
 
 The 34 initializers that still differ after a faithful recompile are dominated by float constants
 the emitter cannot spell: AngelScript has no infinity literal, so `+inf` (`0x7F800000`) is written

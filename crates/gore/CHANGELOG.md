@@ -63,6 +63,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   another item's model.
 - Decompiled source keeps namespaces, `const` methods and parameter defaults, so
   quest, document and conversation modules can be edited and spliced at all.
+- A fluent chain keeps its links: a temporary's destructor between two of them
+  no longer ends the statement, so AI rule tables decompile as the one call
+  chain they were written as.
 - A `default` statement whose call lost an argument is refused instead of
   written, so a module keeps its byte-exact defaults rather than quietly
   changing meaning.

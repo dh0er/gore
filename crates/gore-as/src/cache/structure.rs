@@ -2406,10 +2406,17 @@ fn block_stmts_in(
         };
     }
 
+    // Index of a statement that a construct/destruct behaviour's pre-call flush just emitted.
+    // A fluent chain is built as one `pending` expression, and the temporary destructor between
+    // two links ends it — the next link then finds no pending and takes a leftover operand as
+    // its receiver. Kept for exactly one instruction, so a `PshRPtr` that immediately follows
+    // can take the statement back and carry the chain on.
+    let mut behaviour_flushed: Option<usize> = None;
     let insns = &ctx.instrs[lo..hi];
     for k in 0..insns.len() {
         let ins = &insns[k];
         let n = ins.op.name;
+        let flushed_by_behaviour = behaviour_flushed.take();
         // Invalidate a cached SetV* constant when this op overwrites that slot with a
         // NON-constant value (copy, call-result deref, arithmetic, conversion). Otherwise a
         // later float/double field store reads the stale literal instead of the live value.
@@ -2534,6 +2541,16 @@ fn block_stmts_in(
                     };
                     stack.push(Arg::typed(s, None));
                     continue;
+                }
+                // A behaviour's flush ended a chain one instruction ago: take that statement
+                // back and carry it as the operand it was about to become.
+                if pending.is_none() {
+                    if let Some(at) = flushed_by_behaviour.filter(|at| *at + 1 == out.len()) {
+                        let statement = out.remove(at);
+                        let expr = statement.trim_end_matches(';').to_string();
+                        stack.push(Arg::typed(expr, None));
+                        continue;
+                    }
                 }
                 // The value register holds a just-completed call's return value; PshRPtr pushes it
                 // back onto the operand stack as the NEXT call's argument (e.g. the receiver/arg of
@@ -3611,9 +3628,17 @@ fn block_stmts_in(
                 test_after_call = false;
                 // Fix b2 — flush a pending statement-position call result before this call begins
                 // (e.g. MakeRequirement's result must be emitted before `Add(...)` overwrites it).
+                let before_flush = out.len();
                 flush_b2!();
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 let f = ctx.refs.func_by_ptr(ptr).unwrap_or("syscall?").to_string();
+                // A behaviour emits no statement of its own and consumes only its own operands,
+                // so a statement flushed for it may still belong to a chain the very next
+                // `PshRPtr` continues. Note it; the flush itself stays, so nothing is lost if
+                // the next instruction is anything else.
+                if (f.starts_with('$') || f.starts_with('~')) && out.len() > before_flush {
+                    behaviour_flushed = Some(out.len() - 1);
+                }
                 if f == "opCast" {
                     // `opCast` is the AngelScript handle-downcast behaviour — the lowered form of
                     // `T@ dst = Cast<T>(src)`. The cache renders it `src.opCast(out)` with the cast
