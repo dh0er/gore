@@ -142,6 +142,11 @@ class _HomePageState extends ConsumerState<HomePage> {
   _preflightRetryFocusRequest;
 
   Future<void> _startGame(BuildContext context) async {
+    // The button's callback is captured at build time, so an operation that
+    // starts between that frame and the tap would still reach here with a
+    // stale "enabled". Re-read the state, as every other action here does:
+    // launching against a half-written installation is the thing to prevent.
+    if (_operationInFlight) return;
     final exe = gameExecutableFor(ref.read(gameExePathProvider));
     if (exe == null) return;
     final launched = await ref.read(gameLauncherProvider)(exe);
@@ -161,11 +166,14 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   String? get _gameRoot => gameRootFromExe(ref.read(gameExePathProvider));
 
-  bool get _focusBlocked =>
+  /// True while any Manager lane is reading or writing the installation.
+  bool get _operationInFlight =>
       ref.read(libraryProvider).busy ||
       ref.read(statusProvider).busy ||
       ref.read(preflightProvider).busy ||
       ref.read(conflictsProvider).isLoading;
+
+  bool get _focusBlocked => _operationInFlight;
 
   void _refreshPreflightWhenIdle() {
     if (!mounted) return;

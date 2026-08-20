@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -10,6 +11,7 @@ import 'package:gore_manager/app/game_paths.dart';
 import 'package:gore_manager/core/core_service.dart';
 import 'package:gore_manager/core/providers.dart';
 import 'package:gore_manager/home_page.dart';
+import 'package:gore_manager/library/domain/library_notifier.dart';
 import 'package:gore_manager/l10n/app_localizations.dart';
 import 'package:path/path.dart' as p;
 
@@ -42,22 +44,50 @@ FakeGoreCoreFfiService _core() => FakeGoreCoreFfiService(
   },
 );
 
-Widget _app({required GameLauncher launcher}) => ProviderScope(
-  overrides: [
-    coreServiceProvider.overrideWithValue(_core()),
-    gameLauncherProvider.overrideWithValue(launcher),
-  ],
-  child: MaterialApp(
-    localizationsDelegates: const [
-      AppLocalizations.delegate,
-      GlobalMaterialLocalizations.delegate,
-      GlobalWidgetsLocalizations.delegate,
-      GlobalCupertinoLocalizations.delegate,
-    ],
-    supportedLocales: AppLocalizations.supportedLocales,
-    home: const HomePage(),
-  ),
-);
+/// Delegates to the plain fake but can park one `mgr_library_list` call, so a
+/// test can hold the library in `busy` while it taps.
+class _ParkableCore implements GoreCoreFfiService {
+  _ParkableCore(this._inner);
+
+  final GoreCoreFfiService _inner;
+  Completer<void>? park;
+
+  @override
+  bool get isAvailable => _inner.isAvailable;
+
+  @override
+  String get description => _inner.description;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'mgr_library_list' && park != null) {
+      await park!.future;
+      park = null;
+    }
+    return _inner.execute(command, payload: payload);
+  }
+}
+
+Widget _app({required GameLauncher launcher, GoreCoreFfiService? core}) =>
+    ProviderScope(
+      overrides: [
+        coreServiceProvider.overrideWithValue(core ?? _core()),
+        gameLauncherProvider.overrideWithValue(launcher),
+      ],
+      child: MaterialApp(
+        localizationsDelegates: const [
+          AppLocalizations.delegate,
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: const HomePage(),
+      ),
+    );
 
 void _window(WidgetTester tester, Size size, {double textScale = 1}) {
   tester.view.physicalSize = size;
@@ -165,6 +195,53 @@ void main() {
     await tester.tap(find.text(l10n.tabSettings));
     await tester.pumpAndSettle();
     expect(_startGame, findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a stale enabled callback cannot launch mid-operation', (
+    tester,
+  ) async {
+    _window(tester, const Size(1280, 800));
+    final launched = <String>[];
+    final core = _ParkableCore(_core());
+    await tester.pumpWidget(
+      _app(
+        core: core,
+        launcher: (exe) async {
+          launched.add(exe);
+          return true;
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(HomePage)),
+    );
+    container.read(gameExePathProvider.notifier).set(_fakeInstall());
+    await tester.pumpAndSettle();
+    expect(_enabled(tester), isTrue);
+
+    // Grab the callback while the button is enabled. This is the one a tap
+    // landing between that frame and the next still carries.
+    final stale = tester.widget<FilledButton>(_startGame).onPressed!;
+
+    // Park the next library read so an operation is genuinely in flight.
+    core.park = Completer<void>();
+    unawaited(container.read(libraryProvider.notifier).refresh());
+    await tester.pump();
+    expect(container.read(libraryProvider).busy, isTrue);
+    expect(_enabled(tester), isFalse, reason: 'the next frame disables it');
+
+    // Firing the stale callback must still not launch: the guard lives inside
+    // the handler, not only in whether the button was drawn enabled.
+    stale();
+    await tester.pump();
+    expect(launched, isEmpty, reason: 'must not launch mid-operation');
+
+    core.park!.complete();
+    await tester.pumpAndSettle();
+    expect(launched, isEmpty);
     expect(tester.takeException(), isNull);
   });
 

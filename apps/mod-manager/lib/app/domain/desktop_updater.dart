@@ -241,7 +241,25 @@ Future<void> _portableCheckBody({required bool silentIfNoUpdate}) async {
     return;
   }
 
-  await _showUpdateAvailableDialog(context, version: latest, current: current);
+  // Everything below still runs inside the active-check lock: doing it in the
+  // dialog's own button callback would outlive the dialog, releasing the lock
+  // while the follow-up prompt is still on screen.
+  if (!await _showUpdateAvailableDialog(
+    context,
+    version: latest,
+    current: current,
+  )) {
+    return;
+  }
+  if (await _openReleasePage(latest)) return;
+  final root = updaterNavigatorKey.currentContext;
+  if (root == null || !root.mounted) return;
+  // Silently doing nothing is the one outcome a Download button must not have;
+  // the page address goes along so it stays reachable.
+  await _showInfoDialog(
+    root,
+    AppLocalizations.of(root).updateOpenFailed(_releasePageUrl(latest)),
+  );
 }
 
 Future<void> _showInfoDialog(BuildContext context, String message) {
@@ -276,43 +294,32 @@ Future<bool> _openReleasePage(String version) async {
   }
 }
 
-Future<void> _showUpdateAvailableDialog(
+/// Asks whether to download. Returns true when the user chose Download; the
+/// caller does the launching so it stays inside the check's lock.
+Future<bool> _showUpdateAvailableDialog(
   BuildContext context, {
   required String version,
   required String current,
-}) {
+}) async {
   final l10n = AppLocalizations.of(context);
-  return showDialog<void>(
+  final download = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
       title: Text(l10n.updateAvailableTitle),
       content: Text(l10n.updateAvailableMessage(version, current)),
       actions: [
         TextButton(
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: () => Navigator.of(context).pop(false),
           child: Text(l10n.updateLater),
         ),
         FilledButton(
-          onPressed: () async {
-            Navigator.of(context).pop();
-            if (await _openReleasePage(version)) return;
-            // The dialog is gone by now, so report through the root navigator.
-            // Silently doing nothing is the one outcome a Download button must
-            // not have; the page address goes along so it stays reachable.
-            final root = updaterNavigatorKey.currentContext;
-            if (root == null || !root.mounted) return;
-            await _showInfoDialog(
-              root,
-              AppLocalizations.of(
-                root,
-              ).updateOpenFailed(_releasePageUrl(version)),
-            );
-          },
+          onPressed: () => Navigator.of(context).pop(true),
           child: Text(l10n.updateDownload),
         ),
       ],
     ),
   );
+  return download ?? false;
 }
 
 // --------------------------------------------------------------------------- #
