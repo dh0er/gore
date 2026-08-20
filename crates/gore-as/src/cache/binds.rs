@@ -79,6 +79,13 @@ pub struct NativeApi {
     /// native-struct enum field types the script cache cannot (PropertyReferences.OldTypeId
     /// is the OWNER struct, not the field's value type).
     field_types: HashMap<(String, String), String>,
+    /// High-coverage plain field rows (`(class, field) -> value type`) from the exhaustive
+    /// header scan, admitted for ANY `Binds.Cache`. These are a DECOMPILER type witness only:
+    /// they say what the file declares, they license no mutation. The sealed mutation witness
+    /// stays [`Self::verified_default_field_types`], which is gated on an audited identity.
+    /// Kept separate from [`Self::field_types`] so the historical enum/float-filtered consumers
+    /// keep their strict record-walk provenance unchanged.
+    plain_field_types: HashMap<(String, String), String>,
     /// High-coverage native field rows are a mutation witness only for a sealed, audited
     /// Binds.Cache identity. Unknown versions keep this empty and therefore fail closed.
     verified_default_field_types: HashMap<(String, String), String>,
@@ -113,6 +120,7 @@ impl NativeApi {
                 .map(|(name, arity)| (name.to_string(), *arity))
                 .collect(),
             field_types: HashMap::new(),
+            plain_field_types: HashMap::new(),
             verified_default_field_types: HashMap::new(),
             verified_default_class_paths: HashMap::new(),
             verified_default_class_profile_digests: None,
@@ -142,6 +150,7 @@ impl NativeApi {
             by_class: HashMap::new(),
             by_name: HashMap::new(),
             field_types: fields(generic),
+            plain_field_types: fields(generic),
             verified_default_field_types: fields(verified),
             verified_default_class_paths: HashMap::new(),
             verified_default_class_profile_digests: None,
@@ -164,6 +173,7 @@ impl NativeApi {
             return None;
         }
         let (by_class, field_types) = parse_records(data);
+        let plain_field_types = scan_plain_field_types(data);
         // The identity of the bytes, not merely the fact that they were readable. Everything sealed
         // below is evidence only for the generation that ships exactly this file.
         let source_sha256: [u8; 32] = Sha256::digest(data).into();
@@ -175,6 +185,7 @@ impl NativeApi {
         if by_name.is_empty()
             && by_class.is_empty()
             && field_types.is_empty()
+            && plain_field_types.is_empty()
             && verified_default_field_types.is_empty()
             && verified_default_class_paths.is_empty()
         {
@@ -184,6 +195,7 @@ impl NativeApi {
             by_class,
             by_name,
             field_types,
+            plain_field_types,
             verified_default_binds_sha256: (!verified_default_field_types.is_empty()
                 || !verified_default_class_paths.is_empty())
             .then_some(source_sha256),
@@ -218,6 +230,17 @@ impl NativeApi {
     /// batch-25a: `("FWidgetAlignment", "VerticalAlignment") -> "EVerticalAlignment"`.
     pub fn field_type(&self, class: &str, field: &str) -> Option<&str> {
         self.field_types
+            .get(&(class.to_string(), field.to_string()))
+            .map(|s| s.as_str())
+    }
+
+    /// Declared value type of a native class/struct field, from the high-coverage plain-field
+    /// scan. Unlike [`Self::field_type`] this is not restricted to the strict record walk, so it
+    /// answers for ordinary UPROPERTY members of native classes (`UItemDefinition::m_Value` ->
+    /// `int`). Read-only decompiler evidence: it is deliberately NOT admissible for mutation,
+    /// which keeps using [`Self::verified_default_field_type`].
+    pub fn plain_field_type(&self, class: &str, field: &str) -> Option<&str> {
+        self.plain_field_types
             .get(&(class.to_string(), field.to_string()))
             .map(|s| s.as_str())
     }

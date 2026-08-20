@@ -9,12 +9,43 @@
 //! - global-ptr(QW) -> GlobalReferences[ptr].Name
 //! - member         -> PropertyReferences[(typeId<<1)|(offset<<33)|1].Name
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::header::CacheHeader;
 use super::types::DataType;
 use super::walk_modules::module_region_end;
 use super::wire::{Cursor, WireError};
+
+/// Drop every space from a tokenized source snippet so it can be compared against a packed
+/// render. `FGameplayTag :: Empty` and `FGameplayTag::Empty` are the same default; a string
+/// literal is left alone, since spaces inside it are content.
+pub(crate) fn pack_tokens(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    for ch in value.chars() {
+        if in_string {
+            out.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => {
+                in_string = true;
+                out.push(ch);
+            }
+            c if c.is_whitespace() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
 
 /// Complete serialized identity of one `TypeReferences` entry.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -29,6 +60,15 @@ pub struct TypeIdentity {
 pub struct RefResolver {
     type_by_ptr: HashMap<i64, String>,
     type_identity_by_ptr: HashMap<i64, TypeIdentity>,
+    /// Bare type name -> its declaring namespace, only while every row with that name agrees.
+    /// A name that appears in two namespaces cannot be qualified from the name alone, so it is
+    /// removed rather than guessed.
+    type_ns_by_name: HashMap<String, Option<String>>,
+    /// Class -> its methods that are NOT declared const (injected from the parsed modules).
+    non_const_methods: HashMap<String, HashSet<String>>,
+    /// `(owner, function)` -> the declared default argument of each parameter, normalized.
+    /// An empty entry means that parameter has none. The owner is `""` for a free function.
+    param_defaults: HashMap<(String, String), Vec<String>>,
     func_by_ptr: HashMap<i64, String>,
     global_by_ptr: HashMap<i64, String>,
     prop_by_key: HashMap<i64, String>,
@@ -118,6 +158,16 @@ impl RefResolver {
             }
             r.type_names.insert(name.clone());
             r.type_by_ptr.insert(key, name.clone());
+            let declared = (!namespace.is_empty()).then(|| namespace.clone());
+            match r.type_ns_by_name.get(&name) {
+                Some(known) if *known != declared => {
+                    r.type_ns_by_name.insert(name.clone(), None);
+                }
+                Some(_) => {}
+                None => {
+                    r.type_ns_by_name.insert(name.clone(), declared);
+                }
+            }
             r.type_identity_by_ptr.insert(
                 key,
                 TypeIdentity {
@@ -273,6 +323,22 @@ impl RefResolver {
     /// Full module/namespace/name identity for an exact serialized type pointer.
     pub fn type_identity_by_ptr(&self, ptr: i64) -> Option<&TypeIdentity> {
         self.type_identity_by_ptr.get(&ptr)
+    }
+    /// Declaring AngelScript namespace of a type, empty at global scope. A reference from
+    /// another namespace has to spell it out (`G1R::UStoryG1R`), or the name does not resolve
+    /// and everything built on it degrades to `Unknown`.
+    /// Declaring namespace of a type looked up by BARE name, when unambiguous. Used where only
+    /// the rendered name survived and the pointer is long gone.
+    pub fn type_ns_by_name(&self, name: &str) -> Option<&str> {
+        self.type_ns_by_name
+            .get(name)
+            .and_then(|namespace| namespace.as_deref())
+    }
+    pub fn type_ns_by_ptr(&self, ptr: i64) -> Option<&str> {
+        self.type_identity_by_ptr
+            .get(&ptr)
+            .map(|identity| identity.namespace.as_str())
+            .filter(|namespace| !namespace.is_empty())
     }
     /// True if `name` is a known type (so a call to it is a constructor, not a method).
     pub fn is_type_name(&self, name: &str) -> bool {
@@ -753,6 +819,28 @@ impl RefResolver {
             .as_ref()
             .and_then(|n| n.field_type(class, field))
     }
+    /// Declared VALUE type of a field of a NATIVE class or struct, from the loaded
+    /// `Binds.Cache` plain-field scan.
+    ///
+    /// This is the channel that answers for members the script cache structurally cannot type:
+    /// `PropertyReferences` stores only (name, OWNER OldTypeId), and a field declared on a
+    /// NATIVE base (`UItemDefinition::m_Value`, `UWeaponDefinition::m_SuperArmorDamageBase`)
+    /// appears in no script class-fields map, so both script-side channels resolve to `None`
+    /// and the owner name is all `member_type` can offer. Without this the decompiler cannot
+    /// tell a `WRTV4` of `0x0000000a` (int `10`) from one of `0x41200000` (float `10.0f`) and
+    /// drops the store instead of guessing — which silently lost every scalar class default on
+    /// a native base.
+    ///
+    /// Read-only evidence, deliberately ungated: it reports what the installed `Binds.Cache`
+    /// declares for ANY build. Cache MUTATION keeps requiring the sealed, audited witness in
+    /// [`Self::verified_native_default_field_type`]; this accessor must never be substituted
+    /// there. Absent `Binds.Cache`, this returns `None` and callers keep their prior behaviour.
+    pub fn native_field_value_type(&self, class: &str, field: &str) -> Option<&str> {
+        self.native
+            .as_ref()
+            .and_then(|native| native.plain_field_type(class, field))
+    }
+
     /// Native field type admissible as a cache-mutation witness. Unlike the decompiler's
     /// best-effort [`Self::native_field_type`], this succeeds only for a SHA-256-sealed,
     /// independently audited Binds.Cache profile paired with its audited script-cache GUID.
@@ -806,6 +894,56 @@ impl RefResolver {
     /// `CastSpell(AI, int)` even if the method itself is never called).
     pub fn add_method_names<I: IntoIterator<Item = String>>(&mut self, names: I) {
         self.method_names.extend(names);
+    }
+    /// Install `class -> methods that are NOT declared const` from the parsed modules. A const
+    /// method may not call one of these on `this`, so the emitter needs the set to decide
+    /// whether re-emitting a `const` qualifier keeps the body compiling.
+    pub fn set_non_const_methods(&mut self, by_class: HashMap<String, HashSet<String>>) {
+        self.non_const_methods = by_class;
+    }
+    /// Install `(owner, function) -> per-parameter default argument text` from the parsed
+    /// modules. Whitespace is normalized on the way in: the cache stores the defaults
+    /// TOKENIZED (`FGameplayTagContainer ( )`), the emitter renders them packed.
+    pub fn set_param_defaults(&mut self, defaults: HashMap<(String, String), Vec<String>>) {
+        self.param_defaults = defaults
+            .into_iter()
+            .map(|(key, values)| {
+                let packed = values.iter().map(|value| pack_tokens(value)).collect();
+                (key, packed)
+            })
+            .collect();
+    }
+    /// Declared default arguments of `owner::function`, if the cache recorded any. Walks the
+    /// script hierarchy, because a call's target type is often a subclass of the declarer.
+    pub fn param_defaults(&self, owner: &str, function: &str) -> Option<&[String]> {
+        let mut current = Some(owner.to_string());
+        for _ in 0..64 {
+            let name = current?;
+            if let Some(defaults) = self
+                .param_defaults
+                .get(&(name.clone(), function.to_string()))
+            {
+                return Some(defaults.as_slice());
+            }
+            current = self.class_super_of(&name).map(|s| s.to_string());
+        }
+        None
+    }
+    /// True when `method` is a known NON-const method of `class` or of any script ancestor.
+    pub fn calls_non_const_method(&self, class: &str, method: &str) -> bool {
+        let mut current = Some(class.to_string());
+        for _ in 0..64 {
+            let Some(name) = current else { break };
+            if self
+                .non_const_methods
+                .get(&name)
+                .is_some_and(|methods| methods.contains(method))
+            {
+                return true;
+            }
+            current = self.class_super_of(&name).map(|s| s.to_string());
+        }
+        false
     }
     /// batch-25f: install the cross-module free-fn rename map. `by_module` is
     /// `module name -> (original fn name -> renamed name)` — exactly the collision set the

@@ -636,7 +636,7 @@ impl Ctx<'_> {
                         let rh = rt.base_name(self.refs);
                         match self.slot_type(slot) {
                             Some(st) if provably_derived(&rh, &st, self.refs) => {
-                                format!("Cast<{rh}>({v})")
+                                format!("Cast<{}>({v})", qualify_class_name(&rh, self.refs))
                             }
                             _ => v,
                         }
@@ -1010,6 +1010,12 @@ fn build_call(
     global_shadowed: bool,
     refs: &RefResolver,
 ) -> Option<String> {
+    // The callee's declared default arguments, so a call can be rendered the way it was
+    // written rather than the way it was compiled.
+    let arg_defaults = target_owner
+        .or(cur_class)
+        .and_then(|owner| refs.param_defaults(owner, f))
+        .or_else(|| refs.param_defaults("", f));
     if f.starts_with('$') || f.starts_with('~') || f == "__STATIC_NAME" {
         // EDIT C (the dominant FName form): `__STATIC_NAME` is the synthesized name-table accessor
         // (`const FName& __STATIC_NAME(int Id)` per the exe's registered decl) that fetches
@@ -1173,7 +1179,10 @@ fn build_call(
         }
         let is_operator = assign_op(f).is_some() || binop_method(f).is_some();
         if let Some(rh) = ret_ty.map(head).filter(|_| !is_operator && !ret_is_ref) {
-            if matches!(rh.bytes().next(), Some(b'F') | Some(b'T') | Some(b'E')) {
+            if matches!(
+                bare_type_name(rh).bytes().next(),
+                Some(b'F') | Some(b'T') | Some(b'E')
+            ) {
                 // the RVO out-slot = a PSF arg whose type head equals the return-type head.
                 // batch-29c (3a, specs/batch29-errortail.md): the ABI pushes
                 // [args..., dest, recv], so after the recv pop the dest is the LAST entry —
@@ -1202,7 +1211,7 @@ fn build_call(
                     return Some(format!(
                         "{out} = {}.{f}({})",
                         wrap_uobject_recv(&recv, target_owner, refs),
-                        render_args(&a, params, refs)
+                        render_args(&a, params, refs, arg_defaults)
                     ));
                 }
             }
@@ -1267,7 +1276,10 @@ fn build_call(
         // super name is itself a type name).
         if super_ctor == Some(f) && recv.s == "this" {
             maybe_reverse_args(&mut a, params, refs); // super calls are reverse-pushed too
-            return Some(format!("super({})", render_args(&a, params, refs)));
+            return Some(format!(
+                "super({})",
+                render_args(&a, params, refs, arg_defaults)
+            ));
         }
         // BUG (a) — SUPER-CALL: a NON-VIRTUAL (`CALL`) dispatch on `this` to a method owned by a
         // STRICT ANCESTOR of the current class is a `Super::method()` call, not `this.method()`
@@ -1276,7 +1288,10 @@ fn build_call(
             if let (Some(owner), Some(cur)) = (target_owner, cur_class) {
                 if owner != cur && refs.is_subclass(cur, owner) {
                     maybe_reverse_args(&mut a, params, refs); // super calls are reverse-pushed too
-                    return Some(format!("Super::{f}({})", render_args(&a, params, refs)));
+                    return Some(format!(
+                        "Super::{f}({})",
+                        render_args(&a, params, refs, arg_defaults)
+                    ));
                 }
             }
         }
@@ -1323,7 +1338,7 @@ fn build_call(
         Some(format!(
             "{}.{f}({})",
             wrap_uobject_recv(&recv, target_owner, refs),
-            render_args(&a, params, refs)
+            render_args(&a, params, refs, arg_defaults)
         ))
     } else {
         if refs.is_type_name(f) {
@@ -1357,10 +1372,16 @@ fn build_call(
             // a member store / return is worse than a dropped one, and a mis-fire on a genuine in-place
             // ctor = silent DOUBLE construction).
             let head = f.split('<').next().unwrap_or(f);
-            let is_value = matches!(head.bytes().next(), Some(b'F') | Some(b'E') | Some(b'T'));
+            let is_value = matches!(
+                bare_type_name(head).bytes().next(),
+                Some(b'F') | Some(b'E') | Some(b'T')
+            );
             if is_value && !a.is_empty() {
                 maybe_reverse_args(&mut a, params, refs);
-                return Some(format!("{f}({})", render_args(&a, params, refs)));
+                return Some(format!(
+                    "{f}({})",
+                    render_args(&a, params, refs, arg_defaults)
+                ));
             }
             // OBJECT factory: non-method (structurally: an in-place ctor is void and/or a method the
             // idiom-C arm consumed first), return type resolves to a real U/A class head, non-void.
@@ -1372,7 +1393,7 @@ fn build_call(
                     && rh != "void");
             if is_object_factory {
                 maybe_reverse_args(&mut a, params, refs);
-                let rendered = render_args(&a, params, refs);
+                let rendered = render_args(&a, params, refs, arg_defaults);
                 // Never emit a sentinel-marked / unresolved arg list (a definite mismatch): bail.
                 if !rendered.contains('\u{2}')
                     && !rendered.contains('\u{1}')
@@ -1415,7 +1436,10 @@ fn build_call(
             });
             if let Some(owner) = owner {
                 maybe_reverse_args(&mut a, params, refs);
-                return Some(format!("{owner}::{f}({})", render_args(&a, params, refs)));
+                return Some(format!(
+                    "{owner}::{f}({})",
+                    render_args(&a, params, refs, arg_defaults)
+                ));
             }
         }
         // batch-24b: AngelScript member lookup SHADOWS globals — an unqualified call to a free
@@ -1439,7 +1463,10 @@ fn build_call(
         // (batch-20 Class D): a BY-REFERENCE return has no out-slot, and the probe would steal a
         // same-typed by-ref struct arg.
         if let Some(rh) = ret_ty.map(tyhead).filter(|_| !ret_is_ref) {
-            if matches!(rh.bytes().next(), Some(b'F') | Some(b'T') | Some(b'E')) {
+            if matches!(
+                bare_type_name(rh).bytes().next(),
+                Some(b'F') | Some(b'T') | Some(b'E')
+            ) {
                 // batch-32b (N5): the free-call ABI pushes [args..., dest] — the RVO dest is
                 // the TOP entry (build_call's own rvo_slot probe: idx=1 for free calls), so
                 // probe with rposition, mirroring the batch-29c method-arm fix (line ~691).
@@ -1460,7 +1487,10 @@ fn build_call(
                         }
                     }
                     maybe_reverse_args(&mut a, params, refs);
-                    return Some(format!("{out} = {f}({})", render_args(&a, params, refs)));
+                    return Some(format!(
+                        "{out} = {f}({})",
+                        render_args(&a, params, refs, arg_defaults)
+                    ));
                 }
             }
         }
@@ -1471,7 +1501,10 @@ fn build_call(
             }
         }
         maybe_reverse_args(&mut a, params, refs);
-        Some(format!("{f}({})", render_args(&a, params, refs)))
+        Some(format!(
+            "{f}({})",
+            render_args(&a, params, refs, arg_defaults)
+        ))
     }
 }
 
@@ -1534,7 +1567,7 @@ fn wrap_uobject_recv(recv: &Arg, owner: Option<&str>, refs: &RefResolver) -> Str
     {
         return recv.s.clone();
     }
-    format!("Cast<{o}>({})", recv.s)
+    format!("Cast<{}>({})", qualify_class_name(&o, refs), recv.s)
 }
 
 /// Count DEFINITE type mismatches when pairing args[i] with params[i] (mirrors `cast_arg`'s
@@ -1544,8 +1577,13 @@ fn wrap_uobject_recv(recv: &Arg, owner: Option<&str>, refs: &RefResolver) -> Str
 /// the score never penalizes a legitimately-ordered call.
 fn arg_mismatch_count(a: &[Arg], params: &[DataType], refs: &RefResolver) -> usize {
     let head = |s: &str| s.split('<').next().unwrap_or(s).to_string();
-    let is_value = |s: &str| matches!(s.bytes().next(), Some(b'F') | Some(b'E') | Some(b'T'));
-    let is_obj = |s: &str| matches!(s.bytes().next(), Some(b'U') | Some(b'A'));
+    let is_value = |s: &str| {
+        matches!(
+            bare_type_name(s).bytes().next(),
+            Some(b'F') | Some(b'E') | Some(b'T')
+        )
+    };
+    let is_obj = |s: &str| matches!(bare_type_name(s).bytes().next(), Some(b'U') | Some(b'A'));
     let mut n = 0;
     for (i, arg) in a.iter().enumerate() {
         let Some(pt) = params.get(i) else { continue };
@@ -1679,15 +1717,36 @@ fn cast_container_args(method: &str, recv_ty: Option<&str>, a: &mut [Arg]) {
 }
 
 /// Render args joined by ", ", casting each int arg to the callee's expected param type.
-fn render_args(a: &[Arg], params: Option<&[DataType]>, refs: &RefResolver) -> String {
-    a.iter()
+fn render_args(
+    a: &[Arg],
+    params: Option<&[DataType]>,
+    refs: &RefResolver,
+    defaults: Option<&[String]>,
+) -> String {
+    let mut rendered: Vec<String> = a
+        .iter()
         .enumerate()
         .map(|(i, arg)| match params.and_then(|p| p.get(i)) {
             Some(pt) => cast_arg(arg, pt, refs),
             None => arg.s.clone(),
         })
-        .collect::<Vec<_>>()
-        .join(", ")
+        .collect();
+    // Drop trailing arguments that just restate the declared default. The bytecode always
+    // materialises them, so recovering them literally is not wrong — but it is a DIFFERENT
+    // source program, and one that makes the compiler emit construct behaviours the base cache
+    // never had (`TSubclassOf<UConversationTopic>::$beh0()`), which then fail to remap.
+    if let Some(defaults) = defaults {
+        while let Some(last) = rendered.len().checked_sub(1) {
+            let Some(default) = defaults.get(last).filter(|value| !value.is_empty()) else {
+                break;
+            };
+            if super::refs::pack_tokens(&rendered[last]) != *default {
+                break;
+            }
+            rendered.pop();
+        }
+    }
+    rendered.join(", ")
 }
 
 /// Cast an int-origin argument to the callee's `bool`/enum param (AngelScript has no
@@ -1702,9 +1761,14 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
                 // compare the type "head" (before any `<...>`) so covariant template
                 // instantiations (e.g. TSubclassOf<Derived> vs <Base>) aren't flagged.
                 let head = |s: &str| s.split('<').next().unwrap_or(s).to_string();
-                let is_value =
-                    |s: &str| matches!(s.bytes().next(), Some(b'F') | Some(b'E') | Some(b'T'));
-                let is_obj = |s: &str| matches!(s.bytes().next(), Some(b'U') | Some(b'A'));
+                let is_value = |s: &str| {
+                    matches!(
+                        bare_type_name(s).bytes().next(),
+                        Some(b'F') | Some(b'E') | Some(b'T')
+                    )
+                };
+                let is_obj =
+                    |s: &str| matches!(bare_type_name(s).bytes().next(), Some(b'U') | Some(b'A'));
                 let (ph, ah) = (head(&pt.base_name(refs)), head(at));
                 // value types (F/E/T) have no inheritance — any head mismatch is wrong.
                 // Emitting the raw arg (e.g. an FName where an FVector is wanted) won't
@@ -1778,6 +1842,18 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
         0x46 => return format!("int16({})", arg.s),
         0x4C => return format!("uint8({})", arg.s),
         0x4D => return format!("uint16({})", arg.s),
+        // A 32-bit constant feeding a `uint`/`uint64` parameter is unsigned data rendered
+        // through a signed slot: an ARGB colour hex reaches `FLinearColor::MakeFromHex` as
+        // `-8364214` and warns "Implicit conversion changed sign of value" (warnings are
+        // errors here). Re-render the SAME bits unsigned; a non-negative constant and any
+        // non-constant argument are left exactly as they were.
+        0x4B | 0x4E => {
+            if let Some(ConstBits::W4(bits)) = arg.cbits {
+                if (bits as i32) < 0 {
+                    return bits.to_string();
+                }
+            }
+        }
         _ => {}
     }
     if pt.token == 5 {
@@ -1830,7 +1906,7 @@ fn downcast(
             if refs.is_subclass(&s, d) {
                 rhs
             } else {
-                format!("Cast<{d}>({rhs})")
+                format!("Cast<{}>({rhs})", qualify_class_name(d, refs))
             }
         }
         (Some(s), Some(d)) if src_const && is_obj(&s) && s == *d => format!("{CONSTSTORE}{rhs}"),
@@ -1903,8 +1979,48 @@ fn provably_derived(dst: &str, src: &str, refs: &RefResolver) -> bool {
 
 /// True if `tyname` is a UE enum type (`E<Upper>...`) — same shape `cast_to_typename` keys on.
 /// Tolerates a leading `const ` (a const-qualified enum is still an enum for cast purposes).
+/// A native field type that is a scalar but provably NOT a bool. Used to stop the 1-byte-write
+/// bool heuristic from converting an integer class default into `(N != 0)`.
+fn is_proven_non_bool_scalar(value: &str) -> bool {
+    matches!(
+        value.trim_start_matches("const "),
+        "int8"
+            | "uint8"
+            | "int16"
+            | "uint16"
+            | "int"
+            | "int32"
+            | "uint"
+            | "uint32"
+            | "int64"
+            | "uint64"
+    )
+}
+
+/// The declaration-local part of a possibly namespace-qualified type name: `G1R::EWeather` ->
+/// `EWeather`. Every family predicate here keys on the leading letters of the BARE name, so a
+/// qualified render must be reduced first or an enum stops looking like one.
+pub(crate) fn bare_type_name(tyname: &str) -> &str {
+    let unqualified = tyname.trim_start_matches("const ");
+    match unqualified.rsplit_once("::") {
+        Some((_, tail)) => tail,
+        None => unqualified,
+    }
+}
+
+/// Qualify a bare class name for use in an EXPRESSION (`G1R::UStoryG1R::StaticClass()`,
+/// `default MainStoryClass = G1R::UStoryG1R;`). A class declared in a namespace is not reachable
+/// by its bare name from anywhere else, and `UStoryG1R::StaticClass()` is then read as a
+/// NAMESPACE access, which fails with "Namespace 'UStoryG1R' doesn't exist".
+pub(crate) fn qualify_class_name(name: &str, refs: &RefResolver) -> String {
+    match refs.type_ns_by_name(name) {
+        Some(namespace) if !name.contains("::") => format!("{namespace}::{name}"),
+        _ => name.to_string(),
+    }
+}
+
 pub(crate) fn is_enum_name(tyname: &str) -> bool {
-    let b = tyname.trim_start_matches("const ").as_bytes();
+    let b = bare_type_name(tyname).as_bytes();
     b.len() >= 2 && b[0] == b'E' && b[1].is_ascii_uppercase()
 }
 
@@ -1934,6 +2050,12 @@ fn float_field_type(refs: &RefResolver, tid: i32, field: &str) -> Option<String>
     let cls = refs.type_by_id(tid)?;
     refs.field_type_by_class(cls, field)
         .or_else(|| refs.native_field_type(cls, field))
+        // The declared type from `Binds.Cache` covers ordinary members of native classes and
+        // structs, which neither channel above knows. Without it a float default keeps its raw
+        // IEEE-754 bits: `PostProcessSettings.ChromaticAberrationStartOffset = 1045220557;`
+        // instead of `= 0.1f;` — the compiler then coerces the int and the value is off by ten
+        // orders of magnitude.
+        .or_else(|| refs.native_field_value_type(cls, field))
         .filter(|t| matches!(*t, "float" | "float32" | "double"))
         .map(|s| s.to_string())
 }
@@ -1951,7 +2073,9 @@ fn cast_to_typename(rhs: &str, tyname: &str) -> Option<String> {
     if tyname == "bool" {
         return Some(format!("({rhs} != 0)"));
     }
-    let b = tyname.as_bytes();
+    // The CHECK reduces to the bare name; the CAST keeps the qualified one, which is what has
+    // to be written when the enum lives in a namespace.
+    let b = bare_type_name(tyname).as_bytes();
     if b.len() >= 2 && b[0] == b'E' && b[1].is_ascii_uppercase() {
         return Some(format!("{tyname}({rhs})"));
     }
@@ -2015,6 +2139,13 @@ fn is_pure_iter_get(s: &str) -> bool {
 
 /// True if a rendered operand is an integer slot/constant (safe to cast to bool/enum).
 /// Excludes already-typed operands (params, fields, calls) so we never double-cast.
+/// A bare integer LITERAL (not a slot name). A literal the compiler can prove fits its target
+/// needs no narrowing cast; a slot does.
+fn is_int_literal(s: &str) -> bool {
+    let s = s.strip_prefix('-').unwrap_or(s);
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+}
+
 fn looks_int(s: &str) -> bool {
     let s = s.strip_prefix('-').unwrap_or(s);
     if let Some(r) = s.strip_prefix("local_") {
@@ -2127,6 +2258,11 @@ fn block_stmts_in(
     // and, when the precise script-field channel is absent, by PshRPtr's call-argument typing.
     // The lookup is enum-filtered at every assignment, so non-enum native fields remain unknown.
     let mut ref_reg_nfty: Option<String> = None;
+    // Unfiltered NATIVE field value type behind ref_reg (Binds.Cache field decls + the in-crate
+    // rows). `ref_reg_nfty` keeps its enum filter for the historical consumers; this channel is
+    // consumed ONLY by the WRTV rescue below, where a field DECLARED ON A NATIVE BASE (absent
+    // from every script-side map) otherwise leaves both type channels empty.
+    let mut ref_reg_nvty: Option<String> = None;
     let mut set_consts: HashMap<i32, ConstBits> = HashMap::new(); // last SetV* constant per slot
                                                                   // Slots whose current value came from a MEMBER READ (RDR* after a member-ref load) — real
                                                                   // data values, kept by the nested-call retain (see Arg.keep). Invalidated on overwrite.
@@ -2418,8 +2554,14 @@ fn block_stmts_in(
                 } else {
                     let nm = ctx.refs.global_by_ptr(ptr).unwrap_or("global?");
                     if let Some(cls) = nm.strip_prefix("__StaticType_") {
-                        // generator class-pointer global -> the real UClass accessor
-                        stack.push(Arg::obj(format!("{cls}::StaticClass()")).carry());
+                        // Generator class-pointer global. The BARE class name is what compiles
+                        // into this push: writing `X::StaticClass()` instead compiles into
+                        // `CALL StaticClass` plus a `TSubclassOf` conversion — a different
+                        // program, and one that makes the compiler GENERATE a `StaticClass`
+                        // free function the base cache never had, which then fails to remap
+                        // ("no matching symbol in the base cache"). Vanilla contains both forms;
+                        // only this one pushes the global, so render what was actually written.
+                        stack.push(Arg::obj(qualify_class_name(cls, ctx.refs)).carry());
                     } else if nm.starts_with("__") {
                         // other implicit generator global (e.g. __WorldContext) — not a
                         // source-level identifier. Push a MARKER (not dropped): the native's arity
@@ -2546,6 +2688,15 @@ fn block_stmts_in(
                     .and_then(|cls| ctx.refs.native_field_type(cls, &field))
                     .filter(|t| is_enum_name(t))
                     .map(|s| s.to_string());
+                ref_reg_nvty = ctx
+                    .refs
+                    .type_by_id(tid)
+                    .and_then(|cls| {
+                        ctx.refs
+                            .native_field_value_type(cls, &field)
+                            .or_else(|| ctx.refs.native_field_type(cls, &field))
+                    })
+                    .map(|s| s.to_string());
                 // batch-32b: precise value type (poison-free sources only — see decl comment).
                 ref_reg_vty = ctx.fields.and_then(|m| m.get(&field)).cloned().or_else(|| {
                     ctx.refs
@@ -2577,6 +2728,15 @@ fn block_stmts_in(
                     .type_by_id(tid)
                     .and_then(|cls| ctx.refs.native_field_type(cls, &field))
                     .filter(|t| is_enum_name(t))
+                    .map(|s| s.to_string());
+                ref_reg_nvty = ctx
+                    .refs
+                    .type_by_id(tid)
+                    .and_then(|cls| {
+                        ctx.refs
+                            .native_field_value_type(cls, &field)
+                            .or_else(|| ctx.refs.native_field_type(cls, &field))
+                    })
                     .map(|s| s.to_string());
                 // batch-32b: precise value type (poison-free sources only — see decl comment).
                 ref_reg_vty = ctx
@@ -2774,8 +2934,21 @@ fn block_stmts_in(
                     // rescues an already-DROPPED store (rhs still UNRESOLVED) and only when vty is
                     // a real primitive value type (never an object/owner name that would re-bail),
                     // so no working store changes.
+                    //
+                    // `ref_reg_nvty` extends the same rescue to fields DECLARED ON A NATIVE BASE.
+                    // Those appear in no script-side map at all, so both channels above are empty
+                    // and every such store dropped — which silently erased the scalar class
+                    // defaults of every item, weapon and config class (`m_Value`,
+                    // `m_SuperArmorDamageBase`, …), since their fields belong to native
+                    // `UItemDefinition`/`UWeaponDefinition` rather than to the script class.
                     if rhs == UNRESOLVED {
-                        if let Some(vty) = ref_reg_vty.as_deref() {
+                        for vty in [ref_reg_vty.as_deref(), ref_reg_nvty.as_deref()]
+                            .into_iter()
+                            .flatten()
+                        {
+                            if rhs != UNRESOLVED {
+                                break;
+                            }
                             let v = vty.trim_start_matches("const ");
                             let is_primitive = matches!(
                                 v,
@@ -2869,9 +3042,18 @@ fn block_stmts_in(
                     // `(Param != 0)` -> "bool -> EPerceptionCharacterType&", 41 in-game errors),
                     // or the FIELD's value type is a known enum (this-class fields map), the write
                     // is enum->enum: keep it bare.
+                    // NATIVE guard: the heuristic reads "1-byte write to a field of unknown type",
+                    // and a field declared on a native base used to be exactly that. Now that the
+                    // native declaration is readable, a proven non-bool 1-byte field keeps its
+                    // integer store — `m_GroundRaysAmount = 2` (uint8) had become
+                    // `m_GroundRaysAmount = (2 != 0)`, which is both a different value and a
+                    // compile error ("Can't implicitly convert from 'bool' to 'uint8&'").
                     if n == "WRTV1"
                         && ref_reg_ty.as_deref() != Some("bool")
                         && !ref_reg_ty.as_deref().map(is_enum_name).unwrap_or(false)
+                        && !ref_reg_nvty
+                            .as_deref()
+                            .is_some_and(is_proven_non_bool_scalar)
                         && rhs == raw
                         && rhs != UNRESOLVED
                         && ctx.slot_type(slot).as_deref() != Some("bool")
@@ -2882,6 +3064,23 @@ fn block_stmts_in(
                             .unwrap_or(false)
                     {
                         rhs = format!("({rhs} != 0)");
+                    }
+                    // Storing a slot into a NARROW native field warns twice ("signed to
+                    // unsigned" + "truncates") and warnings are errors here. Narrow the store
+                    // explicitly, mirroring the small-int parameter cast in `cast_arg`. Only a
+                    // proven native type narrower than the 4-byte slot qualifies, and only for a
+                    // bare slot RHS — a literal that already fits, and every rendering the rules
+                    // above produced, are left alone.
+                    if matches!(n, "WRTV1" | "WRTV2") && rhs == raw && rhs != UNRESOLVED {
+                        if let Some(narrow) = ref_reg_nvty
+                            .as_deref()
+                            .map(|t| t.trim_start_matches("const "))
+                            .filter(|t| matches!(*t, "int8" | "uint8" | "int16" | "uint16"))
+                        {
+                            if !is_int_literal(&raw) {
+                                rhs = format!("{narrow}({rhs})");
+                            }
+                        }
                     }
                     out.push(format!("{r} = {rhs};"));
                 }
@@ -3234,7 +3433,7 @@ fn block_stmts_in(
                     if !args_clean {
                         break 'idiom_c false;
                     }
-                    let rendered = render_args(&args, Some(params), ctx.refs);
+                    let rendered = render_args(&args, Some(params), ctx.refs, None);
                     // A definite arg-type mismatch surfaces as the \u{2} sentinel from cast_arg
                     // -> bail (keep the member's default-constructed struct) rather than emit an
                     // uncompilable build.
@@ -3270,7 +3469,10 @@ fn block_stmts_in(
                         .or_else(|| ctx.refs.func_owner_by_id(id))
                         .or(ctx.class_name)
                         .unwrap_or("UObject");
-                    Some(format!("{cls}::StaticClass()"))
+                    Some(format!(
+                        "{}::StaticClass()",
+                        qualify_class_name(cls, ctx.refs)
+                    ))
                 } else {
                     pending_ty = ctx.refs.func_ret_by_id(id).map(|d| d.base_name(ctx.refs));
                     // CALL-by-id = SCRIPT function: its authoritative signature is the module-region
@@ -3331,9 +3533,21 @@ fn block_stmts_in(
                         && owner.is_none()
                         && ctx.class_name.is_some()
                         && ctx.refs.member_name_exists(&f);
+                    // A free/static SCRIPT function declared in a namespace has to be called
+                    // qualified, exactly like the native namespaced calls below. The binding
+                    // puts a class's companion functions in a namespace named after the class
+                    // (`UEffect_GiveExperience::ApplyTo`), so an unqualified call picks a
+                    // same-named overload from somewhere else — or none at all. Name-keyed
+                    // lookups above keep using the bare `f`; only the render is qualified.
+                    let called = match ctx.refs.func_ns_by_id(id) {
+                        Some(namespace) if !ctx.refs.is_method_by_id(id) => {
+                            format!("{namespace}::{f}")
+                        }
+                        _ => f.clone(),
+                    };
                     build_call(
                         &mut stack,
-                        &f,
+                        &called,
                         ctx.refs.is_method_by_id(id),
                         ctx.super_ctor,
                         ctx.refs.func_params_by_id(id),
@@ -3377,7 +3591,7 @@ fn block_stmts_in(
                         // so the destination/return local is written (never a discarded cast).
                         let rhs = match &t {
                             Some(ty) if ty.starts_with('U') || ty.starts_with('A') => {
-                                format!("Cast<{ty}>({src})")
+                                format!("Cast<{}>({src})", qualify_class_name(ty, ctx.refs))
                             }
                             _ => src,
                         };
@@ -3508,7 +3722,7 @@ fn block_stmts_in(
                             // spurious leftover operands on the stack).
                             let count_ok = params.map(|p| p.len() == args.len()).unwrap_or(false);
                             if !args.is_empty() && (!any_psf_arg || proven_psf_copy) && count_ok {
-                                let rendered = render_args(&args, params, ctx.refs);
+                                let rendered = render_args(&args, params, ctx.refs, None);
                                 // Gate (d): a definite arg-type mismatch -> drop (keep prior
                                 // behaviour: slot unwritten) rather than emit the `\u{2}` sentinel
                                 // that would force-stub the whole function.
@@ -3612,7 +3826,10 @@ fn block_stmts_in(
                         .or_else(|| ctx.refs.func_owner_by_ptr(ptr))
                         .or(ctx.class_name)
                         .unwrap_or("UObject");
-                    Some(format!("{cls}::StaticClass()"))
+                    Some(format!(
+                        "{}::StaticClass()",
+                        qualify_class_name(cls, ctx.refs)
+                    ))
                 } else {
                     pending_ty = ctx.refs.func_ret_by_ptr(ptr).map(|d| d.base_name(ctx.refs));
                     // batch-31e (capture.batch30-0705 ForceRemoveDamage regression): the T3
@@ -4342,7 +4559,7 @@ fn block_stmts_in(
                                     .map(|st| provably_derived(&dt, st, ctx.refs))
                                     .unwrap_or(false) =>
                             {
-                                format!("Cast<{dt}>({})", top.s)
+                                format!("Cast<{}>({})", qualify_class_name(&dt, ctx.refs), top.s)
                             }
                             _ => top.s.clone(),
                         };
@@ -4471,7 +4688,7 @@ fn block_stmts_in(
                                     .next()
                                     .unwrap_or(fty)
                                     .trim_start_matches("const ");
-                                format!("Cast<{head}>({})", src.s)
+                                format!("Cast<{}>({})", qualify_class_name(head, ctx.refs), src.s)
                             }
                             _ => src.s.clone(),
                         };
@@ -4584,7 +4801,10 @@ fn block_stmts_in(
                     let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
                     match resolve_cast_typeid(ctx.refs, tid) {
                         Some(ty) if ty.starts_with('U') || ty.starts_with('A') => {
-                            stack.push(Arg::typed(format!("Cast<{ty}>({})", src.s), Some(ty)));
+                            stack.push(Arg::typed(
+                                format!("Cast<{}>({})", qualify_class_name(&ty, ctx.refs), src.s),
+                                Some(ty),
+                            ));
                         }
                         _ => stack.push(src),
                     }

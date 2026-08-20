@@ -850,13 +850,23 @@ fn canonical_script_enum_type(identity: &TypeIdentity) -> String {
     )
 }
 
+/// Field-type witness text reduced to the comparable value-type name.
+///
+/// The decompiler renders a namespaced type fully qualified (`G1R::EWeather`) because that is
+/// what has to be written in source, but the identity this is checked against carries the
+/// namespace in its own field. Comparing the qualified render against a bare identity name
+/// would reject every namespaced script enum, so the namespace is dropped here; the full
+/// identity (module + namespace + name) is still what admitted the enum in the first place.
 fn normalize_type_name(value: &str) -> String {
-    value
+    let trimmed = value
         .trim()
         .strip_prefix("const ")
         .unwrap_or(value.trim())
-        .trim_end_matches('@')
-        .to_owned()
+        .trim_end_matches('@');
+    match trimmed.rsplit_once("::") {
+        Some((_, name)) => name.to_owned(),
+        None => trimmed.to_owned(),
+    }
 }
 
 fn classify_value_type(value_type: &str, enum_proven: bool) -> Option<(ValueKind, Option<usize>)> {
@@ -1009,6 +1019,7 @@ mod tests {
             functions: Vec::new(),
             classes: vec![Class {
                 name: class.to_owned(),
+                namespace: String::new(),
                 super_class: super_class.map(str::to_owned),
                 fields: Vec::new(),
                 methods: Vec::new(),

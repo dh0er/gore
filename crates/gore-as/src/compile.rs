@@ -695,6 +695,10 @@ where
         .map_err(|error| CompileError::Other(format!("parse: {error}")))?;
     let native_api = crate::cache::binds::NativeApi::from_bytes(&opts.binds_cache)
         .ok_or_else(|| CompileError::Other("sealed Binds.Cache is invalid".to_owned()))?;
+    // The compile baseline stays defaults-free (the emit default), exactly the tree this path
+    // was qualified against. Its job is to satisfy the compiler's dependency graph, not to be
+    // read, and the extracted module's own `__InitDefaults` is carried from the base cache
+    // byte-for-byte — regenerating 30k of them here would change the regen cache for no gain.
     let prepared = emit_all::PreparedEmit::new(&base_modules, &mut refs, Some(native_api))
         .map_err(|error| CompileError::Other(format!("preparing base modules: {error}")))?;
 
@@ -976,10 +980,34 @@ fn prepare_generated_defaults_edit(
         ));
     }
     if source_contains_default_token(overlay).map_err(|reason| refusal(&reason))? {
-        return Err(refusal(
-            "the authored overlay contains a `default` code token, so carrying old defaults \
-             would be stale; remove the authored defaults or use a new module",
-        ));
+        // The overlay authors class defaults itself, so the compiler REGENERATES
+        // `__InitDefaults` from that source and the carried copy is superseded — carrying it
+        // would reinstate the old values over the edited ones. Skip the carry, but only once
+        // every record it would have carried is proven superseded, class by class: a partially
+        // authored overlay would silently lose the classes it left out.
+        let authored = crate::cache::default_source::classes_with_default_statements(overlay)
+            .map_err(|reason| refusal(&reason))?;
+        let mut unsuperseded = Vec::new();
+        for entry in &omitted {
+            match entry.strip_suffix("::__InitDefaults") {
+                // Only a class-defaults initializer is regenerated from `default` statements;
+                // any other generated method would still need its byte-exact carry.
+                None => unsuperseded.push(entry.clone()),
+                Some(class) if !authored.contains(class) => unsuperseded.push(entry.clone()),
+                Some(_) => {}
+            }
+        }
+        if !unsuperseded.is_empty() {
+            return Err(refusal(&format!(
+                "the authored overlay declares `default` statements, which makes the compiler \
+                 regenerate the class defaults and the carried copies stale, but it does not \
+                 supersede {} of them ({}); author defaults for every class, or emit the module \
+                 with `--no-defaults` and edit that",
+                unsuperseded.len(),
+                unsuperseded.join(", ")
+            )));
+        }
+        return Ok(None);
     }
     let plan =
         crate::cache::generated_defaults::GeneratedDefaultsPlan::prepare(base, mods, module_name)
@@ -3399,10 +3427,24 @@ where
         ),
         None => native_api(&base_path),
     };
-    let prepared = emit_all::PreparedEmit::new(&mods, &mut refs, native_api)
-        .map_err(|error| CompileError::Other(format!("preparing base modules: {error}")))?;
     let overlay = std::str::from_utf8(&overlay)
         .map_err(|error| CompileError::Other(format!("source .as is not valid UTF-8: {error}")))?;
+    // The baseline tree has to speak the same dialect as the overlay.
+    //
+    // A defaults-free overlay keeps the historical, qualified baseline: the tree exists to
+    // satisfy the compiler's dependency graph, not to be read, and regenerating 30k
+    // `__InitDefaults` for nothing would only churn the regen cache.
+    //
+    // An overlay that AUTHORS defaults needs the opposite. Class defaults are where most string
+    // literals and `FName`s in the game live, so a defaults-free baseline declares a materially
+    // different symbol landscape than vanilla: a literal vanilla spells out in two modules
+    // appears once, and the ref remap then reports it as ambiguous or unresolvable through no
+    // fault of the edit. Emitting the baseline with defaults restores the correspondence.
+    let baseline_defaults = source_contains_default_token(overlay)
+        .map_err(|reason| CompileError::Other(format!("preparing authored overlay: {reason}")))?;
+    let prepared = emit_all::PreparedEmit::new(&mods, &mut refs, native_api)
+        .map_err(|error| CompileError::Other(format!("preparing base modules: {error}")))?
+        .with_class_defaults(baseline_defaults);
     let (overlay, overlay_rel_path) = prepared
         .prepare_compile_overlay(&opts.op, &opts.module_name, &opts.rel_path, overlay)
         .map_err(|error| CompileError::Other(format!("preparing authored overlay: {error}")))?;
@@ -6540,6 +6582,7 @@ mod tests {
         Func {
             name: name.into(),
             namespace: String::new(),
+            param_defaults: Vec::new(),
             ret: DataType::default(),
             params: Vec::new(),
             bytecode: Vec::new(),
@@ -6557,6 +6600,7 @@ mod tests {
             functions: Vec::new(),
             classes: vec![Class {
                 name: "UQuestFixture".into(),
+                namespace: String::new(),
                 super_class: None,
                 fields: Vec::new(),
                 methods: vec![test_function("Tick"), test_function("__InitDefaults")],
@@ -6611,6 +6655,7 @@ mod tests {
         };
         let class = |name: &str, methods| Class {
             name: name.into(),
+            namespace: String::new(),
             super_class: None,
             fields: Vec::new(),
             methods,
@@ -7299,9 +7344,7 @@ mod tests {
             install_mutation_init_path(&game, "gore-as:compile", full_compile_id);
         std::fs::write(
             &full_compile_init,
-            format!(
-                "version=1\nowner=gore-as:compile\npid=123\nguard_id={full_compile_id}\n"
-            ),
+            format!("version=1\nowner=gore-as:compile\npid=123\nguard_id={full_compile_id}\n"),
         )
         .unwrap();
         match InstallMutationGuard::take_over_abandoned_manager(&game) {

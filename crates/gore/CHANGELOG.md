@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- `as emit` / `as emit-all` now write class `default` statements, so item, NPC
+  and config classes decompile with their values instead of as empty shells.
+- A module whose defaults cannot all be recovered says so in its header and
+  keeps them byte-exact on recompile.
+- A module whose source declares defaults can be edited and spliced back;
+  `as emit --no-defaults` still produces the previous shape.
+- Scalar member stores into fields declared on a native base are recovered
+  instead of dropped.
+- Editing a module and splicing it back now keeps its `n"..."` names: they were
+  remapped to unrelated entries before, so an item could come back wearing
+  another item's model.
+- Decompiled source keeps namespaces, `const` methods and parameter defaults, so
+  quest, document and conversation modules can be edited and spliced at all.
+- `as extract-remap` and `compile-module` resolve a repeated string literal
+  instead of refusing the module.
+- `GORE_AS_REMAP_DIAG=1` prints the two identities behind an unresolved or
+  ambiguous reference.
+
 ## [0.1.0] - 2026-08-18
 
 First release. Command-line toolkit for modding Gothic 1 Remake.

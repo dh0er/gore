@@ -40,8 +40,35 @@ mirrors each module's `ScriptRelativeFilename` into the output tree.
 entries; pass indices to print specific ones. These are the literals that
 `__STATIC_NAME(Id)` resolves against.
 
-Decompilation and emit resolve native-call arities from a `Binds.Cache` placed
-next to the input cache, or from the path in `GORE_AS_BINDS`.
+Decompilation and emit resolve native-call arities and native field types from a
+`Binds.Cache` placed next to the input cache, or from the path in
+`GORE_AS_BINDS`.
+
+Emitted classes carry their `default` statements — the class-scope statements
+that give an item its name, value and damage, an NPC its config, a camera its
+settings. They come out of the compiler-generated `__InitDefaults` method, which
+holds every one of them:
+
+```angelscript
+class UItMw_1H_Sword_Old_01 : USword1H
+{
+    default m_Name = "ItMw_1H_Sword_Old_01";
+    default m_Value = 10;
+    default m_DamageBase.Add(GameplayTag::Item_Damage_Physical_Edge, 10.0f);
+    default SetItemType(GameplayTag::Item_Weapon_Sword_OneHand);
+}
+```
+
+You can edit those statements and splice the module back with `compile-module
+--op edit`; the compiler regenerates the class defaults from your source and the
+old copies are dropped rather than carried. An overlay that declares defaults for
+only some of a module's classes is refused, because the classes it left out would
+lose theirs silently.
+
+Recovery is all-or-nothing per module: if one class in a module cannot be
+recovered in full, the module's header says so by name and reason, and none of
+its defaults are written. Nothing is lost either way — a module without authored
+defaults keeps them byte-exact when it is recompiled.
 
 ## Recompiling: the game is the compiler
 
@@ -176,6 +203,10 @@ gore as extract regen.Cache <Module> -o mini.Cache
 generation by `compile-module` or `extract-remap`. Raw
 `-as-generate-precompiled-data` output carries a fresh GUID and is refused; remap
 it against the intended pristine base first.
+
+When a remap refuses a module — `unresolved`, or `ambiguous` — the message names the symbol but
+not what differs about it. `GORE_AS_REMAP_DIAG=1` prints the regenerated and the base identity
+side by side; they differ in exactly one field, and that field is the answer.
 
 `--allow-new-symbols` is deliberately opt-in. Existing references are still
 mapped back to the vanilla cache; only rows for classes, functions, and names
