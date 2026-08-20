@@ -72,6 +72,11 @@ pub(crate) fn recover(rendered_method: &str) -> DefaultsRecovery {
             statements.len()
         ));
     }
+    if std::env::var_os("GORE_AS_DEFAULTS_DEBUG").is_some() {
+        for statement in &statements {
+            eprintln!("[defaults] {statement}");
+        }
+    }
     if let Err(reason) = fold_temporaries(&mut statements) {
         return DefaultsRecovery::Rejected(reason);
     }
@@ -83,7 +88,9 @@ pub(crate) fn recover(rendered_method: &str) -> DefaultsRecovery {
         // initializer did with it in the first place, and the game compiler accepts it — the
         // whole tree recompiles with these statements in place.
         if let Some(local) = first_temporary(&stripped) {
-            return DefaultsRecovery::Rejected(format!("temporary `{local}` did not fold"));
+            return DefaultsRecovery::Rejected(format!(
+                "temporary `{local}` did not fold: {stripped}"
+            ));
         }
         if let Some(operator) = explicit_operator_call(&stripped) {
             return DefaultsRecovery::Rejected(format!(
@@ -220,6 +227,18 @@ fn fold_temporaries(statements: &mut Vec<String>) -> Result<(), String> {
                 uses.push((offset, count));
             }
         }
+        // A redefinition may READ the temporary it redefines — `local_4 = local_4 * local_6;`
+        // is how the compiler writes an in-place update. That read is a use of THIS definition,
+        // and not counting it dropped this definition as a dead store and left the read
+        // dangling, which cost the whole module its authored defaults.
+        let redefinition_reads = statements
+            .get(region_end)
+            .and_then(|statement| definition_rhs(statement))
+            .map(|rhs| count_word(rhs, &name))
+            .unwrap_or(0);
+        if redefinition_reads > 0 {
+            uses.push((region_end, redefinition_reads));
+        }
         let total: usize = uses.iter().map(|(_, count)| *count).sum();
         if total == 0 {
             // A dead store. Dropping it is only safe when the value cannot have an effect —
@@ -241,6 +260,17 @@ fn fold_temporaries(statements: &mut Vec<String>) -> Result<(), String> {
             value.clone()
         };
         for (offset, _) in &uses {
+            // The redefinition keeps its own left-hand side; only its right-hand side reads the
+            // value being folded.
+            if *offset == region_end {
+                let statement = &statements[*offset];
+                let (head, rhs) = statement
+                    .rsplit_once(" = ")
+                    .expect("a definition splits at its assignment");
+                let rhs = replace_word(rhs, &name, &replacement);
+                statements[*offset] = format!("{head} = {rhs}");
+                continue;
+            }
             let statement = &statements[*offset];
             // A temporary at the head of a statement is either the RECEIVER of a call — the
             // fluent-builder idiom `CreateNewTauntGroup().AddProperty(…).Set();`, which the
@@ -261,6 +291,11 @@ fn fold_temporaries(statements: &mut Vec<String>) -> Result<(), String> {
 
 /// `local_4 = <expr>;` -> `("local_4", "<expr>")`. Only a WHOLE temporary is a definition:
 /// `local_4.Field = x;` writes through one and must stay a statement.
+/// The right-hand side of a statement that defines a temporary, if it is one.
+fn definition_rhs(statement: &str) -> Option<&str> {
+    temporary_definition(statement).map(|(_, rhs)| rhs)
+}
+
 fn temporary_definition(statement: &str) -> Option<(&str, &str)> {
     let body = statement.strip_suffix(';')?;
     let (lhs, rhs) = split_top_level_assignment(body)?;
@@ -864,6 +899,22 @@ mod tests {
     #[test]
     fn a_missing_return_is_rejected() {
         assert!(rejection(&["this.A = 1;"]).contains("does not end in a plain return"));
+    }
+
+    #[test]
+    fn an_in_place_update_keeps_the_value_it_reads() {
+        // `local_4 = local_4 * local_6;` READS the definition above it; not counting that read
+        // dropped the definition as a dead store and left the read dangling.
+        assert_eq!(
+            recovered(&[
+                "local_4 = this.WaterCost;",
+                "local_6 = 0.33;",
+                "local_4 = local_4 * local_6;",
+                "this.WaterCost = local_4;",
+                "return;",
+            ]),
+            vec!["WaterCost = (WaterCost * 0.33);"]
+        );
     }
 
     #[test]

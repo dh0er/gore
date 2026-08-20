@@ -122,6 +122,10 @@ pub struct RefResolver {
     zero_arg_names: HashSet<String>,
     /// Every function name the cache records, so an unknown name can be told from a known one.
     known_func_names: HashSet<String>,
+    /// `name/type` keys for one-parameter functions whose parameter accepts a TEMPORARY — by
+    /// value, or by const reference. A name is recorded only when EVERY one-parameter row of it
+    /// taking that type accepts one, so a single non-const-reference overload disqualifies it.
+    temporary_arg_methods: HashSet<String>,
     /// `Type<Sub>::name/arity` keys the cache's own function table records, namespaces stripped.
     /// Whether a value type has a default constructor, a copy constructor or an `opAssign` is
     /// what decides which SHAPE a local of it has to be written in.
@@ -220,6 +224,7 @@ impl RefResolver {
         // The owning-type keys are composed after the parse: composing one needs the finished
         // type tables, which are still borrowed mutably here.
         let mut owned_methods: Vec<(i64, String, usize)> = Vec::new();
+        let mut one_arg_params: Vec<(String, DataType, bool)> = Vec::new();
         let function_reference_count = c.read_count("FunctionReferences")?;
         c.ensure_minimum_remaining(function_reference_count, 80, "FunctionReferences")?;
         for _ in 0..function_reference_count {
@@ -250,6 +255,12 @@ impl RefResolver {
             }
             if is_method && objtype != 0 {
                 owned_methods.push((objtype, name.clone(), params.len()));
+            }
+            if let [only] = params.as_slice() {
+                // `!is_reference` is a by-value parameter; a reference one has to be const.
+                let accepts_temporary =
+                    !only.is_reference || only.is_object_const || only.is_read_only;
+                one_arg_params.push((name.clone(), only.clone(), accepts_temporary));
             }
             r.func_params.insert(key, params);
             r.func_ret.insert(key, ret);
@@ -315,6 +326,16 @@ impl RefResolver {
             r.prop_by_key.insert(key, name);
             r.prop_type_id.insert(key, old_type_id);
         }
+        let mut one_arg_verdict: HashMap<String, bool> = HashMap::new();
+        for (name, param, accepts_temporary) in one_arg_params {
+            let key = format!("{name}/{}", strip_namespaces(&param.base_name(&r)));
+            let entry = one_arg_verdict.entry(key).or_insert(true);
+            *entry &= accepts_temporary;
+        }
+        r.temporary_arg_methods = one_arg_verdict
+            .into_iter()
+            .filter_map(|(key, accepts)| accepts.then_some(key))
+            .collect();
         for (objtype, name, arity) in owned_methods {
             let Some(owner) = r.composed_type_name(objtype) else {
                 continue;
@@ -991,6 +1012,13 @@ impl RefResolver {
         }
     }
 
+    /// True when every one-parameter `name` in the cache that takes `ty` takes it by value or by
+    /// const reference — so a TEMPORARY may be written at that call site.
+    pub fn one_arg_call_accepts_temporary(&self, name: &str, ty: &str) -> bool {
+        self.temporary_arg_methods
+            .contains(&format!("{name}/{}", strip_namespaces(ty)))
+    }
+
     /// True when the cache's own function table records `type::name` with that many parameters.
     /// Namespaces are ignored on both sides — a rendered type carries them, the table does not.
     pub fn type_has_method(&self, ty: &str, name: &str, arity: usize) -> bool {
@@ -1242,6 +1270,17 @@ mod tests {
             .insert("TSubclassOf<UAIGroup_StateEvent>::$beh0/0".to_owned());
         assert!(refs.type_has_method("TSubclassOf<G1R::AIGroup::UAIGroup_StateEvent>", "$beh0", 0));
         assert!(!refs.type_has_method("TSubclassOf<UAIGroup_StateEvent>", "$beh0", 1));
+    }
+
+    #[test]
+    fn a_one_argument_call_accepts_a_temporary_only_when_every_overload_does() {
+        let mut refs = RefResolver::default();
+        refs.temporary_arg_methods
+            .insert("Add/FCrimeSetup".to_owned());
+        assert!(refs.one_arg_call_accepts_temporary("Add", "FCrimeSetup"));
+        assert!(refs.one_arg_call_accepts_temporary("Add", "G1R::Crime::FCrimeSetup"));
+        assert!(!refs.one_arg_call_accepts_temporary("Add", "FOtherSetup"));
+        assert!(!refs.one_arg_call_accepts_temporary("Consume", "FCrimeSetup"));
     }
 
     #[test]
