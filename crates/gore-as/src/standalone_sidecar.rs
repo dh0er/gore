@@ -109,11 +109,46 @@ impl StandaloneSidecarConfigV1 {
     }
 }
 
+/// Opaque proof that a compiler-profile package passed every typed qualification gate.
+///
+/// Construction reads the exact manifest plus all registry, frontend, and differential-parity
+/// payloads from `profile_root`. Product code must pass this handle, rather than a raw manifest,
+/// when it creates authority-bearing generation evidence for either backend.
+#[derive(Debug)]
+pub struct ValidatedCompilerProfilePackageV1 {
+    profile: CompilerProfileV1,
+}
+
+impl ValidatedCompilerProfilePackageV1 {
+    pub fn load(
+        profile_manifest_path: &Path,
+        profile_root: &Path,
+    ) -> Result<Self, CompilerBackendFailureV1> {
+        require_absolute(profile_manifest_path, "compiler profile manifest")?;
+        require_absolute(profile_root, "compiler profile root")?;
+        ensure_real_directory(profile_root, "compiler profile root")?;
+        let manifest = read_regular_bounded_no_follow(
+            profile_manifest_path,
+            MAX_COMPILER_PROFILE_JSON_BYTES as u64,
+            "compiler profile manifest",
+        )
+        .map_err(|error| unavailable(error.to_string()))?;
+        let profile = CompilerProfileV1::from_json(&manifest)
+            .map_err(|error| unavailable(format!("compiler profile is not qualified: {error}")))?;
+        validate_typed_profile_payloads_at_root(&profile, profile_root)?;
+        Ok(Self { profile })
+    }
+
+    pub fn profile(&self) -> &CompilerProfileV1 {
+        &self.profile
+    }
+}
+
 /// Native sidecar runner with a fully parsed and qualified compiler profile.
 #[derive(Debug)]
 pub struct StandaloneSidecarRunnerV1 {
     config: StandaloneSidecarConfigV1,
-    profile: CompilerProfileV1,
+    profile_package: ValidatedCompilerProfilePackageV1,
 }
 
 impl StandaloneSidecarRunnerV1 {
@@ -130,25 +165,26 @@ impl StandaloneSidecarRunnerV1 {
                  {MAX_SIDECAR_MEMORY_LIMIT_BYTES} bytes"
             )));
         }
-        ensure_real_directory(&config.profile_root, "compiler profile root")?;
         ensure_real_directory(&config.scratch_root, "sidecar scratch root")?;
         let mut sidecar = open_regular_no_follow(&config.sidecar_path, "sidecar executable")
             .map_err(unavailable)?;
         verify_open_sidecar_seal(&mut sidecar, config.sidecar_seal)?;
-        let manifest = read_regular_bounded_no_follow(
+        let profile_package = ValidatedCompilerProfilePackageV1::load(
             &config.profile_manifest_path,
-            MAX_COMPILER_PROFILE_JSON_BYTES as u64,
-            "compiler profile manifest",
-        )
-        .map_err(|error| unavailable(error.to_string()))?;
-        let profile = CompilerProfileV1::from_json(&manifest)
-            .map_err(|error| unavailable(format!("compiler profile is not qualified: {error}")))?;
-        validate_typed_profile_payloads_at_root(&profile, &config.profile_root)?;
-        Ok(Self { config, profile })
+            &config.profile_root,
+        )?;
+        Ok(Self {
+            config,
+            profile_package,
+        })
     }
 
     pub fn profile(&self) -> &CompilerProfileV1 {
-        &self.profile
+        self.profile_package.profile()
+    }
+
+    pub fn profile_package(&self) -> &ValidatedCompilerProfilePackageV1 {
+        &self.profile_package
     }
 }
 
@@ -166,16 +202,16 @@ impl StandaloneCompilerRunnerV1 for StandaloneSidecarRunnerV1 {
         verify_memory_seal(
             "base cache",
             base_cache,
-            &self.profile.oracle.shipping_cache,
+            &self.profile().oracle.shipping_cache,
             MAX_SIDECAR_BASE_BYTES_V1,
         )?;
         verify_memory_seal(
             "Binds.Cache",
             binds_cache,
-            &self.profile.oracle.binds_cache,
+            &self.profile().oracle.binds_cache,
             MAX_SIDECAR_BINDS_BYTES_V1,
         )?;
-        self.profile.validate_complete().map_err(|error| {
+        self.profile().validate_complete().map_err(|error| {
             unavailable(format!("compiler profile is no longer valid: {error}"))
         })?;
 
@@ -199,7 +235,7 @@ impl StandaloneCompilerRunnerV1 for StandaloneSidecarRunnerV1 {
         }
 
         let staged_manifest = stage_profile(
-            &self.profile,
+            self.profile(),
             &self.config.profile_root,
             &staged_profile_root,
         )?;
@@ -222,12 +258,12 @@ impl StandaloneCompilerRunnerV1 for StandaloneSidecarRunnerV1 {
             profile: SidecarProfileIdentityV1 {
                 manifest_path: json_path(&staged_manifest, "staged profile manifest")?,
                 profile_root: json_path(&staged_profile_root, "staged profile root")?,
-                profile_sha256: self.profile.profile_sha256,
-                steam_build_id: self.profile.target.steam_build_id,
-                depot_id: self.profile.target.depot_id,
-                depot_manifest_gid: self.profile.target.depot_manifest_gid,
+                profile_sha256: self.profile().profile_sha256,
+                steam_build_id: self.profile().target.steam_build_id,
+                depot_id: self.profile().target.depot_id,
+                depot_manifest_gid: self.profile().target.depot_manifest_gid,
                 required_probe_suite_version: self
-                    .profile
+                    .profile()
                     .qualification
                     .required_probe_suite_version
                     .clone(),
@@ -260,7 +296,7 @@ impl StandaloneCompilerRunnerV1 for StandaloneSidecarRunnerV1 {
 
         let completed =
             run_sidecar_process(&self.config, &request_path, &scratch.path, sidecar_handle)?;
-        let response = parse_sidecar_response(&completed, &output_path, &self.profile)?;
+        let response = parse_sidecar_response(&completed, &output_path, self.profile())?;
         verify_output(&output_path, &response)?;
         set_readonly(&output_path, true).map_err(|error| {
             invalid_output(format!("sealing sidecar output read-only: {error}"))
