@@ -454,6 +454,7 @@ bool parse_request(const std::string_view bytes, compile_request& output, std::s
         overlays->elements.size() > wire::kMaxOverlayModules) return false;
 
     std::set<std::string> file_paths;
+    std::string previous_file_path;
     std::uint64_t aggregate = 0U;
     for (const auto& item : files->elements) {
         source_file file;
@@ -462,6 +463,7 @@ bool parse_request(const std::string_view bytes, compile_request& output, std::s
             !json::get_string(item, "path", file.relative_path, detail) || !safe_relative_path(file.relative_path) ||
             !json::get_u64(item, "byte_len", file.byte_len, detail) || file.byte_len > wire::kMaxSourceFileBytes ||
             !json::get_string(item, "sha256", file_digest, detail) || !parse_sha256_hex(file_digest, file.sha256) ||
+            (!previous_file_path.empty() && file.relative_path <= previous_file_path) ||
             !file_paths.insert(file.relative_path).second) {
             if (detail.empty()) detail = "source tree contains an invalid or duplicate file";
             return false;
@@ -471,6 +473,7 @@ bool parse_request(const std::string_view bytes, compile_request& output, std::s
             return false;
         }
         aggregate += file.byte_len;
+        previous_file_path = file.relative_path;
         staged.source_files.push_back(std::move(file));
     }
 
@@ -574,6 +577,212 @@ std::vector<preprocessor_base_module> base_modules(const cache_wire::cache& cach
     return output;
 }
 
+void hash_u64(sha256& hash, const std::uint64_t value) noexcept {
+    std::array<std::uint8_t, 8U> bytes{};
+    for (std::size_t index = 0U; index < bytes.size(); ++index) {
+        bytes[index] = static_cast<std::uint8_t>(value >> (index * 8U));
+    }
+    hash.update(bytes.data(), bytes.size());
+}
+
+void hash_field(sha256& hash, const std::string_view value) noexcept {
+    hash_u64(hash, value.size());
+    hash.update(value);
+}
+
+sha256_digest graph_input_digest(
+    preprocessor_graph_hook_module* const modules,
+    const std::size_t module_count) noexcept {
+    sha256 hash;
+    constexpr char domain[] = "gore-as-external-hook-graph-input-v1\0";
+    hash.update(domain, sizeof(domain) - 1U);
+    hash_u64(hash, module_count);
+    for (std::size_t index = 0U; index < module_count; ++index) {
+        const lexical_module_description* const module = modules[index].module;
+        if (module == nullptr) {
+            hash_field(hash, {});
+            hash_u64(hash, 0U);
+            continue;
+        }
+        hash_field(hash, module->module_name);
+        hash_u64(hash, module->code.size());
+        for (const preprocessed_code_section& section : module->code) {
+            hash_field(hash, section.relative_path);
+            hash_field(hash, section.conditioned_code);
+        }
+    }
+    return hash.finish();
+}
+
+sha256_digest graph_output_digest(
+    const sha256_digest& input,
+    preprocessor_graph_hook_module* const modules,
+    const std::size_t module_count) noexcept {
+    sha256 hash;
+    constexpr char domain[] = "gore-as-external-hook-graph-output-v1\0";
+    hash.update(domain, sizeof(domain) - 1U);
+    hash.update(input.data(), input.size());
+    hash_u64(hash, module_count);
+    for (std::size_t index = 0U; index < module_count; ++index) {
+        const lexical_module_description* const module = modules[index].module;
+        hash_field(hash, module == nullptr ? std::string_view{} : module->module_name);
+        hash_field(hash, modules[index].generated_declarations);
+    }
+    return hash.finish();
+}
+
+struct captured_hook_runtime {
+    const external_frontend_profile* profile = nullptr;
+};
+
+bool captured_class_analyze(
+    void* const context,
+    const preprocessor_source& source,
+    preprocessed_class_description& description,
+    std::string& generated_statics,
+    bool& has_statics,
+    std::string& detail) noexcept {
+    try {
+        const auto* const runtime = static_cast<const captured_hook_runtime*>(context);
+        if (runtime == nullptr || runtime->profile == nullptr ||
+            !runtime->profile->class_analyze_bound) {
+            detail = "ClassAnalyze is not bound by the sealed frontend profile";
+            return false;
+        }
+        const sha256_digest source_digest = sha256_bytes(source.code.data(), source.code.size());
+        const sha256_digest generated_digest =
+            sha256_bytes(generated_statics.data(), generated_statics.size());
+        const auto found = std::find_if(
+            runtime->profile->class_analyze_captures.begin(),
+            runtime->profile->class_analyze_captures.end(),
+            [&](const class_analyze_capture& capture) {
+                return capture.module_name == source.module_name &&
+                    capture.name_space == description.name_space &&
+                    capture.class_name == description.class_name &&
+                    capture.source_sha256 == source_digest &&
+                    capture.input_generated_statics_sha256 == generated_digest;
+            });
+        if (found == runtime->profile->class_analyze_captures.end()) {
+            detail = "no exact ClassAnalyze capture matches this source/class/input tuple";
+            return false;
+        }
+        generated_statics = found->generated_statics;
+        has_statics = found->has_statics;
+        description.compose_onto_class = found->compose_onto_class;
+        detail.clear();
+        return true;
+    } catch (...) {
+        try { detail = "ClassAnalyze capture lookup failed"; } catch (...) {}
+        return false;
+    }
+}
+
+bool apply_graph_capture(
+    const graph_hook_profile& profile,
+    preprocessor_graph_hook_module* const modules,
+    const std::size_t module_count,
+    std::string& detail) {
+    const sha256_digest input = graph_input_digest(modules, module_count);
+    const auto found = std::find_if(
+        profile.captures.begin(), profile.captures.end(),
+        [&](const graph_hook_capture& capture) {
+            return capture.input_graph_sha256 == input;
+        });
+    if (found == profile.captures.end()) {
+        detail = "no exact module-graph capture matches this hook input";
+        return false;
+    }
+    if (found->modules.size() != module_count) {
+        detail = "captured hook output does not cover the complete module graph";
+        return false;
+    }
+    for (std::size_t index = 0U; index < module_count; ++index) {
+        if (modules[index].module == nullptr ||
+            found->modules[index].module_name != modules[index].module->module_name) {
+            detail = "captured hook module order does not match the input graph";
+            return false;
+        }
+        modules[index].generated_declarations =
+            found->modules[index].generated_declarations;
+    }
+    if (graph_output_digest(input, modules, module_count) != found->output_graph_sha256) {
+        detail = "captured hook output digest does not match its declarations";
+        return false;
+    }
+    detail.clear();
+    return true;
+}
+
+bool captured_process_chunks(
+    void* const context,
+    preprocessor_graph_hook_module* const modules,
+    const std::size_t module_count,
+    std::string& detail) noexcept {
+    try {
+        const auto* const runtime = static_cast<const captured_hook_runtime*>(context);
+        if (runtime == nullptr || runtime->profile == nullptr ||
+            !runtime->profile->process_chunks.bound) {
+            detail = "OnProcessChunks is not bound by the sealed frontend profile";
+            return false;
+        }
+        return apply_graph_capture(runtime->profile->process_chunks, modules, module_count, detail);
+    } catch (...) {
+        try { detail = "OnProcessChunks capture lookup failed"; } catch (...) {}
+        return false;
+    }
+}
+
+bool captured_post_process_code(
+    void* const context,
+    preprocessor_graph_hook_module* const modules,
+    const std::size_t module_count,
+    std::string& detail) noexcept {
+    try {
+        const auto* const runtime = static_cast<const captured_hook_runtime*>(context);
+        if (runtime == nullptr || runtime->profile == nullptr ||
+            !runtime->profile->post_process_code.bound) {
+            detail = "OnPostProcessCode is not bound by the sealed frontend profile";
+            return false;
+        }
+        return apply_graph_capture(runtime->profile->post_process_code, modules, module_count, detail);
+    } catch (...) {
+        try { detail = "OnPostProcessCode capture lookup failed"; } catch (...) {}
+        return false;
+    }
+}
+
+bool script_source_path(const std::string_view path) noexcept {
+    return path.size() >= 3U && path[path.size() - 3U] == '.' &&
+        std::tolower(static_cast<unsigned char>(path[path.size() - 2U])) == 'a' &&
+        std::tolower(static_cast<unsigned char>(path[path.size() - 1U])) == 's';
+}
+
+bool skipped_script_directory(const std::string_view path) noexcept {
+    std::size_t begin = 0U;
+    while (begin < path.size()) {
+        const std::size_t end = path.find('/', begin);
+        if (end == std::string_view::npos) return false;
+        const std::string_view component = path.substr(begin, end - begin);
+        if (component == "Editor" || component == "Dev" || component == "Examples") return true;
+        begin = end + 1U;
+    }
+    return false;
+}
+
+std::string source_module_name(std::string path) {
+    for (std::size_t position = 0U; position + 2U < path.size();) {
+        if (path[position] == '.' &&
+            std::tolower(static_cast<unsigned char>(path[position + 1U])) == 'a' &&
+            std::tolower(static_cast<unsigned char>(path[position + 2U])) == 's') {
+            path.erase(position, 3U);
+        } else {
+            ++position;
+        }
+    }
+    std::replace(path.begin(), path.end(), '/', '.');
+    return path;
+}
+
 void message_callback(const asSMessageInfo* message, void* parameter) {
     auto& diagnostics = *static_cast<std::vector<compiler_diagnostic>*>(parameter);
     if (message == nullptr || diagnostics.size() >= wire::kMaxDiagnostics) return;
@@ -674,9 +883,11 @@ sidecar_compile_result compile_sidecar_request(const std::wstring_view request_p
         }
         preprocessor_options preprocessor;
         compiler_options options;
+        external_frontend_profile external_frontend;
         if (!parse_frontend_profile_payloads(
                 text_blob(manifest.preprocessor_config), text_blob(manifest.class_generator_config),
-                text_blob(manifest.compiler_options), preprocessor, options, detail)) {
+                text_blob(manifest.compiler_options), preprocessor, options,
+                external_frontend, detail)) {
             return failure(wire::ExitCode::unavailable, "engine_unavailable", "GORE_AS_FRONTEND_PROFILE_INVALID", detail);
         }
 
@@ -706,26 +917,85 @@ sidecar_compile_result compile_sidecar_request(const std::wstring_view request_p
                 return failure(wire::ExitCode::data_error, "rejected", "GORE_AS_SOURCE_FILE_INVALID", detail);
             }
             std::string code(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-            if (code.find('\0') != std::string::npos || !is_valid_utf8(code)) {
+            const bool discovered_script = script_source_path(file.relative_path) &&
+                (preprocessor.use_editor_scripts || !skipped_script_directory(file.relative_path));
+            if (discovered_script &&
+                (code.find('\0') != std::string::npos || !is_valid_utf8(code))) {
                 return failure(wire::ExitCode::data_error, "rejected", "GORE_AS_SOURCE_ENCODING_INVALID",
-                    "source file must be canonical UTF-8 without NUL bytes");
+                    "discovered .as source must be canonical UTF-8 without NUL bytes");
             }
             source_contents.emplace(file.relative_path, std::move(code));
         }
+        const std::vector<preprocessor_base_module> base_descriptors = base_modules(base);
+        std::set<std::string> base_module_names;
+        for (const preprocessor_base_module& module : base_descriptors) {
+            base_module_names.insert(module.module_name);
+        }
+        std::map<std::string, const overlay_module*> overlay_by_path;
+        for (const overlay_module& overlay : request.overlays) {
+            overlay_by_path.emplace(overlay.relative_path, &overlay);
+        }
+        std::set<std::string> resolved_overlays;
         std::vector<preprocessor_source> sources;
-        sources.reserve(request.overlays.size());
-        for (const auto& overlay : request.overlays) {
+        sources.reserve(request.source_files.size());
+        for (const source_file& file : request.source_files) {
+            const auto requested = overlay_by_path.find(file.relative_path);
+            if (!script_source_path(file.relative_path)) {
+                if (requested != overlay_by_path.end()) {
+                    return failure(wire::ExitCode::data_error, "rejected",
+                        "GORE_AS_SOURCE_DISCOVERY_INVALID",
+                        "overlay path is not a donor-discoverable .as source file");
+                }
+                continue;
+            }
+            if (!preprocessor.use_editor_scripts && skipped_script_directory(file.relative_path)) {
+                if (requested != overlay_by_path.end()) {
+                    return failure(wire::ExitCode::data_error, "rejected",
+                        "GORE_AS_EDITOR_SOURCE_DISABLED",
+                        "profile disables Editor, Dev, and Examples source directories");
+                }
+                continue;
+            }
+            const std::string module_name = source_module_name(file.relative_path);
+            const preprocessor_source::operation inferred_operation =
+                base_module_names.count(module_name) == 0U
+                    ? preprocessor_source::operation::add
+                    : preprocessor_source::operation::edit;
+            if (requested != overlay_by_path.end()) {
+                if (requested->second->module_name != module_name ||
+                    requested->second->operation != inferred_operation) {
+                    return failure(wire::ExitCode::data_error, "rejected",
+                        "GORE_AS_SOURCE_DISCOVERY_MISMATCH",
+                        "overlay identity/operation disagrees with the sealed source path and pristine cache");
+                }
+                resolved_overlays.insert(file.relative_path);
+            }
             preprocessor_source source;
-            source.relative_path = overlay.relative_path;
-            source.absolute_path = request.source_root_utf8 + "/" + overlay.relative_path;
-            source.code = source_contents.at(overlay.relative_path);
-            source.overlay_operation = overlay.operation;
-            source.module_name = overlay.module_name;
+            source.relative_path = file.relative_path;
+            source.absolute_path = request.source_root_utf8 + "/" + file.relative_path;
+            source.code = source_contents.at(file.relative_path);
+            source.overlay_operation = inferred_operation;
+            source.module_name = module_name;
             sources.push_back(std::move(source));
+        }
+        if (resolved_overlays.size() != request.overlays.size() || sources.empty()) {
+            return failure(wire::ExitCode::data_error, "rejected",
+                "GORE_AS_SOURCE_DISCOVERY_INCOMPLETE",
+                "not every requested overlay resolves into the enabled sealed source graph");
         }
         preprocessor.static_names.reserve(base.static_names.size());
         for (const auto& name : base.static_names) preprocessor.static_names.push_back(name.bytes);
-        const auto preprocessing = preprocess_lexical_module_graph(preprocessor, sources, base_modules(base));
+        captured_hook_runtime captured_runtime{&external_frontend};
+        preprocessor_hooks hooks;
+        hooks.context = &captured_runtime;
+        hooks.class_analyze = external_frontend.class_analyze_bound
+            ? &captured_class_analyze : nullptr;
+        hooks.process_chunks = external_frontend.process_chunks.bound
+            ? &captured_process_chunks : nullptr;
+        hooks.post_process_code = external_frontend.post_process_code.bound
+            ? &captured_post_process_code : nullptr;
+        const auto preprocessing = preprocess_lexical_module_graph(
+            preprocessor, sources, base_descriptors, &hooks);
         std::vector<compiler_diagnostic> diagnostics;
         for (const auto& diagnostic : preprocessing.diagnostics) {
             diagnostics.push_back({
@@ -775,13 +1045,13 @@ sidecar_compile_result compile_sidecar_request(const std::wstring_view request_p
         guid_hash.update(guid_domain, sizeof(guid_domain) - 1U);
         guid_hash.update(request.profile_sha256.data(), request.profile_sha256.size());
         guid_hash.update(request.base_cache.sha256.data(), request.base_cache.sha256.size());
-        for (const auto& overlay : request.overlays) {
-            guid_hash.update(overlay.module_name);
+        for (const preprocessor_source& source : sources) {
+            guid_hash.update(source.module_name);
             guid_hash.update(std::string_view("\0", 1U));
-            guid_hash.update(overlay.relative_path);
+            guid_hash.update(source.relative_path);
             guid_hash.update(std::string_view("\0", 1U));
             const auto& file = *std::find_if(request.source_files.begin(), request.source_files.end(),
-                [&](const source_file& candidate) { return candidate.relative_path == overlay.relative_path; });
+                [&](const source_file& candidate) { return candidate.relative_path == source.relative_path; });
             guid_hash.update(file.sha256.data(), file.sha256.size());
         }
         const auto guid_digest = guid_hash.finish();

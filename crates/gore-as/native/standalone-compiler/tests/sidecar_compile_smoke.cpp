@@ -71,6 +71,7 @@ int main() {
     std::filesystem::create_directories(profile_root / "engine", filesystem_error);
     std::filesystem::create_directories(profile_root / "frontend", filesystem_error);
     std::filesystem::create_directories(source_root, filesystem_error);
+    std::filesystem::create_directories(source_root / "Editor", filesystem_error);
     std::filesystem::create_directories(output_root, filesystem_error);
     if (filesystem_error) return 1;
 
@@ -114,7 +115,7 @@ int main() {
         "}}],\"final_states\":[],\"canonical_sha256\":\"" + digest + "\"}";
     const std::string preprocessor =
         "{\"schema\":\"gore.as.preprocessor-config\",\"schema_version\":1,"
-        "\"automatic_imports\":true,\"warn_on_manual_import_statements\":true,"
+        "\"automatic_imports\":false,\"warn_on_manual_import_statements\":true,"
         "\"use_editor_scripts\":false,\"effective_flags\":["
         "{\"ordinal\":0,\"name\":\"COOK_COMMANDLET\",\"value\":false},"
         "{\"ordinal\":1,\"name\":\"EDITOR\",\"value\":false},"
@@ -129,6 +130,10 @@ int main() {
         "\"static_class_mode\":\"allowed\",\"script_float_is_float64\":false,"
         "\"angelscript_haze\":false,\"enforce_server_rpc_validation\":false,"
         "\"blueprint_event_argument_specializations\":[],\"native_super_types\":[],"
+        "\"fname_comparison_keys\":[],\"external_hooks\":{"
+        "\"class_analyze\":{\"bound\":false,\"captures\":[]},"
+        "\"process_chunks\":{\"bound\":false,\"captures\":[]},"
+        "\"post_process_code\":{\"bound\":false,\"captures\":[]}},"
         "\"canonical_sha256\":\"" + digest + "\"}";
     const std::string class_generator =
         "{\"schema\":\"gore.as.class-generator-config\",\"schema_version\":1,"
@@ -155,13 +160,24 @@ int main() {
     precompiled::codec_error codec_error;
     if (!precompiled::encode(empty_cache, base, codec_error)) return 5;
     const std::vector<std::uint8_t> binds{'b', 'i', 'n', 'd', 's'};
-    const std::string source = "int Answer() { return 42; }\n";
+    const std::string dependency_source =
+        "struct FAnswerInput { int Value; }\n";
+    const std::string source =
+        "import Dependency;\nint Answer(FAnswerInput Input) { return Input.Value + 2; }\n";
+    const std::string editor_source = "this is intentionally not valid script\n";
+    const std::vector<std::uint8_t> dependency_bytes(
+        dependency_source.begin(), dependency_source.end());
     const std::vector<std::uint8_t> source_bytes(source.begin(), source.end());
+    const std::vector<std::uint8_t> editor_bytes(editor_source.begin(), editor_source.end());
     const std::filesystem::path base_path = root / "base.cache";
     const std::filesystem::path binds_path = root / "binds.cache";
     const std::filesystem::path source_path = source_root / "Module.as";
+    const std::filesystem::path dependency_path = source_root / "Dependency.as";
+    const std::filesystem::path editor_path = source_root / "Editor" / "Ignored.as";
     const std::filesystem::path output_path = output_root / "generated.cache";
     if (!write_bytes(base_path, base) || !write_bytes(binds_path, binds) ||
+        !write_bytes(dependency_path, dependency_bytes) ||
+        !write_bytes(editor_path, editor_bytes) ||
         !write_bytes(source_path, source_bytes)) return 6;
 
     const std::string file_seal =
@@ -228,7 +244,15 @@ int main() {
         "\"depot_manifest_gid\":1585071322101748861,\"required_probe_suite_version\":\"test-v1\"},"
         "\"inputs\":{\"base_cache\":" + path_seal(base_path, base) + ",\"binds_cache\":" +
         path_seal(binds_path, binds) + ",\"source_tree\":{\"root\":\"" + json_path(source_root) +
-        "\",\"files\":[{\"path\":\"Module.as\",\"byte_len\":" + std::to_string(source_bytes.size()) +
+        "\",\"files\":[{\"path\":\"Dependency.as\",\"byte_len\":" +
+        std::to_string(dependency_bytes.size()) + ",\"sha256\":\"" +
+        standalone::sha256_hex(standalone::sha256_bytes(
+            dependency_bytes.data(), dependency_bytes.size())) + "\"},"
+        "{\"path\":\"Editor/Ignored.as\",\"byte_len\":" +
+        std::to_string(editor_bytes.size()) + ",\"sha256\":\"" +
+        standalone::sha256_hex(standalone::sha256_bytes(
+            editor_bytes.data(), editor_bytes.size())) + "\"},"
+        "{\"path\":\"Module.as\",\"byte_len\":" + std::to_string(source_bytes.size()) +
         ",\"sha256\":\"" + standalone::sha256_hex(
             standalone::sha256_bytes(source_bytes.data(), source_bytes.size())) + "\"}]},"
         "\"overlays\":[{\"ordinal\":0,\"operation\":\"add\",\"module_name\":\"Module\","
@@ -249,9 +273,11 @@ int main() {
         std::istreambuf_iterator<char>(output_stream), std::istreambuf_iterator<char>()};
     precompiled::cache generated;
     if (!precompiled::decode(output_bytes.data(), output_bytes.size(), generated, codec_error) ||
-        generated.modules.size() != 1U || generated.modules[0].second.module_name.bytes != "Module" ||
-        generated.modules[0].second.functions.size() != 1U ||
-        generated.modules[0].second.functions[0].function_name.bytes != "Answer") {
+        generated.modules.size() != 2U ||
+        generated.modules[0].second.module_name.bytes != "Dependency" ||
+        generated.modules[1].second.module_name.bytes != "Module" ||
+        generated.modules[1].second.functions.size() != 1U ||
+        generated.modules[1].second.functions[0].function_name.bytes != "Answer") {
         std::filesystem::remove_all(root, filesystem_error);
         return 10;
     }

@@ -87,6 +87,11 @@ bool profile_loader_smoke() {
         "{\"ordinal\":0,\"angelscript_type_name\":\"UObject\","
         "\"unreal_class_path\":\"/Script/CoreUObject.Object\",\"property_offset\":64,"
         "\"kind\":\"other_u_object\",\"cannot_derive_angelscript\":false}],"
+        "\"fname_comparison_keys\":[{\"ordinal\":0,\"spelling\":\"Gr\\u00f6\\u00dfe\","
+        "\"comparison_key\":\"fname-key-17\"}],\"external_hooks\":{"
+        "\"class_analyze\":{\"bound\":false,\"captures\":[]},"
+        "\"process_chunks\":{\"bound\":false,\"captures\":[]},"
+        "\"post_process_code\":{\"bound\":false,\"captures\":[]}},"
         "\"canonical_sha256\":\"" + digest + "\"}";
     const std::string class_generator =
         "{\"schema\":\"gore.as.class-generator-config\",\"schema_version\":1,"
@@ -100,12 +105,50 @@ bool profile_loader_smoke() {
         "\"warn_on_unused_return_value_for_const_methods\":true,\"canonical_sha256\":\"" + digest + "\"}";
     preprocessor_options preprocessor_profile;
     compiler_options compiler_profile;
+    external_frontend_profile external_profile;
     if (!expect(parse_frontend_profile_payloads(
             preprocessor, class_generator, compiler_options_json,
-            preprocessor_profile, compiler_profile, detail), detail.c_str())) return false;
+            preprocessor_profile, compiler_profile, external_profile, detail), detail.c_str())) return false;
     if (!expect(preprocessor_profile.native_super_types.size() == 1U &&
+            preprocessor_profile.fname_comparison_keys.size() == 1U &&
+            !external_profile.class_analyze_bound &&
             compiler_profile.error_on_incorrect_editor_only_code,
             "frontend JSON projection mismatch")) return false;
+
+    const std::string generated_statics = "void CapturedStatic() {}";
+    std::string captured_preprocessor = preprocessor;
+    const std::string unbound_class =
+        "\"class_analyze\":{\"bound\":false,\"captures\":[]}";
+    const std::string captured_class =
+        "\"class_analyze\":{\"bound\":true,\"captures\":[{\"ordinal\":0,"
+        "\"module_name\":\"Game.Module\",\"namespace\":\"Game\","
+        "\"class_name\":\"ACaptured\",\"source_sha256\":\"" + digest +
+        "\",\"input_generated_statics_sha256\":\"" + digest +
+        "\",\"generated_statics\":\"" + generated_statics +
+        "\",\"output_generated_statics_sha256\":\"" +
+        sha256_hex(sha256_bytes(generated_statics.data(), generated_statics.size())) +
+        "\",\"has_statics\":true,\"compose_onto_class\":\"AParent\"}]}";
+    const std::size_t class_position = captured_preprocessor.find(unbound_class);
+    if (!expect(class_position != std::string::npos, "unbound hook fixture is missing")) return false;
+    captured_preprocessor.replace(class_position, unbound_class.size(), captured_class);
+    if (!expect(parse_frontend_profile_payloads(
+            captured_preprocessor, class_generator, compiler_options_json,
+            preprocessor_profile, compiler_profile, external_profile, detail), detail.c_str()) ||
+        !expect(external_profile.class_analyze_bound &&
+            external_profile.class_analyze_captures.size() == 1U &&
+            external_profile.class_analyze_captures[0].compose_onto_class == "AParent",
+            "captured ClassAnalyze projection mismatch")) return false;
+
+    std::string missing_capture_contract = preprocessor;
+    const std::size_t fname_begin = missing_capture_contract.find(",\"fname_comparison_keys\"");
+    const std::size_t hook_begin = missing_capture_contract.find(",\"external_hooks\"");
+    if (!expect(fname_begin != std::string::npos && hook_begin > fname_begin,
+            "capture-contract fixture boundaries are missing")) return false;
+    missing_capture_contract.erase(fname_begin, hook_begin - fname_begin);
+    if (!expect(!parse_frontend_profile_payloads(
+            missing_capture_contract, class_generator, compiler_options_json,
+            preprocessor_profile, compiler_profile, external_profile, detail),
+            "missing FName capture contract was accepted")) return false;
 
     const std::string file_seal =
         "{\"byte_len\":3,\"sha256\":\"" + digest + "\",\"steam_content_sha1\":\"" +

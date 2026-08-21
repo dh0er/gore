@@ -1004,7 +1004,19 @@ void lower_literal_assets(
 }
 
 std::string filename_to_module_name(const std::string& filename) {
-    return replace_all(replace_all(filename, ".as", ""), "/", ".");
+    std::string module_name = filename;
+    for (std::size_t position = 0U; position + 2U < module_name.size();) {
+        const auto lower = [](const char value) {
+            return static_cast<char>(std::tolower(static_cast<unsigned char>(value)));
+        };
+        if (module_name[position] == '.' && lower(module_name[position + 1U]) == 'a' &&
+            lower(module_name[position + 2U]) == 's') {
+            module_name.erase(position, 3U);
+        } else {
+            ++position;
+        }
+    }
+    return replace_all(module_name, "/", ".");
 }
 
 std::string effective_module_name(const preprocessor_source& source) {
@@ -3429,11 +3441,14 @@ bool invoke_graph_hook(
     const preprocessor_hooks* const hooks,
     const graph_hook_function hook,
     std::vector<source_state>& states,
+    const std::vector<std::size_t>& order,
     lexical_preprocess_result& result) {
     if (hooks == nullptr || hook == nullptr) return true;
     std::vector<preprocessor_graph_hook_module> modules;
     modules.reserve(states.size());
-    for (source_state& state : states) modules.push_back({&state.module, {}});
+    for (const std::size_t index : order) {
+        modules.push_back({&states[index].module, {}});
+    }
 
     std::string detail;
     std::int64_t ignored_detail_hash = 0;
@@ -3479,7 +3494,7 @@ bool invoke_graph_hook(
         total_generated += generated.size();
         if (!generated.empty()) {
             std::string& code =
-                states[index].module.code.front().conditioned_code;
+                states[order[index]].module.code.front().conditioned_code;
             code += "\n\n";
             code += generated;
         }
@@ -3907,7 +3922,7 @@ lexical_preprocess_result preprocess_lexical_module_graph(
     invoke_graph_hook(
         "OnProcessChunks", hooks,
         hooks == nullptr ? nullptr : hooks->process_chunks,
-        states, result);
+        states, order, result);
     for (const std::size_t index : order) refresh_defaults(states[index]);
 
     // Donor post-processing runs in dependency-sorted order.
@@ -3926,7 +3941,7 @@ lexical_preprocess_result preprocess_lexical_module_graph(
     invoke_graph_hook(
         "OnPostProcessCode", hooks,
         hooks == nullptr ? nullptr : hooks->post_process_code,
-        states, result);
+        states, order, result);
 
     for (std::size_t index = 0U; index < states.size(); ++index) {
         preprocessed_code_section& section = states[index].module.code.front();

@@ -46,6 +46,21 @@ struct external_hook_state {
     bool code_post_processed = false;
 };
 
+bool dependency_order_hook(
+    void* const raw_context,
+    standalone::preprocessor_graph_hook_module* const modules,
+    const std::size_t module_count,
+    std::string&) noexcept {
+    bool& observed = *static_cast<bool*>(raw_context);
+    observed = module_count == 3U && modules != nullptr &&
+        modules[0].module != nullptr && modules[1].module != nullptr &&
+        modules[2].module != nullptr &&
+        modules[0].module->module_name == "Game.Provider" &&
+        modules[1].module->module_name == "Game.NamespaceProvider" &&
+        modules[2].module->module_name == "Game.Consumer";
+    return observed;
+}
+
 bool class_analyze_hook(
     void* const raw_context,
     const standalone::preprocessor_source&,
@@ -151,12 +166,15 @@ const string Literal = "import Not.A.Module;";
     sources.push_back(source(
         "Game/NamespaceProvider.as", "int NamespaceProvider() { return 22; }\n"));
 
-    const auto explicit_result =
-        standalone::preprocess_lexical_module_graph(explicit_imports, sources);
+    bool hook_observed_dependency_order = false;
+    const standalone::preprocessor_hooks order_hooks{
+        &hook_observed_dependency_order, nullptr, &dependency_order_hook, nullptr};
+    const auto explicit_result = standalone::preprocess_lexical_module_graph(
+        explicit_imports, sources, {}, &order_hooks);
     if (!explicit_result.ok || !explicit_result.diagnostics.empty()) {
         return fail("explicit-import lexical preprocessing failed");
     }
-    if (explicit_result.modules.size() != 3U ||
+    if (!hook_observed_dependency_order || explicit_result.modules.size() != 3U ||
         explicit_result.modules[0].module_name != "Game.Provider" ||
         explicit_result.modules[1].module_name != "Game.NamespaceProvider" ||
         explicit_result.modules[2].module_name != "Game.Consumer") {

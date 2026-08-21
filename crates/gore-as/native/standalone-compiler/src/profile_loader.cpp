@@ -1108,6 +1108,7 @@ bool parse_frontend_profile_payloads(
     const std::string_view compiler_options_json,
     preprocessor_options& preprocessor,
     compiler_options& compiler,
+    external_frontend_profile& external_frontend,
     std::string& detail) {
     try {
         value pre_root, class_root, options_root;
@@ -1120,15 +1121,16 @@ bool parse_frontend_profile_payloads(
                  "default_property_edit_specifier", "default_property_edit_specifier_for_structs",
                  "default_property_blueprint_specifier", "static_class_mode", "script_float_is_float64",
                  "angelscript_haze", "enforce_server_rpc_validation",
-                 "blueprint_event_argument_specializations", "native_super_types", "canonical_sha256"}, {}, detail) ||
+                 "blueprint_event_argument_specializations", "native_super_types",
+                 "fname_comparison_keys", "external_hooks", "canonical_sha256"}, {}, detail) ||
             !exact_schema(pre_root, "gore.as.preprocessor-config", detail)) return false;
         sha256_digest ignored{};
-        bool ignored_bool = false;
         preprocessor_options staged_pre;
         if (!digest_field(pre_root, "canonical_sha256", ignored, detail) ||
             !json::get_bool(pre_root, "automatic_imports", staged_pre.automatic_imports, detail) ||
-            !json::get_bool(pre_root, "warn_on_manual_import_statements", ignored_bool, detail) ||
-            !json::get_bool(pre_root, "use_editor_scripts", ignored_bool, detail) ||
+            !json::get_bool(pre_root, "warn_on_manual_import_statements",
+                staged_pre.warn_on_manual_import_statements, detail) ||
+            !json::get_bool(pre_root, "use_editor_scripts", staged_pre.use_editor_scripts, detail) ||
             !json::get_bool(pre_root, "default_function_blueprint_callable", staged_pre.default_function_blueprint_callable, detail) ||
             !json::get_bool(pre_root, "script_float_is_float64", staged_pre.script_float_is_float64, detail) ||
             !json::get_bool(pre_root, "angelscript_haze", staged_pre.angelscript_haze, detail) ||
@@ -1146,6 +1148,8 @@ bool parse_frontend_profile_payloads(
         const value* flags = nullptr;
         if (!json::get_array(pre_root, "effective_flags", flags, detail) || flags->elements.size() > max_preprocessor_flags) return false;
         staged_pre.flags.reserve(flags->elements.size());
+        std::string previous_flag;
+        bool saw_editor_flag = false;
         for (const auto& item : flags->elements) {
             preprocessor_flag flag;
             std::uint32_t ordinal = 0U;
@@ -1153,7 +1157,17 @@ bool parse_frontend_profile_payloads(
                 !u32(item, "ordinal", ordinal, detail) || ordinal != staged_pre.flags.size() ||
                 !json::get_string(item, "name", flag.name, detail) || flag.name.empty() ||
                 !json::get_bool(item, "value", flag.value, detail)) return false;
+            if (!previous_flag.empty() && flag.name <= previous_flag) {
+                detail = "effective preprocessor flags are not in strict canonical order";
+                return false;
+            }
+            if (flag.name == "EDITOR") saw_editor_flag = true;
+            previous_flag = flag.name;
             staged_pre.flags.push_back(std::move(flag));
+        }
+        if (!saw_editor_flag) {
+            detail = "effective preprocessor flags do not contain EDITOR";
+            return false;
         }
 
         const value* specializations = nullptr;
@@ -1187,6 +1201,154 @@ bool parse_frontend_profile_payloads(
             staged_pre.native_super_types.push_back(std::move(native));
         }
 
+        const value* fname_keys = nullptr;
+        if (!json::get_array(pre_root, "fname_comparison_keys", fname_keys, detail) ||
+            fname_keys->elements.size() > max_preprocessor_static_names) return false;
+        staged_pre.fname_comparison_keys.reserve(fname_keys->elements.size());
+        std::set<std::string> fname_spellings;
+        for (const auto& item : fname_keys->elements) {
+            fname_comparison_key key;
+            std::uint32_t ordinal = 0U;
+            if (!json::require_object_keys(
+                    item, {"ordinal", "spelling", "comparison_key"}, {}, detail) ||
+                !u32(item, "ordinal", ordinal, detail) ||
+                ordinal != staged_pre.fname_comparison_keys.size() ||
+                !json::get_string(item, "spelling", key.spelling, detail) ||
+                !json::get_string(item, "comparison_key", key.key, detail) ||
+                key.spelling.empty() || key.key.empty() ||
+                key.spelling.find('\0') != std::string::npos ||
+                key.key.find('\0') != std::string::npos ||
+                key.spelling.size() > max_preprocessor_path_bytes ||
+                key.key.size() > max_preprocessor_path_bytes ||
+                !fname_spellings.insert(key.spelling).second) {
+                if (detail.empty()) detail = "FName comparison-key capture is invalid or duplicate";
+                return false;
+            }
+            staged_pre.fname_comparison_keys.push_back(std::move(key));
+        }
+
+        external_frontend_profile staged_external;
+        const value* hooks = nullptr;
+        const value* class_hook = nullptr;
+        const value* class_captures = nullptr;
+        if (!json::get_object(pre_root, "external_hooks", hooks, detail) ||
+            !json::require_object_keys(
+                *hooks, {"class_analyze", "process_chunks", "post_process_code"}, {}, detail) ||
+            !json::get_object(*hooks, "class_analyze", class_hook, detail) ||
+            !json::require_object_keys(*class_hook, {"bound", "captures"}, {}, detail) ||
+            !json::get_bool(*class_hook, "bound", staged_external.class_analyze_bound, detail) ||
+            !json::get_array(*class_hook, "captures", class_captures, detail) ||
+            class_captures->elements.size() > max_preprocessor_static_names) return false;
+        std::set<std::string> class_identities;
+        std::size_t class_generated_bytes = 0U;
+        staged_external.class_analyze_captures.reserve(class_captures->elements.size());
+        for (const auto& item : class_captures->elements) {
+            class_analyze_capture capture;
+            if (!json::require_object_keys(item,
+                    {"ordinal", "module_name", "namespace", "class_name", "source_sha256",
+                     "input_generated_statics_sha256", "generated_statics",
+                     "output_generated_statics_sha256", "has_statics", "compose_onto_class"}, {}, detail) ||
+                !u32(item, "ordinal", capture.ordinal, detail) ||
+                capture.ordinal != staged_external.class_analyze_captures.size() ||
+                !json::get_string(item, "module_name", capture.module_name, detail) ||
+                !json::get_string(item, "namespace", capture.name_space, detail) ||
+                !json::get_string(item, "class_name", capture.class_name, detail) ||
+                !digest_field(item, "source_sha256", capture.source_sha256, detail) ||
+                !digest_field(item, "input_generated_statics_sha256",
+                    capture.input_generated_statics_sha256, detail) ||
+                !json::get_string(item, "generated_statics", capture.generated_statics, detail) ||
+                !digest_field(item, "output_generated_statics_sha256",
+                    capture.output_generated_statics_sha256, detail) ||
+                !json::get_bool(item, "has_statics", capture.has_statics, detail) ||
+                !json::get_string(item, "compose_onto_class", capture.compose_onto_class, detail)) return false;
+            std::string identity = capture.module_name;
+            identity.push_back('\0');
+            identity += capture.name_space;
+            identity.push_back('\0');
+            identity += capture.class_name;
+            if (capture.module_name.empty() || capture.class_name.empty() ||
+                capture.module_name.find('\0') != std::string::npos ||
+                capture.name_space.find('\0') != std::string::npos ||
+                capture.class_name.find('\0') != std::string::npos ||
+                capture.module_name.size() > max_preprocessor_path_bytes ||
+                capture.name_space.size() > max_preprocessor_path_bytes ||
+                capture.class_name.size() > max_preprocessor_path_bytes ||
+                capture.compose_onto_class.size() > max_preprocessor_path_bytes ||
+                capture.generated_statics.find('\0') != std::string::npos ||
+                capture.compose_onto_class.find('\0') != std::string::npos ||
+                capture.generated_statics.size() > max_preprocessor_external_generated_bytes ||
+                class_generated_bytes > max_preprocessor_external_generated_bytes - capture.generated_statics.size() ||
+                sha256_bytes(capture.generated_statics.data(), capture.generated_statics.size()) !=
+                    capture.output_generated_statics_sha256 ||
+                !class_identities.insert(identity).second) {
+                detail = "ClassAnalyze capture is invalid, duplicate, unbounded, or has a forged output digest";
+                return false;
+            }
+            class_generated_bytes += capture.generated_statics.size();
+            staged_external.class_analyze_captures.push_back(std::move(capture));
+        }
+        if (!staged_external.class_analyze_bound && !staged_external.class_analyze_captures.empty()) {
+            detail = "unbound ClassAnalyze hook carries captures";
+            return false;
+        }
+
+        const auto parse_graph_hook = [&](const std::string_view field, graph_hook_profile& output) {
+            const value* hook = nullptr;
+            const value* captures = nullptr;
+            if (!json::get_object(*hooks, field, hook, detail) ||
+                !json::require_object_keys(*hook, {"bound", "captures"}, {}, detail) ||
+                !json::get_bool(*hook, "bound", output.bound, detail) ||
+                !json::get_array(*hook, "captures", captures, detail) ||
+                captures->elements.size() > max_preprocessor_sources) return false;
+            std::set<sha256_digest> input_digests;
+            output.captures.reserve(captures->elements.size());
+            for (const auto& item : captures->elements) {
+                graph_hook_capture capture;
+                const value* modules = nullptr;
+                if (!json::require_object_keys(item,
+                        {"ordinal", "input_graph_sha256", "output_graph_sha256", "modules"}, {}, detail) ||
+                    !u32(item, "ordinal", capture.ordinal, detail) ||
+                    capture.ordinal != output.captures.size() ||
+                    !digest_field(item, "input_graph_sha256", capture.input_graph_sha256, detail) ||
+                    !digest_field(item, "output_graph_sha256", capture.output_graph_sha256, detail) ||
+                    !json::get_array(item, "modules", modules, detail) ||
+                    modules->elements.size() > max_preprocessor_sources ||
+                    !input_digests.insert(capture.input_graph_sha256).second) return false;
+                std::set<std::string> module_names;
+                std::size_t generated_bytes = 0U;
+                capture.modules.reserve(modules->elements.size());
+                for (const auto& module_item : modules->elements) {
+                    graph_hook_module_capture module;
+                    if (!json::require_object_keys(
+                            module_item, {"ordinal", "module_name", "generated_declarations"}, {}, detail) ||
+                        !u32(module_item, "ordinal", module.ordinal, detail) ||
+                        module.ordinal != capture.modules.size() ||
+                        !json::get_string(module_item, "module_name", module.module_name, detail) ||
+                        !json::get_string(module_item, "generated_declarations", module.generated_declarations, detail) ||
+                        module.module_name.empty() ||
+                        module.module_name.find('\0') != std::string::npos ||
+                        module.module_name.size() > max_preprocessor_path_bytes ||
+                        module.generated_declarations.find('\0') != std::string::npos ||
+                        module.generated_declarations.size() > max_preprocessor_external_generated_bytes ||
+                        generated_bytes > max_preprocessor_external_generated_bytes - module.generated_declarations.size() ||
+                        !module_names.insert(module.module_name).second) {
+                        if (detail.empty()) detail = "graph-hook module capture is invalid or unbounded";
+                        return false;
+                    }
+                    generated_bytes += module.generated_declarations.size();
+                    capture.modules.push_back(std::move(module));
+                }
+                output.captures.push_back(std::move(capture));
+            }
+            if (!output.bound && !output.captures.empty()) {
+                detail = "unbound graph hook carries captures";
+                return false;
+            }
+            return true;
+        };
+        if (!parse_graph_hook("process_chunks", staged_external.process_chunks) ||
+            !parse_graph_hook("post_process_code", staged_external.post_process_code)) return false;
+
         compiler_options staged_compiler;
         if (!json::require_object_keys(class_root,
                 {"schema", "schema_version", "mark_non_uproperty_properties_as_transient", "canonical_sha256"}, {}, detail) ||
@@ -1213,6 +1375,7 @@ bool parse_frontend_profile_payloads(
 
         preprocessor = std::move(staged_pre);
         compiler = staged_compiler;
+        external_frontend = std::move(staged_external);
         detail.clear();
         return true;
     } catch (const std::exception& exception) {

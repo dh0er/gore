@@ -46,6 +46,47 @@ struct compiler_options {
     bool warn_on_unused_return_value_for_const_methods = false;
 };
 
+// Exact, sealed observations for donor extension points whose implementations
+// live outside UNREANGEL. A bound hook rejects any invocation which has no
+// matching capture; an unbound hook must carry no captures.
+struct class_analyze_capture {
+    std::uint32_t ordinal = 0U;
+    std::string module_name;
+    std::string name_space;
+    std::string class_name;
+    sha256_digest source_sha256{};
+    sha256_digest input_generated_statics_sha256{};
+    std::string generated_statics;
+    sha256_digest output_generated_statics_sha256{};
+    bool has_statics = false;
+    std::string compose_onto_class;
+};
+
+struct graph_hook_module_capture {
+    std::uint32_t ordinal = 0U;
+    std::string module_name;
+    std::string generated_declarations;
+};
+
+struct graph_hook_capture {
+    std::uint32_t ordinal = 0U;
+    sha256_digest input_graph_sha256{};
+    sha256_digest output_graph_sha256{};
+    std::vector<graph_hook_module_capture> modules;
+};
+
+struct graph_hook_profile {
+    bool bound = false;
+    std::vector<graph_hook_capture> captures;
+};
+
+struct external_frontend_profile {
+    bool class_analyze_bound = false;
+    std::vector<class_analyze_capture> class_analyze_captures;
+    graph_hook_profile process_chunks;
+    graph_hook_profile post_process_code;
+};
+
 bool parse_compiler_profile_manifest(
     std::string_view bytes,
     compiler_profile_manifest& output,
@@ -65,6 +106,7 @@ bool parse_frontend_profile_payloads(
     std::string_view compiler_options_json,
     preprocessor_options& preprocessor,
     compiler_options& compiler,
+    external_frontend_profile& external_frontend,
     std::string& detail);
 
 } // namespace gore::as::standalone

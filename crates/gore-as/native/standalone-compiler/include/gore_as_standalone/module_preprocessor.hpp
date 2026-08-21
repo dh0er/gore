@@ -178,6 +178,10 @@ struct preprocessor_options {
     // imports enabled, the donor does not sort, blank, or publish manual module
     // imports during preprocessing.
     bool automatic_imports = true;
+    // Captured FAngelscriptManager/source-discovery inputs. These are not
+    // derivable from the standalone process environment.
+    bool warn_on_manual_import_statements = false;
+    bool use_editor_scripts = false;
     static_class_mode static_classes = static_class_mode::allowed;
     bool default_function_blueprint_callable = false;
     property_edit_specifier default_property_edit =
