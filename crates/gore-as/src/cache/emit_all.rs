@@ -261,7 +261,18 @@ pub fn prepare_resolver_semantics(
             let methods = class
                 .methods
                 .iter()
-                .map(|method| format!("{}/{}", method.name, method.params.len()))
+                .map(|method| {
+                    format!(
+                        "{}/{}{}",
+                        method.name,
+                        method.params.len(),
+                        if method.is_const_method() {
+                            "/const"
+                        } else {
+                            ""
+                        }
+                    )
+                })
                 .collect::<HashSet<_>>();
             (class.name.clone(), methods)
         })

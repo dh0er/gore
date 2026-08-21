@@ -64,7 +64,14 @@ fn body_calls_non_const_method(body: &str, class_name: Option<&str>, refs: &RefR
             end += 1;
         }
         // Only a CALL constrains the receiver; a member read is fine on a const object.
-        if bytes.get(end) == Some(&b'(') && refs.calls_non_const_method(class, &body[start..end]) {
+        // A method that also exists as a CONST overload does not constrain the caller: the call
+        // resolves to that overload. The accessor pairs (`T& f()` / `const T& f() const`) are
+        // exactly this, and treating them as non-const cost their callers their own `const`.
+        let called = &body[start..end];
+        if bytes.get(end) == Some(&b'(')
+            && refs.calls_non_const_method(class, called)
+            && !refs.has_const_overload(class, called)
+        {
             return true;
         }
         index = end.max(start);
@@ -621,6 +628,28 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver, defaults: Option<&[
         }
     }
     let _ = writeln!(s, "{{");
+    let super_name = c.super_class.as_deref().filter(|s| !s.is_empty());
+    let field_types = class_field_types(c, refs);
+    // The constructors are rendered FIRST, into their own buffer: a constructor that does
+    // nothing but give members their values is the compiler's lowering of member INITIALIZERS,
+    // and those belong on the declarations below. Written as a constructor body instead, the
+    // member is default-constructed first — a behaviour the base cache may not have, which
+    // costs the module its splicability.
+    let mut constructors = String::new();
+    for ctor in &c.ctors {
+        emit_function_ctor(
+            &mut constructors,
+            ctor,
+            refs,
+            true,
+            true,
+            1,
+            super_name,
+            Some(&field_types),
+            Some(&c.name),
+        );
+    }
+    let member_initializers = extract_member_initializers(&mut constructors);
     for f in &c.fields {
         // Drop a leading `const`: UE-AS UPROPERTY members aren't const-assignable, yet the
         // generated constructor assigns them — keeping `const` causes "Cannot assign" errors.
@@ -629,7 +658,14 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver, defaults: Option<&[
         if f.is_uproperty {
             let _ = writeln!(s, "    UPROPERTY()");
         }
-        let _ = writeln!(s, "    {ty} {};", f.name);
+        match member_initializers.get(&f.name) {
+            Some(value) => {
+                let _ = writeln!(s, "    {ty} {} = {value};", f.name);
+            }
+            None => {
+                let _ = writeln!(s, "    {ty} {};", f.name);
+            }
+        }
     }
     if !c.fields.is_empty() {
         s.push('\n');
@@ -644,21 +680,7 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver, defaults: Option<&[
         }
         s.push('\n');
     }
-    let super_name = c.super_class.as_deref().filter(|s| !s.is_empty());
-    let field_types = class_field_types(c, refs);
-    for ctor in &c.ctors {
-        emit_function_ctor(
-            s,
-            ctor,
-            refs,
-            true,
-            true,
-            1,
-            super_name,
-            Some(&field_types),
-            Some(&c.name),
-        );
-    }
+    s.push_str(&constructors);
     // Dedup methods by name+parameters+const: the cache can carry two entries that render to the
     // same signature, which AngelScript rejects as "a function with the same name and parameters
     // already exists". A method's own `const` qualifier is part of what distinguishes them,
@@ -4929,6 +4951,118 @@ fn call_arguments(line: &str) -> Option<(String, Vec<String>)> {
         arguments.push(inner[start..].trim().to_owned());
     }
     Some((callee, arguments))
+}
+
+/// A constructor whose whole body is `super();` and member stores is the compiler's lowering of
+/// member INITIALIZERS. Take those stores out of the constructor and return them, so the field
+/// declarations can carry them: written back as constructor statements, the member is
+/// default-constructed first, which asks for a behaviour the base cache may not have.
+///
+/// Anything else in the body — a call, a branch, a local — means the constructor really is a
+/// constructor, and it keeps every statement.
+fn extract_member_initializers(constructors: &mut String) -> HashMap<String, String> {
+    let mut initializers = HashMap::new();
+    let lines: Vec<&str> = constructors.lines().collect();
+    let mut keep: Vec<String> = Vec::with_capacity(lines.len());
+    let mut index = 0usize;
+    while index < lines.len() {
+        // A constructor: signature, `{`, body…, `}`.
+        let Some(open) = lines.get(index + 1).filter(|line| line.trim() == "{") else {
+            keep.push(lines[index].to_owned());
+            index += 1;
+            continue;
+        };
+        let _ = open;
+        let Some(close) = lines
+            .iter()
+            .enumerate()
+            .skip(index + 2)
+            .find(|(_, line)| line.trim() == "}")
+            .map(|(at, _)| at)
+        else {
+            keep.push(lines[index].to_owned());
+            index += 1;
+            continue;
+        };
+        let body = &lines[index + 2..close];
+        // A value that reads a constructor PARAMETER (or a local) is not an initializer — the
+        // member takes what the caller passed, and moving it to the declaration would reference
+        // a name that does not exist there.
+        let parameters = signature_parameters(lines[index]);
+        let stores: Option<Vec<(String, String)>> = body
+            .iter()
+            .filter(|line| {
+                let trimmed = line.trim();
+                trimmed != "super();" && trimmed != "return;"
+            })
+            .map(|line| {
+                member_store(line).filter(|(_, value)| {
+                    count_ident(value, "local") == 0
+                        && !value.contains("local_")
+                        && parameters
+                            .iter()
+                            .all(|parameter| count_ident(value, parameter) == 0)
+                })
+            })
+            .collect();
+        match stores {
+            Some(stores) if !stores.is_empty() => {
+                for (field, value) in stores {
+                    initializers.insert(field, value);
+                }
+                keep.push(lines[index].to_owned());
+                keep.push(lines[index + 1].to_owned());
+                for line in body {
+                    let trimmed = line.trim();
+                    if trimmed == "super();" || trimmed == "return;" {
+                        keep.push((*line).to_owned());
+                    }
+                }
+                keep.push(lines[close].to_owned());
+            }
+            _ => {
+                for line in &lines[index..=close] {
+                    keep.push((*line).to_owned());
+                }
+            }
+        }
+        index = close + 1;
+    }
+    if !initializers.is_empty() {
+        *constructors = keep.join("\n");
+        constructors.push('\n');
+    }
+    initializers
+}
+
+/// The parameter NAMES of a rendered signature line.
+fn signature_parameters(signature: &str) -> Vec<String> {
+    let Some(open) = signature.find('(') else {
+        return Vec::new();
+    };
+    let Some(close) = matching_paren(signature, open) else {
+        return Vec::new();
+    };
+    signature[open + 1..close]
+        .split(',')
+        .filter_map(|parameter| {
+            let name = parameter
+                .split_whitespace()
+                .last()?
+                .trim_start_matches('&')
+                .trim_end_matches(')');
+            (!name.is_empty()).then(|| name.to_owned())
+        })
+        .collect()
+}
+
+/// `this.<Field> = <value>;` -> (field, value). Only a direct member of `this`.
+fn member_store(line: &str) -> Option<(String, String)> {
+    let trimmed = line.trim().strip_suffix(';')?;
+    let (target, value) = trimmed.split_once(" = ")?;
+    let field = target.strip_prefix("this.")?;
+    (!field.contains(['.', '(', '[', ' ']) && !value.is_empty())
+        .then(|| (field.to_owned(), value.to_owned()))
 }
 
 /// The `FName` literal a global's initializer builds it from: `PshC4 <static-name id>` followed

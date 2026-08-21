@@ -23,6 +23,13 @@ use super::wire::{Cursor, WireError};
 /// (`TSubclassOf<G1R::AIGroup::UAIGroup_StateEvent>` -> `TSubclassOf<UAIGroup_StateEvent>`).
 /// A function's const-return verdict is per NAME AND per const qualifier: a class may declare
 /// both `T f()` and `const T f() const`, and those two rows are not in disagreement.
+/// `name/arity/const` — the shape `set_class_methods` stores.
+fn is_const_key(key: &str, method: &str) -> bool {
+    key.strip_prefix(method)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .is_some_and(|rest| rest.ends_with("/const"))
+}
+
 pub(crate) fn const_return_key(name: &str, is_const_method: bool) -> String {
     format!("{name}/{}", if is_const_method { "const" } else { "" })
 }
@@ -1028,6 +1035,26 @@ impl RefResolver {
     pub fn set_class_methods(&mut self, by_class: HashMap<String, HashSet<String>>) {
         self.class_methods = by_class;
     }
+    /// True when `class` or an ancestor declares a CONST overload of `method`. A const method
+    /// calling it resolves to that overload, so the call does not make the caller non-const.
+    pub fn has_const_overload(&self, class: &str, method: &str) -> bool {
+        let mut current = Some(class.to_owned());
+        for _ in 0..64 {
+            let Some(name) = current else {
+                break;
+            };
+            if self
+                .class_methods
+                .get(&name)
+                .is_some_and(|methods| methods.iter().any(|key| is_const_key(key, method)))
+            {
+                return true;
+            }
+            current = self.class_super_of(&name).map(str::to_owned);
+        }
+        false
+    }
+
     /// True when `class` declares `method` with that many parameters itself — an OVERRIDE. A
     /// same-named method with a different parameter count is an overload, and a call to the
     /// ancestor's version resolves to the ancestor either way.
