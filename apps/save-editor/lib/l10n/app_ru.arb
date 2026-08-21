@@ -396,6 +396,7 @@
   "updateAvailableTitle": "Доступно обновление",
   "updateAvailableMessage": "Доступна версия {version}. У вас {current}.",
   "updateDownload": "Скачать",
+  "updateOpenFailed": "Не удалось открыть страницу загрузки. Она доступна по адресу {url}",
   "updateLater": "Позже",
   "updateUpToDate": "У вас установлена последняя версия.",
   "updateCheckFailed": "Не удалось проверить обновления. Повторите попытку позже.",

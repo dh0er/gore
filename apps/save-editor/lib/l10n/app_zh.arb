@@ -396,6 +396,7 @@
   "updateAvailableTitle": "有可用更新",
   "updateAvailableMessage": "版本 {version} 可用。您当前为 {current}。",
   "updateDownload": "下载",
+  "updateOpenFailed": "无法打开下载页面。你可以通过 {url} 访问。",
   "updateLater": "稍后",
   "updateUpToDate": "您正在使用最新版本。",
   "updateCheckFailed": "无法检查更新，请稍后重试。",

@@ -396,6 +396,7 @@
   "updateAvailableTitle": "アップデートがあります",
   "updateAvailableMessage": "バージョン {version} が利用可能です。現在は {current} です。",
   "updateDownload": "ダウンロード",
+  "updateOpenFailed": "ダウンロードページを開けませんでした。{url} からアクセスできます。",
   "updateLater": "後で",
   "updateUpToDate": "最新バージョンを使用しています。",
   "updateCheckFailed": "アップデートを確認できませんでした。後でもう一度お試しください。",

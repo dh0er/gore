@@ -1500,6 +1500,11 @@ class AppLocalizationsFr extends AppLocalizations {
   String get updateDownload => 'Télécharger';
 
   @override
+  String updateOpenFailed(String url) {
+    return 'Impossible d\'ouvrir la page de téléchargement. Vous pouvez y accéder à $url';
+  }
+
+  @override
   String get updateLater => 'Plus tard';
 
   @override

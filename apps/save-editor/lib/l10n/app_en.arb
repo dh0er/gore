@@ -709,6 +709,14 @@
     }
   },
   "updateDownload": "Download",
+  "updateOpenFailed": "Could not open the download page. You can reach it at {url}",
+  "@updateOpenFailed": {
+    "placeholders": {
+      "url": {
+        "type": "String"
+      }
+    }
+  },
   "updateLater": "Later",
   "updateUpToDate": "You are using the latest version.",
   "updateCheckFailed": "Could not check for updates. Please try again later.",
