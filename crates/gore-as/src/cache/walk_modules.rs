@@ -315,9 +315,12 @@ fn read_class_c(
     if c.read_bool4()? {
         c.read_sia()?; // SuperClass
         c.read_sia()?; // CodeSuperClass
-        c.skip(8 * 4)?;
+        for _ in 0..7 {
+            c.read_bool4()?;
+        }
+        c.read_sia()?; // ConfigName
         c.read_sia()?; // StaticClassGVName
-        c.skip(4)?; // bPlaceable
+        c.read_bool4()?; // bPlaceable
         skip_tarray_sia_checked(c, "Class.MetaSpec")?;
         skip_tarray_sia_checked(c, "Class.MetaValues")?;
         c.read_sia()?; // ComposeOntoClassName
@@ -337,14 +340,18 @@ fn read_global_c(
         // !bIsDefaultInit
         if c.read_bool4()? {
             c.skip(8)?; // PureConstantValue
-        } else if c.read_bool4()? {
-            // bHasInitFunction
+        } else {
+            let has_init = c.read_bool4()?;
+            let previous_function_count = out.len();
             read_function_c(
                 c,
                 &format!("{module}.<glob:{name}>"),
                 FuncCodeKind::GlobalInitializer,
                 out,
             )?;
+            if !has_init {
+                out.truncate(previous_function_count);
+            }
         }
     }
     Ok(())
@@ -475,9 +482,12 @@ fn read_class(c: &mut Cursor) -> Result<(), WireError> {
     if in_preprocessor {
         c.read_sia()?; // SuperClass
         c.read_sia()?; // CodeSuperClass
-        c.skip(8 * 4)?; // 8 × int32 (class bools)
+        for _ in 0..7 {
+            c.read_bool4()?;
+        }
+        c.read_sia()?; // ConfigName
         c.read_sia()?; // StaticClassGVName
-        c.skip(4)?; // bPlaceable
+        c.read_bool4()?; // bPlaceable
         c.skip_tarray_sia("Class.MetaSpec")?;
         c.skip_tarray_sia("Class.MetaValues")?;
         c.read_sia()?; // ComposeOntoClassName
@@ -503,10 +513,8 @@ fn read_global(c: &mut Cursor) -> Result<(), WireError> {
         if pure_const {
             c.skip(8)?; // PureConstantValue (uint64)
         } else {
-            let has_init = c.read_bool4()?;
-            if has_init {
-                read_function(c)?; // InitFunc
-            }
+            c.read_bool4()?; // bHasInitFunction
+            read_function(c)?; // InitFunc is archived unconditionally
         }
     }
     Ok(())

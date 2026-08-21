@@ -389,9 +389,15 @@ fn read_class(c: &mut Cursor) -> Result<Class, WireError> {
     if c.read_bool4()? {
         super_class = Some(c.read_sia()?); // SuperClass
         c.read_sia()?; // CodeSuperClass
-        c.skip(8 * 4)?;
+                       // bSuperIsCodeClass + six serialized class flags. ConfigName follows
+                       // as a variable-width FStringInArchive; treating an empty ConfigName's
+                       // four-byte length as an eighth bool desynchronizes any non-empty one.
+        for _ in 0..7 {
+            c.read_bool4()?;
+        }
+        c.read_sia()?; // ConfigName
         c.read_sia()?; // StaticClassGVName
-        c.skip(4)?; // bPlaceable
+        c.read_bool4()?; // bPlaceable
         skip_tarray_sia_checked(c, "Class.MetaSpec")?;
         skip_tarray_sia_checked(c, "Class.MetaValues")?;
         c.read_sia()?; // ComposeOntoClassName
@@ -432,7 +438,10 @@ fn read_global(c: &mut Cursor) -> Result<Global, WireError> {
         // !bIsDefaultInit
         if c.read_bool4()? {
             value = Some(c.read_u64()?); // PureConstantValue
-        } else if c.read_bool4()? {
+        } else {
+            c.read_bool4()?; // bHasInitFunction
+                             // The fork archives InitFunc unconditionally in this branch,
+                             // including the default function object when the flag is false.
             read_function(c)?; // InitFunc (ignored for emit)
         }
     }
@@ -509,6 +518,100 @@ mod tests {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
 
+    fn push_i64(bytes: &mut Vec<u8>, value: i64) {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_sia(bytes: &mut Vec<u8>, value: &str) {
+        push_i32(bytes, value.len() as i32);
+        if !value.is_empty() {
+            bytes.extend_from_slice(value.as_bytes());
+            bytes.push(0);
+        }
+    }
+
+    fn push_data_type(bytes: &mut Vec<u8>) {
+        for _ in 0..6 {
+            push_i32(bytes, 0);
+        }
+        push_i64(bytes, 0);
+        push_i32(bytes, 0x44);
+    }
+
+    fn push_default_function(bytes: &mut Vec<u8>) {
+        push_sia(bytes, ""); // FunctionName
+        push_sia(bytes, ""); // Namespace
+        push_data_type(bytes);
+        for _ in 0..4 {
+            push_i32(bytes, 0); // parameter arrays
+        }
+        push_i32(bytes, 0); // FunctionTraits
+        push_i32(bytes, 0); // ByteCode
+        push_i32(bytes, 0); // ByteCodeReferences
+        push_i32(bytes, -1); // VariableSpace
+        push_i32(bytes, 0); // ObjVariableTypes
+        push_i32(bytes, 0); // ObjVariablePos
+        push_i32(bytes, -1); // ObjVariablesOnHeap
+        for _ in 0..3 {
+            push_i32(bytes, 0); // variable info arrays
+        }
+        push_i32(bytes, -1); // StackNeeded
+        push_i32(bytes, 0); // Id
+        push_i32(bytes, 0); // DeclaredAt
+        push_i32(bytes, 0); // LineNumbers
+        push_i32(bytes, 0); // bIsUFunction
+    }
+
+    fn cache_with_nonempty_config_and_inactive_global_initializer() -> Vec<u8> {
+        let mut bytes = cache_with_module_count(1);
+        push_i32(&mut bytes, 0); // empty Modules TMap key
+        push_sia(&mut bytes, "M");
+        push_i32(&mut bytes, 0); // Functions
+        push_i32(&mut bytes, 1); // Classes
+        push_sia(&mut bytes, "UFixture");
+        push_sia(&mut bytes, ""); // Namespace
+        push_i32(&mut bytes, 0); // Flags
+        for _ in 0..2 {
+            push_i32(&mut bytes, 0); // Properties, Methods
+        }
+        push_i32(&mut bytes, 0); // MethodTable
+        push_i64(&mut bytes, 0); // DerivedFrom
+        push_i64(&mut bytes, 0); // ShadowType
+        for _ in 0..5 {
+            push_i32(&mut bytes, 0); // Constructors through BehaviorFunctionTypes
+        }
+        push_i32(&mut bytes, 1); // bIsInPreprocessor
+        push_sia(&mut bytes, "UObject");
+        push_sia(&mut bytes, "/Script/CoreUObject.Object");
+        for index in 0..7 {
+            push_i32(&mut bytes, i32::from(index == 0));
+        }
+        push_sia(&mut bytes, "Game"); // ConfigName
+        push_sia(&mut bytes, "FixtureClass");
+        push_i32(&mut bytes, 1); // bPlaceable
+        push_i32(&mut bytes, 0); // MetaSpec
+        push_i32(&mut bytes, 0); // MetaValues
+        push_sia(&mut bytes, ""); // ComposeOntoClassName
+        push_i32(&mut bytes, 0); // Enums
+        push_i32(&mut bytes, 1); // GlobalVariables
+        push_sia(&mut bytes, "Inactive");
+        push_sia(&mut bytes, ""); // Namespace
+        push_data_type(&mut bytes);
+        push_i32(&mut bytes, 0); // bIsDefaultInit
+        push_i32(&mut bytes, 0); // bIsPureConstant
+        push_i32(&mut bytes, 0); // bHasInitFunction
+        push_default_function(&mut bytes); // still serialized by the fork
+        push_i32(&mut bytes, 0); // FunctionImports
+        push_i64(&mut bytes, 0); // CodeHash
+        push_i32(&mut bytes, 0); // ImportedModules
+        push_sia(&mut bytes, ""); // StaticsClassName
+        push_i32(&mut bytes, 0); // DeclaredEvents
+        push_i32(&mut bytes, 0); // DeclaredDelegates
+        push_sia(&mut bytes, "M.as");
+        push_i32(&mut bytes, 0); // PostInitFunctions
+        bytes
+    }
+
     #[test]
     fn rejects_unbacked_header_module_count_before_allocating() {
         let bytes = cache_with_module_count(u32::MAX);
@@ -567,5 +670,19 @@ mod tests {
                 have: 68,
             }
         ));
+    }
+
+    #[test]
+    fn exact_class_and_global_conditionals_do_not_desynchronize_module_walkers() {
+        let bytes = cache_with_nonempty_config_and_inactive_global_initializer();
+        let modules = parse_modules(&bytes).expect("full conditional fixture must parse");
+        assert_eq!(modules.len(), 1);
+        assert_eq!(modules[0].classes[0].name, "UFixture");
+        assert_eq!(modules[0].globals[0].name, "Inactive");
+        assert_eq!(modules[0].file, "M.as");
+        assert_eq!(
+            super::super::walk_modules::module_region_end(&bytes).unwrap(),
+            bytes.len()
+        );
     }
 }

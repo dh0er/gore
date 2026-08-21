@@ -5308,9 +5308,12 @@ fn module_work_class(c: &mut Cursor, budget: &mut ModuleWorkBudget) -> Result<()
     if c.read_bool4()? {
         c.read_sia_bytes()?;
         c.read_sia_bytes()?;
-        c.skip(8 * 4)?;
+        for _ in 0..7 {
+            c.read_bool4()?;
+        }
+        c.read_sia_bytes()?; // ConfigName
         c.read_sia_bytes()?;
-        c.skip(4)?;
+        c.read_bool4()?;
         module_work_skip_sia_array(c, budget, "Class.MetaSpec")?;
         module_work_skip_sia_array(c, budget, "Class.MetaValues")?;
         c.read_sia_bytes()?;
@@ -5333,8 +5336,9 @@ fn module_work_global(c: &mut Cursor, budget: &mut ModuleWorkBudget) -> Result<(
     if !c.read_bool4()? {
         if c.read_bool4()? {
             c.skip(8)?;
-        } else if c.read_bool4()? {
-            module_work_function(c, budget)?;
+        } else {
+            c.read_bool4()?; // bHasInitFunction
+            module_work_function(c, budget)?; // serialized unconditionally
         }
     }
     Ok(())
@@ -6072,9 +6076,12 @@ fn read_class_spans(
     if c.read_bool4()? {
         c.read_sia()?; // SuperClass
         c.read_sia()?; // CodeSuperClass
-        c.skip(8 * 4)?;
+        for _ in 0..7 {
+            c.read_bool4()?;
+        }
+        c.read_sia()?; // ConfigName
         c.read_sia()?; // StaticClassGVName
-        c.skip(4)?; // bPlaceable
+        c.read_bool4()?; // bPlaceable
         let nspec = c.read_count("Class.MetaSpec")?;
         for _ in 0..nspec {
             c.read_sia()?;
@@ -6144,14 +6151,28 @@ fn read_global_spans(
         // !bIsDefaultInit
         if c.read_bool4()? {
             c.skip(8)?; // PureConstantValue
-        } else if c.read_bool4()? {
-            read_function_spans(
-                c,
-                bytes,
-                out,
-                declaration_types,
-                FunctionDeclarationScope::None,
-            )?; // InitFunc carries bytecode but is not a T3 declaration
+        } else {
+            let has_init = c.read_bool4()?;
+            if has_init {
+                read_function_spans(
+                    c,
+                    bytes,
+                    out,
+                    declaration_types,
+                    FunctionDeclarationScope::None,
+                )?; // InitFunc carries bytecode but is not a T3 declaration
+            } else {
+                // The fork still archives the default InitFunc object. Consume
+                // it exactly without publishing an inactive function/id/span.
+                let mut discarded = ModuleSpans::default();
+                read_function_spans(
+                    c,
+                    bytes,
+                    &mut discarded,
+                    None,
+                    FunctionDeclarationScope::None,
+                )?;
+            }
         }
     }
     Ok(())

@@ -1305,9 +1305,16 @@ fn parse_class(cursor: &mut Cursor<'_>, context: &str) -> Result<ClassRecord, St
     if has_preprocessor {
         read_sia(cursor, context, "Class.SuperClass")?;
         read_sia(cursor, context, "Class.CodeSuperClass")?;
-        skip(cursor, 8 * 4, context, "Class.PreprocessorFlags")?;
+        for _ in 0..7 {
+            cursor
+                .read_bool4()
+                .map_err(|error| format!("parsing {context} Class.PreprocessorFlags: {error}"))?;
+        }
+        read_sia(cursor, context, "Class.ConfigName")?;
         read_sia(cursor, context, "Class.StaticClassGVName")?;
-        skip(cursor, 4, context, "Class.Placeable")?;
+        cursor
+            .read_bool4()
+            .map_err(|error| format!("parsing {context} Class.Placeable: {error}"))?;
         skip_sia_array(cursor, "Class.MetaSpec", context)?;
         skip_sia_array(cursor, "Class.MetaValues", context)?;
         read_sia(cursor, context, "Class.ComposeOntoClassName")?;
@@ -1427,8 +1434,9 @@ fn parse_global(cursor: &mut Cursor<'_>, context: &str) -> Result<Option<Functio
             let has_init = cursor
                 .read_bool4()
                 .map_err(|error| format!("parsing {context} Global.HasInitFunction: {error}"))?;
+            let function = parse_function(cursor, context)?;
             if has_init {
-                return parse_function(cursor, context).map(Some);
+                return Ok(Some(function));
             }
         }
     }

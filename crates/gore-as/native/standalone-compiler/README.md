@@ -7,8 +7,8 @@ the sidecar's `compile` operation remains deliberately fail-closed until the
 G1R profile, preprocessing, and cache emitter are integrated.
 
 No target links or loads Unreal Engine or a game DLL. Nothing launches the game,
-and the sidecar does not yet write compiled output or cache data. CMake performs
-no downloads and the source tree contains no generated SDK or game artifacts.
+and the sidecar does not yet publish compiled output. CMake performs no downloads
+and the source tree contains no generated SDK or game artifacts.
 
 ## What the core checkpoint proves
 
@@ -57,6 +57,55 @@ and hashing are sufficient for the generic core checkpoint, settings are safe
 defaults rather than profile values, numeric scans use the CRT, and the
 UObject-backed `asIScriptObject::GetObjectType()` bridge returns no type. These
 are explicit parity boundaries, not claims about G1R cache equivalence.
+
+## PrecompiledData codec checkpoint
+
+`gore_as_standalone/precompiled_data.hpp` and `src/precompiled_data.cpp`
+implement the complete bounded wire schema used by the pinned fork's
+`FAngelscriptPrecompiledData`. This includes every nested function, class,
+property, enum, global and import record plus all seven reference/name tail
+tables. TMap order and raw `FStringInArchive` bytes are retained, UE `FString`
+module keys support validated ANSI and UTF-16, archive bools must be canonical,
+counts/strings/total bytes are bounded, and decode requires exact EOF.
+
+The codec covers two easy-to-miss fork details explicitly: `ConfigName` is a
+variable-width class field after seven serialized bools, and the global
+`InitFunc` record is archived even when `bHasInitFunction` is false. The broad
+codec smoke covers every conditional branch and failure leaves the caller's
+output unchanged. An optional path argument makes the same executable perform a
+byte-exact decode/encode comparison against an external sealed cache; the
+qualified BuildID 24539464 Shipping cache (124,354,799 bytes) passes.
+
+The engine bridge now implements the generic fork-side portion of all three
+`PrecompiledData` apply stages. It restores module imports and imported-function
+signatures, enums, script class/struct inheritance and layouts, methods,
+constructors, destructors, behaviour tables, non-primitive globals and global
+initializers. It also recreates data types and relocates the fork's exact
+type/function/function-id/global/property reference-bearing bytecodes. Saved
+IDs are resolved by semantic identity rather than copied, so the target smoke
+deliberately skews a registered type ID before applying the cache.
+
+The matching exporter derives functions, object locals, classes, globals,
+initializers and all required reference-tail rows from compiled engine objects.
+Output and reference tables are staged and become visible only together on
+success. A generic engine exposes only its flattened imported-module view; the
+authoritative direct import list/order and all preprocessor-only fields must be
+supplied by the future module descriptor rather than inferred here.
+
+The engine smoke compiles real free functions, a value struct and a reference
+class, exports and codec-roundtrips them, rehydrates two modules into a fresh
+engine, binds an imported declaration, and executes reference-relocated calls,
+registered globals and a rehydrated struct method. It also compiles a consumer
+against rehydrated value/reference class metadata, exercises synthetic base and
+derived layouts, and proves that an invalid tail mapping rejects atomically.
+Reference-class allocation is not executed in this hermetic smoke because the
+fork delegates those objects to Unreal allocation/runtime semantics.
+
+This remains an engine-apply checkpoint, not full G1R cache parity. Unreal
+shadow layouts and class/property/function metadata, delegate/event tags,
+statics and post-init hooks, string-literal globals, native registry replay,
+authoritative preprocessing/module discovery and safe sidecar output
+publication remain mandatory and fail closed.
 
 ## Build and test
 

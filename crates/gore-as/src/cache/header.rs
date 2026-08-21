@@ -2,13 +2,16 @@
 //!
 //! Layout (little-endian):
 //! - `0x00..0x10`  per-build `FGuid` identity (not a content hash)
-//! - `0x10..0x14`  u32 magic = `0x9e377abe`
+//! - `0x10..0x14`  per-build `BuildIdentifier` (`0x9e377abe` for the qualified build)
 //! - `0x14..0x18`  u32 module count
 //! - `0x18..`      `Modules` TMap followed by seven global tail tables
 
 use thiserror::Error;
 
-/// Magic at offset `0x10` of the precompiled cache.
+/// Qualified G1R `BuildIdentifier` at offset `0x10`.
+///
+/// The compatibility name is retained because this public constant predates
+/// the static writer-map proof; it is not a format magic shared by builds.
 pub const CACHE_MAGIC: u32 = 0x9e37_7abe;
 
 /// Parsed outer header.
@@ -17,7 +20,8 @@ pub struct CacheHeader {
     /// 16-byte per-build GUID (`0x00..0x10`). The field name is retained for
     /// API compatibility.
     pub hash: [u8; 16],
-    /// Magic word; must equal [`CACHE_MAGIC`].
+    /// Build identifier; must equal the qualified [`CACHE_MAGIC`] value. The
+    /// field name is retained for API compatibility.
     pub magic: u32,
     /// Number of module records that follow the header. The field name is
     /// retained for API compatibility.
@@ -29,7 +33,7 @@ pub struct CacheHeader {
 pub enum HeaderError {
     #[error("cache too short: need {need} bytes, got {got}")]
     TooShort { need: usize, got: usize },
-    #[error("bad cache magic: got {got:#010x}, expected {expected:#010x}")]
+    #[error("unsupported cache build identifier: got {got:#010x}, expected {expected:#010x}")]
     BadMagic { got: u32, expected: u32 },
 }
 

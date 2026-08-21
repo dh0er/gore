@@ -41,6 +41,8 @@ set(unreangel_core_sources
     vendor/unreangel/source/as_variablescope.cpp
     compat/src/compat_runtime.cpp
     src/core.cpp
+    src/precompiled_data.cpp
+    src/precompiled_engine.cpp
 )
 
 add_library(gore-as-unreangel-core STATIC ${unreangel_core_sources})
@@ -75,6 +77,8 @@ target_compile_options(gore-as-unreangel-core PRIVATE
 set_source_files_properties(
     compat/src/compat_runtime.cpp
     src/core.cpp
+    src/precompiled_data.cpp
+    src/precompiled_engine.cpp
     PROPERTIES COMPILE_OPTIONS "/W4;/WX;/permissive-;/sdl"
 )
 set_property(TARGET gore-as-unreangel-core PROPERTY
@@ -147,6 +151,30 @@ if(BUILD_TESTING)
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
     )
 
+    add_executable(gore-as-precompiled-codec-smoke tests/precompiled_codec_smoke.cpp)
+    target_link_libraries(gore-as-precompiled-codec-smoke PRIVATE gore-as-unreangel-core)
+    target_compile_options(gore-as-precompiled-codec-smoke PRIVATE
+        /W4 /WX /permissive- /utf-8 /sdl /guard:cf /Brepro
+    )
+    target_link_options(gore-as-precompiled-codec-smoke PRIVATE
+        /guard:cf /DYNAMICBASE /NXCOMPAT /Brepro
+    )
+    set_property(TARGET gore-as-precompiled-codec-smoke PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    )
+
+    add_executable(gore-as-precompiled-engine-smoke tests/precompiled_engine_smoke.cpp)
+    target_link_libraries(gore-as-precompiled-engine-smoke PRIVATE gore-as-unreangel-core)
+    target_compile_options(gore-as-precompiled-engine-smoke PRIVATE
+        /W4 /WX /permissive- /utf-8 /sdl /guard:cf /Brepro
+    )
+    target_link_options(gore-as-precompiled-engine-smoke PRIVATE
+        /guard:cf /DYNAMICBASE /NXCOMPAT /Brepro
+    )
+    set_property(TARGET gore-as-precompiled-engine-smoke PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    )
+
     add_test(
         NAME gore-as-unreangel-core.build-smoke
         COMMAND "$<TARGET_FILE:gore-as-unreangel-core-smoke>"
@@ -154,6 +182,14 @@ if(BUILD_TESTING)
     add_test(
         NAME gore-as-unreangel-core.module-graph-smoke
         COMMAND "$<TARGET_FILE:gore-as-unreangel-graph-smoke>"
+    )
+    add_test(
+        NAME gore-as-precompiled-data.codec-smoke
+        COMMAND "$<TARGET_FILE:gore-as-precompiled-codec-smoke>"
+    )
+    add_test(
+        NAME gore-as-precompiled-data.engine-smoke
+        COMMAND "$<TARGET_FILE:gore-as-precompiled-engine-smoke>"
     )
     add_test(
         NAME gore-as-standalone-compiler.cli-smoke

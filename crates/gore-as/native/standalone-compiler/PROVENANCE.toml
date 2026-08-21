@@ -2,7 +2,7 @@ manifest_version = 1
 component = "gore-as-standalone-compiler"
 component_license = "MIT"
 project_license_file = "../../../../LICENSE"
-status = "pinned-unreangel-core-with-graph-wide-phase-orchestrator"
+status = "pinned-core-with-graph-orchestrator-and-precompiled-wire-codec"
 
 [current_tree]
 contains_unreal_engine_source = false
@@ -13,6 +13,7 @@ links_game_dll = false
 loads_game_dll = false
 contains_g1r_profile_data = false
 contains_unreangel_source = true
+contains_reverse_derived_precompiled_schema = true
 vendored_unreangel_source_files = 64
 vendored_files_modified = false
 
