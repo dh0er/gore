@@ -2093,6 +2093,10 @@ fn enum_to_int(rhs: String, src_ty: Option<&str>, dst_is_int: bool) -> String {
 /// (`E<Upper>...`) -> `EEnum(x)`. Returns None when no cast applies.
 fn cast_to_typename(rhs: &str, tyname: &str) -> Option<String> {
     if tyname == "bool" {
+        // Already a bool: `(true != 0)` is "No conversion from 'int' to 'bool'".
+        if matches!(rhs, "true" | "false") {
+            return None;
+        }
         return Some(format!("({rhs} != 0)"));
     }
     // The CHECK reduces to the bare name; the CAST keeps the qualified one, which is what has
@@ -3091,7 +3095,9 @@ fn block_stmts_in(
                     // only for an int-family source, and renders the same `(x != 0)` bool wrap the
                     // heuristic below produces for owner-typed fields — so no working store changes.
                     if rhs == UNRESOLVED && n == "WRTV1" && looks_int(&raw) && is_ue_bool_field(r) {
-                        rhs = format!("({raw} != 0)");
+                        if !matches!(raw.as_str(), "true" | "false") {
+                            rhs = format!("({raw} != 0)");
+                        }
                     }
                     // Same convention, the other way round: the store was NOT dropped but the
                     // constant was already resolved to an int LITERAL, so both wraps below (which
@@ -3100,7 +3106,9 @@ fn block_stmts_in(
                     // field is a bool UPROPERTY by UHT's own rule, so the literal takes the bool
                     // form. Bounded to a 1-byte write of a plain integer literal.
                     if n == "WRTV1" && is_int_literal(&rhs) && is_ue_bool_field(r) {
-                        rhs = format!("({rhs} != 0)");
+                        if !matches!(rhs.as_str(), "true" | "false") {
+                            rhs = format!("({rhs} != 0)");
+                        }
                     }
                     // batch-25a (G2, specs/batch23-cantconvert.md): a 1-byte write to a NATIVE
                     // struct's field whose value type the in-crate native-field table resolves
@@ -3161,14 +3169,18 @@ fn block_stmts_in(
                             .map(is_enum_name)
                             .unwrap_or(false)
                     {
-                        rhs = format!("({rhs} != 0)");
+                        if !matches!(rhs.as_str(), "true" | "false") {
+                            rhs = format!("({rhs} != 0)");
+                        }
                     }
                     // The mirror case: a KNOWN bool field written from an int LITERAL (the
                     // `SetV1 w,1` folded into the store). The generated accessor is `bool&`, so
                     // `= 1` is "Can't implicitly convert from 'int' to 'bool&'". A bool SOURCE
                     // slot still stores bare — `bool != 0` would be the illegal form there.
                     if n == "WRTV1" && target_is_bool && !source_is_bool && is_int_literal(&rhs) {
-                        rhs = format!("({rhs} != 0)");
+                        if !matches!(rhs.as_str(), "true" | "false") {
+                            rhs = format!("({rhs} != 0)");
+                        }
                     }
                     // Storing a slot into a NARROW native field warns twice ("signed to
                     // unsigned" + "truncates") and warnings are errors here. Narrow the store

@@ -869,6 +869,10 @@ fn emit_function_ctor(
     } else {
         infer_bool_field_slots(f, refs, fields)
     };
+    // `NOT` is AngelScript's LOGICAL not and exists only for a bool variable, so wherever it
+    // appears its operand slot is a bool. Left as an int the body writes
+    // `local = int(local == 0);` and the compiler materializes a comparison vanilla never had.
+    bool_overrides.extend(not_operand_slots(f));
     bool_overrides.retain(|slot| {
         !enum_overrides.contains_key(slot)
             && !numkinds.contains_key(slot)
@@ -1238,7 +1242,7 @@ fn emit_function_ctor(
     let body = fold_literal_temporaries(&body, refs);
     let body = fold_constant_comparisons(&body);
     let body = fold_double_negations(&body);
-    let body = inline_call_argument_temporaries(&body, refs);
+    let body = inline_call_argument_temporaries(&body, refs, &inferred_locals);
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
@@ -3276,6 +3280,19 @@ fn bool_slot_profile_is_safe(instrs: &[super::disasm::Instr], slot: i32) -> bool
 /// resolved `bool` field witness, no unresolved/non-bool byte-field access on the same slot, and a
 /// whole-function bool-only opcode profile. This turns compiler bool temporaries back into bools
 /// without treating arbitrary SetV1/int8 scratch as boolean.
+/// Slots `NOT` is applied to — AngelScript's logical not, which only takes a bool variable.
+fn not_operand_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    instrs
+        .iter()
+        .filter(|ins| ins.op.name == "NOT")
+        .filter_map(|ins| ins.words.first().map(|word| *word as i16 as i32))
+        .filter(|slot| *slot > 0)
+        .collect()
+}
+
 fn infer_bool_field_slots(
     f: &Func,
     refs: &RefResolver,
@@ -4804,7 +4821,11 @@ fn sole_use_is_a_conversion(line: &str, ident: &str, refs: &RefResolver) -> bool
 /// is a whole argument of a later call in the same block; the parameter at that position accepts
 /// a temporary (from the cache's own parameter table); and every statement in between is itself
 /// a temporary the SAME call consumes, so nothing else changes its order.
-fn inline_call_argument_temporaries(body: &str, refs: &RefResolver) -> String {
+fn inline_call_argument_temporaries(
+    body: &str,
+    refs: &RefResolver,
+    locals: &BTreeMap<i32, String>,
+) -> String {
     const MAX_ARGUMENT_INLINE_PASSES: usize = 8;
     let trailing_newline = body.ends_with('\n');
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
@@ -4842,7 +4863,7 @@ fn inline_call_argument_temporaries(body: &str, refs: &RefResolver) -> String {
                 .map(|(callee, _)| callee)
                 .unwrap_or_else(|| "<receiver>".to_owned());
             for (temp, receiver) in candidates {
-                if inline_temporary_into(&mut lines, index, &temp, &callee, receiver) {
+                if inline_temporary_into(&mut lines, index, &temp, &callee, receiver, locals) {
                     changed = true;
                     moved = true;
                 }
@@ -4874,11 +4895,13 @@ fn inline_temporary_into(
     temp: &str,
     callee: &str,
     receiver: bool,
+    locals: &BTreeMap<i32, String>,
 ) -> bool {
     // A value struct reached through a call IS a temporary, and AngelScript refuses a non-const
     // method on one ("Cannot call non-const method on a temporary object"). Only an object handle
-    // is safe in receiver position.
-    if receiver && !declared_type(lines, temp).is_some_and(|ty| is_object_handle_type(&ty)) {
+    // is safe in receiver position. The body has no declarations yet at this point, so the type
+    // comes from the slot table.
+    if receiver && !temporary_type(locals, temp).is_some_and(is_object_handle_type) {
         inline_reject("receiver", callee);
         return false;
     }
@@ -4931,18 +4954,10 @@ fn inline_temporary_into(
     true
 }
 
-/// The type a body declares `temp` with, if it declares it at all.
-fn declared_type(lines: &[String], temp: &str) -> Option<String> {
-    lines.iter().find_map(|line| {
-        let trimmed = line.trim();
-        let head = trimmed
-            .strip_suffix(';')
-            .unwrap_or(trimmed)
-            .split(" = ")
-            .next()?;
-        let mut words = head.split_whitespace();
-        (words.next_back()? == temp).then(|| words.next_back().map(str::to_owned))?
-    })
+/// The type the slot table gives `temp`.
+fn temporary_type<'a>(locals: &'a BTreeMap<i32, String>, temp: &str) -> Option<&'a str> {
+    let slot = temp.strip_prefix("local_")?.parse::<i32>().ok()?;
+    locals.get(&slot).map(String::as_str)
 }
 
 /// A UObject/AActor handle by UE’s own naming rule.
@@ -5276,11 +5291,14 @@ fn fold_double_negations(body: &str) -> String {
 /// both to the same constant, but only the literal keeps the one-byte store vanilla emitted
 /// instead of a compare and a test.
 fn fold_constant_comparisons(body: &str) -> String {
-    const COMPARISONS: [(&str, &str); 4] = [
+    const COMPARISONS: [(&str, &str); 6] = [
         ("(0 != 0)", "false"),
         ("(1 != 0)", "true"),
         ("(0 == 0)", "true"),
         ("(1 == 0)", "false"),
+        // A bool literal folded into an int->bool wrap: `(true != 0)` does not compile at all.
+        ("(true != 0)", "true"),
+        ("(false != 0)", "false"),
     ];
     if !COMPARISONS
         .iter()
