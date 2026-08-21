@@ -2501,4 +2501,30 @@ time.sleep(30)
         assert!(error.detail().contains("SHA-256 seal"), "{error}");
         fixture.assert_scratch_empty();
     }
+
+    #[test]
+    fn opaque_profile_package_rejects_self_consistent_but_untyped_qualification() {
+        let fixture = TestFixture::create("opaque-profile-package");
+        let manifest_bytes = std::fs::read(&fixture.manifest).unwrap();
+        let mut profile = CompilerProfileV1::from_json(&manifest_bytes).unwrap();
+        let semantic_path = fixture
+            .profile_root
+            .join(&profile.qualification.semantic_parity.path);
+        let forged = b"{}";
+        std::fs::write(&semantic_path, forged).unwrap();
+        profile.qualification.semantic_parity.byte_len = forged.len() as u64;
+        profile.qualification.semantic_parity.sha256 = sha256_bytes(forged);
+        profile.seal().unwrap();
+        std::fs::write(&fixture.manifest, serde_json::to_vec(&profile).unwrap()).unwrap();
+
+        let error =
+            ValidatedCompilerProfilePackageV1::load(&fixture.manifest, &fixture.profile_root)
+                .unwrap_err();
+        assert_eq!(error.kind(), CompilerBackendFailureKindV1::Unavailable);
+        assert!(
+            error.detail().contains("qualification is invalid"),
+            "{error}"
+        );
+        fixture.assert_scratch_empty();
+    }
 }
