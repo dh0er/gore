@@ -6,6 +6,73 @@
 
 use std::fmt;
 
+/// Severity reported directly by a compiler backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompilerBackendDiagnosticSeverityV1 {
+    Info,
+    Warning,
+    Error,
+}
+
+/// One bounded diagnostic emitted by a compiler backend.
+///
+/// Unlike the game-only diagnostics-capture adapter, this preserves the sidecar's stable code and
+/// optional source coordinates exactly. Values can only be constructed inside `gore-as`, after
+/// the backend protocol's count and allocation bounds have been checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompilerBackendDiagnosticV1 {
+    severity: CompilerBackendDiagnosticSeverityV1,
+    code: String,
+    message: String,
+    source_path: Option<String>,
+    line: Option<u32>,
+    column: Option<u32>,
+}
+
+impl CompilerBackendDiagnosticV1 {
+    pub(crate) fn new(
+        severity: CompilerBackendDiagnosticSeverityV1,
+        code: String,
+        message: String,
+        source_path: Option<String>,
+        line: Option<u32>,
+        column: Option<u32>,
+    ) -> Self {
+        Self {
+            severity,
+            code,
+            message,
+            source_path,
+            line,
+            column,
+        }
+    }
+
+    pub fn severity(&self) -> CompilerBackendDiagnosticSeverityV1 {
+        self.severity
+    }
+
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub fn source_path(&self) -> Option<&str> {
+        self.source_path.as_deref()
+    }
+
+    pub fn line(&self) -> Option<u32> {
+        self.line
+    }
+
+    pub fn column(&self) -> Option<u32> {
+        self.column
+    }
+}
+
 /// Backend-selection modes understood by the first standalone-compiler integration contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompilerBackendModeV1 {
@@ -93,6 +160,7 @@ impl CompilerBackendFailureKindV1 {
 pub struct CompilerBackendFailureV1 {
     kind: CompilerBackendFailureKindV1,
     detail: String,
+    diagnostics: Vec<CompilerBackendDiagnosticV1>,
 }
 
 impl CompilerBackendFailureV1 {
@@ -100,7 +168,28 @@ impl CompilerBackendFailureV1 {
         Self {
             kind,
             detail: detail.into(),
+            diagnostics: Vec::new(),
         }
+    }
+
+    pub(crate) fn with_diagnostics(
+        kind: CompilerBackendFailureKindV1,
+        detail: impl Into<String>,
+        diagnostics: Vec<CompilerBackendDiagnosticV1>,
+    ) -> Self {
+        Self {
+            kind,
+            detail: detail.into(),
+            diagnostics,
+        }
+    }
+
+    pub(crate) fn with_backend_diagnostics(
+        mut self,
+        diagnostics: Vec<CompilerBackendDiagnosticV1>,
+    ) -> Self {
+        self.diagnostics = diagnostics;
+        self
     }
 
     pub fn unavailable(detail: impl Into<String>) -> Self {
@@ -113,6 +202,10 @@ impl CompilerBackendFailureV1 {
 
     pub fn detail(&self) -> &str {
         &self.detail
+    }
+
+    pub fn diagnostics(&self) -> &[CompilerBackendDiagnosticV1] {
+        &self.diagnostics
     }
 }
 
@@ -130,6 +223,7 @@ pub struct CompilerBackendFallbackReasonV1 {
     failed_backend: CompilerBackendNameV1,
     failure_kind: CompilerBackendFailureKindV1,
     detail: String,
+    diagnostics: Vec<CompilerBackendDiagnosticV1>,
 }
 
 impl CompilerBackendFallbackReasonV1 {
@@ -141,6 +235,7 @@ impl CompilerBackendFallbackReasonV1 {
             failed_backend,
             failure_kind: failure.kind(),
             detail: failure.detail().to_owned(),
+            diagnostics: failure.diagnostics().to_vec(),
         }
     }
 
@@ -154,6 +249,10 @@ impl CompilerBackendFallbackReasonV1 {
 
     pub fn detail(&self) -> &str {
         &self.detail
+    }
+
+    pub fn diagnostics(&self) -> &[CompilerBackendDiagnosticV1] {
+        &self.diagnostics
     }
 }
 

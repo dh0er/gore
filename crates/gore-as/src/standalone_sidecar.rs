@@ -15,7 +15,10 @@ use crate::compile::{
     StandaloneCompilerInputsV1, StandaloneCompilerOutputV1, StandaloneCompilerOverlayOperationV1,
     StandaloneCompilerOverlayV1, StandaloneCompilerRunnerV1,
 };
-use crate::compiler_backend::{CompilerBackendFailureKindV1, CompilerBackendFailureV1};
+use crate::compiler_backend::{
+    CompilerBackendDiagnosticSeverityV1, CompilerBackendDiagnosticV1, CompilerBackendFailureKindV1,
+    CompilerBackendFailureV1,
+};
 use crate::compiler_profile::frontend::{
     validate_frontend_profile_payloads, MAX_CLASS_GENERATOR_CONFIG_BYTES_V1,
     MAX_COMPILER_OPTIONS_BYTES_V1, MAX_PREPROCESSOR_CONFIG_BYTES_V1,
@@ -220,90 +223,126 @@ impl StandaloneCompilerRunnerV1 for StandaloneSidecarRunnerV1 {
                 .map_err(unavailable)?;
         verify_open_sidecar_seal(&mut sidecar_handle, self.config.sidecar_seal)?;
         let mut scratch = ScratchDirectory::create(&self.config.scratch_root)?;
-        let staged_profile_root = scratch.path.join("profile");
-        let staged_sources = scratch.path.join("sources");
-        let staged_inputs = scratch.path.join("inputs");
-        let staged_output = scratch.path.join("output");
-        for directory in [
-            &staged_profile_root,
-            &staged_sources,
-            &staged_inputs,
-            &staged_output,
-        ] {
-            std::fs::create_dir(directory)
-                .map_err(|error| internal(format!("creating {}: {error}", directory.display())))?;
-        }
+        let result = (|| {
+            let staged_profile_root = scratch.path.join("profile");
+            let staged_sources = scratch.path.join("sources");
+            let staged_inputs = scratch.path.join("inputs");
+            let staged_output = scratch.path.join("output");
+            for directory in [
+                &staged_profile_root,
+                &staged_sources,
+                &staged_inputs,
+                &staged_output,
+            ] {
+                std::fs::create_dir(directory).map_err(|error| {
+                    internal(format!("creating {}: {error}", directory.display()))
+                })?;
+            }
 
-        let staged_manifest = stage_profile(
-            self.profile(),
-            &self.config.profile_root,
-            &staged_profile_root,
-        )?;
-        let staged_base = staged_inputs.join("PrecompiledScript_Shipping.Cache");
-        write_new_readonly(&staged_base, base_cache, "staged base cache")?;
-        let staged_binds = staged_inputs.join("Binds.Cache");
-        write_new_readonly(&staged_binds, binds_cache, "staged Binds.Cache")?;
-        let source_files = stage_source_tree(inputs.source_tree, &staged_sources)?;
-        let overlays = stage_overlay_manifest(inputs.overlays, &source_files)?;
-        let output_path = staged_output.join("PrecompiledScript.Cache");
-        if output_path.exists() {
-            return Err(internal(
-                "sidecar output path unexpectedly exists before launch",
-            ));
-        }
+            let staged_manifest = stage_profile(
+                self.profile(),
+                &self.config.profile_root,
+                &staged_profile_root,
+            )?;
+            let staged_base = staged_inputs.join("PrecompiledScript_Shipping.Cache");
+            write_new_readonly(&staged_base, base_cache, "staged base cache")?;
+            let staged_binds = staged_inputs.join("Binds.Cache");
+            write_new_readonly(&staged_binds, binds_cache, "staged Binds.Cache")?;
+            let source_files =
+                stage_source_tree(inputs.source_tree, &staged_sources, inputs.overlays)?;
+            let overlays = stage_overlay_manifest(inputs.overlays, &source_files)?;
+            let output_path = staged_output.join("PrecompiledScript.Cache");
+            if output_path.exists() {
+                return Err(internal(
+                    "sidecar output path unexpectedly exists before launch",
+                ));
+            }
 
-        let request = SidecarCompileRequestV1 {
-            request_version: SIDECAR_REQUEST_VERSION_V1,
-            operation: SidecarOperationV1::Compile,
-            profile: SidecarProfileIdentityV1 {
-                manifest_path: json_path(&staged_manifest, "staged profile manifest")?,
-                profile_root: json_path(&staged_profile_root, "staged profile root")?,
-                profile_sha256: self.profile().profile_sha256,
-                steam_build_id: self.profile().target.steam_build_id,
-                depot_id: self.profile().target.depot_id,
-                depot_manifest_gid: self.profile().target.depot_manifest_gid,
-                required_probe_suite_version: self
-                    .profile()
-                    .qualification
-                    .required_probe_suite_version
-                    .clone(),
-            },
-            inputs: SidecarInputsV1 {
-                base_cache: sealed_path(&staged_base, base_cache, "staged base cache")?,
-                binds_cache: sealed_path(&staged_binds, binds_cache, "staged Binds.Cache")?,
-                source_tree: SidecarSourceTreeV1 {
-                    root: json_path(&staged_sources, "staged source root")?,
-                    files: source_files,
+            let request = SidecarCompileRequestV1 {
+                request_version: SIDECAR_REQUEST_VERSION_V1,
+                operation: SidecarOperationV1::Compile,
+                profile: SidecarProfileIdentityV1 {
+                    manifest_path: json_path(&staged_manifest, "staged profile manifest")?,
+                    profile_root: json_path(&staged_profile_root, "staged profile root")?,
+                    profile_sha256: self.profile().profile_sha256,
+                    steam_build_id: self.profile().target.steam_build_id,
+                    depot_id: self.profile().target.depot_id,
+                    depot_manifest_gid: self.profile().target.depot_manifest_gid,
+                    required_probe_suite_version: self
+                        .profile()
+                        .qualification
+                        .required_probe_suite_version
+                        .clone(),
                 },
-                overlays,
-            },
-            output: SidecarOutputRequestV1 {
-                cache_path: json_path(&output_path, "sidecar output")?,
-            },
-        };
-        let request_bytes = serde_json::to_vec(&request)
-            .map_err(|error| internal(format!("serializing sidecar request: {error}")))?;
-        if request_bytes.len() > MAX_SIDECAR_REQUEST_BYTES_V1 {
-            return Err(internal(format!(
-                "sidecar request has {} bytes; maximum is {}",
-                request_bytes.len(),
-                MAX_SIDECAR_REQUEST_BYTES_V1
-            )));
-        }
-        let request_path = scratch.path.join("request-v1.json");
-        write_new_readonly(&request_path, &request_bytes, "sidecar request")?;
-        validate_regular_no_reparse(&request_path, "sidecar request")?;
+                inputs: SidecarInputsV1 {
+                    base_cache: sealed_path(&staged_base, base_cache, "staged base cache")?,
+                    binds_cache: sealed_path(&staged_binds, binds_cache, "staged Binds.Cache")?,
+                    source_tree: SidecarSourceTreeV1 {
+                        root: json_path(&staged_sources, "staged source root")?,
+                        files: source_files,
+                    },
+                    overlays,
+                },
+                output: SidecarOutputRequestV1 {
+                    cache_path: json_path(&output_path, "sidecar output")?,
+                },
+            };
+            let request_bytes = serde_json::to_vec(&request)
+                .map_err(|error| internal(format!("serializing sidecar request: {error}")))?;
+            if request_bytes.len() > MAX_SIDECAR_REQUEST_BYTES_V1 {
+                return Err(internal(format!(
+                    "sidecar request has {} bytes; maximum is {}",
+                    request_bytes.len(),
+                    MAX_SIDECAR_REQUEST_BYTES_V1
+                )));
+            }
+            let request_path = scratch.path.join("request-v1.json");
+            write_new_readonly(&request_path, &request_bytes, "sidecar request")?;
+            validate_regular_no_reparse(&request_path, "sidecar request")?;
 
-        let completed =
-            run_sidecar_process(&self.config, &request_path, &scratch.path, sidecar_handle)?;
-        let response = parse_sidecar_response(&completed, &output_path, self.profile())?;
-        verify_output(&output_path, &response)?;
-        set_readonly(&output_path, true).map_err(|error| {
-            invalid_output(format!("sealing sidecar output read-only: {error}"))
-        })?;
-        validate_regular_no_reparse(&output_path, "sidecar output")?;
+            let completed =
+                run_sidecar_process(&self.config, &request_path, &scratch.path, sidecar_handle)?;
+            let response = parse_sidecar_response(
+                &completed,
+                &output_path,
+                self.profile(),
+                &staged_sources,
+                &scratch.path,
+            )?;
+            verify_output(&output_path, &response.output)?;
+            set_readonly(&output_path, true).map_err(|error| {
+                invalid_output(format!("sealing sidecar output read-only: {error}"))
+            })?;
+            validate_regular_no_reparse(&output_path, "sidecar output")?;
 
-        Ok(scratch.retain_output(output_path))
+            Ok(scratch.retain_output(output_path, response.diagnostics))
+        })();
+        finalize_sidecar_result(&mut scratch, result)
+    }
+}
+
+fn finalize_sidecar_result(
+    scratch: &mut ScratchDirectory,
+    result: Result<StandaloneCompilerOutputV1, CompilerBackendFailureV1>,
+) -> Result<StandaloneCompilerOutputV1, CompilerBackendFailureV1> {
+    match result {
+        Ok(output) => Ok(output),
+        Err(failure) => match scratch.cleanup_now() {
+            Ok(()) => Err(failure),
+            Err(cleanup_error) => {
+                let private_path = scratch.path.display().to_string();
+                let detail = failure
+                    .detail()
+                    .replace(&private_path, "<private standalone compiler path>");
+                Err(CompilerBackendFailureV1::with_diagnostics(
+                    CompilerBackendFailureKindV1::RecoveryRequired,
+                    format!(
+                        "{detail}; standalone compiler scratch cleanup failed: {cleanup_error}"
+                    ),
+                    failure.diagnostics().to_vec(),
+                ))
+            }
+        },
     }
 }
 
@@ -417,6 +456,11 @@ struct SidecarOutputResponseV1 {
     byte_len: u64,
     sha256: Sha256Digest,
     profile_sha256: Sha256Digest,
+}
+
+struct ParsedSidecarSuccessV1 {
+    output: SidecarOutputResponseV1,
+    diagnostics: Vec<CompilerBackendDiagnosticV1>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -597,7 +641,9 @@ fn parse_sidecar_response(
     completed: &CompletedSidecarProcess,
     expected_output: &Path,
     profile: &CompilerProfileV1,
-) -> Result<SidecarOutputResponseV1, CompilerBackendFailureV1> {
+    source_root: &Path,
+    private_root: &Path,
+) -> Result<ParsedSidecarSuccessV1, CompilerBackendFailureV1> {
     for (label, capture) in [("stdout", &completed.stdout), ("stderr", &completed.stderr)] {
         if let Some(error) = &capture.error {
             return Err(invalid_output(format!("reading sidecar {label}: {error}")));
@@ -635,11 +681,15 @@ fn parse_sidecar_response(
             Some(SidecarFailureKindV1::EngineUnavailable)
         );
     if engine_unavailable {
-        return Err(unavailable(format!(
-            "{}{}",
-            diagnostics_detail(&response.diagnostics),
-            stderr_suffix(stderr)
-        )));
+        return Err(CompilerBackendFailureV1::with_diagnostics(
+            CompilerBackendFailureKindV1::Unavailable,
+            format!(
+                "{}{}",
+                diagnostics_detail(&response.diagnostics),
+                stderr_suffix(stderr)
+            ),
+            backend_diagnostics(&response.diagnostics, source_root, private_root),
+        ));
     }
 
     if response.ok {
@@ -679,7 +729,10 @@ fn parse_sidecar_response(
                 output.profile_sha256, profile.profile_sha256
             )));
         }
-        return Ok(output);
+        return Ok(ParsedSidecarSuccessV1 {
+            output,
+            diagnostics: backend_diagnostics(&response.diagnostics, source_root, private_root),
+        });
     }
 
     if completed.status.success() {
@@ -703,7 +756,58 @@ fn parse_sidecar_response(
         Some(SidecarFailureKindV1::Internal) | None => CompilerBackendFailureKindV1::Internal,
         Some(SidecarFailureKindV1::EngineUnavailable) => CompilerBackendFailureKindV1::Unavailable,
     };
-    Err(CompilerBackendFailureV1::new(kind, detail))
+    Err(CompilerBackendFailureV1::with_diagnostics(
+        kind,
+        detail,
+        backend_diagnostics(&response.diagnostics, source_root, private_root),
+    ))
+}
+
+fn backend_diagnostics(
+    diagnostics: &[SidecarDiagnosticV1],
+    source_root: &Path,
+    private_root: &Path,
+) -> Vec<CompilerBackendDiagnosticV1> {
+    diagnostics
+        .iter()
+        .map(|diagnostic| {
+            CompilerBackendDiagnosticV1::new(
+                match diagnostic.severity {
+                    SidecarDiagnosticSeverityV1::Info => CompilerBackendDiagnosticSeverityV1::Info,
+                    SidecarDiagnosticSeverityV1::Warning => {
+                        CompilerBackendDiagnosticSeverityV1::Warning
+                    }
+                    SidecarDiagnosticSeverityV1::Error => {
+                        CompilerBackendDiagnosticSeverityV1::Error
+                    }
+                },
+                diagnostic.code.clone(),
+                diagnostic.message.replace(
+                    &private_root.display().to_string(),
+                    "<private standalone compiler path>",
+                ),
+                safe_sidecar_diagnostic_source_path(diagnostic.source_path.as_deref(), source_root),
+                diagnostic.line,
+                diagnostic.column,
+            )
+        })
+        .collect()
+}
+
+fn safe_sidecar_diagnostic_source_path(value: Option<&str>, source_root: &Path) -> Option<String> {
+    let value = value?;
+    let path = Path::new(value);
+    let relative = if path.is_absolute() {
+        match path.strip_prefix(source_root) {
+            Ok(relative) => relative,
+            Err(_) => return Some("<private standalone compiler path>".to_owned()),
+        }
+    } else {
+        path
+    };
+    relative_json_path(relative)
+        .ok()
+        .or_else(|| Some("<invalid standalone source path>".to_owned()))
 }
 
 fn validate_diagnostics(
@@ -1078,67 +1182,148 @@ fn stage_overlay_manifest(
 fn stage_source_tree(
     source_root: &Path,
     destination_root: &Path,
+    overlays: &[StandaloneCompilerOverlayV1<'_>],
 ) -> Result<Vec<SidecarSourceFileV1>, CompilerBackendFailureV1> {
     ensure_real_directory(source_root, "emitted source tree")?;
-    let mut pending = vec![(source_root.to_path_buf(), PathBuf::new())];
-    let mut files = Vec::new();
-    let mut aggregate = 0u64;
-    while let Some((directory, relative_directory)) = pending.pop() {
-        ensure_real_directory(&directory, "source-tree directory")?;
-        let mut entries = std::fs::read_dir(&directory)
-            .map_err(|error| internal(format!("reading source tree: {error}")))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| internal(format!("reading source-tree entry: {error}")))?;
-        entries.sort_by_key(|entry| entry.file_name());
-        for entry in entries.into_iter().rev() {
-            let name = entry.file_name();
-            let relative = relative_directory.join(&name);
-            let source = entry.path();
-            let metadata = std::fs::symlink_metadata(&source)
-                .map_err(|error| internal(format!("inspecting source-tree entry: {error}")))?;
-            if is_reparse_or_symlink(&metadata) {
-                return Err(internal(format!(
-                    "source tree contains a symlink/reparse point: {}",
-                    source.display()
-                )));
-            }
-            if metadata.is_dir() {
-                let destination = destination_root.join(&relative);
-                std::fs::create_dir(&destination).map_err(|error| {
-                    internal(format!("creating staged source directory: {error}"))
-                })?;
-                pending.push((source, relative));
-                continue;
-            }
-            if !metadata.is_file() {
-                return Err(internal(format!(
-                    "source tree contains a non-regular entry: {}",
-                    source.display()
-                )));
-            }
-            if files.len() == MAX_SIDECAR_SOURCE_FILES_V1 {
-                return Err(internal("source tree exceeds the sidecar file-count bound"));
-            }
-            let bytes = read_regular_bounded_no_follow(
-                &source,
-                MAX_SIDECAR_SOURCE_FILE_BYTES_V1,
-                "source file",
-            )?;
-            aggregate = aggregate
-                .checked_add(bytes.len() as u64)
-                .filter(|sum| *sum <= MAX_SIDECAR_SOURCE_BYTES_V1)
-                .ok_or_else(|| internal("source tree exceeds the aggregate sidecar bound"))?;
-            let destination = destination_root.join(&relative);
-            write_new_readonly(&destination, &bytes, "staged source file")?;
-            files.push(SidecarSourceFileV1 {
-                path: relative_json_path(&relative)?,
-                byte_len: bytes.len() as u64,
-                sha256: sha256_bytes(&bytes),
-            });
+    if overlays.is_empty() || overlays.len() > MAX_SIDECAR_OVERLAY_MODULES_V1 {
+        return Err(preflight(format!(
+            "standalone overlay count must be between 1 and {}",
+            MAX_SIDECAR_OVERLAY_MODULES_V1
+        )));
+    }
+    let mut requested = BTreeMap::<String, PathBuf>::new();
+    for overlay in overlays {
+        let relative = PathBuf::from(overlay.relative_path);
+        let json = relative_json_path(&relative)
+            .map_err(|_| preflight("standalone overlay has an unsafe relative path"))?;
+        if requested.insert(json.clone(), relative).is_some() {
+            return Err(preflight(format!(
+                "standalone overlays contain duplicate source path {json:?}"
+            )));
         }
     }
-    files.sort_by(|left, right| left.path.cmp(&right.path));
+
+    let mut files = Vec::with_capacity(requested.len());
+    let mut aggregate = 0u64;
+    for (json, relative) in requested {
+        let _parent_pins = pin_real_relative_parent_chain(source_root, &relative)?;
+        let source = source_root.join(&relative);
+        let metadata = match std::fs::symlink_metadata(&source) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(preflight(format!(
+                    "standalone overlay source {json:?} is absent from the sealed source tree"
+                )));
+            }
+            Err(error) => {
+                return Err(internal(format!(
+                    "inspecting standalone overlay source {json:?}: {error}"
+                )));
+            }
+        };
+        if !metadata.is_file() || is_reparse_or_symlink(&metadata) {
+            return Err(preflight(format!(
+                "standalone overlay source {json:?} is not a regular non-reparse file"
+            )));
+        }
+        let bytes = read_regular_bounded_no_follow(
+            &source,
+            MAX_SIDECAR_SOURCE_FILE_BYTES_V1,
+            "overlay source file",
+        )?;
+        aggregate = aggregate
+            .checked_add(bytes.len() as u64)
+            .filter(|sum| *sum <= MAX_SIDECAR_SOURCE_BYTES_V1)
+            .ok_or_else(|| internal("source tree exceeds the aggregate sidecar bound"))?;
+        let destination = destination_root.join(&relative);
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| internal(format!("creating staged source directory: {error}")))?;
+        }
+        write_new_readonly(&destination, &bytes, "staged overlay source file")?;
+        files.push(SidecarSourceFileV1 {
+            path: json,
+            byte_len: bytes.len() as u64,
+            sha256: sha256_bytes(&bytes),
+        });
+    }
     Ok(files)
+}
+
+fn pin_real_relative_parent_chain(
+    root: &Path,
+    relative: &Path,
+) -> Result<Vec<std::fs::File>, CompilerBackendFailureV1> {
+    let mut current = root.to_path_buf();
+    let mut pins = vec![open_directory_pin_no_follow(
+        &current,
+        "overlay source root",
+    )?];
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        let Component::Normal(part) = component else {
+            return Err(preflight("standalone overlay has an unsafe relative path"));
+        };
+        if components.peek().is_none() {
+            break;
+        }
+        current.push(part);
+        pins.push(open_directory_pin_no_follow(
+            &current,
+            "overlay source parent",
+        )?);
+    }
+    Ok(pins)
+}
+
+#[cfg(windows)]
+fn open_directory_pin_no_follow(
+    path: &Path,
+    label: &str,
+) -> Result<std::fs::File, CompilerBackendFailureV1> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ,
+        FILE_SHARE_READ,
+    };
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .access_mode(FILE_GENERIC_READ)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options
+        .open(path)
+        .map_err(|error| preflight(format!("opening {label} directory pin: {error}")))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| preflight(format!("inspecting {label} directory pin: {error}")))?;
+    if !metadata.is_dir() || is_reparse_or_symlink(&metadata) {
+        return Err(preflight(format!(
+            "{label} must be a real non-reparse directory"
+        )));
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn open_directory_pin_no_follow(
+    path: &Path,
+    label: &str,
+) -> Result<std::fs::File, CompilerBackendFailureV1> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|error| preflight(format!("opening {label} directory pin: {error}")))?;
+    if !file
+        .metadata()
+        .map_err(|error| preflight(format!("inspecting {label} directory pin: {error}")))?
+        .is_dir()
+    {
+        return Err(preflight(format!("{label} must be a real directory")));
+    }
+    Ok(file)
 }
 
 fn sealed_path(
@@ -1503,13 +1688,28 @@ impl ScratchDirectory {
         ))
     }
 
-    fn retain_output(&mut self, output_path: PathBuf) -> StandaloneCompilerOutputV1 {
+    fn retain_output(
+        &mut self,
+        output_path: PathBuf,
+        diagnostics: Vec<CompilerBackendDiagnosticV1>,
+    ) -> StandaloneCompilerOutputV1 {
         self.armed = false;
         let path = self.path.clone();
         let root = self.root.clone();
-        StandaloneCompilerOutputV1::with_cleanup(output_path, move || {
-            cleanup_scratch_directory(&root, &path)
-        })
+        StandaloneCompilerOutputV1::with_cleanup_and_diagnostics(
+            output_path,
+            diagnostics,
+            move || cleanup_scratch_directory(&root, &path),
+        )
+    }
+
+    fn cleanup_now(&mut self) -> Result<(), String> {
+        if !self.armed {
+            return Ok(());
+        }
+        cleanup_scratch_directory(&self.root, &self.path)?;
+        self.armed = false;
+        Ok(())
     }
 }
 
@@ -1815,6 +2015,11 @@ mod tests {
                 std::fs::create_dir_all(path).unwrap();
             }
             std::fs::write(sources.join("Module.as"), b"void Test() {}\n").unwrap();
+            std::fs::write(
+                sources.join("Base.as"),
+                b"void LossyDecompiledBaseMustNotCompile() {}\n",
+            )
+            .unwrap();
             let base = b"sealed-base-cache".to_vec();
             let binds = b"sealed-binds-cache".to_vec();
             let blob_bytes = b"profile-blob";
@@ -2315,12 +2520,13 @@ assert request["request_version"] == 1 and request["operation"] == "compile"
 assert request["profile"]["profile_sha256"]
 assert request["inputs"]["base_cache"]["sha256"]
 assert request["inputs"]["binds_cache"]["sha256"]
+assert len(request["inputs"]["source_tree"]["files"]) == 1
 assert request["inputs"]["source_tree"]["files"][0]["path"] == "Module.as"
 assert request["inputs"]["overlays"] == [{"ordinal":0,"operation":"add","module_name":"Module","relative_path":"Module.as"}]
 data = b"fake-full-cache"
 output = pathlib.Path(request["output"]["cache_path"])
 output.write_bytes(data)
-print(json.dumps({"response_version":1,"ok":True,"output":{"cache_path":str(output),"byte_len":len(data),"sha256":hashlib.sha256(data).hexdigest(),"profile_sha256":request["profile"]["profile_sha256"]},"diagnostics":[]}))
+print(json.dumps({"response_version":1,"ok":True,"output":{"cache_path":str(output),"byte_len":len(data),"sha256":hashlib.sha256(data).hexdigest(),"profile_sha256":request["profile"]["profile_sha256"]},"diagnostics":[{"severity":"warning","code":"GORE_AS_TEST_WARNING","message":"private=" + request["inputs"]["source_tree"]["root"],"source_path":str(pathlib.Path(request["inputs"]["source_tree"]["root"]) / "Module.as"),"line":3,"column":7}]}))
 "#,
             Duration::from_secs(5),
         ) else {
@@ -2330,6 +2536,22 @@ print(json.dumps({"response_version":1,"ok":True,"output":{"cache_path":str(outp
 
         let output = runner.run_regen(fixture.inputs()).unwrap();
         assert_eq!(std::fs::read(output.path()).unwrap(), b"fake-full-cache");
+        assert_eq!(output.diagnostics().len(), 1);
+        let diagnostic = &output.diagnostics()[0];
+        assert_eq!(
+            diagnostic.severity(),
+            CompilerBackendDiagnosticSeverityV1::Warning
+        );
+        assert_eq!(diagnostic.code(), "GORE_AS_TEST_WARNING");
+        assert!(diagnostic
+            .message()
+            .contains("<private standalone compiler path>"));
+        assert!(!diagnostic
+            .message()
+            .contains(&fixture.scratch.display().to_string()));
+        assert_eq!(diagnostic.source_path(), Some("Module.as"));
+        assert_eq!(diagnostic.line(), Some(3));
+        assert_eq!(diagnostic.column(), Some(7));
         assert_eq!(std::fs::read_dir(&fixture.scratch).unwrap().count(), 1);
         drop(output);
         fixture.assert_scratch_empty();
@@ -2375,6 +2597,25 @@ print(json.dumps({"response_version":1,"ok":True,"output":{"cache_path":str(outp
         fixture.assert_scratch_empty();
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn overlay_parent_directory_pins_block_junction_swap_window() {
+        let fixture = TestFixture::create("overlay-parent-pins");
+        let parent = fixture.sources.join("Project");
+        let moved = fixture.sources.join("Moved");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::write(parent.join("A.as"), b"void A() {}\n").unwrap();
+
+        let pins =
+            pin_real_relative_parent_chain(&fixture.sources, Path::new("Project/A.as")).unwrap();
+        assert!(
+            std::fs::rename(&parent, &moved).is_err(),
+            "the retained directory chain must deny parent replacement during source staging"
+        );
+        drop(pins);
+        std::fs::rename(&parent, &moved).unwrap();
+    }
+
     #[test]
     fn fake_sidecar_preserves_unavailable_and_rejected_classes() {
         let fixture = TestFixture::create("failures");
@@ -2396,6 +2637,11 @@ sys.exit(69)
             CompilerBackendFailureKindV1::Unavailable
         );
         assert!(unavailable_error.detail().contains("engine absent"));
+        assert_eq!(unavailable_error.diagnostics().len(), 1);
+        assert_eq!(
+            unavailable_error.diagnostics()[0].code(),
+            "GORE_AS_STANDALONE_ENGINE_UNAVAILABLE"
+        );
         fixture.assert_scratch_empty();
 
         let mut rejected_runner = fixture
@@ -2415,6 +2661,11 @@ sys.exit(65)
             CompilerBackendFailureKindV1::Rejected
         );
         assert!(rejected_error.detail().contains("bad expression"));
+        assert_eq!(rejected_error.diagnostics().len(), 1);
+        assert_eq!(
+            rejected_error.diagnostics()[0].code(),
+            "GORE_AS_COMPILE_REJECTED"
+        );
         fixture.assert_scratch_empty();
     }
 
@@ -2436,6 +2687,30 @@ sys.exit(70)
         let error = runner.run_regen(fixture.inputs()).unwrap_err();
         assert_eq!(error.kind(), CompilerBackendFailureKindV1::InvalidOutput);
         assert!(error.detail().contains("unknown field"), "{error}");
+        fixture.assert_scratch_empty();
+    }
+
+    #[test]
+    fn scratch_cleanup_failure_escalates_to_recovery_required() {
+        let fixture = TestFixture::create("cleanup-escalation");
+        let mut scratch = ScratchDirectory::create(&fixture.scratch).unwrap();
+        let configured_root = scratch.root.clone();
+        scratch.root = fixture.root.join("wrong-scratch-root");
+        let error = finalize_sidecar_result(
+            &mut scratch,
+            Err(CompilerBackendFailureV1::new(
+                CompilerBackendFailureKindV1::Rejected,
+                "compiler rejected the source",
+            )),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), CompilerBackendFailureKindV1::RecoveryRequired);
+        assert!(error.detail().contains("scratch cleanup failed"), "{error}");
+        assert!(scratch.armed);
+
+        scratch.root = configured_root;
+        scratch.cleanup_now().unwrap();
+        assert!(!scratch.armed);
         fixture.assert_scratch_empty();
     }
 

@@ -5,11 +5,14 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use sha2::{Digest as _, Sha256};
+
 use crate::cache::{emit_all, model, refs::RefResolver, remap, splice};
 use crate::compiler_backend::{run_compiler_backend_v1, CompilerBackendRunnerV1};
 pub use crate::compiler_backend::{
-    CompilerBackendFailureKindV1, CompilerBackendFailureV1, CompilerBackendFallbackReasonV1,
-    CompilerBackendModeV1, CompilerBackendNameV1,
+    CompilerBackendDiagnosticSeverityV1, CompilerBackendDiagnosticV1, CompilerBackendFailureKindV1,
+    CompilerBackendFailureV1, CompilerBackendFallbackReasonV1, CompilerBackendModeV1,
+    CompilerBackendNameV1,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -89,6 +92,7 @@ pub struct StandaloneCompilerOverlayV1<'a> {
 /// Full regenerated-cache output retained until GORE finishes its downstream validation.
 pub struct StandaloneCompilerOutputV1 {
     path: PathBuf,
+    diagnostics: Vec<CompilerBackendDiagnosticV1>,
     cleanup: Option<Box<dyn FnOnce() -> Result<(), String> + Send>>,
 }
 
@@ -97,6 +101,7 @@ impl std::fmt::Debug for StandaloneCompilerOutputV1 {
         formatter
             .debug_struct("StandaloneCompilerOutputV1")
             .field("path", &self.path)
+            .field("diagnostic_count", &self.diagnostics.len())
             .field("retains_cleanup", &self.cleanup.is_some())
             .finish()
     }
@@ -107,6 +112,7 @@ impl StandaloneCompilerOutputV1 {
     pub fn detached(path: PathBuf) -> Self {
         Self {
             path,
+            diagnostics: Vec::new(),
             cleanup: None,
         }
     }
@@ -115,12 +121,30 @@ impl StandaloneCompilerOutputV1 {
         &self.path
     }
 
+    pub fn diagnostics(&self) -> &[CompilerBackendDiagnosticV1] {
+        &self.diagnostics
+    }
+
+    #[cfg(test)]
     pub(crate) fn with_cleanup(
         path: PathBuf,
         cleanup: impl FnOnce() -> Result<(), String> + Send + 'static,
     ) -> Self {
         Self {
             path,
+            diagnostics: Vec::new(),
+            cleanup: Some(Box::new(cleanup)),
+        }
+    }
+
+    pub(crate) fn with_cleanup_and_diagnostics(
+        path: PathBuf,
+        diagnostics: Vec<CompilerBackendDiagnosticV1>,
+        cleanup: impl FnOnce() -> Result<(), String> + Send + 'static,
+    ) -> Self {
+        Self {
+            path,
+            diagnostics,
             cleanup: Some(Box::new(cleanup)),
         }
     }
@@ -176,6 +200,222 @@ const MAX_PROJECT_COMPILER_CHECK_IDENTITY_BYTES: usize = 4 * 1024;
 const MAX_PROJECT_COMPILER_CHECK_BASE_BYTES: usize = 512 * 1024 * 1024;
 const MAX_PROJECT_COMPILER_CHECK_BINDS_BYTES: usize = 128 * 1024 * 1024;
 const MAX_PROJECT_COMPILER_CHECK_REGEN_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_PROJECT_SOURCE_TREE_FILES: usize = 100_000;
+const MAX_PROJECT_SOURCE_TREE_FILE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_PROJECT_SOURCE_TREE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_PROJECT_BACKEND_EVIDENCE_DETAIL_BYTES: usize = 4 * 1024;
+const MAX_PROJECT_BACKEND_DIAGNOSTICS: usize = 64;
+const MAX_PROJECT_BACKEND_DIAGNOSTIC_CODE_BYTES: usize = 256;
+const MAX_PROJECT_BACKEND_DIAGNOSTIC_MESSAGE_BYTES: usize = 2 * 1024;
+
+#[derive(Debug)]
+struct ProjectSourceTreeSealEntry {
+    relative_path: PathBuf,
+    byte_len: u64,
+    sha256: [u8; 32],
+    file: std::fs::File,
+    original_readonly: bool,
+}
+
+#[derive(Debug)]
+struct ProjectSourceTreeSeal {
+    root: PathBuf,
+    entries: Vec<ProjectSourceTreeSealEntry>,
+}
+
+impl ProjectSourceTreeSeal {
+    fn capture(root: &Path) -> Result<Self, String> {
+        let paths = project_source_tree_files(root)?;
+        let mut seal = Self {
+            root: root.to_path_buf(),
+            entries: Vec::with_capacity(paths.len()),
+        };
+        let mut aggregate = 0u64;
+        for relative_path in paths {
+            let path = root.join(&relative_path);
+            let mut file = open_project_source_pin(&path)?;
+            let original_readonly = file
+                .metadata()
+                .map_err(|error| format!("inspecting project source permissions: {error}"))?
+                .permissions()
+                .readonly();
+            let bytes = read_open_regular_file_bounded(
+                &mut file,
+                MAX_PROJECT_SOURCE_TREE_FILE_BYTES,
+                "sealed project source",
+            )?;
+            aggregate = aggregate
+                .checked_add(bytes.len() as u64)
+                .filter(|value| *value <= MAX_PROJECT_SOURCE_TREE_BYTES)
+                .ok_or_else(|| {
+                    format!("project source tree exceeds {MAX_PROJECT_SOURCE_TREE_BYTES} bytes")
+                })?;
+            let entry = ProjectSourceTreeSealEntry {
+                relative_path,
+                byte_len: bytes.len() as u64,
+                sha256: Sha256::digest(&bytes).into(),
+                file,
+                original_readonly,
+            };
+            set_project_source_handle_readonly(&entry.file, true)?;
+            seal.entries.push(entry);
+        }
+        Ok(seal)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        let actual_paths = project_source_tree_files(&self.root)?;
+        if actual_paths.len() != self.entries.len() {
+            return Err(format!(
+                "project source tree entry count changed from {} to {} after standalone attempt",
+                self.entries.len(),
+                actual_paths.len()
+            ));
+        }
+        for (actual_path, expected) in actual_paths.iter().zip(&self.entries) {
+            if actual_path != &expected.relative_path {
+                return Err(format!(
+                    "project source tree membership changed after standalone attempt at {:?}",
+                    expected.relative_path
+                ));
+            }
+            if !project_source_handle_is_readonly(&expected.file)? {
+                return Err(format!(
+                    "project source {:?} lost its read-only seal after standalone attempt",
+                    actual_path
+                ));
+            }
+            let mut file = expected
+                .file
+                .try_clone()
+                .map_err(|error| format!("cloning sealed project source handle: {error}"))?;
+            let bytes = read_open_regular_file_bounded(
+                &mut file,
+                MAX_PROJECT_SOURCE_TREE_FILE_BYTES,
+                "revalidated project source",
+            )?;
+            if bytes.len() as u64 != expected.byte_len
+                || <[u8; 32]>::from(Sha256::digest(&bytes)) != expected.sha256
+            {
+                return Err(format!(
+                    "project source {:?} changed after standalone attempt",
+                    actual_path
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ProjectSourceTreeSeal {
+    fn drop(&mut self) {
+        for entry in &self.entries {
+            let _ = set_project_source_handle_readonly(&entry.file, entry.original_readonly);
+        }
+    }
+}
+
+fn project_source_tree_files(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let root_metadata = std::fs::symlink_metadata(root)
+        .map_err(|error| format!("inspecting project source root: {error}"))?;
+    if !root_metadata.is_dir() || metadata_is_link_or_reparse(&root_metadata) {
+        return Err("project source root is not a real directory".to_owned());
+    }
+    let mut pending = vec![PathBuf::new()];
+    let mut files = Vec::new();
+    while let Some(relative_directory) = pending.pop() {
+        let directory = root.join(&relative_directory);
+        let mut entries = std::fs::read_dir(&directory)
+            .map_err(|error| format!("reading project source directory: {error}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("reading project source entry: {error}"))?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries.into_iter().rev() {
+            let relative = relative_directory.join(entry.file_name());
+            let metadata = std::fs::symlink_metadata(entry.path())
+                .map_err(|error| format!("inspecting project source entry: {error}"))?;
+            if metadata_is_link_or_reparse(&metadata) {
+                return Err(format!(
+                    "project source tree contains a link/reparse point at {:?}",
+                    relative
+                ));
+            }
+            if metadata.is_dir() {
+                pending.push(relative);
+            } else if metadata.is_file() {
+                if files.len() == MAX_PROJECT_SOURCE_TREE_FILES {
+                    return Err(format!(
+                        "project source tree exceeds {MAX_PROJECT_SOURCE_TREE_FILES} files"
+                    ));
+                }
+                files.push(relative);
+            } else {
+                return Err(format!(
+                    "project source tree contains a non-regular entry at {:?}",
+                    relative
+                ));
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+#[cfg(windows)]
+fn open_project_source_pin(path: &Path) -> Result<std::fs::File, String> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_SHARE_READ, FILE_WRITE_ATTRIBUTES,
+    };
+
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .access_mode(FILE_GENERIC_READ | FILE_WRITE_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options
+        .open(path)
+        .map_err(|error| format!("opening pinned project source: {error}"))?;
+    validate_opened_compiled_artifact(file)
+}
+
+#[cfg(not(windows))]
+fn open_project_source_pin(path: &Path) -> Result<std::fs::File, String> {
+    open_regular_file_no_follow_read(path)
+}
+
+#[cfg(windows)]
+fn set_project_source_handle_readonly(file: &std::fs::File, readonly: bool) -> Result<(), String> {
+    let mut permissions = file
+        .metadata()
+        .map_err(|error| format!("inspecting project source permissions: {error}"))?
+        .permissions();
+    permissions.set_readonly(readonly);
+    file.set_permissions(permissions)
+        .map_err(|error| format!("sealing project source read-only: {error}"))
+}
+
+#[cfg(not(windows))]
+fn set_project_source_handle_readonly(
+    _file: &std::fs::File,
+    _readonly: bool,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn project_source_handle_is_readonly(file: &std::fs::File) -> Result<bool, String> {
+    Ok(file
+        .metadata()
+        .map_err(|error| format!("inspecting project source permissions: {error}"))?
+        .permissions()
+        .readonly())
+}
+
+#[cfg(not(windows))]
+fn project_source_handle_is_readonly(_file: &std::fs::File) -> Result<bool, String> {
+    Ok(true)
+}
 
 /// One source module sealed by the managed project/store layer.
 ///
@@ -402,6 +642,7 @@ pub enum CompileModuleReportOutcome {
 pub struct CompileModuleReport {
     pub outcome: CompileModuleReportOutcome,
     diagnostics: Option<crate::diagnostics::CompilerDiagnosticsReport>,
+    backend_diagnostics: Vec<CompilerBackendDiagnosticV1>,
     install_restore: InstallRestoreDisposition,
     backend: Option<CompilerBackendNameV1>,
     fallback_reason: Option<CompilerBackendFallbackReasonV1>,
@@ -410,6 +651,15 @@ pub struct CompileModuleReport {
 impl CompileModuleReport {
     pub fn diagnostics(&self) -> Option<&crate::diagnostics::CompilerDiagnosticsReport> {
         self.diagnostics.as_ref()
+    }
+
+    /// Diagnostics emitted directly by the selected standalone backend.
+    ///
+    /// Game diagnostics remain available through [`Self::diagnostics`]. A game result after an
+    /// explicit fallback has no direct backend diagnostics; the failed standalone attempt stays
+    /// attached to [`Self::fallback_reason`].
+    pub fn backend_diagnostics(&self) -> &[CompilerBackendDiagnosticV1] {
+        &self.backend_diagnostics
     }
 
     pub fn install_restore_disposition(&self) -> InstallRestoreDisposition {
@@ -469,6 +719,7 @@ pub enum ProjectCompilerClosingAuditDisposition {
 pub struct ProjectCompilerCheckReport {
     pub outcome: ProjectCompilerCheckOutcome,
     diagnostics: Option<crate::diagnostics::CompilerDiagnosticsReport>,
+    backend_diagnostics: Vec<CompilerBackendDiagnosticV1>,
     install_restore: InstallRestoreDisposition,
     output_disposition: ProjectCompilerOutputDisposition,
     closing_audit: ProjectCompilerClosingAuditDisposition,
@@ -482,6 +733,10 @@ pub struct ProjectCompilerCheckReport {
 impl ProjectCompilerCheckReport {
     pub fn diagnostics(&self) -> Option<&crate::diagnostics::CompilerDiagnosticsReport> {
         self.diagnostics.as_ref()
+    }
+
+    pub fn backend_diagnostics(&self) -> &[CompilerBackendDiagnosticV1] {
+        &self.backend_diagnostics
     }
 
     pub fn install_restore_disposition(&self) -> InstallRestoreDisposition {
@@ -691,6 +946,7 @@ pub fn compile_module_with_diagnostics_report_with_guard(
             Err(error) => CompileModuleReportOutcome::Failed(error),
         },
         diagnostics: generated.and_then(|(diagnostics, _)| diagnostics),
+        backend_diagnostics: Vec::new(),
         install_restore,
         backend: backend_started.get().then_some(CompilerBackendNameV1::Game),
         fallback_reason: None,
@@ -725,6 +981,7 @@ where
             Err(error) => CompileModuleReportOutcome::Failed(error),
         },
         diagnostics: generated.and_then(|(diagnostics, _)| diagnostics),
+        backend_diagnostics: Vec::new(),
         install_restore,
         backend,
         fallback_reason: None,
@@ -743,6 +1000,7 @@ where
     let standalone_runner_called = std::cell::Cell::new(false);
     let standalone_runner_failure = std::cell::RefCell::new(None);
     let standalone_compile_error = std::cell::RefCell::new(None);
+    let standalone_backend_diagnostics = std::cell::RefCell::new(Vec::new());
     let game_runner_called = std::cell::Cell::new(false);
     let game_compile_error = std::cell::RefCell::new(None);
     let game_metadata = std::cell::RefCell::new(None);
@@ -775,11 +1033,22 @@ where
                         binds_cache: opts.binds_override.as_deref(),
                     })
                     .map(|output| {
+                        *standalone_backend_diagnostics.borrow_mut() =
+                            sanitize_project_backend_diagnostics(
+                                output.diagnostics(),
+                                &[source_tree, &opts.work_dir],
+                            );
                         let path = output.path().to_path_buf();
                         *retained_output.borrow_mut() = Some(output);
                         path
                     })
                     .map_err(|failure| {
+                        let failure = sanitize_project_backend_failure(
+                            failure,
+                            &[source_tree, &opts.work_dir],
+                        );
+                        *standalone_backend_diagnostics.borrow_mut() =
+                            failure.diagnostics().to_vec();
                         *standalone_runner_failure.borrow_mut() = Some(failure.clone());
                         failure.to_string()
                     })
@@ -803,7 +1072,11 @@ where
                                 // target, extraction, remap, defaults, or mini validations failed.
                                 CompilerBackendFailureKindV1::InvalidOutput
                             };
-                            CompilerBackendFailureV1::new(kind, error.to_string())
+                            CompilerBackendFailureV1::with_diagnostics(
+                                kind,
+                                error.to_string(),
+                                standalone_backend_diagnostics.borrow().clone(),
+                            )
                         });
                     *standalone_compile_error.borrow_mut() = Some(error);
                     Err(failure)
@@ -856,6 +1129,15 @@ where
 
     let (selected_result, backend, fallback_reason) = selected.into_parts();
     let terminal_kind = selected_result.as_ref().err().map(|failure| failure.kind());
+    let backend_diagnostics = if backend == CompilerBackendNameV1::Standalone {
+        selected_result
+            .as_ref()
+            .err()
+            .map(|failure| failure.diagnostics().to_vec())
+            .unwrap_or_else(|| standalone_backend_diagnostics.into_inner())
+    } else {
+        Vec::new()
+    };
     let outcome = match selected_result {
         Ok(output) => CompileModuleReportOutcome::Compiled(output),
         Err(failure) => {
@@ -877,6 +1159,7 @@ where
     CompileModuleReport {
         outcome,
         diagnostics,
+        backend_diagnostics,
         install_restore,
         backend: (terminal_kind != Some(CompilerBackendFailureKindV1::Preflight))
             .then_some(backend),
@@ -944,12 +1227,13 @@ where
         standalone,
         guard,
         closing_audit,
-        |game_dir, source_tree, diagnostics, guard, closing_audit| {
-            run_project_compiler_with_guard(
+        |game_dir, source_tree, diagnostics, guard, input_pins, closing_audit| {
+            run_project_compiler_with_guard_and_pins(
                 game_dir,
                 source_tree,
                 diagnostics,
                 guard,
+                input_pins,
                 closing_audit,
             )
         },
@@ -971,6 +1255,7 @@ where
         &Path,
         &crate::diagnostics::DiagnosticsOptions,
         InstallMutationGuard,
+        ProjectGameInputPins,
         A,
     ) -> ProjectCompilerRunnerReport,
     A: FnOnce() -> Result<(), String>,
@@ -986,8 +1271,11 @@ where
     let game_calls = std::cell::Cell::new(0u8);
     let selected_backend = std::cell::Cell::new(None);
     let fallback_reason = std::cell::RefCell::new(None);
+    let standalone_backend_diagnostics = std::cell::RefCell::new(Vec::new());
 
     let mut result = check_project_modules(opts, |game_dir, source_tree| {
+        let tree_seal = ProjectSourceTreeSeal::capture(source_tree)
+            .map_err(|error| format!("sealing the prepared project source graph: {error}"))?;
         let mut standalone_attempt = standalone.as_deref_mut().map(|runner| {
             || {
                 standalone_calls.set(standalone_calls.get().saturating_add(1));
@@ -1000,12 +1288,30 @@ where
                         relative_path: &overlay.rel_path,
                     })
                     .collect::<Vec<_>>();
-                let output = runner.run_regen(StandaloneCompilerInputsV1 {
-                    source_tree,
-                    overlays: &overlays,
-                    base_cache: Some(&opts.base_cache),
-                    binds_cache: Some(&opts.binds_cache),
-                })?;
+                let output = runner
+                    .run_regen(StandaloneCompilerInputsV1 {
+                        source_tree,
+                        overlays: &overlays,
+                        base_cache: Some(&opts.base_cache),
+                        binds_cache: Some(&opts.binds_cache),
+                    })
+                    .map_err(|failure| {
+                        if failure.kind() == CompilerBackendFailureKindV1::RecoveryRequired {
+                            output_disposition
+                                .set(ProjectCompilerOutputDisposition::RecoveryRetained);
+                        }
+                        let failure = sanitize_project_backend_failure(
+                            failure,
+                            &[source_tree, &opts.work_dir],
+                        );
+                        *standalone_backend_diagnostics.borrow_mut() =
+                            failure.diagnostics().to_vec();
+                        failure
+                    })?;
+                *standalone_backend_diagnostics.borrow_mut() = sanitize_project_backend_diagnostics(
+                    output.diagnostics(),
+                    &[source_tree, &opts.work_dir],
+                );
                 let bytes = read_regular_file_bounded_no_follow(
                     output.path(),
                     MAX_PROJECT_COMPILER_CHECK_REGEN_BYTES,
@@ -1013,34 +1319,59 @@ where
                 );
                 if let Err(error) = output.discard() {
                     output_disposition.set(ProjectCompilerOutputDisposition::RecoveryRetained);
-                    return Err(CompilerBackendFailureV1::new(
-                        CompilerBackendFailureKindV1::RecoveryRequired,
-                        format!("standalone project output disposal failed: {error}"),
+                    return Err(sanitize_project_backend_failure(
+                        CompilerBackendFailureV1::new(
+                            CompilerBackendFailureKindV1::RecoveryRequired,
+                            format!("standalone project output disposal failed: {error}"),
+                        )
+                        .with_backend_diagnostics(standalone_backend_diagnostics.borrow().clone()),
+                        &[source_tree, &opts.work_dir],
                     ));
                 }
                 output_disposition.set(ProjectCompilerOutputDisposition::Discarded);
                 let bytes = bytes.map_err(|error| {
-                    CompilerBackendFailureV1::new(
-                        CompilerBackendFailureKindV1::InvalidOutput,
-                        error,
+                    sanitize_project_backend_failure(
+                        CompilerBackendFailureV1::new(
+                            CompilerBackendFailureKindV1::InvalidOutput,
+                            error,
+                        )
+                        .with_backend_diagnostics(standalone_backend_diagnostics.borrow().clone()),
+                        &[source_tree, &opts.work_dir],
                     )
                 })?;
                 validate_generated_cache(&bytes).map_err(|error| {
-                    CompilerBackendFailureV1::new(
-                        CompilerBackendFailureKindV1::InvalidOutput,
-                        error,
+                    sanitize_project_backend_failure(
+                        CompilerBackendFailureV1::new(
+                            CompilerBackendFailureKindV1::InvalidOutput,
+                            error,
+                        )
+                        .with_backend_diagnostics(standalone_backend_diagnostics.borrow().clone()),
+                        &[source_tree, &opts.work_dir],
                     )
                 })?;
                 validate_project_regen_manifest_for_opts(opts, &bytes).map_err(|error| {
-                    CompilerBackendFailureV1::new(
-                        CompilerBackendFailureKindV1::InvalidOutput,
-                        error,
+                    sanitize_project_backend_failure(
+                        CompilerBackendFailureV1::new(
+                            CompilerBackendFailureKindV1::InvalidOutput,
+                            error,
+                        )
+                        .with_backend_diagnostics(standalone_backend_diagnostics.borrow().clone()),
+                        &[source_tree, &opts.work_dir],
                     )
                 })?;
                 Ok(bytes)
             }
         });
         let mut game_attempt = || {
+            tree_seal.validate().map_err(|error| {
+                CompilerBackendFailureV1::new(
+                    CompilerBackendFailureKindV1::Preflight,
+                    format!("prepared project source seal no longer matches: {error}"),
+                )
+            })?;
+            let input_pins = pin_project_game_input_seals(opts).map_err(|error| {
+                CompilerBackendFailureV1::new(CompilerBackendFailureKindV1::Preflight, error)
+            })?;
             game_calls.set(game_calls.get().saturating_add(1));
             let guard = guard.borrow_mut().take().ok_or_else(|| {
                 CompilerBackendFailureV1::new(
@@ -1060,7 +1391,7 @@ where
                     "project game compiler runner was consumed more than once",
                 )
             })?;
-            let report = runner(game_dir, source_tree, diagnostics, guard, audit);
+            let report = runner(game_dir, source_tree, diagnostics, guard, input_pins, audit);
             let unsafe_recovery = matches!(
                 report.install_restore,
                 InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed
@@ -1074,7 +1405,10 @@ where
             });
             *diagnostics_report.borrow_mut() = report.diagnostics;
             install_restore.set(report.install_restore);
-            output_disposition.set(report.output_disposition);
+            output_disposition.set(merge_project_output_disposition(
+                output_disposition.get(),
+                report.output_disposition,
+            ));
             closing_disposition.set(report.closing_audit);
             report.result.map_err(|error| {
                 CompilerBackendFailureV1::new(
@@ -1098,6 +1432,11 @@ where
         );
         drop(standalone_attempt);
         let (selected_result, backend, fallback) = selected.into_parts();
+        if backend == CompilerBackendNameV1::Standalone {
+            if let Some(failure) = selected_result.as_ref().err() {
+                *standalone_backend_diagnostics.borrow_mut() = failure.diagnostics().to_vec();
+            }
+        }
         let terminal_preflight = selected_result
             .as_ref()
             .err()
@@ -1148,6 +1487,13 @@ where
     ) {
         output_disposition_value = ProjectCompilerOutputDisposition::RecoveryRetained;
     }
+    let fallback_reason = fallback_reason.into_inner();
+    let backend_diagnostics =
+        if game_calls.get() == 0 && standalone_calls.get() != 0 && fallback_reason.is_none() {
+            standalone_backend_diagnostics.into_inner()
+        } else {
+            Vec::new()
+        };
 
     ProjectCompilerCheckReport {
         outcome: match result {
@@ -1155,12 +1501,13 @@ where
             Err(error) => ProjectCompilerCheckOutcome::Failed(error),
         },
         diagnostics: diagnostics_report.into_inner(),
+        backend_diagnostics,
         install_restore: install_restore_value,
         output_disposition: output_disposition_value,
         closing_audit: closing_disposition_value,
         runner_invocations: standalone_calls.get().saturating_add(game_calls.get()),
         backend: selected_backend.get(),
-        fallback_reason: fallback_reason.into_inner(),
+        fallback_reason,
         standalone_attempted: standalone_calls.get() != 0,
         game_attempted: game_calls.get() != 0,
     }
@@ -1292,6 +1639,7 @@ where
         diagnostics: generated
             .as_mut()
             .and_then(|(diagnostics, _, _, _)| diagnostics.take()),
+        backend_diagnostics: Vec::new(),
         install_restore,
         output_disposition,
         closing_audit: closing_audit_disposition,
@@ -1330,6 +1678,160 @@ fn project_diagnostics_acceptance_error(
         );
     }
     None
+}
+
+#[derive(Debug)]
+struct ProjectGameInputPins {
+    shipping: std::fs::File,
+    _binds: std::fs::File,
+}
+
+fn pin_project_game_input_seals(
+    opts: &ProjectCompilerCheckOpts,
+) -> Result<ProjectGameInputPins, String> {
+    let mut shipping = open_regular_file_no_follow_read(&vanilla_cache(&opts.game_dir))?;
+    let live_shipping = read_open_regular_file_bounded(
+        &mut shipping,
+        MAX_PROJECT_COMPILER_CHECK_BASE_BYTES as u64,
+        "live Shipping cache",
+    )?;
+    if live_shipping != opts.base_cache {
+        return Err(
+            "live Shipping cache no longer matches the sealed project compiler snapshot".to_owned(),
+        );
+    }
+    let binds_path = vanilla_cache(&opts.game_dir)
+        .parent()
+        .expect("Shipping cache always has Script parent")
+        .join("Binds.Cache");
+    let mut binds = open_regular_file_no_follow_read(&binds_path)?;
+    let live_binds = read_open_regular_file_bounded(
+        &mut binds,
+        MAX_PROJECT_COMPILER_CHECK_BINDS_BYTES as u64,
+        "live Binds.Cache",
+    )?;
+    if live_binds != opts.binds_cache {
+        return Err(
+            "live Binds.Cache no longer matches the sealed project compiler snapshot".to_owned(),
+        );
+    }
+    Ok(ProjectGameInputPins {
+        shipping,
+        _binds: binds,
+    })
+}
+
+fn merge_project_output_disposition(
+    left: ProjectCompilerOutputDisposition,
+    right: ProjectCompilerOutputDisposition,
+) -> ProjectCompilerOutputDisposition {
+    use ProjectCompilerOutputDisposition::{Discarded, NotCreated, RecoveryRetained};
+    match (left, right) {
+        (RecoveryRetained, _) | (_, RecoveryRetained) => RecoveryRetained,
+        (Discarded, _) | (_, Discarded) => Discarded,
+        (NotCreated, NotCreated) => NotCreated,
+    }
+}
+
+fn sanitize_project_backend_failure(
+    failure: CompilerBackendFailureV1,
+    private_roots: &[&Path],
+) -> CompilerBackendFailureV1 {
+    let mut detail = failure.detail().to_owned();
+    for root in private_roots {
+        let displayed = root.display().to_string();
+        if !displayed.is_empty() {
+            detail = detail.replace(&displayed, "<private compiler path>");
+        }
+    }
+    let truncated = detail.len() > MAX_PROJECT_BACKEND_EVIDENCE_DETAIL_BYTES;
+    let (mut detail, _) = bounded_probe_text(
+        &detail,
+        if truncated {
+            MAX_PROJECT_BACKEND_EVIDENCE_DETAIL_BYTES.saturating_sub(" [truncated]".len())
+        } else {
+            MAX_PROJECT_BACKEND_EVIDENCE_DETAIL_BYTES
+        },
+    );
+    if truncated {
+        detail.push_str(" [truncated]");
+    }
+    CompilerBackendFailureV1::with_diagnostics(
+        failure.kind(),
+        detail,
+        sanitize_project_backend_diagnostics(failure.diagnostics(), private_roots),
+    )
+}
+
+fn sanitize_project_backend_diagnostics(
+    diagnostics: &[CompilerBackendDiagnosticV1],
+    private_roots: &[&Path],
+) -> Vec<CompilerBackendDiagnosticV1> {
+    diagnostics
+        .iter()
+        .take(MAX_PROJECT_BACKEND_DIAGNOSTICS)
+        .map(|diagnostic| {
+            let mut message = diagnostic.message().to_owned();
+            for root in private_roots {
+                let displayed = root.display().to_string();
+                if !displayed.is_empty() {
+                    message = message.replace(&displayed, "<private compiler path>");
+                }
+            }
+            let (code, _) =
+                bounded_probe_text(diagnostic.code(), MAX_PROJECT_BACKEND_DIAGNOSTIC_CODE_BYTES);
+            let (message, _) =
+                bounded_probe_text(&message, MAX_PROJECT_BACKEND_DIAGNOSTIC_MESSAGE_BYTES);
+            CompilerBackendDiagnosticV1::new(
+                diagnostic.severity(),
+                code,
+                message,
+                safe_project_backend_diagnostic_source_path(
+                    diagnostic.source_path(),
+                    private_roots,
+                ),
+                diagnostic.line(),
+                diagnostic.column(),
+            )
+        })
+        .collect()
+}
+
+fn safe_project_backend_diagnostic_source_path(
+    source_path: Option<&str>,
+    private_roots: &[&Path],
+) -> Option<String> {
+    let source_path = source_path?;
+    let path = Path::new(source_path);
+    let relative = if path.is_absolute() {
+        let Some(relative) = private_roots
+            .iter()
+            .find_map(|root| path.strip_prefix(root).ok())
+        else {
+            return Some("<private compiler path>".to_owned());
+        };
+        relative
+    } else {
+        path
+    };
+    let mut components = Vec::new();
+    for component in relative.components() {
+        let std::path::Component::Normal(component) = component else {
+            return Some("<invalid compiler source path>".to_owned());
+        };
+        let Some(component) = component.to_str() else {
+            return Some("<invalid compiler source path>".to_owned());
+        };
+        if component.is_empty() || component.contains(['/', '\\', '\0']) {
+            return Some("<invalid compiler source path>".to_owned());
+        }
+        components.push(component);
+    }
+    if components.is_empty() {
+        Some("<invalid compiler source path>".to_owned())
+    } else {
+        Some(components.join("/"))
+    }
 }
 
 fn check_project_modules<R>(
@@ -4602,6 +5104,7 @@ struct CompileTransaction {
     journal: RecoveryJournal,
     lock: CompileLock,
     mutation_guard: InstallMutationGuard,
+    project_input_pins: Option<ProjectGameInputPins>,
     rollback_needed: bool,
     /// A user-facing `.gore-bak` created immediately before install, removed unless install commits.
     ephemeral_deploy_backup: Option<PathBuf>,
@@ -4665,6 +5168,48 @@ impl CompileTransaction {
     where
         C: FnOnce() -> Result<bool, String>,
     {
+        Self::begin_with_mutation_guard_optional_project_pins_and_process_checker(
+            game_dir,
+            g1r,
+            script_dir,
+            mutation_guard,
+            None,
+            check_game_process,
+        )
+    }
+
+    fn begin_with_mutation_guard_project_pins_and_process_checker<C>(
+        game_dir: &Path,
+        g1r: &Path,
+        script_dir: &Path,
+        mutation_guard: InstallMutationGuard,
+        input_pins: ProjectGameInputPins,
+        check_game_process: C,
+    ) -> Result<Self, CompileTransactionBeginFailure>
+    where
+        C: FnOnce() -> Result<bool, String>,
+    {
+        Self::begin_with_mutation_guard_optional_project_pins_and_process_checker(
+            game_dir,
+            g1r,
+            script_dir,
+            mutation_guard,
+            Some(input_pins),
+            check_game_process,
+        )
+    }
+
+    fn begin_with_mutation_guard_optional_project_pins_and_process_checker<C>(
+        game_dir: &Path,
+        g1r: &Path,
+        script_dir: &Path,
+        mutation_guard: InstallMutationGuard,
+        mut project_input_pins: Option<ProjectGameInputPins>,
+        check_game_process: C,
+    ) -> Result<Self, CompileTransactionBeginFailure>
+    where
+        C: FnOnce() -> Result<bool, String>,
+    {
         let expected_lock = install_mutation_lock_path(game_dir);
         if !mutation_guard.active
             || mutation_guard.owner != "gore-as:compile"
@@ -4702,7 +5247,16 @@ impl CompileTransaction {
         };
         let shipping_cache = script_dir.join("PrecompiledScript_Shipping.Cache");
         let dev_cache = script_dir.join("PrecompiledScript.Cache");
-        let saved_shipping = match std::fs::read(&shipping_cache) {
+        let saved_shipping = match &mut project_input_pins {
+            Some(pins) => read_open_regular_file_bounded(
+                &mut pins.shipping,
+                MAX_PROJECT_COMPILER_CHECK_BASE_BYTES as u64,
+                "pinned live Shipping cache",
+            ),
+            None => std::fs::read(&shipping_cache)
+                .map_err(|error| format!("reading live shipping cache: {error}")),
+        };
+        let saved_shipping = match saved_shipping {
             Ok(bytes) => bytes,
             Err(error) => {
                 let mut errors = vec![format!(
@@ -4784,6 +5338,7 @@ impl CompileTransaction {
             journal,
             lock,
             mutation_guard,
+            project_input_pins,
             rollback_needed: true,
             ephemeral_deploy_backup: None,
         })
@@ -4828,6 +5383,10 @@ impl CompileTransaction {
                 shipping_restored: true,
             };
         }
+        // Project compiler pins deny write/delete sharing until the generator has exited. Release
+        // them only at the start of confirmed-process restoration; unconfirmed paths leak the
+        // complete transaction and therefore keep both authoritative inputs pinned.
+        self.project_input_pins.take();
         let mut errors = Vec::new();
         if let Some(isolation) = &mut self.isolation {
             if let Err(e) = isolation.restore() {
@@ -5159,6 +5718,48 @@ fn run_project_compiler_with_guard<A>(
 where
     A: FnOnce() -> Result<(), String>,
 {
+    run_project_compiler_with_optional_pins(
+        game_dir,
+        source_tree,
+        diagnostics_options,
+        mutation_guard,
+        None,
+        closing_audit,
+    )
+}
+
+fn run_project_compiler_with_guard_and_pins<A>(
+    game_dir: &Path,
+    source_tree: &Path,
+    diagnostics_options: &crate::diagnostics::DiagnosticsOptions,
+    mutation_guard: InstallMutationGuard,
+    input_pins: ProjectGameInputPins,
+    closing_audit: A,
+) -> ProjectCompilerRunnerReport
+where
+    A: FnOnce() -> Result<(), String>,
+{
+    run_project_compiler_with_optional_pins(
+        game_dir,
+        source_tree,
+        diagnostics_options,
+        mutation_guard,
+        Some(input_pins),
+        closing_audit,
+    )
+}
+
+fn run_project_compiler_with_optional_pins<A>(
+    game_dir: &Path,
+    source_tree: &Path,
+    diagnostics_options: &crate::diagnostics::DiagnosticsOptions,
+    mutation_guard: InstallMutationGuard,
+    input_pins: Option<ProjectGameInputPins>,
+    closing_audit: A,
+) -> ProjectCompilerRunnerReport
+where
+    A: FnOnce() -> Result<(), String>,
+{
     let expected_copy = source_tree.join("regen.cache");
     let diagnostic_report = std::cell::RefCell::new(None);
     let diagnostic_private_paths = std::cell::RefCell::new(Vec::new());
@@ -5169,40 +5770,36 @@ where
     let closing_audit = std::cell::RefCell::new(Some(closing_audit));
     let callback_failure = std::cell::RefCell::new(None);
 
-    let generated = game_run_regen_with_install_report_with_guard_and_after_restore(
-        game_dir,
-        source_tree,
-        mutation_guard,
-        |exe, g1r, cache| {
-            let generated = real_generate_with_timeout_and_diagnostics_report(
-                exe,
-                g1r,
-                cache,
-                Duration::from_secs(30 * 60),
-                diagnostics_options,
-            );
-            *diagnostic_private_paths.borrow_mut() = generated.private_paths;
-            *diagnostic_report.borrow_mut() = Some(generated.diagnostics);
-            GeneratorRunResult {
-                result: generated.result,
-                process_exit: generated.process_exit,
-            }
-        },
-        |path_result, retained_copy| {
-            let (converted, disposition) = match path_result {
-                Ok(path) => match retained_copy {
-                    Some(artifact) => consume_project_regen_artifact(source_tree, path, artifact),
-                    None => (
-                        Err("project compiler lost the retained private output handle".to_owned()),
-                        ProjectCompilerOutputDisposition::RecoveryRetained,
-                    ),
-                },
-                Err(error) => {
-                    let (cleanup, disposition) = match retained_copy {
-                        Some(artifact) => discard_project_regen_artifact(&expected_copy, artifact),
-                        None => discard_project_regen_copy(&expected_copy),
-                    };
-                    (
+    let generate = |exe: &Path, g1r: &Path, cache: &Path| {
+        let generated = real_generate_with_timeout_and_diagnostics_report(
+            exe,
+            g1r,
+            cache,
+            Duration::from_secs(30 * 60),
+            diagnostics_options,
+        );
+        *diagnostic_private_paths.borrow_mut() = generated.private_paths;
+        *diagnostic_report.borrow_mut() = Some(generated.diagnostics);
+        GeneratorRunResult {
+            result: generated.result,
+            process_exit: generated.process_exit,
+        }
+    };
+    let after_restore = |path_result: &Result<PathBuf, String>, retained_copy| {
+        let (converted, disposition) = match path_result {
+            Ok(path) => match retained_copy {
+                Some(artifact) => consume_project_regen_artifact(source_tree, path, artifact),
+                None => (
+                    Err("project compiler lost the retained private output handle".to_owned()),
+                    ProjectCompilerOutputDisposition::RecoveryRetained,
+                ),
+            },
+            Err(error) => {
+                let (cleanup, disposition) = match retained_copy {
+                    Some(artifact) => discard_project_regen_artifact(&expected_copy, artifact),
+                    None => discard_project_regen_copy(&expected_copy),
+                };
+                (
                         Err(match cleanup {
                             Ok(_) => error.clone(),
                             Err(cleanup) => format!(
@@ -5211,44 +5808,59 @@ where
                         }),
                         disposition,
                     )
-                }
-            };
-            output_disposition.set(disposition);
-            let conversion_failure = converted.as_ref().err().cloned();
-            *consumed_result.borrow_mut() = Some(converted);
+            }
+        };
+        output_disposition.set(disposition);
+        let conversion_failure = converted.as_ref().err().cloned();
+        *consumed_result.borrow_mut() = Some(converted);
 
-            let mut failures = Vec::new();
-            if path_result.is_ok()
-                || disposition == ProjectCompilerOutputDisposition::RecoveryRetained
-            {
-                if let Some(failure) = conversion_failure {
-                    failures.push(failure);
-                }
+        let mut failures = Vec::new();
+        if path_result.is_ok() || disposition == ProjectCompilerOutputDisposition::RecoveryRetained
+        {
+            if let Some(failure) = conversion_failure {
+                failures.push(failure);
             }
-            let audit = closing_audit
-                .borrow_mut()
-                .take()
-                .ok_or_else(|| "closing project audit was consumed more than once".to_owned())?;
-            match audit() {
-                Ok(()) => {
-                    closing_audit_disposition.set(ProjectCompilerClosingAuditDisposition::Passed)
-                }
-                Err(error) => {
-                    closing_audit_disposition.set(ProjectCompilerClosingAuditDisposition::Failed);
-                    failures.push(format!(
-                        "closing project audit failed while the install guard was held: {error}"
-                    ));
-                }
+        }
+        let audit = closing_audit
+            .borrow_mut()
+            .take()
+            .ok_or_else(|| "closing project audit was consumed more than once".to_owned())?;
+        match audit() {
+            Ok(()) => closing_audit_disposition.set(ProjectCompilerClosingAuditDisposition::Passed),
+            Err(error) => {
+                closing_audit_disposition.set(ProjectCompilerClosingAuditDisposition::Failed);
+                failures.push(format!(
+                    "closing project audit failed while the install guard was held: {error}"
+                ));
             }
-            if failures.is_empty() {
-                Ok(())
-            } else {
-                let failure = failures.join("; ");
-                *callback_failure.borrow_mut() = Some(failure.clone());
-                Err(failure)
-            }
-        },
-    );
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            let failure = failures.join("; ");
+            *callback_failure.borrow_mut() = Some(failure.clone());
+            Err(failure)
+        }
+    };
+    let generated = match input_pins {
+        Some(input_pins) => {
+            game_run_regen_with_install_report_with_guard_and_pins_and_after_restore(
+                game_dir,
+                source_tree,
+                mutation_guard,
+                input_pins,
+                generate,
+                after_restore,
+            )
+        }
+        None => game_run_regen_with_install_report_with_guard_and_after_restore(
+            game_dir,
+            source_tree,
+            mutation_guard,
+            generate,
+            after_restore,
+        ),
+    };
 
     let (common_result, install_restore) = match generated {
         Ok(report) => (report.result, report.install_restore),
@@ -5645,6 +6257,50 @@ where
     G: FnOnce(&Path, &Path, &Path) -> GeneratorRunResult<Vec<u8>>,
     A: FnOnce(&Result<PathBuf, String>, Option<CompiledArtifact>) -> Result<(), String>,
 {
+    game_run_regen_with_install_report_with_guard_optional_pins_and_after_restore(
+        game_dir,
+        src_dir,
+        mutation_guard,
+        None,
+        generate,
+        after_restore,
+    )
+}
+
+fn game_run_regen_with_install_report_with_guard_and_pins_and_after_restore<G, A>(
+    game_dir: &Path,
+    src_dir: &Path,
+    mutation_guard: InstallMutationGuard,
+    input_pins: ProjectGameInputPins,
+    generate: G,
+    after_restore: A,
+) -> Result<GameRunInstallReport, String>
+where
+    G: FnOnce(&Path, &Path, &Path) -> GeneratorRunResult<Vec<u8>>,
+    A: FnOnce(&Result<PathBuf, String>, Option<CompiledArtifact>) -> Result<(), String>,
+{
+    game_run_regen_with_install_report_with_guard_optional_pins_and_after_restore(
+        game_dir,
+        src_dir,
+        mutation_guard,
+        Some(input_pins),
+        generate,
+        after_restore,
+    )
+}
+
+fn game_run_regen_with_install_report_with_guard_optional_pins_and_after_restore<G, A>(
+    game_dir: &Path,
+    src_dir: &Path,
+    mutation_guard: InstallMutationGuard,
+    mut input_pins: Option<ProjectGameInputPins>,
+    generate: G,
+    after_restore: A,
+) -> Result<GameRunInstallReport, String>
+where
+    G: FnOnce(&Path, &Path, &Path) -> GeneratorRunResult<Vec<u8>>,
+    A: FnOnce(&Result<PathBuf, String>, Option<CompiledArtifact>) -> Result<(), String>,
+{
     let mutation_guard = std::cell::RefCell::new(Some(mutation_guard));
     let after_restore = std::cell::RefCell::new(Some(after_restore));
     let begin_recovery_required = std::cell::Cell::new(false);
@@ -5656,13 +6312,26 @@ where
                 let guard = mutation_guard.borrow_mut().take().ok_or_else(|| {
                     "pre-held install-mutation guard was consumed more than once".to_owned()
                 })?;
-                match CompileTransaction::begin_with_mutation_guard_and_process_checker(
+                let transaction = match input_pins.take() {
+                Some(pins) => {
+                    CompileTransaction::begin_with_mutation_guard_project_pins_and_process_checker(
+                        game_dir,
+                        g1r,
+                        script_dir,
+                        guard,
+                        pins,
+                        shipping_game_process_running,
+                    )
+                }
+                None => CompileTransaction::begin_with_mutation_guard_and_process_checker(
                     game_dir,
                     g1r,
                     script_dir,
                     guard,
                     shipping_game_process_running,
-                ) {
+                ),
+            };
+                match transaction {
                     Ok(transaction) => Ok(transaction),
                     Err(failure) => {
                         begin_recovery_required.set(failure.recovery_required);
@@ -6779,6 +7448,14 @@ fn read_regular_file_bounded_no_follow(
     label: &str,
 ) -> Result<Vec<u8>, String> {
     let mut file = open_regular_file_no_follow_read(path)?;
+    read_open_regular_file_bounded(&mut file, max_bytes, label)
+}
+
+fn read_open_regular_file_bounded(
+    file: &mut std::fs::File,
+    max_bytes: u64,
+    label: &str,
+) -> Result<Vec<u8>, String> {
     let length = file
         .metadata()
         .map_err(|error| format!("inspecting {label}: {error}"))?
@@ -6794,12 +7471,22 @@ fn read_regular_file_bounded_no_follow(
         .checked_add(1)
         .ok_or_else(|| format!("{label} read limit overflowed"))?;
     let mut bytes = Vec::with_capacity(capacity);
-    Read::by_ref(&mut file)
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| format!("seeking {label}: {error}"))?;
+    Read::by_ref(file)
         .take(read_limit)
         .read_to_end(&mut bytes)
         .map_err(|error| format!("reading {label}: {error}"))?;
     if bytes.len() as u64 > max_bytes {
         return Err(format!("{label} exceeded {max_bytes} bytes while reading"));
+    }
+    if file
+        .metadata()
+        .map_err(|error| format!("rechecking {label}: {error}"))?
+        .len()
+        != length
+    {
+        return Err(format!("{label} changed while being read"));
     }
     Ok(bytes)
 }
@@ -7981,9 +8668,7 @@ mod tests {
             install_mutation_init_path(&game, "gore-as:compile", full_compile_id);
         std::fs::write(
             &full_compile_init,
-            format!(
-                "version=1\nowner=gore-as:compile\npid=123\nguard_id={full_compile_id}\n"
-            ),
+            format!("version=1\nowner=gore-as:compile\npid=123\nguard_id={full_compile_id}\n"),
         )
         .unwrap();
         match InstallMutationGuard::take_over_abandoned_manager(&game) {
@@ -8511,6 +9196,17 @@ mod tests {
         }
     }
 
+    fn install_project_game_inputs(opts: &ProjectCompilerCheckOpts) {
+        let script = g1r_dir(&opts.game_dir).join("Script");
+        std::fs::create_dir_all(&script).unwrap();
+        std::fs::write(
+            script.join("PrecompiledScript_Shipping.Cache"),
+            &opts.base_cache,
+        )
+        .unwrap();
+        std::fs::write(script.join("Binds.Cache"), &opts.binds_cache).unwrap();
+    }
+
     fn accepted_project_diagnostics() -> crate::diagnostics::CompilerDiagnosticsReport {
         crate::diagnostics::CompilerDiagnosticsReport::empty(
             crate::diagnostics::DiagnosticsCaptureDisposition::UnavailableFallback,
@@ -8623,8 +9319,16 @@ mod tests {
             )
             .unwrap();
             let cleanup = output_for_cleanup.clone();
-            Ok(StandaloneCompilerOutputV1::with_cleanup(
+            Ok(StandaloneCompilerOutputV1::with_cleanup_and_diagnostics(
                 output_path.clone(),
+                vec![CompilerBackendDiagnosticV1::new(
+                    CompilerBackendDiagnosticSeverityV1::Warning,
+                    "GORE_AS_PROJECT_WARNING".to_owned(),
+                    "project warning".to_owned(),
+                    Some("Project/A.as".to_owned()),
+                    Some(1),
+                    Some(2),
+                )],
                 move || {
                     std::fs::remove_file(&cleanup)
                         .map_err(|error| format!("removing test output: {error}"))
@@ -8643,7 +9347,7 @@ mod tests {
                 audit_calls.set(audit_calls.get() + 1);
                 Ok(())
             },
-            |_, _, _, _, _| panic!("strict standalone must never enter the game backend"),
+            |_, _, _, _, _, _| panic!("strict standalone must never enter the game backend"),
         );
 
         assert!(matches!(
@@ -8660,6 +9364,11 @@ mod tests {
         assert!(report.standalone_attempted());
         assert!(!report.game_attempted());
         assert!(report.fallback_reason().is_none());
+        assert_eq!(report.backend_diagnostics().len(), 1);
+        assert_eq!(
+            report.backend_diagnostics()[0].code(),
+            "GORE_AS_PROJECT_WARNING"
+        );
         assert_eq!(
             report.install_restore_disposition(),
             InstallRestoreDisposition::NotStarted
@@ -8685,6 +9394,7 @@ mod tests {
                 "void SharedProjectSource() {}\n",
             )],
         );
+        install_project_game_inputs(&opts);
         let bad_output = root.join("bad-standalone-project.cache");
         let bad_output_cleanup = bad_output.clone();
         let shared_tree = std::cell::RefCell::new(None::<PathBuf>);
@@ -8708,8 +9418,27 @@ mod tests {
             Some(&mut standalone),
             guard,
             || Ok(()),
-            |_, tree, _, mut guard, audit| {
+            |game_dir, tree, _, mut guard, _input_pins, audit| {
                 assert_eq!(shared_tree.borrow().as_deref(), Some(tree));
+                #[cfg(windows)]
+                {
+                    assert!(
+                        std::fs::write(vanilla_cache(game_dir), b"raced shipping replacement")
+                            .is_err(),
+                        "pinned Shipping handle must deny writes through the game attempt"
+                    );
+                    assert!(
+                        std::fs::write(
+                            vanilla_cache(game_dir)
+                                .parent()
+                                .unwrap()
+                                .join("Binds.Cache"),
+                            b"raced binds replacement",
+                        )
+                        .is_err(),
+                        "pinned Binds handle must deny writes through the game attempt"
+                    );
+                }
                 audit().unwrap();
                 guard.release().unwrap();
                 checked_project_runner_report(cache_with_empty_modules(&[
@@ -8739,6 +9468,386 @@ mod tests {
         );
         assert!(!bad_output.exists());
         assert!(!install_mutation_lock_path(&opts.game_dir).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_backend_refuses_mutated_tree_before_game_fallback() {
+        let root = unique_test_root("project-backend-tree-drift");
+        let opts = project_check_opts(
+            &root,
+            &[("Project.A", "Project/A.as", "void Original() {}\n")],
+        );
+        install_project_game_inputs(&opts);
+        let game_calls = std::cell::Cell::new(0u8);
+        let mut standalone = |inputs: StandaloneCompilerInputsV1<'_>| {
+            let source = inputs.source_tree.join("Project/A.as");
+            #[cfg(windows)]
+            assert!(
+                std::fs::write(&source, b"void Mutated() {}\n").is_err(),
+                "the pinned source handle must deny writes during the attempt"
+            );
+            #[cfg(not(windows))]
+            std::fs::write(&source, b"void Mutated() {}\n").unwrap();
+            std::fs::write(
+                inputs.source_tree.join("Project/Injected.as"),
+                b"void Injected() {}\n",
+            )
+            .unwrap();
+            Err(CompilerBackendFailureV1::new(
+                CompilerBackendFailureKindV1::InvalidOutput,
+                "forced fallback after source mutation",
+            ))
+        };
+        let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
+        let report = check_project_modules_with_backend_v1_with_guard_and_runner(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::StandaloneThenGame,
+            Some(&mut standalone),
+            guard,
+            || Ok(()),
+            |_, _, _, _, _, _| {
+                game_calls.set(game_calls.get() + 1);
+                panic!("source drift must prevent the game runner")
+            },
+        );
+
+        let ProjectCompilerCheckOutcome::Failed(ref error) = report.outcome else {
+            panic!("mutated source tree unexpectedly reached the game compiler")
+        };
+        assert!(error.to_string().contains("source seal"), "{error}");
+        assert_eq!(game_calls.get(), 0);
+        assert_eq!(report.runner_invocations(), 1);
+        assert!(report.standalone_attempted());
+        assert!(!report.game_attempted());
+        assert_eq!(report.backend_name(), None);
+        assert!(!install_mutation_lock_path(&opts.game_dir).exists());
+        #[cfg(windows)]
+        assert!(
+            !std::fs::metadata(opts.work_dir.join("tree/Project/A.as"))
+                .unwrap()
+                .permissions()
+                .readonly(),
+            "the original source object's writable state must be restored by handle"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_backend_refuses_live_base_or_binds_drift_before_game_fallback() {
+        for target in ["shipping", "binds"] {
+            let root = unique_test_root(&format!("project-backend-{target}-drift"));
+            let opts = project_check_opts(
+                &root,
+                &[("Project.A", "Project/A.as", "void Original() {}\n")],
+            );
+            install_project_game_inputs(&opts);
+            let game_calls = std::cell::Cell::new(0u8);
+            let game_dir = opts.game_dir.clone();
+            let mut standalone = move |_inputs: StandaloneCompilerInputsV1<'_>| {
+                let path = if target == "shipping" {
+                    vanilla_cache(&game_dir)
+                } else {
+                    vanilla_cache(&game_dir)
+                        .parent()
+                        .unwrap()
+                        .join("Binds.Cache")
+                };
+                std::fs::write(path, b"drifted").unwrap();
+                Err(CompilerBackendFailureV1::new(
+                    CompilerBackendFailureKindV1::InvalidOutput,
+                    "forced fallback after live-input mutation",
+                ))
+            };
+            let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
+            let report = check_project_modules_with_backend_v1_with_guard_and_runner(
+                &opts,
+                &crate::diagnostics::DiagnosticsOptions::default(),
+                CompilerBackendModeV1::StandaloneThenGame,
+                Some(&mut standalone),
+                guard,
+                || Ok(()),
+                |_, _, _, _, _, _| {
+                    game_calls.set(game_calls.get() + 1);
+                    panic!("live-input drift must prevent the game runner")
+                },
+            );
+
+            let ProjectCompilerCheckOutcome::Failed(ref error) = report.outcome else {
+                panic!("drifted {target} unexpectedly reached the game compiler")
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("sealed project compiler snapshot"),
+                "target={target}: {error}"
+            );
+            assert_eq!(game_calls.get(), 0);
+            assert_eq!(report.runner_invocations(), 1);
+            assert!(!report.game_attempted());
+            assert_eq!(report.backend_name(), None);
+            assert!(!install_mutation_lock_path(&opts.game_dir).exists());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn project_backend_cleanup_failure_is_terminal_without_game_fallback() {
+        let root = unique_test_root("project-backend-cleanup-failure");
+        let opts = project_check_opts(
+            &root,
+            &[("Project.A", "Project/A.as", "void Original() {}\n")],
+        );
+        install_project_game_inputs(&opts);
+        let output = root.join("standalone.cache");
+        let output_for_runner = output.clone();
+        let mut standalone = move |_inputs: StandaloneCompilerInputsV1<'_>| {
+            std::fs::write(&output_for_runner, b"invalid").unwrap();
+            Ok(StandaloneCompilerOutputV1::with_cleanup(
+                output_for_runner.clone(),
+                || Err("intentional cleanup failure".to_owned()),
+            ))
+        };
+        let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
+        let report = check_project_modules_with_backend_v1_with_guard_and_runner(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::StandaloneThenGame,
+            Some(&mut standalone),
+            guard,
+            || Ok(()),
+            |_, _, _, _, _, _| panic!("cleanup uncertainty must be terminal"),
+        );
+
+        assert!(matches!(
+            report.outcome,
+            ProjectCompilerCheckOutcome::Failed(_)
+        ));
+        assert_eq!(report.runner_invocations(), 1);
+        assert_eq!(
+            report.backend_name(),
+            Some(CompilerBackendNameV1::Standalone)
+        );
+        assert!(report.fallback_reason().is_none());
+        assert!(!report.game_attempted());
+        assert_eq!(
+            report.output_disposition(),
+            ProjectCompilerOutputDisposition::RecoveryRetained
+        );
+        std::fs::remove_file(&output).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_backend_reports_closing_audit_failure_after_standalone_success() {
+        let root = unique_test_root("project-backend-standalone-audit-failure");
+        let opts = project_check_opts(
+            &root,
+            &[("Project.A", "Project/A.as", "void Original() {}\n")],
+        );
+        install_project_game_inputs(&opts);
+        let output = root.join("standalone.cache");
+        let output_for_cleanup = output.clone();
+        let mut standalone = |_inputs: StandaloneCompilerInputsV1<'_>| {
+            std::fs::write(
+                &output,
+                cache_with_empty_modules(&[("Base", "Base.as"), ("Project.A", "Project/A.as")]),
+            )
+            .unwrap();
+            let cleanup = output_for_cleanup.clone();
+            Ok(StandaloneCompilerOutputV1::with_cleanup(
+                output.clone(),
+                move || std::fs::remove_file(cleanup).map_err(|error| error.to_string()),
+            ))
+        };
+        let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
+        let report = check_project_modules_with_backend_v1_with_guard_and_runner(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::Standalone,
+            Some(&mut standalone),
+            guard,
+            || Err("intentional audit failure".to_owned()),
+            |_, _, _, _, _, _| panic!("strict standalone must not use game"),
+        );
+
+        let ProjectCompilerCheckOutcome::Failed(ref error) = report.outcome else {
+            panic!("failed closing audit unexpectedly produced success evidence")
+        };
+        assert!(error.to_string().contains("closing project audit failed"));
+        assert_eq!(
+            report.closing_audit_disposition(),
+            ProjectCompilerClosingAuditDisposition::Failed
+        );
+        assert_eq!(
+            report.output_disposition(),
+            ProjectCompilerOutputDisposition::Discarded
+        );
+        assert!(!install_mutation_lock_path(&opts.game_dir).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_backend_keeps_discarded_when_fallback_game_creates_no_output() {
+        let root = unique_test_root("project-backend-game-not-created");
+        let opts = project_check_opts(
+            &root,
+            &[("Project.A", "Project/A.as", "void Original() {}\n")],
+        );
+        install_project_game_inputs(&opts);
+        let output = root.join("standalone-invalid.cache");
+        let output_for_cleanup = output.clone();
+        let mut standalone = |_inputs: StandaloneCompilerInputsV1<'_>| {
+            std::fs::write(&output, b"invalid").unwrap();
+            let cleanup = output_for_cleanup.clone();
+            Ok(StandaloneCompilerOutputV1::with_cleanup(
+                output.clone(),
+                move || std::fs::remove_file(cleanup).map_err(|error| error.to_string()),
+            ))
+        };
+        let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
+        let report = check_project_modules_with_backend_v1_with_guard_and_runner(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::StandaloneThenGame,
+            Some(&mut standalone),
+            guard,
+            || Ok(()),
+            |_, _, _, mut guard, _input_pins, audit| {
+                audit().unwrap();
+                guard.release().unwrap();
+                ProjectCompilerRunnerReport {
+                    result: Err("game failed before creating output".to_owned()),
+                    diagnostics: None,
+                    install_restore: InstallRestoreDisposition::RestoredExact,
+                    output_disposition: ProjectCompilerOutputDisposition::NotCreated,
+                    closing_audit: ProjectCompilerClosingAuditDisposition::Passed,
+                }
+            },
+        );
+
+        assert!(matches!(
+            report.outcome,
+            ProjectCompilerCheckOutcome::Failed(_)
+        ));
+        assert_eq!(
+            report.output_disposition(),
+            ProjectCompilerOutputDisposition::Discarded
+        );
+        assert_eq!(report.runner_invocations(), 2);
+        assert!(report.game_attempted());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_backend_missing_strict_runner_reports_zero_attempts() {
+        let root = unique_test_root("project-backend-missing-runner");
+        let opts = project_check_opts(
+            &root,
+            &[("Project.A", "Project/A.as", "void Original() {}\n")],
+        );
+        install_project_game_inputs(&opts);
+        let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
+        let report = check_project_modules_with_backend_v1_with_guard_and_runner(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::Standalone,
+            None,
+            guard,
+            || Ok(()),
+            |_, _, _, _, _, _| panic!("missing strict standalone must not use game"),
+        );
+
+        assert!(matches!(
+            report.outcome,
+            ProjectCompilerCheckOutcome::Failed(_)
+        ));
+        assert_eq!(report.runner_invocations(), 0);
+        assert!(!report.standalone_attempted());
+        assert!(!report.game_attempted());
+        assert_eq!(
+            report.backend_name(),
+            Some(CompilerBackendNameV1::Standalone)
+        );
+        assert!(report.fallback_reason().is_none());
+        assert!(!install_mutation_lock_path(&opts.game_dir).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_backend_bounds_and_redacts_fallback_detail() {
+        let root = unique_test_root("project-backend-fallback-redaction");
+        let opts = project_check_opts(
+            &root,
+            &[("Project.A", "Project/A.as", "void Original() {}\n")],
+        );
+        install_project_game_inputs(&opts);
+        let mut standalone = |inputs: StandaloneCompilerInputsV1<'_>| {
+            Err(CompilerBackendFailureV1::new(
+                CompilerBackendFailureKindV1::InvalidOutput,
+                format!(
+                    "private={} {}",
+                    inputs.source_tree.display(),
+                    "x".repeat(MAX_PROJECT_BACKEND_EVIDENCE_DETAIL_BYTES * 2)
+                ),
+            )
+            .with_backend_diagnostics(vec![CompilerBackendDiagnosticV1::new(
+                CompilerBackendDiagnosticSeverityV1::Error,
+                format!(
+                    "GORE_AS_FALLBACK_TEST{}",
+                    "C".repeat(MAX_PROJECT_BACKEND_DIAGNOSTIC_CODE_BYTES * 2)
+                ),
+                format!(
+                    "fallback diagnostic private={} {}",
+                    inputs.source_tree.display(),
+                    "m".repeat(MAX_PROJECT_BACKEND_DIAGNOSTIC_MESSAGE_BYTES * 2)
+                ),
+                Some(
+                    inputs
+                        .source_tree
+                        .join("Project/A.as")
+                        .display()
+                        .to_string(),
+                ),
+                None,
+                None,
+            )]))
+        };
+        let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
+        let report = check_project_modules_with_backend_v1_with_guard_and_runner(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::StandaloneThenGame,
+            Some(&mut standalone),
+            guard,
+            || Ok(()),
+            |_, _, _, mut guard, _input_pins, audit| {
+                audit().unwrap();
+                guard.release().unwrap();
+                checked_project_runner_report(cache_with_empty_modules(&[
+                    ("Base", "Base.as"),
+                    ("Project.A", "Project/A.as"),
+                ]))
+            },
+        );
+
+        assert!(matches!(
+            report.outcome,
+            ProjectCompilerCheckOutcome::Checked
+        ));
+        let detail = report.fallback_reason().unwrap().detail();
+        assert!(detail.len() <= MAX_PROJECT_BACKEND_EVIDENCE_DETAIL_BYTES);
+        assert!(detail.contains("<private compiler path>"));
+        assert!(detail.ends_with("[truncated]"));
+        assert!(!detail.contains(&root.display().to_string()));
+        let diagnostic = &report.fallback_reason().unwrap().diagnostics()[0];
+        assert!(diagnostic.code().len() <= MAX_PROJECT_BACKEND_DIAGNOSTIC_CODE_BYTES);
+        assert!(diagnostic.message().len() <= MAX_PROJECT_BACKEND_DIAGNOSTIC_MESSAGE_BYTES);
+        assert!(diagnostic.message().contains("<private compiler path>"));
+        assert!(!diagnostic.message().contains(&root.display().to_string()));
+        assert_eq!(diagnostic.source_path(), Some("Project/A.as"));
+        assert!(report.backend_diagnostics().is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -10896,7 +12005,19 @@ mod tests {
         let mut standalone = |_: StandaloneCompilerInputsV1<'_>| {
             let path = root.join("standalone.cache");
             std::fs::write(&path, &generated).unwrap();
-            Ok(StandaloneCompilerOutputV1::detached(path))
+            let cleanup = path.clone();
+            Ok(StandaloneCompilerOutputV1::with_cleanup_and_diagnostics(
+                path,
+                vec![CompilerBackendDiagnosticV1::new(
+                    CompilerBackendDiagnosticSeverityV1::Warning,
+                    "GORE_AS_MODULE_WARNING".to_owned(),
+                    "module warning".to_owned(),
+                    Some("NewModule.as".to_owned()),
+                    Some(2),
+                    Some(4),
+                )],
+                move || std::fs::remove_file(cleanup).map_err(|error| error.to_string()),
+            ))
         };
 
         let report = compile_module_report_with_backend_runner_v1(
@@ -10914,6 +12035,11 @@ mod tests {
             Some(CompilerBackendNameV1::Standalone)
         );
         assert!(report.fallback_reason().is_none());
+        assert_eq!(report.backend_diagnostics().len(), 1);
+        assert_eq!(
+            report.backend_diagnostics()[0].code(),
+            "GORE_AS_MODULE_WARNING"
+        );
         assert_eq!(
             report.install_restore_disposition(),
             InstallRestoreDisposition::NotStarted
