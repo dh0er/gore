@@ -5,6 +5,7 @@
 //! record before dynamic registration data can be layered on top.
 
 pub mod binds;
+pub mod capture;
 pub mod frontend;
 pub mod manifest;
 pub mod qualification;
