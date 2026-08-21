@@ -193,7 +193,12 @@ pub fn emit_module_with(m: &Module, refs: &RefResolver, class_defaults: bool) ->
             // FName constants are almost always named after their value -> `n"Name"`; other
             // structs get a default-constructed const (their real value isn't recoverable).
             if base == "FName" {
-                let _ = writeln!(s, "{indent}const FName {0} = n\"{0}\";", g.name);
+                // The declaration alone does not carry the value; the global's initializer
+                // bytecode does, as the `__STATIC_NAME` index it pushes. Falling back to the
+                // global's own name is a guess that is right often enough to look correct and
+                // wrong where it matters (`Spawnpoint` really holds `LOCATION_Spawnpoint`).
+                let literal = fname_initializer(g, refs).unwrap_or_else(|| g.name.clone());
+                let _ = writeln!(s, "{indent}const FName {} = n\"{literal}\";", g.name);
             } else {
                 let _ = writeln!(s, "{indent}const {base} {} = {base}();", g.name);
             }
@@ -4746,6 +4751,32 @@ fn sole_use_is_a_conversion(line: &str, ident: &str, refs: &RefResolver) -> bool
         .collect();
     let head = head.trim_start_matches(':');
     !head.is_empty() && (is_primitive(head) || is_enum(head) || refs.is_type_name(head))
+}
+
+/// The `FName` literal a global's initializer builds it from: `PshC4 <static-name id>` followed
+/// by `CALLSYS __STATIC_NAME`. Any other shape yields None, and the caller keeps its fallback.
+fn fname_initializer(global: &super::model::Global, refs: &RefResolver) -> Option<String> {
+    let init = global.init.as_ref()?;
+    let instrs = disassemble(&init.bytecode).ok()?;
+    let mut pushed: Option<i64> = None;
+    for ins in &instrs {
+        match ins.op.name {
+            "PshC4" => {
+                pushed = ins.dwords.first().map(|value| *value as i64);
+            }
+            "CALLSYS" | "Thiscall1" => {
+                let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+                if refs.func_by_ptr(ptr) == Some("__STATIC_NAME") {
+                    return pushed
+                        .and_then(|id| refs.static_name(id))
+                        .map(str::to_owned);
+                }
+                pushed = None;
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// `!(!(x))` is what a recovered double branch reads like; the source tested `x`. The two

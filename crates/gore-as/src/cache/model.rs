@@ -183,6 +183,10 @@ pub struct EnumDef {
 #[derive(Debug, Clone)]
 pub struct Global {
     pub name: String,
+    /// The global's initializer function, when it has one. Its bytecode carries the value a
+    /// non-primitive global is built from — an `FName` global's real name literal, say, which is
+    /// otherwise unrecoverable from the declaration alone.
+    pub init: Option<Func>,
     /// Declaring AngelScript namespace, empty at global scope. Reference sites render a
     /// namespaced global as `Ns::Name`, so the declaration has to reopen that namespace or the
     /// compiler rejects the reference with "Unknown scope".
@@ -449,15 +453,20 @@ fn read_global(c: &mut Cursor) -> Result<Global, WireError> {
     let namespace = c.read_sia()?;
     let ty = DataType::read(c)?;
     let mut value = None;
+    let mut init = None;
     if !c.read_bool4()? {
         // !bIsDefaultInit
         if c.read_bool4()? {
             value = Some(c.read_u64()?); // PureConstantValue
         } else {
-            c.read_bool4()?; // bHasInitFunction
-                             // The fork archives InitFunc unconditionally in this branch,
-                             // including the default function object when the flag is false.
-            read_function(c)?; // InitFunc (ignored for emit)
+            let has_init = c.read_bool4()?; // bHasInitFunction
+            // The fork archives InitFunc unconditionally in this branch, including the default
+            // function object when the flag is false. Read it either way to keep the stream in
+            // step, and keep it only when the flag says it is a real initializer.
+            let func = read_function(c)?;
+            if has_init {
+                init = Some(func);
+            }
         }
     }
     Ok(Global {
@@ -465,6 +474,7 @@ fn read_global(c: &mut Cursor) -> Result<Global, WireError> {
         namespace,
         ty,
         value,
+        init,
     })
 }
 
