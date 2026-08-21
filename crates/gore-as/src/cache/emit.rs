@@ -1216,6 +1216,7 @@ fn emit_function_ctor(
     let body = fold_literal_temporaries(&body, refs);
     let body = fold_constant_comparisons(&body);
     let body = fold_double_negations(&body);
+    let body = inline_call_argument_temporaries(&body, refs);
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
@@ -4765,6 +4766,169 @@ fn sole_use_is_a_conversion(line: &str, ident: &str, refs: &RefResolver) -> bool
         .collect();
     let head = head.trim_start_matches(':');
     !head.is_empty() && (is_primitive(head) || is_enum(head) || refs.is_type_name(head))
+}
+
+/// The compiler evaluates an argument expression where the argument sits; the structurer has to
+/// turn it into a statement first, which puts the evaluation BEFORE the whole call's other
+/// pushes. Written back that way it recompiles into a different instruction order than vanilla's
+/// — the single largest remaining class of divergence. Inline a temporary that only exists to
+/// carry one argument back into the call.
+///
+/// Gates, all of them necessary: the temporary is defined once by a CALL and read once; the read
+/// is a whole argument of a later call in the same block; the parameter at that position accepts
+/// a temporary (from the cache's own parameter table); and every statement in between is itself
+/// a temporary the SAME call consumes, so nothing else changes its order.
+fn inline_call_argument_temporaries(body: &str, refs: &RefResolver) -> String {
+    const MAX_ARGUMENT_INLINE_PASSES: usize = 8;
+    let trailing_newline = body.ends_with('\n');
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut changed = false;
+    // Work backwards: the last argument's temporary is the innermost, and inlining it first
+    // keeps the earlier ones' positions valid.
+    // Repeat until nothing moves: inlining one argument can reveal that the statement above it
+    // belongs to the same call after all.
+    for _ in 0..MAX_ARGUMENT_INLINE_PASSES {
+        let mut moved = false;
+        for index in (0..lines.len()).rev() {
+            let Some((callee, arguments)) = call_arguments(&lines[index]) else {
+                continue;
+            };
+            let rendered = arguments.len();
+            for (position, argument) in arguments.iter().enumerate() {
+                if !is_local_ident(argument)
+                    || !refs.arg_position_accepts_temporary(&callee, rendered, position)
+                {
+                    continue;
+                }
+                let uses: usize = lines.iter().map(|l| count_ident(l, argument)).sum();
+                let definitions: Vec<usize> = (0..index)
+                    .filter(|line| definition_value(&lines[*line], argument).is_some())
+                    .collect();
+                let [definition] = definitions[..] else {
+                    continue;
+                };
+                if uses != 2 {
+                    continue; // defined once, read once
+                }
+                let value = definition_value(&lines[definition], argument)
+                    .expect("the definition matched above")
+                    .to_owned();
+                if !value.ends_with(')') || !value.contains('(') {
+                    continue; // only a call's result is worth moving
+                }
+                // Everything between has to feed THIS call as well, or the order of a side effect
+                // would change. "Feeds this call" is checked against the line as it stands, so a
+                // temporary that an already-inlined argument still refers to counts.
+                let between_feeds_this_call = (definition + 1..index).all(|line| {
+                    // A line already consumed by an earlier inlining is gone, not in the way.
+                    lines[line].is_empty()
+                        || defined_temporary(&lines[line])
+                            .is_some_and(|temp| count_ident(&lines[index], &temp) > 0)
+                });
+                if !between_feeds_this_call {
+                    continue;
+                }
+                lines[index] = rename_ident(&lines[index], argument, &value);
+                lines[definition].clear();
+                changed = true;
+                moved = true;
+            }
+        }
+        if !moved {
+            break;
+        }
+    }
+    if !changed {
+        return body.to_owned();
+    }
+    let mut joined = lines
+        .into_iter()
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if trailing_newline {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// The value a statement gives `ident`, whether it declares it at the same time or not.
+fn definition_value<'a>(line: &'a str, ident: &str) -> Option<&'a str> {
+    if let Some(rhs) = assignment_rhs_for(line, ident) {
+        return Some(rhs);
+    }
+    let trimmed = line.trim().strip_suffix(';')?;
+    let (head, rhs) = trimmed.split_once(" = ")?;
+    (head.split_whitespace().last() == Some(ident)
+        && count_ident(rhs, ident) == 0
+        && !rhs.is_empty())
+    .then_some(rhs)
+}
+
+/// The temporary a statement defines, if it is a plain `local_N = …;` definition.
+fn defined_temporary(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let (head, _) = trimmed.split_once(" = ")?;
+    let name = head.split_whitespace().last()?;
+    is_local_ident(name).then(|| name.to_owned())
+}
+
+/// `local_12` and nothing else.
+fn is_local_ident(text: &str) -> bool {
+    text.strip_prefix("local_")
+        .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The callee name and top-level argument list of a statement that IS one call.
+fn call_arguments(line: &str) -> Option<(String, Vec<String>)> {
+    let statement = line.trim().strip_suffix(';')?;
+    let statement = match statement.split_once(" = ") {
+        Some((_, rhs)) => rhs,
+        None => statement,
+    };
+    let open = statement.find('(')?;
+    if matching_paren(statement, open)? != statement.len() - 1 {
+        return None; // not a single call: something follows the closing parenthesis
+    }
+    let callee = statement[..open].rsplit(['.', ':']).next()?.to_owned();
+    if callee.is_empty()
+        || !callee
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    {
+        return None;
+    }
+    let inner = &statement[open + 1..statement.len() - 1];
+    let mut arguments = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (at, byte) in inner.bytes().enumerate() {
+        if in_string {
+            match byte {
+                _ if escaped => escaped = false,
+                b'\\' => escaped = true,
+                b'"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'(' | b'<' | b'[' => depth += 1,
+            b')' | b'>' | b']' => depth -= 1,
+            b',' if depth == 0 => {
+                arguments.push(inner[start..at].trim().to_owned());
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    if !inner.trim().is_empty() {
+        arguments.push(inner[start..].trim().to_owned());
+    }
+    Some((callee, arguments))
 }
 
 /// The `FName` literal a global's initializer builds it from: `PshC4 <static-name id>` followed
