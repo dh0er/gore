@@ -830,6 +830,32 @@ fn scan_back_retval_floor(ctx: &Ctx, before: usize, floor: usize) -> Option<Stri
     None
 }
 
+/// `local_N = <expr>;` immediately before `return local_N;` is one `return <expr>;`. The slot is
+/// the compiler's own temporary there, so naming it costs a copy vanilla does not have. Folds
+/// only when the value does not read the slot back.
+fn fold_return_into_store(stmts: &mut Vec<String>, exit: String) -> String {
+    let Some(slot) = exit
+        .strip_prefix("return ")
+        .and_then(|value| value.strip_suffix(';'))
+        .filter(|value| value.starts_with("local_") && !value.contains(['.', '(', ' ', '[']))
+    else {
+        return exit;
+    };
+    let Some((target, value)) = stmts
+        .last()
+        .and_then(|last| last.trim().strip_suffix(';'))
+        .and_then(|last| last.split_once(" = "))
+    else {
+        return exit;
+    };
+    if target.trim() != slot || value.contains(slot) {
+        return exit;
+    }
+    let folded = format!("return {value};");
+    stmts.pop();
+    folded
+}
+
 /// Conditional-jump opcode (mirrors `cfg::is_cond_jump`, which is private to that module).
 fn is_cond_op(n: &str) -> bool {
     matches!(
@@ -6055,8 +6081,11 @@ impl Structurer<'_> {
             } else {
                 // (linear fallthrough-carry is out of scope — the plain arm's leftover is dropped.)
                 let ret_ref_tail = self.ctx.ret_is_ref() && self.flows_to_bare_ret(i);
-                let (stmts, _, _) =
+                let (mut stmts, _, _) =
                     block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, ret_ref_tail);
+                let plain_return = self
+                    .plain_return_exit_stmt(i)
+                    .map(|exit| fold_return_into_store(&mut stmts, exit));
                 for s in &stmts {
                     let _ = writeln!(out, "{ind}{s}");
                 }
@@ -6069,7 +6098,7 @@ impl Structurer<'_> {
                     let _ = writeln!(out, "{ind}{x}");
                 } else if let Some(x) = self.loop_exit_stmt(i) {
                     let _ = writeln!(out, "{ind}{x}");
-                } else if let Some(x) = self.plain_return_exit_stmt(i) {
+                } else if let Some(x) = plain_return {
                     let _ = writeln!(out, "{ind}{x}");
                 }
                 next = i + 1;
@@ -6102,14 +6131,17 @@ impl Structurer<'_> {
                 Some(j) if bi <= j => std::mem::take(&mut carry),
                 _ => Vec::new(),
             };
-            let (stmts, cmp, leftover) =
+            let (mut stmts, cmp, leftover) =
                 block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, false);
+            let plain_return = self
+                .plain_return_exit_stmt(bi)
+                .map(|exit| fold_return_into_store(&mut stmts, exit));
             for s in &stmts {
                 let _ = writeln!(out, "{ind}{s}");
             }
             if let Some(x) = self.region_exit_stmt(bi) {
                 let _ = writeln!(out, "{ind}{x}");
-            } else if let Some(x) = self.plain_return_exit_stmt(bi) {
+            } else if let Some(x) = plain_return {
                 let _ = writeln!(out, "{ind}{x}");
             }
             match carry_until {
