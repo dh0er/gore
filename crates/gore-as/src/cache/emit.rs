@@ -1208,6 +1208,7 @@ fn emit_function_ctor(
     };
     let (body, _) = rewrite_value_temporaries(&body, &inferred_locals);
     let body = drop_dead_stores(&body);
+    let body = fold_literal_temporaries(&body, refs);
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
@@ -4656,6 +4657,112 @@ fn expression_start(line: &str, end: usize) -> Option<usize> {
         i -= 1;
     }
     (i < end).then_some(i)
+}
+
+/// A slot that holds one literal and is read once is not a variable the source declared — the
+/// compiler put the constant straight into the expression, and writing it back as a local costs
+/// a wider store plus a narrowing conversion (`SetV4` + `iTOb` where vanilla has `SetV1`). Fold
+/// the literal into its use. A literal has no side effect and no evaluation order, so the only
+/// thing this can change is which slot the recompiler allocates.
+fn fold_literal_temporaries(body: &str, refs: &RefResolver) -> String {
+    let trailing_newline = body.ends_with('\n');
+    let lines: Vec<&str> = body.lines().collect();
+    let mut folded: Vec<String> = lines.iter().map(|line| (*line).to_owned()).collect();
+    let mut dropped = false;
+    for slot in used_locals(body) {
+        let ident = format!("local_{slot}");
+        let definitions: Vec<usize> = folded
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| assignment_rhs_for(line, &ident).is_some_and(is_foldable_literal))
+            .map(|(index, _)| index)
+            .collect();
+        let [definition] = definitions[..] else {
+            continue;
+        };
+        let uses: Vec<usize> = folded
+            .iter()
+            .enumerate()
+            .filter(|(index, line)| *index != definition && count_ident(line, &ident) > 0)
+            .map(|(index, _)| index)
+            .collect();
+        let [use_line] = uses[..] else {
+            continue;
+        };
+        if count_ident(&folded[use_line], &ident) != 1
+            || assignment_target_is_rooted_at_ident(&folded[use_line], &ident)
+            || !sole_use_is_a_conversion(&folded[use_line], &ident, refs)
+        {
+            continue;
+        }
+        let literal = assignment_rhs_for(&folded[definition], &ident)
+            .expect("the definition matched above")
+            .to_owned();
+        folded[use_line] = rename_ident(&folded[use_line], &ident, &literal);
+        folded[definition].clear();
+        dropped = true;
+    }
+    if !dropped {
+        return body.to_owned();
+    }
+    let mut joined = folded
+        .into_iter()
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if trailing_newline {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// True when the ident's only appearance is as the whole argument of a TYPE conversion —
+/// `ERelationship(local_5)`. Anything else may be a by-reference parameter, where a literal is
+/// "Not a valid reference", and the parameter types are not visible in the rendered text.
+fn sole_use_is_a_conversion(line: &str, ident: &str, refs: &RefResolver) -> bool {
+    let marker = format!("({ident})");
+    let Some(at) = line.find(&marker) else {
+        return false;
+    };
+    let head: String = line[..at]
+        .chars()
+        .rev()
+        .take_while(|c| {
+            c.is_ascii_alphanumeric() || *c == '_' || *c == ':' || *c == '<' || *c == '>'
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    let head = head.trim_start_matches(':');
+    !head.is_empty() && (is_primitive(head) || is_enum(head) || refs.is_type_name(head))
+}
+
+/// A plain numeric or boolean literal — nothing that could carry a side effect.
+fn is_foldable_literal(value: &str) -> bool {
+    if value == "true" || value == "false" {
+        return true;
+    }
+    let digits = value.strip_prefix('-').unwrap_or(value);
+    let digits = digits
+        .strip_suffix('f')
+        .filter(|rest| rest.contains('.'))
+        .unwrap_or(digits);
+    !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        && digits.bytes().filter(|b| *b == b'.').count() <= 1
+}
+
+/// The statement assigns THROUGH the ident (`local_5.Field = x;` or `local_5 = x;`).
+fn assignment_target_is_rooted_at_ident(statement: &str, ident: &str) -> bool {
+    let trimmed = statement.trim_start();
+    let Some(rest) = trimmed.strip_prefix(ident) else {
+        return false;
+    };
+    rest.split(" = ")
+        .next()
+        .is_some_and(|target| !target.contains('('))
+        && rest.contains(" = ")
 }
 
 /// A store into a slot the rendered source never reads back: the structurer resolved the value at
