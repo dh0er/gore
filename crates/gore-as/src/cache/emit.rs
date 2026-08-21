@@ -3950,44 +3950,92 @@ fn first_top_level_assignment_before_read(body: &str, slot: i32) -> bool {
 /// reuse while rejecting read-before-write, self-assignment, malformed braces, and branch leakage.
 fn all_reads_lexically_dominated_by_assignment(body: &str, slot: i32) -> bool {
     let ident = format!("local_{slot}");
-    let mut assigned = vec![false];
-    let mut saw_assignment = false;
-    let mut saw_read = false;
+    let lines: Vec<&str> = body.lines().collect();
+    let mut at = 0usize;
+    let mut seen = SlotReads {
+        every_read_dominated: true,
+        ..SlotReads::default()
+    };
+    walk_assignment_scope(&lines, &mut at, &ident, false, &mut seen);
+    at == lines.len() && seen.every_read_dominated && seen.assignment && seen.read
+}
 
-    for line in body.lines() {
-        match line.trim() {
-            "{" => {
-                assigned.push(*assigned.last().unwrap_or(&false));
-                continue;
-            }
-            "}" => {
-                if assigned.len() == 1 {
-                    return false;
-                }
-                assigned.pop();
-                continue;
-            }
-            _ => {}
+/// What [`all_reads_lexically_dominated_by_assignment`] learned about one slot.
+#[derive(Default)]
+struct SlotReads {
+    assignment: bool,
+    read: bool,
+    every_read_dominated: bool,
+}
+
+/// One scope's effect on the slot: whether every path through it ends with the slot assigned, and
+/// whether it always leaves the enclosing block (so the code after it is not on this path).
+#[derive(Clone, Copy, Default)]
+struct ScopeEffect {
+    assigns: bool,
+    leaves: bool,
+}
+
+/// Walk one scope. An `if`/`else` assigns for the scope around it when each arm either assigns or
+/// leaves; a loop never does, because it may not run.
+fn walk_assignment_scope(
+    lines: &[&str],
+    at: &mut usize,
+    ident: &str,
+    mut assigned: bool,
+    seen: &mut SlotReads,
+) -> ScopeEffect {
+    let mut leaves = false;
+    while *at < lines.len() {
+        let line = lines[*at];
+        let trimmed = line.trim();
+        if trimmed == "}" {
+            break;
         }
-
-        if count_ident(line, &ident) == 0 {
+        *at += 1;
+        if count_ident(line, ident) > 0 {
+            if assignment_rhs_for(line, ident).is_some() {
+                assigned = true;
+                seen.assignment = true;
+            } else {
+                seen.read = true;
+                if !assigned {
+                    seen.every_read_dominated = false;
+                }
+            }
+        }
+        leaves |= trimmed.starts_with("return ") || trimmed == "return;";
+        if lines.get(*at).map(|l| l.trim()) != Some("{") {
             continue;
         }
-        if assignment_rhs_for(line, &ident).is_some() {
-            let Some(current) = assigned.last_mut() else {
-                return false;
-            };
-            *current = true;
-            saw_assignment = true;
-        } else {
-            saw_read = true;
-            if !assigned.last().copied().unwrap_or(false) {
-                return false;
+        *at += 1;
+        let then = walk_assignment_scope(lines, at, ident, assigned, seen);
+        *at += 1; // the closing brace
+        let mut arms = ScopeEffect::default();
+        if lines.get(*at).map(|l| l.trim()) == Some("else") {
+            *at += 1;
+            if lines.get(*at).map(|l| l.trim()) == Some("{") {
+                *at += 1;
+                let other = walk_assignment_scope(lines, at, ident, assigned, seen);
+                *at += 1; // the closing brace
+                arms = ScopeEffect {
+                    assigns: (then.assigns || then.leaves) && (other.assigns || other.leaves),
+                    leaves: then.leaves && other.leaves,
+                };
             }
+        } else {
+            // A one-armed `if` that always leaves puts the code after it on the fall path only.
+            arms.assigns = then.leaves && assigned;
+        }
+        if trimmed.starts_with("if (") {
+            assigned |= arms.assigns;
+            leaves |= arms.leaves;
         }
     }
-
-    assigned.len() == 1 && saw_assignment && saw_read
+    ScopeEffect {
+        assigns: assigned,
+        leaves,
+    }
 }
 
 /// batch-25i: the innermost brace-block span containing line `i`: returns `(start, end)` line
