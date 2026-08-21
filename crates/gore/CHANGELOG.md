@@ -46,6 +46,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Decompiled bodies write the range-for the compiler desugared, fold the
   temporaries it invented, drop stores nothing reads, and call `Super::` where
   an override calls the method it overrides.
+- A branch that returns comes back as a return: a bool function's guarded return
+  kept its condition, and every branch that leaves through the shared exit
+  returns its own value instead of the one another branch left behind.
+- A call's receiver and its arguments sit inside the call, including a call that
+  stands in an `if`, a `while` or a `return` — they used to be evaluated earlier
+  than the source evaluated them.
+- A slot that holds what a call returned is declared with that type, so a bool
+  result reads as a bool instead of `(x != 0)`.
 - `as extract-remap` and `compile-module` resolve a repeated string literal
   instead of refusing the module.
 - `GORE_AS_REMAP_DIAG=1` prints the two identities behind an unresolved or
