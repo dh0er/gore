@@ -1619,6 +1619,7 @@ fn emit_function_ctor(
         // and fold the RVODEF default-return into it so there is a single coherent return local.
         // A handle return defaults to null on declaration, so `UFoo __return;` is valid (no
         // "no default constructor" issue that bare struct RVODEF hits).
+        let body = fold_return_slot_stores(&body);
         let uses_return_slot = body.contains("__return");
         if uses_return_slot {
             let _ = writeln!(s, "{ind}    {ret} __return;");
@@ -3348,17 +3349,41 @@ fn bool_call_result_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
     slots
 }
 
-/// Slots the function stores a 4- or 8-byte literal into. A bool is stored with `SetV1`.
+/// Slots the function stores a 4- or 8-byte literal into. A bool is stored with `SetV1`, so a
+/// wider store is the slot's own width evidence — EXCEPT for one compiler idiom: the `&&`
+/// short-circuit writes its `false` result with `SetV4 slot, 0` between the conditional jump that
+/// short-circuited and the jump over the right-hand operand. That slot holds the bool result of
+/// the whole expression, and reading its width as int costs the `!` in 190 functions (measured:
+/// every one of the 724 wide stores landing on a NOT-proven slot has exactly this shape).
 fn wide_literal_store_slots(f: &Func) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
+    let short_circuit_result = |at: usize| {
+        let before = at
+            .checked_sub(1)
+            .map(|prev| is_conditional_jump(instrs[prev].op.name));
+        before == Some(true)
+            && instrs.get(at + 1).map(|next| next.op.name) == Some("JMP")
+            && instrs[at].dwords.first().copied() == Some(0)
+    };
     instrs
         .iter()
-        .filter(|ins| matches!(ins.op.name, "SetV4" | "SetV8"))
-        .filter_map(|ins| ins.words.first().map(|word| *word as i16 as i32))
+        .enumerate()
+        .filter(|(at, ins)| {
+            matches!(ins.op.name, "SetV4" | "SetV8") && !short_circuit_result(*at)
+        })
+        .filter_map(|(_, ins)| ins.words.first().map(|word| *word as i16 as i32))
         .filter(|slot| *slot > 0)
         .collect()
+}
+
+/// The conditional-jump opcodes (the structurer's own list).
+fn is_conditional_jump(name: &str) -> bool {
+    matches!(
+        name,
+        "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JLowZ" | "JLowNZ"
+    )
 }
 
 /// Slots `NOT` is applied to — AngelScript's logical not, which only takes a bool variable.
@@ -4546,7 +4571,16 @@ fn rewrite_no_assign_locals(body: &str, locals: &BTreeMap<i32, String>) -> (Stri
                 k += 1;
                 let indent = &line[..line.len() - t.len()];
                 let rest = &t[ident.len()..]; // ` = <expr>;`
-                if k == 1 {
+                // Nothing reads the slot: vanilla just made the call and destroyed the result
+                // where it stood. Declaring a local for it costs the declaration AND sinks the
+                // destructor to the end of the function.
+                let discarded = write_only
+                    .then(|| rest.strip_prefix(" = ").and_then(|v| v.strip_suffix(';')))
+                    .flatten()
+                    .filter(|value| value.ends_with(')'));
+                if let Some(value) = discarded {
+                    let _ = writeln!(rewritten, "{indent}{value};");
+                } else if k == 1 {
                     let _ = writeln!(rewritten, "{indent}{ty} {ident}{rest}");
                 } else {
                     let _ = writeln!(rewritten, "{indent}{ty} {ident}_{k}{rest}");
@@ -5470,6 +5504,46 @@ fn extract_member_initializers(constructors: &mut String) -> HashMap<String, Str
         constructors.push('\n');
     }
     initializers
+}
+
+/// `__return = <val>;` immediately before `return __return;` is one `return <val>;`. The hidden
+/// out-slot of a by-value struct return is the compiler's, not the source's: naming it costs a
+/// construct at the top of the function and an assignment at every return, which is two
+/// instructions vanilla never emitted. Only an adjacent, resolved store folds — a `return
+/// __return;` that stands alone still says the path did not provably write the slot.
+fn fold_return_slot_stores(body: &str) -> String {
+    let mut kept: Vec<String> = Vec::new();
+    for line in body.lines() {
+        // The default-return marker only becomes `return __return;` further down; both spellings
+        // mean the same statement here.
+        let returns_the_slot = matches!(line.trim(), "return __return;")
+            || line.trim() == format!("return {RVODEF};");
+        let folded = returns_the_slot
+            .then(|| kept.last().cloned())
+            .flatten()
+            .and_then(|store| {
+                let value = store.trim().strip_prefix("__return = ")?.strip_suffix(';')?;
+                let usable = !value.is_empty()
+                    && !value.contains('\u{1}')
+                    && !value.contains('\u{2}')
+                    && !value.contains("__return")
+                    && !value.contains(RVODEF);
+                let indent: String = store.chars().take_while(|c| c.is_whitespace()).collect();
+                usable.then(|| format!("{indent}return {value};"))
+            });
+        match folded {
+            Some(replacement) => {
+                kept.pop();
+                kept.push(replacement);
+            }
+            None => kept.push(line.to_string()),
+        }
+    }
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
 }
 
 /// Drop what follows a statement that always leaves the block. Recovering a branch's own return
