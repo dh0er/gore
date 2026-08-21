@@ -5972,6 +5972,18 @@ impl Structurer<'_> {
                         .then(|| expr.to_string())
                     })
                     .unwrap_or_else(|| negate(&taken_cond));
+                if let Some((straight, ret_idx)) = self.bool_return_diamond(then_idx, else_idx) {
+                    // A guarded return and a bare one after it — NOT an `else` branch, which would
+                    // make the second return jump to the shared exit instead of falling into it
+                    // (measured: one extra `JMP` per function).
+                    let _ = writeln!(out, "{ind}if ({cond})");
+                    let _ = writeln!(out, "{ind}{{");
+                    let _ = writeln!(out, "{ind}    return {straight};");
+                    let _ = writeln!(out, "{ind}}}");
+                    let _ = writeln!(out, "{ind}return {};", !straight);
+                    i = (ret_idx + 1).max(i + 1);
+                    continue;
+                }
                 let then_end = else_idx.unwrap_or(stop).min(stop).max(i + 1);
                 let _ = writeln!(out, "{ind}if ({cond})");
                 let _ = writeln!(out, "{ind}{{");
@@ -6174,6 +6186,61 @@ impl Structurer<'_> {
         }
         let (stmts, _) = block_stmts(self.ctx, b.instr_lo, b.instr_hi);
         single_clean_rvo_store(&stmts).is_some()
+    }
+
+    /// The compiler's bool-return normalization. `return <expr>;` out of a bool function does not
+    /// copy the expression straight into the value register: it branches on it and materializes a
+    /// literal 1 or 0 into a slot, copies THAT, and both arms end at one shared bare `RET`.
+    /// Written back arm by arm the returned expression is lost (`local_N = 1;` in one arm and a
+    /// literal `return false;` at the end), so recognize the shape and give the return its
+    /// condition back. `Some((true, ret))`: the THEN arm carries the 1, so the source is
+    /// `return <cond>;`; `Some((false, ret))`: the arms are the other way round.
+    fn bool_return_diamond(
+        &self,
+        then_idx: Option<usize>,
+        else_idx: Option<usize>,
+    ) -> Option<(bool, usize)> {
+        if self
+            .ctx
+            .ret_ty
+            .map(|t| t.base_name(self.ctx.refs))
+            .as_deref()
+            != Some("bool")
+        {
+            return None;
+        }
+        let (then_slot, then_val, ret_off) = self.bool_return_arm(then_idx?, true)?;
+        let (else_slot, else_val, else_ret) = self.bool_return_arm(else_idx?, false)?;
+        if then_slot != else_slot || ret_off != else_ret || then_val == else_val {
+            return None;
+        }
+        Some((then_val == 1, *self.idx_of.get(&ret_off)?))
+    }
+
+    /// One arm of [`Self::bool_return_diamond`]: `SetV1 wN, K` + `CpyVtoR{1,4} wN`, then either a
+    /// `JMP` into the shared bare `RET` row (the arm that has to jump over the other) or a plain
+    /// fall-through into it. Returns the slot, the literal and the `RET` row's offset.
+    fn bool_return_arm(&self, bi: usize, jumps: bool) -> Option<(u16, u32, usize)> {
+        let b = &self.g.blocks[bi];
+        if b.instr_hi - b.instr_lo != if jumps { 3 } else { 2 } {
+            return None;
+        }
+        let set = &self.ctx.instrs[b.instr_lo];
+        let copy = &self.ctx.instrs[b.instr_lo + 1];
+        if set.op.name != "SetV1" || !matches!(copy.op.name, "CpyVtoR1" | "CpyVtoR4") {
+            return None;
+        }
+        let slot = set.words.first().copied()?;
+        if copy.words.first().copied()? != slot {
+            return None;
+        }
+        let value = set.dwords.first().copied()?;
+        if value > 1 || (jumps && self.ctx.instrs[b.instr_hi - 1].op.name != "JMP") {
+            return None;
+        }
+        let target = *b.succs.first()?;
+        self.is_bare_ret_off(target)
+            .then_some((slot, value, target))
     }
 
     /// The block at dword offset `off` is a bare `RET` row (exactly one instruction).
