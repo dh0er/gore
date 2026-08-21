@@ -200,6 +200,10 @@ impl<'a> Cursor<'a> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
 
+    pub fn read_i8(&mut self) -> Result<i8, WireError> {
+        Ok(self.take(1)?[0] as i8)
+    }
+
     pub fn read_i64(&mut self) -> Result<i64, WireError> {
         Ok(i64::from_le_bytes(self.take(8)?.try_into().unwrap()))
     }

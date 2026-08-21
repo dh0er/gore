@@ -2,7 +2,10 @@
 
 pub mod cache;
 pub mod compile;
+pub mod compiler_backend;
+pub mod compiler_profile;
 pub mod diagnostics;
+pub mod standalone_sidecar;
 
 #[cfg(test)]
 mod tests {
