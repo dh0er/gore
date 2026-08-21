@@ -22,57 +22,42 @@ functions the vanilla and regenerated caches align:
 | Modules emitted, fallback stubs | full corpus | 7,308 modules, **0 stubs** |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,604 functions | **90.26%** (`IDENTICAL`+`BENIGN`) |
-| Splice back (`extract-remap`) | **627-module random sample (8.6%)** | 625 (99.7%) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **91.41%** (`IDENTICAL`+`BENIGN`) |
+| Alignment loss | full corpus | **none** — every function the cache has is regenerated |
+| Splice back (`extract-remap`) | full corpus, all 7,308 modules | 7,276 (**99.6%**) |
 
-The splice test is the one sampled measurement: each run re-reads both 100+ MB caches (~3.4 s per
-module), so a full sweep takes about five hours. Partial sweeps of 999 and 627 modules on earlier
-builds of this work produced the same failure rate (0.3–0.5%).
+Every measurement now covers the whole corpus. The splice sweep takes about two hours (each run
+re-reads both 100+ MB caches), which is why earlier revisions of this document reported it from a
+627-module sample; the sample and the sweep agree to within 0.1 points.
 
 ## What is left
 
-**16,040 functions (9.74%) recompile to bytecode that differs semantically**, spread over 1,949 of
-the 7,308 modules. A semantic difference means *not proven identical*, not *proven wrong*: the
-whole-tree compile proves the source type-checks, and `bytediff` normalizes away reference keys,
-jump absolutes, constant encodings and (opt-in) slot allocation before judging the rest.
+**14,134 functions (8.59%) recompile to bytecode that differs semantically.** A semantic
+difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
+source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
+encodings and (opt-in) slot allocation before judging the rest.
+
+What is left is dominated by the ORDER the recompiler emits instructions in, not by wrong values.
+The largest classes, by the opcodes that differ:
 
 | Class | Functions |
 |-------|-----------|
-| Conversion-op count differs (enum↔int casts the emitter inserts) | 5,076 |
-| Residual divergence, unclassified | 10,467 |
-| Other classified hints | 497 |
-| **Total** | **16,040** |
+| Same opcodes, different order or operands | ~3,400 |
+| An argument still evaluated as a statement (`PshGPtr` vs `PGA`+`PSF`) | ~2,250 |
+| A null check materialized into a slot instead of branched on | ~1,300 |
+| A branch the structurer flattened (`JMP`) | ~700 |
+| Everything else | the rest |
 
-Cutting across those classes, 37 of them are `__InitDefaults`. By size of the divergence: 231 are three instructions or fewer, 981 are 4–10, 8,486 are 11–50, and
-6,342 are longer than 50 — those last are whole bodies with a different shape, and they are where
-the remaining work is. The 37 `__InitDefaults` are dominated by a float constant the language
-cannot spell: AngelScript has no infinity literal, so `+inf` is written as the largest finite float
-and comes back one ULP low.
+Cutting across them, 37 are `__InitDefaults`, dominated by a float constant the language cannot
+spell: AngelScript has no infinity literal, so `+inf` is written as the largest finite float and
+comes back one ULP low.
 
-**Three functions are never emitted at all** (only-in-vanilla, everything else aligns):
-`UAICombatRoleSystem::FindRoleGroup`, `UG1RDialogTopic::GetG1R`, `UG1RQuest::GetG1R`.
+**32 of the 7,308 modules cannot be spliced back** (99.6% can). Each is a template instantiation
+or a behaviour the base cache never recorded — nine `TArray` iterators, eight `FPerceptionHandler`
+copies, seven for a `TArray<AGothicNPCState>`, and a tail of single cases. They share the root
+cause of the ordering classes above: vanilla wrote the expression inline where the emitter
+materializes a local, and that local asks for a copy the base cache has no row for.
 
-**Two of the 627 sampled modules cannot be spliced back.** One instantiates a
-`TSoftObjectPtr<AActor>` the base cache never had; the other iterates a `TArray` whose element type
-the base has no `Iterator` row for at all, through a NATIVE getter whose signature the emit run
-cannot see (it runs without `Binds.Cache`).
-
-**A caveat about the diagnostic view:** `gore as decompile` renders without local types or class
-fields, so it shows casts and dropped stores that the real `emit` path handles correctly. Never
-diagnose an emit problem from it — use `as emit` (and `GORE_AS_DEFAULTS_DEBUG=1` for defaults).
-
-Reproduce the whole-corpus numbers with:
-
-```text
-gore as emit-all <vanilla cache> <tree>
-gore as compile <tree> -o <regen cache> --game <install>
-gore as bytediff <vanilla cache> <regen cache> --norm-slots
-gore as bytediff <vanilla cache> <regen cache> --norm-slots --verdict semantic
-```
-
-and the sampled one by running `gore as extract-remap <regen cache> <module> <vanilla cache>` per
-module. The regen cache a `compile` run leaves in `<work-dir>/tree/regen.cache` works for that too,
-so the loop costs seconds per module instead of a game launch.
 
 ## Retained measured baseline (historical, 2026-07-12)
 
@@ -180,12 +165,11 @@ Same run as "What is measured, and on what" above — full corpus, build `Build5
 | Aligned after recompile | 30,005 (**all of them**) |
 | Byte-faithful (`IDENTICAL`+`BENIGN`, `--norm-slots`) | 29,968 (**99.88%**) |
 
-The whole emitted tree recompiles with no errors, and `gore as bytediff --norm-slots` reports 0
-module-level alignment loss, 3 only-in-vanilla functions, no only-in-regen ones, and B1 **90.26%**
-over all 164,604 aligned functions — up from 88.78% before the body work below, with 16,040
-semantic differences left against 18,288.
+The whole emitted tree recompiles with no errors, and `gore as bytediff --norm-slots` reports no
+alignment loss at all and B1 **91.41%** over all 164,607 aligned functions — up from 88.78% before
+this work, with 14,134 semantic differences left against 18,288.
 
-Editing an existing module's defaults and splicing it back works. Getting there needed five
+Editing an existing module's defaults and splicing it back works. Getting there needed six
 identity fixes, because a decompiled module is only re-splicable when every symbol it references
 still composes to the identity the base cache recorded:
 
@@ -204,6 +188,11 @@ still composes to the identity the base cache recorded:
   `X::StaticClass()` made the compiler generate `StaticClass` functions the base never had.
 - **Parameter defaults.** They are recorded in the cache and were skipped; declarations carry
   them again and calls omit arguments that only restate them.
+- **The const half of an accessor pair.** `T f()` next to `const T f() const` is the ordinary
+  accessor pair and the cache records both; the emitter deduplicated by name and parameters
+  alone, so the const half of every one of them was dropped and the rest aligned against the
+  wrong twin. Keying the dedup on the qualifier as well took byte-IDENTICAL functions from 771 to
+  6,882 and closed the last alignment loss.
 
 The collision-rename workaround disappeared with the namespaces: the emitter no longer invents
 `_g1234`-suffixed symbols that the base cache cannot know.
@@ -236,9 +225,9 @@ thumb: a type that has a copy constructor is declared with its initializer, a ty
 default constructor and an `opAssign` keeps the hoisted declaration and its assignment. Both
 shapes compile; only the one the base cache has a row for can be spliced back.
 
-Measured over the 627-module random sample (the one sampled measurement — see the top of this
-document), `extract-remap` against the base cache succeeds for 625 (**99.7%**). The same
-measurement scored 43 of 60 before the identity work and 58 of 60 after it.
+Measured over the whole corpus, `extract-remap` against the base cache succeeds for 7,276 of 7,308
+modules (**99.6%**). The same measurement scored 43 of 60 before the identity work and 58 of 60
+after it, on the 60-module sample it started from.
 
 A method's RETURN `const` is part of its identity and is emitted again. It used to be stripped
 because the cache sets the flag inconsistently across an override family, and a family has to
