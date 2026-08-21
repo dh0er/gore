@@ -4977,16 +4977,34 @@ fn is_call_result(value: &str) -> bool {
     false
 }
 
+/// The expression a statement evaluates, whatever statement it is: the right-hand side of an
+/// assignment, the value of a `return`, or the condition of an `if`/`while`/`switch`. A call
+/// standing in a condition is still a call, and its arguments still have producers that belong
+/// back inside it — reading only assignments left every condition's call alone.
+fn statement_expression(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    for keyword in ["if ", "while ", "switch "] {
+        if let Some(rest) = trimmed.strip_prefix(keyword) {
+            let rest = rest.trim();
+            return (rest.starts_with('(') && matching_paren(rest, 0)? == rest.len() - 1)
+                .then(|| rest[1..rest.len() - 1].trim());
+        }
+    }
+    let statement = trimmed.strip_suffix(';')?;
+    if let Some(value) = statement.strip_prefix("return ") {
+        return Some(value.trim());
+    }
+    Some(match statement.split_once(" = ") {
+        Some((_, rhs)) => rhs,
+        None => statement,
+    })
+}
+
 /// The temporary a statement’s own call runs on. `local_4.GetDistanceTo(x)` reads `local_4` AFTER
 /// the argument — which is where vanilla evaluates it; a producer line above the call evaluates
 /// it before instead, and that reordering is the whole difference.
 fn receiver_temporary(line: &str) -> Option<String> {
-    let statement = line.trim().strip_suffix(';')?;
-    let expression = match statement.split_once(" = ") {
-        Some((_, rhs)) => rhs,
-        None => statement,
-    };
-    let (head, rest) = expression.split_once('.')?;
+    let (head, rest) = statement_expression(line)?.split_once('.')?;
     (is_local_ident(head) && rest.contains('(') && count_ident(rest, head) == 0)
         .then(|| head.to_owned())
 }
@@ -5032,11 +5050,7 @@ fn is_local_ident(text: &str) -> bool {
 
 /// The callee name and top-level argument list of a statement that IS one call.
 fn call_arguments(line: &str) -> Option<(String, Vec<String>)> {
-    let statement = line.trim().strip_suffix(';')?;
-    let statement = match statement.split_once(" = ") {
-        Some((_, rhs)) => rhs,
-        None => statement,
-    };
+    let statement = statement_expression(line)?;
     let open = statement.find('(')?;
     if matching_paren(statement, open)? != statement.len() - 1 {
         return None; // not a single call: something follows the closing parenthesis

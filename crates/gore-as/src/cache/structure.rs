@@ -5984,6 +5984,18 @@ impl Structurer<'_> {
                     i = (ret_idx + 1).max(i + 1);
                     continue;
                 }
+                if let Some(ret_idx) = self.return_diamond(then_idx, else_idx) {
+                    let (ti, ei) = (then_idx.unwrap_or(i), else_idx.unwrap_or(i));
+                    let _ = writeln!(out, "{ind}if ({cond})");
+                    let _ = writeln!(out, "{ind}{{");
+                    self.emit_range(ti, ti + 1, depth + 1, out);
+                    let _ = writeln!(out, "{ind}    {}", self.arm_return(ti));
+                    let _ = writeln!(out, "{ind}}}");
+                    self.emit_range(ei, ei + 1, depth, out);
+                    let _ = writeln!(out, "{ind}{}", self.arm_return(ei));
+                    i = (ret_idx + 1).max(i + 1);
+                    continue;
+                }
                 let then_end = else_idx.unwrap_or(stop).min(stop).max(i + 1);
                 let _ = writeln!(out, "{ind}if ({cond})");
                 let _ = writeln!(out, "{ind}{{");
@@ -6215,6 +6227,49 @@ impl Structurer<'_> {
             return None;
         }
         Some((then_val == 1, *self.idx_of.get(&ret_off)?))
+    }
+
+    /// The general shape behind [`Self::bool_return_diamond`]: one arm copies ITS value into the
+    /// value register and jumps to the function's single bare `RET` row, the other copies its own
+    /// and falls into the same row. Emitted arm by arm both returns are lost — each arm keeps
+    /// only its store and the shared `RET` renders one return for the whole diamond, which is a
+    /// different function. Returns the `RET` row's block index.
+    fn return_diamond(&self, then_idx: Option<usize>, else_idx: Option<usize>) -> Option<usize> {
+        if self.ctx.ret_via_rvo() || self.ctx.ret_ty.map(|t| t.token) == Some(0x52) {
+            return None;
+        }
+        let then_block = &self.g.blocks[then_idx?];
+        let else_block = &self.g.blocks[else_idx?];
+        if then_block.instr_hi - then_block.instr_lo < 2
+            || else_block.instr_hi == else_block.instr_lo
+        {
+            return None;
+        }
+        let copies_result = |at: usize| {
+            matches!(
+                self.ctx.instrs[at].op.name,
+                "CpyVtoR1" | "CpyVtoR4" | "CpyVtoR8"
+            )
+        };
+        if self.ctx.instrs[then_block.instr_hi - 1].op.name != "JMP"
+            || !copies_result(then_block.instr_hi - 2)
+            || !copies_result(else_block.instr_hi - 1)
+        {
+            return None;
+        }
+        let ret_off = *then_block.succs.first()?;
+        if !self.is_bare_ret_off(ret_off) || else_block.succs.first() != Some(&ret_off) {
+            return None;
+        }
+        self.idx_of.get(&ret_off).copied()
+    }
+
+    /// The `return <expr>;` one arm of a [`Self::return_diamond`] ends in.
+    fn arm_return(&self, bi: usize) -> String {
+        self.ctx.return_stmt(scan_back_retval(
+            self.ctx,
+            self.g.blocks[bi].instr_hi - 1,
+        ))
     }
 
     /// One arm of [`Self::bool_return_diamond`]: `SetV1 wN, K` + `CpyVtoR{1,4} wN`, then either a
