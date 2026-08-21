@@ -654,10 +654,11 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver, defaults: Option<&[
             Some(&c.name),
         );
     }
-    // Dedup methods by name+parameters: the cache can carry two entries that render to the same
-    // signature (e.g. a const- and non-const-return overload that collapse once the meaningless
-    // return `const` is stripped), which AngelScript rejects as "a function with the same name
-    // and parameters already exists".
+    // Dedup methods by name+parameters+const: the cache can carry two entries that render to the
+    // same signature, which AngelScript rejects as "a function with the same name and parameters
+    // already exists". A method's own `const` qualifier is part of what distinguishes them,
+    // though: `T f()` next to `const T f() const` is the ordinary accessor pair, and keying
+    // without it dropped the const half of every one of them.
     let mut seen_sigs: HashSet<String> = HashSet::new();
     for m in &c.methods {
         // `__InitDefaults` (and other `__`-prefixed generator methods) set the CDO defaults
@@ -667,7 +668,25 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver, defaults: Option<&[
         if m.name.starts_with("__") {
             continue;
         }
-        if !seen_sigs.insert(format!("{}({})", m.name, param_sig(m, refs))) {
+        let const_method = m.is_const_method();
+        if !seen_sigs.insert(format!(
+            "{}({}){}",
+            m.name,
+            param_sig(m, refs),
+            const_method
+        )) {
+            if std::env::var_os("GORE_AS_DUP_DIAG").is_some() {
+                eprintln!(
+                    "[dup] {}::{}({}) traits={:#x} const_method={} ret={} ret_const={}",
+                    c.name,
+                    m.name,
+                    param_sig(m, refs),
+                    m.traits,
+                    m.is_const_method(),
+                    m.ret.render(refs),
+                    m.ret.is_object_const || m.ret.is_read_only,
+                );
+            }
             continue; // duplicate signature
         }
         emit_function_ctor(
@@ -714,7 +733,7 @@ fn emit_function_ctor(
     // `infer_const_result_slots`). The exception is a name whose rows DISAGREE about it — an
     // override family has to declare one return type, so those keep the stripped form, and with
     // it the caller-side locals that could not be const either.
-    let ret = if refs.const_return_is_inconsistent(&f.name) {
+    let ret = if refs.const_return_is_inconsistent(&f.name, is_method && f.is_const_method()) {
         f.ret.render(refs).trim_start_matches("const ").to_string()
     } else {
         f.ret.render(refs)
@@ -2785,20 +2804,28 @@ fn infer_const_result_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
             .and_then(|previous| match previous.op.name {
                 "CALL" | "CALLINTF" | "CALLBND" => {
                     let id = previous.dwords.first().copied().unwrap_or(0) as i32;
-                    Some((refs.func_ret_by_id(id)?, refs.func_by_id(id)?))
+                    Some((
+                        refs.func_ret_by_id(id)?,
+                        refs.func_by_id(id)?,
+                        refs.is_const_method_by_id(id),
+                    ))
                 }
                 "CALLSYS" | "Thiscall1" => {
                     let ptr = previous.qwords.first().copied().unwrap_or(0) as i64;
-                    Some((refs.func_ret_by_ptr(ptr)?, refs.func_by_ptr(ptr)?))
+                    Some((
+                        refs.func_ret_by_ptr(ptr)?,
+                        refs.func_by_ptr(ptr)?,
+                        refs.is_const_method_by_ptr(ptr),
+                    ))
                 }
                 _ => None,
             })
             // A name whose rows disagree about the qualifier is re-emitted WITHOUT it (see
             // `emit_function_ctor`), so its result is not const in the recompiled source either.
-            .is_some_and(|(ret, name)| {
+            .is_some_and(|(ret, name, is_const_method)| {
                 ret.token == 5
                     && (ret.is_object_const || ret.is_read_only)
-                    && !refs.const_return_is_inconsistent(name)
+                    && !refs.const_return_is_inconsistent(name, is_const_method)
             });
         // Every write has to come from a provably const-returning call. A slot the compiler
         // re-used for several of them is still const-valued — the declaration rewrite gives each

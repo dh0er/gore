@@ -7,7 +7,7 @@ use std::path::Path;
 
 use super::disasm::disassemble;
 use super::model::{Func, Module};
-use super::refs::RefResolver;
+use super::refs::{const_return_key, RefResolver};
 
 #[derive(Debug)]
 pub struct EmitAllStats {
@@ -165,16 +165,26 @@ fn unusable_const_returns(mods: &[Module], refs: &RefResolver) -> HashSet<String
                     .and_then(|previous| match previous.op.name {
                         "CALL" | "CALLINTF" | "CALLBND" => {
                             let id = previous.dwords.first().copied().unwrap_or(0) as i32;
-                            Some((refs.func_ret_by_id(id)?, refs.func_by_id(id)?))
+                            Some((
+                                refs.func_ret_by_id(id)?,
+                                refs.func_by_id(id)?,
+                                refs.is_const_method_by_id(id),
+                            ))
                         }
                         "CALLSYS" | "Thiscall1" => {
                             let ptr = previous.qwords.first().copied().unwrap_or(0) as i64;
-                            Some((refs.func_ret_by_ptr(ptr)?, refs.func_by_ptr(ptr)?))
+                            Some((
+                                refs.func_ret_by_ptr(ptr)?,
+                                refs.func_by_ptr(ptr)?,
+                                refs.is_const_method_by_ptr(ptr),
+                            ))
                         }
                         _ => None,
                     })
-                    .filter(|(ret, _)| ret.token == 5 && (ret.is_object_const || ret.is_read_only))
-                    .map(|(_, name)| name.to_owned());
+                    .filter(|(ret, _, _)| {
+                        ret.token == 5 && (ret.is_object_const || ret.is_read_only)
+                    })
+                    .map(|(_, name, is_const_method)| const_return_key(name, is_const_method));
                 match producer {
                     Some(name) => {
                         const_source.insert(destination, name);

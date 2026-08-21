@@ -21,6 +21,12 @@ use super::wire::{Cursor, WireError};
 /// literal is left alone, since spaces inside it are content.
 /// Drop namespace qualifiers from every identifier in a rendered type
 /// (`TSubclassOf<G1R::AIGroup::UAIGroup_StateEvent>` -> `TSubclassOf<UAIGroup_StateEvent>`).
+/// A function's const-return verdict is per NAME AND per const qualifier: a class may declare
+/// both `T f()` and `const T f() const`, and those two rows are not in disagreement.
+pub(crate) fn const_return_key(name: &str, is_const_method: bool) -> String {
+    format!("{name}/{}", if is_const_method { "const" } else { "" })
+}
+
 pub(crate) fn strip_namespaces(ty: &str) -> String {
     let mut out = String::with_capacity(ty.len());
     let mut token = String::new();
@@ -122,8 +128,10 @@ pub struct RefResolver {
     zero_arg_names: HashSet<String>,
     /// Every function name the cache records, so an unknown name can be told from a known one.
     known_func_names: HashSet<String>,
-    /// Function names whose const return no caller can hold (see `unusable_const_returns`).
+    /// `name/const` keys whose const return no caller can hold (see `unusable_const_returns`).
     unusable_const_return_names: HashSet<String>,
+    /// Function pointers the cache records as CONST methods.
+    const_method_ptrs: HashSet<i64>,
     /// Function names whose recorded rows DISAGREE about a const return. Re-emitting the
     /// qualifier for those breaks the language's "must have the same return type as in the base
     /// class" rule, so they keep the stripped form.
@@ -239,7 +247,7 @@ impl RefResolver {
             let name = c.read_sia()?;
             let module = c.read_sia()?; // Module (declaring module name, batch-25f)
             let ns = c.read_sia()?; // Namespace
-            c.skip(4)?; // bIsConst
+            let is_const_method = c.read_bool4()?; // bIsConst
             c.skip(4)?; // bIsImportedDecl
             let is_method = c.read_bool4()?;
             let objtype = c.read_i64()?; // ObjectType ptr (owning class)
@@ -263,15 +271,22 @@ impl RefResolver {
             if is_method && objtype != 0 {
                 owned_methods.push((objtype, name.clone(), params.len()));
             }
+            // Keyed WITH the method's own const qualifier: `T f()` and `const T f() const` are
+            // an accessor pair, not a disagreement, and collapsing them stripped the qualifier
+            // from both halves.
             let returns_const = ret.is_object_const || ret.is_read_only;
-            match const_returns.get(&name) {
+            let const_key = const_return_key(&name, is_const_method);
+            match const_returns.get(&const_key) {
                 Some(seen) if *seen != returns_const => {
-                    r.inconsistent_const_return_names.insert(name.clone());
+                    r.inconsistent_const_return_names.insert(const_key);
                 }
                 None => {
-                    const_returns.insert(name.clone(), returns_const);
+                    const_returns.insert(const_key, returns_const);
                 }
                 _ => {}
+            }
+            if is_const_method {
+                r.const_method_ptrs.insert(key);
             }
             if let [only] = params.as_slice() {
                 // `!is_reference` is a by-value parameter; a reference one has to be const.
@@ -1036,9 +1051,22 @@ impl RefResolver {
 
     /// True when the cache's rows for `name` disagree about returning a const value. An override
     /// family has to declare ONE return type, so a re-emitted qualifier would not compile.
-    pub fn const_return_is_inconsistent(&self, name: &str) -> bool {
-        self.inconsistent_const_return_names.contains(name)
-            || self.unusable_const_return_names.contains(name)
+    pub fn const_return_is_inconsistent(&self, name: &str, is_const_method: bool) -> bool {
+        let key = const_return_key(name, is_const_method);
+        self.inconsistent_const_return_names.contains(&key)
+            || self.unusable_const_return_names.contains(&key)
+    }
+
+    /// True when the cache records this function pointer as a CONST method.
+    pub fn is_const_method_by_ptr(&self, ptr: i64) -> bool {
+        self.const_method_ptrs.contains(&ptr)
+    }
+
+    /// True when the cache records this function id as a CONST method.
+    pub fn is_const_method_by_id(&self, id: i32) -> bool {
+        self.funcid_to_ptr
+            .get(&id)
+            .is_some_and(|ptr| self.const_method_ptrs.contains(ptr))
     }
 
     /// True when every one-parameter `name` in the cache that takes `ty` takes it by value or by
@@ -1305,11 +1333,15 @@ mod tests {
     fn a_const_return_is_kept_unless_the_rows_disagree_or_a_caller_cannot_hold_it() {
         let mut refs = RefResolver::default();
         refs.inconsistent_const_return_names
-            .insert("GetRootNode".to_owned());
-        refs.set_unusable_const_returns(HashSet::from(["GetSpawnedActor".to_owned()]));
-        assert!(refs.const_return_is_inconsistent("GetRootNode"));
-        assert!(refs.const_return_is_inconsistent("GetSpawnedActor"));
-        assert!(!refs.const_return_is_inconsistent("GetSelectedItem"));
+            .insert(const_return_key("GetRootNode", false));
+        refs.set_unusable_const_returns(HashSet::from([const_return_key("GetSpawnedActor", true)]));
+        assert!(refs.const_return_is_inconsistent("GetRootNode", false));
+        assert!(refs.const_return_is_inconsistent("GetSpawnedActor", true));
+        // The same names under the OTHER qualifier are separate rows: `T f()` next to
+        // `const T f() const` is an accessor pair, not a disagreement.
+        assert!(!refs.const_return_is_inconsistent("GetRootNode", true));
+        assert!(!refs.const_return_is_inconsistent("GetSpawnedActor", false));
+        assert!(!refs.const_return_is_inconsistent("GetSelectedItem", false));
     }
 
     #[test]
