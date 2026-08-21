@@ -2577,7 +2577,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     .with_context(|| format!("creating {}", parent.display()))?;
             }
             if generation_receipt.is_some()
-                || compiler.backend == AsCompilerBackendV1::Standalone
+                || used_backend == gore_as::compile::CompilerBackendNameV1::Standalone
             {
                 gore_as::generation_receipt::publish_generation_output_v1(&out, &mini)
                     .map_err(anyhow::Error::msg)
@@ -2605,7 +2605,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 if let Err(error) =
                     gore_as::generation_receipt::publish_generation_receipt_v1(path, receipt)
                 {
-                    match std::fs::remove_file(&out) {
+                    match gore_as::generation_receipt::rollback_generation_output_v1(&out, &mini) {
                         Ok(()) => bail!(
                             "GENERATION_RECEIPT_PUBLICATION_FAILED_OUTPUT_REMOVED: publishing {}: \
                              {error}; removed the no-clobber output {} so no unqualified artifact \

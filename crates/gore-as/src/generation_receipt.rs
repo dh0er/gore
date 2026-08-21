@@ -697,6 +697,92 @@ pub fn publish_generation_output_v1(
     )
 }
 
+/// Remove a just-published output only when an exact, non-reparse handle still contains the
+/// expected bytes.
+///
+/// This is the compensating half of output-then-receipt publication. On Windows the handle is
+/// opened with DELETE authority while denying delete sharing, so validation and deletion apply to
+/// one immutable file object. Platforms without an equivalent pathname-race-free primitive fail
+/// closed and leave the output for explicit recovery.
+pub fn rollback_generation_output_v1(
+    destination: &Path,
+    expected_bytes: &[u8],
+) -> Result<(), GenerationReceiptError> {
+    if expected_bytes.len() as u64 > MAX_GENERATION_OUTPUT_BYTES_V1 {
+        return Err(GenerationReceiptError::InputTooLarge {
+            field: "generation output rollback evidence",
+            actual: expected_bytes.len() as u64,
+            max: MAX_GENERATION_OUTPUT_BYTES_V1,
+        });
+    }
+    rollback_generation_output_exact(destination, expected_bytes).map_err(|reason| {
+        GenerationReceiptError::PublicationUncertain {
+            path: destination.to_path_buf(),
+            reason,
+        }
+    })
+}
+
+#[cfg(windows)]
+fn rollback_generation_output_exact(
+    destination: &Path,
+    expected_bytes: &[u8],
+) -> Result<(), String> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Foundation::GENERIC_READ;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileDispositionInfo, SetFileInformationByHandle, DELETE, FILE_DISPOSITION_INFO,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+    };
+
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .read(true)
+        .access_mode(GENERIC_READ | DELETE)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options
+        .open(destination)
+        .map_err(|error| format!("opening exact published output for rollback: {error}"))?;
+    validate_regular_non_reparse(&file)?;
+    let actual = read_bounded_file(
+        file.try_clone()
+            .map_err(|error| format!("cloning exact rollback handle: {error}"))?,
+        MAX_GENERATION_OUTPUT_BYTES_V1,
+        "published generation output rollback evidence",
+    )?;
+    if actual != expected_bytes {
+        return Err("published output identity or bytes changed before rollback".to_owned());
+    }
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+    let removed = unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle() as _,
+            FileDispositionInfo,
+            std::ptr::from_ref(&disposition).cast(),
+            std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    };
+    if removed == 0 {
+        return Err(format!(
+            "deleting exact published output by handle: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    drop(file);
+    let parent = destination
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    sync_parent_directory(parent)
+}
+
+#[cfg(not(windows))]
+fn rollback_generation_output_exact(_: &Path, _: &[u8]) -> Result<(), String> {
+    Err("exact handle-bound output rollback is unavailable on this platform".to_owned())
+}
+
 fn publish_bytes_atomic_no_clobber_v1(
     destination: &Path,
     bytes: &[u8],
@@ -1683,6 +1769,25 @@ mod tests {
         assert!(matches!(
             publish_generation_output_v1(&published_output, &output_bytes),
             Err(GenerationReceiptError::AlreadyExists(_))
+        ));
+
+        let foreign_output = root.join("foreign.cache");
+        publish_generation_output_v1(&foreign_output, b"different bytes").unwrap();
+        assert!(matches!(
+            rollback_generation_output_v1(&foreign_output, &output_bytes),
+            Err(GenerationReceiptError::PublicationUncertain { .. })
+        ));
+        assert_eq!(std::fs::read(&foreign_output).unwrap(), b"different bytes");
+
+        #[cfg(windows)]
+        {
+            rollback_generation_output_v1(&published_output, &output_bytes).unwrap();
+            assert!(!published_output.exists());
+        }
+        #[cfg(not(windows))]
+        assert!(matches!(
+            rollback_generation_output_v1(&published_output, &output_bytes),
+            Err(GenerationReceiptError::PublicationUncertain { .. })
         ));
 
         let mut value: serde_json::Value =
