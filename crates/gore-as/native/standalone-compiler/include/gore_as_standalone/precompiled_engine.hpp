@@ -1,12 +1,18 @@
 #pragma once
 
 #include "gore_as_standalone/precompiled_data.hpp"
+#include "gore_as_standalone/module_preprocessor.hpp"
+#include "gore_as_standalone/registry_profile.hpp"
 
 #include "angelscript.h"
 
 #include <cstddef>
 #include <string>
 #include <vector>
+
+namespace gore::as::standalone {
+class frontend_compile_runtime;
+}
 
 namespace gore::as::standalone::precompiled {
 
@@ -17,8 +23,15 @@ enum class engine_bridge_phase {
     prepare_engine,
     create_modules,
     create_types,
+    parse_source,
+    generate_source_types,
     create_globals_and_functions,
+    generate_source_functions,
+    layout_types,
+    layout_source_functions,
     relocate_bytecode,
+    compile_source_code,
+    validate_template_instances,
     initialize_globals,
     export_module,
     cleanup,
@@ -44,6 +57,20 @@ struct engine_bridge_result {
 engine_bridge_result rehydrate_cache_checkpoint(
     asIScriptEngine& engine,
     const cache& input,
+    std::vector<asIScriptModule*>& modules);
+
+// Rebuild a final graph from a pristine cache plus source overlays under one
+// RequestBuild/BuildCompleted session. A source module whose name is present
+// in `base` replaces that cached module; any other source module is appended.
+// Saved references are resolved by qualified identity after all replacement
+// shells/declarations exist, never by copying cached engine ids.
+engine_bridge_result compile_mixed_cache_checkpoint(
+    asIScriptEngine& engine,
+    const cache& base,
+    const preprocessor_options& options,
+    const lexical_preprocess_result& source,
+    registry_runtime* registry,
+    frontend_compile_runtime& frontend_runtime,
     std::vector<asIScriptModule*>& modules);
 
 // Export one compiled module through the same generic fork-side subset.

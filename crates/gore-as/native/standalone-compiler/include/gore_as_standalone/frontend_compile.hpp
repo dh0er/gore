@@ -59,6 +59,11 @@ public:
     frontend_compile_runtime(const frontend_compile_runtime&) = delete;
     frontend_compile_runtime& operator=(const frontend_compile_runtime&) = delete;
 
+    // Stable process-local identities used by both the source-only and mixed
+    // cache/source frontends. Generated type metadata retains these pointers,
+    // so the runtime must outlive the engine.
+    [[nodiscard]] void* delegate_tag(bool multicast) noexcept;
+
 private:
     struct impl;
     std::unique_ptr<impl> impl_;

@@ -2,7 +2,7 @@ manifest_version = 1
 component = "gore-as-standalone-compiler"
 component_license = "MIT"
 project_license_file = "../../../../LICENSE"
-status = "pinned-core-with-cache-registry-source-frontend-and-graph-bridge"
+status = "pinned-core-with-mixed-cache-source-graph-bridge"
 
 [current_tree]
 contains_unreal_engine_source = false

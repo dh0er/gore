@@ -181,6 +181,18 @@ if(BUILD_TESTING)
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
     )
 
+    add_executable(gore-as-mixed-engine-smoke tests/mixed_engine_smoke.cpp)
+    target_link_libraries(gore-as-mixed-engine-smoke PRIVATE gore-as-unreangel-core)
+    target_compile_options(gore-as-mixed-engine-smoke PRIVATE
+        /W4 /WX /permissive- /utf-8 /sdl /guard:cf /Brepro
+    )
+    target_link_options(gore-as-mixed-engine-smoke PRIVATE
+        /guard:cf /DYNAMICBASE /NXCOMPAT /Brepro
+    )
+    set_property(TARGET gore-as-mixed-engine-smoke PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    )
+
     add_executable(gore-as-registry-profile-smoke tests/registry_profile_smoke.cpp)
     target_link_libraries(gore-as-registry-profile-smoke PRIVATE gore-as-unreangel-core)
     target_include_directories(gore-as-registry-profile-smoke SYSTEM PRIVATE
@@ -235,6 +247,10 @@ if(BUILD_TESTING)
     add_test(
         NAME gore-as-precompiled-data.engine-smoke
         COMMAND "$<TARGET_FILE:gore-as-precompiled-engine-smoke>"
+    )
+    add_test(
+        NAME gore-as-precompiled-data.mixed-engine-smoke
+        COMMAND "$<TARGET_FILE:gore-as-mixed-engine-smoke>"
     )
     add_test(
         NAME gore-as-registry-profile.replay-smoke

@@ -1,5 +1,7 @@
 #include "gore_as_standalone/precompiled_engine.hpp"
+#include "gore_as_standalone/frontend_compile.hpp"
 
+#include "as_builder.h"
 #include "as_bytecode.h"
 #include "as_datatype.h"
 #include "as_module.h"
@@ -266,7 +268,8 @@ bool validate_function_shape(
 bool validate_module_shape(
     const std::pair<map_string, precompiled_module>& entry,
     std::string& module_name,
-    std::string& detail) {
+    std::string& detail,
+    const bool allow_delegate_tags = false) {
     if (!plain_module_name(entry.first, module_name) ||
         entry.second.module_name.bytes != module_name) {
         detail = "module TMap key and inner ModuleName must be the same non-empty ASCII name";
@@ -274,10 +277,26 @@ bool validate_module_shape(
     }
     const precompiled_module& module = entry.second;
     if (!module.statics_class_name.bytes.empty() ||
-        !module.declared_events.empty() || !module.declared_delegates.empty() ||
-        !module.post_init_functions.empty()) {
-        detail = "checkpoint bridge does not yet replay delegate/statics/post-init records";
+        !module.post_init_functions.empty() ||
+        (!allow_delegate_tags &&
+         (!module.declared_events.empty() || !module.declared_delegates.empty()))) {
+        detail = "checkpoint bridge does not yet replay requested module metadata";
         return false;
+    }
+    std::unordered_set<std::string> declared_delegate_names;
+    for (const archive_string& declared : module.declared_events) {
+        if (!engine_name(declared) ||
+            !declared_delegate_names.emplace(declared.bytes).second) {
+            detail = "declared event/delegate names must be non-empty and unique";
+            return false;
+        }
+    }
+    for (const archive_string& declared : module.declared_delegates) {
+        if (!engine_name(declared) ||
+            !declared_delegate_names.emplace(declared.bytes).second) {
+            detail = "declared event/delegate names must be non-empty and unique";
+            return false;
+        }
     }
     for (const archive_string& imported : module.imported_modules) {
         if (!engine_name(imported)) {
@@ -342,14 +361,16 @@ bool validate_module_shape(
 engine_bridge_result preflight_cache(
     asCScriptEngine& engine,
     const cache& input,
-    std::vector<std::string>& module_names) {
+    std::vector<std::string>& module_names,
+    const bool allow_delegate_tags = false) {
     std::unordered_set<std::string> unique_names;
     module_names.clear();
     module_names.reserve(input.modules.size());
     for (std::size_t index = 0U; index < input.modules.size(); ++index) {
         std::string name;
         std::string detail;
-        if (!validate_module_shape(input.modules[index], name, detail)) {
+        if (!validate_module_shape(
+                input.modules[index], name, detail, allow_delegate_tags)) {
             return failure(engine_bridge_phase::preflight, index, std::move(detail));
         }
         if (!unique_names.emplace(name).second) {
@@ -1252,11 +1273,12 @@ public:
         const precompiled_class& record,
         const std::size_t module_index) {
         records_.emplace(&type, record_location{&record, module_index});
+        order_.push_back(&type);
     }
 
     bool process_all(std::size_t& module_index, std::string& detail) {
-        for (const auto& entry : records_) {
-            if (!process(*entry.first, module_index, detail)) {
+        for (asCObjectType* const type : order_) {
+            if (!process(*type, module_index, detail)) {
                 return false;
             }
         }
@@ -1334,6 +1356,7 @@ private:
     reference_resolver& references_;
     std::unordered_map<asCObjectType*, record_location> records_;
     std::unordered_map<asCObjectType*, std::uint8_t> states_;
+    std::vector<asCObjectType*> order_;
 };
 
 bool attach_class_function(
@@ -1474,11 +1497,12 @@ public:
         const precompiled_class& record,
         const std::size_t module_index) {
         records_.emplace(&type, record_location{&record, module_index});
+        order_.push_back(&type);
     }
 
     bool process_all(std::size_t& module_index, std::string& detail) {
-        for (const auto& entry : records_) {
-            if (!process(*entry.first, module_index, detail)) {
+        for (asCObjectType* const type : order_) {
+            if (!process(*type, module_index, detail)) {
                 return false;
             }
         }
@@ -1547,6 +1571,7 @@ private:
 
     std::unordered_map<asCObjectType*, record_location> records_;
     std::unordered_map<asCObjectType*, std::uint8_t> states_;
+    std::vector<asCObjectType*> order_;
 };
 
 bool add_function_import(
@@ -2326,6 +2351,248 @@ engine_bridge_result export_class(
     return {};
 }
 
+class deferred_build_settings final {
+public:
+    explicit deferred_build_settings(asCScriptEngine& engine) noexcept
+        : engine_(engine),
+          validation_(engine.deferValidationOfTemplateTypes),
+          template_size_(engine.deferCalculatingTemplateSize) {
+        engine_.deferValidationOfTemplateTypes = true;
+        engine_.deferCalculatingTemplateSize = true;
+    }
+
+    ~deferred_build_settings() {
+        engine_.deferValidationOfTemplateTypes = validation_;
+        engine_.deferCalculatingTemplateSize = template_size_;
+    }
+
+private:
+    asCScriptEngine& engine_;
+    bool validation_;
+    bool template_size_;
+};
+
+class source_builder_cleanup final {
+public:
+    void add(asCModule& module) { modules_.push_back(&module); }
+
+    ~source_builder_cleanup() {
+        for (asCModule* const module : modules_) {
+            if (module->builder != nullptr) {
+                asDELETE(module->builder, asCBuilder);
+                module->builder = nullptr;
+            }
+        }
+    }
+
+private:
+    std::vector<asCModule*> modules_;
+};
+
+struct mixed_module_state {
+    asCModule* module = nullptr;
+    const precompiled_module* cached = nullptr;
+    const lexical_module_description* source = nullptr;
+    std::size_t source_index = kNoModule;
+};
+
+asCTypeInfo* find_registered_type(
+    asCScriptEngine& engine,
+    const std::string& name) noexcept {
+    return engine.allRegisteredTypesByName.FindFirst_CaseInsensitive(name.c_str());
+}
+
+bool preprocess_cached_inheritance(asCObjectType& type, std::string& detail) {
+    if (type.derivedFrom != nullptr) {
+        for (asUINT index = 0U; index < type.derivedFrom->properties.GetLength(); ++index) {
+            asCObjectProperty* const property = type.derivedFrom->properties[index];
+            if (property->byteOffset < type.basePropertyOffset) continue;
+            type.properties.PushLast(property);
+            type.propertyTable.Add(property);
+        }
+    }
+    if ((type.flags & asOBJ_VALUE) != 0U) return true;
+    for (asUINT slot = 0U; slot < type.virtualFunctionTable.GetLength(); ++slot) {
+        if (type.virtualFunctionTable[slot] != nullptr) continue;
+        asCScriptFunction* inherited = nullptr;
+        for (asCObjectType* base = type.derivedFrom;
+             base != nullptr; base = base->derivedFrom) {
+            if (slot < base->virtualFunctionTable.GetLength() &&
+                base->virtualFunctionTable[slot] != nullptr) {
+                inherited = base->virtualFunctionTable[slot];
+                break;
+            }
+        }
+        if (inherited == nullptr) {
+            detail = "class virtual slot has no implementation in its base chain";
+            return false;
+        }
+        type.virtualFunctionTable[slot] = inherited;
+        inherited->AddRefInternal();
+        type.methods.PushLast(inherited->id);
+        inherited->AddRefInternal();
+        type.methodTable.Add(inherited);
+    }
+    return true;
+}
+
+// The stock source builder can recursively lay out other source classes, but
+// it treats a precompiled shell (compilingDeclaration == nullptr) as complete.
+// This coordinator therefore walks the combined dependency graph first and
+// invokes the appropriate source or cache layout operation only after every
+// base/value dependency has been completed.
+class mixed_type_coordinator final {
+public:
+    explicit mixed_type_coordinator(reference_resolver& references)
+        : references_(references) {}
+
+    void add_cached(
+        asCObjectType& type,
+        const precompiled_class& record,
+        const std::size_t module_index) {
+        cached_.emplace(&type, cached_location{&record, module_index});
+        order_.push_back(&type);
+    }
+
+    void add_source(asCObjectType& type, const std::size_t module_index) {
+        source_.emplace(&type, module_index);
+        order_.push_back(&type);
+    }
+
+    bool link_cached(std::size_t& module_index, std::string& detail) {
+        for (const auto& entry : cached_) {
+            asCObjectType& type = *entry.first;
+            const cached_location location = entry.second;
+            module_index = location.module_index;
+            type.derivedFrom = nullptr;
+            if (location.record->derived_from != 0) {
+                asCTypeInfo* base_info = nullptr;
+                if (!references_.get_type_info(
+                        location.record->derived_from, base_info, false, detail) ||
+                    base_info == nullptr) {
+                    return false;
+                }
+                type.derivedFrom = CastToObjectType(base_info);
+                if (type.derivedFrom == nullptr ||
+                    (type.derivedFrom->flags & asOBJ_SCRIPT_OBJECT) == 0U) {
+                    detail = "saved script base reference does not resolve to a script object type";
+                    return false;
+                }
+            }
+            type.shadowType = nullptr;
+            type.basePropertyOffset = 0;
+        }
+        return true;
+    }
+
+    bool process_all(std::size_t& module_index, std::string& detail) {
+        for (asCObjectType* const type : order_) {
+            if (!process(*type, module_index, detail)) return false;
+        }
+        return true;
+    }
+
+private:
+    struct cached_location {
+        const precompiled_class* record = nullptr;
+        std::size_t module_index = kNoModule;
+    };
+
+    bool process_dependency(
+        asCTypeInfo* const dependency,
+        std::size_t& module_index,
+        std::string& detail) {
+        if (dependency == nullptr) return true;
+        auto* const object = CastToObjectType(dependency);
+        if (object == nullptr) return true;
+        if ((object->flags & asOBJ_TEMPLATE_SUBTYPE_DETERMINES_SIZE) != 0U) {
+            if (object->templateSubTypes.GetLength() != 0U) {
+                asCTypeInfo* const subtype = object->templateSubTypes[0].GetTypeInfo();
+                if (subtype != nullptr && (subtype->flags & asOBJ_REF) == 0U &&
+                    !process_dependency(subtype, module_index, detail)) {
+                    return false;
+                }
+            }
+            object->CalculateTemplateSize();
+            return true;
+        }
+        if ((object->flags & asOBJ_SCRIPT_OBJECT) == 0U || object->size != -1) {
+            return true;
+        }
+        if (cached_.find(object) == cached_.end() &&
+            source_.find(object) == source_.end()) {
+            detail = "script layout dependency is not owned by the final mixed graph";
+            return false;
+        }
+        return process(*object, module_index, detail);
+    }
+
+    bool process(
+        asCObjectType& type,
+        std::size_t& module_index,
+        std::string& detail) {
+        const auto state = states_.find(&type);
+        if (state != states_.end()) {
+            if (state->second == 2U) return true;
+            detail = "cycle detected in mixed script layout dependencies";
+            return false;
+        }
+        states_.emplace(&type, 1U);
+
+        const auto cached = cached_.find(&type);
+        const auto source = source_.find(&type);
+        if (cached == cached_.end() && source == source_.end()) {
+            detail = "mixed layout requested an unowned script type";
+            return false;
+        }
+        module_index = cached != cached_.end()
+            ? cached->second.module_index
+            : source->second;
+
+        if (!process_dependency(type.derivedFrom, module_index, detail)) return false;
+
+        if (cached != cached_.end()) {
+            for (const precompiled_property& property : cached->second.record->properties) {
+                if (property.type.type_info == 0) continue;
+                asCTypeInfo* property_type = nullptr;
+                if (!references_.get_type_info(
+                        property.type.type_info, property_type, false, detail) ||
+                    !process_dependency(property_type, module_index, detail)) {
+                    return false;
+                }
+            }
+            if (!create_class_properties(
+                    type, *cached->second.record, references_, detail) ||
+                !preprocess_cached_inheritance(type, detail)) {
+                return false;
+            }
+        } else {
+            for (asUINT index = 0U; index < type.properties.GetLength(); ++index) {
+                asCTypeInfo* const property_type =
+                    type.properties[index]->type.GetTypeInfo();
+                if (property_type != nullptr &&
+                    (property_type->flags & asOBJ_VALUE) != 0U &&
+                    !process_dependency(property_type, module_index, detail)) {
+                    return false;
+                }
+            }
+            if (type.module == nullptr || type.module->builder == nullptr ||
+                !type.module->builder->EnsureClassLayouted(&type) || type.size < 0) {
+                detail = "source builder failed to lay out a mixed-graph script type";
+                return false;
+            }
+        }
+        states_[&type] = 2U;
+        return true;
+    }
+
+    reference_resolver& references_;
+    std::unordered_map<asCObjectType*, cached_location> cached_;
+    std::unordered_map<asCObjectType*, std::size_t> source_;
+    std::unordered_map<asCObjectType*, std::uint8_t> states_;
+    std::vector<asCObjectType*> order_;
+};
+
 } // namespace
 
 engine_bridge_result rehydrate_cache_checkpoint(
@@ -2596,6 +2863,511 @@ engine_bridge_result rehydrate_cache_checkpoint(
         return failure(
             engine_bridge_phase::cleanup, kNoModule,
             "unexpected precompiled engine bridge failure", asERROR);
+    }
+}
+
+engine_bridge_result compile_mixed_cache_checkpoint(
+    asIScriptEngine& engine_interface,
+    const cache& base,
+    const preprocessor_options& options,
+    const lexical_preprocess_result& source,
+    registry_runtime* const registry,
+    frontend_compile_runtime& frontend_runtime,
+    std::vector<asIScriptModule*>& modules) {
+    try {
+        auto& engine = static_cast<asCScriptEngine&>(engine_interface);
+        std::vector<std::string> cache_names;
+        engine_bridge_result result = preflight_cache(
+            engine, base, cache_names, true);
+        if (!result.succeeded()) return result;
+        if (!source.ok || source.modules.size() > max_preprocessor_sources ||
+            std::any_of(
+                source.diagnostics.begin(), source.diagnostics.end(),
+                [](const preprocessor_diagnostic& diagnostic) {
+                    return diagnostic.severity == preprocessor_diagnostic_severity::error;
+                })) {
+            return failure(
+                engine_bridge_phase::preflight, kNoModule,
+                "mixed frontend input is invalid or contains preprocessing errors",
+                asINVALID_ARG);
+        }
+
+        std::unordered_map<std::string, std::size_t> cache_by_name;
+        cache_by_name.reserve(cache_names.size());
+        for (std::size_t index = 0U; index < cache_names.size(); ++index) {
+            cache_by_name.emplace(cache_names[index], index);
+        }
+        std::unordered_map<std::string, std::size_t> source_by_name;
+        source_by_name.reserve(source.modules.size());
+        std::unordered_map<std::string, const native_super_type*> native_by_path;
+        native_by_path.reserve(options.native_super_types.size());
+        for (const native_super_type& native : options.native_super_types) {
+            if (native.unreal_class_path.empty() ||
+                !native_by_path.emplace(native.unreal_class_path, &native).second) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "native-super profile has an empty or duplicate Unreal class path",
+                    asINVALID_CONFIGURATION);
+            }
+        }
+
+        std::vector<std::string> final_names = cache_names;
+        final_names.reserve(cache_names.size() + source.modules.size());
+        std::vector<std::size_t> source_final_indices(
+            source.modules.size(), kNoModule);
+        for (std::size_t index = 0U; index < source.modules.size(); ++index) {
+            const lexical_module_description& description = source.modules[index];
+            if (description.module_name.empty() ||
+                !source_by_name.emplace(description.module_name, index).second) {
+                return failure(
+                    engine_bridge_phase::preflight, index,
+                    "mixed frontend contains an empty or duplicate module name",
+                    asINVALID_ARG);
+            }
+            const auto cached = cache_by_name.find(description.module_name);
+            if (cached != cache_by_name.end()) {
+                source_final_indices[index] = cached->second;
+            } else {
+                if (engine.GetModule(description.module_name.c_str(), false) != nullptr) {
+                    return failure(
+                        engine_bridge_phase::preflight, index,
+                        "added source module already exists in the target engine",
+                        asALREADY_REGISTERED);
+                }
+                source_final_indices[index] = final_names.size();
+                final_names.push_back(description.module_name);
+            }
+            if (!description.delegates.empty() && registry == nullptr) {
+                return failure(
+                    engine_bridge_phase::preflight, index,
+                    "delegate compilation requires the live registry runtime",
+                    asINVALID_CONFIGURATION);
+            }
+            for (const preprocessed_class_description& type : description.classes) {
+                if (type.is_struct || type.code_super_class.empty()) continue;
+                const auto native = native_by_path.find(type.code_super_class);
+                if (native == native_by_path.end() ||
+                    find_registered_type(
+                        engine, native->second->angelscript_type_name) == nullptr) {
+                    return failure(
+                        engine_bridge_phase::preflight, index,
+                        "source class has an unavailable profiled native superclass",
+                        asINVALID_CONFIGURATION);
+                }
+            }
+        }
+
+        std::unordered_set<std::string> final_name_set(
+            final_names.begin(), final_names.end());
+        for (std::size_t index = 0U; index < source.modules.size(); ++index) {
+            for (const std::string& imported : source.modules[index].imported_modules) {
+                if (final_name_set.find(imported) == final_name_set.end() &&
+                    engine.GetModule(imported.c_str(), false) == nullptr) {
+                    return failure(
+                        engine_bridge_phase::preflight, index,
+                        "source import is absent from the final mixed graph",
+                        asNO_MODULE);
+                }
+            }
+        }
+        if (registry == nullptr && std::any_of(
+                base.modules.begin(), base.modules.end(),
+                [](const auto& entry) {
+                    return !entry.second.declared_events.empty() ||
+                           !entry.second.declared_delegates.empty();
+                })) {
+            return failure(
+                engine_bridge_phase::preflight, kNoModule,
+                "cached delegate restoration requires the live registry runtime",
+                asINVALID_CONFIGURATION);
+        }
+
+        reference_resolver references(engine, base);
+        mixed_type_coordinator types(references);
+        module_cleanup cleanup(engine);
+        cleanup.reserve(final_names.size());
+        build_guard guard(engine);
+        result.code = guard.request();
+        if (result.code < 0) {
+            result.phase = engine_bridge_phase::request_build;
+            return result;
+        }
+        deferred_build_settings deferred(engine);
+        engine.PrepareEngine();
+        if (engine.configFailed) {
+            return failure(
+                engine_bridge_phase::prepare_engine, kNoModule,
+                "engine configuration failed", asINVALID_CONFIGURATION);
+        }
+
+        std::vector<mixed_module_state> states(final_names.size());
+        for (std::size_t index = 0U; index < final_names.size(); ++index) {
+            auto* const module = static_cast<asCModule*>(
+                engine.GetModule(final_names[index].c_str(), asGM_ALWAYS_CREATE));
+            if (module == nullptr) {
+                return failure(
+                    engine_bridge_phase::create_modules, index,
+                    "engine refused to create a mixed-graph module", asERROR);
+            }
+            module->baseModuleName = final_names[index].c_str();
+            states[index].module = module;
+            cleanup.add(final_names[index]);
+        }
+        for (std::size_t source_index = 0U;
+             source_index < source.modules.size(); ++source_index) {
+            mixed_module_state& state = states[source_final_indices[source_index]];
+            state.source = &source.modules[source_index];
+            state.source_index = source_index;
+        }
+        for (std::size_t index = 0U; index < base.modules.size(); ++index) {
+            mixed_module_state& state = states[index];
+            if (state.source != nullptr) continue;
+            state.cached = &base.modules[index].second;
+            for (const precompiled_class& record : state.cached->classes) {
+                asCObjectType* const type = create_class_shell(engine, *state.module, record);
+                types.add_cached(*type, record, index);
+            }
+            for (const precompiled_enum& record : state.cached->enums) {
+                create_enum(engine, *state.module, record);
+            }
+            const auto classify_cached = [&](
+                const std::vector<archive_string>& names,
+                const bool multicast) -> bool {
+                for (const archive_string& name : names) {
+                    asCObjectType* const type = CastToObjectType(
+                        state.module->allLocalTypes.FindFirst(name.bytes.c_str()));
+                    void* const tag = frontend_runtime.delegate_tag(multicast);
+                    if (type == nullptr || tag == nullptr) return false;
+                    type->plainUserData = reinterpret_cast<asPWORD>(tag);
+                    if (!classify_dynamic_script_type(
+                            *registry, *type,
+                            multicast
+                                ? dynamic_script_type_category::multicast_delegate
+                                : dynamic_script_type_category::delegate)) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            if (!classify_cached(state.cached->declared_events, true) ||
+                !classify_cached(state.cached->declared_delegates, false)) {
+                return failure(
+                    engine_bridge_phase::create_types, index,
+                    "cached delegate/event tag could not be restored", asERROR);
+            }
+        }
+
+        source_builder_cleanup builder_cleanup;
+        for (std::size_t index = 0U; index < states.size(); ++index) {
+            mixed_module_state& state = states[index];
+            if (state.source == nullptr) continue;
+            builder_cleanup.add(*state.module);
+            for (const preprocessed_class_description& type : state.source->classes) {
+                if (type.is_struct || type.code_super_class.empty()) continue;
+                const native_super_type& native = *native_by_path.at(type.code_super_class);
+                asPreClassData data;
+                data.PropertyOffset = static_cast<std::size_t>(native.property_offset);
+                data.ShadowType = find_registered_type(engine, native.angelscript_type_name);
+                state.module->AddPreClassData(type.class_name.c_str(), data);
+            }
+            for (const preprocessed_delegate_description& type : state.source->delegates) {
+                asPreClassData data;
+                data.InitialUserData = frontend_runtime.delegate_tag(type.multicast);
+                if (data.InitialUserData == nullptr) {
+                    return failure(
+                        engine_bridge_phase::create_types, index,
+                        "frontend runtime was moved from", asINVALID_ARG);
+                }
+                state.module->AddPreClassData(type.delegate_name.c_str(), data);
+            }
+            for (const preprocessed_code_section& section : state.source->code) {
+                const int added = state.module->AddScriptSection(
+                    section.absolute_path.c_str(), section.conditioned_code.data(),
+                    section.conditioned_code.size(), 0);
+                if (added < 0) {
+                    return failure(
+                        engine_bridge_phase::create_modules, index,
+                        "engine rejected a mixed source section", added);
+                }
+            }
+        }
+
+        for (std::size_t index = 0U; index < states.size(); ++index) {
+            const auto import_one = [&](const std::string& imported) -> bool {
+                asIScriptModule* const dependency =
+                    engine.GetModule(imported.c_str(), false);
+                if (dependency == nullptr) return false;
+                states[index].module->ImportModule(dependency);
+                return true;
+            };
+            if (states[index].cached != nullptr) {
+                for (const archive_string& imported :
+                     states[index].cached->imported_modules) {
+                    if (!import_one(imported.bytes)) {
+                        return failure(
+                            engine_bridge_phase::create_modules, index,
+                            "cached import is absent from the final mixed graph", asNO_MODULE);
+                    }
+                }
+            } else {
+                for (const std::string& imported : states[index].source->imported_modules) {
+                    if (!import_one(imported)) {
+                        return failure(
+                            engine_bridge_phase::create_modules, index,
+                            "source import disappeared after mixed preflight", asNO_MODULE);
+                    }
+                }
+            }
+        }
+
+        for (std::size_t index = 0U; index < states.size(); ++index) {
+            mixed_module_state& state = states[index];
+            if (state.source == nullptr || state.module->builder == nullptr) continue;
+            state.module->InternalReset();
+            const int code = state.module->builder->BuildParallelParseScripts();
+            if (code != asSUCCESS) {
+                return failure(
+                    engine_bridge_phase::parse_source, index,
+                    "source parse failed in mixed graph", code);
+            }
+        }
+        for (std::size_t index = 0U; index < states.size(); ++index) {
+            mixed_module_state& state = states[index];
+            if (state.source == nullptr || state.module->builder == nullptr) continue;
+            const int code = state.module->builder->BuildGenerateTypes();
+            if (code != asSUCCESS) {
+                return failure(
+                    engine_bridge_phase::generate_source_types, index,
+                    "source type generation failed in mixed graph", code);
+            }
+            for (asUINT type_index = 0U;
+                 type_index < state.module->classTypes.GetLength(); ++type_index) {
+                types.add_source(*state.module->classTypes[type_index], index);
+            }
+            for (const preprocessed_delegate_description& delegate :
+                 state.source->delegates) {
+                const std::string declaration = delegate.name_space.empty()
+                    ? delegate.delegate_name
+                    : delegate.name_space + "::" + delegate.delegate_name;
+                asITypeInfo* const type =
+                    state.module->GetTypeInfoByDecl(declaration.c_str());
+                if (type == nullptr || registry == nullptr ||
+                    !classify_dynamic_script_type(
+                        *registry, *type,
+                        delegate.multicast
+                            ? dynamic_script_type_category::multicast_delegate
+                            : dynamic_script_type_category::delegate)) {
+                    return failure(
+                        engine_bridge_phase::generate_source_types, index,
+                        "source delegate classification failed in mixed graph", asERROR);
+                }
+            }
+        }
+
+        std::size_t failed_module = kNoModule;
+        std::string detail;
+        if (!types.link_cached(failed_module, detail)) {
+            return failure(
+                engine_bridge_phase::create_types, failed_module,
+                std::move(detail), asERROR);
+        }
+
+        // Publish every cached function declaration before source Stage 2 so
+        // added/edited modules can compile declarations against unchanged
+        // precompiled providers regardless of final module order.
+        for (std::size_t index = 0U; index < states.size(); ++index) {
+            mixed_module_state& state = states[index];
+            if (state.cached == nullptr) continue;
+            const int section = engine.GetScriptSectionNameIndex(
+                state.cached->script_relative_filename.bytes.c_str());
+            for (const function_import& imported : state.cached->function_imports) {
+                detail.clear();
+                if (!add_function_import(engine, *state.module, imported, references, detail)) {
+                    return failure(
+                        engine_bridge_phase::create_globals_and_functions, index,
+                        std::move(detail), asERROR);
+                }
+            }
+            for (const precompiled_function& record : state.cached->functions) {
+                asCScriptFunction* function = nullptr;
+                detail.clear();
+                if (!create_function(
+                        engine, *state.module, record, section,
+                        references, function, detail)) {
+                    return failure(
+                        engine_bridge_phase::create_globals_and_functions, index,
+                        std::move(detail), asERROR);
+                }
+                function->id = engine.GetNextScriptFunctionId();
+                function->CalculateParameterOffsets();
+                state.module->AddScriptFunction(function);
+                state.module->globalFunctions.Add(function);
+                state.module->globalFunctionList.PushLast(function);
+            }
+            for (std::size_t class_index = 0U;
+                 class_index < state.cached->classes.size(); ++class_index) {
+                detail.clear();
+                if (!create_class_functions(
+                        engine, *state.module,
+                        *state.module->classTypes[static_cast<asUINT>(class_index)],
+                        state.cached->classes[class_index], section,
+                        references, detail)) {
+                    return failure(
+                        engine_bridge_phase::create_globals_and_functions, index,
+                        std::move(detail), asERROR);
+                }
+            }
+        }
+        for (std::size_t index = 0U; index < states.size(); ++index) {
+            mixed_module_state& state = states[index];
+            if (state.source == nullptr || state.module->builder == nullptr) continue;
+            const int code = state.module->builder->BuildGenerateFunctions();
+            if (code != asSUCCESS) {
+                return failure(
+                    engine_bridge_phase::generate_source_functions, index,
+                    "source function generation failed in mixed graph", code);
+            }
+        }
+
+        failed_module = kNoModule;
+        detail.clear();
+        if (!types.process_all(failed_module, detail)) {
+            return failure(
+                engine_bridge_phase::layout_types, failed_module,
+                std::move(detail), asERROR);
+        }
+        for (std::size_t index = 0U; index < states.size(); ++index) {
+            mixed_module_state& state = states[index];
+            if (state.source == nullptr || state.module->builder == nullptr) continue;
+            const int code = state.module->builder->BuildLayoutClasses();
+            if (code != asSUCCESS) {
+                return failure(
+                    engine_bridge_phase::layout_types, index,
+                    "source class layout finalization failed in mixed graph", code);
+            }
+        }
+
+        for (std::size_t index = 0U; index < states.size(); ++index) {
+            mixed_module_state& state = states[index];
+            if (state.cached == nullptr) continue;
+            const int section = engine.GetScriptSectionNameIndex(
+                state.cached->script_relative_filename.bytes.c_str());
+            for (const precompiled_global& global : state.cached->global_variables) {
+                asCGlobalProperty* property = nullptr;
+                detail.clear();
+                if (!create_global(
+                        engine, *state.module, global, section,
+                        references, property, detail)) {
+                    return failure(
+                        engine_bridge_phase::create_globals_and_functions, index,
+                        std::move(detail), asERROR);
+                }
+            }
+            for (std::size_t class_index = 0U;
+                 class_index < state.cached->classes.size(); ++class_index) {
+                detail.clear();
+                if (!bind_class_function_references(
+                        *state.module->classTypes[static_cast<asUINT>(class_index)],
+                        state.cached->classes[class_index], references, detail)) {
+                    return failure(
+                        engine_bridge_phase::create_globals_and_functions, index,
+                        std::move(detail), asERROR);
+                }
+            }
+        }
+
+        engine.deferCalculatingTemplateSize = false;
+        for (asCObjectType* instance : engine.unvalidatedTemplateInstances) {
+            instance->CalculateTemplateSize();
+        }
+        for (std::size_t index = 0U; index < states.size(); ++index) {
+            mixed_module_state& state = states[index];
+            if (state.source == nullptr || state.module->builder == nullptr) continue;
+            const int code = state.module->builder->BuildLayoutFunctions();
+            if (code != asSUCCESS) {
+                return failure(
+                    engine_bridge_phase::layout_source_functions, index,
+                    "source function layout failed in mixed graph", code);
+            }
+        }
+
+        for (std::size_t index = 0U; index < states.size(); ++index) {
+            mixed_module_state& state = states[index];
+            if (state.cached == nullptr) continue;
+            for (asUINT function_index = 0U;
+                 function_index < state.module->scriptFunctions.GetLength();
+                 ++function_index) {
+                detail.clear();
+                if (!references.relocate_function(
+                        *state.module->scriptFunctions[function_index], detail)) {
+                    return failure(
+                        engine_bridge_phase::relocate_bytecode, index,
+                        std::move(detail), asERROR);
+                }
+            }
+            for (asUINT global_index = 0U;
+                 global_index < state.module->scriptGlobalsList.GetLength();
+                 ++global_index) {
+                asCScriptFunction* const initializer =
+                    state.module->scriptGlobalsList[global_index]->GetInitFunc();
+                if (initializer == nullptr) continue;
+                detail.clear();
+                if (!references.relocate_function(*initializer, detail)) {
+                    return failure(
+                        engine_bridge_phase::relocate_bytecode, index,
+                        std::move(detail), asERROR);
+                }
+            }
+        }
+        for (std::size_t index = 0U; index < states.size(); ++index) {
+            mixed_module_state& state = states[index];
+            if (state.source == nullptr || state.module->builder == nullptr) continue;
+            const int code = state.module->builder->BuildCompileCode();
+            asDELETE(state.module->builder, asCBuilder);
+            state.module->builder = nullptr;
+            if (code != asSUCCESS) {
+                return failure(
+                    engine_bridge_phase::compile_source_code, index,
+                    "source bytecode compilation failed in mixed graph", code);
+            }
+        }
+        for (mixed_module_state& state : states) state.module->JITCompile();
+
+        asCBuilder validator(&engine, nullptr);
+        validator.Reset();
+        validator.EvaluateTemplateInstances(false);
+        engine.deferValidationOfTemplateTypes = false;
+        if (validator.numErrors > 0) {
+            return failure(
+                engine_bridge_phase::validate_template_instances, kNoModule,
+                "mixed graph contains invalid template instances", asERROR);
+        }
+        for (std::size_t index = 0U; index < states.size(); ++index) {
+            const int code = states[index].module->ResetGlobalVars(nullptr);
+            if (code != asSUCCESS) {
+                return failure(
+                    engine_bridge_phase::initialize_globals, index,
+                    "mixed module global initialization failed", code);
+            }
+        }
+
+        std::vector<asIScriptModule*> built;
+        built.reserve(states.size());
+        for (const mixed_module_state& state : states) built.push_back(state.module);
+        modules = std::move(built);
+        cleanup.keep();
+        return {};
+    } catch (const std::bad_alloc&) {
+        return failure(
+            engine_bridge_phase::cleanup, kNoModule,
+            "allocation failed in mixed cache/source compiler", asOUT_OF_MEMORY);
+    } catch (const std::exception& exception) {
+        return failure(
+            engine_bridge_phase::cleanup, kNoModule, exception.what(), asERROR);
+    } catch (...) {
+        return failure(
+            engine_bridge_phase::cleanup, kNoModule,
+            "unexpected mixed cache/source compiler failure", asERROR);
     }
 }
 

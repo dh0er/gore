@@ -4,8 +4,8 @@ This directory contains the hermetic native process boundary and the pinned,
 modified UNREANGEL AngelScript core used by the future standalone compiler. The
 core is now a Windows-x64/MSVC static library with a source frontend and a real
 graph compile bridge; the sidecar's `compile` operation remains deliberately
-fail-closed until the captured G1R profile, mixed precompiled/source apply path,
-and cache emitter are integrated.
+fail-closed until the captured G1R profile, remaining Unreal metadata/runtime
+callbacks, and final cache emitter are integrated.
 
 No target links or loads Unreal Engine or a game DLL. Nothing launches the game,
 and the sidecar does not yet publish compiled output. CMake performs no downloads
@@ -47,12 +47,11 @@ only compile after the graph-wide type barrier. The same test injects a parse
 error and then successfully rebuilds that module, covering builder lifetime and
 engine build-lock release.
 
-This is phase-orchestration parity, not yet a complete G1R mixed module graph.
-The source bridge now supplies explicit import edges plus code-class and
-delegate pre-class data, but active/precompiled selection, automatic dependency
-closure and reference replacement for edited modules still require the mixed
-apply orchestrator. Those values must come from the decoded cache and sealed
-G1R profile; the native layer does not infer or manufacture them.
+The source-only graph remains useful as a focused frontend boundary. The mixed
+cache/source bridge described below now owns active/precompiled selection and
+reference replacement for edited modules. Automatic dependency closure and
+the remaining G1R-only records must still come from decoded cache/profile facts;
+the native layer does not infer or manufacture them.
 
 The compatibility layer is also not an Unreal implementation. Its containers
 and hashing are sufficient for the generic core checkpoint, settings are safe
@@ -86,7 +85,7 @@ graph barriers atomically. Its smoke compiles a consumer against a provider's
 preprocessed USTRUCT and proves a rejected graph leaves no module behind. This
 does not yet cover the donor's external `OnProcessChunks`/ClassAnalyze hooks,
 editor-only builder hook, exact FName Unicode comparison, authoritative source
-encoding/code hashes, or mixed precompiled/source staging for edited modules.
+encoding/code hashes, or automatic dependency closure.
 
 The Rust compiler profile now parses and validates all three frontend payloads
 as typed, independently digest-bound schemas. The preprocessor payload carries
@@ -149,15 +148,23 @@ derived layouts, and proves that an invalid tail mapping rejects atomically.
 Reference-class allocation is not executed in this hermetic smoke because the
 fork delegates those objects to Unreal allocation/runtime semantics.
 
-This remains an engine-apply checkpoint, not full G1R cache parity. The current
-rehydrator applies a complete precompiled graph in one operation and the source
-bridge compiles a separate new graph. Edited modules require a mixed Stage
-1/2/3 orchestrator so unchanged bytecode references resolve directly to the
-replacement types/functions rather than an old module. Unreal shadow layouts
-and class/property/function metadata, delegate/event tags,
-statics and post-init hooks, string-literal globals, an actual captured G1R
-registry, authoritative preprocessing/module discovery and safe sidecar output
-publication remain mandatory and fail closed.
+`compile_mixed_cache_checkpoint` now substitutes edited source modules directly
+into the pristine cache graph and appends source additions under one engine
+build session. It creates every final module and type shell before declarations,
+publishes cached function declarations before source Stage 2, resolves a single
+cross-source/cache layout dependency graph, relocates unchanged bytecode only
+after replacement identities exist, compiles source code, validates templates,
+and initializes globals atomically. Its smoke deliberately shifts both target
+type and function IDs, changes an edited struct's property offset, executes an
+unchanged precompiled consumer against the replacements, compiles an added
+module against that consumer, and proves a parse failure leaves no module.
+
+This remains an engine-apply checkpoint, not full G1R cache parity. Cached
+delegate/event tags are supported by the mixed path, while the complete-cache
+rehydrator continues to reject them. Unreal shadow layouts and class/property/
+function metadata, statics and post-init hooks, string-literal globals, an
+actual captured G1R registry, authoritative preprocessing/module discovery and
+safe sidecar output publication remain mandatory and fail closed.
 
 ## Registry replay checkpoint
 

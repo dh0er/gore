@@ -167,6 +167,13 @@ frontend_compile_runtime::frontend_compile_runtime(frontend_compile_runtime&&) n
 frontend_compile_runtime& frontend_compile_runtime::operator=(
     frontend_compile_runtime&&) noexcept = default;
 
+void* frontend_compile_runtime::delegate_tag(const bool multicast) noexcept {
+    if (impl_ == nullptr) return nullptr;
+    return multicast
+        ? static_cast<void*>(&impl_->multicast_delegate_tag)
+        : static_cast<void*>(&impl_->delegate_tag);
+}
+
 frontend_compile_result compile_preprocessed_module_graph(
     asIScriptEngine& engine,
     const preprocessor_options& options,
