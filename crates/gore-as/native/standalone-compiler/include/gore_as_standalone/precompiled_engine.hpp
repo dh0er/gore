@@ -87,4 +87,17 @@ engine_bridge_result export_module_checkpoint(
     precompiled_module& output,
     cache* reference_tables = nullptr);
 
+// Exports every final mixed-graph module into one fresh, internally coherent
+// reference-table namespace. Unchanged cache modules regain their exact
+// descriptor-only metadata after structural order verification; source
+// modules receive the preprocessor projection. The caller supplies the
+// profile-qualified build identifier and newly generated output GUID.
+engine_bridge_result export_mixed_graph_checkpoint(
+    const cache& base,
+    const lexical_preprocess_result& source,
+    const std::vector<asIScriptModule*>& modules,
+    const std::array<std::uint8_t, 16U>& data_guid,
+    std::int32_t build_identifier,
+    cache& output);
+
 } // namespace gore::as::standalone::precompiled

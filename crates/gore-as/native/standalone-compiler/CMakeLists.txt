@@ -45,6 +45,7 @@ set(unreangel_core_sources
     src/module_preprocessor.cpp
     src/precompiled_data.cpp
     src/precompiled_engine.cpp
+    src/precompiled_metadata.cpp
     src/registry_profile.cpp
 )
 
@@ -84,6 +85,7 @@ set_source_files_properties(
     src/module_preprocessor.cpp
     src/precompiled_data.cpp
     src/precompiled_engine.cpp
+    src/precompiled_metadata.cpp
     src/registry_profile.cpp
     PROPERTIES COMPILE_OPTIONS "/W4;/WX;/permissive-;/sdl"
 )
@@ -193,6 +195,23 @@ if(BUILD_TESTING)
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
     )
 
+    add_executable(
+        gore-as-precompiled-metadata-smoke
+        tests/precompiled_metadata_smoke.cpp
+    )
+    target_link_libraries(
+        gore-as-precompiled-metadata-smoke PRIVATE gore-as-unreangel-core
+    )
+    target_compile_options(gore-as-precompiled-metadata-smoke PRIVATE
+        /W4 /WX /permissive- /utf-8 /sdl /guard:cf /Brepro
+    )
+    target_link_options(gore-as-precompiled-metadata-smoke PRIVATE
+        /guard:cf /DYNAMICBASE /NXCOMPAT /Brepro
+    )
+    set_property(TARGET gore-as-precompiled-metadata-smoke PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    )
+
     add_executable(gore-as-registry-profile-smoke tests/registry_profile_smoke.cpp)
     target_link_libraries(gore-as-registry-profile-smoke PRIVATE gore-as-unreangel-core)
     target_include_directories(gore-as-registry-profile-smoke SYSTEM PRIVATE
@@ -251,6 +270,10 @@ if(BUILD_TESTING)
     add_test(
         NAME gore-as-precompiled-data.mixed-engine-smoke
         COMMAND "$<TARGET_FILE:gore-as-mixed-engine-smoke>"
+    )
+    add_test(
+        NAME gore-as-precompiled-data.metadata-smoke
+        COMMAND "$<TARGET_FILE:gore-as-precompiled-metadata-smoke>"
     )
     add_test(
         NAME gore-as-registry-profile.replay-smoke

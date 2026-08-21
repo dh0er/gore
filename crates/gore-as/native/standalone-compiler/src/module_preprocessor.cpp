@@ -1,6 +1,7 @@
 #include "gore_as_standalone/module_preprocessor.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <optional>
 #include <regex>
@@ -456,6 +457,147 @@ std::string ascii_fold(std::string value) {
         }
     }
     return value;
+}
+
+std::uint64_t rotate_left(const std::uint64_t value, const unsigned count) noexcept {
+    return (value << count) | (value >> (64U - count));
+}
+
+std::uint32_t read_u32_le(const std::uint8_t* value) noexcept {
+    return static_cast<std::uint32_t>(value[0]) |
+           (static_cast<std::uint32_t>(value[1]) << 8U) |
+           (static_cast<std::uint32_t>(value[2]) << 16U) |
+           (static_cast<std::uint32_t>(value[3]) << 24U);
+}
+
+std::uint64_t read_u64_le(const std::uint8_t* value) noexcept {
+    return static_cast<std::uint64_t>(read_u32_le(value)) |
+           (static_cast<std::uint64_t>(read_u32_le(value + 4U)) << 32U);
+}
+
+std::uint64_t xxh64_round(std::uint64_t accumulator, const std::uint64_t input) noexcept {
+    constexpr std::uint64_t prime1 = 11400714785074694791ULL;
+    constexpr std::uint64_t prime2 = 14029467366897019727ULL;
+    accumulator += input * prime2;
+    accumulator = rotate_left(accumulator, 31U);
+    return accumulator * prime1;
+}
+
+std::uint64_t xxh64(const std::uint8_t* data, const std::size_t size) noexcept {
+    constexpr std::uint64_t prime1 = 11400714785074694791ULL;
+    constexpr std::uint64_t prime2 = 14029467366897019727ULL;
+    constexpr std::uint64_t prime3 = 1609587929392839161ULL;
+    constexpr std::uint64_t prime4 = 9650029242287828579ULL;
+    constexpr std::uint64_t prime5 = 2870177450012600261ULL;
+    const std::uint8_t* current = data;
+    const std::uint8_t* const end = data + size;
+    std::uint64_t hash = 0U;
+    if (size >= 32U) {
+        std::uint64_t v1 = prime1 + prime2;
+        std::uint64_t v2 = prime2;
+        std::uint64_t v3 = 0U;
+        std::uint64_t v4 = 0U - prime1;
+        const std::uint8_t* const limit = end - 32U;
+        do {
+            v1 = xxh64_round(v1, read_u64_le(current)); current += 8U;
+            v2 = xxh64_round(v2, read_u64_le(current)); current += 8U;
+            v3 = xxh64_round(v3, read_u64_le(current)); current += 8U;
+            v4 = xxh64_round(v4, read_u64_le(current)); current += 8U;
+        } while (current <= limit);
+        hash = rotate_left(v1, 1U) + rotate_left(v2, 7U) +
+               rotate_left(v3, 12U) + rotate_left(v4, 18U);
+        for (const std::uint64_t value : {v1, v2, v3, v4}) {
+            hash ^= xxh64_round(0U, value);
+            hash = hash * prime1 + prime4;
+        }
+    } else {
+        hash = prime5;
+    }
+    hash += static_cast<std::uint64_t>(size);
+    while (current + 8U <= end) {
+        const std::uint64_t lane = xxh64_round(0U, read_u64_le(current));
+        hash ^= lane;
+        hash = rotate_left(hash, 27U) * prime1 + prime4;
+        current += 8U;
+    }
+    if (current + 4U <= end) {
+        hash ^= static_cast<std::uint64_t>(read_u32_le(current)) * prime1;
+        hash = rotate_left(hash, 23U) * prime2 + prime3;
+        current += 4U;
+    }
+    while (current < end) {
+        hash ^= static_cast<std::uint64_t>(*current++) * prime5;
+        hash = rotate_left(hash, 11U) * prime1;
+    }
+    hash ^= hash >> 33U;
+    hash *= prime2;
+    hash ^= hash >> 29U;
+    hash *= prime3;
+    hash ^= hash >> 32U;
+    return hash;
+}
+
+bool append_utf16le(
+    std::vector<std::uint8_t>& output,
+    const std::uint32_t scalar) {
+    if (scalar > 0x10ffffU || (scalar >= 0xd800U && scalar <= 0xdfffU)) {
+        return false;
+    }
+    const auto append_unit = [&output](const std::uint16_t value) {
+        output.push_back(static_cast<std::uint8_t>(value & 0xffU));
+        output.push_back(static_cast<std::uint8_t>(value >> 8U));
+    };
+    if (scalar <= 0xffffU) {
+        append_unit(static_cast<std::uint16_t>(scalar));
+    } else {
+        const std::uint32_t value = scalar - 0x10000U;
+        append_unit(static_cast<std::uint16_t>(0xd800U + (value >> 10U)));
+        append_unit(static_cast<std::uint16_t>(0xdc00U + (value & 0x3ffU)));
+    }
+    return true;
+}
+
+bool processed_code_hash_impl(const std::string& code, std::int64_t& output) {
+    if (code.empty()) {
+        output = 0;
+        return true;
+    }
+    std::vector<std::uint8_t> utf16;
+    utf16.reserve(code.size() * 2U);
+    for (std::size_t index = 0U; index < code.size();) {
+        const auto first = static_cast<std::uint8_t>(code[index++]);
+        std::uint32_t scalar = 0U;
+        std::size_t continuation_count = 0U;
+        if (first < 0x80U) {
+            scalar = first;
+        } else if (first >= 0xc2U && first <= 0xdfU) {
+            scalar = first & 0x1fU;
+            continuation_count = 1U;
+        } else if (first >= 0xe0U && first <= 0xefU) {
+            scalar = first & 0x0fU;
+            continuation_count = 2U;
+        } else if (first >= 0xf0U && first <= 0xf4U) {
+            scalar = first & 0x07U;
+            continuation_count = 3U;
+        } else {
+            return false;
+        }
+        if (continuation_count > code.size() - index) return false;
+        for (std::size_t part = 0U; part < continuation_count; ++part) {
+            const auto value = static_cast<std::uint8_t>(code[index++]);
+            if ((value & 0xc0U) != 0x80U) return false;
+            scalar = (scalar << 6U) | (value & 0x3fU);
+        }
+        if ((continuation_count == 2U && scalar < 0x800U) ||
+            (continuation_count == 3U && scalar < 0x10000U) ||
+            !append_utf16le(utf16, scalar)) {
+            return false;
+        }
+    }
+    const std::uint64_t hash = xxh64(utf16.data(), utf16.size());
+    static_assert(sizeof(output) == sizeof(hash));
+    std::memcpy(&output, &hash, sizeof(output));
+    return true;
 }
 
 std::string make_identifier(const std::string_view value) {
@@ -1989,6 +2131,20 @@ void process_function_macro(
         }
     }
 
+    const auto has_metadata = [](const std::vector<preprocessor_metadata>& metadata,
+                                 const std::string_view name) {
+        return std::any_of(
+            metadata.begin(), metadata.end(),
+            [name](const preprocessor_metadata& entry) {
+                return entry.subject_index == -1 && entry.name == name;
+            });
+    };
+    const bool class_thread_safe =
+        has_metadata(description.metadata, "BlueprintThreadSafe");
+    function.thread_safe = class_thread_safe
+        ? !has_metadata(function.metadata, "NotBlueprintThreadSafe")
+        : has_metadata(function.metadata, "BlueprintThreadSafe");
+
     if (function.script_function_name != macro.name) {
         replacements.push_back({
             macro.name_start, macro.name_end, function.script_function_name});
@@ -3381,6 +3537,12 @@ void process_imports(
 
 } // namespace
 
+bool compute_processed_code_hash_utf8(
+    const std::string& processed_code,
+    std::int64_t& code_hash) {
+    return processed_code_hash_impl(processed_code, code_hash);
+}
+
 lexical_preprocess_result preprocess_lexical_module_graph(
     const preprocessor_options& options,
     const std::vector<preprocessor_source>& sources,
@@ -3484,6 +3646,18 @@ lexical_preprocess_result preprocess_lexical_module_graph(
                 result, sources[index], 1U,
                 "post-init function count exceeds the bounded maximum");
         }
+    }
+
+    for (std::size_t index = 0U; index < states.size(); ++index) {
+        preprocessed_code_section& section = states[index].module.code.front();
+        if (!compute_processed_code_hash_utf8(
+                section.conditioned_code, section.code_hash)) {
+            add_diagnostic(
+                result, sources[index], 1U,
+                "processed source is not canonical UTF-8 for FString code hashing");
+            continue;
+        }
+        states[index].module.code_hash ^= section.code_hash;
     }
 
     result.modules.reserve(order.size());

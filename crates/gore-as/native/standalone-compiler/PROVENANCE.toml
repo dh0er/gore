@@ -2,7 +2,7 @@ manifest_version = 1
 component = "gore-as-standalone-compiler"
 component_license = "MIT"
 project_license_file = "../../../../LICENSE"
-status = "pinned-core-with-mixed-cache-source-graph-bridge"
+status = "pinned-core-with-mixed-graph-cache-export"
 
 [current_tree]
 contains_unreal_engine_source = false
@@ -49,6 +49,10 @@ notice_location_at_revision = [
     "Angelscript/Source/AngelscriptCode/Private/Hash/xxhash.inl",
 ]
 notice_retention_required_on_import = true
+
+# The current processed-code hash is a local bounded implementation of the
+# published XXH64 algorithm, verified against the pinned donor for exact
+# UTF-16LE inputs. No xxHash source file is present in the vendored tree.
 
 [review_policy]
 require_exact_source_revision = true

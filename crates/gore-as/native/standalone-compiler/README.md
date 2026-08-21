@@ -2,10 +2,11 @@
 
 This directory contains the hermetic native process boundary and the pinned,
 modified UNREANGEL AngelScript core used by the future standalone compiler. The
-core is now a Windows-x64/MSVC static library with a source frontend and a real
-graph compile bridge; the sidecar's `compile` operation remains deliberately
-fail-closed until the captured G1R profile, remaining Unreal metadata/runtime
-callbacks, and final cache emitter are integrated.
+core is now a Windows-x64/MSVC static library with a source frontend, mixed
+cache/source graph compiler, and whole-graph cache exporter. The sidecar's
+`compile` operation remains deliberately fail-closed until the captured G1R
+profile, remaining external preprocessing hooks, and safe output publication
+are integrated.
 
 No target links or loads Unreal Engine or a game DLL. Nothing launches the game,
 and the sidecar does not yet publish compiled output. CMake performs no downloads
@@ -85,7 +86,9 @@ graph barriers atomically. Its smoke compiles a consumer against a provider's
 preprocessed USTRUCT and proves a rejected graph leaves no module behind. This
 does not yet cover the donor's external `OnProcessChunks`/ClassAnalyze hooks,
 editor-only builder hook, exact FName Unicode comparison, authoritative source
-encoding/code hashes, or automatic dependency closure.
+decoding, or automatic dependency closure. Processed-code hashes do now match
+the donor's XXH64(seed 0) over UTF-16LE `FString` code units, including its
+empty-code sentinel and strict UTF-8-to-UTF-16 conversion boundary.
 
 The Rust compiler profile now parses and validates all three frontend payloads
 as typed, independently digest-bound schemas. The preprocessor payload carries
@@ -159,12 +162,25 @@ type and function IDs, changes an edited struct's property offset, executes an
 unchanged precompiled consumer against the replacements, compiles an added
 module against that consumer, and proves a parse failure leaves no module.
 
-This remains an engine-apply checkpoint, not full G1R cache parity. Cached
-delegate/event tags are supported by the mixed path, while the complete-cache
-rehydrator continues to reject them. Unreal shadow layouts and class/property/
-function metadata, statics and post-init hooks, string-literal globals, an
-actual captured G1R registry, authoritative preprocessing/module discovery and
-safe sidecar output publication remain mandatory and fail closed.
+The mixed path now validates cached G1R descriptor records, recreates native
+shadow layouts only from sealed native-super rows, retains cached statics and
+post-init records, and projects source class/property/function metadata plus
+delegate/event declarations. String-literal globals are recreated through the
+registered string factory rather than treated as ordinary global storage.
+`export_mixed_graph_checkpoint` re-exports every final module into one fresh
+reference-table namespace, restores descriptor-only metadata for unchanged
+modules, projects source metadata, and validates the complete encoded wire
+artifact atomically. The mixed smoke then decodes that artifact, loads it into
+a second fresh engine, executes edited/cached/added modules and a string
+literal, verifies a profiled shadow-property offset, and cleanly destroys both
+engines.
+
+This remains a compiler-core checkpoint, not full G1R qualification. The plain
+complete-cache rehydrator intentionally keeps its narrower fail-closed contract.
+An actual captured G1R registry, the external ClassAnalyze/ComposeOnto and
+module-discovery hooks, exact source decoding/FName behavior, Protocol-v1
+wiring, create-new publication, and differential oracle corpus are still
+mandatory.
 
 ## Registry replay checkpoint
 

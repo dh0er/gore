@@ -117,6 +117,7 @@ struct preprocessed_function_description {
     bool dev_function = false;
     bool can_override_event = true;
     bool is_static = false;
+    bool thread_safe = false;
     std::vector<preprocessor_metadata> metadata;
 };
 
@@ -215,6 +216,7 @@ struct preprocessed_code_section {
     std::string relative_path;
     std::string absolute_path;
     std::string conditioned_code;
+    std::int64_t code_hash = 0;
 };
 
 // UE-free projection of the source-bearing parts of FAngelscriptModuleDesc.
@@ -222,6 +224,7 @@ struct preprocessed_code_section {
 // the record now includes reflection and generated-code descriptors.
 struct lexical_module_description {
     std::string module_name;
+    std::int64_t code_hash = 0;
     std::vector<preprocessed_code_section> code;
     std::vector<std::string> imported_modules;
     std::vector<std::string> post_init_functions;
@@ -237,6 +240,12 @@ struct lexical_preprocess_result {
     std::vector<std::string> static_names;
     std::vector<preprocessor_diagnostic> diagnostics;
 };
+
+// Exact donor CodeHash: XXH64(seed 0) over the processed FString's UTF-16LE
+// code units. Empty processed code uses the donor's sentinel hash 0.
+bool compute_processed_code_hash_utf8(
+    const std::string& processed_code,
+    std::int64_t& code_hash);
 
 // Source transformations and descriptors are ported from the pinned donor.
 // Unreal reflection inputs are supplied through the sealed native-super and

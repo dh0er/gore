@@ -43,6 +43,13 @@ const standalone::preprocessor_metadata* metadata(
 } // namespace
 
 int main() {
+    std::int64_t donor_hash = 0;
+    if (!standalone::compute_processed_code_hash_utf8("abc", donor_hash) ||
+        static_cast<std::uint64_t>(donor_hash) != 0xaff0f2a2f8b32731ULL ||
+        standalone::compute_processed_code_hash_utf8(
+            std::string("\xc0\x80", 2U), donor_hash)) {
+        return fail("UTF-16LE XXH64 code hashing drifted from the pinned donor");
+    }
     const auto empty = standalone::preprocess_lexical_module_graph({}, {});
     if (!empty.ok || !empty.modules.empty() || !empty.diagnostics.empty()) {
         return fail("empty donor source set did not remain a successful no-op");
