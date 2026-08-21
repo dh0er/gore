@@ -293,6 +293,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_check_revision3_npc_compiler_v1",
     "authoring_store_check_revision3_npc_compiler_v2",
     authoring_project_compiler_revision3::COMMAND,
+    authoring_project_compiler_revision3::COMMAND_V2,
     "authoring_store_check_revision3_quest_compiler_v1",
     "authoring_store_check_revision3_quest_compiler_v2",
     authoring_project_export_revision3::COMMAND,
@@ -682,6 +683,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         ),
         authoring_project_compiler_revision3::COMMAND => Some(
             authoring_project_compiler_revision3::check_revision3_project_compiler_v1_raw,
+        ),
+        authoring_project_compiler_revision3::COMMAND_V2 => Some(
+            authoring_project_compiler_revision3::check_revision3_project_compiler_v2_raw,
         ),
         "authoring_store_check_revision3_quest_compiler_v1" => Some(
             authoring_story_compiler_revision3::check_revision3_quest_compiler_v1_raw,
@@ -2137,6 +2141,7 @@ mod tests {
                     "authoring_store_check_revision3_npc_compiler_v1",
                     "authoring_store_check_revision3_npc_compiler_v2",
                     "authoring_store_check_revision3_project_compiler_v1",
+                    "authoring_store_check_revision3_project_compiler_v2",
                     "authoring_store_check_revision3_quest_compiler_v1",
                     "authoring_store_check_revision3_quest_compiler_v2",
                     "authoring_store_export_revision3_exact_snapshot_v2",

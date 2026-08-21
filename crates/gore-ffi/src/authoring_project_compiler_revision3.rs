@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use gore_as::compile::{
     acquire_compile_install_mutation, check_project_modules_with_diagnostics_report_with_guard,
-    InstallMutationGuard, InstallRestoreDisposition, ProjectCompileOverlay,
+    CompilerBackendNameV1, InstallMutationGuard, InstallRestoreDisposition, ProjectCompileOverlay,
     ProjectCompilerCheckOpts, ProjectCompilerCheckOutcome, ProjectCompilerCheckReport,
     ProjectCompilerClosingAuditDisposition, ProjectCompilerOutputDisposition,
     MAX_PROJECT_COMPILER_CHECK_MODULES,
@@ -44,8 +44,13 @@ use crate::err;
 use crate::script_compile_report::{
     compile_error_parts, diagnostics_rejection, diagnostics_report_json, install_restore_label,
 };
+use crate::standalone_compiler_package::{
+    backend_evidence, bundle_absent_fallback_reason, resolve_product_standalone_compiler_v1,
+    CompilerBackendWireV2, StandaloneCompilerPackageStatusV1, BUNDLE_ABSENT_DETAIL,
+};
 
 pub(super) const COMMAND: &str = "authoring_store_check_revision3_project_compiler_v1";
+pub(super) const COMMAND_V2: &str = "authoring_store_check_revision3_project_compiler_v2";
 
 const MAX_PATH_BYTES: usize = 32 * 1024;
 const MAX_HEAD_JSON_BYTES: usize = 64 * 1024;
@@ -63,6 +68,15 @@ struct ExactWireRequest<P> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProjectCompilerWirePayload {
+    expected_head_json: String,
+    game_root: String,
+    root: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectCompilerWirePayloadV2 {
+    compiler_backend: CompilerBackendWireV2,
     expected_head_json: String,
     game_root: String,
     root: String,
@@ -204,6 +218,84 @@ impl ClosingRevalidation {
 
 pub(super) fn check_revision3_project_compiler_v1_raw(input: &str) -> Value {
     check_revision3_project_compiler_v1_inner(input).unwrap_or_else(Failure::response)
+}
+
+pub(super) fn check_revision3_project_compiler_v2_raw(input: &str) -> Value {
+    check_revision3_project_compiler_v2_inner(input).unwrap_or_else(Failure::response)
+}
+
+fn check_revision3_project_compiler_v2_inner(input: &str) -> Result<Value, Failure> {
+    let payload: ProjectCompilerWirePayloadV2 = parse_exact_wire_for(input, COMMAND_V2)?;
+    let requested = payload.compiler_backend;
+    if requested == CompilerBackendWireV2::Standalone {
+        let StandaloneCompilerPackageStatusV1::BundleAbsent =
+            resolve_product_standalone_compiler_v1();
+        validate_path(&payload.root)?;
+        validate_path(&payload.game_root)?;
+        let expected_head = parse_canonical_head(&payload.expected_head_json)?;
+        let selection =
+            open_initial_selection(&payload.root, expected_head, payload.expected_head_json)?;
+        let mut graph = close_module_graph(&selection.project)?;
+        sort_and_validate_compile_identities(&mut graph)?;
+        let manifest = seal_module_manifest(&selection, &graph)?;
+        let mut compiler = compiler_failure_evidence(
+            "AUTHORING_REVISION3_PROJECT_STANDALONE_BUNDLE_ABSENT",
+            BUNDLE_ABSENT_DETAIL,
+            Value::Null,
+            "not_started",
+            false,
+            0,
+            "not_created",
+        );
+        compiler["compiler_backend"] = backend_evidence(requested, None, false, false, None);
+        return project_response(
+            &selection,
+            &graph,
+            manifest,
+            Value::Null,
+            compiler,
+            ClosingRevalidation::NOT_RUN,
+        );
+    }
+    if requested == CompilerBackendWireV2::StandaloneThenGame {
+        let StandaloneCompilerPackageStatusV1::BundleAbsent =
+            resolve_product_standalone_compiler_v1();
+    }
+    let v1 = json!({
+        "command": COMMAND,
+        "payload": {
+            "expected_head_json": payload.expected_head_json,
+            "game_root": payload.game_root,
+            "root": payload.root,
+        }
+    })
+    .to_string();
+    let response = check_revision3_project_compiler_v1_inner(&v1)?;
+    Ok(attach_project_backend_evidence(response, requested))
+}
+
+fn attach_project_backend_evidence(mut response: Value, requested: CompilerBackendWireV2) -> Value {
+    let game_attempted = matches!(
+        response
+            .pointer("/compiler/install_restore")
+            .and_then(Value::as_str),
+        Some(disposition) if disposition != "not_started"
+    );
+    let (result_backend, fallback) = match requested {
+        CompilerBackendWireV2::Game => {
+            (game_attempted.then_some(CompilerBackendNameV1::Game), None)
+        }
+        CompilerBackendWireV2::StandaloneThenGame => (
+            game_attempted.then_some(CompilerBackendNameV1::Game),
+            Some(bundle_absent_fallback_reason()),
+        ),
+        CompilerBackendWireV2::Standalone => (None, None),
+    };
+    if response.get("compiler").is_some() {
+        response["compiler"]["compiler_backend"] =
+            backend_evidence(requested, result_backend, false, game_attempted, fallback);
+    }
+    response
 }
 
 fn check_revision3_project_compiler_v1_inner(input: &str) -> Result<Value, Failure> {
@@ -992,6 +1084,13 @@ where
 }
 
 fn parse_exact_wire<P: DeserializeOwned>(input: &str) -> Result<P, Failure> {
+    parse_exact_wire_for(input, COMMAND)
+}
+
+fn parse_exact_wire_for<P: DeserializeOwned>(
+    input: &str,
+    expected_command: &str,
+) -> Result<P, Failure> {
     if input.is_empty() || input.len() > MAX_WIRE_BYTES {
         return Err(Failure::new(
             "AUTHORING_REVISION3_PROJECT_COMPILER_INPUT_LIMIT",
@@ -1000,7 +1099,7 @@ fn parse_exact_wire<P: DeserializeOwned>(input: &str) -> Result<P, Failure> {
     }
     let request: ExactWireRequest<P> =
         serde_json::from_str(input).map_err(|_| invalid_request())?;
-    if request.command != COMMAND {
+    if request.command != expected_command {
         return Err(invalid_request());
     }
     Ok(request.payload)
@@ -1429,6 +1528,10 @@ mod tests {
         json!({"command": COMMAND, "payload": payload}).to_string()
     }
 
+    fn wire_v2(payload: Value) -> String {
+        json!({"command": COMMAND_V2, "payload": payload}).to_string()
+    }
+
     fn valid_shape() -> Value {
         json!({
             "expected_head_json": serde_json::to_string(&WorkingHead {
@@ -1485,6 +1588,78 @@ mod tests {
             check_revision3_project_compiler_v1_raw(&duplicate_command)["error"]["code"],
             "AUTHORING_REVISION3_PROJECT_COMPILER_REQUEST_INVALID"
         );
+    }
+
+    #[test]
+    fn v2_strict_standalone_is_store_bound_and_never_acquires_game_ownership() {
+        let project = npc_project(7);
+        let (temp, head_json) = published_store(&project);
+        let game = temp.path().join("missing-game");
+        let response = crate::dispatch(&wire_v2(json!({
+            "compiler_backend": "standalone",
+            "expected_head_json": head_json,
+            "game_root": game.display().to_string(),
+            "root": temp.path().display().to_string(),
+        })));
+
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["exact_current"], false);
+        assert!(response["game_inputs"].is_null());
+        assert_eq!(response["closing_audit"]["store"], "not_run");
+        assert_eq!(response["closing_audit"]["game"], "not_run");
+        assert_eq!(response["compiler"]["outcome"], "failed");
+        assert_eq!(
+            response["compiler"]["compile_error"]["code"],
+            "AUTHORING_REVISION3_PROJECT_STANDALONE_BUNDLE_ABSENT"
+        );
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["requested_mode"],
+            "standalone"
+        );
+        assert!(response["compiler"]["compiler_backend"]["result_backend"].is_null());
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["standalone_attempted"],
+            false
+        );
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["game_attempted"],
+            false
+        );
+        assert!(response["compiler"]["compiler_backend"]["qualified_package"].is_null());
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+    }
+
+    #[test]
+    fn v2_wire_accepts_only_backend_policy_not_package_authority() {
+        let mut payload = valid_shape();
+        payload["compiler_backend"] = json!("standalone");
+        payload["sidecar_path"] = json!("C:/caller/sidecar.exe");
+        assert_eq!(
+            check_revision3_project_compiler_v2_raw(&wire_v2(payload))["error"]["code"],
+            "AUTHORING_REVISION3_PROJECT_COMPILER_REQUEST_INVALID"
+        );
+
+        let mut invalid_mode = valid_shape();
+        invalid_mode["compiler_backend"] = json!("standalone-then-game");
+        assert_eq!(
+            check_revision3_project_compiler_v2_raw(&wire_v2(invalid_mode))["error"]["code"],
+            "AUTHORING_REVISION3_PROJECT_COMPILER_REQUEST_INVALID"
+        );
+    }
+
+    #[test]
+    fn v2_project_fallback_evidence_preserves_bundle_absence() {
+        let response = attach_project_backend_evidence(
+            json!({"ok": true, "compiler": {"install_restore": "not_started"}}),
+            CompilerBackendWireV2::StandaloneThenGame,
+        );
+        let backend = &response["compiler"]["compiler_backend"];
+        assert_eq!(backend["requested_mode"], "standalone_then_game");
+        assert!(backend["result_backend"].is_null());
+        assert_eq!(backend["standalone_attempted"], false);
+        assert_eq!(backend["game_attempted"], false);
+        assert_eq!(backend["fallback_reason"]["failure_kind"], "unavailable");
+        assert_eq!(backend["fallback_reason"]["detail"], BUNDLE_ABSENT_DETAIL);
     }
 
     #[test]
