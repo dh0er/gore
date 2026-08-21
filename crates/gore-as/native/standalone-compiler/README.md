@@ -103,9 +103,41 @@ fork delegates those objects to Unreal allocation/runtime semantics.
 
 This remains an engine-apply checkpoint, not full G1R cache parity. Unreal
 shadow layouts and class/property/function metadata, delegate/event tags,
-statics and post-init hooks, string-literal globals, native registry replay,
-authoritative preprocessing/module discovery and safe sidecar output
+statics and post-init hooks, string-literal globals, an actual captured G1R
+registry, authoritative preprocessing/module discovery and safe sidecar output
 publication remain mandatory and fail closed.
+
+## Registry replay checkpoint
+
+`gore_as_standalone/registry_profile.hpp` and `src/registry_profile.cpp`
+provide the native projection of GORE's sealed registry contract. Replay
+requires a fresh engine, preflights the complete profile before its first
+mutation, applies the ordered engine properties and effective registration
+contexts, then reproduces every public registration class. Expected engine
+type/function IDs and owner/member indices are checked 1:1 before the captured
+post-bind type/property/function/global state is applied and read back.
+
+Runtime function and object addresses are never accepted from a profile.
+Ordinary bindings receive call-convention-compatible inert compile-only stubs,
+global storage is bounded and aligned, and the string factory owns byte-exact
+string constants for the lifetime of the engine. Different typedef names may
+correctly share one primitive engine type ID, matching `RegisterTypedef` in the
+pinned fork. Owner kinds, all stub references, result identities and complete
+final-state coverage fail closed; the smoke also proves these rejections occur
+before engine mutation.
+
+The five class-constrained callbacks (`TSubclassOf`, `TObjectPtr`,
+`TWeakObjectPtr`, `TSoftObjectPtr`, and `TSoftClassPtr`) use the fork's exact
+subtype check. `TArray`, `TMap`, `TSet`, and `TOptional` deliberately return
+`asNOT_SUPPORTED` during preflight. Their acceptance algorithms depend on the
+game's `FAngelscriptTypeUsage` operation registry, including construction,
+copy, destruction, comparison, hashing, size/alignment and nested-container
+rules. That semantic registry must be captured and ported before these four
+adapters can be enabled; accepting them generically would change the language.
+
+The registry smoke uses a deterministic synthetic profile. No G1R registry
+payload has been captured or qualified yet, and this replay layer is not yet
+wired to the JSON sidecar request.
 
 ## Build and test
 

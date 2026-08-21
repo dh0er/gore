@@ -166,6 +166,25 @@ pub enum ObjectBehaviourV1 {
     ReleaseRefs,
 }
 
+/// Closed identity of a compiler-owned implementation of a G1R template validator.
+///
+/// These callbacks are invoked by AngelScript while compiling template instances, so they
+/// cannot be represented by an inert host stub. The standalone compiler accepts only these
+/// version-pinned adapters and rejects an unknown or missing implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TemplateValidationAdapterV1 {
+    TArray,
+    TMap,
+    TSet,
+    TOptional,
+    TSubclassOf,
+    TObjectPtr,
+    TWeakObjectPtr,
+    TSoftObjectPtr,
+    TSoftClassPtr,
+}
+
 /// Public `asEObjTypeFlags` bits supplied to `RegisterObjectType`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -174,7 +193,9 @@ pub struct ObjectTypeFlagsV1(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompileOnlyStubPurposeV1 {
-    /// The descriptor exists only so registration can complete; execution must be rejected.
+    /// The descriptor exists only so registration can complete; ordinary runtime execution must
+    /// be rejected. Compile-time string factories and template validators are supplied by
+    /// dedicated compiler-owned implementations rather than by invoking this stub.
     CompileOnlyNeverInvoke,
 }
 
@@ -269,6 +290,7 @@ pub enum RegistrationEntryV1 {
         call_convention: CallConventionV1,
         callable_stub_id: u32,
         auxiliary_object_stub_id: Option<u32>,
+        template_validation_adapter: Option<TemplateValidationAdapterV1>,
         composite_offset: u32,
         is_composite_indirect: bool,
     },
@@ -610,9 +632,11 @@ impl RegistrationTraceV1 {
                 RegistrationEntryV1::ObjectBehaviour {
                     function_id,
                     owner_type_id,
+                    behaviour,
                     declaration,
                     callable_stub_id,
                     auxiliary_object_stub_id,
+                    template_validation_adapter,
                     composite_offset,
                     ..
                 } => {
@@ -630,6 +654,22 @@ impl RegistrationTraceV1 {
                         *callable_stub_id,
                         *auxiliary_object_stub_id,
                     )?;
+                    match (behaviour, template_validation_adapter) {
+                        (ObjectBehaviourV1::TemplateCallback, None) => {
+                            return invalid(
+                                "object_behaviour.template_validation_adapter",
+                                "is required for a template callback",
+                            );
+                        }
+                        (ObjectBehaviourV1::TemplateCallback, Some(_)) => {}
+                        (_, Some(_)) => {
+                            return invalid(
+                                "object_behaviour.template_validation_adapter",
+                                "is only valid for a template callback",
+                            );
+                        }
+                        (_, None) => {}
+                    }
                 }
                 RegistrationEntryV1::GlobalProperty {
                     property_id,
@@ -1409,12 +1449,16 @@ fn validate_snapshot_pair(
         | (
             RegistrationEntryV1::Funcdef { type_id, .. },
             PostBindResultV1::Funcdef { engine_type_id },
-        )
-        | (
+        ) => {
+            unique("engine_type_id", engine_type_ids, *engine_type_id)?;
+            type_results.insert(*type_id, *engine_type_id);
+        }
+        (
             RegistrationEntryV1::Typedef { type_id, .. },
             PostBindResultV1::Typedef { engine_type_id },
         ) => {
-            unique("engine_type_id", engine_type_ids, *engine_type_id)?;
+            // RegisterTypedef returns the aliased primitive type id. Multiple
+            // distinct typedefs may therefore legitimately have the same id.
             type_results.insert(*type_id, *engine_type_id);
         }
         (
@@ -1863,6 +1907,7 @@ mod tests {
                     call_convention: CallConventionV1::CdeclObjectLast,
                     callable_stub_id: 1,
                     auxiliary_object_stub_id: None,
+                    template_validation_adapter: None,
                     composite_offset: 0,
                     is_composite_indirect: false,
                 },
@@ -2244,6 +2289,74 @@ mod tests {
             RegistrationTraceV1::from_json(&serde_json::to_vec(&json).unwrap()),
             Err(RegistryProfileError::Json(_))
         ));
+    }
+
+    #[test]
+    fn template_callbacks_require_a_closed_adapter_identity() {
+        let mut missing = trace();
+        if let RegistrationEntryV1::ObjectBehaviour { behaviour, .. } = &mut missing.entries[4] {
+            *behaviour = ObjectBehaviourV1::TemplateCallback;
+        }
+        assert!(matches!(
+            missing.seal(),
+            Err(RegistryProfileError::InvalidField { .. })
+        ));
+
+        let mut unexpected = trace();
+        if let RegistrationEntryV1::ObjectBehaviour {
+            template_validation_adapter,
+            ..
+        } = &mut unexpected.entries[4]
+        {
+            *template_validation_adapter = Some(TemplateValidationAdapterV1::TArray);
+        }
+        assert!(matches!(
+            unexpected.seal(),
+            Err(RegistryProfileError::InvalidField { .. })
+        ));
+
+        let mut valid = trace();
+        if let RegistrationEntryV1::ObjectBehaviour {
+            behaviour,
+            template_validation_adapter,
+            ..
+        } = &mut valid.entries[4]
+        {
+            *behaviour = ObjectBehaviourV1::TemplateCallback;
+            *template_validation_adapter = Some(TemplateValidationAdapterV1::TArray);
+        }
+        valid.seal().unwrap();
+        assert_eq!(
+            RegistrationTraceV1::from_json(&valid.to_json().unwrap()).unwrap(),
+            valid
+        );
+    }
+
+    #[test]
+    fn distinct_typedefs_may_share_their_aliased_primitive_type_id() {
+        let p = properties();
+        let mut t = trace();
+        let mut s = snapshot(&p, &t);
+        t.entries.push(RegistrationEntryV1::Typedef {
+            ordinal: 15,
+            registration_id: 15,
+            context: context(""),
+            type_id: 16,
+            name: "Index".into(),
+            target_declaration: "uint32".into(),
+        });
+        t.seal().unwrap();
+
+        s.registration_trace_sha256 = t.canonical_sha256;
+        s.entries.push(PostBindEntryV1 {
+            ordinal: 15,
+            trace_registration_id: 15,
+            result: PostBindResultV1::Typedef {
+                engine_type_id: 104,
+            },
+        });
+        s.seal().unwrap();
+        s.validate_against(&p, &t).unwrap();
     }
 
     #[test]
