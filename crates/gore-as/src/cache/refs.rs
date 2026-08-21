@@ -136,6 +136,11 @@ pub struct RefResolver {
     /// qualifier for those breaks the language's "must have the same return type as in the base
     /// class" rule, so they keep the stripped form.
     inconsistent_const_return_names: HashSet<String>,
+    /// Function name -> declared arity -> per-position "this parameter accepts a temporary" (by
+    /// value, or by const reference). Rows are kept per arity because a name can carry unrelated
+    /// overloads, and a call renders without the arguments that only restate a default, so the
+    /// lookup consults every declared arity from the rendered one upwards.
+    temporary_arg_positions: HashMap<String, HashMap<usize, Vec<bool>>>,
     /// `name/type` keys for one-parameter functions whose parameter accepts a TEMPORARY — by
     /// value, or by const reference. A name is recorded only when EVERY one-parameter row of it
     /// taking that type accepts one, so a single non-const-reference overload disqualifies it.
@@ -287,6 +292,23 @@ impl RefResolver {
             }
             if is_const_method {
                 r.const_method_ptrs.insert(key);
+            }
+            {
+                let accepts: Vec<bool> = params
+                    .iter()
+                    .map(|p| !p.is_reference || p.is_object_const || p.is_read_only)
+                    .collect();
+                let by_arity = r.temporary_arg_positions.entry(name.clone()).or_default();
+                match by_arity.get_mut(&accepts.len()) {
+                    Some(seen) => {
+                        for (slot, accepted) in seen.iter_mut().zip(&accepts) {
+                            *slot &= *accepted;
+                        }
+                    }
+                    None => {
+                        by_arity.insert(accepts.len(), accepts);
+                    }
+                }
             }
             if let [only] = params.as_slice() {
                 // `!is_reference` is a by-value parameter; a reference one has to be const.
@@ -1067,6 +1089,27 @@ impl RefResolver {
         self.funcid_to_ptr
             .get(&id)
             .is_some_and(|ptr| self.const_method_ptrs.contains(ptr))
+    }
+
+    /// True when every declaration of `name` a call with `rendered` arguments could reach takes
+    /// parameter `position` by value or by const reference — the positions where a temporary
+    /// expression is legal. Declarations with fewer parameters than the call renders cannot be
+    /// the callee; ones with more are reachable through default arguments.
+    pub fn arg_position_accepts_temporary(
+        &self,
+        name: &str,
+        rendered: usize,
+        position: usize,
+    ) -> bool {
+        let Some(by_arity) = self.temporary_arg_positions.get(name) else {
+            return false;
+        };
+        let mut reachable = by_arity
+            .iter()
+            .filter(|(arity, _)| **arity >= rendered)
+            .peekable();
+        reachable.peek().is_some()
+            && reachable.all(|(_, accepts)| accepts.get(position).copied().unwrap_or(false))
     }
 
     /// True when every one-parameter `name` in the cache that takes `ty` takes it by value or by
