@@ -6276,12 +6276,18 @@ impl Structurer<'_> {
         self.idx_of.get(&ret_off).copied()
     }
 
-    /// The `return <expr>;` one arm of a [`Self::return_diamond`] ends in.
+    /// The `return <expr>;` one arm of a [`Self::return_diamond`] ends in. The scan is exclusive
+    /// of its end and bounded by the block, so the arm that ends ON its own value copy has to
+    /// include it — otherwise the value of the OTHER arm leaks in and the two returns agree
+    /// where vanilla's disagree.
     fn arm_return(&self, bi: usize) -> String {
-        self.ctx.return_stmt(scan_back_retval(
-            self.ctx,
-            self.g.blocks[bi].instr_hi - 1,
-        ))
+        let b = &self.g.blocks[bi];
+        let end = match self.ctx.instrs[b.instr_hi - 1].op.name {
+            "CpyVtoR1" | "CpyVtoR4" | "CpyVtoR8" => b.instr_hi,
+            _ => b.instr_hi - 1,
+        };
+        self.ctx
+            .return_stmt(scan_back_retval_floor(self.ctx, end, b.instr_lo))
     }
 
     /// One arm of [`Self::bool_return_diamond`]: `SetV1 wN, K` + `CpyVtoR{1,4} wN`, then either a
