@@ -73,6 +73,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A method's `const` return type is written again, so an edited module keeps
   that part of its identity; locals that receive such a value are declared
   const to match.
+- Both halves of an accessor pair (`T f()` and `const T f() const`) are written,
+  where the const half used to be dropped — every function in the cache is
+  regenerated now.
+- Decompiled bodies read the way they were written: an argument expression sits
+  inside its call, a constant sits where it is used, `!(!(x))` is `x`, and a
+  local the original never initialized is not initialized.
+- A constructor that only gives members their values decompiles as member
+  initializers, and a member store that used to be dropped from constructors is
+  recovered — an `FName` global reads its real value instead of its own name.
 - A `default` statement whose call lost an argument is refused instead of
   written, so a module keeps its byte-exact defaults rather than quietly
   changing meaning.
