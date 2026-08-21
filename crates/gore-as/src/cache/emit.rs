@@ -1210,6 +1210,7 @@ fn emit_function_ctor(
     let body = drop_dead_stores(&body);
     let body = fold_literal_temporaries(&body, refs);
     let body = fold_constant_comparisons(&body);
+    let body = fold_double_negations(&body);
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
@@ -4745,6 +4746,37 @@ fn sole_use_is_a_conversion(line: &str, ident: &str, refs: &RefResolver) -> bool
         .collect();
     let head = head.trim_start_matches(':');
     !head.is_empty() && (is_primitive(head) || is_enum(head) || refs.is_type_name(head))
+}
+
+/// `!(!(x))` is what a recovered double branch reads like; the source tested `x`. The two
+/// negations survive into the bytecode as two `NOT`s where vanilla branches on the value itself.
+fn fold_double_negations(body: &str) -> String {
+    if !body.contains("!(!(") {
+        return body.to_owned();
+    }
+    let trailing_newline = body.ends_with('\n');
+    let mut out: Vec<String> = Vec::new();
+    for line in body.lines() {
+        let mut line = line.to_owned();
+        // Bound: every pass removes one `!(!(`, and the line only gets shorter.
+        while let Some(at) = line.find("!(!(") {
+            let inner_open = at + 3;
+            let Some(inner_close) = matching_paren(&line, inner_open) else {
+                break;
+            };
+            if line.as_bytes().get(inner_close + 1) != Some(&b')') {
+                break;
+            }
+            let inner = line[inner_open + 1..inner_close].to_owned();
+            line = format!("{}{inner}{}", &line[..at], &line[inner_close + 2..]);
+        }
+        out.push(line);
+    }
+    let mut joined = out.join("\n");
+    if trailing_newline {
+        joined.push('\n');
+    }
+    joined
 }
 
 /// `(0 != 0)` is how a folded bool constant reads; the source said `false`. The compiler folds
