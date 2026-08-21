@@ -2018,6 +2018,9 @@ mod tests {
                         cannot_derive_angelscript: false,
                     },
                 ],
+                fname_comparison_keys: Vec::new(),
+                external_hooks: crate::compiler_profile::frontend::ExternalFrontendHooksV1::unbound(
+                ),
                 canonical_sha256: Sha256Digest::from_bytes([0; 32]),
             };
             preprocessor.seal().unwrap();

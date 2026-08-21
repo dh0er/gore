@@ -1384,6 +1384,8 @@ mod tests {
             enforce_server_rpc_validation: false,
             blueprint_event_argument_specializations: Vec::new(),
             native_super_types: Vec::new(),
+            fname_comparison_keys: Vec::new(),
+            external_hooks: crate::compiler_profile::frontend::ExternalFrontendHooksV1::unbound(),
             canonical_sha256: zero_digest(),
         };
         preprocessor.seal().unwrap();

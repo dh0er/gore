@@ -1384,6 +1384,9 @@ mod tests {
                     "int32".to_owned(),
                 ],
                 native_super_types: vec![],
+                fname_comparison_keys: Vec::new(),
+                external_hooks: crate::compiler_profile::frontend::ExternalFrontendHooksV1::unbound(
+                ),
                 canonical_sha256: zero_digest(),
             };
             preprocessor.seal().unwrap();

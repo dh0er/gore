@@ -26,7 +26,14 @@ const MAX_BLUEPRINT_EVENT_ARGUMENT_SPECIALIZATIONS: usize = 4096;
 const MAX_BLUEPRINT_EVENT_ARGUMENT_SPECIALIZATION_BYTES: usize = 4096;
 const MAX_NATIVE_SUPER_TYPES: usize = 1_000_000;
 const MAX_NATIVE_SUPER_TYPE_NAME_BYTES: usize = 4096;
+const MAX_FNAME_COMPARISON_KEYS: usize = 1_000_000;
+const MAX_EXTERNAL_CLASS_CAPTURES: usize = 1_000_000;
+const MAX_EXTERNAL_GRAPH_CAPTURES: usize = 4096;
+const MAX_EXTERNAL_GRAPH_MODULES: usize = 4096;
+const MAX_EXTERNAL_NAME_BYTES: usize = 4096;
+const MAX_EXTERNAL_GENERATED_BYTES: usize = 16 * 1024 * 1024;
 const PREPROCESSOR_HASH_DOMAIN: &[u8] = b"gore-as-preprocessor-config-v1\0";
+const EXTERNAL_GRAPH_OUTPUT_HASH_DOMAIN: &[u8] = b"gore-as-external-hook-graph-output-v1\0";
 const CLASS_GENERATOR_HASH_DOMAIN: &[u8] = b"gore-as-class-generator-config-v1\0";
 const COMPILER_OPTIONS_HASH_DOMAIN: &[u8] = b"gore-as-compiler-options-v1\0";
 const BUILTIN_PREPROCESSOR_FLAGS: [&str; 6] = [
@@ -100,6 +107,87 @@ pub struct NativeSuperTypeV1 {
     pub cannot_derive_angelscript: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FNameComparisonKeyV1 {
+    pub ordinal: u32,
+    pub spelling: String,
+    pub comparison_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClassAnalyzeCaptureV1 {
+    pub ordinal: u32,
+    pub module_name: String,
+    pub namespace: String,
+    pub class_name: String,
+    pub source_sha256: Sha256Digest,
+    pub input_generated_statics_sha256: Sha256Digest,
+    pub generated_statics: String,
+    pub output_generated_statics_sha256: Sha256Digest,
+    pub has_statics: bool,
+    pub compose_onto_class: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClassAnalyzeHookProfileV1 {
+    pub bound: bool,
+    pub captures: Vec<ClassAnalyzeCaptureV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphHookModuleCaptureV1 {
+    pub ordinal: u32,
+    pub module_name: String,
+    pub generated_declarations: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphHookCaptureV1 {
+    pub ordinal: u32,
+    pub input_graph_sha256: Sha256Digest,
+    pub output_graph_sha256: Sha256Digest,
+    pub modules: Vec<GraphHookModuleCaptureV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GraphHookProfileV1 {
+    pub bound: bool,
+    pub captures: Vec<GraphHookCaptureV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalFrontendHooksV1 {
+    pub class_analyze: ClassAnalyzeHookProfileV1,
+    pub process_chunks: GraphHookProfileV1,
+    pub post_process_code: GraphHookProfileV1,
+}
+
+impl ExternalFrontendHooksV1 {
+    pub fn unbound() -> Self {
+        Self {
+            class_analyze: ClassAnalyzeHookProfileV1 {
+                bound: false,
+                captures: Vec::new(),
+            },
+            process_chunks: GraphHookProfileV1 {
+                bound: false,
+                captures: Vec::new(),
+            },
+            post_process_code: GraphHookProfileV1 {
+                bound: false,
+                captures: Vec::new(),
+            },
+        }
+    }
+}
+
 /// Effective constructor inputs for `FAngelscriptPreprocessor` plus the source-discovery mode.
 ///
 /// `effective_flags` is the final map after built-ins, configured flags, and any donor overrides.
@@ -130,6 +218,10 @@ pub struct PreprocessorConfigV1 {
     /// Ordered lookup materialized after binds from `FAngelscriptType::GetClass`
     /// and native UClass ancestry/metadata.
     pub native_super_types: Vec<NativeSuperTypeV1>,
+    /// Captured case-insensitive identities used by Unreal's FName comparison semantics.
+    pub fname_comparison_keys: Vec<FNameComparisonKeyV1>,
+    /// Exact replay material for host callbacks outside the portable preprocessor core.
+    pub external_hooks: ExternalFrontendHooksV1,
     pub canonical_sha256: Sha256Digest,
 }
 
@@ -256,6 +348,8 @@ impl PreprocessorConfigV1 {
             }
             previous_native = Some(&native.angelscript_type_name);
         }
+        validate_fname_comparison_keys(&self.fname_comparison_keys)?;
+        validate_external_frontend_hooks(&self.external_hooks)?;
         Ok(())
     }
 
@@ -470,6 +564,246 @@ fn validate_profile_text(
     Ok(())
 }
 
+fn validate_bounded_nul_free(
+    value: &str,
+    max_bytes: usize,
+    field: &'static str,
+    allow_empty: bool,
+) -> Result<(), FrontendProfileError> {
+    if (!allow_empty && value.is_empty()) || value.len() > max_bytes || value.contains('\0') {
+        return invalid(field, "must be bounded UTF-8 without NUL bytes");
+    }
+    Ok(())
+}
+
+fn validate_fname_comparison_keys(
+    values: &[FNameComparisonKeyV1],
+) -> Result<(), FrontendProfileError> {
+    if values.len() > MAX_FNAME_COMPARISON_KEYS {
+        return Err(FrontendProfileError::CountTooLarge {
+            field: "fname_comparison_keys",
+            actual: values.len(),
+            max: MAX_FNAME_COMPARISON_KEYS,
+        });
+    }
+    let mut previous: Option<&str> = None;
+    for (index, value) in values.iter().enumerate() {
+        if value.ordinal as usize != index {
+            return Err(FrontendProfileError::Order {
+                field: "FName comparison key",
+                expected: index,
+                actual: value.ordinal,
+            });
+        }
+        validate_bounded_nul_free(
+            &value.spelling,
+            MAX_EXTERNAL_NAME_BYTES,
+            "fname_comparison_keys.spelling",
+            false,
+        )?;
+        validate_bounded_nul_free(
+            &value.comparison_key,
+            MAX_EXTERNAL_NAME_BYTES,
+            "fname_comparison_keys.comparison_key",
+            false,
+        )?;
+        if previous.is_some_and(|prior| prior >= value.spelling.as_str()) {
+            return invalid(
+                "fname_comparison_keys",
+                "must be strictly sorted by spelling and duplicate-free",
+            );
+        }
+        previous = Some(&value.spelling);
+    }
+    Ok(())
+}
+
+fn validate_external_frontend_hooks(
+    hooks: &ExternalFrontendHooksV1,
+) -> Result<(), FrontendProfileError> {
+    validate_class_analyze_hook(&hooks.class_analyze)?;
+    validate_graph_hook("process_chunks", &hooks.process_chunks)?;
+    validate_graph_hook("post_process_code", &hooks.post_process_code)
+}
+
+fn validate_class_analyze_hook(
+    hook: &ClassAnalyzeHookProfileV1,
+) -> Result<(), FrontendProfileError> {
+    if !hook.bound && !hook.captures.is_empty() {
+        return invalid(
+            "external_hooks.class_analyze",
+            "unbound hook must not carry captures",
+        );
+    }
+    if hook.captures.len() > MAX_EXTERNAL_CLASS_CAPTURES {
+        return Err(FrontendProfileError::CountTooLarge {
+            field: "external_hooks.class_analyze.captures",
+            actual: hook.captures.len(),
+            max: MAX_EXTERNAL_CLASS_CAPTURES,
+        });
+    }
+    let mut identities = BTreeSet::new();
+    let mut generated_bytes = 0usize;
+    for (index, capture) in hook.captures.iter().enumerate() {
+        if capture.ordinal as usize != index {
+            return Err(FrontendProfileError::Order {
+                field: "ClassAnalyze capture",
+                expected: index,
+                actual: capture.ordinal,
+            });
+        }
+        validate_bounded_nul_free(
+            &capture.module_name,
+            MAX_EXTERNAL_NAME_BYTES,
+            "external_hooks.class_analyze.module_name",
+            false,
+        )?;
+        validate_bounded_nul_free(
+            &capture.namespace,
+            MAX_EXTERNAL_NAME_BYTES,
+            "external_hooks.class_analyze.namespace",
+            true,
+        )?;
+        validate_bounded_nul_free(
+            &capture.class_name,
+            MAX_EXTERNAL_NAME_BYTES,
+            "external_hooks.class_analyze.class_name",
+            false,
+        )?;
+        validate_bounded_nul_free(
+            &capture.compose_onto_class,
+            MAX_EXTERNAL_NAME_BYTES,
+            "external_hooks.class_analyze.compose_onto_class",
+            true,
+        )?;
+        validate_bounded_nul_free(
+            &capture.generated_statics,
+            MAX_EXTERNAL_GENERATED_BYTES,
+            "external_hooks.class_analyze.generated_statics",
+            true,
+        )?;
+        let next_generated_bytes = generated_bytes.saturating_add(capture.generated_statics.len());
+        if next_generated_bytes > MAX_EXTERNAL_GENERATED_BYTES {
+            return Err(FrontendProfileError::CountTooLarge {
+                field: "external_hooks.class_analyze generated bytes",
+                actual: next_generated_bytes,
+                max: MAX_EXTERNAL_GENERATED_BYTES,
+            });
+        }
+        generated_bytes = next_generated_bytes;
+        let actual_output =
+            Sha256Digest::from_bytes(Sha256::digest(capture.generated_statics.as_bytes()).into());
+        check_digest(
+            "external_hooks.class_analyze.output_generated_statics_sha256",
+            capture.output_generated_statics_sha256,
+            actual_output,
+        )?;
+        if !identities.insert((
+            capture.module_name.as_str(),
+            capture.namespace.as_str(),
+            capture.class_name.as_str(),
+        )) {
+            return invalid(
+                "external_hooks.class_analyze.captures",
+                "contains a duplicate module/namespace/class identity",
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_graph_hook(
+    field: &'static str,
+    hook: &GraphHookProfileV1,
+) -> Result<(), FrontendProfileError> {
+    if !hook.bound && !hook.captures.is_empty() {
+        return invalid(field, "unbound hook must not carry captures");
+    }
+    if hook.captures.len() > MAX_EXTERNAL_GRAPH_CAPTURES {
+        return Err(FrontendProfileError::CountTooLarge {
+            field,
+            actual: hook.captures.len(),
+            max: MAX_EXTERNAL_GRAPH_CAPTURES,
+        });
+    }
+    let mut inputs = BTreeSet::new();
+    for (index, capture) in hook.captures.iter().enumerate() {
+        if capture.ordinal as usize != index {
+            return Err(FrontendProfileError::Order {
+                field,
+                expected: index,
+                actual: capture.ordinal,
+            });
+        }
+        if !inputs.insert(capture.input_graph_sha256) {
+            return invalid(field, "contains a duplicate input graph digest");
+        }
+        if capture.modules.len() > MAX_EXTERNAL_GRAPH_MODULES {
+            return Err(FrontendProfileError::CountTooLarge {
+                field: "external hook modules",
+                actual: capture.modules.len(),
+                max: MAX_EXTERNAL_GRAPH_MODULES,
+            });
+        }
+        let mut module_names = BTreeSet::new();
+        let mut generated_bytes = 0usize;
+        for (module_index, module) in capture.modules.iter().enumerate() {
+            if module.ordinal as usize != module_index {
+                return Err(FrontendProfileError::Order {
+                    field: "external hook module",
+                    expected: module_index,
+                    actual: module.ordinal,
+                });
+            }
+            validate_bounded_nul_free(
+                &module.module_name,
+                MAX_EXTERNAL_NAME_BYTES,
+                "external hook module_name",
+                false,
+            )?;
+            validate_bounded_nul_free(
+                &module.generated_declarations,
+                MAX_EXTERNAL_GENERATED_BYTES,
+                "external hook generated_declarations",
+                true,
+            )?;
+            let next_generated_bytes =
+                generated_bytes.saturating_add(module.generated_declarations.len());
+            if next_generated_bytes > MAX_EXTERNAL_GENERATED_BYTES {
+                return Err(FrontendProfileError::CountTooLarge {
+                    field: "external hook generated bytes",
+                    actual: next_generated_bytes,
+                    max: MAX_EXTERNAL_GENERATED_BYTES,
+                });
+            }
+            generated_bytes = next_generated_bytes;
+            if !module_names.insert(module.module_name.as_str()) {
+                return invalid(field, "contains a duplicate module name");
+            }
+        }
+        check_digest(
+            "external hook output_graph_sha256",
+            capture.output_graph_sha256,
+            graph_hook_output_digest(capture),
+        )?;
+    }
+    Ok(())
+}
+
+fn graph_hook_output_digest(capture: &GraphHookCaptureV1) -> Sha256Digest {
+    let mut hash = Sha256::new();
+    hash.update(EXTERNAL_GRAPH_OUTPUT_HASH_DOMAIN);
+    hash.update(capture.input_graph_sha256.as_bytes());
+    hash.update((capture.modules.len() as u64).to_le_bytes());
+    for module in &capture.modules {
+        hash.update((module.module_name.len() as u64).to_le_bytes());
+        hash.update(module.module_name.as_bytes());
+        hash.update((module.generated_declarations.len() as u64).to_le_bytes());
+        hash.update(module.generated_declarations.as_bytes());
+    }
+    Sha256Digest::from_bytes(hash.finalize().into())
+}
+
 fn check_schema(
     actual: &str,
     version: u32,
@@ -678,6 +1012,8 @@ mod tests {
                     cannot_derive_angelscript: false,
                 },
             ],
+            fname_comparison_keys: Vec::new(),
+            external_hooks: ExternalFrontendHooksV1::unbound(),
             canonical_sha256: zero_digest(),
         };
         value.seal().unwrap();
@@ -842,6 +1178,107 @@ mod tests {
                 label: "compiler options",
                 reason: "byte length"
             })
+        ));
+    }
+
+    #[test]
+    fn external_frontend_semantics_are_exact_bounded_and_fail_closed() {
+        let generated_statics = "int GeneratedValue = 7;\n".to_owned();
+        let graph_input = Sha256Digest::from_bytes([0x31; 32]);
+        let mut graph_capture = GraphHookCaptureV1 {
+            ordinal: 0,
+            input_graph_sha256: graph_input,
+            output_graph_sha256: zero_digest(),
+            modules: vec![GraphHookModuleCaptureV1 {
+                ordinal: 0,
+                module_name: "GoreMods.Example".to_owned(),
+                generated_declarations: "void GeneratedHook();\n".to_owned(),
+            }],
+        };
+        graph_capture.output_graph_sha256 = graph_hook_output_digest(&graph_capture);
+
+        let mut value = preprocessor();
+        value.fname_comparison_keys = vec![FNameComparisonKeyV1 {
+            ordinal: 0,
+            spelling: "Äpfel".to_owned(),
+            comparison_key: "äpfel".to_owned(),
+        }];
+        value.external_hooks = ExternalFrontendHooksV1 {
+            class_analyze: ClassAnalyzeHookProfileV1 {
+                bound: true,
+                captures: vec![ClassAnalyzeCaptureV1 {
+                    ordinal: 0,
+                    module_name: "GoreMods.Example".to_owned(),
+                    namespace: "Example".to_owned(),
+                    class_name: "UExample".to_owned(),
+                    source_sha256: Sha256Digest::from_bytes([0x11; 32]),
+                    input_generated_statics_sha256: Sha256Digest::from_bytes([0x22; 32]),
+                    output_generated_statics_sha256: Sha256Digest::from_bytes(
+                        Sha256::digest(generated_statics.as_bytes()).into(),
+                    ),
+                    generated_statics,
+                    has_statics: true,
+                    compose_onto_class: "UBaseExample".to_owned(),
+                }],
+            },
+            process_chunks: GraphHookProfileV1 {
+                bound: true,
+                captures: vec![graph_capture.clone()],
+            },
+            post_process_code: GraphHookProfileV1 {
+                bound: true,
+                captures: vec![graph_capture],
+            },
+        };
+        value.seal().unwrap();
+        assert_eq!(
+            PreprocessorConfigV1::from_json(&value.to_json().unwrap()).unwrap(),
+            value
+        );
+
+        let mut unbound_with_capture = value.clone();
+        unbound_with_capture.external_hooks.class_analyze.bound = false;
+        assert!(matches!(
+            unbound_with_capture.seal(),
+            Err(FrontendProfileError::InvalidField {
+                field: "external_hooks.class_analyze",
+                ..
+            })
+        ));
+
+        let mut forged_generated_output = value.clone();
+        forged_generated_output
+            .external_hooks
+            .class_analyze
+            .captures[0]
+            .output_generated_statics_sha256 = zero_digest();
+        assert!(matches!(
+            forged_generated_output.seal(),
+            Err(FrontendProfileError::DigestMismatch {
+                field: "external_hooks.class_analyze.output_generated_statics_sha256",
+                ..
+            })
+        ));
+
+        let mut forged_graph_output = value.clone();
+        forged_graph_output.external_hooks.process_chunks.captures[0].output_graph_sha256 =
+            zero_digest();
+        assert!(matches!(
+            forged_graph_output.seal(),
+            Err(FrontendProfileError::DigestMismatch {
+                field: "external hook output_graph_sha256",
+                ..
+            })
+        ));
+
+        let mut missing_hooks = serde_json::to_value(value).unwrap();
+        missing_hooks
+            .as_object_mut()
+            .unwrap()
+            .remove("external_hooks");
+        assert!(matches!(
+            PreprocessorConfigV1::from_json(&serde_json::to_vec(&missing_hooks).unwrap()),
+            Err(FrontendProfileError::Json(_))
         ));
     }
 }
