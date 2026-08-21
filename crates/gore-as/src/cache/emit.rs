@@ -1250,7 +1250,16 @@ fn emit_function_ctor(
     let body = fold_literal_temporaries(&body, refs);
     let body = fold_constant_comparisons(&body);
     let body = fold_double_negations(&body);
-    let body = inline_call_argument_temporaries(&body, refs, &inferred_locals, fields);
+    // `__InitDefaults` is where the class's values live, and their recovery is fail-closed: a
+    // temporary left without a reader there costs the whole class its `default` statements
+    // (measured: 358 classes). Move only what a call reads there, never a plain operand.
+    let body = inline_call_argument_temporaries(
+        &body,
+        refs,
+        &inferred_locals,
+        fields,
+        !f.name.contains("__InitDefaults"),
+    );
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
     let body = drop_unreachable_statements(&body);
@@ -4927,6 +4936,7 @@ fn inline_call_argument_temporaries(
     refs: &RefResolver,
     locals: &BTreeMap<i32, String>,
     fields: Option<&HashMap<String, String>>,
+    operands_move: bool,
 ) -> String {
     const MAX_ARGUMENT_INLINE_PASSES: usize = 8;
     let trailing_newline = body.ends_with('\n');
@@ -4943,6 +4953,9 @@ fn inline_call_argument_temporaries(
             // receiver its own call runs on.
             let called = call_arguments(&lines[index]);
             let mut candidates: Vec<(String, Position)> = Vec::new();
+            // A temporary this statement refuses in one position must not come back through
+            // another: the operand sweep below sees the same name and knows less about it.
+            let mut refused: Vec<String> = Vec::new();
             if let Some((callee, arguments)) = &called {
                 for (position, argument) in arguments.iter().enumerate() {
                     let Some(temp) = argument_temporary(argument) else {
@@ -4955,6 +4968,7 @@ fn inline_call_argument_temporaries(
                         && !refs.arg_position_accepts_temporary(callee, arguments.len(), position)
                     {
                         inline_reject("param", callee);
+                        refused.push(temp);
                         continue;
                     }
                     candidates.push((temp, Position::Argument));
@@ -4966,11 +4980,14 @@ fn inline_call_argument_temporaries(
             // A temporary is not only a call's argument or receiver: it is any operand the
             // statement reads (`if (local_14 >= local_10)`). Those move only with type evidence
             // — see the gate in `inline_temporary_into`.
-            candidates.extend(
-                statement_temporaries(&lines[index])
-                    .into_iter()
-                    .map(|temp| (temp, Position::Operand)),
-            );
+            let operands: Vec<String> = statement_temporaries(&lines[index])
+                .into_iter()
+                .filter(|_| operands_move)
+                .filter(|temp| {
+                    !refused.contains(temp) && !candidates.iter().any(|(known, _)| known == temp)
+                })
+                .collect();
+            candidates.extend(operands.into_iter().map(|temp| (temp, Position::Operand)));
             let callee = called
                 .map(|(callee, _)| callee)
                 .unwrap_or_else(|| "<receiver>".to_owned());
@@ -5037,6 +5054,13 @@ fn inline_temporary_into(
         inline_reject("uses", callee);
         return false; // inlining a value read twice would evaluate it twice
     }
+    // The rendered read carries the int-to-bool conversion the slot's declaration performed
+    // (`(local_3 != 0)`). Whatever replaces it brings its own type, and `(<bool> != 0)` does not
+    // compile — leave the wrapped reads where they are.
+    if lines[index].contains(&format!("({temp} != 0)")) {
+        inline_reject("wrapped", callee);
+        return false;
+    }
     // The compiler re-uses one slot for several temporaries, so the definition that matters is
     // the LAST one before this call, and it owns the lines up to the next definition of the
     // same slot.
@@ -5065,7 +5089,10 @@ fn inline_temporary_into(
     // moves only where the read has provably the same type — a member of `this` the class field
     // map types exactly like the slot.
     let movable = match position {
-        Position::Operand => same_typed_own_field(&value, temp, locals, fields),
+        Position::Operand => {
+            operand_read_takes_a_value(&lines[index])
+                && (same_typed_own_field(&value, temp, locals, fields) || is_call_result(&value))
+        }
         _ => is_call_result(&value),
     };
     if !movable {
@@ -5088,6 +5115,17 @@ fn inline_temporary_into(
     lines[index] = rename_ident(&lines[index], temp, &value);
     lines[definition].clear();
     true
+}
+
+/// Whether an operand read can take a value in place of the slot. It cannot in a `return` of a
+/// reference (the returned reference would outlive the temporaries the expression built), and it
+/// cannot inside arithmetic, where the slot declaration is what typed the operands. A comparison
+/// takes either side as it is, which is the case worth moving.
+fn operand_read_takes_a_value(line: &str) -> bool {
+    let Some(expression) = statement_expression(line) else {
+        return false;
+    };
+    !line.trim().starts_with("return ") && !expression.contains(['*', '/', '+', '-'])
 }
 
 /// Where in a statement a temporary was found.
