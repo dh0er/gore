@@ -1243,7 +1243,7 @@ fn emit_function_ctor(
     let body = fold_literal_temporaries(&body, refs);
     let body = fold_constant_comparisons(&body);
     let body = fold_double_negations(&body);
-    let body = inline_call_argument_temporaries(&body, refs, &inferred_locals);
+    let body = inline_call_argument_temporaries(&body, refs, &inferred_locals, fields);
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
     let body = drop_unreachable_statements(&body);
@@ -4919,6 +4919,7 @@ fn inline_call_argument_temporaries(
     body: &str,
     refs: &RefResolver,
     locals: &BTreeMap<i32, String>,
+    fields: Option<&HashMap<String, String>>,
 ) -> String {
     const MAX_ARGUMENT_INLINE_PASSES: usize = 8;
     let trailing_newline = body.ends_with('\n');
@@ -4934,7 +4935,7 @@ fn inline_call_argument_temporaries(
             // Every temporary this statement can take back: one per call argument, plus the
             // receiver its own call runs on.
             let called = call_arguments(&lines[index]);
-            let mut candidates: Vec<(String, bool)> = Vec::new();
+            let mut candidates: Vec<(String, Position)> = Vec::new();
             if let Some((callee, arguments)) = &called {
                 for (position, argument) in arguments.iter().enumerate() {
                     let Some(temp) = argument_temporary(argument) else {
@@ -4949,16 +4950,27 @@ fn inline_call_argument_temporaries(
                         inline_reject("param", callee);
                         continue;
                     }
-                    candidates.push((temp, false));
+                    candidates.push((temp, Position::Argument));
                 }
             }
-            candidates.extend(receiver_temporary(&lines[index]).map(|temp| (temp, true)));
+            candidates.extend(
+                receiver_temporary(&lines[index]).map(|temp| (temp, Position::Receiver)),
+            );
+            // A temporary is not only a call's argument or receiver: it is any operand the
+            // statement reads (`if (local_14 >= local_10)`). Those move only with type evidence
+            // — see the gate in `inline_temporary_into`.
+            candidates.extend(
+                statement_temporaries(&lines[index])
+                    .into_iter()
+                    .map(|temp| (temp, Position::Operand)),
+            );
             let callee = called
                 .map(|(callee, _)| callee)
                 .unwrap_or_else(|| "<receiver>".to_owned());
-            for (temp, receiver) in candidates {
-                if inline_temporary_into(&mut lines, index, &temp, &callee, receiver, locals, refs)
-                {
+            for (temp, position) in candidates {
+                if inline_temporary_into(
+                    &mut lines, index, &temp, &callee, position, locals, refs, fields,
+                ) {
                     changed = true;
                     moved = true;
                 }
@@ -4989,10 +5001,12 @@ fn inline_temporary_into(
     index: usize,
     temp: &str,
     callee: &str,
-    receiver: bool,
+    position: Position,
     locals: &BTreeMap<i32, String>,
     refs: &RefResolver,
+    fields: Option<&HashMap<String, String>>,
 ) -> bool {
+    let receiver = position == Position::Receiver;
     // A value struct reached through a call IS a temporary, and AngelScript refuses a NON-const
     // method on one ("Cannot call non-const method on a temporary object"). An object handle is
     // always safe; a value struct only when the cache records a const overload of the method it
@@ -5039,9 +5053,17 @@ fn inline_temporary_into(
     let value = definition_value(&lines[definition], temp)
         .expect("the definition matched above")
         .to_owned();
-    if !is_call_result(&value) {
+    // An argument or a receiver takes the value as it is: whatever conversion the call needs is
+    // written at the call. Any OTHER operand had the conversion in the slot's declaration, so it
+    // moves only where the read has provably the same type — a member of `this` the class field
+    // map types exactly like the slot.
+    let movable = match position {
+        Position::Operand => same_typed_own_field(&value, temp, locals, fields),
+        _ => is_call_result(&value),
+    };
+    if !movable {
         inline_reject("not-a-call", callee);
-        return false; // only a call's result is worth moving
+        return false;
     }
     // Everything between has to feed THIS call as well, or the order of a side effect would
     // change. "Feeds this call" is checked against the line as it stands, so a temporary that an
@@ -5059,6 +5081,78 @@ fn inline_temporary_into(
     lines[index] = rename_ident(&lines[index], temp, &value);
     lines[definition].clear();
     true
+}
+
+/// Where in a statement a temporary was found.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Position {
+    Argument,
+    Receiver,
+    Operand,
+}
+
+/// `this.<Field>` whose declared field type is exactly the slot's. Reading a member has no side
+/// effect of its own, so it can be read where it is used instead of being materialized into a
+/// slot first — but only when the slot's declaration was not also performing a conversion.
+fn same_typed_own_field(
+    value: &str,
+    temp: &str,
+    locals: &BTreeMap<i32, String>,
+    fields: Option<&HashMap<String, String>>,
+) -> bool {
+    let Some(field) = value.strip_prefix("this.") else {
+        return false;
+    };
+    if field.is_empty() || field.contains(['.', '(', '[', ' ']) {
+        return false;
+    }
+    let (Some(fields), Some(slot_type)) = (fields, temporary_type(locals, temp)) else {
+        return false;
+    };
+    fields
+        .get(field)
+        .is_some_and(|declared| same_scalar_type(declared, slot_type))
+}
+
+/// The same type under either of its names. The slot table calls the fork's 8-byte float
+/// `double` where a class field calls it `float`; that is one type, not a conversion.
+fn same_scalar_type(a: &str, b: &str) -> bool {
+    fn canonical(ty: &str) -> &str {
+        match ty {
+            "double" | "float64" => "float",
+            other => other,
+        }
+    }
+    canonical(a) == canonical(b)
+}
+
+/// Every `local_N` the statement's expression reads.
+fn statement_temporaries(line: &str) -> Vec<String> {
+    let Some(expression) = statement_expression(line) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for (at, _) in expression.match_indices("local_") {
+        if expression[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        {
+            continue;
+        }
+        let digits: String = expression[at + 6..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        if digits.is_empty() {
+            continue;
+        }
+        let name = format!("local_{digits}");
+        if !found.contains(&name) {
+            found.push(name);
+        }
+    }
+    found
 }
 
 /// The method a statement's call runs DIRECTLY on `temp`. A chain through a field
