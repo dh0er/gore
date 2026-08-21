@@ -25,6 +25,7 @@ enum class CaptureError : std::uint32_t {
   invalid_state,
   pointer_outside_primary_image,
   duplicate_or_late_record,
+  output_recovery_required,
 };
 
 struct BuildJitFact final {

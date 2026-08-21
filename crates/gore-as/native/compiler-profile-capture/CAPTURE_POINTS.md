@@ -7,9 +7,11 @@ load an instrumentation bridge.
 The bridge must preserve this order:
 
 1. Call `open_pinned` before recording anything. Supply the running primary-image base, the
-   exact on-disk EXE path, observed Steam BuildID `24539464`, an output path outside the game
-   directory, and a nonzero random capture ID. The helper independently verifies EXE size,
-   SHA-256, PE image size, and RSDS GUID/age.
+   exact on-disk EXE path, observed Steam BuildID `24539464`, an output path outside the resolved
+   executable directory, and a nonzero random capture ID. The helper independently verifies EXE
+   size, SHA-256, PE image size, RSDS GUID/age, source/loaded-module handle identity, and the
+   handle-resolved output location. A redirected output that reaches the executable tree is
+   removed only through its newly created handle; cleanup failure is recovery-required.
 2. At the pinned `SetEngineProperty` implementation (RVA `0x47a50f0`), record each property ID
    and value in call order. The raw engine pointer is not captured.
 3. Around each indirect bind callback call at RVA `0x46856fb` / return RVA `0x46856fd`, intern

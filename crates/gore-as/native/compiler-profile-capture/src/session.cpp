@@ -1,4 +1,5 @@
 #include "gore_as_capture/session.hpp"
+#include "path_safety.hpp"
 
 #include <windows.h>
 #include <bcrypt.h>
@@ -137,19 +138,6 @@ bool is_zero(const Digest& digest) noexcept {
   });
 }
 
-bool path_starts_with(
-    const std::filesystem::path& candidate,
-    const std::filesystem::path& prefix) {
-  auto candidate_it = candidate.begin();
-  for (auto prefix_it = prefix.begin(); prefix_it != prefix.end(); ++prefix_it, ++candidate_it) {
-    if (candidate_it == candidate.end() ||
-        _wcsicmp(candidate_it->c_str(), prefix_it->c_str()) != 0) {
-      return false;
-    }
-  }
-  return true;
-}
-
 std::optional<std::uint32_t> rva_to_file_offset(
     const IMAGE_NT_HEADERS64& nt,
     const IMAGE_SECTION_HEADER* sections,
@@ -265,6 +253,7 @@ bool valid_json(std::span<const std::byte> json) noexcept {
 
 struct CaptureSession::Impl final {
   HANDLE file{INVALID_HANDLE_VALUE};
+  HANDLE executable_directory{INVALID_HANDLE_VALUE};
   CaptureError last_error{CaptureError::invalid_state};
   std::uintptr_t image_base{};
   std::uint64_t stream_bytes{};
@@ -290,6 +279,9 @@ struct CaptureSession::Impl final {
   ~Impl() {
     if (file != INVALID_HANDLE_VALUE) {
       CloseHandle(file);
+    }
+    if (executable_directory != INVALID_HANDLE_VALUE) {
+      CloseHandle(executable_directory);
     }
   }
 
@@ -403,46 +395,38 @@ CaptureError CaptureSession::open_pinned(
     return impl_->fail(CaptureError::invalid_argument);
   }
   try {
-    const auto executable = std::filesystem::absolute(executable_path).lexically_normal();
-    const auto output = std::filesystem::absolute(output_path).lexically_normal();
-    if (path_starts_with(output, executable.parent_path())) {
-      return impl_->fail(CaptureError::unsafe_output_path);
-    }
     std::array<wchar_t, 32768> loaded_path{};
     const auto loaded_length = GetModuleFileNameW(
         static_cast<HMODULE>(const_cast<void*>(primary_image_base)),
         loaded_path.data(),
         static_cast<DWORD>(loaded_path.size()));
     if (loaded_length == 0 || loaded_length == loaded_path.size() ||
-        _wcsicmp(executable.c_str(), std::filesystem::path(loaded_path.data()).c_str()) != 0 ||
         !verify_loaded_image(primary_image_base)) {
       return impl_->fail(CaptureError::wrong_target);
     }
-    const HANDLE source = CreateFileW(
-        executable.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (source == INVALID_HANDLE_VALUE) {
-      return impl_->fail(CaptureError::io_error);
+    auto source = detail::open_pinned_source(
+        executable_path,
+        std::filesystem::path(loaded_path.data(), loaded_path.data() + loaded_length));
+    if (source.error != CaptureError::ok) {
+      return impl_->fail(source.error);
     }
     LARGE_INTEGER file_size{};
     Digest executable_sha{};
-    const bool target_ok = GetFileSizeEx(source, &file_size) &&
+    const bool target_ok = GetFileSizeEx(source.executable.get(), &file_size) &&
                            static_cast<std::uint64_t>(file_size.QuadPart) == kExecutableBytes &&
-                           hash_handle_prefix(source, kExecutableBytes, {}, executable_sha) &&
+                           hash_handle_prefix(
+                               source.executable.get(), kExecutableBytes, {}, executable_sha) &&
                            executable_sha == kExecutableSha256 &&
-                           verify_pe_and_codeview(source, kExecutableBytes);
-    CloseHandle(source);
+                           verify_pe_and_codeview(source.executable.get(), kExecutableBytes);
     if (!target_ok) {
       return impl_->fail(CaptureError::wrong_target);
     }
-    impl_->file = CreateFileW(
-        output.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, CREATE_NEW,
-        FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (impl_->file == INVALID_HANDLE_VALUE) {
-      return impl_->fail(
-          GetLastError() == ERROR_FILE_EXISTS ? CaptureError::output_exists
-                                               : CaptureError::io_error);
+    auto output = detail::create_pinned_output(output_path, source.executable_directory.get());
+    if (output.error != CaptureError::ok) {
+      return impl_->fail(output.error);
     }
+    impl_->file = output.output.release();
+    impl_->executable_directory = source.executable_directory.release();
     std::vector<std::byte> header;
     header.reserve(kHeaderBytes);
     put_array(header, kCaptureMagic);
