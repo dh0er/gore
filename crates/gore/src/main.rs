@@ -884,7 +884,9 @@ mod as_cli_tests {
         ]));
     }
 
-    fn parse_compile_module(extra: &[&str]) -> (String, String, bool) {
+    fn parse_compile_module(
+        extra: &[&str],
+    ) -> (String, String, bool, cmd::as_cache::AsCompilerBackendV1) {
         let mut args = vec![
             "gore",
             "as",
@@ -910,22 +912,56 @@ mod as_cli_tests {
                     op,
                     module,
                     allow_new_symbols,
+                    compiler,
                     ..
                 },
         } = cli.command
         else {
             panic!("expected as compile-module command");
         };
-        (op, module, allow_new_symbols)
+        (op, module, allow_new_symbols, compiler.backend)
     }
 
     #[test]
     fn as_compile_module_exposes_complete_pipeline_with_strict_default() {
         assert_eq!(
             parse_compile_module(&[]),
-            ("add".into(), "GoreMods.Example".into(), false)
+            (
+                "add".into(),
+                "GoreMods.Example".into(),
+                false,
+                cmd::as_cache::AsCompilerBackendV1::Game,
+            )
         );
         assert!(parse_compile_module(&["--allow-new-symbols"]).2);
+        assert_eq!(
+            parse_compile_module(&["--backend", "standalone-then-game"]).3,
+            cmd::as_cache::AsCompilerBackendV1::StandaloneThenGame
+        );
+    }
+
+    #[test]
+    fn as_compile_module_receipt_requires_a_profile_manifest() {
+        let args = [
+            "gore",
+            "as",
+            "compile-module",
+            "--op",
+            "add",
+            "--module",
+            "M",
+            "--rel-path",
+            "M.as",
+            "--source",
+            "M.as",
+            "--work-dir",
+            "work",
+            "--out",
+            "M.cache",
+            "--generation-receipt",
+            "module.receipt.json",
+        ];
+        assert!(Cli::try_parse_from(args).is_err());
     }
 
     #[test]

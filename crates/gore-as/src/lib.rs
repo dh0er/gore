@@ -5,6 +5,7 @@ pub mod compile;
 pub mod compiler_backend;
 pub mod compiler_profile;
 pub mod diagnostics;
+pub mod generation_receipt;
 pub mod standalone_sidecar;
 
 #[cfg(test)]

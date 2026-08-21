@@ -310,6 +310,21 @@ impl CompileOutput {
         }
         Ok(())
     }
+
+    /// Clone the exact create-new output handle for receipt sealing.
+    ///
+    /// This is crate-private so callers cannot turn a successful compile into an unrelated
+    /// pathname-based artifact claim. The generation-receipt layer hashes this handle and checks
+    /// its metadata before and after the bounded read.
+    pub(crate) fn clone_retained_artifact_file(&self) -> Result<std::fs::File, String> {
+        self.validate_retained_artifact()?;
+        self.artifact
+            .as_ref()
+            .expect("validated retained artifact")
+            .file
+            .try_clone()
+            .map_err(|error| format!("cloning retained compiler output handle: {error}"))
+    }
 }
 
 impl CompileError {
@@ -519,6 +534,70 @@ pub fn compile_module_with_backend_v1(
     compile_module_report_with_backend_runner_v1(opts, mode, standalone, |game_dir, source_tree| {
         game_run_regen_with_extended_diagnostics_report(game_dir, source_tree, diagnostics)
     })
+}
+
+/// Compile through the explicit backend policy while transferring a caller-held install guard.
+///
+/// The guard must cover the caller's exact base/Binds snapshot. It is consumed by the game
+/// backend if selected, or explicitly released after a standalone/preflight result. This is the
+/// product-integration seam for `standalone-then-game`: both attempts remain bound to the same
+/// authoritative snapshot and a standalone success never launches the game.
+pub fn compile_module_with_backend_v1_with_guard(
+    opts: &CompileOpts,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    mode: CompilerBackendModeV1,
+    standalone: Option<&mut dyn StandaloneCompilerRunnerV1>,
+    guard: InstallMutationGuard,
+) -> CompileModuleReport {
+    let guard = std::cell::RefCell::new(Some(guard));
+    let mut report = compile_module_report_with_backend_runner_v1(
+        opts,
+        mode,
+        standalone,
+        |game_dir, source_tree| {
+            let guard = guard
+                .borrow_mut()
+                .take()
+                .ok_or_else(|| "pre-held compiler guard was consumed more than once".to_owned())?;
+            game_run_regen_with_extended_diagnostics_report_with_guard(
+                game_dir,
+                source_tree,
+                diagnostics,
+                guard,
+            )
+        },
+    );
+
+    if let Some(mut unused_guard) = guard.into_inner() {
+        if let Err(release) = unused_guard.release() {
+            unused_guard.preserve_for_manual_recovery();
+            let previous = std::mem::replace(
+                &mut report.outcome,
+                CompileModuleReportOutcome::Failed(CompileError::Other(
+                    "unreachable guard-release placeholder".to_owned(),
+                )),
+            );
+            let primary = match previous {
+                CompileModuleReportOutcome::Compiled(mut output) => {
+                    let cleanup = output
+                        .neutralize_retained_artifact()
+                        .err()
+                        .map(|error| {
+                            format!("; retained compiler output cleanup also failed: {error}")
+                        })
+                        .unwrap_or_default();
+                    format!("compiler output was discarded before publication{cleanup}")
+                }
+                CompileModuleReportOutcome::Failed(error) => error.to_string(),
+            };
+            report.outcome = CompileModuleReportOutcome::Failed(CompileError::Other(format!(
+                "{primary}; additionally failed to release the pre-held install-mutation guard: \
+                 {release}"
+            )));
+            report.install_restore = InstallRestoreDisposition::RecoveryRequiredRestoreFailed;
+        }
+    }
+    report
 }
 
 /// Compile with a caller-held guard acquired by [`acquire_compile_install_mutation`].
@@ -10377,6 +10456,57 @@ mod tests {
             report.install_restore_disposition(),
             InstallRestoreDisposition::NotStarted
         );
+
+        drop(report);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn guard_aware_backend_v1_releases_unused_guard_after_standalone_success() {
+        let root = unique_test_root("backend-v1-standalone-guard");
+        let (game, _) = fake_install(&root);
+        let guard = InstallMutationGuard::acquire(&game, "gore-as:compile").unwrap();
+        let guard_path = guard.path().to_path_buf();
+        let opts = CompileOpts {
+            game_dir: game,
+            op: "add".to_owned(),
+            module_name: "NewModule".to_owned(),
+            rel_path: "NewModule.as".to_owned(),
+            as_path: root.join("must-not-be-opened.as"),
+            source_override: Some(b"// standalone source\n".to_vec()),
+            work_dir: root.join("work"),
+            allow_new_symbols: true,
+            base_override: Some(cache_with_empty_modules(&[("Base", "Base.as")])),
+            binds_override: None,
+        };
+        let generated =
+            cache_with_empty_modules(&[("Base", "Base.as"), ("NewModule", "NewModule.as")]);
+        let mut standalone = |_: StandaloneCompilerInputsV1<'_>| {
+            let path = root.join("standalone-guard.cache");
+            std::fs::write(&path, &generated).unwrap();
+            Ok(StandaloneCompilerOutputV1::detached(path))
+        };
+
+        let report = compile_module_with_backend_v1_with_guard(
+            &opts,
+            &Default::default(),
+            CompilerBackendModeV1::Standalone,
+            Some(&mut standalone),
+            guard,
+        );
+        assert!(matches!(
+            report.outcome,
+            CompileModuleReportOutcome::Compiled(_)
+        ));
+        assert_eq!(
+            report.backend_name(),
+            Some(CompilerBackendNameV1::Standalone)
+        );
+        assert_eq!(
+            report.install_restore_disposition(),
+            InstallRestoreDisposition::NotStarted
+        );
+        assert!(!guard_path.exists());
 
         drop(report);
         std::fs::remove_dir_all(root).unwrap();

@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use clap::Subcommand;
+use clap::{Args, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -13,6 +13,52 @@ use gore_as::cache::default_evidence::{
 use gore_as::cache::header::CacheHeader;
 use gore_as::cache::scan::scan_strings;
 use gore_as::cache::walk_modules::{module_count, module_region_end};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum AsCompilerBackendV1 {
+    Standalone,
+    Game,
+    StandaloneThenGame,
+}
+
+impl From<AsCompilerBackendV1> for gore_as::compile::CompilerBackendModeV1 {
+    fn from(value: AsCompilerBackendV1) -> Self {
+        match value {
+            AsCompilerBackendV1::Standalone => Self::Standalone,
+            AsCompilerBackendV1::Game => Self::Game,
+            AsCompilerBackendV1::StandaloneThenGame => Self::StandaloneThenGame,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AsCompilerBackendArgsV1 {
+    /// Compiler policy. The game compiler remains the default until a real profile is qualified.
+    #[arg(long, value_enum, default_value_t = AsCompilerBackendV1::Game)]
+    pub backend: AsCompilerBackendV1,
+    /// Exact native standalone sidecar executable. Required by standalone modes.
+    #[arg(long, value_name = "EXE")]
+    pub standalone_sidecar: Option<PathBuf>,
+    /// Package-authored SHA-256 of the exact standalone sidecar executable.
+    #[arg(long, value_name = "HEX")]
+    pub standalone_sidecar_sha256: Option<String>,
+    /// Qualified compiler-profile manifest. Required by standalone modes and receipt publication.
+    #[arg(long, value_name = "PROFILE.json")]
+    pub compiler_profile_manifest: Option<PathBuf>,
+    /// Read-only root containing every sealed compiler-profile payload.
+    #[arg(long, value_name = "DIR")]
+    pub compiler_profile_root: Option<PathBuf>,
+    /// Existing private scratch root used by the standalone sidecar.
+    #[arg(long, value_name = "DIR")]
+    pub standalone_scratch_root: Option<PathBuf>,
+    /// Atomically publish a no-clobber generation-receipt V1 for the exact output.
+    #[arg(
+        long,
+        value_name = "RECEIPT.json",
+        requires = "compiler_profile_manifest"
+    )]
+    pub generation_receipt: Option<PathBuf>,
+}
 
 #[derive(Subcommand)]
 pub enum AsCmd {
@@ -222,6 +268,9 @@ pub enum AsCmd {
             value_parser = clap::value_parser!(u64).range(0..=30_000)
         )]
         diagnostics_inject_delay_ms: u64,
+        /// Explicit compiler backend/package and optional generation-receipt contract.
+        #[command(flatten)]
+        compiler: AsCompilerBackendArgsV1,
     },
     /// Replace an existing module using a mini-cache bound to this exact base generation.
     Replace {
@@ -1654,6 +1703,147 @@ fn guarded_pristine_script_cache(
     }
 }
 
+fn compiler_binds_path(game: &Path) -> PathBuf {
+    let g1r = if game.file_name().is_some_and(|name| name == "G1R") {
+        game.to_path_buf()
+    } else {
+        game.join("G1R")
+    };
+    g1r.join("Script").join("Binds.Cache")
+}
+
+fn release_compile_guard_after_error(
+    mut guard: gore_as::compile::InstallMutationGuard,
+    primary: anyhow::Error,
+) -> anyhow::Error {
+    match guard.release() {
+        Ok(()) => primary,
+        Err(release) => {
+            guard.preserve_for_manual_recovery();
+            anyhow::anyhow!(
+                "COMPILE_RECOVERY_REQUIRED: {primary}; additionally failed to release the \
+                 pre-held install-mutation guard: {release}"
+            )
+        }
+    }
+}
+
+fn prepare_standalone_runner(
+    compiler: &AsCompilerBackendArgsV1,
+) -> Result<Option<gore_as::standalone_sidecar::StandaloneSidecarRunnerV1>> {
+    use gore_as::standalone_sidecar::{
+        SidecarExecutableSealV1, StandaloneSidecarConfigV1, StandaloneSidecarRunnerV1,
+    };
+
+    let configured = [
+        compiler.standalone_sidecar.is_some(),
+        compiler.standalone_sidecar_sha256.is_some(),
+        compiler.standalone_scratch_root.is_some(),
+    ];
+    if compiler.backend == AsCompilerBackendV1::Game {
+        if configured.into_iter().any(|present| present) {
+            bail!(
+                "standalone sidecar arguments require --backend standalone or \
+                 --backend standalone-then-game"
+            );
+        }
+        return Ok(None);
+    }
+    let sidecar = compiler
+        .standalone_sidecar
+        .as_deref()
+        .context("standalone backend requires --standalone-sidecar")?
+        .canonicalize()
+        .context("resolving standalone sidecar executable")?;
+    let expected_sha256 = compiler
+        .standalone_sidecar_sha256
+        .as_deref()
+        .context("standalone backend requires --standalone-sidecar-sha256")?;
+    let expected_sha256 =
+        gore_as::compiler_profile::manifest::Sha256Digest::from_hex(expected_sha256)
+            .map_err(anyhow::Error::msg)
+            .context("parsing --standalone-sidecar-sha256")?;
+    let profile_manifest = compiler
+        .compiler_profile_manifest
+        .as_deref()
+        .context("standalone backend requires --compiler-profile-manifest")?
+        .canonicalize()
+        .context("resolving compiler profile manifest")?;
+    let profile_root = compiler
+        .compiler_profile_root
+        .as_deref()
+        .context("standalone backend requires --compiler-profile-root")?
+        .canonicalize()
+        .context("resolving compiler profile root")?;
+    let scratch_root = compiler
+        .standalone_scratch_root
+        .as_deref()
+        .context("standalone backend requires --standalone-scratch-root")?
+        .canonicalize()
+        .context("resolving standalone scratch root")?;
+    let sidecar_len = std::fs::metadata(&sidecar)
+        .with_context(|| format!("inspecting {}", sidecar.display()))?
+        .len();
+    let config = StandaloneSidecarConfigV1::new(
+        sidecar,
+        SidecarExecutableSealV1 {
+            byte_len: sidecar_len,
+            sha256: expected_sha256,
+        },
+        profile_manifest,
+        profile_root,
+        scratch_root,
+    );
+    StandaloneSidecarRunnerV1::new(config)
+        .map(Some)
+        .map_err(anyhow::Error::msg)
+        .context("initializing qualified standalone compiler")
+}
+
+fn load_game_receipt_profile_package(
+    compiler: &AsCompilerBackendArgsV1,
+) -> Result<Option<gore_as::standalone_sidecar::ValidatedCompilerProfilePackageV1>> {
+    if compiler.generation_receipt.is_none() || compiler.backend != AsCompilerBackendV1::Game {
+        return Ok(None);
+    }
+    let manifest = compiler
+        .compiler_profile_manifest
+        .as_deref()
+        .context("game generation receipt requires --compiler-profile-manifest")?
+        .canonicalize()
+        .context("resolving compiler profile manifest")?;
+    let root = compiler
+        .compiler_profile_root
+        .as_deref()
+        .context("game generation receipt requires --compiler-profile-root")?
+        .canonicalize()
+        .context("resolving compiler profile root")?;
+    gore_as::standalone_sidecar::ValidatedCompilerProfilePackageV1::load(&manifest, &root)
+        .map(Some)
+        .map_err(anyhow::Error::msg)
+        .context("loading fully qualified compiler profile package for game receipt")
+}
+
+fn validate_profile_inputs_before_compile(
+    profile: &gore_as::compiler_profile::manifest::CompilerProfileV1,
+    base: &[u8],
+    binds: &[u8],
+) -> Result<()> {
+    let base = gore_as::generation_receipt::ArtifactSealV1::from_bytes(base);
+    let binds = gore_as::generation_receipt::ArtifactSealV1::from_bytes(binds);
+    if base.byte_len != profile.oracle.shipping_cache.byte_len
+        || base.sha256 != profile.oracle.shipping_cache.sha256
+    {
+        bail!("qualified compiler profile does not match the selected pristine Shipping cache");
+    }
+    if binds.byte_len != profile.oracle.binds_cache.byte_len
+        || binds.sha256 != profile.oracle.binds_cache.sha256
+    {
+        bail!("qualified compiler profile does not match the selected Binds.Cache");
+    }
+    Ok(())
+}
+
 pub fn run(cmd: AsCmd) -> Result<()> {
     match cmd {
         AsCmd::DecodeHeader { file } => {
@@ -2218,41 +2408,113 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             no_diagnostics,
             diagnostics_hook,
             diagnostics_inject_delay_ms,
+            compiler,
         } => {
             let game = gore_loc::config::game_root(game).context("resolving game path")?;
-            let (base_override, guard) = guarded_pristine_script_cache(&game)?;
+            let source_bytes = read_regular_bounded(
+                &source,
+                gore_as::generation_receipt::MAX_GENERATION_SOURCE_FILE_BYTES_V1 as u64,
+                "AS_COMPILE_SOURCE",
+            )?;
+            let mut standalone = prepare_standalone_runner(&compiler)?;
+            let game_receipt_package = load_game_receipt_profile_package(&compiler)?;
+            let execution_profile = standalone.as_ref().map(|runner| runner.profile().clone());
+            let game_receipt_profile = game_receipt_package
+                .as_ref()
+                .map(|package| package.profile().clone());
+            let sealed_inputs_required = standalone.is_some() || game_receipt_package.is_some();
+            let (base_override, guard) = if compiler.backend == AsCompilerBackendV1::Standalone {
+                (
+                    gore_mod::pristine_script_cache(&game)
+                        .context("reading the drift-aware pristine script cache read-only")?,
+                    None,
+                )
+            } else {
+                let (base, guard) = guarded_pristine_script_cache(&game)?;
+                (base, Some(guard))
+            };
+            let binds_override = if sealed_inputs_required {
+                let binds_path = compiler_binds_path(&game);
+                match read_regular_bounded(&binds_path, DEFAULT_BINDS_MAX_BYTES, "AS_COMPILE_BINDS")
+                {
+                    Ok(bytes) => Some(bytes),
+                    Err(error) => match guard {
+                        Some(guard) => return Err(release_compile_guard_after_error(guard, error)),
+                        None => return Err(error),
+                    },
+                }
+            } else {
+                None
+            };
+            if let Some(profile) = execution_profile.as_ref().or(game_receipt_profile.as_ref()) {
+                if let Err(error) = validate_profile_inputs_before_compile(
+                    profile,
+                    &base_override,
+                    binds_override
+                        .as_deref()
+                        .expect("profile-bound compile has Binds snapshot"),
+                ) {
+                    return match guard {
+                        Some(guard) => Err(release_compile_guard_after_error(guard, error)),
+                        None => Err(error),
+                    };
+                }
+            }
             let opts = gore_as::compile::CompileOpts {
                 game_dir: game,
                 op,
                 module_name: module,
                 rel_path,
                 as_path: source,
-                source_override: None,
+                source_override: Some(source_bytes.clone()),
                 work_dir,
                 allow_new_symbols,
-                base_override: Some(base_override),
-                binds_override: None,
+                base_override: Some(base_override.clone()),
+                binds_override: binds_override.clone(),
             };
             let diagnostics = gore_as::diagnostics::DiagnosticsOptions {
                 disabled: no_diagnostics,
                 hook_dll: diagnostics_hook,
                 inject_delay: std::time::Duration::from_millis(diagnostics_inject_delay_ms),
             };
-            let report = gore_as::compile::compile_module_with_diagnostics_report_with_guard(
-                &opts,
-                &diagnostics,
-                guard,
-            );
+            let requested_mode: gore_as::compile::CompilerBackendModeV1 = compiler.backend.into();
+            let report = match guard {
+                Some(guard) => gore_as::compile::compile_module_with_backend_v1_with_guard(
+                    &opts,
+                    &diagnostics,
+                    requested_mode,
+                    standalone.as_mut().map(|runner| {
+                        runner as &mut dyn gore_as::compile::StandaloneCompilerRunnerV1
+                    }),
+                    guard,
+                ),
+                None => gore_as::compile::compile_module_with_backend_v1(
+                    &opts,
+                    &diagnostics,
+                    requested_mode,
+                    standalone.as_mut().map(|runner| {
+                        runner as &mut dyn gore_as::compile::StandaloneCompilerRunnerV1
+                    }),
+                ),
+            };
             let restore = report.install_restore_disposition();
+            let used_backend = report.backend_name();
+            let fallback_reason = report.fallback_reason().cloned();
             let compiled = match report.outcome {
                 gore_as::compile::CompileModuleReportOutcome::Compiled(output)
-                    if restore == gore_as::compile::InstallRestoreDisposition::RestoredExact =>
-                {
-                    output
-                }
+                    if matches!(
+                        (used_backend, restore),
+                        (
+                            Some(gore_as::compile::CompilerBackendNameV1::Standalone),
+                            gore_as::compile::InstallRestoreDisposition::NotStarted
+                        ) | (
+                            Some(gore_as::compile::CompilerBackendNameV1::Game),
+                            gore_as::compile::InstallRestoreDisposition::RestoredExact
+                        )
+                    ) => output,
                 gore_as::compile::CompileModuleReportOutcome::Compiled(_) => bail!(
                     "COMPILE_RECOVERY_REQUIRED: compiler output was produced without proving an \
-                     exact game-install restore"
+                     exact backend/install disposition"
                 ),
                 gore_as::compile::CompileModuleReportOutcome::Failed(error)
                     if matches!(
@@ -2267,23 +2529,109 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     return Err(anyhow::Error::new(error)).context("compiling module");
                 }
             };
-            let mini = std::fs::read(&compiled.mini_path).with_context(|| {
-                format!(
-                    "reading compiled mini-cache {}",
-                    compiled.mini_path.display()
+            let used_backend = used_backend.context(
+                "compiler succeeded without reporting the backend that produced its output",
+            )?;
+            let backend_receipt =
+                gore_as::generation_receipt::ReceiptBackendSelectionV1::from_compile_selection(
+                    requested_mode,
+                    used_backend,
+                    fallback_reason.as_ref(),
                 )
-            })?;
+                .map_err(anyhow::Error::msg)?;
+            let sources = [gore_as::generation_receipt::GenerationSourceFileV1 {
+                relative_path: &opts.rel_path,
+                bytes: &source_bytes,
+            }];
+            let receipt_package = standalone
+                .as_ref()
+                .map(|runner| runner.profile_package())
+                .or(game_receipt_package.as_ref());
+            let generation_receipt = match (
+                compiler.generation_receipt.as_ref(),
+                receipt_package,
+                binds_override.as_deref(),
+            ) {
+                (Some(_), Some(package), Some(binds)) => Some(
+                    gore_as::generation_receipt::GenerationReceiptV1::build_for_compile_output(
+                        package,
+                        &sources,
+                        &base_override,
+                        binds,
+                        &compiled,
+                        backend_receipt,
+                    )
+                    .map_err(anyhow::Error::msg)
+                    .context("building qualified generation receipt")?,
+                ),
+                (None, _, _) => None,
+                _ => {
+                    bail!("generation receipt is missing its qualified profile package or Binds input")
+                }
+            };
+            let mini = gore_as::generation_receipt::read_compile_output_bytes_v1(&compiled)
+                .map_err(anyhow::Error::msg)
+                .context("reading the exact retained compiled mini-cache")?;
             if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("creating {}", parent.display()))?;
             }
-            std::fs::write(&out, &mini).with_context(|| format!("writing {}", out.display()))?;
+            if generation_receipt.is_some()
+                || compiler.backend == AsCompilerBackendV1::Standalone
+            {
+                gore_as::generation_receipt::publish_generation_output_v1(&out, &mini)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| {
+                        format!(
+                            "atomically publishing no-clobber compiler output {}",
+                            out.display()
+                        )
+                    })?;
+            } else {
+                std::fs::write(&out, &mini)
+                    .with_context(|| format!("writing {}", out.display()))?;
+            }
+            if let (Some(path), Some(receipt)) = (
+                compiler.generation_receipt.as_ref(),
+                generation_receipt.as_ref(),
+            ) {
+                if let Some(parent) = path
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                {
+                    std::fs::create_dir_all(parent)
+                        .with_context(|| format!("creating {}", parent.display()))?;
+                }
+                if let Err(error) =
+                    gore_as::generation_receipt::publish_generation_receipt_v1(path, receipt)
+                {
+                    match std::fs::remove_file(&out) {
+                        Ok(()) => bail!(
+                            "GENERATION_RECEIPT_PUBLICATION_FAILED_OUTPUT_REMOVED: publishing {}: \
+                             {error}; removed the no-clobber output {} so no unqualified artifact \
+                             remains",
+                            path.display(),
+                            out.display()
+                        ),
+                        Err(cleanup) => bail!(
+                            "GENERATION_RECEIPT_RECOVERY_REQUIRED: publishing {}: {error}; failed \
+                             to remove the now-unqualified output {}: {cleanup}",
+                            path.display(),
+                            out.display()
+                        ),
+                    }
+                }
+            }
             println!(
-                "compiled module {:?} -> {} ({} bytes)",
+                "compiled module {:?} with {} -> {} ({} bytes)",
                 compiled.module_name,
+                used_backend,
                 out.display(),
                 mini.len()
             );
+            if let Some(path) = compiler.generation_receipt {
+                println!("generation receipt -> {}", path.display());
+            }
         }
         AsCmd::Replace {
             base,
