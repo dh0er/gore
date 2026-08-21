@@ -18,7 +18,7 @@ pub const DIAGNOSTIC_PARITY_SCHEMA: &str = "gore.as.compiler-diagnostic-parity";
 pub const SEMANTIC_PARITY_SCHEMA: &str = "gore.as.compiler-semantic-parity";
 pub const QUALIFICATION_SCHEMA_VERSION: u32 = 1;
 
-const MAX_QUALIFICATION_JSON_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_QUALIFICATION_JSON_BYTES_V1: usize = 32 * 1024 * 1024;
 const MAX_PROBE_CASES: usize = 8192;
 const MAX_SECTIONS_PER_CASE: usize = 256;
 const MAX_DIAGNOSTICS_PER_CASE: usize = 4096;
@@ -803,11 +803,11 @@ fn parse_bounded<T>(
 where
     T: for<'de> Deserialize<'de>,
 {
-    if bytes.len() > MAX_QUALIFICATION_JSON_BYTES {
+    if bytes.len() > MAX_QUALIFICATION_JSON_BYTES_V1 {
         return Err(QualificationError::InputTooLarge {
             label,
             actual: bytes.len(),
-            max: MAX_QUALIFICATION_JSON_BYTES,
+            max: MAX_QUALIFICATION_JSON_BYTES_V1,
         });
     }
     let value = serde_json::from_slice(bytes)?;

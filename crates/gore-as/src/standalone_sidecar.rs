@@ -23,6 +23,9 @@ use crate::compiler_profile::frontend::{
 use crate::compiler_profile::manifest::{
     CompilerProfileV1, FileSealV1, SealedBlobV1, Sha256Digest, MAX_COMPILER_PROFILE_JSON_BYTES,
 };
+use crate::compiler_profile::qualification::{
+    validate_qualification_payloads, MAX_QUALIFICATION_JSON_BYTES_V1,
+};
 use crate::compiler_profile::registry::validate_engine_profile_payloads;
 
 pub const SIDECAR_REQUEST_VERSION_V1: u32 = 1;
@@ -831,6 +834,40 @@ fn validate_typed_profile_payloads_at_root(
         &compiler_options,
     )
     .map_err(|error| unavailable(format!("compiler frontend profile is invalid: {error}")))?;
+
+    let probe_corpus = read_sealed_profile_blob(
+        profile_root,
+        &profile.bytecode.codegen_probe_corpus,
+        MAX_QUALIFICATION_JSON_BYTES_V1 as u64,
+        "compiler probe corpus",
+    )?;
+    let expected_results = read_sealed_profile_blob(
+        profile_root,
+        &profile.bytecode.expected_probe_results,
+        MAX_QUALIFICATION_JSON_BYTES_V1 as u64,
+        "expected compiler probe results",
+    )?;
+    let diagnostic_parity = read_sealed_profile_blob(
+        profile_root,
+        &profile.qualification.diagnostic_parity,
+        MAX_QUALIFICATION_JSON_BYTES_V1 as u64,
+        "compiler diagnostic parity",
+    )?;
+    let semantic_parity = read_sealed_profile_blob(
+        profile_root,
+        &profile.qualification.semantic_parity,
+        MAX_QUALIFICATION_JSON_BYTES_V1 as u64,
+        "compiler semantic parity",
+    )?;
+    validate_qualification_payloads(
+        &profile.bytecode,
+        &profile.qualification,
+        &probe_corpus,
+        &expected_results,
+        &diagnostic_parity,
+        &semantic_parity,
+    )
+    .map_err(|error| unavailable(format!("compiler qualification is invalid: {error}")))?;
     Ok(())
 }
 
@@ -1691,6 +1728,13 @@ mod tests {
         EngineProfileV1, FrontendProfileV1, PeCodeViewV1, QualificationProfileV1, Sha1Digest,
         UnrealSemanticsProfileV1, COMPILER_PROFILE_SCHEMA, COMPILER_PROFILE_SCHEMA_VERSION,
     };
+    use crate::compiler_profile::qualification::{
+        CompilerProbeCaseV1, CompilerProbeCorpusV1, DiagnosticParityEntryV1,
+        DiagnosticParityReportV1, ExpectedProbeResultV1, ExpectedProbeResultsV1, ProbeModeV1,
+        ProbeOutcomeV1, ProbeSourceSectionV1, SemanticParityEntryV1, SemanticParityReportV1,
+        DIAGNOSTIC_PARITY_SCHEMA, EXPECTED_RESULTS_SCHEMA, PROBE_CORPUS_SCHEMA,
+        QUALIFICATION_SCHEMA_VERSION, SEMANTIC_PARITY_SCHEMA,
+    };
     use crate::compiler_profile::registry::{
         DynamicScriptTypeOperationsV1, EnginePropertySettingV1, EnginePropertyV1,
         FixedTypeOperationsV1, OrderedEnginePropertiesV1, PostBindEntryV1, PostBindResultV1,
@@ -1909,8 +1953,7 @@ mod tests {
                 .collect(),
                 default_function_blueprint_callable: true,
                 default_property_edit_specifier: PropertyEditSpecifierV1::EditAnywhere,
-                default_property_edit_specifier_for_structs:
-                    PropertyEditSpecifierV1::EditAnywhere,
+                default_property_edit_specifier_for_structs: PropertyEditSpecifierV1::EditAnywhere,
                 default_property_blueprint_specifier:
                     PropertyBlueprintSpecifierV1::BlueprintReadWrite,
                 static_class_mode: StaticClassModeV1::Allowed,
@@ -1963,12 +2006,95 @@ mod tests {
             };
             compiler_options.seal().unwrap();
             let compiler_options_json = compiler_options.to_json().unwrap();
-            let preprocessor_blob =
-                registry_blob("frontend/preprocessor.json", &preprocessor_json);
+            let preprocessor_blob = registry_blob("frontend/preprocessor.json", &preprocessor_json);
             let class_generator_blob =
                 registry_blob("frontend/class-generator.json", &class_generator_json);
             let compiler_options_blob =
                 registry_blob("frontend/compiler-options.json", &compiler_options_json);
+            let source_text = "void Test() {}\n";
+            let mut probe_corpus = CompilerProbeCorpusV1 {
+                schema: PROBE_CORPUS_SCHEMA.into(),
+                schema_version: QUALIFICATION_SCHEMA_VERSION,
+                suite_id: "sidecar-test-v1".into(),
+                cases: vec![CompilerProbeCaseV1 {
+                    ordinal: 0,
+                    case_id: "positive.compile".into(),
+                    category: "smoke".into(),
+                    expected_outcome: ProbeOutcomeV1::Accepted,
+                    mode: ProbeModeV1::CompileOnly,
+                    sections: vec![ProbeSourceSectionV1 {
+                        ordinal: 0,
+                        module: "Module".into(),
+                        relative_path: "Module.as".into(),
+                        source_utf8: source_text.into(),
+                        source_sha256: sha256_bytes(source_text.as_bytes()),
+                    }],
+                }],
+                canonical_sha256: Sha256Digest::from_bytes([0; 32]),
+            };
+            probe_corpus.seal().unwrap();
+            let semantic_sha256 = sha256_bytes(b"normalized-smoke-result");
+            let mut expected_results = ExpectedProbeResultsV1 {
+                schema: EXPECTED_RESULTS_SCHEMA.into(),
+                schema_version: QUALIFICATION_SCHEMA_VERSION,
+                suite_id: probe_corpus.suite_id.clone(),
+                corpus_sha256: probe_corpus.canonical_sha256,
+                results: vec![ExpectedProbeResultV1 {
+                    ordinal: 0,
+                    case_id: probe_corpus.cases[0].case_id.clone(),
+                    outcome: ProbeOutcomeV1::Accepted,
+                    diagnostics: vec![],
+                    semantic_sha256: Some(semantic_sha256),
+                }],
+                canonical_sha256: Sha256Digest::from_bytes([0; 32]),
+            };
+            expected_results.seal().unwrap();
+            let diagnostics_sha256 = expected_results.results[0].diagnostics_sha256().unwrap();
+            let mut diagnostic_parity = DiagnosticParityReportV1 {
+                schema: DIAGNOSTIC_PARITY_SCHEMA.into(),
+                schema_version: QUALIFICATION_SCHEMA_VERSION,
+                suite_id: probe_corpus.suite_id.clone(),
+                corpus_sha256: probe_corpus.canonical_sha256,
+                expected_results_sha256: expected_results.canonical_sha256,
+                entries: vec![DiagnosticParityEntryV1 {
+                    ordinal: 0,
+                    case_id: probe_corpus.cases[0].case_id.clone(),
+                    expected_sha256: diagnostics_sha256,
+                    embedded_sha256: diagnostics_sha256,
+                    standalone_sha256: diagnostics_sha256,
+                }],
+                canonical_sha256: Sha256Digest::from_bytes([0; 32]),
+            };
+            diagnostic_parity.seal().unwrap();
+            let mut semantic_parity = SemanticParityReportV1 {
+                schema: SEMANTIC_PARITY_SCHEMA.into(),
+                schema_version: QUALIFICATION_SCHEMA_VERSION,
+                suite_id: probe_corpus.suite_id.clone(),
+                corpus_sha256: probe_corpus.canonical_sha256,
+                expected_results_sha256: expected_results.canonical_sha256,
+                entries: vec![SemanticParityEntryV1 {
+                    ordinal: 0,
+                    case_id: probe_corpus.cases[0].case_id.clone(),
+                    expected_sha256: semantic_sha256,
+                    embedded_sha256: semantic_sha256,
+                    standalone_sha256: semantic_sha256,
+                }],
+                unexplained_differences: vec![],
+                qualified: true,
+                canonical_sha256: Sha256Digest::from_bytes([0; 32]),
+            };
+            semantic_parity.seal().unwrap();
+            let probe_corpus_json = probe_corpus.to_json().unwrap();
+            let expected_results_json = expected_results.to_json().unwrap();
+            let diagnostic_parity_json = diagnostic_parity.to_json().unwrap();
+            let semantic_parity_json = semantic_parity.to_json().unwrap();
+            let probe_corpus_blob = registry_blob("qualification/corpus.json", &probe_corpus_json);
+            let expected_results_blob =
+                registry_blob("qualification/expected.json", &expected_results_json);
+            let diagnostic_parity_blob =
+                registry_blob("qualification/diagnostics.json", &diagnostic_parity_json);
+            let semantic_parity_blob =
+                registry_blob("qualification/semantics.json", &semantic_parity_json);
             let file = |bytes: &[u8], steam: bool| FileSealV1 {
                 byte_len: bytes.len() as u64,
                 sha256: sha256_bytes(bytes),
@@ -2025,8 +2151,8 @@ mod tests {
                     opcode_table_version: "g1r-v1".to_owned(),
                     opcode_table: blob.clone(),
                     operand_schema: blob.clone(),
-                    codegen_probe_corpus: blob.clone(),
-                    expected_probe_results: blob.clone(),
+                    codegen_probe_corpus: probe_corpus_blob,
+                    expected_probe_results: expected_results_blob,
                 },
                 cache_writer: CacheWriterProfileV1 {
                     format_version: 1,
@@ -2037,8 +2163,8 @@ mod tests {
                 },
                 qualification: QualificationProfileV1 {
                     required_probe_suite_version: "sidecar-test-v1".to_owned(),
-                    diagnostic_parity: blob.clone(),
-                    semantic_parity: blob,
+                    diagnostic_parity: diagnostic_parity_blob,
+                    semantic_parity: semantic_parity_blob,
                     qualified: true,
                 },
                 profile_sha256: Sha256Digest::from_bytes([0; 32]),
@@ -2192,12 +2318,11 @@ print(json.dumps({"response_version":1,"ok":True,"output":{"cache_path":str(outp
         assert!(error.detail().contains("overlay count"), "{error}");
         fixture.assert_scratch_empty();
 
-        const MISSING: [StandaloneCompilerOverlayV1<'static>; 1] =
-            [StandaloneCompilerOverlayV1 {
-                operation: StandaloneCompilerOverlayOperationV1::Edit,
-                module_name: "Missing",
-                relative_path: "Missing.as",
-            }];
+        const MISSING: [StandaloneCompilerOverlayV1<'static>; 1] = [StandaloneCompilerOverlayV1 {
+            operation: StandaloneCompilerOverlayOperationV1::Edit,
+            module_name: "Missing",
+            relative_path: "Missing.as",
+        }];
         let missing = StandaloneCompilerInputsV1 {
             source_tree: &fixture.sources,
             overlays: &MISSING,
