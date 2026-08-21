@@ -1246,6 +1246,7 @@ fn emit_function_ctor(
     let body = inline_call_argument_temporaries(&body, refs, &inferred_locals);
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
+    let body = drop_unreachable_statements(&body);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
     // (a wrong type just becomes a compile error the in-game loop force-stubs, rather than the
     // whole function stubbing on an undeclared identifier).
@@ -5236,6 +5237,72 @@ fn extract_member_initializers(constructors: &mut String) -> HashMap<String, Str
         constructors.push('\n');
     }
     initializers
+}
+
+/// Drop what follows a statement that always leaves the block. Recovering a branch's own return
+/// leaves behind the statement the shared exit used to render, and the compiler treats
+/// "Unreachable code" as an error.
+fn drop_unreachable_statements(body: &str) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<&str> = Vec::new();
+    let mut at = 0usize;
+    strip_unreachable(&lines, &mut at, &mut kept);
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// Copy statements until this block's closing brace (left for the caller) or the end of the
+/// body. Returns true when the run always leaves the block — a `return`/`break`/`continue`, or
+/// an `if`/`else` whose arms BOTH leave.
+fn strip_unreachable<'a>(lines: &[&'a str], at: &mut usize, kept: &mut Vec<&'a str>) -> bool {
+    let mut leaves = false;
+    while *at < lines.len() {
+        let line = lines[*at];
+        let trimmed = line.trim();
+        if trimmed == "}" {
+            break;
+        }
+        let mut dead = Vec::new();
+        let out = if leaves { &mut dead } else { &mut *kept };
+        out.push(line);
+        *at += 1;
+        let mut statement_leaves = trimmed.starts_with("return ")
+            || trimmed == "return;"
+            || trimmed == "break;"
+            || trimmed == "continue;";
+        if lines.get(*at).map(|l| l.trim()) == Some("{") {
+            out.push(lines[*at]);
+            *at += 1;
+            let then_leaves = strip_unreachable(lines, at, out);
+            if let Some(close) = lines.get(*at) {
+                out.push(close);
+                *at += 1;
+            }
+            let mut arms_leave = false;
+            if lines.get(*at).map(|l| l.trim()) == Some("else") {
+                out.push(lines[*at]);
+                *at += 1;
+                if lines.get(*at).map(|l| l.trim()) == Some("{") {
+                    out.push(lines[*at]);
+                    *at += 1;
+                    let else_leaves = strip_unreachable(lines, at, out);
+                    if let Some(close) = lines.get(*at) {
+                        out.push(close);
+                        *at += 1;
+                    }
+                    arms_leave = then_leaves && else_leaves;
+                }
+            }
+            // Only a two-armed `if` leaves: a loop may run zero times, and a one-armed `if`
+            // has a path around it.
+            statement_leaves = arms_leave && trimmed.starts_with("if (");
+        }
+        leaves |= statement_leaves;
+    }
+    leaves
 }
 
 /// Diagnostic counter for why an argument could not be moved back into its call.
