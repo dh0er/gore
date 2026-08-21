@@ -185,9 +185,12 @@ pub enum ProbeDiagnosticSeverityV1 {
 pub struct ExpectedDiagnosticV1 {
     pub ordinal: u32,
     pub severity: ProbeDiagnosticSeverityV1,
-    pub section: String,
-    pub row: u32,
-    pub column: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<u32>,
     pub message: String,
 }
 
@@ -270,20 +273,23 @@ impl ExpectedProbeResultsV1 {
             let mut has_error = false;
             for (diagnostic_index, diagnostic) in result.diagnostics.iter().enumerate() {
                 check_ordinal("expected diagnostic", diagnostic_index, diagnostic.ordinal)?;
-                validate_text(
-                    &diagnostic.section,
-                    "diagnostic.section",
-                    MAX_TEXT_BYTES,
-                    false,
-                )?;
+                if let Some(section) = &diagnostic.section {
+                    validate_text(section, "diagnostic.section", MAX_TEXT_BYTES, false)?;
+                }
                 validate_text(
                     &diagnostic.message,
                     "diagnostic.message",
                     MAX_TEXT_BYTES,
                     true,
                 )?;
-                if diagnostic.row == 0 || diagnostic.column == 0 {
-                    return invalid("diagnostic position", "row and column are one-based");
+                if diagnostic.row.is_some() != diagnostic.column.is_some()
+                    || diagnostic.row == Some(0)
+                    || diagnostic.column == Some(0)
+                {
+                    return invalid(
+                        "diagnostic position",
+                        "row and column must both be absent or both be one-based",
+                    );
                 }
                 has_error |= diagnostic.severity == ProbeDiagnosticSeverityV1::Error;
             }
@@ -942,9 +948,9 @@ mod tests {
         let diagnostic = ExpectedDiagnosticV1 {
             ordinal: 0,
             severity: ProbeDiagnosticSeverityV1::Error,
-            section: "Broken.as".into(),
-            row: 1,
-            column: 14,
+            section: Some("Broken.as".into()),
+            row: Some(1),
+            column: Some(14),
             message: "Expected data type".into(),
         };
         let mut expected = ExpectedProbeResultsV1 {
