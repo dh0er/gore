@@ -42,11 +42,15 @@ set(unreangel_core_sources
     compat/src/compat_runtime.cpp
     src/core.cpp
     src/frontend_compile.cpp
+    src/json.cpp
     src/module_preprocessor.cpp
     src/precompiled_data.cpp
     src/precompiled_engine.cpp
     src/precompiled_metadata.cpp
+    src/profile_loader.cpp
     src/registry_profile.cpp
+    src/sha256.cpp
+    src/sidecar_compile.cpp
 )
 
 add_library(gore-as-unreangel-core STATIC ${unreangel_core_sources})
@@ -82,11 +86,15 @@ set_source_files_properties(
     compat/src/compat_runtime.cpp
     src/core.cpp
     src/frontend_compile.cpp
+    src/json.cpp
     src/module_preprocessor.cpp
     src/precompiled_data.cpp
     src/precompiled_engine.cpp
     src/precompiled_metadata.cpp
+    src/profile_loader.cpp
     src/registry_profile.cpp
+    src/sha256.cpp
+    src/sidecar_compile.cpp
     PROPERTIES COMPILE_OPTIONS "/W4;/WX;/permissive-;/sdl"
 )
 set_property(TARGET gore-as-unreangel-core PROPERTY
@@ -135,6 +143,30 @@ target_link_options(gore-as-standalone-compiler PRIVATE
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(gore-as-sidecar-compile-smoke tests/sidecar_compile_smoke.cpp)
+    target_link_libraries(gore-as-sidecar-compile-smoke PRIVATE gore-as-unreangel-core)
+    target_compile_options(gore-as-sidecar-compile-smoke PRIVATE
+        /W4 /WX /permissive- /utf-8 /sdl /guard:cf /Brepro
+    )
+    target_link_options(gore-as-sidecar-compile-smoke PRIVATE
+        /guard:cf /DYNAMICBASE /NXCOMPAT /Brepro
+    )
+    set_property(TARGET gore-as-sidecar-compile-smoke PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    )
+
+    add_executable(gore-as-protocol-primitives-smoke tests/protocol_primitives_smoke.cpp)
+    target_link_libraries(gore-as-protocol-primitives-smoke PRIVATE gore-as-unreangel-core)
+    target_compile_options(gore-as-protocol-primitives-smoke PRIVATE
+        /W4 /WX /permissive- /utf-8 /sdl /guard:cf /Brepro
+    )
+    target_link_options(gore-as-protocol-primitives-smoke PRIVATE
+        /guard:cf /DYNAMICBASE /NXCOMPAT /Brepro
+    )
+    set_property(TARGET gore-as-protocol-primitives-smoke PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    )
+
     add_executable(gore-as-unreangel-core-smoke tests/core_smoke.cpp)
     target_link_libraries(gore-as-unreangel-core-smoke PRIVATE gore-as-unreangel-core)
     target_compile_options(gore-as-unreangel-core-smoke PRIVATE
@@ -251,6 +283,14 @@ if(BUILD_TESTING)
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
     )
 
+    add_test(
+        NAME gore-as-protocol.compile-smoke
+        COMMAND "$<TARGET_FILE:gore-as-sidecar-compile-smoke>"
+    )
+    add_test(
+        NAME gore-as-protocol.primitives-smoke
+        COMMAND "$<TARGET_FILE:gore-as-protocol-primitives-smoke>"
+    )
     add_test(
         NAME gore-as-unreangel-core.build-smoke
         COMMAND "$<TARGET_FILE:gore-as-unreangel-core-smoke>"

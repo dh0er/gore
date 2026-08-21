@@ -24,7 +24,8 @@ if(NOT capabilities_result EQUAL 0 OR
    NOT capabilities_stdout MATCHES "\\\"response_version\\\":1" OR
    NOT capabilities_stdout MATCHES "\\\"core\\\":\\{\\\"available\\\":true" OR
    NOT capabilities_stdout MATCHES "247954da5326ecc29724067da7b5880c352fe4ff" OR
-   NOT capabilities_stdout MATCHES "\\\"available\\\":false" OR
+   NOT capabilities_stdout MATCHES "\\\"compile\\\":\\{\\\"available\\\":true" OR
+   NOT capabilities_stdout MATCHES "\\\"requires_qualified_profile\\\":true" OR
    NOT capabilities_stdout MATCHES "\\\"requires_unreal_runtime\\\":false" OR
    NOT capabilities_stdout MATCHES "\\\"requires_game_dll\\\":false")
     message(FATAL_ERROR "--capabilities failed: ${capabilities_result}; ${capabilities_stdout}; ${capabilities_stderr}")
@@ -39,11 +40,11 @@ execute_process(
     ERROR_VARIABLE compile_stderr
 )
 file(REMOVE "${request_file}")
-if(NOT compile_result EQUAL 69 OR
+if(NOT compile_result EQUAL 65 OR
    NOT compile_stdout MATCHES "\\\"response_version\\\":1" OR
    NOT compile_stdout MATCHES "\\\"ok\\\":false" OR
-   NOT compile_stdout MATCHES "GORE_AS_STANDALONE_ENGINE_UNAVAILABLE")
-    message(FATAL_ERROR "compile stub did not fail closed: ${compile_result}; ${compile_stdout}; ${compile_stderr}")
+   NOT compile_stdout MATCHES "GORE_AS_REQUEST_INVALID")
+    message(FATAL_ERROR "incomplete request did not fail closed: ${compile_result}; ${compile_stdout}; ${compile_stderr}")
 endif()
 
 execute_process(
@@ -54,7 +55,7 @@ execute_process(
 )
 if(NOT missing_result EQUAL 65 OR
    NOT missing_stdout MATCHES "\\\"ok\\\":false" OR
-   NOT missing_stdout MATCHES "GORE_AS_REQUEST_OPEN_FAILED")
+   NOT missing_stdout MATCHES "GORE_AS_REQUEST_READ_FAILED")
     message(FATAL_ERROR "missing request was not rejected: ${missing_result}; ${missing_stdout}; ${missing_stderr}")
 endif()
 
@@ -70,7 +71,7 @@ execute_process(
 )
 file(REMOVE "${oversized_file}")
 if(NOT oversized_result EQUAL 65 OR
-   NOT oversized_stdout MATCHES "GORE_AS_REQUEST_TOO_LARGE")
+   NOT oversized_stdout MATCHES "GORE_AS_REQUEST_READ_FAILED")
     message(FATAL_ERROR "oversized request was not rejected: ${oversized_result}; ${oversized_stdout}; ${oversized_stderr}")
 endif()
 
@@ -93,6 +94,6 @@ execute_process(
 )
 file(REMOVE "${nested_file}")
 if(NOT nested_result EQUAL 65 OR
-   NOT nested_stdout MATCHES "GORE_AS_REQUEST_NESTING_INVALID")
+   NOT nested_stdout MATCHES "GORE_AS_REQUEST_INVALID")
     message(FATAL_ERROR "deep request was not rejected: ${nested_result}; ${nested_stdout}; ${nested_stderr}")
 endif()

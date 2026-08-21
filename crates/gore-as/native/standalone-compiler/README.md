@@ -1,16 +1,18 @@
 # GORE AngelScript standalone compiler sidecar
 
 This directory contains the hermetic native process boundary and the pinned,
-modified UNREANGEL AngelScript core used by the future standalone compiler. The
+modified UNREANGEL AngelScript core used by the standalone compiler. The
 core is now a Windows-x64/MSVC static library with a source frontend, mixed
-cache/source graph compiler, and whole-graph cache exporter. The sidecar's
-`compile` operation remains deliberately fail-closed until the captured G1R
-profile, remaining external preprocessing hooks, and safe output publication
-are integrated.
+cache/source graph compiler, whole-graph cache exporter, and a working
+Protocol-v1 compile operation. The operation accepts only a qualified,
+digest-bound profile and sealed base/Binds/source inputs, then publishes the
+new full cache with create-new atomic rename semantics.
 
-No target links or loads Unreal Engine or a game DLL. Nothing launches the game,
-and the sidecar does not yet publish compiled output. CMake performs no downloads
-and the source tree contains no generated SDK or game artifacts.
+No target links or loads Unreal Engine or a game DLL. Nothing launches the game.
+CMake performs no downloads and the source tree contains no generated SDK or
+game artifacts. A real G1R compile is still unavailable until the concrete
+current-build registry and remaining external hook facts are captured and the
+profile is qualified; unknown or incomplete profiles fail closed.
 
 ## What the core checkpoint proves
 
@@ -98,8 +100,11 @@ needed by source generation. The class-generator payload carries its direct
 transient-setting input; compiler options carry the five diagnostic switches
 read directly by the modified builder/compiler sources. Bind-only settings
 remain represented by their effective ordered registry trace rather than
-duplicated as inputs. The native JSON settings adapter is not yet populated
-from these payloads.
+duplicated as inputs. The native profile loader now projects these payloads
+into the preprocessor, compiler settings and registry runtime after verifying
+their manifest seals. The class-generator transient switch is parsed and
+retained but remains part of the still-open external ClassAnalyze hook rather
+than being guessed.
 
 Protocol staging also names every authored add/edit overlay explicitly. The
 sealed source tree still contains compatibility decompilations for the game
@@ -178,9 +183,10 @@ engines.
 This remains a compiler-core checkpoint, not full G1R qualification. The plain
 complete-cache rehydrator intentionally keeps its narrower fail-closed contract.
 An actual captured G1R registry, the external ClassAnalyze/ComposeOnto and
-module-discovery hooks, exact source decoding/FName behavior, Protocol-v1
-wiring, create-new publication, and differential oracle corpus are still
-mandatory.
+module-discovery hooks, exact source decoding/FName behavior, and differential
+oracle corpus are still mandatory. Protocol-v1 wiring and create-new
+publication are implemented and covered by a full synthetic request-to-cache
+smoke.
 
 ## Registry replay checkpoint
 
@@ -222,8 +228,9 @@ hash fallback, `opCmp`, cached invalid instances, exact negative diagnostics,
 descriptor mismatch and pre-mutation validation.
 
 The registry smoke uses a deterministic synthetic profile. No G1R registry
-payload has been captured or qualified yet, and this replay layer is not yet
-wired to the JSON sidecar request.
+payload has been captured or qualified yet. The replay layer is wired to the
+JSON sidecar request and cannot run until all three sealed registry documents
+parse, cross-reference and replay exactly.
 
 ## Build and test
 
@@ -250,12 +257,20 @@ Protocol versions and hard limits live in
 on stdout. Exit status 0 means success, 64 invalid CLI use, 65 invalid request
 data, 69 capability unavailable, and 70 an internal software error.
 
-The compile command validates only the safe transport envelope. It does not yet
-claim to parse the sealed request schema: every otherwise acceptable request
-ends with `GORE_AS_STANDALONE_ENGINE_UNAVAILABLE` and exit status 69. The
-capability response exposes the available core independently and leaves full
-compilation unavailable. The development Protocol-v1 request now includes an
-ordered add/edit overlay manifest; response fields and meanings are unchanged.
+The compile command parses the complete closed request schema, rejects unknown
+fields, opens regular inputs without following a final reparse point, verifies
+every length/SHA-256 seal, recomputes the domain-separated profile identity,
+loads all sixteen profile blobs, replays the registry, preprocesses the ordered
+add/edit overlays, compiles the mixed graph, exports and encodes the full cache,
+then atomically renames a private sibling temporary file to the requested new
+output path. The requested path is never partially written and is never
+replaced. Diagnostics preserve source/line/column where the core supplies them.
+
+The capability response reports compile availability together with
+`requires_qualified_profile=true`. This means the implementation exists, not
+that an uncaptured game build is accepted. Exit 69 denotes an unavailable or
+mismatched qualified profile; malformed inputs and source rejection use exit
+65, and output/internal failures use exit 70.
 
 ## Provenance and extraction boundary
 
