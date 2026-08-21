@@ -4821,25 +4821,38 @@ fn inline_call_argument_temporaries(body: &str, refs: &RefResolver) -> String {
             };
             let rendered = arguments.len();
             for (position, argument) in arguments.iter().enumerate() {
-                if !is_local_ident(argument)
-                    || !refs.arg_position_accepts_temporary(&callee, rendered, position)
-                {
+                if !is_local_ident(argument) {
                     continue;
                 }
-                let uses: usize = lines.iter().map(|l| count_ident(l, argument)).sum();
-                let definitions: Vec<usize> = (0..index)
-                    .filter(|line| definition_value(&lines[*line], argument).is_some())
-                    .collect();
-                let [definition] = definitions[..] else {
+                if !refs.arg_position_accepts_temporary(&callee, rendered, position) {
+                    inline_reject("param", &callee);
+                    continue;
+                }
+                // The compiler re-uses one slot for several temporaries, so the definition that
+                // matters is the LAST one before this call, and it owns the lines up to the next
+                // definition of the same slot.
+                let Some(definition) = (0..index)
+                    .rev()
+                    .find(|line| definition_value(&lines[*line], argument).is_some())
+                else {
+                    inline_reject("definitions", &callee);
                     continue;
                 };
-                if uses != 2 {
-                    continue; // defined once, read once
+                let region_end = (definition + 1..lines.len())
+                    .find(|line| definition_value(&lines[*line], argument).is_some())
+                    .unwrap_or(lines.len());
+                let uses_in_region: Vec<usize> = (definition + 1..region_end)
+                    .filter(|line| count_ident(&lines[*line], argument) > 0)
+                    .collect();
+                if uses_in_region != [index] {
+                    inline_reject("uses", &callee);
+                    continue; // this call has to be the only reader of that definition
                 }
                 let value = definition_value(&lines[definition], argument)
                     .expect("the definition matched above")
                     .to_owned();
                 if !value.ends_with(')') || !value.contains('(') {
+                    inline_reject("not-a-call", &callee);
                     continue; // only a call's result is worth moving
                 }
                 // Everything between has to feed THIS call as well, or the order of a side effect
@@ -4852,6 +4865,7 @@ fn inline_call_argument_temporaries(body: &str, refs: &RefResolver) -> String {
                             .is_some_and(|temp| count_ident(&lines[index], &temp) > 0)
                 });
                 if !between_feeds_this_call {
+                    inline_reject("between", &callee);
                     continue;
                 }
                 lines[index] = rename_ident(&lines[index], argument, &value);
@@ -5037,6 +5051,13 @@ fn extract_member_initializers(constructors: &mut String) -> HashMap<String, Str
         constructors.push('\n');
     }
     initializers
+}
+
+/// Diagnostic counter for why an argument could not be moved back into its call.
+fn inline_reject(reason: &str, callee: &str) {
+    if std::env::var_os("GORE_AS_INLINE_DIAG").is_some() {
+        eprintln!("[inline-reject] {reason} {callee}");
+    }
 }
 
 /// The parameter NAMES of a rendered signature line.
