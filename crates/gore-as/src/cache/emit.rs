@@ -4678,36 +4678,50 @@ fn fold_literal_temporaries(body: &str, refs: &RefResolver) -> String {
     let mut dropped = false;
     for slot in used_locals(body) {
         let ident = format!("local_{slot}");
+        // Definitions in order, and the region each one owns: up to the next definition of the
+        // same slot. The compiler re-uses one slot for several constants, so a slot with three
+        // literal stores is three source constants, not one variable.
         let definitions: Vec<usize> = folded
             .iter()
             .enumerate()
             .filter(|(_, line)| assignment_rhs_for(line, &ident).is_some_and(is_foldable_literal))
             .map(|(index, _)| index)
             .collect();
-        let [definition] = definitions[..] else {
-            continue;
-        };
-        let uses: Vec<usize> = folded
-            .iter()
-            .enumerate()
-            .filter(|(index, line)| *index != definition && count_ident(line, &ident) > 0)
-            .map(|(index, _)| index)
-            .collect();
-        let [use_line] = uses[..] else {
-            continue;
-        };
-        if count_ident(&folded[use_line], &ident) != 1
-            || assignment_target_is_rooted_at_ident(&folded[use_line], &ident)
-            || !sole_use_is_a_conversion(&folded[use_line], &ident, refs)
-        {
+        if definitions.is_empty() {
             continue;
         }
-        let literal = assignment_rhs_for(&folded[definition], &ident)
-            .expect("the definition matched above")
-            .to_owned();
-        folded[use_line] = rename_ident(&folded[use_line], &ident, &literal);
-        folded[definition].clear();
-        dropped = true;
+        let all_definitions: Vec<usize> = folded
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| assignment_rhs_for(line, &ident).is_some())
+            .map(|(index, _)| index)
+            .collect();
+        for (order, definition) in definitions.iter().copied().enumerate() {
+            let _ = order;
+            let region_end = all_definitions
+                .iter()
+                .copied()
+                .find(|other| *other > definition)
+                .unwrap_or(folded.len());
+            let uses: Vec<usize> = (definition + 1..region_end)
+                .filter(|index| count_ident(&folded[*index], &ident) > 0)
+                .collect();
+            let [use_line] = uses[..] else {
+                continue;
+            };
+            if count_ident(&folded[use_line], &ident) != 1
+                || assignment_target_is_rooted_at_ident(&folded[use_line], &ident)
+                || !sole_use_is_a_conversion(&folded[use_line], &ident, refs)
+            {
+                continue;
+            }
+            let literal = assignment_rhs_for(&folded[definition], &ident)
+                .expect("the definition matched above")
+                .to_owned();
+            folded[use_line] = rename_ident(&folded[use_line], &ident, &literal);
+            folded[definition].clear();
+            dropped = true;
+        }
     }
     if !dropped {
         return body.to_owned();
@@ -4830,7 +4844,27 @@ fn fold_constant_comparisons(body: &str) -> String {
     for (pattern, literal) in COMPARISONS {
         out = out.replace(pattern, literal);
     }
-    out
+    // A control-flow condition keeps its parentheses: the comparison WAS the whole condition,
+    // and `while false` does not parse.
+    let trailing_newline = out.ends_with('\n');
+    let mut fixed: Vec<String> = Vec::new();
+    for line in out.lines() {
+        let trimmed = line.trim_start();
+        let mut replaced = line.to_owned();
+        for keyword in ["if ", "while ", "switch "] {
+            if let Some(rest) = trimmed.strip_prefix(keyword) {
+                if rest == "true" || rest == "false" {
+                    replaced = format!("{}{keyword}({rest})", leading_indent(line));
+                }
+            }
+        }
+        fixed.push(replaced);
+    }
+    let mut joined = fixed.join("\n");
+    if trailing_newline {
+        joined.push('\n');
+    }
+    joined
 }
 
 /// A plain numeric or boolean literal — nothing that could carry a side effect.
