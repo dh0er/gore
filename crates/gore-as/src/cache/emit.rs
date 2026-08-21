@@ -1549,10 +1549,14 @@ fn emit_function_ctor(
                 // not trip warnings-as-errors in the game compiler.
                 let _ = writeln!(s, "{ind}    {ty} local_{slot} = {ty}(0);");
             } else if is_primitive(ty)
+                // A local vanilla never initialized shows up as a `SetV4 v, 0` prologue the
+                // original does not have. The eager initializer is only needed where the value
+                // could be read before it is written: either the first reference is the write
+                // itself, or every read is dominated by one. The second proof used to be
+                // restricted to proven-enum functions with several assignments; the proof does
+                // not depend on either.
                 && (first_top_level_assignment_before_read(&body, *slot)
-                    || (!enum_overrides.is_empty()
-                        && local_assignment_count(&body, *slot) > 1
-                        && all_reads_lexically_dominated_by_assignment(&body, *slot)))
+                    || all_reads_lexically_dominated_by_assignment(&body, *slot))
             {
                 let _ = writeln!(s, "{ind}    {ty} local_{slot};");
             } else if is_primitive(ty) {
