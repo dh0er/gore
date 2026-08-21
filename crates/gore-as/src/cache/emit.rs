@@ -874,6 +874,12 @@ fn emit_function_ctor(
     // `local = int(local == 0);` and the compiler materializes a comparison vanilla never had.
     bool_overrides.extend(not_operand_slots(f));
     bool_overrides.extend(bool_call_result_slots(f, refs));
+    // A slot the function itself writes a 4- or 8-byte literal into is not a bool: the compiler
+    // stores a bool with the 1-byte `SetV1`. That store is the slot's own width evidence, and it
+    // outranks both rules above — where they disagree the compiler reused one slot for two
+    // things, and typing it bool writes `local = false;` where vanilla wrote an int.
+    let wide_stores = wide_literal_store_slots(f);
+    bool_overrides.retain(|slot| !wide_stores.contains(slot));
     // `NOT` proves the slot is a bool outright, so it outranks the int-family USE hints (a slot
     // pushed into an int parameter): those describe how a value is passed, not what it is, and
     // leaving them in charge writes `local = int(local == 0);` for a plain `!`. Contradicting
@@ -3342,6 +3348,19 @@ fn bool_call_result_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
     slots
 }
 
+/// Slots the function stores a 4- or 8-byte literal into. A bool is stored with `SetV1`.
+fn wide_literal_store_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    instrs
+        .iter()
+        .filter(|ins| matches!(ins.op.name, "SetV4" | "SetV8"))
+        .filter_map(|ins| ins.words.first().map(|word| *word as i16 as i32))
+        .filter(|slot| *slot > 0)
+        .collect()
+}
+
 /// Slots `NOT` is applied to — AngelScript's logical not, which only takes a bool variable.
 fn not_operand_slots(f: &Func) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
@@ -5054,10 +5073,14 @@ fn inline_temporary_into(
         inline_reject("uses", callee);
         return false; // inlining a value read twice would evaluate it twice
     }
-    // The rendered read carries the int-to-bool conversion the slot's declaration performed
-    // (`(local_3 != 0)`). Whatever replaces it brings its own type, and `(<bool> != 0)` does not
-    // compile — leave the wrapped reads where they are.
-    if lines[index].contains(&format!("({temp} != 0)")) {
+    // The rendered read compares the slot against zero, which is how an int-typed slot spells a
+    // bool test (`(local_3 != 0)`, `local_8.HasTag(..) == 0`). Whatever replaces it brings its
+    // own type, and comparing a bool to an int does not compile — leave those reads where they
+    // are.
+    if [" != 0", " == 0"]
+        .iter()
+        .any(|test| lines[index].contains(&format!("{temp}{test}")))
+    {
         inline_reject("wrapped", callee);
         return false;
     }
