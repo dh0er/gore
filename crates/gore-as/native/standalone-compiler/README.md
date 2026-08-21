@@ -126,14 +126,24 @@ pinned fork. Owner kinds, all stub references, result identities and complete
 final-state coverage fail closed; the smoke also proves these rejections occur
 before engine mutation.
 
-The five class-constrained callbacks (`TSubclassOf`, `TObjectPtr`,
-`TWeakObjectPtr`, `TSoftObjectPtr`, and `TSoftClassPtr`) use the fork's exact
-subtype check. `TArray`, `TMap`, `TSet`, and `TOptional` deliberately return
-`asNOT_SUPPORTED` during preflight. Their acceptance algorithms depend on the
-game's `FAngelscriptTypeUsage` operation registry, including construction,
-copy, destruction, comparison, hashing, size/alignment and nested-container
-rules. That semantic registry must be captured and ported before these four
-adapters can be enabled; accepting them generically would change the language.
+All nine callbacks now have closed, version-pinned implementations. The five
+class-constrained callbacks (`TSubclassOf`, `TObjectPtr`, `TWeakObjectPtr`,
+`TSoftObjectPtr`, and `TSoftClassPtr`) use the fork's exact subtype check.
+`TArray`, `TMap`, `TSet`, and `TOptional` resolve the sealed primitive and
+application-type operation tables plus dynamic script struct/object/enum
+formulas, cache engine-lifetime operation records, reject nested containers,
+and preserve the fork's exact validation strings. Array `opCmp` discovery and
+`isInUse` marking and the exact `uint32 Hash() const` fallback for set/map keys
+are reproduced as compile-time side effects.
+
+Script delegate and multicast-delegate traits are sealed separately because
+the game distinguishes them through class-generator user-data tags. The
+class-generator/precompiled loader must call `classify_dynamic_script_type`
+when it creates one of those tagged types. An unclassified script value with
+non-null user data is rejected rather than guessed. The registry smoke covers
+all nine adapters, primitive and application values, script structs/enums,
+hash fallback, `opCmp`, cached invalid instances, exact negative diagnostics,
+descriptor mismatch and pre-mutation validation.
 
 The registry smoke uses a deterministic synthetic profile. No G1R registry
 payload has been captured or qualified yet, and this replay layer is not yet

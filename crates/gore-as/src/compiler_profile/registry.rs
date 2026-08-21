@@ -185,6 +185,94 @@ pub enum TemplateValidationAdapterV1 {
     TSoftClassPtr,
 }
 
+/// The primitive identities consulted by G1R's `FAngelscriptTypeUsage::FromTypeId`.
+/// Order is part of the sealed registry contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrimitiveTypeV1 {
+    Bool,
+    Int8,
+    Int16,
+    Int32,
+    Int64,
+    Uint8,
+    Uint16,
+    Uint32,
+    Uint64,
+    Float32,
+    Float64,
+}
+
+impl PrimitiveTypeV1 {
+    const ORDERED: [Self; 11] = [
+        Self::Bool,
+        Self::Int8,
+        Self::Int16,
+        Self::Int32,
+        Self::Int64,
+        Self::Uint8,
+        Self::Uint16,
+        Self::Uint32,
+        Self::Uint64,
+        Self::Float32,
+        Self::Float64,
+    ];
+}
+
+/// Compile-relevant operations exposed by one fixed `FAngelscriptType`.
+///
+/// The `need_*` bits are captured independently because the fork permits a
+/// type to reject an operation while retaining the base implementation's
+/// default `Need* == true` value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixedTypeOperationsV1 {
+    pub can_be_template_subtype: bool,
+    pub can_construct: bool,
+    pub need_construct: bool,
+    pub can_destruct: bool,
+    pub need_destruct: bool,
+    pub can_copy: bool,
+    pub need_copy: bool,
+    pub can_compare: bool,
+    pub can_hash_value: bool,
+    pub value_size: u32,
+    pub value_alignment: u32,
+    pub is_object_pointer: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrimitiveTypeOperationsV1 {
+    pub ordinal: u32,
+    pub primitive: PrimitiveTypeV1,
+    pub operations: FixedTypeOperationsV1,
+}
+
+/// Fixed operations selected when the class generator tags a script-defined
+/// value type as a single-cast or multicast delegate. Untagged script values
+/// use the dynamic script-struct formula.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DynamicScriptTypeOperationsV1 {
+    pub delegate: FixedTypeOperationsV1,
+    pub multicast_delegate: FixedTypeOperationsV1,
+}
+
+/// Closed operation implementation identity for an application-registered
+/// type. Script-defined classes, structs and enums are derived from the core
+/// type flags at compile time and therefore need no captured entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TypeOperationsV1 {
+    Unavailable,
+    Fixed { operations: FixedTypeOperationsV1 },
+    TArray,
+    TMap,
+    TSet,
+    TOptional,
+}
+
 /// Public `asEObjTypeFlags` bits supplied to `RegisterObjectType`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -236,6 +324,7 @@ pub enum RegistrationEntryV1 {
         byte_size: u32,
         alignment: u32,
         flags: ObjectTypeFlagsV1,
+        type_operations: TypeOperationsV1,
     },
     Interface {
         ordinal: u32,
@@ -243,6 +332,7 @@ pub enum RegistrationEntryV1 {
         context: RegistrationContextV1,
         type_id: u32,
         declaration: String,
+        type_operations: TypeOperationsV1,
     },
     InterfaceMethod {
         ordinal: u32,
@@ -318,6 +408,7 @@ pub enum RegistrationEntryV1 {
         context: RegistrationContextV1,
         type_id: u32,
         declaration: String,
+        type_operations: TypeOperationsV1,
     },
     EnumValue {
         ordinal: u32,
@@ -333,6 +424,7 @@ pub enum RegistrationEntryV1 {
         context: RegistrationContextV1,
         type_id: u32,
         declaration: String,
+        type_operations: TypeOperationsV1,
     },
     Typedef {
         ordinal: u32,
@@ -451,6 +543,8 @@ pub struct RegistrationTraceV1 {
     pub schema: String,
     pub schema_version: u32,
     pub host_stubs: Vec<HostStubDescriptorV1>,
+    pub primitive_operations: Vec<PrimitiveTypeOperationsV1>,
+    pub dynamic_script_operations: DynamicScriptTypeOperationsV1,
     pub entries: Vec<RegistrationEntryV1>,
     pub canonical_sha256: Sha256Digest,
 }
@@ -489,6 +583,47 @@ impl RegistrationTraceV1 {
     fn validate_structure(&self) -> Result<(), RegistryProfileError> {
         check_schema(&self.schema, self.schema_version, REGISTRATION_TRACE_SCHEMA)?;
         check_count("host stubs", self.host_stubs.len(), MAX_HOST_STUBS)?;
+        if self.primitive_operations.len() != PrimitiveTypeV1::ORDERED.len() {
+            return invalid(
+                "primitive_operations",
+                "must contain all eleven primitive identities exactly once",
+            );
+        }
+        for (index, primitive) in self.primitive_operations.iter().enumerate() {
+            check_ordinal("primitive operation", index, primitive.ordinal)?;
+            if primitive.primitive != PrimitiveTypeV1::ORDERED[index] {
+                return invalid(
+                    "primitive_operations.primitive",
+                    "does not match the required closed order",
+                );
+            }
+            validate_fixed_type_operations(
+                "primitive_operations.operations",
+                &primitive.operations,
+            )?;
+            if primitive.operations.value_size == 0 {
+                return invalid(
+                    "primitive_operations.operations.value_size",
+                    "primitive value size must be non-zero",
+                );
+            }
+        }
+        validate_fixed_type_operations(
+            "dynamic_script_operations.delegate",
+            &self.dynamic_script_operations.delegate,
+        )?;
+        if self.dynamic_script_operations.delegate.value_size == 0
+            || self.dynamic_script_operations.multicast_delegate.value_size == 0
+        {
+            return invalid(
+                "dynamic_script_operations.value_size",
+                "delegate value sizes must be non-zero",
+            );
+        }
+        validate_fixed_type_operations(
+            "dynamic_script_operations.multicast_delegate",
+            &self.dynamic_script_operations.multicast_delegate,
+        )?;
         check_count(
             "registration entries",
             self.entries.len(),
@@ -525,6 +660,8 @@ impl RegistrationTraceV1 {
         let mut property_ids = BTreeSet::new();
         let mut string_factory_seen = false;
         let mut default_array_seen = false;
+        let mut type_operations = BTreeMap::new();
+        let mut container_callbacks = BTreeSet::new();
 
         for (index, entry) in self.entries.iter().enumerate() {
             check_ordinal("registration entry", index, entry.ordinal())?;
@@ -537,6 +674,7 @@ impl RegistrationTraceV1 {
                     byte_size,
                     alignment,
                     flags,
+                    type_operations: operations,
                     ..
                 } => {
                     unique("type_id", &mut type_ids, *type_id)?;
@@ -548,16 +686,21 @@ impl RegistrationTraceV1 {
                     if flags.0 & !PUBLIC_OBJECT_FLAG_MASK != 0 {
                         return invalid("object_type.flags", "contains non-public or unknown bits");
                     }
+                    validate_type_operations("object_type.type_operations", operations, true)?;
                     object_types.insert(*type_id, (*byte_size, *alignment));
+                    type_operations.insert(*type_id, operations);
                 }
                 RegistrationEntryV1::Interface {
                     type_id,
                     declaration,
+                    type_operations: operations,
                     ..
                 } => {
                     unique("type_id", &mut type_ids, *type_id)?;
                     validate_declaration("interface.declaration", declaration)?;
+                    validate_type_operations("interface.type_operations", operations, false)?;
                     interface_types.insert(*type_id);
+                    type_operations.insert(*type_id, operations);
                 }
                 RegistrationEntryV1::InterfaceMethod {
                     function_id,
@@ -661,7 +804,27 @@ impl RegistrationTraceV1 {
                                 "is required for a template callback",
                             );
                         }
-                        (ObjectBehaviourV1::TemplateCallback, Some(_)) => {}
+                        (ObjectBehaviourV1::TemplateCallback, Some(adapter)) => {
+                            if is_container_adapter(*adapter) {
+                                if !type_operations
+                                    .get(owner_type_id)
+                                    .is_some_and(|operations| {
+                                        container_operations_matches(operations, *adapter)
+                                    })
+                                {
+                                    return invalid(
+                                        "object_behaviour.template_validation_adapter",
+                                        "does not match its owner type-operation implementation",
+                                    );
+                                }
+                                if !container_callbacks.insert(*owner_type_id) {
+                                    return invalid(
+                                        "object_behaviour.template_validation_adapter",
+                                        "container owner has more than one template callback",
+                                    );
+                                }
+                            }
+                        }
                         (_, Some(_)) => {
                             return invalid(
                                 "object_behaviour.template_validation_adapter",
@@ -708,11 +871,14 @@ impl RegistrationTraceV1 {
                 RegistrationEntryV1::Enum {
                     type_id,
                     declaration,
+                    type_operations: operations,
                     ..
                 } => {
                     unique("type_id", &mut type_ids, *type_id)?;
                     validate_declaration("enum.declaration", declaration)?;
+                    validate_type_operations("enum.type_operations", operations, false)?;
                     enum_types.insert(*type_id);
+                    type_operations.insert(*type_id, operations);
                 }
                 RegistrationEntryV1::EnumValue {
                     owner_type_id,
@@ -731,10 +897,19 @@ impl RegistrationTraceV1 {
                 RegistrationEntryV1::Funcdef {
                     type_id,
                     declaration,
+                    type_operations: operations,
                     ..
                 } => {
                     unique("type_id", &mut type_ids, *type_id)?;
                     validate_declaration("funcdef.declaration", declaration)?;
+                    validate_type_operations("funcdef.type_operations", operations, false)?;
+                    if !matches!(operations, TypeOperationsV1::Unavailable) {
+                        return invalid(
+                            "funcdef.type_operations",
+                            "funcdefs are not valid FAngelscriptTypeUsage values",
+                        );
+                    }
+                    type_operations.insert(*type_id, operations);
                 }
                 RegistrationEntryV1::Typedef {
                     type_id,
@@ -780,8 +955,88 @@ impl RegistrationTraceV1 {
         if used_stubs.len() != self.host_stubs.len() {
             return invalid("host_stubs", "contains an unreferenced descriptor");
         }
+        for (type_id, operations) in type_operations {
+            if is_container_operations(operations) && !container_callbacks.contains(&type_id) {
+                return invalid(
+                    "object_type.type_operations",
+                    "container implementation has no matching template callback",
+                );
+            }
+        }
         Ok(())
     }
+}
+
+fn validate_fixed_type_operations(
+    field: &'static str,
+    operations: &FixedTypeOperationsV1,
+) -> Result<(), RegistryProfileError> {
+    if operations.value_size > MAX_OBJECT_BYTES {
+        return invalid(field, "value size is too large");
+    }
+    check_alignment(field, operations.value_alignment)?;
+    Ok(())
+}
+
+fn validate_type_operations(
+    field: &'static str,
+    operations: &TypeOperationsV1,
+    allow_container: bool,
+) -> Result<(), RegistryProfileError> {
+    match operations {
+        TypeOperationsV1::Unavailable => Ok(()),
+        TypeOperationsV1::Fixed { operations } => validate_fixed_type_operations(field, operations),
+        TypeOperationsV1::TArray
+        | TypeOperationsV1::TMap
+        | TypeOperationsV1::TSet
+        | TypeOperationsV1::TOptional
+            if allow_container =>
+        {
+            Ok(())
+        }
+        _ => invalid(
+            field,
+            "container implementation is only valid for an object type",
+        ),
+    }
+}
+
+fn is_container_adapter(adapter: TemplateValidationAdapterV1) -> bool {
+    matches!(
+        adapter,
+        TemplateValidationAdapterV1::TArray
+            | TemplateValidationAdapterV1::TMap
+            | TemplateValidationAdapterV1::TSet
+            | TemplateValidationAdapterV1::TOptional
+    )
+}
+
+fn container_operations_matches(
+    operations: &TypeOperationsV1,
+    adapter: TemplateValidationAdapterV1,
+) -> bool {
+    matches!(
+        (operations, adapter),
+        (
+            TypeOperationsV1::TArray,
+            TemplateValidationAdapterV1::TArray
+        ) | (TypeOperationsV1::TMap, TemplateValidationAdapterV1::TMap)
+            | (TypeOperationsV1::TSet, TemplateValidationAdapterV1::TSet)
+            | (
+                TypeOperationsV1::TOptional,
+                TemplateValidationAdapterV1::TOptional
+            )
+    )
+}
+
+fn is_container_operations(operations: &TypeOperationsV1) -> bool {
+    matches!(
+        operations,
+        TypeOperationsV1::TArray
+            | TypeOperationsV1::TMap
+            | TypeOperationsV1::TSet
+            | TypeOperationsV1::TOptional
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1487,7 +1742,7 @@ fn validate_snapshot_pair(
             return invalid(
                 "post_bind.result.kind",
                 "does not match its trace entry kind",
-            )
+            );
         }
     }
     Ok(())
@@ -1802,6 +2057,51 @@ mod tests {
         }
     }
 
+    fn fixed_operations(value_size: u32, value_alignment: u32) -> FixedTypeOperationsV1 {
+        FixedTypeOperationsV1 {
+            can_be_template_subtype: true,
+            can_construct: true,
+            need_construct: false,
+            can_destruct: true,
+            need_destruct: false,
+            can_copy: true,
+            need_copy: false,
+            can_compare: true,
+            can_hash_value: true,
+            value_size,
+            value_alignment,
+            is_object_pointer: false,
+        }
+    }
+
+    fn primitive_operations() -> Vec<PrimitiveTypeOperationsV1> {
+        let layouts = [
+            (1, 1),
+            (1, 1),
+            (2, 2),
+            (4, 4),
+            (8, 8),
+            (1, 1),
+            (2, 2),
+            (4, 4),
+            (8, 8),
+            (4, 4),
+            (8, 8),
+        ];
+        PrimitiveTypeV1::ORDERED
+            .into_iter()
+            .zip(layouts)
+            .enumerate()
+            .map(|(ordinal, (primitive, (value_size, value_alignment)))| {
+                PrimitiveTypeOperationsV1 {
+                    ordinal: ordinal as u32,
+                    primitive,
+                    operations: fixed_operations(value_size, value_alignment),
+                }
+            })
+            .collect()
+    }
+
     fn properties() -> OrderedEnginePropertiesV1 {
         let mut value = OrderedEnginePropertiesV1 {
             schema: ENGINE_PROPERTIES_SCHEMA.into(),
@@ -1848,6 +2148,23 @@ mod tests {
                     },
                 },
             ],
+            primitive_operations: primitive_operations(),
+            dynamic_script_operations: DynamicScriptTypeOperationsV1 {
+                delegate: FixedTypeOperationsV1 {
+                    need_construct: true,
+                    need_destruct: true,
+                    need_copy: true,
+                    can_hash_value: false,
+                    ..fixed_operations(16, 8)
+                },
+                multicast_delegate: FixedTypeOperationsV1 {
+                    need_construct: true,
+                    need_destruct: true,
+                    need_copy: true,
+                    can_hash_value: false,
+                    ..fixed_operations(16, 8)
+                },
+            },
             entries: vec![
                 RegistrationEntryV1::ObjectType {
                     ordinal: 0,
@@ -1858,6 +2175,9 @@ mod tests {
                     byte_size: 8,
                     alignment: 8,
                     flags: ObjectTypeFlagsV1(2),
+                    type_operations: TypeOperationsV1::Fixed {
+                        operations: fixed_operations(8, 8),
+                    },
                 },
                 RegistrationEntryV1::ObjectType {
                     ordinal: 1,
@@ -1868,6 +2188,9 @@ mod tests {
                     byte_size: 16,
                     alignment: 8,
                     flags: ObjectTypeFlagsV1(2),
+                    type_operations: TypeOperationsV1::Fixed {
+                        operations: fixed_operations(16, 8),
+                    },
                 },
                 RegistrationEntryV1::ObjectProperty {
                     ordinal: 2,
@@ -1935,6 +2258,12 @@ mod tests {
                     context: context("Game"),
                     type_id: 12,
                     declaration: "EState".into(),
+                    type_operations: TypeOperationsV1::Fixed {
+                        operations: FixedTypeOperationsV1 {
+                            need_copy: true,
+                            ..fixed_operations(1, 1)
+                        },
+                    },
                 },
                 RegistrationEntryV1::EnumValue {
                     ordinal: 8,
@@ -1950,6 +2279,7 @@ mod tests {
                     context: context(""),
                     type_id: 13,
                     declaration: "void Callback(int)".into(),
+                    type_operations: TypeOperationsV1::Unavailable,
                 },
                 RegistrationEntryV1::Typedef {
                     ordinal: 10,
@@ -1978,6 +2308,7 @@ mod tests {
                     context: context("Game"),
                     type_id: 15,
                     declaration: "IRunnable".into(),
+                    type_operations: TypeOperationsV1::Unavailable,
                 },
                 RegistrationEntryV1::InterfaceMethod {
                     ordinal: 14,
@@ -2213,6 +2544,7 @@ mod tests {
                 byte_size,
                 alignment,
                 flags,
+                type_operations,
                 ..
             } => RegistrationEntryV1::ObjectType {
                 ordinal: 9,
@@ -2223,6 +2555,7 @@ mod tests {
                 byte_size,
                 alignment,
                 flags,
+                type_operations,
             },
             _ => unreachable!(),
         };
@@ -2325,11 +2658,56 @@ mod tests {
             *behaviour = ObjectBehaviourV1::TemplateCallback;
             *template_validation_adapter = Some(TemplateValidationAdapterV1::TArray);
         }
+        if let RegistrationEntryV1::ObjectType {
+            type_operations, ..
+        } = &mut valid.entries[1]
+        {
+            *type_operations = TypeOperationsV1::TArray;
+        }
         valid.seal().unwrap();
         assert_eq!(
             RegistrationTraceV1::from_json(&valid.to_json().unwrap()).unwrap(),
             valid
         );
+    }
+
+    #[test]
+    fn primitive_and_type_operation_models_fail_closed() {
+        let mut missing_primitive = trace();
+        missing_primitive.primitive_operations.pop();
+        assert!(matches!(
+            missing_primitive.seal(),
+            Err(RegistryProfileError::InvalidField { .. })
+        ));
+
+        let mut reordered_primitive = trace();
+        reordered_primitive.primitive_operations.swap(0, 1);
+        assert!(matches!(
+            reordered_primitive.seal(),
+            Err(RegistryProfileError::Order { .. })
+                | Err(RegistryProfileError::InvalidField { .. })
+        ));
+
+        let mut container_without_callback = trace();
+        if let RegistrationEntryV1::ObjectType {
+            type_operations, ..
+        } = &mut container_without_callback.entries[1]
+        {
+            *type_operations = TypeOperationsV1::TSet;
+        }
+        assert!(matches!(
+            container_without_callback.seal(),
+            Err(RegistryProfileError::InvalidField { .. })
+        ));
+
+        let mut malformed_alignment = trace();
+        malformed_alignment.primitive_operations[0]
+            .operations
+            .value_alignment = 3;
+        assert!(matches!(
+            malformed_alignment.seal(),
+            Err(RegistryProfileError::InvalidField { .. })
+        ));
     }
 
     #[test]

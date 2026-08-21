@@ -179,6 +179,9 @@ if(BUILD_TESTING)
 
     add_executable(gore-as-registry-profile-smoke tests/registry_profile_smoke.cpp)
     target_link_libraries(gore-as-registry-profile-smoke PRIVATE gore-as-unreangel-core)
+    target_include_directories(gore-as-registry-profile-smoke SYSTEM PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/unreangel/source"
+    )
     target_compile_options(gore-as-registry-profile-smoke PRIVATE
         /W4 /WX /permissive- /utf-8 /sdl /guard:cf /Brepro
     )

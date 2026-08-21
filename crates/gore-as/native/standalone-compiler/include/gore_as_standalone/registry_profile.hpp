@@ -96,6 +96,55 @@ enum class template_validation_adapter {
     t_soft_class_ptr,
 };
 
+enum class primitive_type {
+    bool_type,
+    int8,
+    int16,
+    int32,
+    int64,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+    float32,
+    float64,
+};
+
+struct fixed_type_operations {
+    bool can_be_template_subtype = false;
+    bool can_construct = false;
+    bool need_construct = true;
+    bool can_destruct = false;
+    bool need_destruct = true;
+    bool can_copy = false;
+    bool need_copy = true;
+    bool can_compare = false;
+    bool can_hash_value = false;
+    std::uint32_t value_size = 0U;
+    std::uint32_t value_alignment = 1U;
+    bool is_object_pointer = false;
+};
+
+struct primitive_type_operations {
+    std::uint32_t ordinal = 0U;
+    primitive_type primitive = primitive_type::bool_type;
+    fixed_type_operations operations;
+};
+
+struct dynamic_script_type_operations {
+    fixed_type_operations delegate;
+    fixed_type_operations multicast_delegate;
+};
+
+enum class dynamic_script_type_category { script_struct, delegate, multicast_delegate };
+
+enum class type_operations_kind { unavailable, fixed, t_array, t_map, t_set, t_optional };
+
+struct type_operations {
+    type_operations_kind kind = type_operations_kind::unavailable;
+    fixed_type_operations fixed;
+};
+
 enum class host_stub_kind { callable, storage, object };
 
 struct host_stub {
@@ -158,6 +207,7 @@ struct registration_entry {
     std::uint32_t storage_stub_id = 0U;
     std::uint32_t factory_object_stub_id = 0U;
     std::int32_t enum_value = 0;
+    type_operations operations;
 };
 
 enum class registration_result_kind {
@@ -236,6 +286,8 @@ struct post_bind_state {
 struct registry_profile {
     std::vector<engine_property_setting> engine_properties;
     std::vector<host_stub> host_stubs;
+    std::vector<primitive_type_operations> primitive_operations;
+    dynamic_script_type_operations dynamic_script_operations;
     std::vector<registration_entry> registrations;
     std::vector<registration_result> expected_results;
     std::vector<post_bind_state> final_states;
@@ -276,6 +328,8 @@ private:
     std::unique_ptr<impl> impl_;
     friend registry_replay_result replay_registry(
         asIScriptEngine&, const registry_profile&, registry_runtime&);
+    friend bool classify_dynamic_script_type(
+        registry_runtime&, asITypeInfo&, dynamic_script_type_category);
 };
 
 // The engine and runtime must both be fresh. The runtime must outlive the
@@ -286,5 +340,14 @@ registry_replay_result replay_registry(
     asIScriptEngine& engine,
     const registry_profile& profile,
     registry_runtime& runtime);
+
+// The future class-generator/precompiled-loader adapter must call this when a
+// script value type carries G1R's delegate/multicast user-data tag. Untagged
+// script values are resolved as ordinary script structs. Unknown non-null
+// user data is rejected by the template validators rather than guessed.
+bool classify_dynamic_script_type(
+    registry_runtime& runtime,
+    asITypeInfo& type,
+    dynamic_script_type_category category);
 
 } // namespace gore::as::standalone

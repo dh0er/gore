@@ -9,11 +9,13 @@
 #include "as_typeinfo.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <malloc.h>
 #include <map>
+#include <mutex>
 #include <new>
 #include <string_view>
 #include <unordered_map>
@@ -102,6 +104,59 @@ bool valid_behaviour(const object_behaviour value) noexcept {
 bool valid_adapter(const template_validation_adapter value) noexcept {
     return static_cast<unsigned>(value) <=
         static_cast<unsigned>(template_validation_adapter::t_soft_class_ptr);
+}
+
+bool valid_fixed_operations(const fixed_type_operations& operations) noexcept {
+    return operations.value_size <= max_object_bytes &&
+        valid_alignment(operations.value_alignment);
+}
+
+bool neutral_fixed_operations(const fixed_type_operations& operations) noexcept {
+    return !operations.can_be_template_subtype && !operations.can_construct &&
+        operations.need_construct && !operations.can_destruct && operations.need_destruct &&
+        !operations.can_copy && operations.need_copy && !operations.can_compare &&
+        !operations.can_hash_value && operations.value_size == 0U &&
+        operations.value_alignment == 1U && !operations.is_object_pointer;
+}
+
+bool valid_type_operations(const type_operations& operations, const bool allow_container) noexcept {
+    switch (operations.kind) {
+    case type_operations_kind::unavailable:
+        return neutral_fixed_operations(operations.fixed);
+    case type_operations_kind::fixed:
+        return valid_fixed_operations(operations.fixed);
+    case type_operations_kind::t_array:
+    case type_operations_kind::t_map:
+    case type_operations_kind::t_set:
+    case type_operations_kind::t_optional:
+        return allow_container && neutral_fixed_operations(operations.fixed);
+    }
+    return false;
+}
+
+bool is_container_operations(const type_operations_kind kind) noexcept {
+    return kind == type_operations_kind::t_array || kind == type_operations_kind::t_map ||
+        kind == type_operations_kind::t_set || kind == type_operations_kind::t_optional;
+}
+
+bool is_container_adapter(const template_validation_adapter adapter) noexcept {
+    return adapter == template_validation_adapter::t_array ||
+        adapter == template_validation_adapter::t_map ||
+        adapter == template_validation_adapter::t_set ||
+        adapter == template_validation_adapter::t_optional;
+}
+
+bool operations_match_adapter(
+    const type_operations_kind operations,
+    const template_validation_adapter adapter) noexcept {
+    return (operations == type_operations_kind::t_array &&
+            adapter == template_validation_adapter::t_array) ||
+        (operations == type_operations_kind::t_map &&
+         adapter == template_validation_adapter::t_map) ||
+        (operations == type_operations_kind::t_set &&
+         adapter == template_validation_adapter::t_set) ||
+        (operations == type_operations_kind::t_optional &&
+         adapter == template_validation_adapter::t_optional);
 }
 
 asEEngineProp to_engine_property(const engine_property property) {
@@ -248,6 +303,11 @@ bool validate_class_template(asITypeInfo* type, asCString* error) {
     return true;
 }
 
+bool validate_array_template(asITypeInfo* type, asCString* error);
+bool validate_map_template(asITypeInfo* type, asCString* error);
+bool validate_set_template(asITypeInfo* type, asCString* error);
+bool validate_optional_template(asITypeInfo* type, asCString* error);
+
 asSFuncPtr template_callback(const template_validation_adapter adapter) {
     switch (adapter) {
     case template_validation_adapter::t_subclass_of:
@@ -256,11 +316,15 @@ asSFuncPtr template_callback(const template_validation_adapter adapter) {
     case template_validation_adapter::t_soft_object_ptr:
     case template_validation_adapter::t_soft_class_ptr:
         return asFUNCTION(validate_class_template);
-    case template_validation_adapter::none:
     case template_validation_adapter::t_array:
+        return asFUNCTION(validate_array_template);
     case template_validation_adapter::t_map:
+        return asFUNCTION(validate_map_template);
     case template_validation_adapter::t_set:
+        return asFUNCTION(validate_set_template);
     case template_validation_adapter::t_optional:
+        return asFUNCTION(validate_optional_template);
+    case template_validation_adapter::none:
         return asSFuncPtr{};
     }
     return asSFuncPtr{};
@@ -361,6 +425,7 @@ const host_stub* find_stub(const registry_profile& profile, const std::uint32_t 
 registry_replay_result validate_profile(const registry_profile& profile) {
     if (profile.engine_properties.size() > 4096U ||
         profile.host_stubs.size() > max_host_stubs ||
+        profile.primitive_operations.size() != 11U ||
         profile.registrations.empty() ||
         profile.registrations.size() > max_registrations ||
         profile.expected_results.size() != profile.registrations.size() ||
@@ -386,6 +451,29 @@ registry_replay_result validate_profile(const registry_profile& profile) {
             return fail(registry_replay_phase::validate_profile, index, "host stub descriptor is invalid");
         }
     }
+    constexpr std::array<primitive_type, 11U> primitive_order = {
+        primitive_type::bool_type, primitive_type::int8, primitive_type::int16,
+        primitive_type::int32, primitive_type::int64, primitive_type::uint8,
+        primitive_type::uint16, primitive_type::uint32, primitive_type::uint64,
+        primitive_type::float32, primitive_type::float64};
+    for (std::size_t index = 0U; index < profile.primitive_operations.size(); ++index) {
+        const primitive_type_operations& primitive = profile.primitive_operations[index];
+        if (primitive.ordinal != index || primitive.primitive != primitive_order[index] ||
+            !valid_fixed_operations(primitive.operations) ||
+            primitive.operations.value_size == 0U) {
+            return fail(
+                registry_replay_phase::validate_profile, index,
+                "primitive type-operation order or descriptor is invalid");
+        }
+    }
+    if (!valid_fixed_operations(profile.dynamic_script_operations.delegate) ||
+        !valid_fixed_operations(profile.dynamic_script_operations.multicast_delegate) ||
+        profile.dynamic_script_operations.delegate.value_size == 0U ||
+        profile.dynamic_script_operations.multicast_delegate.value_size == 0U) {
+        return fail(
+            registry_replay_phase::validate_profile, no_ordinal,
+            "dynamic script type-operation descriptor is invalid");
+    }
 
     std::unordered_set<std::uint32_t> type_ids;
     std::unordered_set<std::uint32_t> object_types;
@@ -403,6 +491,8 @@ registry_replay_result validate_profile(const registry_profile& profile) {
     std::unordered_set<std::uint32_t> expected_final_properties;
     std::unordered_set<std::uint32_t> expected_final_functions;
     std::unordered_set<std::uint32_t> expected_final_globals;
+    std::unordered_map<std::uint32_t, type_operations_kind> operations_by_type;
+    std::unordered_set<std::uint32_t> container_callbacks;
     bool string_factory_seen = false;
     bool default_array_seen = false;
     for (std::size_t index = 0U; index < profile.registrations.size(); ++index) {
@@ -420,6 +510,17 @@ registry_replay_result validate_profile(const registry_profile& profile) {
              !valid_text(*entry.context.config_group))) {
             return fail(registry_replay_phase::validate_profile, index, "registration context is invalid");
         }
+        const bool produces_operations = entry.kind == registration_kind::object_type ||
+            entry.kind == registration_kind::interface_type ||
+            entry.kind == registration_kind::enum_type ||
+            entry.kind == registration_kind::funcdef;
+        if (!produces_operations &&
+            (entry.operations.kind != type_operations_kind::unavailable ||
+             !valid_type_operations(entry.operations, false))) {
+            return fail(
+                registry_replay_phase::validate_profile, index,
+                "non-type registration carries a type-operation descriptor");
+        }
 
         const auto require_stub = [&](const std::uint32_t id, const host_stub_kind kind) {
             const host_stub* stub = find_stub(profile, id);
@@ -435,17 +536,22 @@ registry_replay_result validate_profile(const registry_profile& profile) {
             if (!valid_text(entry.declaration) || entry.byte_size > max_object_bytes ||
                 !valid_alignment(entry.alignment) ||
                 (entry.flags & ~public_object_flag_mask) != 0U ||
+                !valid_type_operations(entry.operations, true) ||
                 !type_ids.insert(entry.logical_id).second) {
                 return fail(registry_replay_phase::validate_profile, index, "object type descriptor is invalid");
             }
             object_types.insert(entry.logical_id);
+            operations_by_type.emplace(entry.logical_id, entry.operations.kind);
             expected_final_types.insert(entry.logical_id);
             break;
         case registration_kind::interface_type:
-            if (!valid_text(entry.declaration) || !type_ids.insert(entry.logical_id).second) {
+            if (!valid_text(entry.declaration) ||
+                !valid_type_operations(entry.operations, false) ||
+                !type_ids.insert(entry.logical_id).second) {
                 return fail(registry_replay_phase::validate_profile, index, "interface descriptor is invalid");
             }
             interface_types.insert(entry.logical_id);
+            operations_by_type.emplace(entry.logical_id, entry.operations.kind);
             expected_final_types.insert(entry.logical_id);
             break;
         case registration_kind::interface_method:
@@ -493,8 +599,18 @@ registry_replay_result validate_profile(const registry_profile& profile) {
             if (has_adapter && template_callback(entry.validation_adapter).ptr.f.func == nullptr) {
                 return fail(
                     registry_replay_phase::validate_profile, index,
-                    "container template validator requires the still-unported G1R type-operations layer",
+                    "template validator implementation is unavailable",
                     asNOT_SUPPORTED);
+            }
+            if (is_container_adapter(entry.validation_adapter)) {
+                const auto operations = operations_by_type.find(entry.owner_type_id);
+                if (operations == operations_by_type.end() ||
+                    !operations_match_adapter(operations->second, entry.validation_adapter) ||
+                    !container_callbacks.insert(entry.owner_type_id).second) {
+                    return fail(
+                        registry_replay_phase::validate_profile, index,
+                        "container template validator does not match its owner type operations");
+                }
             }
             expected_final_functions.insert(entry.logical_id);
             break;
@@ -518,10 +634,13 @@ registry_replay_result validate_profile(const registry_profile& profile) {
             expected_final_functions.insert(entry.logical_id);
             break;
         case registration_kind::enum_type:
-            if (!valid_text(entry.declaration) || !type_ids.insert(entry.logical_id).second) {
+            if (!valid_text(entry.declaration) ||
+                !valid_type_operations(entry.operations, false) ||
+                !type_ids.insert(entry.logical_id).second) {
                 return fail(registry_replay_phase::validate_profile, index, "enum descriptor is invalid");
             }
             enum_types.insert(entry.logical_id);
+            operations_by_type.emplace(entry.logical_id, entry.operations.kind);
             break;
         case registration_kind::enum_value:
             if (enum_types.count(entry.owner_type_id) == 0U || !valid_identifier(entry.name)) {
@@ -529,9 +648,13 @@ registry_replay_result validate_profile(const registry_profile& profile) {
             }
             break;
         case registration_kind::funcdef:
-            if (!valid_text(entry.declaration) || !type_ids.insert(entry.logical_id).second) {
+            if (!valid_text(entry.declaration) ||
+                entry.operations.kind != type_operations_kind::unavailable ||
+                !valid_type_operations(entry.operations, false) ||
+                !type_ids.insert(entry.logical_id).second) {
                 return fail(registry_replay_phase::validate_profile, index, "funcdef descriptor is invalid");
             }
+            operations_by_type.emplace(entry.logical_id, entry.operations.kind);
             break;
         case registration_kind::typedef_type:
             if (!valid_identifier(entry.name) || !valid_text(entry.target_declaration) ||
@@ -614,6 +737,14 @@ registry_replay_result validate_profile(const registry_profile& profile) {
 
     if (used_stubs.size() != profile.host_stubs.size()) {
         return fail(registry_replay_phase::validate_profile, no_ordinal, "host stub table contains an unreferenced descriptor");
+    }
+    for (const auto& [type_id, operations] : operations_by_type) {
+        if (is_container_operations(operations) &&
+            container_callbacks.count(type_id) == 0U) {
+            return fail(
+                registry_replay_phase::validate_profile, no_ordinal,
+                "container type operations have no matching template callback");
+        }
     }
 
     std::unordered_set<std::uint32_t> actual_final_types;
@@ -723,17 +854,368 @@ bool same_result(const registration_result& actual, const registration_result& e
         actual.index == expected.index && actual.installed == expected.installed;
 }
 
+struct template_operation_record {
+    type_operations_kind kind = type_operations_kind::unavailable;
+    fixed_type_operations first;
+    fixed_type_operations second;
+    bool valid = false;
+    asIScriptFunction* compare_function = nullptr;
+    asIScriptFunction* hash_function = nullptr;
+};
+
 } // namespace
 
 class registry_runtime::impl final {
 public:
+    ~impl();
+
     bool bound = false;
+    asIScriptEngine* engine = nullptr;
     std::unordered_map<std::uint32_t, aligned_pointer> storage;
     std::unordered_map<std::uint32_t, std::unique_ptr<std::byte>> objects;
     std::unique_ptr<string_pool> strings;
+    std::array<fixed_type_operations, 11U> primitive_operations;
+    dynamic_script_type_operations dynamic_script_operations;
+    std::unordered_map<const asITypeInfo*, type_operations> type_operations_by_pointer;
+    std::unordered_map<std::string, type_operations> type_operations_by_name;
+    std::unordered_map<const asITypeInfo*, dynamic_script_type_category> dynamic_script_categories;
+    std::vector<std::unique_ptr<template_operation_record>> template_records;
+    std::unordered_set<const template_operation_record*> template_record_pointers;
+    std::mutex operations_mutex;
 };
 
 namespace {
+
+std::mutex runtime_registry_mutex;
+std::unordered_map<asIScriptEngine*, registry_runtime::impl*> runtime_registry;
+
+void unregister_runtime(registry_runtime::impl& runtime) noexcept {
+    if (runtime.engine == nullptr) return;
+    const std::lock_guard<std::mutex> lock(runtime_registry_mutex);
+    const auto iterator = runtime_registry.find(runtime.engine);
+    if (iterator != runtime_registry.end() && iterator->second == &runtime) {
+        runtime_registry.erase(iterator);
+    }
+    runtime.engine = nullptr;
+}
+
+bool register_runtime(asIScriptEngine& engine, registry_runtime::impl& runtime) {
+    const std::lock_guard<std::mutex> lock(runtime_registry_mutex);
+    if (!runtime_registry.emplace(&engine, &runtime).second) return false;
+    runtime.engine = &engine;
+    return true;
+}
+
+registry_runtime::impl* find_runtime(asIScriptEngine* engine) {
+    if (engine == nullptr) return nullptr;
+    const std::lock_guard<std::mutex> lock(runtime_registry_mutex);
+    const auto iterator = runtime_registry.find(engine);
+    return iterator == runtime_registry.end() ? nullptr : iterator->second;
+}
+
+std::string qualified_type_name(const asITypeInfo& type) {
+    const char* name = type.GetName();
+    const char* name_space = type.GetNamespace();
+    std::string result;
+    if (name_space != nullptr && *name_space != '\0') {
+        result.assign(name_space);
+        result.append("::");
+    }
+    if (name != nullptr) result.append(name);
+    return result;
+}
+
+void remember_type_operations(
+    registry_runtime::impl& runtime,
+    asITypeInfo& type,
+    const type_operations& operations) {
+    const std::lock_guard<std::mutex> lock(runtime.operations_mutex);
+    runtime.type_operations_by_pointer.emplace(&type, operations);
+    runtime.type_operations_by_name.emplace(qualified_type_name(type), operations);
+}
+
+struct resolved_type_operations {
+    bool valid = false;
+    type_operations_kind kind = type_operations_kind::unavailable;
+    fixed_type_operations fixed;
+};
+
+std::optional<std::size_t> primitive_index(const int type_id) noexcept {
+    switch (type_id & asTYPEID_MASK_SEQNBR) {
+    case asTYPEID_BOOL: return 0U;
+    case asTYPEID_INT8: return 1U;
+    case asTYPEID_INT16: return 2U;
+    case asTYPEID_INT32: return 3U;
+    case asTYPEID_INT64: return 4U;
+    case asTYPEID_UINT8: return 5U;
+    case asTYPEID_UINT16: return 6U;
+    case asTYPEID_UINT32: return 7U;
+    case asTYPEID_UINT64: return 8U;
+    case asTYPEID_FLOAT32: return 9U;
+    case asTYPEID_FLOAT64: return 10U;
+    default: return std::nullopt;
+    }
+}
+
+resolved_type_operations resolve_type_operations(
+    registry_runtime::impl& runtime,
+    asIScriptEngine& engine,
+    const int type_id) {
+    if (const std::optional<std::size_t> index = primitive_index(type_id)) {
+        return {true, type_operations_kind::fixed, runtime.primitive_operations[*index]};
+    }
+
+    asITypeInfo* type = engine.GetTypeInfoById(type_id);
+    if (type == nullptr) return {};
+    const asDWORD flags = type->GetFlags();
+    if ((flags & asOBJ_SCRIPT_OBJECT) != 0U) {
+        const auto category = runtime.dynamic_script_categories.find(type);
+        fixed_type_operations operations;
+        operations.can_be_template_subtype = true;
+        operations.can_construct = true;
+        operations.can_destruct = true;
+        operations.can_copy = true;
+        operations.can_compare = true;
+        if ((flags & asOBJ_VALUE) == 0U) {
+            operations.need_construct = true;
+            operations.need_destruct = false;
+            operations.need_copy = false;
+            operations.can_hash_value = true;
+            operations.value_size = static_cast<std::uint32_t>(sizeof(void*));
+            operations.value_alignment = static_cast<std::uint32_t>(alignof(void*));
+            operations.is_object_pointer = true;
+        } else {
+            if (category != runtime.dynamic_script_categories.end() &&
+                category->second == dynamic_script_type_category::delegate) {
+                operations = runtime.dynamic_script_operations.delegate;
+                return {true, type_operations_kind::fixed, operations};
+            }
+            if (category != runtime.dynamic_script_categories.end() &&
+                category->second == dynamic_script_type_category::multicast_delegate) {
+                operations = runtime.dynamic_script_operations.multicast_delegate;
+                return {true, type_operations_kind::fixed, operations};
+            }
+            if (category == runtime.dynamic_script_categories.end() &&
+                type->GetUserData() != nullptr) {
+                return {};
+            }
+            const int size = type->GetSize();
+            const int alignment = static_cast<asCTypeInfo*>(type)->alignment;
+            if (size < 0 || alignment <= 0) return {};
+            operations.need_construct = true;
+            operations.need_destruct = true;
+            operations.need_copy = true;
+            operations.can_hash_value = false;
+            operations.value_size = static_cast<std::uint32_t>(size);
+            operations.value_alignment = static_cast<std::uint32_t>(alignment);
+        }
+        return {valid_fixed_operations(operations), type_operations_kind::fixed, operations};
+    }
+    if ((flags & asOBJ_ENUM) != 0U && type->GetModule() != nullptr) {
+        fixed_type_operations operations;
+        operations.can_be_template_subtype = true;
+        operations.can_construct = true;
+        operations.need_construct = false;
+        operations.can_destruct = true;
+        operations.need_destruct = false;
+        operations.can_copy = true;
+        operations.need_copy = true;
+        operations.can_compare = true;
+        operations.can_hash_value = true;
+        operations.value_size = 1U;
+        operations.value_alignment = 1U;
+        return {true, type_operations_kind::fixed, operations};
+    }
+
+    const auto by_pointer = runtime.type_operations_by_pointer.find(type);
+    const type_operations* captured = by_pointer == runtime.type_operations_by_pointer.end()
+        ? nullptr : &by_pointer->second;
+    if (captured == nullptr) {
+        const auto by_name = runtime.type_operations_by_name.find(qualified_type_name(*type));
+        if (by_name != runtime.type_operations_by_name.end()) captured = &by_name->second;
+    }
+    if (captured == nullptr || captured->kind == type_operations_kind::unavailable) return {};
+    if (captured->kind == type_operations_kind::fixed) {
+        return {true, captured->kind, captured->fixed};
+    }
+
+    fixed_type_operations container;
+    container.can_be_template_subtype = false;
+    return {true, captured->kind, container};
+}
+
+template_operation_record* existing_template_record(
+    registry_runtime::impl& runtime,
+    asITypeInfo& type) {
+    const auto* pointer = static_cast<const template_operation_record*>(type.GetUserData());
+    if (pointer == nullptr || runtime.template_record_pointers.count(pointer) == 0U) return nullptr;
+    return const_cast<template_operation_record*>(pointer);
+}
+
+template_operation_record& cache_template_record(
+    registry_runtime::impl& runtime,
+    asITypeInfo& type,
+    std::unique_ptr<template_operation_record> record) {
+    template_operation_record* pointer = record.get();
+    runtime.template_record_pointers.insert(pointer);
+    runtime.template_records.push_back(std::move(record));
+    type.SetUserData(pointer);
+    return *pointer;
+}
+
+void set_error(asCString* error, const char* message) {
+    if (error != nullptr) *error = message;
+}
+
+asIScriptFunction* find_hash_function(asITypeInfo* type) {
+    if (type == nullptr) return nullptr;
+    return type->GetMethodByDecl("uint32 Hash() const");
+}
+
+asIScriptFunction* find_compare_function(
+    asITypeInfo* type,
+    const bool is_object_pointer) {
+    if (type == nullptr || type->GetName() == nullptr) return nullptr;
+    std::string declaration = "int opCmp(";
+    if (!is_object_pointer) declaration.append("const ");
+    declaration.append(type->GetName());
+    if (!is_object_pointer) declaration.push_back('&');
+    declaration.append(" Other) const");
+    return type->GetMethodByDecl(declaration.c_str());
+}
+
+bool validate_array_template(asITypeInfo* type, asCString* error) {
+    if (type == nullptr || type->GetSubTypeCount() != 1U) return false;
+    if (asITypeInfo* subtype = type->GetSubType(0U);
+        subtype != nullptr && (subtype->GetFlags() & asOBJ_TEMPLATE_SUBTYPE) != 0U) {
+        return true;
+    }
+    registry_runtime::impl* runtime = find_runtime(type->GetEngine());
+    if (runtime == nullptr) return false;
+    const std::lock_guard<std::mutex> lock(runtime->operations_mutex);
+    if (template_operation_record* existing = existing_template_record(*runtime, *type)) {
+        return existing->valid;
+    }
+    const resolved_type_operations subtype = resolve_type_operations(
+        *runtime, *type->GetEngine(), type->GetSubTypeId(0U));
+    if (!subtype.fixed.can_be_template_subtype) {
+        set_error(error, "Containers cannot be nested in other containers");
+        return false;
+    }
+
+    auto record = std::make_unique<template_operation_record>();
+    record->kind = type_operations_kind::t_array;
+    record->first = subtype.fixed;
+    template_operation_record& cached = cache_template_record(*runtime, *type, std::move(record));
+    if (!subtype.valid) {
+        set_error(error, "Subtype could not be found");
+        return false;
+    }
+    if (!(subtype.fixed.can_construct && subtype.fixed.can_destruct && subtype.fixed.can_copy)) {
+        set_error(error, "Subtype cannot be constructed or copied");
+        return false;
+    }
+    cached.valid = subtype.fixed.value_size > 0U;
+    if (!cached.valid) {
+        set_error(error, "Subtype is an empty struct");
+        return false;
+    }
+    cached.compare_function = find_compare_function(
+        type->GetSubType(0U), subtype.fixed.is_object_pointer);
+    if (cached.compare_function != nullptr) {
+        static_cast<asCScriptFunction*>(cached.compare_function)->isInUse = true;
+    }
+    return true;
+}
+
+bool validate_set_template(asITypeInfo* type, asCString* error) {
+    if (type == nullptr || type->GetSubTypeCount() != 1U) return false;
+    registry_runtime::impl* runtime = find_runtime(type->GetEngine());
+    if (runtime == nullptr) return false;
+    const std::lock_guard<std::mutex> lock(runtime->operations_mutex);
+    if (template_operation_record* existing = existing_template_record(*runtime, *type)) {
+        return existing->valid;
+    }
+    const resolved_type_operations subtype = resolve_type_operations(
+        *runtime, *type->GetEngine(), type->GetSubTypeId(0U));
+    if (!subtype.fixed.can_be_template_subtype) {
+        set_error(error, "Containers cannot be nested in other containers");
+        return false;
+    }
+    auto record = std::make_unique<template_operation_record>();
+    record->kind = type_operations_kind::t_set;
+    record->first = subtype.fixed;
+    if (!subtype.fixed.can_hash_value) {
+        record->hash_function = find_hash_function(type->GetSubType(0U));
+    }
+    const bool can_hash = subtype.fixed.can_hash_value || record->hash_function != nullptr;
+    record->valid = subtype.valid && subtype.fixed.can_construct &&
+        subtype.fixed.can_destruct && subtype.fixed.can_copy &&
+        subtype.fixed.can_compare && can_hash;
+    template_operation_record& cached = cache_template_record(*runtime, *type, std::move(record));
+    if (!cached.valid) {
+        set_error(error, can_hash ? "Key type does not have a hash function defined" :
+            "Subtype cannot be constructed or copied");
+    }
+    return cached.valid;
+}
+
+bool validate_map_template(asITypeInfo* type, asCString* error) {
+    if (type == nullptr || type->GetSubTypeCount() != 2U) return false;
+    registry_runtime::impl* runtime = find_runtime(type->GetEngine());
+    if (runtime == nullptr) return false;
+    const std::lock_guard<std::mutex> lock(runtime->operations_mutex);
+    if (template_operation_record* existing = existing_template_record(*runtime, *type)) {
+        return existing->valid;
+    }
+    const resolved_type_operations key = resolve_type_operations(
+        *runtime, *type->GetEngine(), type->GetSubTypeId(0U));
+    const resolved_type_operations value = resolve_type_operations(
+        *runtime, *type->GetEngine(), type->GetSubTypeId(1U));
+    if (!key.fixed.can_be_template_subtype || !value.fixed.can_be_template_subtype) {
+        set_error(error, "Containers cannot be nested in other containers");
+        return false;
+    }
+    auto record = std::make_unique<template_operation_record>();
+    record->kind = type_operations_kind::t_map;
+    record->first = key.fixed;
+    record->second = value.fixed;
+    if (!key.fixed.can_hash_value) {
+        record->hash_function = find_hash_function(type->GetSubType(0U));
+    }
+    const bool can_hash = key.fixed.can_hash_value || record->hash_function != nullptr;
+    record->valid = key.valid && value.valid && key.fixed.can_construct &&
+        key.fixed.can_destruct && key.fixed.can_copy && key.fixed.can_compare && can_hash &&
+        value.fixed.can_construct && value.fixed.can_destruct && value.fixed.can_copy;
+    template_operation_record& cached = cache_template_record(*runtime, *type, std::move(record));
+    if (!cached.valid) {
+        set_error(error, can_hash ? "Key type does not have a hash function defined" :
+            "Subtype cannot be constructed or copied");
+    }
+    return cached.valid;
+}
+
+bool validate_optional_template(asITypeInfo* type, asCString* error) {
+    if (type == nullptr || type->GetSubTypeCount() != 1U) return false;
+    registry_runtime::impl* runtime = find_runtime(type->GetEngine());
+    if (runtime == nullptr) return false;
+    const std::lock_guard<std::mutex> lock(runtime->operations_mutex);
+    if (template_operation_record* existing = existing_template_record(*runtime, *type)) {
+        return existing->valid;
+    }
+    const resolved_type_operations subtype = resolve_type_operations(
+        *runtime, *type->GetEngine(), type->GetSubTypeId(0U));
+    if (!subtype.fixed.can_be_template_subtype) {
+        set_error(error, "Containers cannot be nested in other containers");
+        return false;
+    }
+    auto record = std::make_unique<template_operation_record>();
+    record->kind = type_operations_kind::t_optional;
+    record->first = subtype.fixed;
+    record->valid = subtype.valid && subtype.fixed.can_construct &&
+        subtype.fixed.can_destruct && subtype.fixed.can_copy;
+    return cache_template_record(*runtime, *type, std::move(record)).valid;
+}
 
 void* auxiliary_pointer(registry_runtime::impl& runtime, const std::uint32_t id) {
     const auto iterator = runtime.objects.find(id);
@@ -772,6 +1254,7 @@ registry_replay_result register_one(
             if (type == nullptr) return fail(registry_replay_phase::register_entry, entry.ordinal, "registered object type is not reflectable");
             type->alignment = static_cast<int>(entry.alignment);
             maps.types.emplace(entry.logical_id, type);
+            remember_type_operations(runtime, *type, entry.operations);
             maps.type_declarations.emplace(
                 entry.logical_id, callable_type_declaration(entry.declaration));
             actual.engine_id = static_cast<std::uint32_t>(type->GetTypeId());
@@ -787,6 +1270,7 @@ registry_replay_result register_one(
             auto* type = static_cast<asCTypeInfo*>(engine.GetObjectTypeByIndex(before));
             if (type == nullptr) return fail(registry_replay_phase::register_entry, entry.ordinal, "registered interface is not reflectable");
             maps.types.emplace(entry.logical_id, type);
+            remember_type_operations(runtime, *type, entry.operations);
             maps.type_declarations.emplace(entry.logical_id, entry.declaration);
             actual.engine_id = static_cast<std::uint32_t>(type->GetTypeId());
         } else if (code >= 0) {
@@ -888,6 +1372,7 @@ registry_replay_result register_one(
             auto* type = static_cast<asCTypeInfo*>(engine.GetTypeInfoById(code));
             if (type == nullptr) return fail(registry_replay_phase::register_entry, entry.ordinal, "registered enum is not reflectable");
             maps.types.emplace(entry.logical_id, type);
+            remember_type_operations(runtime, *type, entry.operations);
             maps.type_declarations.emplace(entry.logical_id, entry.declaration);
             actual.engine_id = static_cast<std::uint32_t>(code);
         }
@@ -910,6 +1395,7 @@ registry_replay_result register_one(
             auto* type = static_cast<asCTypeInfo*>(engine.GetTypeInfoById(code));
             if (type == nullptr) return fail(registry_replay_phase::register_entry, entry.ordinal, "registered funcdef is not reflectable");
             maps.types.emplace(entry.logical_id, type);
+            remember_type_operations(runtime, *type, entry.operations);
             maps.type_declarations.emplace(entry.logical_id, entry.declaration);
             actual.engine_id = static_cast<std::uint32_t>(code);
         }
@@ -1108,6 +1594,27 @@ bool verify_final_state(const post_bind_state& state, replay_maps& maps) {
 
 } // namespace
 
+registry_runtime::impl::~impl() { unregister_runtime(*this); }
+
+bool classify_dynamic_script_type(
+    registry_runtime& runtime,
+    asITypeInfo& type,
+    const dynamic_script_type_category category) {
+    if (runtime.impl_ == nullptr || !runtime.impl_->bound ||
+        runtime.impl_->engine != type.GetEngine() ||
+        static_cast<unsigned>(category) >
+            static_cast<unsigned>(dynamic_script_type_category::multicast_delegate)) {
+        return false;
+    }
+    const asDWORD flags = type.GetFlags();
+    if ((flags & asOBJ_SCRIPT_OBJECT) == 0U || (flags & asOBJ_VALUE) == 0U) {
+        return false;
+    }
+    const std::lock_guard<std::mutex> lock(runtime.impl_->operations_mutex);
+    runtime.impl_->dynamic_script_categories.insert_or_assign(&type, category);
+    return true;
+}
+
 registry_runtime::registry_runtime() : impl_(std::make_unique<impl>()) {}
 registry_runtime::~registry_runtime() = default;
 registry_runtime::registry_runtime(registry_runtime&&) noexcept = default;
@@ -1133,6 +1640,10 @@ registry_replay_result replay_registry(
     }
 
     auto prepared = std::make_unique<registry_runtime::impl>();
+    for (std::size_t index = 0U; index < profile.primitive_operations.size(); ++index) {
+        prepared->primitive_operations[index] = profile.primitive_operations[index].operations;
+    }
+    prepared->dynamic_script_operations = profile.dynamic_script_operations;
     for (const host_stub& stub : profile.host_stubs) {
         if (stub.kind == host_stub_kind::storage) {
             const std::size_t size = std::max<std::size_t>(stub.byte_len, 1U);
@@ -1143,6 +1654,11 @@ registry_replay_result replay_registry(
         } else if (stub.kind == host_stub_kind::object) {
             prepared->objects.emplace(stub.stub_id, std::make_unique<std::byte>());
         }
+    }
+    if (!register_runtime(engine, *prepared)) {
+        return fail(
+            registry_replay_phase::validate_profile, no_ordinal,
+            "engine already has a standalone registry runtime");
     }
 
     for (const engine_property_setting& setting : profile.engine_properties) {

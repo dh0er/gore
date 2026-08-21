@@ -1561,10 +1561,11 @@ mod tests {
         UnrealSemanticsProfileV1, COMPILER_PROFILE_SCHEMA, COMPILER_PROFILE_SCHEMA_VERSION,
     };
     use crate::compiler_profile::registry::{
-        EnginePropertySettingV1, EnginePropertyV1, OrderedEnginePropertiesV1, PostBindEntryV1,
-        PostBindResultV1, PostBindSnapshotV1, RegistrationContextV1, RegistrationEntryV1,
-        RegistrationTraceV1, ENGINE_PROPERTIES_SCHEMA, POST_BIND_SNAPSHOT_SCHEMA,
-        REGISTRATION_TRACE_SCHEMA,
+        DynamicScriptTypeOperationsV1, EnginePropertySettingV1, EnginePropertyV1,
+        FixedTypeOperationsV1, OrderedEnginePropertiesV1, PostBindEntryV1, PostBindResultV1,
+        PostBindSnapshotV1, PrimitiveTypeOperationsV1, PrimitiveTypeV1, RegistrationContextV1,
+        RegistrationEntryV1, RegistrationTraceV1, TypeOperationsV1, ENGINE_PROPERTIES_SCHEMA,
+        POST_BIND_SNAPSHOT_SCHEMA, REGISTRATION_TRACE_SCHEMA,
     };
 
     struct TestFixture {
@@ -1616,10 +1617,77 @@ mod tests {
             };
             properties.seal().unwrap();
             let properties_json = properties.to_json().unwrap();
+            let primitive_layouts = [
+                (PrimitiveTypeV1::Bool, 1, 1),
+                (PrimitiveTypeV1::Int8, 1, 1),
+                (PrimitiveTypeV1::Int16, 2, 2),
+                (PrimitiveTypeV1::Int32, 4, 4),
+                (PrimitiveTypeV1::Int64, 8, 8),
+                (PrimitiveTypeV1::Uint8, 1, 1),
+                (PrimitiveTypeV1::Uint16, 2, 2),
+                (PrimitiveTypeV1::Uint32, 4, 4),
+                (PrimitiveTypeV1::Uint64, 8, 8),
+                (PrimitiveTypeV1::Float32, 4, 4),
+                (PrimitiveTypeV1::Float64, 8, 8),
+            ];
             let mut trace = RegistrationTraceV1 {
                 schema: REGISTRATION_TRACE_SCHEMA.into(),
                 schema_version: 1,
                 host_stubs: vec![],
+                primitive_operations: primitive_layouts
+                    .into_iter()
+                    .enumerate()
+                    .map(|(ordinal, (primitive, value_size, value_alignment))| {
+                        PrimitiveTypeOperationsV1 {
+                            ordinal: ordinal as u32,
+                            primitive,
+                            operations: FixedTypeOperationsV1 {
+                                can_be_template_subtype: true,
+                                can_construct: true,
+                                need_construct: false,
+                                can_destruct: true,
+                                need_destruct: false,
+                                can_copy: true,
+                                need_copy: false,
+                                can_compare: true,
+                                can_hash_value: true,
+                                value_size,
+                                value_alignment,
+                                is_object_pointer: false,
+                            },
+                        }
+                    })
+                    .collect(),
+                dynamic_script_operations: DynamicScriptTypeOperationsV1 {
+                    delegate: FixedTypeOperationsV1 {
+                        can_be_template_subtype: true,
+                        can_construct: true,
+                        need_construct: true,
+                        can_destruct: true,
+                        need_destruct: true,
+                        can_copy: true,
+                        need_copy: true,
+                        can_compare: true,
+                        can_hash_value: false,
+                        value_size: 16,
+                        value_alignment: 8,
+                        is_object_pointer: false,
+                    },
+                    multicast_delegate: FixedTypeOperationsV1 {
+                        can_be_template_subtype: true,
+                        can_construct: true,
+                        need_construct: true,
+                        can_destruct: true,
+                        need_destruct: true,
+                        can_copy: true,
+                        need_copy: true,
+                        can_compare: true,
+                        can_hash_value: false,
+                        value_size: 16,
+                        value_alignment: 8,
+                        is_object_pointer: false,
+                    },
+                },
                 entries: vec![RegistrationEntryV1::Enum {
                     ordinal: 0,
                     registration_id: 0,
@@ -1630,6 +1698,22 @@ mod tests {
                     },
                     type_id: 1,
                     declaration: "ETest".into(),
+                    type_operations: TypeOperationsV1::Fixed {
+                        operations: FixedTypeOperationsV1 {
+                            can_be_template_subtype: true,
+                            can_construct: true,
+                            need_construct: false,
+                            can_destruct: true,
+                            need_destruct: false,
+                            can_copy: true,
+                            need_copy: true,
+                            can_compare: true,
+                            can_hash_value: true,
+                            value_size: 1,
+                            value_alignment: 1,
+                            is_object_pointer: false,
+                        },
+                    },
                 }],
                 canonical_sha256: Sha256Digest::from_bytes([0; 32]),
             };
