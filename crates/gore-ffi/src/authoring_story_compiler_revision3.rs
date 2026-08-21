@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use gore_as::compile::{
     acquire_compile_install_mutation, compile_module_with_diagnostics_report_with_guard,
-    CompileModuleReportOutcome, CompileOpts, InstallMutationGuard,
+    CompileModuleReportOutcome, CompileOpts, CompilerBackendNameV1, InstallMutationGuard,
 };
 use gore_as::diagnostics::DiagnosticsOptions;
 use gore_authoring::{
@@ -34,9 +34,15 @@ use crate::script_compile_report::{
     discard_owned_compiled_mini, discard_owned_failed_compiled_mini, install_guard_failure,
     report_response, OwnedCompileStaging,
 };
+use crate::standalone_compiler_package::{
+    backend_evidence, bundle_absent_fallback_reason, resolve_product_standalone_compiler_v1,
+    CompilerBackendWireV2, StandaloneCompilerPackageStatusV1, BUNDLE_ABSENT_DETAIL,
+};
 
 pub(super) const QUEST_COMMAND: &str = "authoring_store_check_revision3_quest_compiler_v1";
 pub(super) const NPC_COMMAND: &str = "authoring_store_check_revision3_npc_compiler_v1";
+pub(super) const QUEST_COMMAND_V2: &str = "authoring_store_check_revision3_quest_compiler_v2";
+pub(super) const NPC_COMMAND_V2: &str = "authoring_store_check_revision3_npc_compiler_v2";
 
 const MAX_PATH_BYTES: usize = 32 * 1024;
 const MAX_HEAD_JSON_BYTES: usize = 64 * 1024;
@@ -66,6 +72,26 @@ struct QuestWirePayload {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NpcWirePayload {
+    expected_head_json: String,
+    game_root: String,
+    npc_id: String,
+    root: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QuestWirePayloadV2 {
+    compiler_backend: CompilerBackendWireV2,
+    expected_head_json: String,
+    game_root: String,
+    quest_id: String,
+    root: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NpcWirePayloadV2 {
+    compiler_backend: CompilerBackendWireV2,
     expected_head_json: String,
     game_root: String,
     npc_id: String,
@@ -169,6 +195,126 @@ pub(super) fn check_revision3_quest_compiler_v1_raw(input: &str) -> Value {
 
 pub(super) fn check_revision3_npc_compiler_v1_raw(input: &str) -> Value {
     check_revision3_npc_compiler_v1_inner(input).unwrap_or_else(Failure::response)
+}
+
+pub(super) fn check_revision3_quest_compiler_v2_raw(input: &str) -> Value {
+    check_revision3_quest_compiler_v2_inner(input).unwrap_or_else(Failure::response)
+}
+
+pub(super) fn check_revision3_npc_compiler_v2_raw(input: &str) -> Value {
+    check_revision3_npc_compiler_v2_inner(input).unwrap_or_else(Failure::response)
+}
+
+fn check_revision3_quest_compiler_v2_inner(input: &str) -> Result<Value, Failure> {
+    let payload: QuestWirePayloadV2 = parse_exact_wire(input, QUEST_COMMAND_V2)?;
+    let requested = payload.compiler_backend;
+    if requested == CompilerBackendWireV2::Standalone {
+        let StandaloneCompilerPackageStatusV1::BundleAbsent =
+            resolve_product_standalone_compiler_v1();
+        let expected_head = parse_canonical_head(&payload.expected_head_json)?;
+        let entity_id = parse_entity_id(&payload.quest_id)?;
+        validate_paths(&payload.root, &payload.game_root)?;
+        let selection = open_initial_selection(
+            &payload.root,
+            expected_head,
+            payload.expected_head_json,
+            ManagedEntityKind::Quest,
+            entity_id,
+        )?;
+        return strict_standalone_bundle_absent_response(selection, requested);
+    }
+    if requested == CompilerBackendWireV2::StandaloneThenGame {
+        let StandaloneCompilerPackageStatusV1::BundleAbsent =
+            resolve_product_standalone_compiler_v1();
+    }
+    let v1 = json!({
+        "command": QUEST_COMMAND,
+        "payload": {
+            "expected_head_json": payload.expected_head_json,
+            "game_root": payload.game_root,
+            "quest_id": payload.quest_id,
+            "root": payload.root,
+        }
+    })
+    .to_string();
+    let response = check_revision3_quest_compiler_v1_inner(&v1)?;
+    Ok(attach_managed_backend_evidence(response, requested))
+}
+
+fn check_revision3_npc_compiler_v2_inner(input: &str) -> Result<Value, Failure> {
+    let payload: NpcWirePayloadV2 = parse_exact_wire(input, NPC_COMMAND_V2)?;
+    let requested = payload.compiler_backend;
+    if requested == CompilerBackendWireV2::Standalone {
+        let StandaloneCompilerPackageStatusV1::BundleAbsent =
+            resolve_product_standalone_compiler_v1();
+        let expected_head = parse_canonical_head(&payload.expected_head_json)?;
+        let entity_id = parse_entity_id(&payload.npc_id)?;
+        validate_paths(&payload.root, &payload.game_root)?;
+        let selection = open_initial_selection(
+            &payload.root,
+            expected_head,
+            payload.expected_head_json,
+            ManagedEntityKind::Npc,
+            entity_id,
+        )?;
+        return strict_standalone_bundle_absent_response(selection, requested);
+    }
+    if requested == CompilerBackendWireV2::StandaloneThenGame {
+        let StandaloneCompilerPackageStatusV1::BundleAbsent =
+            resolve_product_standalone_compiler_v1();
+    }
+    let v1 = json!({
+        "command": NPC_COMMAND,
+        "payload": {
+            "expected_head_json": payload.expected_head_json,
+            "game_root": payload.game_root,
+            "npc_id": payload.npc_id,
+            "root": payload.root,
+        }
+    })
+    .to_string();
+    let response = check_revision3_npc_compiler_v1_inner(&v1)?;
+    Ok(attach_managed_backend_evidence(response, requested))
+}
+
+fn strict_standalone_bundle_absent_response(
+    selection: InitialSelection,
+    requested: CompilerBackendWireV2,
+) -> Result<Value, Failure> {
+    let derived = DerivedModule {
+        generated: selection.persisted_module.clone(),
+    };
+    let mut compiler = preflight_compiler_evidence(
+        "AUTHORING_REVISION3_STANDALONE_BUNDLE_ABSENT",
+        BUNDLE_ABSENT_DETAIL,
+        false,
+    );
+    compiler["compiler_backend"] = backend_evidence(requested, None, false, false, None);
+    managed_response(&selection, &derived, compiler, false)
+}
+
+fn attach_managed_backend_evidence(mut response: Value, requested: CompilerBackendWireV2) -> Value {
+    let game_attempted = matches!(
+        response
+            .pointer("/compiler/install_restore")
+            .and_then(Value::as_str),
+        Some(disposition) if disposition != "not_started"
+    );
+    let (result_backend, fallback) = match requested {
+        CompilerBackendWireV2::Game => {
+            (game_attempted.then_some(CompilerBackendNameV1::Game), None)
+        }
+        CompilerBackendWireV2::StandaloneThenGame => (
+            game_attempted.then_some(CompilerBackendNameV1::Game),
+            Some(bundle_absent_fallback_reason()),
+        ),
+        CompilerBackendWireV2::Standalone => (None, None),
+    };
+    if response.get("compiler").is_some() {
+        response["compiler"]["compiler_backend"] =
+            backend_evidence(requested, result_backend, false, game_attempted, fallback);
+    }
+    response
 }
 
 fn check_revision3_quest_compiler_v1_inner(input: &str) -> Result<Value, Failure> {
@@ -1161,6 +1307,10 @@ mod tests {
         json!({"command": NPC_COMMAND, "payload": payload}).to_string()
     }
 
+    fn npc_wire_v2(payload: Value) -> String {
+        json!({"command": NPC_COMMAND_V2, "payload": payload}).to_string()
+    }
+
     fn valid_npc_shape() -> Value {
         json!({
             "expected_head_json": "{}",
@@ -1221,6 +1371,103 @@ mod tests {
         assert_eq!(
             check_revision3_quest_compiler_v1_raw(&forged_quest)["error"]["code"],
             "AUTHORING_REVISION3_COMPILER_REQUEST_INVALID"
+        );
+    }
+
+    #[test]
+    fn v2_npc_strict_standalone_is_store_bound_and_fails_before_game_ownership() {
+        let project = npc_project(7);
+        let (temp, head_json) = published_store(&project);
+        let game = temp.path().join("missing-game");
+        let payload = json!({
+            "compiler_backend": "standalone",
+            "expected_head_json": head_json,
+            "game_root": game.display().to_string(),
+            "npc_id": EntityId::from_bytes([NPC_BYTE; 16]).to_string(),
+            "root": temp.path().display().to_string(),
+        });
+
+        let response = crate::dispatch(&npc_wire_v2(payload));
+
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["compiler"]["outcome"], "failed");
+        assert_eq!(
+            response["compiler"]["compile_error"]["code"],
+            "AUTHORING_REVISION3_STANDALONE_BUNDLE_ABSENT"
+        );
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["requested_mode"],
+            "standalone"
+        );
+        assert!(response["compiler"]["compiler_backend"]["result_backend"].is_null());
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["standalone_attempted"],
+            false
+        );
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["game_attempted"],
+            false
+        );
+        assert!(response["compiler"]["compiler_backend"]["qualified_package"].is_null());
+        assert_eq!(response["exact_current"], false);
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+    }
+
+    #[test]
+    fn v2_npc_wire_accepts_only_backend_policy_not_package_authority() {
+        let mut payload = valid_npc_shape();
+        payload["compiler_backend"] = json!("standalone");
+        payload["compiler_profile_root"] = json!("C:/caller/profile");
+        let response = check_revision3_npc_compiler_v2_raw(&npc_wire_v2(payload));
+        assert_eq!(
+            response["error"]["code"],
+            "AUTHORING_REVISION3_COMPILER_REQUEST_INVALID"
+        );
+
+        let forged_quest = json!({
+            "command": QUEST_COMMAND_V2,
+            "payload": {
+                "compiler_backend": "standalone",
+                "expected_head_json": "{}",
+                "game_root": "C:/missing-game",
+                "quest_id": EntityId::from_bytes([0x71; 16]),
+                "root": "C:/missing-store",
+                "sidecar_sha256": "forged",
+            }
+        })
+        .to_string();
+        assert_eq!(
+            check_revision3_quest_compiler_v2_raw(&forged_quest)["error"]["code"],
+            "AUTHORING_REVISION3_COMPILER_REQUEST_INVALID"
+        );
+    }
+
+    #[test]
+    fn v2_managed_fallback_evidence_preserves_bundle_absence() {
+        let response = attach_managed_backend_evidence(
+            json!({"ok": true, "compiler": {"outcome": "failed"}}),
+            CompilerBackendWireV2::StandaloneThenGame,
+        );
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["requested_mode"],
+            "standalone_then_game"
+        );
+        assert!(response["compiler"]["compiler_backend"]["result_backend"].is_null());
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["standalone_attempted"],
+            false
+        );
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["game_attempted"],
+            false
+        );
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["fallback_reason"]["failure_kind"],
+            "unavailable"
+        );
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["fallback_reason"]["detail"],
+            BUNDLE_ABSENT_DETAIL
         );
     }
 
@@ -1313,6 +1560,7 @@ mod tests {
         assert_eq!(response["entity"]["kind"], "npc_draft");
         assert_eq!(response["entity"]["revision"], 2);
         assert_eq!(response["module"]["revision"], 3);
+        assert!(response["compiler"].get("compiler_backend").is_none());
         assert_eq!(
             response["module"]["namespace"],
             "GoreMods.Npcs.ManagedCompilerCheck"
