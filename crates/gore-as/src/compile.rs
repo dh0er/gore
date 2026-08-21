@@ -65,8 +65,25 @@ pub struct CompileOpts {
 #[derive(Debug, Clone, Copy)]
 pub struct StandaloneCompilerInputsV1<'a> {
     pub source_tree: &'a Path,
+    /// Exact authored modules which differ from the sealed base cache. The source tree also
+    /// contains decompiled compatibility sources for the game backend; a standalone compiler
+    /// must not mistake those lossy reconstructions for authoritative base-module input.
+    pub overlays: &'a [StandaloneCompilerOverlayV1<'a>],
     pub base_cache: Option<&'a [u8]>,
     pub binds_cache: Option<&'a [u8]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StandaloneCompilerOverlayOperationV1 {
+    Add,
+    Edit,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct StandaloneCompilerOverlayV1<'a> {
+    pub operation: StandaloneCompilerOverlayOperationV1,
+    pub module_name: &'a str,
+    pub relative_path: &'a str,
 }
 
 /// Full regenerated-cache output retained until GORE finishes its downstream validation.
@@ -625,9 +642,25 @@ where
             let retained_output = std::cell::RefCell::new(None);
             let result = compile_module(opts, |_, source_tree| {
                 standalone_runner_called.set(true);
+                let operation = match opts.op.as_str() {
+                    "add" => StandaloneCompilerOverlayOperationV1::Add,
+                    "edit" => StandaloneCompilerOverlayOperationV1::Edit,
+                    _ => {
+                        return Err(format!(
+                            "standalone compiler received unsupported operation {:?}",
+                            opts.op
+                        ));
+                    }
+                };
+                let overlays = [StandaloneCompilerOverlayV1 {
+                    operation,
+                    module_name: &opts.module_name,
+                    relative_path: &opts.rel_path,
+                }];
                 runner
                     .run_regen(StandaloneCompilerInputsV1 {
                         source_tree,
+                        overlays: &overlays,
                         base_cache: opts.base_override.as_deref(),
                         binds_cache: opts.binds_override.as_deref(),
                     })

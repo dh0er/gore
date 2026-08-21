@@ -58,6 +58,39 @@ defaults rather than profile values, numeric scans use the CRT, and the
 UObject-backed `asIScriptObject::GetObjectType()` bridge returns no type. These
 are explicit parity boundaries, not claims about G1R cache equivalence.
 
+## Frontend/module-graph checkpoint
+
+`module_preprocessor.hpp` and `src/module_preprocessor.cpp` implement the
+bounded lexical front of the pinned preprocessor: effective `#if`/`#ifdef`/
+`#ifndef`/`#elif`/`#else` handling, exact whitespace-preserving directive and
+manual-import removal, comment/string-safe top-level module-import discovery,
+explicit-import DFS order and circular-import diagnostics. Automatic-import
+mode preserves the donor's behavior of retaining source/input order without
+publishing or blanking manual imports. Deliberate donor quirks such as
+`ReadIdentifier`, `KillRawLine`, and its `0..1` identifier-start digit range
+are retained rather than normalized.
+
+This API stops before chunk/class/enum/delegate detection, Unreal macro and
+default processing, name/F-string/range-for/literal-asset replacements, code
+hashing, and generated class metadata. Its smoke therefore proves only the
+lexical/import layer, not complete source-to-module parity.
+
+The Rust compiler profile now parses and validates all three frontend payloads
+as typed, independently digest-bound schemas. The preprocessor payload carries
+the final effective flag map and every setting read directly by the pinned
+preprocessor; the class-generator payload carries its direct transient-setting
+input; compiler options carry the five diagnostic switches read directly by
+the modified builder/compiler sources. Bind-only settings remain represented
+by their effective ordered registry trace rather than duplicated as inputs.
+The native settings adapter is not yet populated from these payloads.
+
+Protocol staging also names every authored add/edit overlay explicitly. The
+sealed source tree still contains compatibility decompilations for the game
+backend, but a standalone implementation can no longer confuse those lossy
+base reconstructions with authoritative new source. Base descriptors and
+bytecode come from the decoded sealed cache; only the named overlays are source
+frontend inputs.
+
 ## PrecompiledData codec checkpoint
 
 `gore_as_standalone/precompiled_data.hpp` and `src/precompiled_data.cpp`
@@ -178,7 +211,8 @@ The compile command validates only the safe transport envelope. It does not yet
 claim to parse the sealed request schema: every otherwise acceptable request
 ends with `GORE_AS_STANDALONE_ENGINE_UNAVAILABLE` and exit status 69. The
 capability response exposes the available core independently and leaves full
-compilation unavailable. Existing protocol-v1 fields and meanings are unchanged.
+compilation unavailable. The development Protocol-v1 request now includes an
+ordered add/edit overlay manifest; response fields and meanings are unchanged.
 
 ## Provenance and extraction boundary
 

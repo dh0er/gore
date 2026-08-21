@@ -26,6 +26,8 @@ inline constexpr std::size_t kMaxJsonNestingDepth = 32U;
 inline constexpr std::size_t kMaxSourceFiles = 4'096U;
 inline constexpr std::size_t kMaxSourceFileBytes = 16U * 1024U * 1024U;
 inline constexpr std::size_t kMaxAggregateSourceBytes = 256U * 1024U * 1024U;
+inline constexpr std::size_t kMaxOverlayModules = 1'024U;
+inline constexpr std::size_t kMaxModuleIdentityBytes = 4U * 1024U;
 
 enum class ExitCode : int {
     success = 0,

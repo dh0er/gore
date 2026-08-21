@@ -12,9 +12,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::compile::{
-    StandaloneCompilerInputsV1, StandaloneCompilerOutputV1, StandaloneCompilerRunnerV1,
+    StandaloneCompilerInputsV1, StandaloneCompilerOutputV1, StandaloneCompilerOverlayOperationV1,
+    StandaloneCompilerOverlayV1, StandaloneCompilerRunnerV1,
 };
 use crate::compiler_backend::{CompilerBackendFailureKindV1, CompilerBackendFailureV1};
+use crate::compiler_profile::frontend::{
+    validate_frontend_profile_payloads, MAX_CLASS_GENERATOR_CONFIG_BYTES_V1,
+    MAX_COMPILER_OPTIONS_BYTES_V1, MAX_PREPROCESSOR_CONFIG_BYTES_V1,
+};
 use crate::compiler_profile::manifest::{
     CompilerProfileV1, FileSealV1, SealedBlobV1, Sha256Digest, MAX_COMPILER_PROFILE_JSON_BYTES,
 };
@@ -30,6 +35,8 @@ pub const MAX_SIDECAR_DIAGNOSTIC_MESSAGE_BYTES_V1: usize = 2 * 1024;
 pub const MAX_SIDECAR_SOURCE_FILES_V1: usize = 4_096;
 pub const MAX_SIDECAR_SOURCE_FILE_BYTES_V1: u64 = 16 * 1024 * 1024;
 pub const MAX_SIDECAR_SOURCE_BYTES_V1: u64 = 256 * 1024 * 1024;
+pub const MAX_SIDECAR_OVERLAY_MODULES_V1: usize = 1_024;
+pub const MAX_SIDECAR_MODULE_IDENTITY_BYTES_V1: usize = 4 * 1024;
 const MAX_SIDECAR_BASE_BYTES_V1: u64 = 512 * 1024 * 1024;
 const MAX_SIDECAR_BINDS_BYTES_V1: u64 = 128 * 1024 * 1024;
 const MAX_SIDECAR_OUTPUT_BYTES_V1: u64 = 512 * 1024 * 1024;
@@ -133,7 +140,7 @@ impl StandaloneSidecarRunnerV1 {
         .map_err(|error| unavailable(error.to_string()))?;
         let profile = CompilerProfileV1::from_json(&manifest)
             .map_err(|error| unavailable(format!("compiler profile is not qualified: {error}")))?;
-        validate_registry_profile_at_root(&profile, &config.profile_root)?;
+        validate_typed_profile_payloads_at_root(&profile, &config.profile_root)?;
         Ok(Self { config, profile })
     }
 
@@ -198,6 +205,7 @@ impl StandaloneCompilerRunnerV1 for StandaloneSidecarRunnerV1 {
         let staged_binds = staged_inputs.join("Binds.Cache");
         write_new_readonly(&staged_binds, binds_cache, "staged Binds.Cache")?;
         let source_files = stage_source_tree(inputs.source_tree, &staged_sources)?;
+        let overlays = stage_overlay_manifest(inputs.overlays, &source_files)?;
         let output_path = staged_output.join("PrecompiledScript.Cache");
         if output_path.exists() {
             return Err(internal(
@@ -228,6 +236,7 @@ impl StandaloneCompilerRunnerV1 for StandaloneSidecarRunnerV1 {
                     root: json_path(&staged_sources, "staged source root")?,
                     files: source_files,
                 },
+                overlays,
             },
             output: SidecarOutputRequestV1 {
                 cache_path: json_path(&output_path, "sidecar output")?,
@@ -293,6 +302,23 @@ struct SidecarInputsV1 {
     base_cache: SidecarSealedPathV1,
     binds_cache: SidecarSealedPathV1,
     source_tree: SidecarSourceTreeV1,
+    overlays: Vec<SidecarOverlayModuleV1>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SidecarOverlayModuleV1 {
+    ordinal: u32,
+    operation: SidecarOverlayOperationV1,
+    module_name: String,
+    relative_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SidecarOverlayOperationV1 {
+    Add,
+    Edit,
 }
 
 #[derive(Debug, Serialize)]
@@ -755,7 +781,7 @@ fn stage_profile(
     Ok(path)
 }
 
-fn validate_registry_profile_at_root(
+fn validate_typed_profile_payloads_at_root(
     profile: &CompilerProfileV1,
     profile_root: &Path,
 ) -> Result<(), CompilerBackendFailureV1> {
@@ -779,6 +805,32 @@ fn validate_registry_profile_at_root(
     )?;
     validate_engine_profile_payloads(&profile.engine, &properties, &trace, &snapshot)
         .map_err(|error| unavailable(format!("compiler registry profile is invalid: {error}")))?;
+
+    let preprocessor = read_sealed_profile_blob(
+        profile_root,
+        &profile.frontend.preprocessor_config,
+        MAX_PREPROCESSOR_CONFIG_BYTES_V1 as u64,
+        "preprocessor config",
+    )?;
+    let class_generator = read_sealed_profile_blob(
+        profile_root,
+        &profile.frontend.class_generator_config,
+        MAX_CLASS_GENERATOR_CONFIG_BYTES_V1 as u64,
+        "class generator config",
+    )?;
+    let compiler_options = read_sealed_profile_blob(
+        profile_root,
+        &profile.frontend.compiler_options,
+        MAX_COMPILER_OPTIONS_BYTES_V1 as u64,
+        "compiler options",
+    )?;
+    validate_frontend_profile_payloads(
+        &profile.frontend,
+        &preprocessor,
+        &class_generator,
+        &compiler_options,
+    )
+    .map_err(|error| unavailable(format!("compiler frontend profile is invalid: {error}")))?;
     Ok(())
 }
 
@@ -879,6 +931,75 @@ fn copy_verified_blob(
     set_readonly(destination, true)
         .map_err(|error| internal(format!("sealing profile snapshot: {error}")))?;
     Ok(())
+}
+
+fn stage_overlay_manifest(
+    overlays: &[StandaloneCompilerOverlayV1<'_>],
+    source_files: &[SidecarSourceFileV1],
+) -> Result<Vec<SidecarOverlayModuleV1>, CompilerBackendFailureV1> {
+    if overlays.is_empty() || overlays.len() > MAX_SIDECAR_OVERLAY_MODULES_V1 {
+        return Err(preflight(format!(
+            "standalone overlay count must be between 1 and {}",
+            MAX_SIDECAR_OVERLAY_MODULES_V1
+        )));
+    }
+
+    let available_paths = source_files
+        .iter()
+        .map(|file| file.path.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut module_names = BTreeMap::<String, String>::new();
+    let mut relative_paths = BTreeMap::<String, String>::new();
+    let mut staged = Vec::with_capacity(overlays.len());
+    for (ordinal, overlay) in overlays.iter().enumerate() {
+        if overlay.module_name.is_empty()
+            || overlay.module_name.len() > MAX_SIDECAR_MODULE_IDENTITY_BYTES_V1
+            || overlay.module_name.contains('\0')
+            || overlay.module_name.chars().any(char::is_control)
+        {
+            return Err(preflight(
+                "standalone overlay has an invalid or oversized module name",
+            ));
+        }
+        let relative_path = relative_json_path(Path::new(overlay.relative_path)).map_err(|_| {
+            preflight("standalone overlay has an unsafe or non-Unicode relative path")
+        })?;
+        if relative_path.len() > MAX_SIDECAR_MODULE_IDENTITY_BYTES_V1 {
+            return Err(preflight(
+                "standalone overlay relative path exceeds the identity bound",
+            ));
+        }
+        if !available_paths.contains(relative_path.as_str()) {
+            return Err(preflight(format!(
+                "standalone overlay source {relative_path:?} is absent from the sealed source tree"
+            )));
+        }
+
+        let folded_name = overlay.module_name.to_lowercase();
+        if let Some(previous) = module_names.insert(folded_name, overlay.module_name.to_owned()) {
+            return Err(preflight(format!(
+                "standalone overlays contain colliding module names {previous:?} and {:?}",
+                overlay.module_name
+            )));
+        }
+        let folded_path = relative_path.to_lowercase();
+        if let Some(previous) = relative_paths.insert(folded_path, relative_path.clone()) {
+            return Err(preflight(format!(
+                "standalone overlays contain colliding relative paths {previous:?} and {relative_path:?}"
+            )));
+        }
+
+        staged.push(SidecarOverlayModuleV1 {
+            ordinal: ordinal as u32,
+            operation: match overlay.operation {
+                StandaloneCompilerOverlayOperationV1::Add => SidecarOverlayOperationV1::Add,
+                StandaloneCompilerOverlayOperationV1::Edit => SidecarOverlayOperationV1::Edit,
+            },
+            module_name: overlay.module_name.to_owned(),
+            relative_path,
+        });
+    }
+    Ok(staged)
 }
 
 fn stage_source_tree(
@@ -1361,6 +1482,10 @@ fn unavailable(detail: impl Into<String>) -> CompilerBackendFailureV1 {
     CompilerBackendFailureV1::new(CompilerBackendFailureKindV1::Unavailable, detail)
 }
 
+fn preflight(detail: impl Into<String>) -> CompilerBackendFailureV1 {
+    CompilerBackendFailureV1::new(CompilerBackendFailureKindV1::Preflight, detail)
+}
+
 fn internal(detail: impl Into<String>) -> CompilerBackendFailureV1 {
     CompilerBackendFailureV1::new(CompilerBackendFailureKindV1::Internal, detail)
 }
@@ -1554,6 +1679,12 @@ impl Drop for ProcessTreeGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compiler_profile::frontend::{
+        ClassGeneratorConfigV1, CompilerOptionsV1, EffectivePreprocessorFlagV1,
+        PreprocessorConfigV1, PropertyBlueprintSpecifierV1, PropertyEditSpecifierV1,
+        StaticClassModeV1, CLASS_GENERATOR_CONFIG_SCHEMA, COMPILER_OPTIONS_SCHEMA,
+        FRONTEND_SCHEMA_VERSION, PREPROCESSOR_CONFIG_SCHEMA,
+    };
     use crate::compiler_profile::manifest::{
         BindsProfileV1, BytecodeProfileV1, CacheWriterProfileV1, CompilerArchitectureV1,
         CompilerBuildConfigurationV1, CompilerOracleV1, CompilerPlatformV1, CompilerTargetV1,
@@ -1567,6 +1698,13 @@ mod tests {
         RegistrationEntryV1, RegistrationTraceV1, TypeOperationsV1, ENGINE_PROPERTIES_SCHEMA,
         POST_BIND_SNAPSHOT_SCHEMA, REGISTRATION_TRACE_SCHEMA,
     };
+
+    const TEST_OVERLAYS: [StandaloneCompilerOverlayV1<'static>; 1] =
+        [StandaloneCompilerOverlayV1 {
+            operation: StandaloneCompilerOverlayOperationV1::Add,
+            module_name: "Module",
+            relative_path: "Module.as",
+        }];
 
     struct TestFixture {
         root: PathBuf,
@@ -1747,6 +1885,66 @@ mod tests {
             let properties_blob = registry_blob("engine/properties.json", &properties_json);
             let trace_blob = registry_blob("engine/registrations.json", &trace_json);
             let snapshot_blob = registry_blob("engine/post-bind.json", &snapshot_json);
+            let mut preprocessor = PreprocessorConfigV1 {
+                schema: PREPROCESSOR_CONFIG_SCHEMA.into(),
+                schema_version: FRONTEND_SCHEMA_VERSION,
+                automatic_imports: true,
+                warn_on_manual_import_statements: true,
+                use_editor_scripts: false,
+                effective_flags: [
+                    ("COOK_COMMANDLET", false),
+                    ("EDITOR", false),
+                    ("EDITORONLY_DATA", false),
+                    ("RELEASE", true),
+                    ("TEST", false),
+                    ("WITH_SERVER_CODE", true),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(ordinal, (name, value))| EffectivePreprocessorFlagV1 {
+                    ordinal: ordinal as u32,
+                    name: name.into(),
+                    value,
+                })
+                .collect(),
+                default_function_blueprint_callable: true,
+                default_property_edit_specifier: PropertyEditSpecifierV1::EditAnywhere,
+                default_property_edit_specifier_for_structs:
+                    PropertyEditSpecifierV1::EditAnywhere,
+                default_property_blueprint_specifier:
+                    PropertyBlueprintSpecifierV1::BlueprintReadWrite,
+                static_class_mode: StaticClassModeV1::Allowed,
+                script_float_is_float64: true,
+                canonical_sha256: Sha256Digest::from_bytes([0; 32]),
+            };
+            preprocessor.seal().unwrap();
+            let preprocessor_json = preprocessor.to_json().unwrap();
+            let mut class_generator = ClassGeneratorConfigV1 {
+                schema: CLASS_GENERATOR_CONFIG_SCHEMA.into(),
+                schema_version: FRONTEND_SCHEMA_VERSION,
+                mark_non_uproperty_properties_as_transient: false,
+                canonical_sha256: Sha256Digest::from_bytes([0; 32]),
+            };
+            class_generator.seal().unwrap();
+            let class_generator_json = class_generator.to_json().unwrap();
+            let mut compiler_options = CompilerOptionsV1 {
+                schema: COMPILER_OPTIONS_SCHEMA.into(),
+                schema_version: FRONTEND_SCHEMA_VERSION,
+                error_on_incorrect_editor_only_code: true,
+                warn_on_divergent_comparison_operator_overloads: true,
+                warn_on_implicit_signed_unsigned_conversion: true,
+                warn_on_increment_decrement_in_complex_expression: true,
+                warn_on_unused_return_value_for_const_methods: true,
+                canonical_sha256: Sha256Digest::from_bytes([0; 32]),
+            };
+            compiler_options.seal().unwrap();
+            let compiler_options_json = compiler_options.to_json().unwrap();
+            let preprocessor_blob =
+                registry_blob("frontend/preprocessor.json", &preprocessor_json);
+            let class_generator_blob =
+                registry_blob("frontend/class-generator.json", &class_generator_json);
+            let compiler_options_blob =
+                registry_blob("frontend/compiler-options.json", &compiler_options_json);
             let file = |bytes: &[u8], steam: bool| FileSealV1 {
                 byte_len: bytes.len() as u64,
                 sha256: sha256_bytes(bytes),
@@ -1795,9 +1993,9 @@ mod tests {
                     metadata_schema_version: 1,
                 },
                 frontend: FrontendProfileV1 {
-                    preprocessor_config: blob.clone(),
-                    class_generator_config: blob.clone(),
-                    compiler_options: blob.clone(),
+                    preprocessor_config: preprocessor_blob,
+                    class_generator_config: class_generator_blob,
+                    compiler_options: compiler_options_blob,
                 },
                 bytecode: BytecodeProfileV1 {
                     opcode_table_version: "g1r-v1".to_owned(),
@@ -1860,6 +2058,7 @@ mod tests {
         fn inputs(&self) -> StandaloneCompilerInputsV1<'_> {
             StandaloneCompilerInputsV1 {
                 source_tree: &self.sources,
+                overlays: &TEST_OVERLAYS,
                 base_cache: Some(&self.base),
                 binds_cache: Some(&self.binds),
             }
@@ -1927,6 +2126,7 @@ assert request["profile"]["profile_sha256"]
 assert request["inputs"]["base_cache"]["sha256"]
 assert request["inputs"]["binds_cache"]["sha256"]
 assert request["inputs"]["source_tree"]["files"][0]["path"] == "Module.as"
+assert request["inputs"]["overlays"] == [{"ordinal":0,"operation":"add","module_name":"Module","relative_path":"Module.as"}]
 data = b"fake-full-cache"
 output = pathlib.Path(request["output"]["cache_path"])
 output.write_bytes(data)
@@ -1942,6 +2142,47 @@ print(json.dumps({"response_version":1,"ok":True,"output":{"cache_path":str(outp
         assert_eq!(std::fs::read(output.path()).unwrap(), b"fake-full-cache");
         assert_eq!(std::fs::read_dir(&fixture.scratch).unwrap().count(), 1);
         drop(output);
+        fixture.assert_scratch_empty();
+    }
+
+    #[test]
+    fn overlay_manifest_rejects_missing_or_unsealed_sources_before_process_start() {
+        let fixture = TestFixture::create("overlay-preflight");
+        let Some(mut runner) = fixture.runner(
+            "overlay-preflight",
+            "raise AssertionError('sidecar must not start after overlay preflight failure')\n",
+            Duration::from_secs(5),
+        ) else {
+            eprintln!("python unavailable; overlay preflight test skipped");
+            return;
+        };
+
+        let empty = StandaloneCompilerInputsV1 {
+            source_tree: &fixture.sources,
+            overlays: &[],
+            base_cache: Some(&fixture.base),
+            binds_cache: Some(&fixture.binds),
+        };
+        let error = runner.run_regen(empty).unwrap_err();
+        assert_eq!(error.kind(), CompilerBackendFailureKindV1::Preflight);
+        assert!(error.detail().contains("overlay count"), "{error}");
+        fixture.assert_scratch_empty();
+
+        const MISSING: [StandaloneCompilerOverlayV1<'static>; 1] =
+            [StandaloneCompilerOverlayV1 {
+                operation: StandaloneCompilerOverlayOperationV1::Edit,
+                module_name: "Missing",
+                relative_path: "Missing.as",
+            }];
+        let missing = StandaloneCompilerInputsV1 {
+            source_tree: &fixture.sources,
+            overlays: &MISSING,
+            base_cache: Some(&fixture.base),
+            binds_cache: Some(&fixture.binds),
+        };
+        let error = runner.run_regen(missing).unwrap_err();
+        assert_eq!(error.kind(), CompilerBackendFailureKindV1::Preflight);
+        assert!(error.detail().contains("absent"), "{error}");
         fixture.assert_scratch_empty();
     }
 
