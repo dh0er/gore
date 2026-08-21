@@ -874,13 +874,20 @@ fn emit_function_ctor(
     // `local = int(local == 0);` and the compiler materializes a comparison vanilla never had.
     bool_overrides.extend(not_operand_slots(f));
     bool_overrides.extend(bool_call_result_slots(f, refs));
+    // `NOT` proves the slot is a bool outright, so it outranks the int-family USE hints (a slot
+    // pushed into an int parameter): those describe how a value is passed, not what it is, and
+    // leaving them in charge writes `local = int(local == 0);` for a plain `!`. Contradicting
+    // TYPE evidence (enum, float family, a declared parameter type) still wins — that is slot
+    // reuse, and typing it bool would break the other use.
+    let proven_bool = not_operand_slots(f);
     bool_overrides.retain(|slot| {
+        let proven = proven_bool.contains(slot);
         !enum_overrides.contains_key(slot)
             && !numkinds.contains_key(slot)
             && !float_args.contains_key(slot)
-            && !keep_ints.contains(slot)
-            && !int_refs.contains(slot)
-            && !small_args.contains_key(slot)
+            && (proven || !keep_ints.contains(slot))
+            && (proven || !int_refs.contains(slot))
+            && (proven || !small_args.contains_key(slot))
             && outref_overrides
                 .get(slot)
                 .is_none_or(|other| other == "bool")
