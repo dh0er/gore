@@ -1915,6 +1915,30 @@ mod tests {
                     PropertyBlueprintSpecifierV1::BlueprintReadWrite,
                 static_class_mode: StaticClassModeV1::Allowed,
                 script_float_is_float64: true,
+                angelscript_haze: false,
+                enforce_server_rpc_validation: false,
+                blueprint_event_argument_specializations: vec![
+                    "FName".to_owned(),
+                    "int32".to_owned(),
+                ],
+                native_super_types: vec![
+                    crate::compiler_profile::frontend::NativeSuperTypeV1 {
+                        ordinal: 0,
+                        angelscript_type_name: "AActor".to_owned(),
+                        unreal_class_path: "/Script/Engine.Actor".to_owned(),
+                        property_offset: 0,
+                        kind: crate::compiler_profile::frontend::NativeSuperKindV1::Actor,
+                        cannot_derive_angelscript: false,
+                    },
+                    crate::compiler_profile::frontend::NativeSuperTypeV1 {
+                        ordinal: 1,
+                        angelscript_type_name: "UObject".to_owned(),
+                        unreal_class_path: "/Script/CoreUObject.Object".to_owned(),
+                        property_offset: 0,
+                        kind: crate::compiler_profile::frontend::NativeSuperKindV1::OtherUObject,
+                        cannot_derive_angelscript: false,
+                    },
+                ],
                 canonical_sha256: Sha256Digest::from_bytes([0; 32]),
             };
             preprocessor.seal().unwrap();

@@ -22,6 +22,10 @@ pub const MAX_COMPILER_OPTIONS_BYTES_V1: usize = 64 * 1024;
 
 const MAX_PREPROCESSOR_FLAGS: usize = 4096;
 const MAX_FLAG_BYTES: usize = 4096;
+const MAX_BLUEPRINT_EVENT_ARGUMENT_SPECIALIZATIONS: usize = 4096;
+const MAX_BLUEPRINT_EVENT_ARGUMENT_SPECIALIZATION_BYTES: usize = 4096;
+const MAX_NATIVE_SUPER_TYPES: usize = 1_000_000;
+const MAX_NATIVE_SUPER_TYPE_NAME_BYTES: usize = 4096;
 const PREPROCESSOR_HASH_DOMAIN: &[u8] = b"gore-as-preprocessor-config-v1\0";
 const CLASS_GENERATOR_HASH_DOMAIN: &[u8] = b"gore-as-class-generator-config-v1\0";
 const COMPILER_OPTIONS_HASH_DOMAIN: &[u8] = b"gore-as-compiler-options-v1\0";
@@ -67,6 +71,35 @@ pub enum StaticClassModeV1 {
     Disallowed,
 }
 
+/// Most-specific native UClass category consulted by `AnalyzeClasses` when it
+/// emits class helper functions. Every entry is also proof that the bound
+/// AngelScript type resolves to a UClass rather than a struct/value type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeSuperKindV1 {
+    Actor,
+    ActorComponent,
+    EngineSubsystem,
+    EditorSubsystem,
+    GameInstanceSubsystem,
+    WorldSubsystem,
+    LocalPlayerSubsystem,
+    OtherUObject,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeSuperTypeV1 {
+    pub ordinal: u32,
+    pub angelscript_type_name: String,
+    /// Stable `UClass::GetPathName()` value serialized as `CodeSuperClass`.
+    pub unreal_class_path: String,
+    /// `UClass::GetPropertiesSize()` used as the script shadow-layout offset.
+    pub property_offset: u64,
+    pub kind: NativeSuperKindV1,
+    pub cannot_derive_angelscript: bool,
+}
+
 /// Effective constructor inputs for `FAngelscriptPreprocessor` plus the source-discovery mode.
 ///
 /// `effective_flags` is the final map after built-ins, configured flags, and any donor overrides.
@@ -86,6 +119,17 @@ pub struct PreprocessorConfigV1 {
     pub default_property_blueprint_specifier: PropertyBlueprintSpecifierV1,
     pub static_class_mode: StaticClassModeV1,
     pub script_float_is_float64: bool,
+    /// Effective compile-time value of `WITH_ANGELSCRIPT_HAZE` in the game.
+    pub angelscript_haze: bool,
+    /// Effective compile-time value of `AS_ENFORCE_SERVER_RPC_VALIDATION`.
+    pub enforce_server_rpc_validation: bool,
+    /// Final membership set populated by `Bind_BlueprintEvent`. The
+    /// preprocessor uses it to select typed `__Evt_PushArgument*` wrappers.
+    /// It is canonicalized in strictly sorted, duplicate-free order.
+    pub blueprint_event_argument_specializations: Vec<String>,
+    /// Ordered lookup materialized after binds from `FAngelscriptType::GetClass`
+    /// and native UClass ancestry/metadata.
+    pub native_super_types: Vec<NativeSuperTypeV1>,
     pub canonical_sha256: Sha256Digest,
 }
 
@@ -158,6 +202,59 @@ impl PreprocessorConfigV1 {
             if !names.contains(required) {
                 return Err(FrontendProfileError::MissingBuiltinFlag(required));
             }
+        }
+        validate_sorted_text_set(
+            &self.blueprint_event_argument_specializations,
+            MAX_BLUEPRINT_EVENT_ARGUMENT_SPECIALIZATIONS,
+            MAX_BLUEPRINT_EVENT_ARGUMENT_SPECIALIZATION_BYTES,
+            "blueprint_event_argument_specializations",
+        )?;
+        if self.native_super_types.len() > MAX_NATIVE_SUPER_TYPES {
+            return Err(FrontendProfileError::CountTooLarge {
+                field: "native_super_types",
+                actual: self.native_super_types.len(),
+                max: MAX_NATIVE_SUPER_TYPES,
+            });
+        }
+        let mut previous_native: Option<&str> = None;
+        let mut native_paths = BTreeSet::new();
+        for (index, native) in self.native_super_types.iter().enumerate() {
+            if native.ordinal as usize != index {
+                return Err(FrontendProfileError::Order {
+                    field: "native super type",
+                    expected: index,
+                    actual: native.ordinal,
+                });
+            }
+            validate_profile_text(
+                &native.angelscript_type_name,
+                MAX_NATIVE_SUPER_TYPE_NAME_BYTES,
+                "native_super_types.angelscript_type_name",
+            )?;
+            validate_profile_text(
+                &native.unreal_class_path,
+                MAX_NATIVE_SUPER_TYPE_NAME_BYTES,
+                "native_super_types.unreal_class_path",
+            )?;
+            if native.property_offset > i32::MAX as u64 {
+                return invalid(
+                    "native_super_types.property_offset",
+                    "must fit the fork's signed class-layout offset",
+                );
+            }
+            if !native_paths.insert(native.unreal_class_path.as_str()) {
+                return invalid(
+                    "native_super_types",
+                    "must map each Unreal class path to exactly one bound type",
+                );
+            }
+            if previous_native.is_some_and(|name| name >= native.angelscript_type_name.as_str()) {
+                return invalid(
+                    "native_super_types",
+                    "must be strictly sorted by case-sensitive AngelScript type name",
+                );
+            }
+            previous_native = Some(&native.angelscript_type_name);
         }
         Ok(())
     }
@@ -317,6 +414,57 @@ fn validate_flag_name(value: &str) -> Result<(), FrontendProfileError> {
         return invalid(
             "effective_flags.name",
             "must be nonempty, bounded UTF-8 without control characters",
+        );
+    }
+    Ok(())
+}
+
+fn validate_sorted_text_set(
+    values: &[String],
+    max_count: usize,
+    max_bytes: usize,
+    field: &'static str,
+) -> Result<(), FrontendProfileError> {
+    if values.len() > max_count {
+        return Err(FrontendProfileError::CountTooLarge {
+            field,
+            actual: values.len(),
+            max: max_count,
+        });
+    }
+    let mut previous: Option<&str> = None;
+    for value in values {
+        if value.is_empty()
+            || value.len() > max_bytes
+            || value.contains('\0')
+            || value.chars().any(char::is_control)
+        {
+            return invalid(
+                field,
+                "must contain bounded nonempty text without control characters",
+            );
+        }
+        if previous.is_some_and(|prior| prior >= value.as_str()) {
+            return invalid(field, "must be strictly sorted and duplicate-free");
+        }
+        previous = Some(value);
+    }
+    Ok(())
+}
+
+fn validate_profile_text(
+    value: &str,
+    max_bytes: usize,
+    field: &'static str,
+) -> Result<(), FrontendProfileError> {
+    if value.is_empty()
+        || value.len() > max_bytes
+        || value.contains('\0')
+        || value.chars().any(char::is_control)
+    {
+        return invalid(
+            field,
+            "must be bounded nonempty text without control characters",
         );
     }
     Ok(())
@@ -509,6 +657,27 @@ mod tests {
             default_property_blueprint_specifier: PropertyBlueprintSpecifierV1::BlueprintReadWrite,
             static_class_mode: StaticClassModeV1::Allowed,
             script_float_is_float64: true,
+            angelscript_haze: false,
+            enforce_server_rpc_validation: false,
+            blueprint_event_argument_specializations: vec!["FName".to_owned(), "int32".to_owned()],
+            native_super_types: vec![
+                NativeSuperTypeV1 {
+                    ordinal: 0,
+                    angelscript_type_name: "AActor".to_owned(),
+                    unreal_class_path: "/Script/Engine.Actor".to_owned(),
+                    property_offset: 0,
+                    kind: NativeSuperKindV1::Actor,
+                    cannot_derive_angelscript: false,
+                },
+                NativeSuperTypeV1 {
+                    ordinal: 1,
+                    angelscript_type_name: "UObject".to_owned(),
+                    unreal_class_path: "/Script/CoreUObject.Object".to_owned(),
+                    property_offset: 0,
+                    kind: NativeSuperKindV1::OtherUObject,
+                    cannot_derive_angelscript: false,
+                },
+            ],
             canonical_sha256: zero_digest(),
         };
         value.seal().unwrap();
@@ -600,6 +769,55 @@ mod tests {
             unsorted.seal(),
             Err(FrontendProfileError::InvalidField {
                 field: "effective_flags",
+                ..
+            })
+        ));
+
+        let mut unsorted_specializations = preprocessor();
+        unsorted_specializations
+            .blueprint_event_argument_specializations
+            .swap(0, 1);
+        assert!(matches!(
+            unsorted_specializations.seal(),
+            Err(FrontendProfileError::InvalidField {
+                field: "blueprint_event_argument_specializations",
+                ..
+            })
+        ));
+
+        let mut duplicated_native = preprocessor();
+        duplicated_native.native_super_types[1].angelscript_type_name = duplicated_native
+            .native_super_types[0]
+            .angelscript_type_name
+            .clone();
+        assert!(matches!(
+            duplicated_native.seal(),
+            Err(FrontendProfileError::InvalidField {
+                field: "native_super_types",
+                ..
+            })
+        ));
+
+        let mut duplicated_native_path = preprocessor();
+        duplicated_native_path.native_super_types[1].unreal_class_path =
+            duplicated_native_path.native_super_types[0]
+                .unreal_class_path
+                .clone();
+        assert!(matches!(
+            duplicated_native_path.seal(),
+            Err(FrontendProfileError::InvalidField {
+                field: "native_super_types",
+                ..
+            })
+        ));
+
+        let mut oversized_property_offset = preprocessor();
+        oversized_property_offset.native_super_types[0].property_offset =
+            i32::MAX as u64 + 1;
+        assert!(matches!(
+            oversized_property_offset.seal(),
+            Err(FrontendProfileError::InvalidField {
+                field: "native_super_types.property_offset",
                 ..
             })
         ));

@@ -41,6 +41,7 @@ set(unreangel_core_sources
     vendor/unreangel/source/as_variablescope.cpp
     compat/src/compat_runtime.cpp
     src/core.cpp
+    src/frontend_compile.cpp
     src/module_preprocessor.cpp
     src/precompiled_data.cpp
     src/precompiled_engine.cpp
@@ -79,6 +80,7 @@ target_compile_options(gore-as-unreangel-core PRIVATE
 set_source_files_properties(
     compat/src/compat_runtime.cpp
     src/core.cpp
+    src/frontend_compile.cpp
     src/module_preprocessor.cpp
     src/precompiled_data.cpp
     src/precompiled_engine.cpp
@@ -206,6 +208,18 @@ if(BUILD_TESTING)
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
     )
 
+    add_executable(gore-as-frontend-compile-smoke tests/frontend_compile_smoke.cpp)
+    target_link_libraries(gore-as-frontend-compile-smoke PRIVATE gore-as-unreangel-core)
+    target_compile_options(gore-as-frontend-compile-smoke PRIVATE
+        /W4 /WX /permissive- /utf-8 /sdl /guard:cf /Brepro
+    )
+    target_link_options(gore-as-frontend-compile-smoke PRIVATE
+        /guard:cf /DYNAMICBASE /NXCOMPAT /Brepro
+    )
+    set_property(TARGET gore-as-frontend-compile-smoke PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    )
+
     add_test(
         NAME gore-as-unreangel-core.build-smoke
         COMMAND "$<TARGET_FILE:gore-as-unreangel-core-smoke>"
@@ -229,6 +243,10 @@ if(BUILD_TESTING)
     add_test(
         NAME gore-as-module-preprocessor.lexical-smoke
         COMMAND "$<TARGET_FILE:gore-as-module-preprocessor-smoke>"
+    )
+    add_test(
+        NAME gore-as-frontend-compile.graph-smoke
+        COMMAND "$<TARGET_FILE:gore-as-frontend-compile-smoke>"
     )
     add_test(
         NAME gore-as-standalone-compiler.cli-smoke

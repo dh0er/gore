@@ -13,6 +13,7 @@ enum class graph_build_phase {
     prepare_engine,
     parse_scripts,
     generate_types,
+    post_generate_types,
     generate_functions,
     layout_classes,
     calculate_template_sizes,
@@ -32,12 +33,21 @@ struct graph_build_result {
     [[nodiscard]] bool succeeded() const noexcept { return code >= 0; }
 };
 
+struct graph_build_hooks {
+    void* context = nullptr;
+    int (*after_generate_types)(
+        void* context,
+        asIScriptModule* const* modules,
+        std::size_t module_count) noexcept = nullptr;
+};
+
 // Build one engine-local module graph under a single RequestBuild/BuildCompleted
 // session. Every phase completes for the graph before the next phase begins.
 // Cross-module visibility must already be configured through ImportModule.
 graph_build_result build_module_graph(
     asIScriptModule* const* modules,
-    std::size_t module_count);
+    std::size_t module_count,
+    const graph_build_hooks* hooks = nullptr);
 
 // Compatibility wrapper. It uses the same graph orchestrator with one module.
 int build_module(asIScriptModule& module);

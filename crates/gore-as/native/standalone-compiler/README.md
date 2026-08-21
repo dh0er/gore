@@ -2,9 +2,10 @@
 
 This directory contains the hermetic native process boundary and the pinned,
 modified UNREANGEL AngelScript core used by the future standalone compiler. The
-core is now a Windows-x64/MSVC static library with a real generic compile smoke;
-the sidecar's `compile` operation remains deliberately fail-closed until the
-G1R profile, preprocessing, and cache emitter are integrated.
+core is now a Windows-x64/MSVC static library with a source frontend and a real
+graph compile bridge; the sidecar's `compile` operation remains deliberately
+fail-closed until the captured G1R profile, mixed precompiled/source apply path,
+and cache emitter are integrated.
 
 No target links or loads Unreal Engine or a game DLL. Nothing launches the game,
 and the sidecar does not yet publish compiled output. CMake performs no downloads
@@ -24,12 +25,13 @@ used by the pinned `FAngelscriptManager` initial-build path:
 
 1. parse every module;
 2. generate types for every successful module;
-3. generate functions for every successful module;
-4. lay out classes across the graph, then calculate deferred template sizes;
-5. lay out functions for every successful module;
-6. compile code for every source builder and release each builder;
-7. validate deferred template instances once for the graph;
-8. initialize globals only when the graph has no compile error.
+3. run the optional post-type hook used to classify generated delegate types;
+4. generate functions for every successful module;
+5. lay out classes across the graph, then calculate deferred template sizes;
+6. lay out functions for every successful module;
+7. compile code for every source builder and release each builder;
+8. validate deferred template instances once for the graph;
+9. initialize globals only when the graph has no compile error.
 
 `BuildCompleted` is paired exactly once with a successful `RequestBuild`.
 Failures retain the first phase/module result, release every builder, reset the
@@ -45,12 +47,12 @@ only compile after the graph-wide type barrier. The same test injects a parse
 error and then successfully rebuilds that module, covering builder lifetime and
 engine build-lock release.
 
-This is phase-orchestration parity, not yet a complete G1R module graph. The
-standalone caller still needs authoritative inputs for module discovery,
-declared/automatic import edges, dependency ordering, code-class and delegate
-pre-class metadata, active/precompiled-module selection, and hot-reload
-reference-replacement policy. Those values must come from preprocessing and the
-sealed G1R profile; the native layer does not infer or manufacture them.
+This is phase-orchestration parity, not yet a complete G1R mixed module graph.
+The source bridge now supplies explicit import edges plus code-class and
+delegate pre-class data, but active/precompiled selection, automatic dependency
+closure and reference replacement for edited modules still require the mixed
+apply orchestrator. Those values must come from the decoded cache and sealed
+G1R profile; the native layer does not infer or manufacture them.
 
 The compatibility layer is also not an Unreal implementation. Its containers
 and hashing are sufficient for the generic core checkpoint, settings are safe
@@ -61,28 +63,41 @@ are explicit parity boundaries, not claims about G1R cache equivalence.
 ## Frontend/module-graph checkpoint
 
 `module_preprocessor.hpp` and `src/module_preprocessor.cpp` implement the
-bounded lexical front of the pinned preprocessor: effective `#if`/`#ifdef`/
-`#ifndef`/`#elif`/`#else` handling, exact whitespace-preserving directive and
-manual-import removal, comment/string-safe top-level module-import discovery,
-explicit-import DFS order and circular-import diagnostics. Automatic-import
-mode preserves the donor's behavior of retaining source/input order without
-publishing or blanking manual imports. Deliberate donor quirks such as
-`ReadIdentifier`, `KillRawLine`, and its `0..1` identifier-start digit range
-are retained rather than normalized.
+bounded source front of the pinned preprocessor. It covers effective
+conditionals, exact whitespace-preserving directive/manual-import removal,
+explicit-import DFS order and diagnostics, class/struct/enum/namespace chunks,
+class/default/specifier metadata, UPROPERTY/UFUNCTION, delegate/event wrappers,
+name and format strings, range-for and literal-asset lowering, static classes,
+native superclass analysis and generated Actor/Component/Subsystem helpers.
+Automatic-import mode preserves the donor's source/input behavior. Deliberate
+donor quirks such as `ReadIdentifier`, `KillRawLine`, and its `0..1`
+identifier-start digit range are retained rather than normalized.
 
-This API stops before chunk/class/enum/delegate detection, Unreal macro and
-default processing, name/F-string/range-for/literal-asset replacements, code
-hashing, and generated class metadata. Its smoke therefore proves only the
-lexical/import layer, not complete source-to-module parity.
+The decoded cache contributes authoritative base class ancestry. Add overlays
+must not collide with base modules; edit overlays must name and replace one.
+Native roots are mapped from bound AngelScript names to serialized Unreal class
+paths, property offsets, derivation bans and helper categories. Haze versus
+non-Haze specifiers and mandatory server-RPC validation are explicit sealed
+profile switches rather than build guesses.
+
+`frontend_compile.hpp` materializes successful module descriptors, attaches
+shadow/delegate pre-class data, binds explicit dependencies and invokes the
+graph barriers atomically. Its smoke compiles a consumer against a provider's
+preprocessed USTRUCT and proves a rejected graph leaves no module behind. This
+does not yet cover the donor's external `OnProcessChunks`/ClassAnalyze hooks,
+editor-only builder hook, exact FName Unicode comparison, authoritative source
+encoding/code hashes, or mixed precompiled/source staging for edited modules.
 
 The Rust compiler profile now parses and validates all three frontend payloads
 as typed, independently digest-bound schemas. The preprocessor payload carries
-the final effective flag map and every setting read directly by the pinned
-preprocessor; the class-generator payload carries its direct transient-setting
-input; compiler options carry the five diagnostic switches read directly by
-the modified builder/compiler sources. Bind-only settings remain represented
-by their effective ordered registry trace rather than duplicated as inputs.
-The native settings adapter is not yet populated from these payloads.
+the final effective flag map, direct settings, Haze/RPC build switches,
+blueprint-event argument specializations and the native-superclass projection
+needed by source generation. The class-generator payload carries its direct
+transient-setting input; compiler options carry the five diagnostic switches
+read directly by the modified builder/compiler sources. Bind-only settings
+remain represented by their effective ordered registry trace rather than
+duplicated as inputs. The native JSON settings adapter is not yet populated
+from these payloads.
 
 Protocol staging also names every authored add/edit overlay explicitly. The
 sealed source tree still contains compatibility decompilations for the game
@@ -134,8 +149,12 @@ derived layouts, and proves that an invalid tail mapping rejects atomically.
 Reference-class allocation is not executed in this hermetic smoke because the
 fork delegates those objects to Unreal allocation/runtime semantics.
 
-This remains an engine-apply checkpoint, not full G1R cache parity. Unreal
-shadow layouts and class/property/function metadata, delegate/event tags,
+This remains an engine-apply checkpoint, not full G1R cache parity. The current
+rehydrator applies a complete precompiled graph in one operation and the source
+bridge compiles a separate new graph. Edited modules require a mixed Stage
+1/2/3 orchestrator so unchanged bytecode references resolve directly to the
+replacement types/functions rather than an old module. Unreal shadow layouts
+and class/property/function metadata, delegate/event tags,
 statics and post-init hooks, string-literal globals, an actual captured G1R
 registry, authoritative preprocessing/module discovery and safe sidecar output
 publication remain mandatory and fail closed.
@@ -170,9 +189,10 @@ and preserve the fork's exact validation strings. Array `opCmp` discovery and
 are reproduced as compile-time side effects.
 
 Script delegate and multicast-delegate traits are sealed separately because
-the game distinguishes them through class-generator user-data tags. The
-class-generator/precompiled loader must call `classify_dynamic_script_type`
-when it creates one of those tagged types. An unclassified script value with
+the game distinguishes them through class-generator user-data tags. The source
+graph bridge calls `classify_dynamic_script_type` immediately after the type
+barrier. The precompiled loader must do the same when it creates one of those
+tagged types. An unclassified script value with
 non-null user data is rejected rather than guessed. The registry smoke covers
 all nine adapters, primitive and application values, script structs/enums,
 hash fallback, `opCmp`, cached invalid instances, exact negative diagnostics,

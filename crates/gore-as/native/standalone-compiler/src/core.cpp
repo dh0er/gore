@@ -106,7 +106,8 @@ void record_graph_failure(
 
 graph_build_result build_module_graph(
     asIScriptModule* const* module_interfaces,
-    const std::size_t module_count) {
+    const std::size_t module_count,
+    const graph_build_hooks* const hooks) {
     graph_build_result result{};
     if (module_count == 0U) {
         return result;
@@ -196,6 +197,16 @@ graph_build_result build_module_graph(
         const int phase_result = state.module->builder->BuildGenerateTypes();
         if (phase_result != asSUCCESS) {
             record_failure(result, state, index, graph_build_phase::generate_types, phase_result);
+        }
+    }
+
+    if (result.succeeded() && hooks != nullptr &&
+        hooks->after_generate_types != nullptr) {
+        const int hook_result = hooks->after_generate_types(
+            hooks->context, module_interfaces, module_count);
+        if (hook_result != asSUCCESS) {
+            record_graph_failure(
+                result, graph_build_phase::post_generate_types, hook_result);
         }
     }
 
