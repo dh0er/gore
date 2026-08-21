@@ -4909,7 +4909,8 @@ fn inline_call_argument_temporaries(
                 .map(|(callee, _)| callee)
                 .unwrap_or_else(|| "<receiver>".to_owned());
             for (temp, receiver) in candidates {
-                if inline_temporary_into(&mut lines, index, &temp, &callee, receiver, locals) {
+                if inline_temporary_into(&mut lines, index, &temp, &callee, receiver, locals, refs)
+                {
                     changed = true;
                     moved = true;
                 }
@@ -4942,14 +4943,26 @@ fn inline_temporary_into(
     callee: &str,
     receiver: bool,
     locals: &BTreeMap<i32, String>,
+    refs: &RefResolver,
 ) -> bool {
-    // A value struct reached through a call IS a temporary, and AngelScript refuses a non-const
-    // method on one ("Cannot call non-const method on a temporary object"). Only an object handle
-    // is safe in receiver position. The body has no declarations yet at this point, so the type
-    // comes from the slot table.
-    if receiver && !temporary_type(locals, temp).is_some_and(is_object_handle_type) {
-        inline_reject("receiver", callee);
-        return false;
+    // A value struct reached through a call IS a temporary, and AngelScript refuses a NON-const
+    // method on one ("Cannot call non-const method on a temporary object"). An object handle is
+    // always safe; a value struct only when the cache records a const overload of the method it
+    // runs. The body has no declarations yet at this point, so the type comes from the slot
+    // table.
+    if receiver {
+        let ty = temporary_type(locals, temp);
+        let const_method = || {
+            let (ty, method) = ty.zip(receiver_method(&lines[index], temp))?;
+            Some(refs.has_const_overload(
+                &super::structure::bare_type_name(ty),
+                &method,
+            ))
+        };
+        if !ty.is_some_and(is_object_handle_type) && const_method() != Some(true) {
+            inline_reject("receiver", callee);
+            return false;
+        }
     }
     if count_ident(&lines[index], temp) != 1 {
         inline_reject("uses", callee);
@@ -4998,6 +5011,16 @@ fn inline_temporary_into(
     lines[index] = rename_ident(&lines[index], temp, &value);
     lines[definition].clear();
     true
+}
+
+/// The method a statement's call runs DIRECTLY on `temp`. A chain through a field
+/// (`local_4.Handle.Reset()`) is not it: the call runs on the field, not on the temporary.
+fn receiver_method(line: &str, temp: &str) -> Option<String> {
+    let rest = statement_expression(line)?
+        .strip_prefix(temp)?
+        .strip_prefix('.')?;
+    let name = rest.split('(').next()?;
+    (!name.is_empty() && !name.contains('.')).then(|| name.to_owned())
 }
 
 /// The type the slot table gives `temp`.
