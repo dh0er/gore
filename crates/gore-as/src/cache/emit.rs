@@ -4816,62 +4816,36 @@ fn inline_call_argument_temporaries(body: &str, refs: &RefResolver) -> String {
     for _ in 0..MAX_ARGUMENT_INLINE_PASSES {
         let mut moved = false;
         for index in (0..lines.len()).rev() {
-            let Some((callee, arguments)) = call_arguments(&lines[index]) else {
-                continue;
-            };
-            let rendered = arguments.len();
-            for (position, argument) in arguments.iter().enumerate() {
-                if !is_local_ident(argument) {
-                    continue;
+            // Every temporary this statement can take back: one per call argument, plus the
+            // receiver its own call runs on.
+            let called = call_arguments(&lines[index]);
+            let mut candidates: Vec<(String, bool)> = Vec::new();
+            if let Some((callee, arguments)) = &called {
+                for (position, argument) in arguments.iter().enumerate() {
+                    let Some(temp) = argument_temporary(argument) else {
+                        continue;
+                    };
+                    // A member chain reads the temporary and passes ITS OWN result, so what the
+                    // parameter receives does not change — only a bare temporary has to be
+                    // checked against the parameter.
+                    if *argument == temp
+                        && !refs.arg_position_accepts_temporary(callee, arguments.len(), position)
+                    {
+                        inline_reject("param", callee);
+                        continue;
+                    }
+                    candidates.push((temp, false));
                 }
-                if !refs.arg_position_accepts_temporary(&callee, rendered, position) {
-                    inline_reject("param", &callee);
-                    continue;
+            }
+            candidates.extend(receiver_temporary(&lines[index]).map(|temp| (temp, true)));
+            let callee = called
+                .map(|(callee, _)| callee)
+                .unwrap_or_else(|| "<receiver>".to_owned());
+            for (temp, receiver) in candidates {
+                if inline_temporary_into(&mut lines, index, &temp, &callee, receiver) {
+                    changed = true;
+                    moved = true;
                 }
-                // The compiler re-uses one slot for several temporaries, so the definition that
-                // matters is the LAST one before this call, and it owns the lines up to the next
-                // definition of the same slot.
-                let Some(definition) = (0..index)
-                    .rev()
-                    .find(|line| definition_value(&lines[*line], argument).is_some())
-                else {
-                    inline_reject("definitions", &callee);
-                    continue;
-                };
-                let region_end = (definition + 1..lines.len())
-                    .find(|line| definition_value(&lines[*line], argument).is_some())
-                    .unwrap_or(lines.len());
-                let uses_in_region: Vec<usize> = (definition + 1..region_end)
-                    .filter(|line| count_ident(&lines[*line], argument) > 0)
-                    .collect();
-                if uses_in_region != [index] {
-                    inline_reject("uses", &callee);
-                    continue; // this call has to be the only reader of that definition
-                }
-                let value = definition_value(&lines[definition], argument)
-                    .expect("the definition matched above")
-                    .to_owned();
-                if !value.ends_with(')') || !value.contains('(') {
-                    inline_reject("not-a-call", &callee);
-                    continue; // only a call's result is worth moving
-                }
-                // Everything between has to feed THIS call as well, or the order of a side effect
-                // would change. "Feeds this call" is checked against the line as it stands, so a
-                // temporary that an already-inlined argument still refers to counts.
-                let between_feeds_this_call = (definition + 1..index).all(|line| {
-                    // A line already consumed by an earlier inlining is gone, not in the way.
-                    lines[line].is_empty()
-                        || defined_temporary(&lines[line])
-                            .is_some_and(|temp| count_ident(&lines[index], &temp) > 0)
-                });
-                if !between_feeds_this_call {
-                    inline_reject("between", &callee);
-                    continue;
-                }
-                lines[index] = rename_ident(&lines[index], argument, &value);
-                lines[definition].clear();
-                changed = true;
-                moved = true;
             }
         }
         if !moved {
@@ -4890,6 +4864,131 @@ fn inline_call_argument_temporaries(body: &str, refs: &RefResolver) -> String {
         joined.push('\n');
     }
     joined
+}
+
+/// Move the producer of `temp` into the statement at `index`, when that statement is the only
+/// reader of that value and nothing in between would have its order changed.
+fn inline_temporary_into(
+    lines: &mut [String],
+    index: usize,
+    temp: &str,
+    callee: &str,
+    receiver: bool,
+) -> bool {
+    // A value struct reached through a call IS a temporary, and AngelScript refuses a non-const
+    // method on one ("Cannot call non-const method on a temporary object"). Only an object handle
+    // is safe in receiver position.
+    if receiver && !declared_type(lines, temp).is_some_and(|ty| is_object_handle_type(&ty)) {
+        inline_reject("receiver", callee);
+        return false;
+    }
+    if count_ident(&lines[index], temp) != 1 {
+        inline_reject("uses", callee);
+        return false; // inlining a value read twice would evaluate it twice
+    }
+    // The compiler re-uses one slot for several temporaries, so the definition that matters is
+    // the LAST one before this call, and it owns the lines up to the next definition of the
+    // same slot.
+    let Some(definition) = (0..index)
+        .rev()
+        .find(|line| definition_value(&lines[*line], temp).is_some())
+    else {
+        inline_reject("definitions", callee);
+        return false;
+    };
+    let region_end = (definition + 1..lines.len())
+        .find(|line| definition_value(&lines[*line], temp).is_some())
+        .unwrap_or(lines.len());
+    let uses_in_region: Vec<usize> = (definition + 1..region_end)
+        .filter(|line| count_ident(&lines[*line], temp) > 0)
+        .collect();
+    if uses_in_region != [index] {
+        inline_reject("uses", callee);
+        return false; // this call has to be the only reader of that definition
+    }
+    let value = definition_value(&lines[definition], temp)
+        .expect("the definition matched above")
+        .to_owned();
+    if !is_call_result(&value) {
+        inline_reject("not-a-call", callee);
+        return false; // only a call's result is worth moving
+    }
+    // Everything between has to feed THIS call as well, or the order of a side effect would
+    // change. "Feeds this call" is checked against the line as it stands, so a temporary that an
+    // already-inlined argument still refers to counts.
+    let between_feeds_this_call = (definition + 1..index).all(|line| {
+        // A line already consumed by an earlier inlining is gone, not in the way.
+        lines[line].is_empty()
+            || defined_temporary(&lines[line])
+                .is_some_and(|feeder| count_ident(&lines[index], &feeder) > 0)
+    });
+    if !between_feeds_this_call {
+        inline_reject("between", callee);
+        return false;
+    }
+    lines[index] = rename_ident(&lines[index], temp, &value);
+    lines[definition].clear();
+    true
+}
+
+/// The type a body declares `temp` with, if it declares it at all.
+fn declared_type(lines: &[String], temp: &str) -> Option<String> {
+    lines.iter().find_map(|line| {
+        let trimmed = line.trim();
+        let head = trimmed
+            .strip_suffix(';')
+            .unwrap_or(trimmed)
+            .split(" = ")
+            .next()?;
+        let mut words = head.split_whitespace();
+        (words.next_back()? == temp).then(|| words.next_back().map(str::to_owned))?
+    })
+}
+
+/// A UObject/AActor handle by UE’s own naming rule.
+fn is_object_handle_type(ty: &str) -> bool {
+    let bare = super::structure::bare_type_name(ty.trim_start_matches("const "));
+    let bytes = bare.as_bytes();
+    bytes.len() >= 2 && matches!(bytes[0], b'A' | b'U') && bytes[1].is_ascii_uppercase()
+}
+
+/// The value is a CALL’s result. A parenthesized expression ends in `)` as well and has no call
+/// to move, and moving it into a receiver position makes a temporary out of it.
+fn is_call_result(value: &str) -> bool {
+    let Some(inner) = value.strip_suffix(')') else {
+        return false;
+    };
+    let mut depth = 1usize;
+    for (at, c) in inner.char_indices().rev() {
+        match c {
+            ')' => depth += 1,
+            '(' => {
+                depth -= 1;
+                if depth == 0 {
+                    return inner[..at]
+                        .chars()
+                        .next_back()
+                        .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '>');
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// The temporary a statement’s own call runs on. `local_4.GetDistanceTo(x)` reads `local_4` AFTER
+/// the argument — which is where vanilla evaluates it; a producer line above the call evaluates
+/// it before instead, and that reordering is the whole difference.
+fn receiver_temporary(line: &str) -> Option<String> {
+    let statement = line.trim().strip_suffix(';')?;
+    let expression = match statement.split_once(" = ") {
+        Some((_, rhs)) => rhs,
+        None => statement,
+    };
+    let (head, rest) = expression.split_once('.')?;
+    (is_local_ident(head) && rest.contains('(') && count_ident(rest, head) == 0)
+        .then(|| head.to_owned())
 }
 
 /// The value a statement gives `ident`, whether it declares it at the same time or not.
@@ -4911,6 +5010,18 @@ fn defined_temporary(line: &str) -> Option<String> {
     let (head, _) = trimmed.split_once(" = ")?;
     let name = head.split_whitespace().last()?;
     is_local_ident(name).then(|| name.to_owned())
+}
+
+/// The temporary an argument is built from: the argument itself, or the receiver a member chain
+/// starts at. `Say(local_6.GetAI(), …)` reads `local_6` exactly where the bare form would, so the
+/// producer moves back into the call the same way — and that is the difference between evaluating
+/// the receiver before the other arguments and evaluating it where vanilla does.
+fn argument_temporary(argument: &str) -> Option<String> {
+    if is_local_ident(argument) {
+        return Some(argument.to_owned());
+    }
+    let (head, rest) = argument.split_once('.')?;
+    (is_local_ident(head) && count_ident(rest, head) == 0).then(|| head.to_owned())
 }
 
 /// `local_12` and nothing else.
@@ -5530,6 +5641,18 @@ fn element_is_written_through(
             let target = rest.split(" = ").next().unwrap_or(rest);
             if rest.len() > target.len() && !target.contains('(') {
                 return true; // `local_E… = …;`
+            }
+        }
+        // Handing the element to a parameter a TEMPORARY could not bind to means the parameter
+        // is a reference and the callee can write through it — and a range-for element is
+        // read-only ("No matching signatures", measured).
+        if let Some((callee, arguments)) = call_arguments(line) {
+            let rendered = arguments.len();
+            if arguments.iter().enumerate().any(|(position, argument)| {
+                argument == ident
+                    && refs.arg_position_is_written_through(&callee, rendered, position)
+            }) {
+                return true;
             }
         }
         for at in super::structure::word_positions(line, ident) {

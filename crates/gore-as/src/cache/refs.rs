@@ -1145,6 +1145,27 @@ impl RefResolver {
             && reachable.all(|(_, accepts)| accepts.get(position).copied().unwrap_or(false))
     }
 
+    /// True when every declaration of `name` a call with `rendered` arguments could reach takes
+    /// parameter `position` by NON-CONST reference, so the callee writes through it. This is not
+    /// the negation of [`Self::arg_position_accepts_temporary`]: a name the cache does not know
+    /// proves nothing either way, and both answers stay `false` for it.
+    pub fn arg_position_is_written_through(
+        &self,
+        name: &str,
+        rendered: usize,
+        position: usize,
+    ) -> bool {
+        let Some(by_arity) = self.temporary_arg_positions.get(name) else {
+            return false;
+        };
+        let mut reachable = by_arity
+            .iter()
+            .filter(|(arity, _)| **arity >= rendered)
+            .peekable();
+        reachable.peek().is_some()
+            && reachable.all(|(_, accepts)| accepts.get(position).copied() == Some(false))
+    }
+
     /// True when every one-parameter `name` in the cache that takes `ty` takes it by value or by
     /// const reference — so a TEMPORARY may be written at that call site.
     pub fn one_arg_call_accepts_temporary(&self, name: &str, ty: &str) -> bool {
