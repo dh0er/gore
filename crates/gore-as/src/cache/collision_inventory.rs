@@ -486,6 +486,7 @@ mod tests {
                 namespace: String::new(),
                 ty: DataType::default(),
                 value: None,
+                init: None,
             }],
         }
     }
