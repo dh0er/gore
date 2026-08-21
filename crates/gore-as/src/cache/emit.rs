@@ -1209,6 +1209,7 @@ fn emit_function_ctor(
     let (body, _) = rewrite_value_temporaries(&body, &inferred_locals);
     let body = drop_dead_stores(&body);
     let body = fold_literal_temporaries(&body, refs);
+    let body = fold_constant_comparisons(&body);
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
@@ -4716,10 +4717,18 @@ fn fold_literal_temporaries(body: &str, refs: &RefResolver) -> String {
     joined
 }
 
-/// True when the ident's only appearance is as the whole argument of a TYPE conversion —
-/// `ERelationship(local_5)`. Anything else may be a by-reference parameter, where a literal is
-/// "Not a valid reference", and the parameter types are not visible in the rendered text.
+/// True when the ident's only appearance is somewhere a literal is certainly legal: the whole
+/// argument of a TYPE conversion (`ERelationship(local_5)`), or an operand of a comparison
+/// against a literal (`(local_5 != 0)`). Anything else may be a by-reference parameter, where a
+/// literal is "Not a valid reference", and parameter types are not visible in the rendered text.
 fn sole_use_is_a_conversion(line: &str, ident: &str, refs: &RefResolver) -> bool {
+    for operator in [" != ", " == ", " < ", " > ", " <= ", " >= "] {
+        for pattern in [format!("({ident}{operator}"), format!("{operator}{ident})")] {
+            if line.contains(&pattern) {
+                return true;
+            }
+        }
+    }
     let marker = format!("({ident})");
     let Some(at) = line.find(&marker) else {
         return false;
@@ -4736,6 +4745,29 @@ fn sole_use_is_a_conversion(line: &str, ident: &str, refs: &RefResolver) -> bool
         .collect();
     let head = head.trim_start_matches(':');
     !head.is_empty() && (is_primitive(head) || is_enum(head) || refs.is_type_name(head))
+}
+
+/// `(0 != 0)` is how a folded bool constant reads; the source said `false`. The compiler folds
+/// both to the same constant, but only the literal keeps the one-byte store vanilla emitted
+/// instead of a compare and a test.
+fn fold_constant_comparisons(body: &str) -> String {
+    const COMPARISONS: [(&str, &str); 4] = [
+        ("(0 != 0)", "false"),
+        ("(1 != 0)", "true"),
+        ("(0 == 0)", "true"),
+        ("(1 == 0)", "false"),
+    ];
+    if !COMPARISONS
+        .iter()
+        .any(|(pattern, _)| body.contains(pattern))
+    {
+        return body.to_owned();
+    }
+    let mut out = body.to_owned();
+    for (pattern, literal) in COMPARISONS {
+        out = out.replace(pattern, literal);
+    }
+    out
 }
 
 /// A plain numeric or boolean literal — nothing that could carry a side effect.
