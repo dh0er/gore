@@ -7,4 +7,5 @@
 pub mod binds;
 pub mod frontend;
 pub mod manifest;
+pub mod qualification;
 pub mod registry;
