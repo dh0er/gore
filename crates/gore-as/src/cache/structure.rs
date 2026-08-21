@@ -3925,7 +3925,19 @@ fn block_stmts_in(
                                     }
                                 }
                             }
-                            let rhs_ok = !rhs.is_psf
+                            // A PSF source is normally an unrecovered temporary, which is why it
+                            // was rejected. When this block has already WRITTEN that slot, it is
+                            // a plain local carrying a real value, and dropping the store loses
+                            // it: `FontHoldToSkip = local_12;` vanished from a constructor and
+                            // left the member default-constructed and empty.
+                            let psf_written_here = rhs.is_psf
+                                && out.iter().any(|statement| {
+                                    statement
+                                        .trim_start()
+                                        .strip_prefix(rhs.s.as_str())
+                                        .is_some_and(|rest| rest.starts_with(" = "))
+                                });
+                            let rhs_ok = (!rhs.is_psf || psf_written_here)
                                 && !rhs.s.is_empty()
                                 && rhs.s != UNRESOLVED
                                 && !rhs.s.starts_with('$')
