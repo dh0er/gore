@@ -1508,7 +1508,7 @@ impl ScratchDirectory {
         let path = self.path.clone();
         let root = self.root.clone();
         StandaloneCompilerOutputV1::with_cleanup(output_path, move || {
-            cleanup_scratch_directory(&root, &path);
+            cleanup_scratch_directory(&root, &path)
         })
     }
 }
@@ -1516,22 +1516,23 @@ impl ScratchDirectory {
 impl Drop for ScratchDirectory {
     fn drop(&mut self) {
         if self.armed {
-            cleanup_scratch_directory(&self.root, &self.path);
+            let _ = cleanup_scratch_directory(&self.root, &self.path);
         }
     }
 }
 
-fn cleanup_scratch_directory(root: &Path, path: &Path) {
+fn cleanup_scratch_directory(root: &Path, path: &Path) -> Result<(), String> {
     if path.parent() != Some(root)
         || !path
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.starts_with(SCRATCH_PREFIX))
     {
-        return;
+        return Err("refusing to clean a scratch path outside the configured root".to_owned());
     }
     make_tree_writable(path);
-    let _ = std::fs::remove_dir_all(path);
+    std::fs::remove_dir_all(path)
+        .map_err(|error| format!("removing standalone compiler scratch directory: {error}"))
 }
 
 fn make_tree_writable(path: &Path) {

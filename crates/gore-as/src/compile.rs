@@ -89,7 +89,7 @@ pub struct StandaloneCompilerOverlayV1<'a> {
 /// Full regenerated-cache output retained until GORE finishes its downstream validation.
 pub struct StandaloneCompilerOutputV1 {
     path: PathBuf,
-    cleanup: Option<Box<dyn FnOnce() + Send>>,
+    cleanup: Option<Box<dyn FnOnce() -> Result<(), String> + Send>>,
 }
 
 impl std::fmt::Debug for StandaloneCompilerOutputV1 {
@@ -115,10 +115,21 @@ impl StandaloneCompilerOutputV1 {
         &self.path
     }
 
-    pub(crate) fn with_cleanup(path: PathBuf, cleanup: impl FnOnce() + Send + 'static) -> Self {
+    pub(crate) fn with_cleanup(
+        path: PathBuf,
+        cleanup: impl FnOnce() -> Result<(), String> + Send + 'static,
+    ) -> Self {
         Self {
             path,
             cleanup: Some(Box::new(cleanup)),
+        }
+    }
+
+    /// Explicitly dispose the private output and report whether its scratch lifecycle closed.
+    pub fn discard(mut self) -> Result<(), String> {
+        match self.cleanup.take() {
+            Some(cleanup) => cleanup(),
+            None => Err("standalone compiler output has no owned cleanup capability".to_owned()),
         }
     }
 }
@@ -126,7 +137,7 @@ impl StandaloneCompilerOutputV1 {
 impl Drop for StandaloneCompilerOutputV1 {
     fn drop(&mut self) {
         if let Some(cleanup) = self.cleanup.take() {
-            cleanup();
+            let _ = cleanup();
         }
     }
 }
@@ -462,6 +473,10 @@ pub struct ProjectCompilerCheckReport {
     output_disposition: ProjectCompilerOutputDisposition,
     closing_audit: ProjectCompilerClosingAuditDisposition,
     runner_invocations: u8,
+    backend: Option<CompilerBackendNameV1>,
+    fallback_reason: Option<CompilerBackendFallbackReasonV1>,
+    standalone_attempted: bool,
+    game_attempted: bool,
 }
 
 impl ProjectCompilerCheckReport {
@@ -490,10 +505,26 @@ impl ProjectCompilerCheckReport {
         ) || self.output_disposition == ProjectCompilerOutputDisposition::RecoveryRetained
     }
 
-    /// Number of calls into the injected/production regen runner. This is zero for all source,
-    /// cache, layout, and tree preflight failures and exactly one after the shared tree is ready.
+    /// Number of backend runner calls. This is zero for shared preflight failures, one for strict
+    /// or first-attempt success, and two only for an explicit standalone-to-game fallback.
     pub fn runner_invocations(&self) -> u8 {
         self.runner_invocations
+    }
+
+    pub fn backend_name(&self) -> Option<CompilerBackendNameV1> {
+        self.backend
+    }
+
+    pub fn fallback_reason(&self) -> Option<&CompilerBackendFallbackReasonV1> {
+        self.fallback_reason.as_ref()
+    }
+
+    pub fn standalone_attempted(&self) -> bool {
+        self.standalone_attempted
+    }
+
+    pub fn game_attempted(&self) -> bool {
+        self.game_attempted
     }
 
     pub fn into_parts(
@@ -890,6 +921,251 @@ where
     )
 }
 
+/// Check one complete project source graph through the explicit backend policy.
+///
+/// The shared tree is prepared exactly once. A standalone result is fully validated before the
+/// policy may accept it or start the explicitly requested game fallback. Both attempts consume the
+/// same sealed base/Binds snapshots and the same dependency-ready source tree.
+pub fn check_project_modules_with_backend_v1_with_guard<A>(
+    opts: &ProjectCompilerCheckOpts,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    mode: CompilerBackendModeV1,
+    standalone: Option<&mut dyn StandaloneCompilerRunnerV1>,
+    guard: InstallMutationGuard,
+    closing_audit: A,
+) -> ProjectCompilerCheckReport
+where
+    A: FnOnce() -> Result<(), String>,
+{
+    check_project_modules_with_backend_v1_with_guard_and_runner(
+        opts,
+        diagnostics,
+        mode,
+        standalone,
+        guard,
+        closing_audit,
+        |game_dir, source_tree, diagnostics, guard, closing_audit| {
+            run_project_compiler_with_guard(
+                game_dir,
+                source_tree,
+                diagnostics,
+                guard,
+                closing_audit,
+            )
+        },
+    )
+}
+
+fn check_project_modules_with_backend_v1_with_guard_and_runner<R, A>(
+    opts: &ProjectCompilerCheckOpts,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    mode: CompilerBackendModeV1,
+    mut standalone: Option<&mut dyn StandaloneCompilerRunnerV1>,
+    guard: InstallMutationGuard,
+    closing_audit: A,
+    run_game: R,
+) -> ProjectCompilerCheckReport
+where
+    R: FnOnce(
+        &Path,
+        &Path,
+        &crate::diagnostics::DiagnosticsOptions,
+        InstallMutationGuard,
+        A,
+    ) -> ProjectCompilerRunnerReport,
+    A: FnOnce() -> Result<(), String>,
+{
+    let guard = std::cell::RefCell::new(Some(guard));
+    let closing_audit = std::cell::RefCell::new(Some(closing_audit));
+    let run_game = std::cell::RefCell::new(Some(run_game));
+    let diagnostics_report = std::cell::RefCell::new(None);
+    let install_restore = std::cell::Cell::new(InstallRestoreDisposition::NotStarted);
+    let output_disposition = std::cell::Cell::new(ProjectCompilerOutputDisposition::NotCreated);
+    let closing_disposition = std::cell::Cell::new(ProjectCompilerClosingAuditDisposition::NotRun);
+    let standalone_calls = std::cell::Cell::new(0u8);
+    let game_calls = std::cell::Cell::new(0u8);
+    let selected_backend = std::cell::Cell::new(None);
+    let fallback_reason = std::cell::RefCell::new(None);
+
+    let mut result = check_project_modules(opts, |game_dir, source_tree| {
+        let mut standalone_attempt = standalone.as_deref_mut().map(|runner| {
+            || {
+                standalone_calls.set(standalone_calls.get().saturating_add(1));
+                let overlays = opts
+                    .overlays
+                    .iter()
+                    .map(|overlay| StandaloneCompilerOverlayV1 {
+                        operation: StandaloneCompilerOverlayOperationV1::Add,
+                        module_name: &overlay.module_name,
+                        relative_path: &overlay.rel_path,
+                    })
+                    .collect::<Vec<_>>();
+                let output = runner.run_regen(StandaloneCompilerInputsV1 {
+                    source_tree,
+                    overlays: &overlays,
+                    base_cache: Some(&opts.base_cache),
+                    binds_cache: Some(&opts.binds_cache),
+                })?;
+                let bytes = read_regular_file_bounded_no_follow(
+                    output.path(),
+                    MAX_PROJECT_COMPILER_CHECK_REGEN_BYTES,
+                    "standalone project compiler output",
+                );
+                if let Err(error) = output.discard() {
+                    output_disposition.set(ProjectCompilerOutputDisposition::RecoveryRetained);
+                    return Err(CompilerBackendFailureV1::new(
+                        CompilerBackendFailureKindV1::RecoveryRequired,
+                        format!("standalone project output disposal failed: {error}"),
+                    ));
+                }
+                output_disposition.set(ProjectCompilerOutputDisposition::Discarded);
+                let bytes = bytes.map_err(|error| {
+                    CompilerBackendFailureV1::new(
+                        CompilerBackendFailureKindV1::InvalidOutput,
+                        error,
+                    )
+                })?;
+                validate_generated_cache(&bytes).map_err(|error| {
+                    CompilerBackendFailureV1::new(
+                        CompilerBackendFailureKindV1::InvalidOutput,
+                        error,
+                    )
+                })?;
+                validate_project_regen_manifest_for_opts(opts, &bytes).map_err(|error| {
+                    CompilerBackendFailureV1::new(
+                        CompilerBackendFailureKindV1::InvalidOutput,
+                        error,
+                    )
+                })?;
+                Ok(bytes)
+            }
+        });
+        let mut game_attempt = || {
+            game_calls.set(game_calls.get().saturating_add(1));
+            let guard = guard.borrow_mut().take().ok_or_else(|| {
+                CompilerBackendFailureV1::new(
+                    CompilerBackendFailureKindV1::Internal,
+                    "pre-held project compiler guard was consumed more than once",
+                )
+            })?;
+            let audit = closing_audit.borrow_mut().take().ok_or_else(|| {
+                CompilerBackendFailureV1::new(
+                    CompilerBackendFailureKindV1::Internal,
+                    "project closing-audit capability was consumed more than once",
+                )
+            })?;
+            let runner = run_game.borrow_mut().take().ok_or_else(|| {
+                CompilerBackendFailureV1::new(
+                    CompilerBackendFailureKindV1::Internal,
+                    "project game compiler runner was consumed more than once",
+                )
+            })?;
+            let report = runner(game_dir, source_tree, diagnostics, guard, audit);
+            let unsafe_recovery = matches!(
+                report.install_restore,
+                InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed
+                    | InstallRestoreDisposition::RecoveryRequiredRestoreFailed
+            ) || report.output_disposition
+                == ProjectCompilerOutputDisposition::RecoveryRetained;
+            let rejected = report.diagnostics.as_ref().is_some_and(|diagnostics| {
+                diagnostics.diagnostics().iter().any(|diagnostic| {
+                    diagnostic.severity == crate::diagnostics::DiagnosticSeverity::Error
+                })
+            });
+            *diagnostics_report.borrow_mut() = report.diagnostics;
+            install_restore.set(report.install_restore);
+            output_disposition.set(report.output_disposition);
+            closing_disposition.set(report.closing_audit);
+            report.result.map_err(|error| {
+                CompilerBackendFailureV1::new(
+                    if unsafe_recovery {
+                        CompilerBackendFailureKindV1::RecoveryRequired
+                    } else if rejected {
+                        CompilerBackendFailureKindV1::Rejected
+                    } else {
+                        CompilerBackendFailureKindV1::InvalidOutput
+                    },
+                    error,
+                )
+            })
+        };
+        let selected = run_compiler_backend_v1(
+            mode,
+            standalone_attempt
+                .as_mut()
+                .map(|runner| runner as &mut dyn CompilerBackendRunnerV1<_>),
+            &mut game_attempt,
+        );
+        drop(standalone_attempt);
+        let (selected_result, backend, fallback) = selected.into_parts();
+        let terminal_preflight = selected_result
+            .as_ref()
+            .err()
+            .is_some_and(|failure| failure.kind() == CompilerBackendFailureKindV1::Preflight);
+        selected_backend.set((!terminal_preflight).then_some(backend));
+        *fallback_reason.borrow_mut() = fallback;
+        selected_result.map_err(|failure| failure.to_string())
+    });
+
+    let mut install_restore_value = install_restore.get();
+    let mut output_disposition_value = output_disposition.get();
+    let mut closing_disposition_value = closing_disposition.get();
+    if let Some(mut unused_guard) = guard.into_inner() {
+        if let Some(audit) = closing_audit.into_inner() {
+            match audit() {
+                Ok(()) => {
+                    closing_disposition_value = ProjectCompilerClosingAuditDisposition::Passed
+                }
+                Err(error) => {
+                    closing_disposition_value = ProjectCompilerClosingAuditDisposition::Failed;
+                    let primary = result
+                        .err()
+                        .map(|error| error.to_string())
+                        .unwrap_or_else(|| "project compiler backend succeeded".to_owned());
+                    result = Err(CompileError::Other(format!(
+                        "{primary}; closing project audit failed while the install guard was held: {error}"
+                    )));
+                }
+            }
+        }
+        if let Err(error) = unused_guard.release() {
+            unused_guard.preserve_for_manual_recovery();
+            let primary = result
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "project compiler backend succeeded".to_owned());
+            result = Err(CompileError::Other(format!(
+                "{primary}; additionally failed to release the pre-held project compiler guard: {error}"
+            )));
+            install_restore_value = InstallRestoreDisposition::RecoveryRequiredRestoreFailed;
+            output_disposition_value = ProjectCompilerOutputDisposition::RecoveryRetained;
+        }
+    }
+    if matches!(
+        install_restore_value,
+        InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed
+            | InstallRestoreDisposition::RecoveryRequiredRestoreFailed
+    ) {
+        output_disposition_value = ProjectCompilerOutputDisposition::RecoveryRetained;
+    }
+
+    ProjectCompilerCheckReport {
+        outcome: match result {
+            Ok(()) => ProjectCompilerCheckOutcome::Checked,
+            Err(error) => ProjectCompilerCheckOutcome::Failed(error),
+        },
+        diagnostics: diagnostics_report.into_inner(),
+        install_restore: install_restore_value,
+        output_disposition: output_disposition_value,
+        closing_audit: closing_disposition_value,
+        runner_invocations: standalone_calls.get().saturating_add(game_calls.get()),
+        backend: selected_backend.get(),
+        fallback_reason: fallback_reason.into_inner(),
+        standalone_attempted: standalone_calls.get() != 0,
+        game_attempted: game_calls.get() != 0,
+    }
+}
+
 fn check_project_modules_with_guard_and_runner<R, A>(
     opts: &ProjectCompilerCheckOpts,
     guard: InstallMutationGuard,
@@ -1020,6 +1296,10 @@ where
         output_disposition,
         closing_audit: closing_audit_disposition,
         runner_invocations: runner_invocations.get(),
+        backend: (runner_invocations.get() != 0).then_some(CompilerBackendNameV1::Game),
+        fallback_reason: None,
+        standalone_attempted: false,
+        game_attempted: runner_invocations.get() != 0,
     }
 }
 
@@ -1187,6 +1467,37 @@ fn validate_project_regen_manifest(
     overlays: &[emit_all::PreparedCompileAddOverlay],
     regen: &[u8],
 ) -> Result<(), String> {
+    validate_project_regen_manifest_entries(
+        base,
+        overlays
+            .iter()
+            .map(|module| (module.module_name.as_str(), module.relative_path.as_str())),
+        regen,
+    )
+}
+
+fn validate_project_regen_manifest_for_opts(
+    opts: &ProjectCompilerCheckOpts,
+    regen: &[u8],
+) -> Result<(), String> {
+    let base_modules = model::parse_modules(&opts.base_cache)
+        .map_err(|error| format!("parsing sealed base module manifest: {error}"))?;
+    let base = emit_all::validated_module_identities(&base_modules)
+        .map_err(|error| format!("validating sealed base module manifest: {error}"))?;
+    validate_project_regen_manifest_entries(
+        &base,
+        opts.overlays
+            .iter()
+            .map(|module| (module.module_name.as_str(), module.rel_path.as_str())),
+        regen,
+    )
+}
+
+fn validate_project_regen_manifest_entries<'a>(
+    base: &[emit_all::ValidatedModuleIdentity],
+    overlays: impl IntoIterator<Item = (&'a str, &'a str)>,
+    regen: &[u8],
+) -> Result<(), String> {
     use std::collections::BTreeMap;
 
     let regen_modules = model::parse_modules(regen)
@@ -1207,11 +1518,8 @@ fn validate_project_regen_manifest(
             (&module.module_name, &module.relative_path),
         );
     }
-    for module in overlays {
-        expected.insert(
-            fold(&module.module_name),
-            (&module.module_name, &module.relative_path),
-        );
+    for (module_name, relative_path) in overlays {
+        expected.insert(fold(module_name), (module_name, relative_path));
     }
     let actual = actual
         .iter()
@@ -8277,6 +8585,160 @@ mod tests {
         );
         assert!(!install_mutation_lock_path(&opts.game_dir).exists());
         assert!(!opts.work_dir.join("tree/regen.cache").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_backend_strict_standalone_compiles_one_shared_graph_without_game() {
+        let root = unique_test_root("project-backend-standalone");
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        let opts = project_check_opts(
+            &root,
+            &[
+                ("Project.A", "Project/A.as", "void FromA() { FromB(); }\n"),
+                ("Project.B", "Project/B.as", "void FromB() { FromA(); }\n"),
+            ],
+        );
+        let expected_base = opts.base_cache.clone();
+        let expected_binds = opts.binds_cache.clone();
+        let output_path = root.join("standalone-project.cache");
+        let output_for_cleanup = output_path.clone();
+        let standalone_calls = std::cell::Cell::new(0u8);
+        let mut standalone = |inputs: StandaloneCompilerInputsV1<'_>| {
+            standalone_calls.set(standalone_calls.get() + 1);
+            assert_eq!(inputs.overlays.len(), 2);
+            assert_eq!(inputs.base_cache.unwrap(), expected_base);
+            assert_eq!(inputs.binds_cache.unwrap(), expected_binds);
+            assert_eq!(
+                std::fs::read_to_string(inputs.source_tree.join("Project/A.as")).unwrap(),
+                "void FromA() { FromB(); }\n"
+            );
+            std::fs::write(
+                &output_path,
+                cache_with_empty_modules(&[
+                    ("Base", "Base.as"),
+                    ("Project.A", "Project/A.as"),
+                    ("Project.B", "Project/B.as"),
+                ]),
+            )
+            .unwrap();
+            let cleanup = output_for_cleanup.clone();
+            Ok(StandaloneCompilerOutputV1::with_cleanup(
+                output_path.clone(),
+                move || {
+                    std::fs::remove_file(&cleanup)
+                        .map_err(|error| format!("removing test output: {error}"))
+                },
+            ))
+        };
+        let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
+        let audit_calls = std::cell::Cell::new(0u8);
+        let report = check_project_modules_with_backend_v1_with_guard_and_runner(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::Standalone,
+            Some(&mut standalone),
+            guard,
+            || {
+                audit_calls.set(audit_calls.get() + 1);
+                Ok(())
+            },
+            |_, _, _, _, _| panic!("strict standalone must never enter the game backend"),
+        );
+
+        assert!(matches!(
+            report.outcome,
+            ProjectCompilerCheckOutcome::Checked
+        ));
+        assert_eq!(standalone_calls.get(), 1);
+        assert_eq!(audit_calls.get(), 1);
+        assert_eq!(report.runner_invocations(), 1);
+        assert_eq!(
+            report.backend_name(),
+            Some(CompilerBackendNameV1::Standalone)
+        );
+        assert!(report.standalone_attempted());
+        assert!(!report.game_attempted());
+        assert!(report.fallback_reason().is_none());
+        assert_eq!(
+            report.install_restore_disposition(),
+            InstallRestoreDisposition::NotStarted
+        );
+        assert_eq!(
+            report.output_disposition(),
+            ProjectCompilerOutputDisposition::Discarded
+        );
+        assert!(!output_path.exists());
+        assert!(!install_mutation_lock_path(&opts.game_dir).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_backend_fallback_reuses_tree_and_reports_invalid_standalone_output() {
+        let root = unique_test_root("project-backend-fallback");
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        let opts = project_check_opts(
+            &root,
+            &[(
+                "Project.A",
+                "Project/A.as",
+                "void SharedProjectSource() {}\n",
+            )],
+        );
+        let bad_output = root.join("bad-standalone-project.cache");
+        let bad_output_cleanup = bad_output.clone();
+        let shared_tree = std::cell::RefCell::new(None::<PathBuf>);
+        let mut standalone = |inputs: StandaloneCompilerInputsV1<'_>| {
+            *shared_tree.borrow_mut() = Some(inputs.source_tree.to_path_buf());
+            std::fs::write(&bad_output, b"not a cache").unwrap();
+            let cleanup = bad_output_cleanup.clone();
+            Ok(StandaloneCompilerOutputV1::with_cleanup(
+                bad_output.clone(),
+                move || {
+                    std::fs::remove_file(&cleanup)
+                        .map_err(|error| format!("removing bad test output: {error}"))
+                },
+            ))
+        };
+        let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
+        let report = check_project_modules_with_backend_v1_with_guard_and_runner(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::StandaloneThenGame,
+            Some(&mut standalone),
+            guard,
+            || Ok(()),
+            |_, tree, _, mut guard, audit| {
+                assert_eq!(shared_tree.borrow().as_deref(), Some(tree));
+                audit().unwrap();
+                guard.release().unwrap();
+                checked_project_runner_report(cache_with_empty_modules(&[
+                    ("Base", "Base.as"),
+                    ("Project.A", "Project/A.as"),
+                ]))
+            },
+        );
+
+        assert!(matches!(
+            report.outcome,
+            ProjectCompilerCheckOutcome::Checked
+        ));
+        assert_eq!(report.runner_invocations(), 2);
+        assert_eq!(report.backend_name(), Some(CompilerBackendNameV1::Game));
+        assert!(report.standalone_attempted());
+        assert!(report.game_attempted());
+        let fallback = report.fallback_reason().unwrap();
+        assert_eq!(fallback.failed_backend(), CompilerBackendNameV1::Standalone);
+        assert_eq!(
+            fallback.failure_kind(),
+            CompilerBackendFailureKindV1::InvalidOutput
+        );
+        assert_eq!(
+            report.install_restore_disposition(),
+            InstallRestoreDisposition::RestoredExact
+        );
+        assert!(!bad_output.exists());
+        assert!(!install_mutation_lock_path(&opts.game_dir).exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 
