@@ -70,6 +70,7 @@ target_include_directories(gore-as-unreangel-core SYSTEM
 )
 target_compile_definitions(gore-as-unreangel-core PRIVATE
     ANGELSCRIPTCODE_API=
+    WITH_EDITOR=1
     WIN32_LEAN_AND_MEAN
     NOMINMAX
     _CRT_SECURE_NO_WARNINGS

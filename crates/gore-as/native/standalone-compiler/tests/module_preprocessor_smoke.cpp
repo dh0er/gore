@@ -40,6 +40,66 @@ const standalone::preprocessor_metadata* metadata(
     return nullptr;
 }
 
+struct external_hook_state {
+    bool class_analyzed = false;
+    bool chunks_processed = false;
+    bool code_post_processed = false;
+};
+
+bool class_analyze_hook(
+    void* const raw_context,
+    const standalone::preprocessor_source&,
+    standalone::preprocessed_class_description& description,
+    std::string& generated_statics,
+    bool& has_statics,
+    std::string&) noexcept {
+    auto& state = *static_cast<external_hook_state*>(raw_context);
+    if (description.class_name != "AHooked") return true;
+    if (generated_statics != "namespace AHooked {") return false;
+    description.compose_onto_class = "/Script/Game.HookTarget";
+    generated_statics +=
+        "\n int ExternalHelper() __generated { return 7; }";
+    has_statics = true;
+    state.class_analyzed = true;
+    return true;
+}
+
+bool process_chunks_hook(
+    void* const raw_context,
+    standalone::preprocessor_graph_hook_module* const modules,
+    const std::size_t module_count,
+    std::string&) noexcept {
+    auto& state = *static_cast<external_hook_state*>(raw_context);
+    if (module_count != 1U || modules == nullptr || modules[0].module == nullptr ||
+        modules[0].module->classes.size() != 1U ||
+        modules[0].module->classes[0].compose_onto_class !=
+            "/Script/Game.HookTarget") {
+        return false;
+    }
+    modules[0].generated_declarations =
+        "int ChunkHook() { return AHooked::ExternalHelper(); }";
+    state.chunks_processed = true;
+    return true;
+}
+
+bool post_process_code_hook(
+    void* const raw_context,
+    standalone::preprocessor_graph_hook_module* const modules,
+    const std::size_t module_count,
+    std::string&) noexcept {
+    auto& state = *static_cast<external_hook_state*>(raw_context);
+    if (module_count != 1U || modules == nullptr || modules[0].module == nullptr ||
+        modules[0].module->code.empty() ||
+        modules[0].module->code[0].conditioned_code.find("ChunkHook") ==
+            std::string::npos) {
+        return false;
+    }
+    modules[0].generated_declarations =
+        "int PostHook() { return ChunkHook(); }";
+    state.code_post_processed = true;
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -181,6 +241,8 @@ const string Literal = "import Not.A.Module;";
     dialect.blueprint_event_argument_specializations = {"int32"};
     dialect.native_super_types = {
         {"AActor", "/Script/Engine.Actor", 0U, standalone::native_super_kind::actor, false},
+        {"UEditorSubsystem", "/Script/EditorSubsystem.EditorSubsystem", 0U,
+            standalone::native_super_kind::editor_subsystem, false},
         {"UObject", "/Script/CoreUObject.Object", 0U, standalone::native_super_kind::other_uobject, false},
     };
     const auto dialect_result = standalone::preprocess_lexical_module_graph(
@@ -211,6 +273,10 @@ class AChild : AHero
 {
 }
 
+class UEditorTool : UEditorSubsystem
+{
+}
+
 UENUM(DisplayName="Mode", Meta=(Bitflags=""))
 enum EMode
 {
@@ -235,7 +301,7 @@ asset Settings of UMySettings
         return fail("dialect frontend or manager-global static-name order drifted");
     }
     const auto& dialect_module = dialect_result.modules[0];
-    if (dialect_module.classes.size() != 3U ||
+    if (dialect_module.classes.size() != 4U ||
         dialect_module.enums.size() != 1U ||
         dialect_module.delegates.size() != 2U ||
         dialect_module.post_init_functions != std::vector<std::string>{"GetSettings"}) {
@@ -281,6 +347,12 @@ asset Settings of UMySettings
         child.code_super_kind != standalone::native_super_kind::actor) {
         return fail("script-to-script native root resolution drifted");
     }
+    const auto& editor_tool = dialect_module.classes[3];
+    if (editor_tool.class_name != "UEditorTool" ||
+        editor_tool.code_super_kind !=
+            standalone::native_super_kind::editor_subsystem) {
+        return fail("profiled editor-subsystem root resolution drifted");
+    }
     const auto& enumeration = dialect_module.enums[0];
     if (enumeration.enum_name != "EMode" || enumeration.name_space != "Demo" ||
         metadata(enumeration.metadata, "DisplayName") == nullptr ||
@@ -308,7 +380,9 @@ asset Settings of UMySettings
         dialect_code.find("StaticClass() __generated deprecated") == std::string::npos ||
         dialect_code.find("class AHero : AActor") != std::string::npos ||
         dialect_code.find("class AChild : AHero") == std::string::npos ||
-        dialect_code.find("Spawn(const FVector& Location") == std::string::npos) {
+        dialect_code.find("Spawn(const FVector& Location") == std::string::npos ||
+        dialect_code.find("EditorSubsystem::GetEditorSubsystem") ==
+            std::string::npos) {
         return fail("dialect source lowering or generated code drifted");
     }
 
@@ -443,6 +517,69 @@ asset Settings of UMySettings
             "UFUNCTION() ServerCall is marked as Server but does not have the "
             "WithValidation property specified!") {
         return fail("server RPC validation profile switch drifted");
+    }
+
+    standalone::preprocessor_options external_options;
+    external_options.flags = {{"EDITOR", true}};
+    external_options.native_super_types = {{
+        "UObject",
+        "/Script/CoreUObject.Object",
+        0U,
+        standalone::native_super_kind::other_uobject,
+        false,
+    }};
+    external_options.static_names = {"\xc3\x84pfel"};
+    external_options.fname_comparison_keys = {
+        {"\xc3\x84pfel", "g1r-name-17"},
+        {"\xc3\xa4PFEL", "g1r-name-17"},
+    };
+    external_hook_state hook_state;
+    const standalone::preprocessor_hooks hooks{
+        &hook_state,
+        &class_analyze_hook,
+        &process_chunks_hook,
+        &post_process_code_hook,
+    };
+    const auto external = standalone::preprocess_lexical_module_graph(
+        external_options,
+        {source("Game/Hooked.as", R"AS(#if EDITOR
+class AHooked : UObject {}
+FName SameName = n"äPFEL";
+#endif
+)AS")},
+        {},
+        &hooks);
+    if (!external.ok || !external.diagnostics.empty() ||
+        !hook_state.class_analyzed || !hook_state.chunks_processed ||
+        !hook_state.code_post_processed || external.modules.size() != 1U ||
+        external.modules[0].classes.size() != 1U ||
+        external.modules[0].classes[0].compose_onto_class !=
+            "/Script/Game.HookTarget" ||
+        external.modules[0].editor_only_blocks.size() != 1U ||
+        external.modules[0].editor_only_blocks[0].first_line != 1U ||
+        external.modules[0].editor_only_blocks[0].last_line != 4U ||
+        external.static_names != std::vector<std::string>{"\xc3\x84pfel"}) {
+        return fail("external frontend hooks, ComposeOnto, editor lines or FName identity drifted");
+    }
+    const std::string& external_code = external.modules[0].code[0].conditioned_code;
+    if (external_code.find("ExternalHelper") == std::string::npos ||
+        external_code.find("__STATIC_NAME(0)") == std::string::npos ||
+        external_code.find("ChunkHook") == std::string::npos ||
+        external_code.find("PostHook") == std::string::npos ||
+        external_code.find("ChunkHook") > external_code.find("PostHook")) {
+        return fail("external generated declarations were not applied at donor phase barriers");
+    }
+
+    standalone::preprocessor_options missing_fname_profile = external_options;
+    missing_fname_profile.static_names.clear();
+    missing_fname_profile.fname_comparison_keys.clear();
+    const auto missing_fname = standalone::preprocess_lexical_module_graph(
+        missing_fname_profile,
+        {source("Bad/UnicodeName.as", "FName Value = n\"\xc3\xa4PFEL\";\n")});
+    if (missing_fname.ok || missing_fname.diagnostics.size() != 1U ||
+        missing_fname.diagnostics[0].message !=
+            "non-ASCII FName has no authoritative comparison key in the frontend profile") {
+        return fail("non-ASCII FName comparison did not fail closed without a profile key");
     }
 
     std::cout << "G1R preprocessor smoke covered conditionals, graph order, reflection "

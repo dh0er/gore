@@ -253,6 +253,16 @@ metadata_projection_result project_preprocessed_metadata(
             type->static_class_global_variable_name.bytes =
                 class_description.static_class_global_variable_name;
             type->placeable = class_description.placeable;
+            std::int64_t ignored_compose_hash = 0;
+            if (class_description.compose_onto_class.find('\0') !=
+                    std::string::npos ||
+                !compute_processed_code_hash_utf8(
+                    class_description.compose_onto_class,
+                    ignored_compose_hash)) {
+                return fail("class ComposeOnto identity is not serializable");
+            }
+            type->compose_onto_class_name.bytes =
+                class_description.compose_onto_class;
             if (!copy_metadata(
                     class_description.metadata,
                     type->metadata_specifiers,

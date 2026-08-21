@@ -1,6 +1,7 @@
 #include "gore_as_standalone/frontend_compile.hpp"
 #include "gore_as_standalone/module_preprocessor.hpp"
 
+#include "AngelscriptManager.h"
 #include "angelscript.h"
 
 #include <cstdint>
@@ -125,6 +126,59 @@ struct FPair
         modules[0]->GetTypeInfoByName("FPair") == nullptr ||
         !contains_bytecode(*modules[1], "Sum")) {
         return fail("frontend descriptors did not compile through the graph bridge", engine);
+    }
+
+    FAngelscriptManager::Get().ConfigSettings->bErrorOnIncorrectEditorOnlyCode = true;
+    standalone::preprocessor_options editor_options;
+    editor_options.automatic_imports = false;
+    editor_options.flags = {{"EDITOR", true}};
+    const auto invalid_editor_use = standalone::preprocess_lexical_module_graph(
+        editor_options,
+        {source("Game/EditorConsumer.as", R"AS(import Editor.Tools;
+int UseEditorTool() { return EditorValue(); }
+)AS"),
+         source("Editor/Tools.as", "int EditorValue() { return 9; }\n")});
+    std::vector<asIScriptModule*> invalid_editor_modules;
+    const auto invalid_editor_compile = standalone::compile_preprocessed_module_graph(
+        *engine,
+        editor_options,
+        invalid_editor_use,
+        nullptr,
+        runtime,
+        invalid_editor_modules);
+    if (invalid_editor_compile.succeeded() ||
+        invalid_editor_compile.phase !=
+            standalone::frontend_compile_phase::build_graph ||
+        engine->GetModule("Editor.Tools", asGM_ONLY_IF_EXISTS) != nullptr ||
+        engine->GetModule("Game.EditorConsumer", asGM_ONLY_IF_EXISTS) != nullptr) {
+        return fail("editor-only module usage was not rejected and cleaned up", engine);
+    }
+
+    const auto valid_editor_use = standalone::preprocess_lexical_module_graph(
+        editor_options,
+        {source("Game/EditorSafe.as", R"AS(import Game.EditorProvider;
+#if EDITOR
+int UseEditorValue() { return EditorValue(); }
+#endif
+)AS"),
+         source("Game/EditorProvider.as", R"AS(#if EDITOR
+int EditorValue() { return 11; }
+#endif
+)AS")});
+    std::vector<asIScriptModule*> editor_modules;
+    const auto editor_compiled = standalone::compile_preprocessed_module_graph(
+        *engine,
+        editor_options,
+        valid_editor_use,
+        nullptr,
+        runtime,
+        editor_modules);
+    if (!editor_compiled.succeeded() || editor_modules.size() != 2U ||
+        valid_editor_use.modules[0].editor_only_blocks.size() != 1U ||
+        valid_editor_use.modules[1].editor_only_blocks.size() != 1U ||
+        !contains_bytecode(*editor_modules[0], "EditorValue") ||
+        !contains_bytecode(*editor_modules[1], "UseEditorValue")) {
+        return fail("editor-only line barriers did not reach the pinned builder", engine);
     }
 
     standalone::preprocessor_options native_options;

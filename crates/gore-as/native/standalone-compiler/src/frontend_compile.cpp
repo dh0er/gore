@@ -1,12 +1,15 @@
 #include "gore_as_standalone/frontend_compile.hpp"
 
+#include "as_builder.h"
 #include "as_module.h"
 #include "as_scriptengine.h"
 
 #include <algorithm>
 #include <cstdint>
 #include <exception>
+#include <limits>
 #include <new>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -63,6 +66,11 @@ asITypeInfo* find_shadow_type(
     auto& engine = static_cast<asCScriptEngine&>(engine_interface);
     return engine.allRegisteredTypesByName.FindFirst_CaseInsensitive(
         angelscript_name.c_str());
+}
+
+bool is_editor_only_module_name(const std::string_view module_name) noexcept {
+    return module_name.compare(0U, 7U, "Editor.") == 0 ||
+        module_name.find(".Editor.") != std::string_view::npos;
 }
 
 int classify_delegates(
@@ -247,6 +255,34 @@ frontend_compile_result compile_preprocessed_module_graph(
                     "delegate compilation requires the live registry runtime",
                     asINVALID_CONFIGURATION);
             }
+            if (!description.editor_only_blocks.empty() &&
+                description.code.size() != 1U) {
+                return failure(
+                    frontend_compile_phase::preflight,
+                    index,
+                    "editor-only line blocks require exactly one source section",
+                    asINVALID_CONFIGURATION);
+            }
+            for (const editor_only_line_block& block :
+                 description.editor_only_blocks) {
+                const std::uint32_t open_end =
+                    (std::numeric_limits<std::uint32_t>::max)();
+                if (block.first_line == 0U ||
+                    block.first_line >
+                        static_cast<std::uint32_t>(
+                            (std::numeric_limits<int>::max)()) ||
+                    (block.last_line != open_end &&
+                     (block.last_line < block.first_line ||
+                      block.last_line >
+                          static_cast<std::uint32_t>(
+                              (std::numeric_limits<int>::max)())))) {
+                    return failure(
+                        frontend_compile_phase::preflight,
+                        index,
+                        "frontend contains an invalid editor-only line block",
+                        asINVALID_ARG);
+                }
+            }
             for (const preprocessed_class_description& type : description.classes) {
                 if (type.is_struct || type.code_super_class.empty()) continue;
                 const auto native = native_by_path.find(type.code_super_class);
@@ -359,6 +395,23 @@ frontend_compile_result compile_preprocessed_module_graph(
                         added);
                 }
             }
+        }
+
+        for (std::size_t index = 0U; index < input.modules.size(); ++index) {
+            auto* const module = static_cast<asCModule*>(created[index]);
+            if (module->builder == nullptr) continue;
+            TArray<TPair<int, int>> blocks;
+            for (const editor_only_line_block& block :
+                 input.modules[index].editor_only_blocks) {
+                const int last = block.last_line ==
+                    (std::numeric_limits<std::uint32_t>::max)()
+                    ? -1
+                    : static_cast<int>(block.last_line);
+                blocks.Emplace(static_cast<int>(block.first_line), last);
+            }
+            module->builder->SetEditorOnlyBlockLinePositions(blocks);
+            module->builder->isEditorOnlyModule =
+                is_editor_only_module_name(input.modules[index].module_name);
         }
 
         classify_context classify{registry, &input};

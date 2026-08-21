@@ -15,8 +15,8 @@ struct metadata_projection_result {
 // Applies the source-only FAngelscriptModuleDesc fields that cannot be
 // recovered from asCModule. The update is atomic and rejects any reflected
 // class/property/function descriptor that does not map 1:1 to the compiled
-// engine record. The externally produced ComposeOnto result is intentionally
-// not invented here.
+// engine record. ComposeOnto is copied only when an external ClassAnalyze hook
+// supplied it; this layer never invents that game-specific result.
 metadata_projection_result project_preprocessed_metadata(
     const lexical_module_description& description,
     precompiled_module& module);

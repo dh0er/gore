@@ -18,6 +18,9 @@ inline constexpr std::size_t max_preprocessor_static_names = 1'000'000U;
 inline constexpr std::size_t max_preprocessor_post_init_functions = 1'000'000U;
 inline constexpr std::size_t max_preprocessor_base_modules = 100'000U;
 inline constexpr std::size_t max_preprocessor_base_classes = 1'000'000U;
+inline constexpr std::size_t max_preprocessor_external_generated_bytes =
+    16U * 1024U * 1024U;
+inline constexpr std::size_t max_preprocessor_hook_detail_bytes = 4'096U;
 
 enum class preprocessor_diagnostic_severity { warning, error };
 
@@ -64,6 +67,15 @@ struct native_super_type {
     std::uint64_t property_offset = 0U;
     native_super_kind kind = native_super_kind::other_uobject;
     bool cannot_derive_angelscript = false;
+};
+
+// FName comparison is not Unicode case folding. Non-ASCII spellings therefore
+// require a captured comparison identity from the target build. Spellings
+// which compare equal carry the same opaque key. ASCII retains the donor's
+// locale-independent folding without requiring profile entries.
+struct fname_comparison_key {
+    std::string spelling;
+    std::string key;
 };
 
 struct preprocessor_metadata {
@@ -141,6 +153,7 @@ struct preprocessed_class_description {
     std::string code_super_class;
     native_super_kind code_super_kind = native_super_kind::other_uobject;
     std::string config_name;
+    std::string compose_onto_class;
     std::vector<preprocessor_metadata> metadata;
     std::vector<preprocessed_property_description> properties;
     std::vector<preprocessed_function_description> methods;
@@ -179,6 +192,7 @@ struct preprocessor_options {
     std::vector<std::string> blueprint_event_argument_specializations;
     std::vector<native_super_type> native_super_types;
     std::vector<preprocessor_flag> flags;
+    std::vector<fname_comparison_key> fname_comparison_keys;
 
     // GenerateStaticName appends to the manager-global FName table. A full
     // regeneration seeds this with the decoded pristine cache tail and emits
@@ -219,6 +233,11 @@ struct preprocessed_code_section {
     std::int64_t code_hash = 0;
 };
 
+struct editor_only_line_block {
+    std::uint32_t first_line = 1U;
+    std::uint32_t last_line = 1U;
+};
+
 // UE-free projection of the source-bearing parts of FAngelscriptModuleDesc.
 // The historical `lexical_` name is retained for source compatibility while
 // the record now includes reflection and generated-code descriptors.
@@ -232,6 +251,7 @@ struct lexical_module_description {
     std::vector<preprocessed_enum_description> enums;
     std::vector<preprocessed_delegate_description> delegates;
     std::string statics_class_name;
+    std::vector<editor_only_line_block> editor_only_blocks;
 };
 
 struct lexical_preprocess_result {
@@ -239,6 +259,37 @@ struct lexical_preprocess_result {
     std::vector<lexical_module_description> modules;
     std::vector<std::string> static_names;
     std::vector<preprocessor_diagnostic> diagnostics;
+};
+
+// UE-free equivalents of the donor's three external preprocessing extension
+// points. The graph hooks receive read-only descriptors and may only append
+// generated declarations, which preserves source offsets used by the core
+// preprocessing passes. ClassAnalyze retains the donor's mutable class record,
+// GeneratedStatics string and bHasStatics result, including ComposeOnto.
+struct preprocessor_graph_hook_module {
+    const lexical_module_description* module = nullptr;
+    std::string generated_declarations;
+};
+
+struct preprocessor_hooks {
+    void* context = nullptr;
+    bool (*class_analyze)(
+        void* context,
+        const preprocessor_source& source,
+        preprocessed_class_description& description,
+        std::string& generated_statics,
+        bool& has_statics,
+        std::string& detail) noexcept = nullptr;
+    bool (*process_chunks)(
+        void* context,
+        preprocessor_graph_hook_module* modules,
+        std::size_t module_count,
+        std::string& detail) noexcept = nullptr;
+    bool (*post_process_code)(
+        void* context,
+        preprocessor_graph_hook_module* modules,
+        std::size_t module_count,
+        std::string& detail) noexcept = nullptr;
 };
 
 // Exact donor CodeHash: XXH64(seed 0) over the processed FString's UTF-16LE
@@ -254,6 +305,7 @@ bool compute_processed_code_hash_utf8(
 lexical_preprocess_result preprocess_lexical_module_graph(
     const preprocessor_options& options,
     const std::vector<preprocessor_source>& sources,
-    const std::vector<preprocessor_base_module>& base_modules = {});
+    const std::vector<preprocessor_base_module>& base_modules = {},
+    const preprocessor_hooks* hooks = nullptr);
 
 } // namespace gore::as::standalone

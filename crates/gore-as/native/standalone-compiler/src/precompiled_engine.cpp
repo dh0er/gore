@@ -19,6 +19,7 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -27,6 +28,11 @@ namespace gore::as::standalone::precompiled {
 namespace {
 
 constexpr std::size_t kNoModule = static_cast<std::size_t>(-1);
+
+bool is_editor_only_module_name(const std::string_view module_name) noexcept {
+    return module_name.compare(0U, 7U, "Editor.") == 0 ||
+        module_name.find(".Editor.") != std::string_view::npos;
+}
 
 engine_bridge_result failure(
     const engine_bridge_phase phase,
@@ -3226,6 +3232,39 @@ engine_bridge_result compile_mixed_cache_checkpoint(
                         "engine rejected a mixed source section", added);
                 }
             }
+            if (!state.source->editor_only_blocks.empty() &&
+                state.source->code.size() != 1U) {
+                return failure(
+                    engine_bridge_phase::create_modules, index,
+                    "editor-only line blocks require exactly one source section",
+                    asINVALID_CONFIGURATION);
+            }
+            TArray<TPair<int, int>> editor_blocks;
+            for (const editor_only_line_block& block :
+                 state.source->editor_only_blocks) {
+                const std::uint32_t open_end =
+                    (std::numeric_limits<std::uint32_t>::max)();
+                if (block.first_line == 0U ||
+                    block.first_line > static_cast<std::uint32_t>(
+                        (std::numeric_limits<int>::max)()) ||
+                    (block.last_line != open_end &&
+                     (block.last_line < block.first_line ||
+                      block.last_line > static_cast<std::uint32_t>(
+                          (std::numeric_limits<int>::max)())))) {
+                    return failure(
+                        engine_bridge_phase::create_modules, index,
+                        "source module has an invalid editor-only line block",
+                        asINVALID_ARG);
+                }
+                editor_blocks.Emplace(
+                    static_cast<int>(block.first_line),
+                    block.last_line == open_end
+                        ? -1
+                        : static_cast<int>(block.last_line));
+            }
+            state.module->builder->SetEditorOnlyBlockLinePositions(editor_blocks);
+            state.module->builder->isEditorOnlyModule =
+                is_editor_only_module_name(state.source->module_name);
         }
 
         for (std::size_t index = 0U; index < states.size(); ++index) {

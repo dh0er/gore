@@ -6,6 +6,7 @@
 #include <cstdlib>
 
 thread_local bool GIsAngelscriptWorldContextAvailable = false;
+thread_local bool GIsInAngelscriptThreadSafeFunction = false;
 
 // UNREANGEL resolves this through UASClass/UObject metadata in
 // Private/angelscript.cpp. Standalone object metadata is profile work; return

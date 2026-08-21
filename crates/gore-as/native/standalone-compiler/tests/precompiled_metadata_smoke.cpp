@@ -46,6 +46,7 @@ standalone::lexical_module_description descriptor_fixture() {
     type.super_is_code_class = true;
     type.abstract = true;
     type.config_name = "Game";
+    type.compose_onto_class = "/Script/Game.HeroBase";
     type.static_class_global_variable_name = "AHero::StaticClass";
     type.metadata.push_back({"Category", "Hero", -1});
     standalone::preprocessed_property_description property;
@@ -97,6 +98,7 @@ int main() {
         output.declared_events.size() != 1U ||
         !type.is_in_preprocessor || type.super_class.bytes != "AActor" ||
         type.code_super_class.bytes != "/Script/Engine.Actor" ||
+        type.compose_onto_class_name.bytes != "/Script/Game.HeroBase" ||
         type.metadata_specifiers.size() != 1U ||
         !property.is_unreal_property || !property.blueprint_readable ||
         !property.replicated || property.replication_condition != 3 ||

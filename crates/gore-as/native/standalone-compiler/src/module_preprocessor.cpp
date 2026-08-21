@@ -459,6 +459,26 @@ std::string ascii_fold(std::string value) {
     return value;
 }
 
+using fname_key_map = std::unordered_map<std::string, std::string>;
+
+bool fname_comparison_identity(
+    const std::string& spelling,
+    const fname_key_map& captured,
+    std::string& identity) {
+    const bool ascii = std::all_of(
+        spelling.begin(), spelling.end(), [](const char character) {
+            return static_cast<unsigned char>(character) < 0x80U;
+        });
+    if (ascii) {
+        identity = "ascii:" + ascii_fold(spelling);
+        return true;
+    }
+    const auto found = captured.find(spelling);
+    if (found == captured.end()) return false;
+    identity = "captured:" + found->second;
+    return true;
+}
+
 std::uint64_t rotate_left(const std::uint64_t value, const unsigned count) noexcept {
     return (value << count) | (value >> (64U - count));
 }
@@ -775,8 +795,14 @@ std::string generate_static_name(
     const std::string& name,
     std::vector<std::string>& static_names,
     std::unordered_map<std::string, std::size_t>& static_name_indices,
-    bool& limit_exceeded) {
-    const std::string key = ascii_fold(name);
+    const fname_key_map& captured_fname_keys,
+    bool& limit_exceeded,
+    bool& comparison_missing) {
+    std::string key;
+    if (!fname_comparison_identity(name, captured_fname_keys, key)) {
+        comparison_missing = true;
+        return "__STATIC_NAME(0)";
+    }
     const auto found = static_name_indices.find(key);
     if (found != static_name_indices.end()) {
         return "__STATIC_NAME(" + std::to_string(found->second) + ")";
@@ -795,7 +821,9 @@ void lower_name_and_format_literals(
     std::string& code,
     std::vector<std::string>& static_names,
     std::unordered_map<std::string, std::size_t>& static_name_indices,
+    const fname_key_map& captured_fname_keys,
     bool& static_name_limit_exceeded,
+    bool& fname_comparison_missing,
     std::vector<source_type_range>* type_ranges) {
     std::vector<text_replacement> replacements;
     bool in_line_comment = false;
@@ -852,7 +880,9 @@ void lower_name_and_format_literals(
                                 position - name_literal_start - 2U),
                             static_names,
                             static_name_indices,
-                            static_name_limit_exceeded)});
+                            captured_fname_keys,
+                            static_name_limit_exceeded,
+                            fname_comparison_missing)});
                     name_literal_start = std::string::npos;
                 } else if (!in_string && format_string_start != std::string::npos) {
                     replacements.push_back({
@@ -1049,6 +1079,12 @@ bool validate_inputs(
             "static-name seed count exceeds the bounded maximum"});
         return false;
     }
+    if (options.fname_comparison_keys.size() > max_preprocessor_static_names) {
+        result.diagnostics.push_back({
+            preprocessor_diagnostic_severity::error, {}, 1U, 1U,
+            "FName comparison-key count exceeds the bounded maximum"});
+        return false;
+    }
     if (options.blueprint_event_argument_specializations.size() >
         max_preprocessor_flags) {
         result.diagnostics.push_back({
@@ -1080,11 +1116,52 @@ bool validate_inputs(
         }
     }
 
+    fname_key_map captured_fname_keys;
+    captured_fname_keys.reserve(options.fname_comparison_keys.size());
+    std::string previous_fname_spelling;
+    for (const fname_comparison_key& entry : options.fname_comparison_keys) {
+        std::int64_t ignored_spelling_hash = 0;
+        std::int64_t ignored_key_hash = 0;
+        const bool non_ascii = std::any_of(
+            entry.spelling.begin(), entry.spelling.end(), [](const char character) {
+                return static_cast<unsigned char>(character) >= 0x80U;
+            });
+        if (!non_ascii || !valid_text_field(entry.spelling, false) ||
+            !valid_text_field(entry.key, false) ||
+            entry.spelling.size() > max_preprocessor_path_bytes ||
+            entry.key.size() > max_preprocessor_path_bytes ||
+            !processed_code_hash_impl(
+                entry.spelling, ignored_spelling_hash) ||
+            !processed_code_hash_impl(entry.key, ignored_key_hash) ||
+            (!previous_fname_spelling.empty() &&
+             previous_fname_spelling >= entry.spelling) ||
+            !captured_fname_keys.emplace(entry.spelling, entry.key).second) {
+            result.diagnostics.push_back({
+                preprocessor_diagnostic_severity::error, {}, 1U, 1U,
+                "FName comparison keys are invalid, redundant or out of canonical order"});
+            return false;
+        }
+        previous_fname_spelling = entry.spelling;
+    }
+
     std::unordered_set<std::string> static_name_keys;
     static_name_keys.reserve(options.static_names.size());
     for (const std::string& name : options.static_names) {
-        if (!valid_text_field(name, true) ||
-            !static_name_keys.insert(ascii_fold(name)).second) {
+        std::string comparison_identity;
+        if (!valid_text_field(name, true)) {
+            result.diagnostics.push_back({
+                preprocessor_diagnostic_severity::error, {}, 1U, 1U,
+                "static-name seed contains an invalid or duplicate name"});
+            return false;
+        }
+        if (!fname_comparison_identity(
+                name, captured_fname_keys, comparison_identity)) {
+            result.diagnostics.push_back({
+                preprocessor_diagnostic_severity::error, {}, 1U, 1U,
+                "non-ASCII FName seed has no authoritative comparison key"});
+            return false;
+        }
+        if (!static_name_keys.insert(std::move(comparison_identity)).second) {
             result.diagnostics.push_back({
                 preprocessor_diagnostic_severity::error, {}, 1U, 1U,
                 "static-name seed contains an invalid or duplicate name"});
@@ -1551,7 +1628,9 @@ std::string generate_blueprint_event_wrapper(
     const std::string& function_name,
     std::vector<std::string>& static_names,
     std::unordered_map<std::string, std::size_t>& static_name_indices,
-    bool& static_name_limit_exceeded) {
+    const fname_key_map& captured_fname_keys,
+    bool& static_name_limit_exceeded,
+    bool& fname_comparison_missing) {
     const parsed_function_text function = parse_function_text(code, macro);
     std::unordered_set<std::string> specializations(
         options.blueprint_event_argument_specializations.begin(),
@@ -1591,7 +1670,9 @@ std::string generate_blueprint_event_wrapper(
         function_name,
         static_names,
         static_name_indices,
-        static_name_limit_exceeded) + ");";
+        captured_fname_keys,
+        static_name_limit_exceeded,
+        fname_comparison_missing) + ");";
     if (function.return_type != "void") wrapper += " return __ReturnValue;";
     wrapper += "}";
     return wrapper;
@@ -1933,7 +2014,9 @@ void process_function_macro(
     std::vector<text_replacement>& replacements,
     std::vector<std::string>& static_names,
     std::unordered_map<std::string, std::size_t>& static_name_indices,
+    const fname_key_map& captured_fname_keys,
     bool& static_name_limit_exceeded,
+    bool& fname_comparison_missing,
     const bool editor_only) {
     preprocessed_function_description function;
     function.function_name = macro.name;
@@ -1992,7 +2075,9 @@ void process_function_macro(
                     function.function_name,
                     static_names,
                     static_name_indices,
-                    static_name_limit_exceeded);
+                    captured_fname_keys,
+                    static_name_limit_exceeded,
+                    fname_comparison_missing);
                 wrapper_generated = true;
                 function.script_function_name += "_Implementation";
             }
@@ -2025,7 +2110,9 @@ void process_function_macro(
                     function.function_name,
                     static_names,
                     static_name_indices,
-                    static_name_limit_exceeded);
+                    captured_fname_keys,
+                    static_name_limit_exceeded,
+                    fname_comparison_missing);
                 wrapper_generated = true;
                 function.script_function_name += "_Implementation";
             }
@@ -2069,7 +2156,9 @@ void process_function_macro(
                     function.function_name,
                     static_names,
                     static_name_indices,
-                    static_name_limit_exceeded);
+                    captured_fname_keys,
+                    static_name_limit_exceeded,
+                    fname_comparison_missing);
                 wrapper_generated = true;
                 function.script_function_name += "_Implementation";
             }
@@ -2167,7 +2256,9 @@ void scan_function_macros_in_range(
     std::vector<text_replacement>& replacements,
     std::vector<std::string>& static_names,
     std::unordered_map<std::string, std::size_t>& static_name_indices,
+    const fname_key_map& captured_fname_keys,
     bool& static_name_limit_exceeded,
+    bool& fname_comparison_missing,
     const std::vector<std::vector<std::string>>& conditional_lines,
     const std::size_t class_condition_depth) {
     std::size_t depth = 1U;
@@ -2200,7 +2291,9 @@ void scan_function_macros_in_range(
                     replacements,
                     static_names,
                     static_name_indices,
+                    captured_fname_keys,
                     static_name_limit_exceeded,
+                    fname_comparison_missing,
                     editor_only);
                 position = macro->end - 1U;
                 continue;
@@ -2237,10 +2330,12 @@ void process_function_macros(
     source_state& state,
     lexical_preprocess_result& result,
     std::vector<std::string>& static_names,
-    std::unordered_map<std::string, std::size_t>& static_name_indices) {
+    std::unordered_map<std::string, std::size_t>& static_name_indices,
+    const fname_key_map& captured_fname_keys) {
     std::string& code = state.module.code.front().conditioned_code;
     std::vector<text_replacement> replacements;
     bool static_name_limit_exceeded = false;
+    bool fname_comparison_missing = false;
     for (const source_type_range& range : state.type_ranges) {
         if (range.kind == source_type_kind::enum_type ||
             range.description_index >= state.module.classes.size() ||
@@ -2258,7 +2353,9 @@ void process_function_macros(
             replacements,
             static_names,
             static_name_indices,
+            captured_fname_keys,
             static_name_limit_exceeded,
+            fname_comparison_missing,
             state.conditional_lines,
             range.condition_depth);
     }
@@ -2320,7 +2417,9 @@ void process_function_macros(
                     replacements,
                     static_names,
                     static_name_indices,
+                    captured_fname_keys,
                     static_name_limit_exceeded,
+                    fname_comparison_missing,
                     editor_only);
                 position = macro->end - 1U;
                 continue;
@@ -2366,6 +2465,11 @@ void process_function_macros(
         add_diagnostic(
             result, source, 1U,
             "static-name table exceeds the bounded maximum");
+    }
+    if (fname_comparison_missing) {
+        add_diagnostic(
+            result, source, 1U,
+            "non-ASCII FName has no authoritative comparison key in the frontend profile");
     }
 }
 
@@ -3026,7 +3130,8 @@ struct class_location {
 };
 
 std::string generated_native_class_statics(
-    const preprocessed_class_description& description) {
+    const preprocessed_class_description& description,
+    bool& has_statics) {
     const std::string qualified_namespace = description.name_space.empty()
         ? std::string{}
         : description.name_space + "::";
@@ -3035,6 +3140,7 @@ std::string generated_native_class_statics(
     const std::string& name = description.class_name;
     const std::string& variable = description.static_class_global_variable_name;
     std::string generated = prefix;
+    has_statics = true;
     switch (description.code_super_kind) {
     case native_super_kind::actor:
         generated += "\n " + name +
@@ -3081,10 +3187,13 @@ std::string generated_native_class_statics(
             variable + ".Get()));}";
         break;
     case native_super_kind::editor_subsystem:
+        generated += "\n " + name + " Get() __generated {return Cast<" + name +
+            ">(EditorSubsystem::GetEditorSubsystem(" + variable + ".Get()));}";
+        break;
     case native_super_kind::other_uobject:
-        return {};
+        has_statics = false;
+        break;
     }
-    generated += "}";
     return generated;
 }
 
@@ -3111,7 +3220,8 @@ void resolve_class_hierarchy(
     const std::vector<preprocessor_base_module>& base_modules,
     std::vector<source_state>& states,
     const std::vector<std::size_t>& order,
-    lexical_preprocess_result& result) {
+    lexical_preprocess_result& result,
+    const preprocessor_hooks* const hooks) {
     std::unordered_map<std::string, const native_super_type*> native_types;
     std::unordered_map<std::string, native_super_kind> native_kinds_by_path;
     native_types.reserve(options.native_super_types.size());
@@ -3246,12 +3356,59 @@ void resolve_class_hierarchy(
         for (const source_type_range& range : states[state_index].type_ranges) {
             if (range.kind == source_type_kind::enum_type ||
                 range.description_index >= states[state_index].module.classes.size()) continue;
-            const preprocessed_class_description& description =
+            preprocessed_class_description& description =
                 states[state_index].module.classes[range.description_index];
             if (visits.find(description.class_name) == visits.end() ||
                 visits[description.class_name] != visit_state::resolved) continue;
-            const std::string generated = generated_native_class_statics(description);
-            if (!generated.empty()) {
+            bool has_statics = false;
+            std::string generated = generated_native_class_statics(
+                description, has_statics);
+            if (hooks != nullptr && hooks->class_analyze != nullptr) {
+                const std::string class_name = description.class_name;
+                const std::string name_space = description.name_space;
+                const std::string super_class = description.super_class;
+                std::string detail;
+                const bool hook_ok = hooks->class_analyze(
+                    hooks->context,
+                    sources[state_index],
+                    description,
+                    generated,
+                    has_statics,
+                    detail);
+                std::int64_t ignored_hash = 0;
+                std::int64_t ignored_compose_hash = 0;
+                std::int64_t ignored_detail_hash = 0;
+                const bool detail_valid =
+                    detail.size() <= max_preprocessor_hook_detail_bytes &&
+                    compute_processed_code_hash_utf8(
+                        detail, ignored_detail_hash);
+                if (!hook_ok || !detail_valid ||
+                    generated.size() > max_preprocessor_external_generated_bytes ||
+                    generated.find('\0') != std::string::npos ||
+                    !compute_processed_code_hash_utf8(generated, ignored_hash) ||
+                    description.class_name != class_name ||
+                    description.name_space != name_space ||
+                    description.super_class != super_class ||
+                    description.compose_onto_class.find('\0') != std::string::npos ||
+                    !compute_processed_code_hash_utf8(
+                        description.compose_onto_class,
+                        ignored_compose_hash)) {
+                    if (!detail_valid) {
+                        detail = "hook returned an invalid diagnostic";
+                    } else if (detail.empty()) {
+                        detail = "hook returned invalid or unbounded class-analysis output";
+                    }
+                    add_diagnostic(
+                        result,
+                        sources[state_index],
+                        description.line,
+                        "external ClassAnalyze hook failed: " + detail.substr(
+                            0U, max_preprocessor_hook_detail_bytes));
+                    continue;
+                }
+            }
+            if (has_statics) {
+                generated += "}";
                 std::string& code =
                     states[state_index].module.code.front().conditioned_code;
                 code += "\n\n";
@@ -3259,6 +3416,75 @@ void resolve_class_hierarchy(
             }
         }
     }
+}
+
+using graph_hook_function = bool (*)(
+    void*,
+    preprocessor_graph_hook_module*,
+    std::size_t,
+    std::string&) noexcept;
+
+bool invoke_graph_hook(
+    const char* const name,
+    const preprocessor_hooks* const hooks,
+    const graph_hook_function hook,
+    std::vector<source_state>& states,
+    lexical_preprocess_result& result) {
+    if (hooks == nullptr || hook == nullptr) return true;
+    std::vector<preprocessor_graph_hook_module> modules;
+    modules.reserve(states.size());
+    for (source_state& state : states) modules.push_back({&state.module, {}});
+
+    std::string detail;
+    std::int64_t ignored_detail_hash = 0;
+    const bool hook_ok = hook(
+        hooks->context, modules.data(), modules.size(), detail);
+    const bool detail_valid =
+        detail.size() <= max_preprocessor_hook_detail_bytes &&
+        compute_processed_code_hash_utf8(detail, ignored_detail_hash);
+    if (!hook_ok || !detail_valid) {
+        if (!detail_valid) {
+            detail = "hook returned an invalid diagnostic";
+        } else if (detail.empty()) {
+            detail = "hook rejected the module graph";
+        }
+        result.diagnostics.push_back({
+            preprocessor_diagnostic_severity::error,
+            {},
+            1U,
+            1U,
+            std::string("external ") + name + " hook failed: " +
+                detail.substr(0U, max_preprocessor_hook_detail_bytes)});
+        return false;
+    }
+
+    std::size_t total_generated = 0U;
+    for (std::size_t index = 0U; index < modules.size(); ++index) {
+        const std::string& generated = modules[index].generated_declarations;
+        std::int64_t ignored_hash = 0;
+        if (generated.size() > max_preprocessor_external_generated_bytes ||
+            total_generated >
+                max_preprocessor_external_generated_bytes - generated.size() ||
+            generated.find('\0') != std::string::npos ||
+            !compute_processed_code_hash_utf8(generated, ignored_hash)) {
+            result.diagnostics.push_back({
+                preprocessor_diagnostic_severity::error,
+                {},
+                1U,
+                1U,
+                std::string("external ") + name +
+                    " hook returned invalid or unbounded generated declarations"});
+            return false;
+        }
+        total_generated += generated.size();
+        if (!generated.empty()) {
+            std::string& code =
+                states[index].module.code.front().conditioned_code;
+            code += "\n\n";
+            code += generated;
+        }
+    }
+    return true;
 }
 
 void scan_source(
@@ -3276,12 +3502,27 @@ void scan_source(
     bool in_line_comment = false;
     bool in_block_comment = false;
     bool in_string = false;
+    bool in_editor_only_block = false;
     std::size_t scope_count = 0U;
     std::uint32_t line_number = 1U;
 
     const auto update_ifdef_stack = [&]() {
         ifdef_stack_is_false = std::any_of(ifdefs.begin(), ifdefs.end(),
             [](const active_ifdef& active) { return !active.value; });
+    };
+    const auto update_editor_only_block = [&]() {
+        const bool has_editor_condition = std::any_of(
+            ifdefs.begin(), ifdefs.end(), [](const active_ifdef& active) {
+                return active.condition == "EDITOR";
+            });
+        if (has_editor_condition && !in_editor_only_block) {
+            in_editor_only_block = true;
+            state.module.editor_only_blocks.push_back({
+                line_number, (std::numeric_limits<std::uint32_t>::max)()});
+        } else if (!has_editor_condition && in_editor_only_block) {
+            in_editor_only_block = false;
+            state.module.editor_only_blocks.back().last_line = line_number;
+        }
     };
     const auto parse_condition = [&](const std::string& expression) {
         std::string lookup = expression;
@@ -3306,6 +3547,7 @@ void scan_source(
 
     for (std::size_t position = 0U; position < code.size(); ++position) {
         char current = code[position];
+        bool conditional_changed = false;
 
         if (current == '#' && !in_comment) {
             if (starts_at(code, position, "#ifdef ")) {
@@ -3314,18 +3556,21 @@ void scan_source(
                 kill_raw_line(code, position);
                 ifdefs.push_back({value, value, false, identifier});
                 update_ifdef_stack();
+                conditional_changed = true;
             } else if (starts_at(code, position, "#ifndef ")) {
                 const std::string identifier = read_identifier(code, position + 8U);
                 const bool value = flags.find(identifier) == flags.end();
                 kill_raw_line(code, position);
                 ifdefs.push_back({value, value, false, identifier});
                 update_ifdef_stack();
+                conditional_changed = true;
             } else if (starts_at(code, position, "#if ")) {
                 const std::string expression = read_identifier(code, position + 4U);
                 const bool value = parse_condition(expression);
                 kill_raw_line(code, position);
                 ifdefs.push_back({value, value, false, expression});
                 update_ifdef_stack();
+                conditional_changed = true;
             } else if (starts_at(code, position, "#elif ")) {
                 const std::string expression = read_identifier(code, position + 6U);
                 kill_raw_line(code, position);
@@ -3345,6 +3590,7 @@ void scan_source(
                     }
                 }
                 update_ifdef_stack();
+                conditional_changed = true;
             } else if (starts_at(code, position, "#else")) {
                 kill_raw_line(code, position);
                 if (ifdefs.empty() || ifdefs.back().has_else) {
@@ -3363,6 +3609,7 @@ void scan_source(
                     }
                 }
                 update_ifdef_stack();
+                conditional_changed = true;
             } else if (starts_at(code, position, "#endif")) {
                 kill_raw_line(code, position);
                 if (ifdefs.empty()) {
@@ -3373,6 +3620,7 @@ void scan_source(
                     ifdefs.pop_back();
                 }
                 update_ifdef_stack();
+                conditional_changed = true;
             } else if (starts_at(code, position, "#restrict usage allow ") ||
                        starts_at(code, position, "#restrict usage disallow ")) {
                 // Shipping builds discard editor-only usage restrictions but
@@ -3380,6 +3628,8 @@ void scan_source(
                 kill_raw_line(code, position);
             }
         }
+
+        if (conditional_changed) update_editor_only_block();
 
         if (ifdef_stack_is_false && !is_whitespace(current)) {
             current = ' ';
@@ -3546,7 +3796,8 @@ bool compute_processed_code_hash_utf8(
 lexical_preprocess_result preprocess_lexical_module_graph(
     const preprocessor_options& options,
     const std::vector<preprocessor_source>& sources,
-    const std::vector<preprocessor_base_module>& base_modules) {
+    const std::vector<preprocessor_base_module>& base_modules,
+    const preprocessor_hooks* const hooks) {
     lexical_preprocess_result result;
     if (!validate_inputs(options, sources, base_modules, result)) return result;
 
@@ -3555,10 +3806,19 @@ lexical_preprocess_result preprocess_lexical_module_graph(
     for (const preprocessor_flag& flag : options.flags) flags.emplace(flag.name, flag.value);
 
     result.static_names = options.static_names;
+    fname_key_map captured_fname_keys;
+    captured_fname_keys.reserve(options.fname_comparison_keys.size());
+    for (const fname_comparison_key& entry : options.fname_comparison_keys) {
+        captured_fname_keys.emplace(entry.spelling, entry.key);
+    }
     std::unordered_map<std::string, std::size_t> static_name_indices;
     static_name_indices.reserve(result.static_names.size());
     for (std::size_t index = 0U; index < result.static_names.size(); ++index) {
-        static_name_indices.emplace(ascii_fold(result.static_names[index]), index);
+        std::string identity;
+        if (fname_comparison_identity(
+                result.static_names[index], captured_fname_keys, identity)) {
+            static_name_indices.emplace(std::move(identity), index);
+        }
     }
 
     std::vector<source_state> states;
@@ -3596,23 +3856,32 @@ lexical_preprocess_result preprocess_lexical_module_graph(
             result,
             declared_classes);
     }
-    resolve_class_hierarchy(options, sources, base_modules, states, order, result);
+    resolve_class_hierarchy(
+        options, sources, base_modules, states, order, result, hooks);
 
     // Name/F-string stream replacements are discovered in original Files
     // order before reflection macros can append wrapper static names.
     for (std::size_t index = 0U; index < states.size(); ++index) {
         bool static_name_limit_exceeded = false;
+        bool fname_comparison_missing = false;
         std::string& code = states[index].module.code.front().conditioned_code;
         lower_name_and_format_literals(
             code,
             result.static_names,
             static_name_indices,
+            captured_fname_keys,
             static_name_limit_exceeded,
+            fname_comparison_missing,
             &states[index].type_ranges);
         if (static_name_limit_exceeded) {
             add_diagnostic(
                 result, sources[index], 1U,
                 "static-name table exceeds the bounded maximum");
+        }
+        if (fname_comparison_missing) {
+            add_diagnostic(
+                result, sources[index], 1U,
+                "non-ASCII FName has no authoritative comparison key in the frontend profile");
         }
     }
 
@@ -3627,13 +3896,19 @@ lexical_preprocess_result preprocess_lexical_module_graph(
             states[index],
             result,
             result.static_names,
-            static_name_indices);
-        refresh_defaults(states[index]);
+            static_name_indices,
+            captured_fname_keys);
     }
 
     for (const std::size_t index : order) {
         process_delegates(options, sources[index], states[index], result);
     }
+
+    invoke_graph_hook(
+        "OnProcessChunks", hooks,
+        hooks == nullptr ? nullptr : hooks->process_chunks,
+        states, result);
+    for (const std::size_t index : order) refresh_defaults(states[index]);
 
     // Donor post-processing runs in dependency-sorted order.
     for (const std::size_t index : order) {
@@ -3647,6 +3922,11 @@ lexical_preprocess_result preprocess_lexical_module_graph(
                 "post-init function count exceeds the bounded maximum");
         }
     }
+
+    invoke_graph_hook(
+        "OnPostProcessCode", hooks,
+        hooks == nullptr ? nullptr : hooks->post_process_code,
+        states, result);
 
     for (std::size_t index = 0U; index < states.size(); ++index) {
         preprocessed_code_section& section = states[index].module.code.front();
