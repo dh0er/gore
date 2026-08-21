@@ -72,6 +72,11 @@ target_compile_options(gore-as-unreangel-core PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:/EHsc>
     $<$<COMPILE_LANGUAGE:CXX>:/FICoreMinimal.h>
 )
+set_source_files_properties(
+    compat/src/compat_runtime.cpp
+    src/core.cpp
+    PROPERTIES COMPILE_OPTIONS "/W4;/WX;/permissive-;/sdl"
+)
 set_property(TARGET gore-as-unreangel-core PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
 )
@@ -130,9 +135,25 @@ if(BUILD_TESTING)
         MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
     )
 
+    add_executable(gore-as-unreangel-graph-smoke tests/module_graph_smoke.cpp)
+    target_link_libraries(gore-as-unreangel-graph-smoke PRIVATE gore-as-unreangel-core)
+    target_compile_options(gore-as-unreangel-graph-smoke PRIVATE
+        /W4 /WX /permissive- /utf-8 /sdl /guard:cf /Brepro
+    )
+    target_link_options(gore-as-unreangel-graph-smoke PRIVATE
+        /guard:cf /DYNAMICBASE /NXCOMPAT /Brepro
+    )
+    set_property(TARGET gore-as-unreangel-graph-smoke PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    )
+
     add_test(
         NAME gore-as-unreangel-core.build-smoke
         COMMAND "$<TARGET_FILE:gore-as-unreangel-core-smoke>"
+    )
+    add_test(
+        NAME gore-as-unreangel-core.module-graph-smoke
+        COMMAND "$<TARGET_FILE:gore-as-unreangel-graph-smoke>"
     )
     add_test(
         NAME gore-as-standalone-compiler.cli-smoke

@@ -223,7 +223,7 @@ pub struct BytecodeProfileV1 {
 pub struct CacheWriterProfileV1 {
     pub format_version: u32,
     pub serializer_schema: SealedBlobV1,
-    pub header_magic: u32,
+    pub build_identifier: u32,
     pub reference_table_order: SealedBlobV1,
     pub normalized_oracle_corpus: SealedBlobV1,
 }
@@ -640,7 +640,7 @@ mod tests {
             cache_writer: CacheWriterProfileV1 {
                 format_version: 1,
                 serializer_schema: blob("cache/serializer.json", 17),
-                header_magic: 0x9e37_7abe,
+                build_identifier: 0x9e37_7abe,
                 reference_table_order: blob("cache/reference-order.json", 18),
                 normalized_oracle_corpus: blob("cache/oracle-corpus.json", 19),
             },

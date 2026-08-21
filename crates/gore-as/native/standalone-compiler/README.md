@@ -4,8 +4,7 @@ This directory contains the hermetic native process boundary and the pinned,
 modified UNREANGEL AngelScript core used by the future standalone compiler. The
 core is now a Windows-x64/MSVC static library with a real generic compile smoke;
 the sidecar's `compile` operation remains deliberately fail-closed until the
-G1R profile, multi-module orchestration, preprocessing, and cache emitter are
-integrated.
+G1R profile, preprocessing, and cache emitter are integrated.
 
 No target links or loads Unreal Engine or a game DLL. Nothing launches the game,
 and the sidecar does not yet write compiled output or cache data. CMake performs
@@ -20,12 +19,38 @@ narrow replacement for the small Unreal Core surface used by those files.
 source text, runs the lexer/parser/builder phases, and verifies that the built
 function has non-empty bytecode.
 
-The `build_module` adapter is intentionally only a single-module generic smoke
-path. It is not parity with `FAngelscriptManager`: the game manager establishes
-phase barriers across the complete module graph (parse all modules, generate
-types across the graph, then functions/layout and code). A standalone
-multi-module graph orchestrator remains required before G1R compilation can be
-claimed.
+`build_module_graph` now runs one engine build session with the phase barriers
+used by the pinned `FAngelscriptManager` initial-build path:
+
+1. parse every module;
+2. generate types for every successful module;
+3. generate functions for every successful module;
+4. lay out classes across the graph, then calculate deferred template sizes;
+5. lay out functions for every successful module;
+6. compile code for every source builder and release each builder;
+7. validate deferred template instances once for the graph;
+8. initialize globals only when the graph has no compile error.
+
+`BuildCompleted` is paired exactly once with a successful `RequestBuild`.
+Failures retain the first phase/module result, release every builder, reset the
+partial graph in reverse input order, and leave the engine reusable.
+`build_module` remains as a one-element compatibility wrapper over this path.
+The current implementation executes modules serially within each phase; it
+preserves the manager's barriers but does not claim its parallel parse
+throughput.
+
+`gore-as-unreangel-graph-smoke` places a consumer before its imported provider.
+The consumer uses a provider-owned enum in its function declaration, so it can
+only compile after the graph-wide type barrier. The same test injects a parse
+error and then successfully rebuilds that module, covering builder lifetime and
+engine build-lock release.
+
+This is phase-orchestration parity, not yet a complete G1R module graph. The
+standalone caller still needs authoritative inputs for module discovery,
+declared/automatic import edges, dependency ordering, code-class and delegate
+pre-class metadata, active/precompiled-module selection, and hot-reload
+reference-replacement policy. Those values must come from preprocessing and the
+sealed G1R profile; the native layer does not infer or manufacture them.
 
 The compatibility layer is also not an Unreal implementation. Its containers
 and hashing are sufficient for the generic core checkpoint, settings are safe

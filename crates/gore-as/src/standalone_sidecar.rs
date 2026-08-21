@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,6 +18,7 @@ use crate::compiler_backend::{CompilerBackendFailureKindV1, CompilerBackendFailu
 use crate::compiler_profile::manifest::{
     CompilerProfileV1, FileSealV1, SealedBlobV1, Sha256Digest, MAX_COMPILER_PROFILE_JSON_BYTES,
 };
+use crate::compiler_profile::registry::validate_engine_profile_payloads;
 
 pub const SIDECAR_REQUEST_VERSION_V1: u32 = 1;
 pub const SIDECAR_RESPONSE_VERSION_V1: u32 = 1;
@@ -32,10 +33,17 @@ pub const MAX_SIDECAR_SOURCE_BYTES_V1: u64 = 256 * 1024 * 1024;
 const MAX_SIDECAR_BASE_BYTES_V1: u64 = 512 * 1024 * 1024;
 const MAX_SIDECAR_BINDS_BYTES_V1: u64 = 128 * 1024 * 1024;
 const MAX_SIDECAR_OUTPUT_BYTES_V1: u64 = 512 * 1024 * 1024;
+const MAX_SIDECAR_EXECUTABLE_BYTES_V1: u64 = 256 * 1024 * 1024;
 const MAX_PROFILE_BLOB_BYTES_V1: u64 = 512 * 1024 * 1024;
 const MAX_PROFILE_AGGREGATE_BYTES_V1: u64 = 1024 * 1024 * 1024;
+const MAX_ENGINE_PROPERTIES_BYTES_V1: u64 = 1024 * 1024;
+const MAX_REGISTRATION_TRACE_BYTES_V1: u64 = 256 * 1024 * 1024;
+const MAX_POST_BIND_SNAPSHOT_BYTES_V1: u64 = 128 * 1024 * 1024;
 const DEFAULT_SIDECAR_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const DEFAULT_TERMINATION_GRACE: Duration = Duration::from_secs(5);
+const DEFAULT_SIDECAR_MEMORY_LIMIT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const MIN_SIDECAR_MEMORY_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_SIDECAR_MEMORY_LIMIT_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const ENGINE_UNAVAILABLE_CODE: &str = "GORE_AS_STANDALONE_ENGINE_UNAVAILABLE";
 const SCRATCH_PREFIX: &str = "gore-as-sidecar-v1-";
@@ -45,28 +53,41 @@ static SCRATCH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug, Clone)]
 pub struct StandaloneSidecarConfigV1 {
     pub sidecar_path: PathBuf,
+    pub sidecar_seal: SidecarExecutableSealV1,
     pub profile_manifest_path: PathBuf,
     pub profile_root: PathBuf,
     pub scratch_root: PathBuf,
     pub timeout: Duration,
     pub termination_grace: Duration,
+    /// Hard per-process and aggregate process-tree memory ceiling.
+    pub memory_limit_bytes: u64,
     fixed_args: Vec<OsString>,
+}
+
+/// Package-authored identity of the exact sidecar binary that may execute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SidecarExecutableSealV1 {
+    pub byte_len: u64,
+    pub sha256: Sha256Digest,
 }
 
 impl StandaloneSidecarConfigV1 {
     pub fn new(
         sidecar_path: PathBuf,
+        sidecar_seal: SidecarExecutableSealV1,
         profile_manifest_path: PathBuf,
         profile_root: PathBuf,
         scratch_root: PathBuf,
     ) -> Self {
         Self {
             sidecar_path,
+            sidecar_seal,
             profile_manifest_path,
             profile_root,
             scratch_root,
             timeout: DEFAULT_SIDECAR_TIMEOUT,
             termination_grace: DEFAULT_TERMINATION_GRACE,
+            memory_limit_bytes: DEFAULT_SIDECAR_MEMORY_LIMIT_BYTES,
             fixed_args: Vec::new(),
         }
     }
@@ -91,10 +112,19 @@ impl StandaloneSidecarRunnerV1 {
         require_absolute(&config.profile_manifest_path, "compiler profile manifest")?;
         require_absolute(&config.profile_root, "compiler profile root")?;
         require_absolute(&config.scratch_root, "sidecar scratch root")?;
+        if !(MIN_SIDECAR_MEMORY_LIMIT_BYTES..=MAX_SIDECAR_MEMORY_LIMIT_BYTES)
+            .contains(&config.memory_limit_bytes)
+        {
+            return Err(unavailable(format!(
+                "sidecar memory limit must be between {MIN_SIDECAR_MEMORY_LIMIT_BYTES} and \
+                 {MAX_SIDECAR_MEMORY_LIMIT_BYTES} bytes"
+            )));
+        }
         ensure_real_directory(&config.profile_root, "compiler profile root")?;
         ensure_real_directory(&config.scratch_root, "sidecar scratch root")?;
-        let _sidecar = open_regular_no_follow(&config.sidecar_path, "sidecar executable")
+        let mut sidecar = open_regular_no_follow(&config.sidecar_path, "sidecar executable")
             .map_err(unavailable)?;
+        verify_open_sidecar_seal(&mut sidecar, config.sidecar_seal)?;
         let manifest = read_regular_bounded_no_follow(
             &config.profile_manifest_path,
             MAX_COMPILER_PROFILE_JSON_BYTES as u64,
@@ -103,6 +133,7 @@ impl StandaloneSidecarRunnerV1 {
         .map_err(|error| unavailable(error.to_string()))?;
         let profile = CompilerProfileV1::from_json(&manifest)
             .map_err(|error| unavailable(format!("compiler profile is not qualified: {error}")))?;
+        validate_registry_profile_at_root(&profile, &config.profile_root)?;
         Ok(Self { config, profile })
     }
 
@@ -138,9 +169,10 @@ impl StandaloneCompilerRunnerV1 for StandaloneSidecarRunnerV1 {
             unavailable(format!("compiler profile is no longer valid: {error}"))
         })?;
 
-        let sidecar_handle =
+        let mut sidecar_handle =
             open_regular_no_follow(&self.config.sidecar_path, "sidecar executable")
                 .map_err(unavailable)?;
+        verify_open_sidecar_seal(&mut sidecar_handle, self.config.sidecar_seal)?;
         let mut scratch = ScratchDirectory::create(&self.config.scratch_root)?;
         let staged_profile_root = scratch.path.join("profile");
         let staged_sources = scratch.path.join("sources");
@@ -372,11 +404,11 @@ fn run_sidecar_process(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    configure_process_group(&mut command);
+    configure_process_group(&mut command, config.memory_limit_bytes)?;
     let mut child = command
         .spawn()
         .map_err(|error| unavailable(format!("starting standalone sidecar: {error}")))?;
-    let mut process_tree = ProcessTreeGuard::attach(&mut child)?;
+    let mut process_tree = ProcessTreeGuard::attach(&mut child, config.memory_limit_bytes)?;
     let stdout = child
         .stdout
         .take()
@@ -723,6 +755,55 @@ fn stage_profile(
     Ok(path)
 }
 
+fn validate_registry_profile_at_root(
+    profile: &CompilerProfileV1,
+    profile_root: &Path,
+) -> Result<(), CompilerBackendFailureV1> {
+    let properties = read_sealed_profile_blob(
+        profile_root,
+        &profile.engine.ordered_engine_properties,
+        MAX_ENGINE_PROPERTIES_BYTES_V1,
+        "ordered engine properties",
+    )?;
+    let trace = read_sealed_profile_blob(
+        profile_root,
+        &profile.engine.registration_trace,
+        MAX_REGISTRATION_TRACE_BYTES_V1,
+        "registration trace",
+    )?;
+    let snapshot = read_sealed_profile_blob(
+        profile_root,
+        &profile.engine.post_bind_snapshot,
+        MAX_POST_BIND_SNAPSHOT_BYTES_V1,
+        "post-bind snapshot",
+    )?;
+    validate_engine_profile_payloads(&profile.engine, &properties, &trace, &snapshot)
+        .map_err(|error| unavailable(format!("compiler registry profile is invalid: {error}")))?;
+    Ok(())
+}
+
+fn read_sealed_profile_blob(
+    root: &Path,
+    expected: &SealedBlobV1,
+    max_bytes: u64,
+    label: &'static str,
+) -> Result<Vec<u8>, CompilerBackendFailureV1> {
+    if expected.byte_len > max_bytes {
+        return Err(unavailable(format!(
+            "{label} is {} bytes; maximum accepted size is {max_bytes}",
+            expected.byte_len
+        )));
+    }
+    let bytes = read_regular_bounded_no_follow(&root.join(&expected.path), max_bytes, label)
+        .map_err(|error| unavailable(error.to_string()))?;
+    if bytes.len() as u64 != expected.byte_len || sha256_bytes(&bytes) != expected.sha256 {
+        return Err(unavailable(format!(
+            "{label} does not match its compiler-profile seal"
+        )));
+    }
+    Ok(bytes)
+}
+
 fn profile_blobs(profile: &CompilerProfileV1) -> [&SealedBlobV1; 16] {
     [
         &profile.engine.ordered_engine_properties,
@@ -901,6 +982,53 @@ fn verify_memory_seal(
 
 fn sha256_bytes(bytes: &[u8]) -> Sha256Digest {
     Sha256Digest::from_bytes(Sha256::digest(bytes).into())
+}
+
+fn verify_open_sidecar_seal(
+    file: &mut std::fs::File,
+    expected: SidecarExecutableSealV1,
+) -> Result<(), CompilerBackendFailureV1> {
+    let metadata = file
+        .metadata()
+        .map_err(|error| unavailable(format!("inspecting sidecar executable: {error}")))?;
+    if expected.byte_len == 0
+        || expected.byte_len > MAX_SIDECAR_EXECUTABLE_BYTES_V1
+        || metadata.len() != expected.byte_len
+    {
+        return Err(unavailable(
+            "sidecar executable does not match its packaged length seal",
+        ));
+    }
+
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| unavailable(format!("seeking sidecar executable: {error}")))?;
+    let mut hash = Sha256::new();
+    let mut read_total = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| unavailable(format!("reading sidecar executable: {error}")))?;
+        if read == 0 {
+            break;
+        }
+        read_total = read_total
+            .checked_add(read as u64)
+            .ok_or_else(|| unavailable("sidecar executable length overflowed"))?;
+        if read_total > expected.byte_len {
+            return Err(unavailable(
+                "sidecar executable changed while its identity was checked",
+            ));
+        }
+        hash.update(&buffer[..read]);
+    }
+    let actual = Sha256Digest::from_bytes(hash.finalize().into());
+    if read_total != expected.byte_len || actual != expected.sha256 {
+        return Err(unavailable(
+            "sidecar executable does not match its packaged SHA-256 seal",
+        ));
+    }
+    Ok(())
 }
 
 fn write_new_readonly(
@@ -1242,16 +1370,38 @@ fn invalid_output(detail: impl Into<String>) -> CompilerBackendFailureV1 {
 }
 
 #[cfg(windows)]
-fn configure_process_group(command: &mut Command) {
+fn configure_process_group(
+    command: &mut Command,
+    _memory_limit_bytes: u64,
+) -> Result<(), CompilerBackendFailureV1> {
     use std::os::windows::process::CommandExt as _;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     command.creation_flags(CREATE_NO_WINDOW);
+    Ok(())
 }
 
 #[cfg(unix)]
-fn configure_process_group(command: &mut Command) {
+fn configure_process_group(
+    command: &mut Command,
+    memory_limit_bytes: u64,
+) -> Result<(), CompilerBackendFailureV1> {
     use std::os::unix::process::CommandExt as _;
     command.process_group(0);
+    // Safety: the closure calls only the async-signal-safe setrlimit syscall and
+    // constructs no Rust-owned state in the child between fork and exec.
+    unsafe {
+        command.pre_exec(move || {
+            let limit = libc::rlimit {
+                rlim_cur: memory_limit_bytes as libc::rlim_t,
+                rlim_max: memory_limit_bytes as libc::rlim_t,
+            };
+            if libc::setrlimit(libc::RLIMIT_AS, &limit) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -1262,14 +1412,18 @@ struct ProcessTreeGuard {
 
 #[cfg(windows)]
 impl ProcessTreeGuard {
-    fn attach(child: &mut std::process::Child) -> Result<Self, CompilerBackendFailureV1> {
+    fn attach(
+        child: &mut std::process::Child,
+        memory_limit_bytes: u64,
+    ) -> Result<Self, CompilerBackendFailureV1> {
         use std::mem::size_of;
         use std::os::windows::io::AsRawHandle as _;
         use windows_sys::Win32::Foundation::{CloseHandle, GetLastError};
         use windows_sys::Win32::System::JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
             SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_JOB_MEMORY,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
         };
         unsafe {
             let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
@@ -1282,7 +1436,13 @@ impl ProcessTreeGuard {
                 )));
             }
             let mut information: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-            information.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            information.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+                | JOB_OBJECT_LIMIT_PROCESS_MEMORY
+                | JOB_OBJECT_LIMIT_JOB_MEMORY;
+            information.BasicLimitInformation.ActiveProcessLimit = 1;
+            information.ProcessMemoryLimit = memory_limit_bytes as usize;
+            information.JobMemoryLimit = memory_limit_bytes as usize;
             if SetInformationJobObject(
                 job,
                 JobObjectExtendedLimitInformation,
@@ -1350,7 +1510,10 @@ struct ProcessTreeGuard {
 
 #[cfg(unix)]
 impl ProcessTreeGuard {
-    fn attach(child: &mut std::process::Child) -> Result<Self, CompilerBackendFailureV1> {
+    fn attach(
+        child: &mut std::process::Child,
+        _memory_limit_bytes: u64,
+    ) -> Result<Self, CompilerBackendFailureV1> {
         let process_group = i32::try_from(child.id())
             .map_err(|_| internal("sidecar process id cannot be represented"))?;
         Ok(Self {
@@ -1397,6 +1560,12 @@ mod tests {
         EngineProfileV1, FrontendProfileV1, PeCodeViewV1, QualificationProfileV1, Sha1Digest,
         UnrealSemanticsProfileV1, COMPILER_PROFILE_SCHEMA, COMPILER_PROFILE_SCHEMA_VERSION,
     };
+    use crate::compiler_profile::registry::{
+        EnginePropertySettingV1, EnginePropertyV1, OrderedEnginePropertiesV1, PostBindEntryV1,
+        PostBindResultV1, PostBindSnapshotV1, RegistrationContextV1, RegistrationEntryV1,
+        RegistrationTraceV1, ENGINE_PROPERTIES_SCHEMA, POST_BIND_SNAPSHOT_SCHEMA,
+        REGISTRATION_TRACE_SCHEMA,
+    };
 
     struct TestFixture {
         root: PathBuf,
@@ -1435,6 +1604,65 @@ mod tests {
                 byte_len: blob_bytes.len() as u64,
                 sha256: sha256_bytes(blob_bytes),
             };
+            let mut properties = OrderedEnginePropertiesV1 {
+                schema: ENGINE_PROPERTIES_SCHEMA.into(),
+                schema_version: 1,
+                settings: vec![EnginePropertySettingV1 {
+                    ordinal: 0,
+                    property: EnginePropertyV1::OptimizeBytecode,
+                    value: 1,
+                }],
+                canonical_sha256: Sha256Digest::from_bytes([0; 32]),
+            };
+            properties.seal().unwrap();
+            let properties_json = properties.to_json().unwrap();
+            let mut trace = RegistrationTraceV1 {
+                schema: REGISTRATION_TRACE_SCHEMA.into(),
+                schema_version: 1,
+                host_stubs: vec![],
+                entries: vec![RegistrationEntryV1::Enum {
+                    ordinal: 0,
+                    registration_id: 0,
+                    context: RegistrationContextV1 {
+                        namespace: String::new(),
+                        config_group: None,
+                        access_mask: u32::MAX,
+                    },
+                    type_id: 1,
+                    declaration: "ETest".into(),
+                }],
+                canonical_sha256: Sha256Digest::from_bytes([0; 32]),
+            };
+            trace.seal().unwrap();
+            let trace_json = trace.to_json().unwrap();
+            let mut snapshot = PostBindSnapshotV1 {
+                schema: POST_BIND_SNAPSHOT_SCHEMA.into(),
+                schema_version: 1,
+                engine_properties_sha256: properties.canonical_sha256,
+                registration_trace_sha256: trace.canonical_sha256,
+                entries: vec![PostBindEntryV1 {
+                    ordinal: 0,
+                    trace_registration_id: 0,
+                    result: PostBindResultV1::Enum { engine_type_id: 1 },
+                }],
+                final_states: vec![],
+                canonical_sha256: Sha256Digest::from_bytes([0; 32]),
+            };
+            snapshot.seal().unwrap();
+            let snapshot_json = snapshot.to_json().unwrap();
+            let registry_blob = |path: &str, bytes: &[u8]| {
+                let destination = profile_root.join(path);
+                std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+                std::fs::write(&destination, bytes).unwrap();
+                SealedBlobV1 {
+                    path: path.into(),
+                    byte_len: bytes.len() as u64,
+                    sha256: sha256_bytes(bytes),
+                }
+            };
+            let properties_blob = registry_blob("engine/properties.json", &properties_json);
+            let trace_blob = registry_blob("engine/registrations.json", &trace_json);
+            let snapshot_blob = registry_blob("engine/post-bind.json", &snapshot_json);
             let file = |bytes: &[u8], steam: bool| FileSealV1 {
                 byte_len: bytes.len() as u64,
                 sha256: sha256_bytes(bytes),
@@ -1473,10 +1701,10 @@ mod tests {
                 },
                 engine: EngineProfileV1 {
                     as_create_version: 23_300,
-                    ordered_engine_properties: blob.clone(),
-                    registration_trace: blob.clone(),
+                    ordered_engine_properties: properties_blob,
+                    registration_trace: trace_blob,
                     registration_trace_count: 1,
-                    post_bind_snapshot: blob.clone(),
+                    post_bind_snapshot: snapshot_blob,
                 },
                 unreal_semantics: UnrealSemanticsProfileV1 {
                     reflected_type_graph: blob.clone(),
@@ -1497,7 +1725,7 @@ mod tests {
                 cache_writer: CacheWriterProfileV1 {
                     format_version: 1,
                     serializer_schema: blob.clone(),
-                    header_magic: 0x9e37_7abe,
+                    build_identifier: 0x9e37_7abe,
                     reference_table_order: blob.clone(),
                     normalized_oracle_corpus: blob.clone(),
                 },
@@ -1533,7 +1761,8 @@ mod tests {
             let script_path = self.root.join(format!("{label}.py"));
             std::fs::write(&script_path, script).unwrap();
             let mut config = StandaloneSidecarConfigV1::new(
-                python,
+                python.clone(),
+                executable_seal(&python),
                 self.manifest.clone(),
                 self.profile_root.clone(),
                 self.scratch.clone(),
@@ -1592,6 +1821,12 @@ mod tests {
             }
         }
         None
+    }
+
+    fn executable_seal(path: &Path) -> SidecarExecutableSealV1 {
+        let (byte_len, sha256) =
+            hash_regular_file(path, MAX_SIDECAR_EXECUTABLE_BYTES_V1, "test sidecar").unwrap();
+        SidecarExecutableSealV1 { byte_len, sha256 }
     }
 
     #[test]
@@ -1709,6 +1944,51 @@ time.sleep(30)
         assert_eq!(error.kind(), CompilerBackendFailureKindV1::Internal);
         assert!(error.detail().contains("exceeded"), "{error}");
         assert!(started.elapsed() < Duration::from_secs(5));
+        fixture.assert_scratch_empty();
+    }
+
+    #[test]
+    fn sidecar_memory_limit_is_bounded_before_process_start() {
+        let fixture = TestFixture::create("memory-limit");
+        let Some(python) = find_python() else {
+            eprintln!("python unavailable; sidecar configuration test skipped");
+            return;
+        };
+        let mut config = StandaloneSidecarConfigV1::new(
+            python.clone(),
+            executable_seal(&python),
+            fixture.manifest.clone(),
+            fixture.profile_root.clone(),
+            fixture.scratch.clone(),
+        );
+        config.memory_limit_bytes = MIN_SIDECAR_MEMORY_LIMIT_BYTES - 1;
+        let error = StandaloneSidecarRunnerV1::new(config).unwrap_err();
+        assert_eq!(error.kind(), CompilerBackendFailureKindV1::Unavailable);
+        assert!(error.detail().contains("memory limit"), "{error}");
+        fixture.assert_scratch_empty();
+    }
+
+    #[test]
+    fn sidecar_executable_must_match_the_packaged_seal() {
+        let fixture = TestFixture::create("executable-seal");
+        let Some(python) = find_python() else {
+            eprintln!("python unavailable; sidecar seal test skipped");
+            return;
+        };
+        let actual = executable_seal(&python);
+        let config = StandaloneSidecarConfigV1::new(
+            python,
+            SidecarExecutableSealV1 {
+                byte_len: actual.byte_len,
+                sha256: Sha256Digest::from_bytes([0; 32]),
+            },
+            fixture.manifest.clone(),
+            fixture.profile_root.clone(),
+            fixture.scratch.clone(),
+        );
+        let error = StandaloneSidecarRunnerV1::new(config).unwrap_err();
+        assert_eq!(error.kind(), CompilerBackendFailureKindV1::Unavailable);
+        assert!(error.detail().contains("SHA-256 seal"), "{error}");
         fixture.assert_scratch_empty();
     }
 }

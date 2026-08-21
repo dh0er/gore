@@ -6,3 +6,4 @@
 
 pub mod binds;
 pub mod manifest;
+pub mod registry;
