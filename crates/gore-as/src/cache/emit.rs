@@ -873,6 +873,7 @@ fn emit_function_ctor(
     // appears its operand slot is a bool. Left as an int the body writes
     // `local = int(local == 0);` and the compiler materializes a comparison vanilla never had.
     bool_overrides.extend(not_operand_slots(f));
+    bool_overrides.extend(bool_call_result_slots(f, refs));
     bool_overrides.retain(|slot| {
         !enum_overrides.contains_key(slot)
             && !numkinds.contains_key(slot)
@@ -3280,6 +3281,50 @@ fn bool_slot_profile_is_safe(instrs: &[super::disasm::Instr], slot: i32) -> bool
 /// resolved `bool` field witness, no unresolved/non-bool byte-field access on the same slot, and a
 /// whole-function bool-only opcode profile. This turns compiler bool temporaries back into bools
 /// without treating arbitrary SetV1/int8 scratch as boolean.
+/// Slots that take a bool-returning call's result. `CpyRtoV*` right after a call copies the
+/// value register into the slot, so the slot holds what the callee returns. Left typed int,
+/// every read of it is wrapped `(x != 0)` and the compiler materializes a comparison and a test
+/// where vanilla just copied the byte.
+fn bool_call_result_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let mut slots = HashSet::new();
+    let mut returns_bool = false;
+    for ins in &instrs {
+        match ins.op.name {
+            "CALL" | "CALLINTF" | "CALLBND" => {
+                let id = ins.dwords.first().copied().unwrap_or(0) as i32;
+                returns_bool = refs
+                    .func_ret_by_id(id)
+                    .map(|d| d.base_name(refs))
+                    .as_deref()
+                    == Some("bool");
+            }
+            "CALLSYS" => {
+                let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+                returns_bool = refs
+                    .func_ret_by_ptr(ptr)
+                    .map(|d| d.base_name(refs))
+                    .as_deref()
+                    == Some("bool");
+            }
+            "CpyRtoV1" | "CpyRtoV4" => {
+                if returns_bool {
+                    if let Some(slot) = ins.words.first().map(|word| *word as i16 as i32) {
+                        if slot > 0 {
+                            slots.insert(slot);
+                        }
+                    }
+                }
+                returns_bool = false;
+            }
+            _ => returns_bool = false,
+        }
+    }
+    slots
+}
+
 /// Slots `NOT` is applied to — AngelScript's logical not, which only takes a bool variable.
 fn not_operand_slots(f: &Func) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
