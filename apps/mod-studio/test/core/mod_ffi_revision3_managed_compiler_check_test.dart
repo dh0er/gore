@@ -143,13 +143,58 @@ void main() {
       requiredStudioCoreCommands,
       containsAll(<String>[
         'authoring_store_check_revision3_npc_compiler_v1',
+        'authoring_store_check_revision3_npc_compiler_v2',
         'authoring_store_check_revision3_quest_compiler_v1',
+        'authoring_store_check_revision3_quest_compiler_v2',
       ]),
     );
     expect(
       requiredStudioCoreCommands,
       orderedEquals(<String>[...requiredStudioCoreCommands]..sort()),
     );
+  });
+
+  test('V2 strict standalone preserves explicit bundle absence', () async {
+    final response = _response(
+      exactCurrent: false,
+      compiler:
+          _failedEvidence(
+              code: 'AUTHORING_REVISION3_STANDALONE_BUNDLE_ABSENT',
+              installRestore: 'not_started',
+            )
+            ..['compiler_backend'] = <String, Object?>{
+              'requested_mode': 'standalone',
+              'result_backend': null,
+              'standalone_attempted': false,
+              'game_attempted': false,
+              'qualified_package': null,
+              'fallback_reason': null,
+            },
+    );
+    final core = FakeGoreCoreFfiService(
+      responses: <String, Map<String, Object?>>{
+        'authoring_store_check_revision3_quest_compiler_v2': response,
+      },
+    );
+
+    final result = await ModFfi(core)
+        .authoringStoreCheckRevision3QuestCompilerV2(
+          root: _root,
+          gameRoot: _gameRoot,
+          expectedHead: AuthoringWorkingHead.fromCanonicalJson(_headJson()),
+          questId: _questId,
+          compilerBackend: ScriptCompilerBackendMode.standalone,
+        );
+
+    expect(core.calls.single.payload['compiler_backend'], 'standalone');
+    expect(
+      result.compiler.backend?.requestedMode,
+      ScriptCompilerBackendMode.standalone,
+    );
+    expect(result.compiler.backend?.resultBackend, isNull);
+    expect(result.compiler.backend?.standaloneAttempted, isFalse);
+    expect(result.compiler.backend?.gameAttempted, isFalse);
+    expect(result.compiler.failure?.code, contains('BUNDLE_ABSENT'));
   });
 
   test(

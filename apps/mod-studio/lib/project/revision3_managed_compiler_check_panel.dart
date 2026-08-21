@@ -12,7 +12,9 @@ import 'current_project_controller.dart';
 import 'managed_project_session.dart';
 
 typedef Revision3ManagedCompilerChecker =
-    Future<ManagedRevision3CompilerCheckReceipt> Function();
+    Future<ManagedRevision3CompilerCheckReceipt> Function({
+      required ScriptCompilerBackendMode compilerBackend,
+    });
 
 typedef Revision3ManagedCompilerPublisher =
     Future<ManagedRevision3CompilerCheckReceipt> Function({
@@ -22,6 +24,7 @@ typedef Revision3ManagedCompilerPublisher =
       required String expectedModuleId,
       required int expectedModuleRevision,
       required String gameRoot,
+      required ScriptCompilerBackendMode compilerBackend,
     });
 
 /// Evidence-only compiler check for the exact Quest/NPC source shown by its
@@ -49,6 +52,7 @@ class Revision3ManagedCompilerCheckPanel extends ConsumerStatefulWidget {
 class _Revision3ManagedCompilerCheckPanelState
     extends ConsumerState<Revision3ManagedCompilerCheckPanel> {
   bool _busy = false;
+  ScriptCompilerBackendMode _backend = ScriptCompilerBackendMode.game;
   ManagedRevision3CompilerCheckReceipt? _receipt;
   Object? _error;
 
@@ -56,19 +60,44 @@ class _Revision3ManagedCompilerCheckPanelState
   Widget build(BuildContext context) {
     final safety = ref.watch(scriptCompileInstallSafetyProvider);
     final recoveryReport = safety.recoveryReport;
+    final requiresGameSafety = _backend != ScriptCompilerBackendMode.standalone;
     return Column(
       key: const Key('revision3-managed-compiler-check-panel'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          'Game compiler check',
-          style: Theme.of(context).textTheme.titleMedium,
-        ),
+        Text('Compiler check', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 6),
         const Text(
-          'Check this exact saved source with the game compiler. The result is evidence only: no compiled output is kept, and build, runtime, and deploy remain blocked.',
+          'Check this exact saved source with the selected compiler backend. The result is evidence only: no compiled output is kept, and build, runtime, and deploy remain blocked.',
         ),
-        if (safety.showBlockingBanner) ...[
+        const SizedBox(height: 10),
+        DropdownButtonFormField<ScriptCompilerBackendMode>(
+          key: const Key('revision3-managed-compiler-backend'),
+          initialValue: _backend,
+          isExpanded: true,
+          decoration: const InputDecoration(
+            labelText: 'Compiler backend',
+            border: OutlineInputBorder(),
+          ),
+          items: [
+            for (final backend in ScriptCompilerBackendMode.values)
+              DropdownMenuItem(value: backend, child: Text(backend.label)),
+          ],
+          onChanged: _busy
+              ? null
+              : (backend) {
+                  if (backend == null) return;
+                  setState(() => _backend = backend);
+                },
+        ),
+        const SizedBox(height: 6),
+        Text(
+          requiresGameSafety
+              ? 'This route may start the game compiler and requires an exact, safe installation.'
+              : 'This route never starts the game and never mutates the installation. It fails closed unless a qualified standalone package is available.',
+          key: const Key('revision3-managed-compiler-backend-description'),
+        ),
+        if (requiresGameSafety && safety.showBlockingBanner) ...[
           const SizedBox(height: 8),
           ScriptCompileInstallStateBanner(
             state: safety,
@@ -92,7 +121,7 @@ class _Revision3ManagedCompilerCheckPanelState
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.fact_check_outlined),
-            label: Text(_busy ? 'Checking…' : 'Check with game compiler'),
+            label: Text(_busy ? 'Checking…' : 'Check source'),
           ),
         ),
         if (_error != null) ...[
@@ -124,13 +153,18 @@ class _Revision3ManagedCompilerCheckPanelState
 
   Future<void> _run() async {
     final onBusyChanged = widget.onBusyChanged;
+    final attemptedBackend = _backend;
+    final requiresGameSafety =
+        attemptedBackend != ScriptCompilerBackendMode.standalone;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         key: const Key('revision3-managed-compiler-confirmation'),
-        title: const Text('Check with the game compiler?'),
-        content: const Text(
-          'Close Gothic 1 Remake first. Mod Studio will temporarily install only this generated source, run the compiler, restore every touched game path, and discard the compiler output. Your save is not loaded or changed. If exact restoration cannot be proven, all further live changes stay blocked.',
+        title: Text('Check with ${attemptedBackend.label.toLowerCase()}?'),
+        content: Text(
+          requiresGameSafety
+              ? 'Close Gothic 1 Remake first. Mod Studio may temporarily install only this generated source, run the compiler, restore every touched game path, and discard the compiler output. Your save is not loaded or changed. If exact restoration cannot be proven, all further live changes stay blocked.'
+              : 'Mod Studio will not launch Gothic 1 Remake or modify its installation. The check fails closed when no qualified standalone compiler package is installed, and any temporary compiler output is discarded.',
         ),
         actions: [
           TextButton(
@@ -166,16 +200,18 @@ class _Revision3ManagedCompilerCheckPanelState
         scriptCompileInstallSafetyProvider.notifier,
       );
       try {
-        final checked = await safetyController.refresh();
-        if (!_sameRoot(checked.gameRoot, attemptedGameRoot) ||
-            !checked.liveMutationAllowed) {
-          throw StateError(
-            'The selected game installation is not currently safe to check. Close the game, resolve any recovery warning, and choose Recheck.',
-          );
+        if (requiresGameSafety) {
+          final checked = await safetyController.refresh();
+          if (!_sameRoot(checked.gameRoot, attemptedGameRoot) ||
+              !checked.liveMutationAllowed) {
+            throw StateError(
+              'The selected game installation is not currently safe to check. Close the game, resolve any recovery warning, and choose Recheck.',
+            );
+          }
         }
-        receipt = await widget.check();
+        receipt = await widget.check(compilerBackend: attemptedBackend);
         final compiler = receipt.result.compiler;
-        if (compiler.recoveryRequired) {
+        if (requiresGameSafety && compiler.recoveryRequired) {
           final failure = compiler.failure;
           safetyController.recordManagedRecovery(
             gameRoot: attemptedGameRoot,
@@ -185,15 +221,14 @@ class _Revision3ManagedCompilerCheckPanelState
                 'Exact restoration of the game installation could not be proven.',
             installRestore: compiler.installRestore,
           );
-        } else if (_sameRoot(
-          safetyController.current.gameRoot,
-          attemptedGameRoot,
-        )) {
+        } else if (requiresGameSafety &&
+            _sameRoot(safetyController.current.gameRoot, attemptedGameRoot)) {
           await safetyController.refresh();
         }
       } catch (caught) {
         error = caught;
-        if (_sameRoot(safetyController.current.gameRoot, attemptedGameRoot)) {
+        if (requiresGameSafety &&
+            _sameRoot(safetyController.current.gameRoot, attemptedGameRoot)) {
           await safetyController.refresh();
         }
       }
@@ -220,6 +255,7 @@ class _ManagedCompilerReceiptView extends StatelessWidget {
     final compiler = receipt.result.compiler;
     final failure = compiler.failure;
     final diagnostics = compiler.diagnostics;
+    final backend = compiler.backend;
     final accepted = receipt.acceptedAtExactCurrent;
     final recovery = receipt.recoveryRequired;
     final compilerRejected =
@@ -233,9 +269,12 @@ class _ManagedCompilerReceiptView extends StatelessWidget {
     late final IconData icon;
     late final Color color;
     if (recovery) {
-      title = 'Game installation recovery required';
-      body =
-          'The attempt did not prove exact restoration. Further compiler and deploy mutations are blocked until Recheck proves the installation safe.';
+      title = backend?.requestedMode == ScriptCompilerBackendMode.standalone
+          ? 'Standalone compiler recovery required'
+          : 'Game installation recovery required';
+      body = backend?.requestedMode == ScriptCompilerBackendMode.standalone
+          ? 'The standalone attempt could not prove exact cleanup. No artifact is authorized for build or deploy.'
+          : 'The attempt did not prove exact restoration. Further compiler and deploy mutations are blocked until Recheck proves the installation safe.';
       icon = Icons.restore_outlined;
       color = Theme.of(context).colorScheme.error;
     } else if (accepted) {
@@ -290,6 +329,13 @@ class _ManagedCompilerReceiptView extends StatelessWidget {
           title: title,
           body: body,
         ),
+        if (backend != null) ...[
+          const SizedBox(height: 6),
+          SelectableText(
+            _compilerBackendSummary(backend),
+            key: const Key('revision3-managed-compiler-backend-result'),
+          ),
+        ],
         if (failure != null) ...[
           const SizedBox(height: 6),
           SelectableText(
@@ -394,6 +440,20 @@ String _captureSummary(ScriptCompilerDiagnostics diagnostics) {
       'Structured compiler diagnostics were disabled',
   };
   return '$method · ${diagnostics.messages.length} message(s)';
+}
+
+String _compilerBackendSummary(ScriptCompilerBackendEvidence evidence) {
+  final result = switch (evidence.resultBackend) {
+    ScriptCompilerBackendName.game => 'Game compiler',
+    ScriptCompilerBackendName.standalone => 'Standalone compiler',
+    null => 'No compiler backend ran',
+  };
+  final fallback = evidence.fallbackReason;
+  if (fallback == null) {
+    return 'Requested: ${evidence.requestedMode.label}. Result: $result.';
+  }
+  return 'Requested: ${evidence.requestedMode.label}. Result: $result. '
+      'Standalone fallback: ${fallback.detail}';
 }
 
 String _friendlyCompilerCheckError(Object error) {

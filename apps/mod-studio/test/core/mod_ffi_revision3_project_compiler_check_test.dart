@@ -6,6 +6,7 @@ import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/scripts/domain/script_compile_report.dart';
 
 const _command = 'authoring_store_check_revision3_project_compiler_v1';
+const _commandV2 = 'authoring_store_check_revision3_project_compiler_v2';
 const _root = r'C:\Projects\ProjectCompiler.goreproj';
 const _gameRoot = r'C:\Games\Gothic 1 Remake';
 const _projectId = '00000000000000000000000000000031';
@@ -159,11 +160,118 @@ Future<void> _expectMalformed(Map<String, Object?> response) => expectLater(
 void main() {
   test('Studio requires the sorted project compiler capability', () {
     expect(requiredStudioCoreCommands, contains(_command));
+    expect(requiredStudioCoreCommands, contains(_commandV2));
     expect(
       requiredStudioCoreCommands,
       orderedEquals(<String>[...requiredStudioCoreCommands]..sort()),
     );
   });
+
+  test(
+    'V2 strict standalone is explicit, package-free, and game-free',
+    () async {
+      final response = _response(
+        exactCurrent: false,
+        storeAudit: 'not_run',
+        gameAudit: 'not_run',
+        compiler:
+            _failedCompiler(
+                runCount: 0,
+                code: 'AUTHORING_REVISION3_PROJECT_STANDALONE_BUNDLE_ABSENT',
+                installRestore: 'not_started',
+                outputDisposition: 'not_created',
+              )
+              ..['compiler_backend'] = <String, Object?>{
+                'requested_mode': 'standalone',
+                'result_backend': null,
+                'standalone_attempted': false,
+                'game_attempted': false,
+                'qualified_package': null,
+                'fallback_reason': null,
+              },
+      )..['game_inputs'] = null;
+      final core = FakeGoreCoreFfiService(
+        responses: <String, Map<String, Object?>>{_commandV2: response},
+      );
+
+      final result = await ModFfi(core)
+          .authoringStoreCheckRevision3ProjectCompilerV2(
+            root: _root,
+            gameRoot: _gameRoot,
+            expectedHead: AuthoringWorkingHead.fromCanonicalJson(_headJson()),
+            compilerBackend: ScriptCompilerBackendMode.standalone,
+          );
+
+      expect(core.calls.single.command, _commandV2);
+      expect(core.calls.single.payload, <String, Object?>{
+        'compiler_backend': 'standalone',
+        'root': _root,
+        'game_root': _gameRoot,
+        'expected_head_json': _headJson(),
+      });
+      expect(result.gameInputsOrNull, isNull);
+      expect(
+        result.compiler.backend?.requestedMode,
+        ScriptCompilerBackendMode.standalone,
+      );
+      expect(result.compiler.backend?.resultBackend, isNull);
+      expect(result.compiler.backend?.standaloneAttempted, isFalse);
+      expect(result.compiler.backend?.gameAttempted, isFalse);
+      expect(result.compiler.failure?.code, contains('BUNDLE_ABSENT'));
+
+      for (final invalid in <(ScriptCompilerBackendMode, Map<String, Object?>)>[
+        (
+          ScriptCompilerBackendMode.game,
+          _copy(response)
+            ..['compiler'] = <String, Object?>{
+              ...response['compiler']! as Map<String, Object?>,
+              'compiler_backend': <String, Object?>{
+                'requested_mode': 'game',
+                'result_backend': null,
+                'standalone_attempted': false,
+                'game_attempted': false,
+                'qualified_package': null,
+                'fallback_reason': null,
+              },
+            },
+        ),
+        (
+          ScriptCompilerBackendMode.standalone,
+          _copy(response)
+            ..['compiler'] = <String, Object?>{
+              ...response['compiler']! as Map<String, Object?>,
+              'compiler_backend': <String, Object?>{
+                'requested_mode': 'standalone',
+                'result_backend': null,
+                'standalone_attempted': true,
+                'game_attempted': false,
+                'qualified_package': null,
+                'fallback_reason': null,
+              },
+            },
+        ),
+      ]) {
+        final invalidCore = FakeGoreCoreFfiService(
+          responses: <String, Map<String, Object?>>{_commandV2: invalid.$2},
+        );
+        await expectLater(
+          ModFfi(invalidCore).authoringStoreCheckRevision3ProjectCompilerV2(
+            root: _root,
+            gameRoot: _gameRoot,
+            expectedHead: AuthoringWorkingHead.fromCanonicalJson(_headJson()),
+            compilerBackend: invalid.$1,
+          ),
+          throwsA(
+            isA<ModFfiException>().having(
+              (error) => error.code,
+              'code',
+              ModFfiException.malformedNativeResponseCode,
+            ),
+          ),
+        );
+      }
+    },
+  );
 
   test('wrapper sends exactly the three Store-owned inputs', () async {
     final core = FakeGoreCoreFfiService(

@@ -253,7 +253,7 @@ void main() {
         inspect: ({required npcId}) async => inspection,
         gameRoot: r'C:\Game',
         safety: safety,
-        checkCompiler: () {
+        checkCompiler: ({required compilerBackend}) {
           checkStarted = true;
           return pending.future;
         },
@@ -335,7 +335,7 @@ void main() {
       inspect: ({required npcId}) async => inspection,
       gameRoot: r'C:\Game',
       safety: safety,
-      checkCompiler: () async =>
+      checkCompiler: ({required compilerBackend}) async =>
           _acceptedNpcCompilerReceipt(projectJson, exactCurrent: false),
     );
     final result = find.byKey(const Key('revision3-npc-profile-result'));

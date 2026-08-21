@@ -34,6 +34,165 @@ enum ScriptCompileInstallRestore {
   recoveryRequiredRestoreFailed,
 }
 
+enum ScriptCompilerBackendMode {
+  game('game', 'Game compiler'),
+  standalone('standalone', 'Standalone compiler'),
+  standaloneThenGame('standalone_then_game', 'Standalone, then game fallback');
+
+  const ScriptCompilerBackendMode(this.wireName, this.label);
+
+  final String wireName;
+  final String label;
+}
+
+enum ScriptCompilerBackendName { game, standalone }
+
+enum ScriptCompilerBackendFailureKind {
+  unavailable,
+  preflight,
+  rejected,
+  invalidOutput,
+  timeout,
+  internal,
+  recoveryRequired,
+}
+
+final class ScriptCompilerBackendFallback {
+  const ScriptCompilerBackendFallback({
+    required this.failedBackend,
+    required this.failureKind,
+    required this.detail,
+  });
+
+  final ScriptCompilerBackendName failedBackend;
+  final ScriptCompilerBackendFailureKind failureKind;
+  final String detail;
+}
+
+final class ScriptCompilerBackendEvidence {
+  const ScriptCompilerBackendEvidence._({
+    required this.requestedMode,
+    required this.resultBackend,
+    required this.standaloneAttempted,
+    required this.gameAttempted,
+    required this.fallbackReason,
+  });
+
+  final ScriptCompilerBackendMode requestedMode;
+  final ScriptCompilerBackendName? resultBackend;
+  final bool standaloneAttempted;
+  final bool gameAttempted;
+  final ScriptCompilerBackendFallback? fallbackReason;
+
+  factory ScriptCompilerBackendEvidence.fromJson(
+    Object? value, {
+    required ScriptCompilerBackendMode expectedMode,
+  }) {
+    if (value is! Map ||
+        value.length != 6 ||
+        !value.containsKey('requested_mode') ||
+        !value.containsKey('result_backend') ||
+        !value.containsKey('standalone_attempted') ||
+        !value.containsKey('game_attempted') ||
+        !value.containsKey('qualified_package') ||
+        !value.containsKey('fallback_reason')) {
+      throw const FormatException('compiler backend evidence fields');
+    }
+    final requestedMode = switch (value['requested_mode']) {
+      'game' => ScriptCompilerBackendMode.game,
+      'standalone' => ScriptCompilerBackendMode.standalone,
+      'standalone_then_game' => ScriptCompilerBackendMode.standaloneThenGame,
+      _ => throw const FormatException('compiler backend requested mode'),
+    };
+    if (requestedMode != expectedMode) {
+      throw const FormatException('compiler backend requested mode mismatch');
+    }
+    final resultBackend = switch (value['result_backend']) {
+      null => null,
+      'game' => ScriptCompilerBackendName.game,
+      'standalone' => ScriptCompilerBackendName.standalone,
+      _ => throw const FormatException('compiler backend result'),
+    };
+    final standaloneAttempted = value['standalone_attempted'];
+    final gameAttempted = value['game_attempted'];
+    if (standaloneAttempted is! bool || gameAttempted is! bool) {
+      throw const FormatException('compiler backend attempt evidence');
+    }
+    // The current product deliberately has no package-authorized bundle. A
+    // future non-null package identity requires its own typed, signed schema.
+    if (value['qualified_package'] != null) {
+      throw const FormatException('compiler backend package authority');
+    }
+    final fallbackReason = _parseCompilerBackendFallback(
+      value['fallback_reason'],
+    );
+    if ((resultBackend == ScriptCompilerBackendName.game && !gameAttempted) ||
+        (resultBackend == ScriptCompilerBackendName.standalone &&
+            !standaloneAttempted) ||
+        (requestedMode == ScriptCompilerBackendMode.game &&
+            (standaloneAttempted || fallbackReason != null)) ||
+        (requestedMode == ScriptCompilerBackendMode.standalone &&
+            (gameAttempted || fallbackReason != null)) ||
+        (requestedMode == ScriptCompilerBackendMode.standaloneThenGame &&
+            resultBackend != ScriptCompilerBackendName.standalone &&
+            fallbackReason == null) ||
+        (resultBackend == ScriptCompilerBackendName.standalone &&
+            (gameAttempted || fallbackReason != null)) ||
+        (fallbackReason != null &&
+            (requestedMode != ScriptCompilerBackendMode.standaloneThenGame ||
+                fallbackReason.failedBackend !=
+                    ScriptCompilerBackendName.standalone))) {
+      throw const FormatException('compiler backend evidence invariant');
+    }
+    return ScriptCompilerBackendEvidence._(
+      requestedMode: requestedMode,
+      resultBackend: resultBackend,
+      standaloneAttempted: standaloneAttempted,
+      gameAttempted: gameAttempted,
+      fallbackReason: fallbackReason,
+    );
+  }
+}
+
+ScriptCompilerBackendFallback? _parseCompilerBackendFallback(Object? value) {
+  if (value == null) return null;
+  if (value is! Map ||
+      value.length != 3 ||
+      !value.containsKey('failed_backend') ||
+      !value.containsKey('failure_kind') ||
+      !value.containsKey('detail')) {
+    throw const FormatException('compiler backend fallback fields');
+  }
+  final failedBackend = switch (value['failed_backend']) {
+    'game' => ScriptCompilerBackendName.game,
+    'standalone' => ScriptCompilerBackendName.standalone,
+    _ => throw const FormatException('compiler backend fallback backend'),
+  };
+  final failureKind = switch (value['failure_kind']) {
+    'unavailable' => ScriptCompilerBackendFailureKind.unavailable,
+    'preflight' => ScriptCompilerBackendFailureKind.preflight,
+    'rejected' => ScriptCompilerBackendFailureKind.rejected,
+    'invalid_output' => ScriptCompilerBackendFailureKind.invalidOutput,
+    'timeout' => ScriptCompilerBackendFailureKind.timeout,
+    'internal' => ScriptCompilerBackendFailureKind.internal,
+    'recovery_required' => ScriptCompilerBackendFailureKind.recoveryRequired,
+    _ => throw const FormatException('compiler backend fallback kind'),
+  };
+  final detail = _optionalBoundedString(
+    value['detail'],
+    4096,
+    allowEmpty: false,
+  );
+  if (detail == null) {
+    throw const FormatException('compiler backend fallback detail');
+  }
+  return ScriptCompilerBackendFallback(
+    failedBackend: failedBackend,
+    failureKind: failureKind,
+    detail: detail,
+  );
+}
+
 enum ScriptCompilerDiagnosticSeverity { error, warning, note }
 
 class ScriptCompilerDiagnostic {

@@ -1912,15 +1912,17 @@ class _HomePageState extends ConsumerState<HomePage> {
                 expectedHead: currentProject.head,
                 npcId: npcId,
               ),
-          checkProjectCompiler: ({required gameRoot}) => ref
-              .read(currentProjectCoordinatorProvider.notifier)
-              .checkCurrentRevision3ProjectCompiler(
-                expectedRoot: currentProject.root.path,
-                expectedProjectId: currentProject.projectId,
-                expectedProjectRevision: currentProject.projectRevision,
-                expectedHead: currentProject.head,
-                gameRoot: gameRoot,
-              ),
+          checkProjectCompiler:
+              ({required gameRoot, required compilerBackend}) => ref
+                  .read(currentProjectCoordinatorProvider.notifier)
+                  .checkCurrentRevision3ProjectCompiler(
+                    expectedRoot: currentProject.root.path,
+                    expectedProjectId: currentProject.projectId,
+                    expectedProjectRevision: currentProject.projectRevision,
+                    expectedHead: currentProject.head,
+                    gameRoot: gameRoot,
+                    compilerBackend: compilerBackend,
+                  ),
           checkManagedCompiler:
               ({
                 required entityKind,
@@ -1929,6 +1931,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                 required expectedModuleId,
                 required expectedModuleRevision,
                 required gameRoot,
+                required compilerBackend,
               }) => ref
                   .read(currentProjectCoordinatorProvider.notifier)
                   .checkCurrentRevision3ManagedCompiler(
@@ -1942,6 +1945,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                     expectedModuleId: expectedModuleId,
                     expectedModuleRevision: expectedModuleRevision,
                     gameRoot: gameRoot,
+                    compilerBackend: compilerBackend,
                   ),
         ),
         NoCurrentProjectState() => _NoCurrentProjectView(
@@ -2540,6 +2544,7 @@ class _ManagedRevision3ProjectViewState
         required expectedModuleId,
         required expectedModuleRevision,
         required gameRoot,
+        required compilerBackend,
       }) => _runManagedProjectMutation(
         () => widget.checkManagedCompiler(
           entityKind: entityKind,
@@ -2548,6 +2553,7 @@ class _ManagedRevision3ProjectViewState
           expectedModuleId: expectedModuleId,
           expectedModuleRevision: expectedModuleRevision,
           gameRoot: gameRoot,
+          compilerBackend: compilerBackend,
         ),
       );
 
@@ -4704,10 +4710,12 @@ class _ManagedRevision3ProjectViewState
                       controller: _projectCompilerController,
                       checkpoint: checkpoint,
                       gameRoot: gameRoot,
-                      check: ({required gameRoot}) =>
+                      check: ({required gameRoot, required compilerBackend}) =>
                           _runManagedProjectMutation(
-                            () =>
-                                widget.checkProjectCompiler(gameRoot: gameRoot),
+                            () => widget.checkProjectCompiler(
+                              gameRoot: gameRoot,
+                              compilerBackend: compilerBackend,
+                            ),
                           ),
                     ),
                   );
@@ -6897,7 +6905,7 @@ class _ManagedRevision3ProjectViewState
         checkCompiler:
             compilerSelection == null || !_managedProjectMutationAllowed()
             ? null
-            : () => checkManagedCompiler(
+            : ({required compilerBackend}) => checkManagedCompiler(
                 entityKind:
                     AuthoringRevision3ManagedCompilerEntityKind.questDraft,
                 entityId: compilerSelection.entityId,
@@ -6905,6 +6913,7 @@ class _ManagedRevision3ProjectViewState
                 expectedModuleId: compilerSelection.moduleId,
                 expectedModuleRevision: compilerSelection.moduleRevision,
                 gameRoot: configuredGameRoot,
+                compilerBackend: compilerBackend,
               ),
       ),
     );
@@ -6939,7 +6948,7 @@ class _ManagedRevision3ProjectViewState
                 configuredGameRoot == null ||
                 !_managedProjectMutationAllowed()
             ? null
-            : () => checkManagedCompiler(
+            : ({required compilerBackend}) => checkManagedCompiler(
                 entityKind:
                     AuthoringRevision3ManagedCompilerEntityKind.npcDraft,
                 entityId: compilerSelection.entityId,
@@ -6947,6 +6956,7 @@ class _ManagedRevision3ProjectViewState
                 expectedModuleId: compilerSelection.moduleId,
                 expectedModuleRevision: compilerSelection.moduleRevision,
                 gameRoot: configuredGameRoot,
+                compilerBackend: compilerBackend,
               ),
       ),
     );

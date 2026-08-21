@@ -801,6 +801,40 @@ class ModFfi {
     }
   }
 
+  /// Check every managed ScriptModule under one explicit compiler-backend
+  /// policy. The caller cannot provide sidecar, profile, seal, or output paths.
+  Future<AuthoringRevision3ProjectCompilerCheckResult>
+  authoringStoreCheckRevision3ProjectCompilerV2({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required ScriptCompilerBackendMode compilerBackend,
+  }) async {
+    const command = 'authoring_store_check_revision3_project_compiler_v2';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(gameRoot, 'gameRoot');
+    _authoringRevision3DataAssetEnvelopePreflight(command, <(String, String)>[
+      ('expectedHead', expectedHead.canonicalJson),
+      ('gameRoot', gameRoot),
+      ('root', root),
+    ]);
+    final response = await _call(command, <String, Object?>{
+      'compiler_backend': compilerBackend.wireName,
+      'root': root,
+      'game_root': gameRoot,
+      'expected_head_json': expectedHead.canonicalJson,
+    });
+    try {
+      return AuthoringRevision3ProjectCompilerCheckResult.fromJson(
+        response,
+        expectedHead: expectedHead,
+        expectedBackend: compilerBackend,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
   /// Ask the game compiler to check the native-derived source for one exact
   /// revision-3 Quest without returning or adopting a compiled artifact.
   Future<AuthoringRevision3ManagedCompilerCheckResult>
@@ -819,6 +853,24 @@ class ModFfi {
     expectedKind: AuthoringRevision3ManagedCompilerEntityKind.questDraft,
   );
 
+  Future<AuthoringRevision3ManagedCompilerCheckResult>
+  authoringStoreCheckRevision3QuestCompilerV2({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required String questId,
+    required ScriptCompilerBackendMode compilerBackend,
+  }) => _authoringStoreCheckRevision3ManagedCompilerV2(
+    command: 'authoring_store_check_revision3_quest_compiler_v2',
+    root: root,
+    gameRoot: gameRoot,
+    expectedHead: expectedHead,
+    entityId: questId,
+    entityWireField: 'quest_id',
+    expectedKind: AuthoringRevision3ManagedCompilerEntityKind.questDraft,
+    compilerBackend: compilerBackend,
+  );
+
   /// Ask the game compiler to check the native-derived source for one exact
   /// revision-3 NPC without returning or adopting a compiled artifact.
   Future<AuthoringRevision3ManagedCompilerCheckResult>
@@ -835,6 +887,24 @@ class ModFfi {
     entityId: npcId,
     entityWireField: 'npc_id',
     expectedKind: AuthoringRevision3ManagedCompilerEntityKind.npcDraft,
+  );
+
+  Future<AuthoringRevision3ManagedCompilerCheckResult>
+  authoringStoreCheckRevision3NpcCompilerV2({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required String npcId,
+    required ScriptCompilerBackendMode compilerBackend,
+  }) => _authoringStoreCheckRevision3ManagedCompilerV2(
+    command: 'authoring_store_check_revision3_npc_compiler_v2',
+    root: root,
+    gameRoot: gameRoot,
+    expectedHead: expectedHead,
+    entityId: npcId,
+    entityWireField: 'npc_id',
+    expectedKind: AuthoringRevision3ManagedCompilerEntityKind.npcDraft,
+    compilerBackend: compilerBackend,
   );
 
   Future<AuthoringRevision3ManagedCompilerCheckResult>
@@ -871,6 +941,49 @@ class ModFfi {
         expectedHead: expectedHead,
         requestedEntityId: requestedEntityId,
         expectedKind: expectedKind,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  Future<AuthoringRevision3ManagedCompilerCheckResult>
+  _authoringStoreCheckRevision3ManagedCompilerV2({
+    required String command,
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required String entityId,
+    required String entityWireField,
+    required AuthoringRevision3ManagedCompilerEntityKind expectedKind,
+    required ScriptCompilerBackendMode compilerBackend,
+  }) async {
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(gameRoot, 'gameRoot');
+    final requestedEntityId = _authoringRevision3ManagedCompilerEntityId(
+      entityId,
+      entityWireField,
+    );
+    _authoringRevision3DataAssetEnvelopePreflight(command, <(String, String)>[
+      ('expectedHead', expectedHead.canonicalJson),
+      ('gameRoot', gameRoot),
+      (entityWireField, requestedEntityId),
+      ('root', root),
+    ]);
+    final response = await _call(command, <String, Object?>{
+      'compiler_backend': compilerBackend.wireName,
+      'root': root,
+      'game_root': gameRoot,
+      'expected_head_json': expectedHead.canonicalJson,
+      entityWireField: requestedEntityId,
+    });
+    try {
+      return AuthoringRevision3ManagedCompilerCheckResult.fromJson(
+        response,
+        expectedHead: expectedHead,
+        requestedEntityId: requestedEntityId,
+        expectedKind: expectedKind,
+        expectedBackend: compilerBackend,
       );
     } on FormatException catch (error) {
       throw ModFfiException._malformed(command: command, reason: error.message);

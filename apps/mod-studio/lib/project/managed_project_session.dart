@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart' as crypto;
 import 'package:path/path.dart' as p;
 
 import '../core/mod_ffi.dart';
+import '../scripts/domain/script_compile_report.dart';
 import 'managed_project_lock.dart';
 import 'project_atomic_io.dart';
 import 'revision3_content_index.dart';
@@ -1131,6 +1132,34 @@ abstract interface class ManagedRevision3AuthoringStore {
   });
 }
 
+/// Additive backend-aware compiler routes. Older test/store doubles may keep
+/// implementing only [ManagedRevision3AuthoringStore]; production implements
+/// this capability and Studio requires the corresponding Core commands.
+abstract interface class ManagedRevision3CompilerBackendStore {
+  Future<AuthoringRevision3ManagedCompilerCheckResult> checkQuestCompilerV2({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required String questId,
+    required ScriptCompilerBackendMode compilerBackend,
+  });
+
+  Future<AuthoringRevision3ManagedCompilerCheckResult> checkNpcCompilerV2({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required String npcId,
+    required ScriptCompilerBackendMode compilerBackend,
+  });
+
+  Future<AuthoringRevision3ProjectCompilerCheckResult> checkProjectCompilerV2({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required ScriptCompilerBackendMode compilerBackend,
+  });
+}
+
 /// Narrow capability for producing one immutable reviewed DataAsset pack.
 /// Keeping it separate avoids forcing checkpoint-only test stores to claim
 /// build authority they do not implement.
@@ -1348,7 +1377,8 @@ final class ModFfiManagedRevision3AuthoringStore
         ManagedRevision3DialogVoiceSlotCreationStore,
         ManagedRevision3NpcProfileEditStore,
         ManagedRevision3ProjectBuildPlanStore,
-        ManagedRevision3ItemPatchStore {
+        ManagedRevision3ItemPatchStore,
+        ManagedRevision3CompilerBackendStore {
   const ModFfiManagedRevision3AuthoringStore(this.ffi);
 
   final ModFfi ffi;
@@ -1526,6 +1556,21 @@ final class ModFfiManagedRevision3AuthoringStore
   );
 
   @override
+  Future<AuthoringRevision3ManagedCompilerCheckResult> checkQuestCompilerV2({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required String questId,
+    required ScriptCompilerBackendMode compilerBackend,
+  }) => ffi.authoringStoreCheckRevision3QuestCompilerV2(
+    root: root,
+    gameRoot: gameRoot,
+    expectedHead: expectedHead,
+    questId: questId,
+    compilerBackend: compilerBackend,
+  );
+
+  @override
   Future<AuthoringRevision3ManagedCompilerCheckResult> checkNpcCompilerV1({
     required String root,
     required String gameRoot,
@@ -1539,6 +1584,21 @@ final class ModFfiManagedRevision3AuthoringStore
   );
 
   @override
+  Future<AuthoringRevision3ManagedCompilerCheckResult> checkNpcCompilerV2({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required String npcId,
+    required ScriptCompilerBackendMode compilerBackend,
+  }) => ffi.authoringStoreCheckRevision3NpcCompilerV2(
+    root: root,
+    gameRoot: gameRoot,
+    expectedHead: expectedHead,
+    npcId: npcId,
+    compilerBackend: compilerBackend,
+  );
+
+  @override
   Future<AuthoringRevision3ProjectCompilerCheckResult> checkProjectCompilerV1({
     required String root,
     required String gameRoot,
@@ -1547,6 +1607,19 @@ final class ModFfiManagedRevision3AuthoringStore
     root: root,
     gameRoot: gameRoot,
     expectedHead: expectedHead,
+  );
+
+  @override
+  Future<AuthoringRevision3ProjectCompilerCheckResult> checkProjectCompilerV2({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required ScriptCompilerBackendMode compilerBackend,
+  }) => ffi.authoringStoreCheckRevision3ProjectCompilerV2(
+    root: root,
+    gameRoot: gameRoot,
+    expectedHead: expectedHead,
+    compilerBackend: compilerBackend,
   );
 
   @override
@@ -5050,6 +5123,19 @@ class ManagedRevision3AuthoringProjectSession {
   /// bounded evidence and retains no compiler artifact.
   Future<ManagedRevision3ProjectCompilerCheckReceipt> checkProjectCompilerV1({
     required String gameRoot,
+  }) => _checkProjectCompiler(gameRoot: gameRoot, compilerBackend: null);
+
+  Future<ManagedRevision3ProjectCompilerCheckReceipt> checkProjectCompilerV2({
+    required String gameRoot,
+    required ScriptCompilerBackendMode compilerBackend,
+  }) => _checkProjectCompiler(
+    gameRoot: gameRoot,
+    compilerBackend: compilerBackend,
+  );
+
+  Future<ManagedRevision3ProjectCompilerCheckReceipt> _checkProjectCompiler({
+    required String gameRoot,
+    required ScriptCompilerBackendMode? compilerBackend,
   }) async {
     final result = await _core
         .readBasisSnapshot<AuthoringRevision3ProjectCompilerCheckResult>(
@@ -5057,11 +5143,24 @@ class ManagedRevision3AuthoringProjectSession {
             final expected = _managedRevision3ProjectCompilerBasis(
               basis.projectJson,
             );
-            final result = await _store.checkProjectCompilerV1(
-              root: root.path,
-              gameRoot: gameRoot,
-              expectedHead: basis.head,
-            );
+            final result = compilerBackend == null
+                ? await _store.checkProjectCompilerV1(
+                    root: root.path,
+                    gameRoot: gameRoot,
+                    expectedHead: basis.head,
+                  )
+                : await switch (_store) {
+                    ManagedRevision3CompilerBackendStore store =>
+                      store.checkProjectCompilerV2(
+                        root: root.path,
+                        gameRoot: gameRoot,
+                        expectedHead: basis.head,
+                        compilerBackend: compilerBackend,
+                      ),
+                    _ => throw UnsupportedError(
+                      'compiler backend selection is unavailable',
+                    ),
+                  };
             final projectBytes = utf8.encode(basis.projectJson);
             if (result.head.canonicalJson != basis.head.canonicalJson ||
                 result.project.id != basis.projectId ||
@@ -5077,10 +5176,11 @@ class ManagedRevision3AuthoringProjectSession {
                     expected.moduleManifestByteLength ||
                 result.coverage.moduleManifest.sha256 !=
                     expected.moduleManifestSha256 ||
-                result.gameInputs.executable.byteLength !=
-                    expected.executableByteLength ||
-                result.gameInputs.executable.sha256 !=
-                    expected.executableSha256) {
+                (result.gameInputsOrNull != null &&
+                    (result.gameInputs.executable.byteLength !=
+                            expected.executableByteLength ||
+                        result.gameInputs.executable.sha256 !=
+                            expected.executableSha256))) {
               throw const ManagedProjectVerificationException(
                 'revision-3 project compiler evidence disagrees with its exact session basis',
               );
@@ -5090,7 +5190,9 @@ class ManagedRevision3AuthoringProjectSession {
             }
             return result;
           },
-          operation: 'checkProjectCompilerV1',
+          operation: compilerBackend == null
+              ? 'checkProjectCompilerV1'
+              : 'checkProjectCompilerV2',
           handleReadError: _core._throwRevision3ProjectCompilerCheckError,
         );
     return ManagedRevision3ProjectCompilerCheckReceipt(
@@ -5114,6 +5216,42 @@ class ManagedRevision3AuthoringProjectSession {
     required int expectedEntityRevision,
     required String expectedModuleId,
     required int expectedModuleRevision,
+  }) => _checkCompiler(
+    entityKind: entityKind,
+    gameRoot: gameRoot,
+    entityId: entityId,
+    expectedEntityRevision: expectedEntityRevision,
+    expectedModuleId: expectedModuleId,
+    expectedModuleRevision: expectedModuleRevision,
+    compilerBackend: null,
+  );
+
+  Future<ManagedRevision3CompilerCheckReceipt> checkCompilerV2({
+    required AuthoringRevision3ManagedCompilerEntityKind entityKind,
+    required String gameRoot,
+    required String entityId,
+    required int expectedEntityRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+    required ScriptCompilerBackendMode compilerBackend,
+  }) => _checkCompiler(
+    entityKind: entityKind,
+    gameRoot: gameRoot,
+    entityId: entityId,
+    expectedEntityRevision: expectedEntityRevision,
+    expectedModuleId: expectedModuleId,
+    expectedModuleRevision: expectedModuleRevision,
+    compilerBackend: compilerBackend,
+  );
+
+  Future<ManagedRevision3CompilerCheckReceipt> _checkCompiler({
+    required AuthoringRevision3ManagedCompilerEntityKind entityKind,
+    required String gameRoot,
+    required String entityId,
+    required int expectedEntityRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+    required ScriptCompilerBackendMode? compilerBackend,
   }) async {
     final result = await _core
         .readBasisSnapshot<AuthoringRevision3ManagedCompilerCheckResult>(
@@ -5129,22 +5267,48 @@ class ManagedRevision3AuthoringProjectSession {
                 selection.moduleRevision != expectedModuleRevision) {
               throw const ManagedRevision3CompilerSelectionStaleException();
             }
-            final result = switch (entityKind) {
-              AuthoringRevision3ManagedCompilerEntityKind.questDraft =>
-                await _store.checkQuestCompilerV1(
-                  root: root.path,
-                  gameRoot: gameRoot,
-                  expectedHead: basis.head,
-                  questId: entityId,
-                ),
-              AuthoringRevision3ManagedCompilerEntityKind.npcDraft =>
-                await _store.checkNpcCompilerV1(
-                  root: root.path,
-                  gameRoot: gameRoot,
-                  expectedHead: basis.head,
-                  npcId: entityId,
-                ),
-            };
+            final result = compilerBackend == null
+                ? switch (entityKind) {
+                    AuthoringRevision3ManagedCompilerEntityKind.questDraft =>
+                      await _store.checkQuestCompilerV1(
+                        root: root.path,
+                        gameRoot: gameRoot,
+                        expectedHead: basis.head,
+                        questId: entityId,
+                      ),
+                    AuthoringRevision3ManagedCompilerEntityKind.npcDraft =>
+                      await _store.checkNpcCompilerV1(
+                        root: root.path,
+                        gameRoot: gameRoot,
+                        expectedHead: basis.head,
+                        npcId: entityId,
+                      ),
+                  }
+                : await switch (_store) {
+                    ManagedRevision3CompilerBackendStore store =>
+                      switch (entityKind) {
+                        AuthoringRevision3ManagedCompilerEntityKind
+                            .questDraft =>
+                          store.checkQuestCompilerV2(
+                            root: root.path,
+                            gameRoot: gameRoot,
+                            expectedHead: basis.head,
+                            questId: entityId,
+                            compilerBackend: compilerBackend,
+                          ),
+                        AuthoringRevision3ManagedCompilerEntityKind.npcDraft =>
+                          store.checkNpcCompilerV2(
+                            root: root.path,
+                            gameRoot: gameRoot,
+                            expectedHead: basis.head,
+                            npcId: entityId,
+                            compilerBackend: compilerBackend,
+                          ),
+                      },
+                    _ => throw UnsupportedError(
+                      'compiler backend selection is unavailable',
+                    ),
+                  };
             final projectBytes = utf8.encode(basis.projectJson);
             final projectId = basis.projectId;
             final projectRevision = basis.projectRevision;
@@ -5168,7 +5332,9 @@ class ManagedRevision3AuthoringProjectSession {
             }
             return result;
           },
-          operation: 'checkCompilerV1',
+          operation: compilerBackend == null
+              ? 'checkCompilerV1'
+              : 'checkCompilerV2',
           handleReadError: _core._throwRevision3ManagedCompilerCheckError,
         );
     return ManagedRevision3CompilerCheckReceipt(

@@ -346,7 +346,7 @@ void main() {
         controller: controller,
         safety: safety,
         textScale: 2,
-        check: ({required gameRoot}) async {
+        check: ({required gameRoot, required compilerBackend}) async {
           checkCalls++;
           checkedRoot = gameRoot;
           return _receipt(checkpoint, _ReceiptKind.fallbackRejected);
@@ -404,12 +404,13 @@ void main() {
         checkpoint: checkpoint,
         controller: controller,
         safety: safety,
-        check: ({required gameRoot}) async => throw const ModFfiException(
-          command: 'authoring_store_check_revision3_project_compiler_v1',
-          code:
-              'AUTHORING_REVISION3_PROJECT_COMPILER_CLOSING_GAME_AUDIT_FAILED',
-          message: 'closing audit failed',
-        ),
+        check: ({required gameRoot, required compilerBackend}) async =>
+            throw const ModFfiException(
+              command: 'authoring_store_check_revision3_project_compiler_v1',
+              code:
+                  'AUTHORING_REVISION3_PROJECT_COMPILER_CLOSING_GAME_AUDIT_FAILED',
+              message: 'closing audit failed',
+            ),
       );
 
       await tester.tap(find.byKey(const Key('revision3-project-compiler-run')));
@@ -450,7 +451,7 @@ void main() {
       checkpoint: checkpoint,
       controller: controller,
       safety: safety,
-      check: ({required gameRoot}) async =>
+      check: ({required gameRoot, required compilerBackend}) async =>
           _receipt(checkpoint, _ReceiptKind.outputRecovery),
     );
 
@@ -470,6 +471,50 @@ void main() {
     expect(
       safety.current.recoveryEvidence?.code,
       'COMPILE_OUTPUT_RECOVERY_REQUIRED',
+    );
+  });
+
+  testWidgets('strict standalone bypasses the live-install safety gate', (
+    tester,
+  ) async {
+    final checkpoint = _checkpoint(7);
+    final controller = _controller(checkpoint: checkpoint);
+    addTearDown(controller.dispose);
+    var safetyLoads = 0;
+    final safety = ScriptCompileInstallSafetyController(
+      (_) async {
+        safetyLoads++;
+        throw StateError('standalone must not inspect live mutation safety');
+      },
+      gameRoot: _gameRoot,
+      autoRefresh: false,
+    );
+    ScriptCompilerBackendMode? requestedBackend;
+    await _pumpDialog(
+      tester,
+      checkpoint: checkpoint,
+      controller: controller,
+      safety: safety,
+      check: ({required gameRoot, required compilerBackend}) async {
+        requestedBackend = compilerBackend;
+        return _receipt(checkpoint, _ReceiptKind.compiled);
+      },
+    );
+
+    await tester.tap(
+      find.byKey(const Key('revision3-project-compiler-backend')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Standalone compiler').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('revision3-project-compiler-run')));
+    await tester.pumpAndSettle();
+
+    expect(requestedBackend, ScriptCompilerBackendMode.standalone);
+    expect(safetyLoads, 0);
+    expect(
+      find.byKey(const Key('revision3-project-compiler-safety-message')),
+      findsNothing,
     );
   });
 

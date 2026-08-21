@@ -43,6 +43,7 @@ import 'package:gore_mod/project/revision3_project_dashboard.dart';
 import 'package:gore_mod/project/revision3_project_problems.dart';
 import 'package:gore_mod/project/revision3_project_workspace.dart';
 import 'package:gore_mod/project/revision3_test_release_workspace.dart';
+import 'package:gore_mod/scripts/domain/script_compile_report.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_context_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_journey_view.dart';
@@ -583,7 +584,10 @@ void main() {
         findsNothing,
       );
       await expectLater(
-        staleProjectCompilerCheck(gameRoot: gameRoot.path),
+        staleProjectCompilerCheck(
+          gameRoot: gameRoot.path,
+          compilerBackend: ScriptCompilerBackendMode.game,
+        ),
         throwsA(isA<StateError>()),
       );
       await Future<void>.sync(staleOpenVoiceBuild);
@@ -593,7 +597,9 @@ void main() {
         findsNothing,
       );
       await expectLater(
-        staleManagedCompilerCheck(),
+        staleManagedCompilerCheck(
+          compilerBackend: ScriptCompilerBackendMode.game,
+        ),
         throwsA(isA<StateError>()),
       );
       expect(managed.projectCompilerCheckCalls, 0);
@@ -2361,7 +2367,10 @@ void main() {
         findsNothing,
       );
       await expectLater(
-        staleProjectCompilerCheck(gameRoot: gameRoot.path),
+        staleProjectCompilerCheck(
+          gameRoot: gameRoot.path,
+          compilerBackend: ScriptCompilerBackendMode.game,
+        ),
         throwsA(isA<StateError>()),
       );
       await Future<void>.sync(staleOpenVoiceBuild);
@@ -2371,7 +2380,9 @@ void main() {
         findsNothing,
       );
       await expectLater(
-        staleManagedCompilerCheck(),
+        staleManagedCompilerCheck(
+          compilerBackend: ScriptCompilerBackendMode.game,
+        ),
         throwsA(isA<StateError>()),
       );
       expect(managed.projectCompilerCheckCalls, 0);
@@ -10195,7 +10206,9 @@ void main() {
       final panel = tester.widget<Revision3ManagedCompilerCheckPanel>(
         find.byType(Revision3ManagedCompilerCheckPanel),
       );
-      final receipt = await panel.check();
+      final receipt = await panel.check(
+        compilerBackend: ScriptCompilerBackendMode.game,
+      );
       expect(receipt.acceptedAtExactCurrent, isTrue);
       expect(managed.managedCompilerCheckCalls, 1);
       expect(
@@ -10524,7 +10537,9 @@ void main() {
       final panel = tester.widget<Revision3ManagedCompilerCheckPanel>(
         panelFinder,
       );
-      final receipt = await panel.check();
+      final receipt = await panel.check(
+        compilerBackend: ScriptCompilerBackendMode.game,
+      );
 
       expect(receipt.acceptedAtExactCurrent, isTrue);
       expect(managed.managedCompilerCheckCalls, 1);

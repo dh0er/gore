@@ -163,7 +163,7 @@ void main() {
       tester,
       inspect: ({required gameRoot, required questId}) async => inspection,
       safety: safety,
-      checkCompiler: () {
+      checkCompiler: ({required compilerBackend}) {
         checkStarted = true;
         return pending.future;
       },
