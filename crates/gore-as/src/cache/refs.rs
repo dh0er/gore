@@ -100,6 +100,9 @@ pub struct RefResolver {
     /// Class -> the `name/arity` keys it declares ITSELF (not inherited). An override calling
     /// the method it overrides was written `Super::`, and rendering it as `this.` would recurse.
     class_methods: HashMap<String, HashSet<String>>,
+    /// Return type by function NAME, for the names every declaration agrees on. A name two
+    /// declarations disagree about carries no witness and is absent (see `names_returning`).
+    func_ret_names: HashMap<String, String>,
     /// Method names the cache records a CONST overload for (see `names_a_const_method`).
     const_method_names: HashSet<String>,
     /// `(owner, function)` -> the declared default argument of each parameter, normalized.
@@ -301,6 +304,21 @@ impl RefResolver {
                     const_returns.insert(const_key, returns_const);
                 }
                 _ => {}
+            }
+            {
+                // Return type by name, for a caller that has been rendered to text and has the
+                // name and nothing else. Two declarations that disagree leave the name blank
+                // rather than guessing which one a call site meant.
+                let returned = ret.base_name(&r);
+                match r.func_ret_names.get(&name) {
+                    Some(seen) if *seen != returned => {
+                        r.func_ret_names.insert(name.clone(), String::new());
+                    }
+                    Some(_) => {}
+                    None => {
+                        r.func_ret_names.insert(name.clone(), returned);
+                    }
+                }
             }
             if is_const_method {
                 r.const_method_ptrs.insert(key);
@@ -1052,6 +1070,14 @@ impl RefResolver {
                 .filter_map(|key| key.rsplit_once('/').map(|(name, _)| name.to_owned())),
         );
         self.class_methods = by_class;
+    }
+
+    /// The return type every declaration of `name` agrees on, if they do agree.
+    pub fn names_returning(&self, name: &str) -> Option<&str> {
+        self.func_ret_names
+            .get(name)
+            .map(String::as_str)
+            .filter(|ty| !ty.is_empty())
     }
 
     /// True when the cache records a CONST method by this name. A const call has no side effect
