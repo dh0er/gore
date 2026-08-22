@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**9,075 functions (5.51%) recompile to bytecode that differs semantically.** A semantic
+**9,069 functions (5.51%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -71,8 +71,12 @@ Three widenings were measured and rejected rather than shipped:
   compile at all: vanilla's two arms are an int constant and a bool call, and AngelScript's `?:`
   requires one type. Recovering those needs the arms' types, not just their shape.
 
-Each needs a witness the cache can give, and none of them may ship on a plausible-looking shape
-alone. One collision is worth recording: the emitter marks an operand it could not resolve with
+The first of these now has its witness and is in place: the slot that catches a call's result
+holds what that callee returns (`call_result_types`), so where that agrees with the slot's
+declared type the read is plain and its value may stand wherever the slot could. It only counts
+for a SCALAR, and only when the slot catches ONE type — a slot catching two is the compiler
+reusing it. The other two still need theirs, and none of them may ship on a plausible-looking
+shape alone. One collision is worth recording: the emitter marks an operand it could not resolve with
 ` ? `, which is also how a conditional expression reads — anything that emits one has to teach
 that check the difference.
 
