@@ -25,7 +25,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
 | Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **94.49%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
-| Splice back (`extract-remap`) | full corpus, all 7,308 modules | 7,276 (**99.6%**) — last full sweep, predates the temporary-naming work below |
+| Splice back (`extract-remap`) | full corpus, all 7,308 modules | 7,277 (**99.58%**) |
 
 Every measurement now covers the whole corpus. The splice sweep takes about two hours (each run
 re-reads both 100+ MB caches), which is why earlier revisions of this document reported it from a
@@ -80,9 +80,9 @@ Cutting across them, 37 are `__InitDefaults`, dominated by a float constant the 
 spell: AngelScript has no infinity literal, so `+inf` is written as the largest finite float and
 comes back one ULP low.
 
-**32 of the 7,308 modules cannot be spliced back** (99.6% can). Each is a template instantiation
-or a behaviour the base cache never recorded — nine `TArray` iterators, eight `FPerceptionHandler`
-copies, seven for a `TArray<AGothicNPCState>`, and a tail of single cases. They share the root
+**31 of the 7,308 modules cannot be spliced back** (99.58% can). Each is a template instantiation
+or a behaviour the base cache never recorded — 15 `$beh0` constructors, 13 `TArray` iterators, and
+a tail of single cases (`opAssign`, `GetRootNode`, `AssertEquals`). They share the root
 cause of the ordering classes above: vanilla wrote the expression inline where the emitter
 materializes a local, and that local asks for a copy the base cache has no row for.
 
@@ -254,7 +254,7 @@ default constructor and an `opAssign` keeps the hoisted declaration and its assi
 shapes compile; only the one the base cache has a row for can be spliced back.
 
 Measured over the whole corpus, `extract-remap` against the base cache succeeds for 7,276 of 7,308
-modules (**99.6%**). The same measurement scored 43 of 60 before the identity work and 58 of 60
+modules (**99.58%**). The same measurement scored 43 of 60 before the identity work and 58 of 60
 after it, on the 60-module sample it started from.
 
 A method's RETURN `const` is part of its identity and is emitted again. It used to be stripped
