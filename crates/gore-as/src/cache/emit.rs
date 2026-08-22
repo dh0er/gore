@@ -6425,10 +6425,16 @@ fn element_is_written_through(
                 continue;
             }
             let dots = path.bytes().filter(|b| *b == b'.').count();
+            let method = path.rsplit('.').next().unwrap_or("");
             if dots > 1 {
-                return true; // `local_E.Field.Method(…)` mutates through the field
+                // `local_E.Field.Method(…)` reaches through the field. That only mutates when
+                // the method can: the cache records which ones are const, and a const call on a
+                // read-only range-for element is exactly what vanilla wrote.
+                if !refs.names_a_const_method(method) {
+                    return true;
+                }
+                continue;
             }
-            let method = path.trim_start_matches('.');
             if ty.is_some_and(|ty| {
                 refs.calls_non_const_method(super::structure::bare_type_name(ty), method)
             }) {
