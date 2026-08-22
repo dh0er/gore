@@ -877,6 +877,14 @@ fn emit_function_ctor(
     // The type each slot's captured call result actually has — the witness the operand gates
     // need to tell a plain read from a read the declaration converts.
     let call_result_types = call_result_types(f, refs);
+    // The same witness types the slots a bool travels INTO: the merge slot of a short-circuit
+    // or a guarded assignment is written by a copy, not by the call itself.
+    bool_overrides.extend(
+        call_result_types
+            .iter()
+            .filter(|(_, ty)| *ty == "bool")
+            .map(|(slot, _)| *slot),
+    );
     // A slot the function itself writes a 4- or 8-byte literal into is not a bool: the compiler
     // stores a bool with the 1-byte `SetV1`. That store is the slot's own width evidence, and it
     // outranks both rules above — where they disagree the compiler reused one slot for two
@@ -888,7 +896,15 @@ fn emit_function_ctor(
     // leaving them in charge writes `local = int(local == 0);` for a plain `!`. Contradicting
     // TYPE evidence (enum, float family, a declared parameter type) still wins — that is slot
     // reuse, and typing it bool would break the other use.
-    let proven_bool = not_operand_slots(f);
+    // `NOT` and the callee's declared return type are both PROOFS of the slot's type; the
+    // int-family hints below only describe how a value is passed.
+    let mut proven_bool = not_operand_slots(f);
+    proven_bool.extend(
+        call_result_types
+            .iter()
+            .filter(|(_, ty)| *ty == "bool")
+            .map(|(slot, _)| *slot),
+    );
     bool_overrides.retain(|slot| {
         let proven = proven_bool.contains(slot);
         !enum_overrides.contains_key(slot)
@@ -3335,16 +3351,18 @@ fn call_result_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
                     returned.take(),
                     ins.words.first().map(|word| *word as i16 as i32),
                 ) {
-                    if slot > 0 {
-                        match types.get(&slot) {
-                            Some(known) if *known != ty => {
-                                conflicting.insert(slot);
-                            }
-                            _ => {
-                                types.insert(slot, ty);
-                            }
-                        }
-                    }
+                    record_slot_type(&mut types, &mut conflicting, slot, ty);
+                }
+            }
+            // A slot-to-slot copy carries the value, and with it what the value is. Without this
+            // step the type stops at the compiler's own scratch slot and the one the source
+            // actually named is left untyped.
+            "CpyVtoV1" | "CpyVtoV4" | "CpyVtoV8" => {
+                returned = None;
+                let dst = ins.words.first().map(|word| *word as i16 as i32);
+                let src = ins.words.get(1).map(|word| *word as i16 as i32);
+                if let (Some(dst), Some(ty)) = (dst, src.and_then(|src| types.get(&src)).cloned()) {
+                    record_slot_type(&mut types, &mut conflicting, dst, ty);
                 }
             }
             _ => returned = None,
@@ -3352,6 +3370,26 @@ fn call_result_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
     }
     types.retain(|slot, _| !conflicting.contains(slot));
     types
+}
+
+/// Note what a slot holds, or that it holds two different things and proves nothing.
+fn record_slot_type(
+    types: &mut HashMap<i32, String>,
+    conflicting: &mut HashSet<i32>,
+    slot: i32,
+    ty: String,
+) {
+    if slot <= 0 {
+        return;
+    }
+    match types.get(&slot) {
+        Some(known) if *known != ty => {
+            conflicting.insert(slot);
+        }
+        _ => {
+            types.insert(slot, ty);
+        }
+    }
 }
 
 /// Slots that take a bool-returning call's result. `CpyRtoV*` right after a call copies the
