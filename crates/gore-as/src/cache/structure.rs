@@ -856,6 +856,16 @@ fn fold_return_into_store(stmts: &mut Vec<String>, exit: String) -> String {
     folded
 }
 
+/// The boolean value a `CMP*` + `T*` pair leaves in the value register.
+fn materialized_comparison(c: &Cmp) -> Option<String> {
+    if let Some(expr) = &c.expr {
+        return Some(expr.clone());
+    }
+    let op = c.op?;
+    (!c.a.is_empty() && !c.b.is_empty() && c.a != UNRESOLVED && c.b != UNRESOLVED)
+        .then(|| format!("({} {op} {})", c.a, c.b))
+}
+
 /// Conditional-jump opcode (mirrors `cfg::is_cond_jump`, which is private to that module).
 fn is_cond_op(n: &str) -> bool {
     matches!(
@@ -4204,6 +4214,30 @@ fn block_stmts_in(
                     let dst_is_int = dst_slot > 0 && ctx.slot_type(dst_slot).is_none();
                     let rhs = enum_to_int(p, pending_ty.as_deref(), dst_is_int);
                     out.push(format!("{} = {rhs};", name(dst_slot)));
+                } else if let Some(condition) = k
+                    .checked_sub(1)
+                    .map(|j| &insns[j])
+                    .filter(|prev| {
+                        matches!(prev.op.name, "TZ" | "TNZ" | "TS" | "TNS" | "TP" | "TNP")
+                    })
+                    .and(cmp.as_ref())
+                    .and_then(materialized_comparison)
+                {
+                    // The value register holds the RESULT of the comparison the `T*` op just
+                    // tested: the source read it as a value, not as a branch. Dropped, the slot
+                    // is never written and every read of it renders the declaration's default —
+                    // a wrong VALUE, not merely a different shape (measured: 124 functions, 30 of
+                    // them comparing against a non-zero constant we returned as zero).
+                    // AngelScript has no implicit bool-to-int, so an int-typed slot takes the
+                    // same explicit form the `NOT` rendering already uses.
+                    let dst = w(ins, 0);
+                    let value = if ctx.slot_type(dst).as_deref() == Some("bool") {
+                        condition
+                    } else {
+                        format!("int{condition}")
+                    };
+                    out.push(format!("{} = {value};", name(dst)));
+                    cmp = None;
                 } else if n == "CpyRtoV8" && ref_reg.is_some() {
                     // batch-32a (A5, specs/batch29-errortail.md §1.2 / illegal-op-round2.md A5):
                     // `LoadRObjR/LoadVObjR ; CpyRtoV8 wD` captures the member ADDRESS the load

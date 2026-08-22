@@ -5107,17 +5107,6 @@ fn inline_temporary_into(
         inline_reject("uses", callee);
         return false; // inlining a value read twice would evaluate it twice
     }
-    // The rendered read compares the slot against zero, which is how an int-typed slot spells a
-    // bool test (`(local_3 != 0)`, `local_8.HasTag(..) == 0`). Whatever replaces it brings its
-    // own type, and comparing a bool to an int does not compile — leave those reads where they
-    // are.
-    if [" != 0", " == 0"]
-        .iter()
-        .any(|test| lines[index].contains(&format!("{temp}{test}")))
-    {
-        inline_reject("wrapped", callee);
-        return false;
-    }
     // The compiler re-uses one slot for several temporaries, so the definition that matters is
     // the LAST one before this call, and it owns the lines up to the next definition of the
     // same slot.
@@ -5154,6 +5143,17 @@ fn inline_temporary_into(
     };
     if !movable {
         inline_reject("not-a-call", callee);
+        return false;
+    }
+    // The rendered read compares the slot against zero, which is how an int-typed slot spells a
+    // bool test (`(local_3 != 0)`, `local_8.HasTag(..) == 0`). Comparing a BOOL to an int does
+    // not compile, so only a value that says int outright may take that slot's place.
+    if !value.starts_with("int(")
+        && [" != 0", " == 0"]
+            .iter()
+            .any(|test| lines[index].contains(&format!("{temp}{test}")))
+    {
+        inline_reject("wrapped", callee);
         return false;
     }
     // Everything between has to feed THIS call as well, or the order of a side effect would
