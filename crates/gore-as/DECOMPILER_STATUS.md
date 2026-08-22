@@ -67,16 +67,24 @@ Three widenings were measured and rejected rather than shipped:
   and back;
 - writing every unread call result as a bare statement costs 265 — the compiler treats "Result
   of expression is unused" as an error and many of those functions are `nodiscard`;
-- writing the remaining `if`/`else`-over-one-slot as the conditional expression it was fails to
-  compile at all: vanilla's two arms are an int constant and a bool call, and AngelScript's `?:`
-  requires one type. Recovering those needs the arms' types, not just their shape.
+- writing the remaining `if`/`else`-over-one-slot as the conditional expression it was is now
+  reachable — the witness types those merge slots `bool`, so both arms unify and the tree
+  compiles — but it does NOT reproduce vanilla: the compiler still materializes the constant arm
+  in a temporary and copies it (`SetV1 t,0; CpyVtoV4 slot,t`), where vanilla writes `SetV4
+  slot,0` straight into the pre-allocated slot. All three source forms have now been measured
+  against the real compiler — `if`/`else` over a named local, `?:`, and `?:` with the arms cast —
+  and none of them emits vanilla's shape. This class is not reachable from source.
 
 The first of these now has its witness and is in place: the slot that catches a call's result
-holds what that callee returns (`call_result_types`), so where that agrees with the slot's
+holds what that callee returns, and the witness follows a slot-to-slot copy so the slot the
+source actually named is typed too (`call_result_types`). Where that agrees with the slot's
 declared type the read is plain and its value may stand wherever the slot could. It only counts
 for a SCALAR, and only when the slot catches ONE type — a slot catching two is the compiler
-reusing it. The other two still need theirs, and none of them may ship on a plausible-looking
-shape alone. One collision is worth recording: the emitter marks an operand it could not resolve with
+reusing it.
+
+The third is now answered rather than open: it was the witness the `?:` needed, and with it the
+form compiles and still does not match. What is left of that class is a codegen shape, not a
+missing rule. One collision is worth recording: the emitter marks an operand it could not resolve with
 ` ? `, which is also how a conditional expression reads — anything that emits one has to teach
 that check the difference.
 
