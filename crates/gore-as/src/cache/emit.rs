@@ -874,6 +874,9 @@ fn emit_function_ctor(
     // `local = int(local == 0);` and the compiler materializes a comparison vanilla never had.
     bool_overrides.extend(not_operand_slots(f));
     bool_overrides.extend(bool_call_result_slots(f, refs));
+    // The type each slot's captured call result actually has — the witness the operand gates
+    // need to tell a plain read from a read the declaration converts.
+    let call_result_types = call_result_types(f, refs);
     // A slot the function itself writes a 4- or 8-byte literal into is not a bool: the compiler
     // stores a bool with the 1-byte `SetV1`. That store is the slot's own width evidence, and it
     // outranks both rules above — where they disagree the compiler reused one slot for two
@@ -1266,6 +1269,7 @@ fn emit_function_ctor(
         &inferred_locals,
         fields,
         !f.name.contains("__InitDefaults"),
+        &call_result_types,
     );
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
@@ -3306,6 +3310,50 @@ fn bool_slot_profile_is_safe(instrs: &[super::disasm::Instr], slot: i32) -> bool
 /// resolved `bool` field witness, no unresolved/non-bool byte-field access on the same slot, and a
 /// whole-function bool-only opcode profile. This turns compiler bool temporaries back into bools
 /// without treating arbitrary SetV1/int8 scratch as boolean.
+/// The type each slot's captured call result has: `CpyRtoV*`/`STOREOBJ` right after a call copies
+/// that call's return value into the slot, and the cache records what the callee returns. A slot
+/// that captures two DIFFERENT types is the compiler reusing it, and carries no witness at all.
+fn call_result_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashMap::new();
+    };
+    let mut types: HashMap<i32, String> = HashMap::new();
+    let mut conflicting: HashSet<i32> = HashSet::new();
+    let mut returned: Option<String> = None;
+    for ins in &instrs {
+        match ins.op.name {
+            "CALL" | "CALLINTF" | "CALLBND" => {
+                let id = ins.dwords.first().copied().unwrap_or(0) as i32;
+                returned = refs.func_ret_by_id(id).map(|d| d.base_name(refs));
+            }
+            "CALLSYS" => {
+                let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+                returned = refs.func_ret_by_ptr(ptr).map(|d| d.base_name(refs));
+            }
+            "CpyRtoV1" | "CpyRtoV4" | "CpyRtoV8" | "STOREOBJ" => {
+                if let (Some(ty), Some(slot)) = (
+                    returned.take(),
+                    ins.words.first().map(|word| *word as i16 as i32),
+                ) {
+                    if slot > 0 {
+                        match types.get(&slot) {
+                            Some(known) if *known != ty => {
+                                conflicting.insert(slot);
+                            }
+                            _ => {
+                                types.insert(slot, ty);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => returned = None,
+        }
+    }
+    types.retain(|slot, _| !conflicting.contains(slot));
+    types
+}
+
 /// Slots that take a bool-returning call's result. `CpyRtoV*` right after a call copies the
 /// value register into the slot, so the slot holds what the callee returns. Left typed int,
 /// every read of it is wrapped `(x != 0)` and the compiler materializes a comparison and a test
@@ -4991,6 +5039,7 @@ fn inline_call_argument_temporaries(
     locals: &BTreeMap<i32, String>,
     fields: Option<&HashMap<String, String>>,
     operands_move: bool,
+    call_types: &HashMap<i32, String>,
 ) -> String {
     const MAX_ARGUMENT_INLINE_PASSES: usize = 8;
     let trailing_newline = body.ends_with('\n');
@@ -5047,7 +5096,7 @@ fn inline_call_argument_temporaries(
                 .unwrap_or_else(|| "<receiver>".to_owned());
             for (temp, position) in candidates {
                 if inline_temporary_into(
-                    &mut lines, index, &temp, &callee, position, locals, refs, fields,
+                    &mut lines, index, &temp, &callee, position, locals, refs, fields, call_types,
                 ) {
                     changed = true;
                     moved = true;
@@ -5083,8 +5132,25 @@ fn inline_temporary_into(
     locals: &BTreeMap<i32, String>,
     refs: &RefResolver,
     fields: Option<&HashMap<String, String>>,
+    call_types: &HashMap<i32, String>,
 ) -> bool {
     let receiver = position == Position::Receiver;
+    // The slot's declaration converts whenever the captured call's return type is not the type
+    // the slot was declared with. Where they agree, the read is plain and the value may take its
+    // place anywhere the slot could stand.
+    let reads_plain = || {
+        let slot = temp.strip_prefix("local_").and_then(|n| n.parse::<i32>().ok());
+        let (Some(slot), Some(declared)) = (slot, temporary_type(locals, temp)) else {
+            return false;
+        };
+        // Only a SCALAR carries this witness: a struct in arithmetic goes through operator
+        // overloads whose result type the declaration is still what fixes ("No conversion from
+        // 'FVector' to math type available").
+        is_primitive(declared)
+            && call_types
+                .get(&slot)
+                .is_some_and(|captured| same_scalar_type(captured, declared))
+    };
     // A value struct reached through a call IS a temporary, and AngelScript refuses a NON-const
     // method on one ("Cannot call non-const method on a temporary object"). An object handle is
     // always safe; a value struct only when the cache records a const overload of the method it
@@ -5137,7 +5203,8 @@ fn inline_temporary_into(
     // map types exactly like the slot.
     let movable = match position {
         Position::Operand => {
-            operand_read_takes_a_value(&lines[index])
+            (operand_read_takes_a_value(&lines[index])
+                || (reads_plain() && assigns_a_scalar(&lines[index], locals)))
                 && (same_typed_own_field(&value, temp, locals, fields) || is_call_result(&value))
         }
         _ => is_call_result(&value),
@@ -5150,6 +5217,7 @@ fn inline_temporary_into(
     // bool test (`(local_3 != 0)`, `local_8.HasTag(..) == 0`). Comparing a BOOL to an int does
     // not compile, so only a value that says int outright may take that slot's place.
     if !value.starts_with("int(")
+        && !reads_plain()
         && [" != 0", " == 0"]
             .iter()
             .any(|test| lines[index].contains(&format!("{temp}{test}")))
@@ -5184,6 +5252,24 @@ fn operand_read_takes_a_value(line: &str) -> bool {
         return false;
     };
     !line.trim().starts_with("return ") && !expression.contains(['*', '/', '+', '-'])
+}
+
+/// The statement gives its value to a SCALAR. Struct arithmetic goes through operator overloads
+/// whose result the declaration is still what fixes, so a scalar witness says nothing there
+/// ("No conversion from 'FVector' to math type available").
+fn assigns_a_scalar(line: &str, locals: &BTreeMap<i32, String>) -> bool {
+    let Some((head, _)) = line.trim().split_once(" = ") else {
+        return true; // not a declaration or assignment — nothing to disagree with
+    };
+    let mut words = head.split_whitespace();
+    let Some(name) = words.next_back() else {
+        return true;
+    };
+    match words.next_back() {
+        Some(ty) => is_primitive(ty.trim_start_matches("const ")),
+        // A bare `local_N = …`: the slot table is what says what it holds.
+        None => temporary_type(locals, name).is_some_and(is_primitive),
+    }
 }
 
 /// Where in a statement a temporary was found.
