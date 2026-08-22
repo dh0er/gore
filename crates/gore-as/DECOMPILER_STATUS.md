@@ -70,12 +70,14 @@ Three widenings were measured and rejected rather than shipped:
   is not a call, and a CONST call has no side effect to keep, which the function table records).
   The third, `nodiscard`, is a property of the C++ binding and appears in no cache; those eight
   names are cited from what the compiler reported on this corpus;
-- writing the remaining `if`/`else`-over-one-slot as the SHORT CIRCUIT it was (`A && B`, not
-  `A ? false : B` — different AngelScript codegen paths, and only `&&` writes its deciding
-  constant straight into the result slot, proven by 13,255 `SetV4 x,0` stores that sit between a
-  conditional jump and a `JMP` against 1,303 `SetV1 x,1` for the `||` mirror) as a STATEMENT
-  (`local = A && B;`) crashes the compiler outright — twice, reproducibly, on the whole tree.
-  The value has to be substituted into the READER, which is structurer work, not a text fold;
+- the remaining `if`/`else`-over-one-slot is the SHORT CIRCUIT `A && B`, not `A ? false : B`:
+  different AngelScript codegen paths, and only `&&` writes its deciding constant straight into
+  the result slot (13,255 `SetV4 x,0` stores sitting between a conditional jump and a `JMP`,
+  against 1,303 `SetV1 x,1` for the `||` mirror). Written back as the operator it was, it
+  compiles and reproduces vanilla's guard — shipped. Feeding `&&` a NON-bool operand takes the
+  compiler down without a diagnostic, which cost two whole-tree runs before the type check went
+  in, and the left operand has to be turned around (`x != nullptr`) rather than wrapped in `!`,
+  or the compiler materializes the negation where vanilla inverted the jump;
 - writing the remaining `if`/`else`-over-one-slot as the conditional expression it was is
   reachable — the witness types those merge slots `bool`, so both arms unify and the tree
   compiles — but it does NOT reproduce vanilla: the compiler still materializes the constant arm
