@@ -5480,7 +5480,11 @@ fn inline_temporary_into(
     let movable = match position {
         Position::Operand => {
             (operand_read_takes_a_value(&lines[index])
-                || (reads_plain() && assigns_a_scalar(&lines[index], locals)))
+                || (reads_plain() && assigns_a_scalar(&lines[index], locals))
+                // A `return` is refused because a returned REFERENCE may not be a temporary.
+                // A bool is not one, and the cache can say so.
+                || (lines[index].trim().starts_with("return ")
+                    && renders_a_bool(&value, locals, refs)))
                 && (same_typed_own_field(&value, temp, locals, fields) || is_call_result(&value))
         }
         // An argument or a receiver takes the value as it is, so a member read may travel there
@@ -5709,7 +5713,24 @@ fn statement_expression(line: &str) -> Option<&str> {
 /// the argument — which is where vanilla evaluates it; a producer line above the call evaluates
 /// it before instead, and that reordering is the whole difference.
 fn receiver_temporary(line: &str) -> Option<String> {
-    let (head, rest) = statement_expression(line)?.split_once('.')?;
+    let mut expression = statement_expression(line)?;
+    // A negated or parenthesized value still runs on the same receiver.
+    loop {
+        let stripped = expression.strip_prefix('!').unwrap_or(expression);
+        let stripped = if stripped.starts_with('(')
+            && matching_paren(stripped, 0) == Some(stripped.len() - 1)
+            && stripped.len() > 2
+        {
+            &stripped[1..stripped.len() - 1]
+        } else {
+            stripped
+        };
+        if stripped == expression {
+            break;
+        }
+        expression = stripped;
+    }
+    let (head, rest) = expression.split_once('.')?;
     (is_local_ident(head) && rest.contains('(') && count_ident(rest, head) == 0)
         .then(|| head.to_owned())
 }
@@ -6054,6 +6075,23 @@ fn turned_around(condition: &str) -> String {
 /// `&&` — and the compiler does not merely refuse it, it goes down.
 fn renders_a_bool(value: &str, locals: &BTreeMap<i32, String>, refs: &RefResolver) -> bool {
     if matches!(value, "true" | "false") || temporary_type(locals, value) == Some("bool") {
+        return true;
+    }
+    // A negation and a comparison are bools whatever they wrap, and a fully parenthesized value
+    // is whatever it holds.
+    if let Some(negated) = value.strip_prefix('!') {
+        return renders_a_bool(negated, locals, refs);
+    }
+    if value.starts_with('(')
+        && matching_paren(value, 0) == Some(value.len() - 1)
+        && value.len() > 2
+    {
+        return renders_a_bool(&value[1..value.len() - 1], locals, refs);
+    }
+    if [" == ", " != ", " < ", " > ", " <= ", " >= ", " && ", " || "]
+        .iter()
+        .any(|operator| value.contains(operator))
+    {
         return true;
     }
     outer_callee(value).is_some_and(|callee| refs.names_returning(&callee) == Some("bool"))
