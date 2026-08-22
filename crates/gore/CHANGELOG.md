@@ -60,6 +60,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the value already sits.
 - A comparison the source read as a value comes back: those functions returned
   the declaration's default instead of what they compared.
+- A call whose result the source threw away is written as the statement it was,
+  wherever the language allows the result to be dropped.
 - `as extract-remap` and `compile-module` resolve a repeated string literal
   instead of refusing the module.
 - `GORE_AS_REMAP_DIAG=1` prints the two identities behind an unresolved or
