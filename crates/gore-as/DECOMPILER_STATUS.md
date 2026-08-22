@@ -101,9 +101,10 @@ A fifth is the architectural one, and its first increment was tried and rejected
 class exists because `block_stmts_in` materializes every store as a statement, so a name is
 created that eight later passes have to take away again. Carrying the value instead — suppressing
 the store when the very next instruction pushes that slot and nothing else reads it — is the
-smallest form of the fix, and it costs three classes their `default` statements and fails the
-whole-tree compile. The defaults path reads the same statement stream and is fail-closed, so this
-has to be a project with that path protected, not an increment.
+smallest form of the fix. It costs three classes their `default` statements, because the defaults
+recovery reads the same statement stream and is fail-closed; excluding `__InitDefaults` restores
+those, and the whole-tree compile STILL fails, twice, with no diagnostic the hook can capture.
+The store site would have to know what the later passes know, which is the project this is.
 
 A fourth was tried and rejected: whether a producer stood INSIDE the expression that reads it is
 decidable from the bytecode — AngelScript emits each argument's own code immediately before its
