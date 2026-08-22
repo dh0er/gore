@@ -967,10 +967,14 @@ fn fmt_float(b: ConstBits, double: bool) -> String {
         return match (v.is_nan(), v.is_sign_negative(), double) {
             (true, _, true) => "0.0".into(),
             (true, _, false) => "0.0f".into(),
-            (false, false, true) => format!("{:?}", f64::MAX),
-            (false, true, true) => format!("{:?}", f64::MIN),
-            (false, false, false) => format!("{:?}f", f32::MAX),
-            (false, true, false) => format!("{:?}f", f32::MIN),
+            // An OVERFLOWING decimal literal is the closest thing to an infinity literal this
+            // language has: it parses, and IEEE round-to-nearest takes it to ±inf, which is the
+            // bit pattern vanilla holds. The type's max finite value — what this used to emit —
+            // comes back one ULP low.
+            (false, false, true) => "1e309".into(),
+            (false, true, true) => "-1e309".into(),
+            (false, false, false) => "1e39f".into(),
+            (false, true, false) => "-1e39f".into(),
         };
     }
     if double {
