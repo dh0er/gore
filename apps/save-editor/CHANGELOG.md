@@ -6,6 +6,17 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- The portable update check could hang, stack prompts, or do nothing. It had no
+  request timeout, so a stalled connection blocked every later check; the
+  hourly timer could open one more prompt per hour on an unattended machine;
+  and Download silently did nothing when no browser was registered. Checks are
+  now serialized and time-limited, and a download page that will not open says
+  so with its address.
+
 ## [1.3.0] - 2026-08-17
 
 ### Added

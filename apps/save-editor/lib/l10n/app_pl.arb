@@ -396,6 +396,7 @@
   "updateAvailableTitle": "Dostępna aktualizacja",
   "updateAvailableMessage": "Wersja {version} jest dostępna. Masz {current}.",
   "updateDownload": "Pobierz",
+  "updateOpenFailed": "Nie udało się otworzyć strony pobierania. Znajdziesz ją pod {url}",
   "updateLater": "Później",
   "updateUpToDate": "Używasz najnowszej wersji.",
   "updateCheckFailed": "Nie udało się sprawdzić aktualizacji. Spróbuj ponownie później.",

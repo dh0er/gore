@@ -1491,6 +1491,11 @@ class AppLocalizationsPt extends AppLocalizations {
   String get updateDownload => 'Transferir';
 
   @override
+  String updateOpenFailed(String url) {
+    return 'Não foi possível abrir a página de transferência. Podes aceder a ela em $url';
+  }
+
+  @override
   String get updateLater => 'Mais tarde';
 
   @override
@@ -4400,6 +4405,11 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get updateDownload => 'Baixar';
+
+  @override
+  String updateOpenFailed(String url) {
+    return 'Não foi possível abrir a página de download. Você pode acessá-la em $url';
+  }
 
   @override
   String get updateLater => 'Mais tarde';

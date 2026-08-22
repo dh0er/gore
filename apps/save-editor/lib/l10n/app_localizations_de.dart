@@ -1489,6 +1489,11 @@ class AppLocalizationsDe extends AppLocalizations {
   String get updateDownload => 'Herunterladen';
 
   @override
+  String updateOpenFailed(String url) {
+    return 'Die Download-Seite konnte nicht geöffnet werden. Du erreichst sie unter $url';
+  }
+
+  @override
   String get updateLater => 'Später';
 
   @override

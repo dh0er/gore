@@ -1451,6 +1451,11 @@ class AppLocalizationsJa extends AppLocalizations {
   String get updateDownload => 'ダウンロード';
 
   @override
+  String updateOpenFailed(String url) {
+    return 'ダウンロードページを開けませんでした。$url からアクセスできます。';
+  }
+
+  @override
   String get updateLater => '後で';
 
   @override

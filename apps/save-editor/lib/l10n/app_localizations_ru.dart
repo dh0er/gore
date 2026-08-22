@@ -1503,6 +1503,11 @@ class AppLocalizationsRu extends AppLocalizations {
   String get updateDownload => 'Скачать';
 
   @override
+  String updateOpenFailed(String url) {
+    return 'Не удалось открыть страницу загрузки. Она доступна по адресу $url';
+  }
+
+  @override
   String get updateLater => 'Позже';
 
   @override
