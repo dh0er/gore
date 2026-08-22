@@ -1307,6 +1307,18 @@ fn emit_function_ctor(
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
     let body = drop_unreachable_statements(&body);
+    // Runs before the declarations are hoisted, so a temporary this pass empties out never gets
+    // one.
+    // A function that returns by REFERENCE keeps its named local: the name is what makes the
+    // returned thing outlive the expression (same condition as `ref_ret` below).
+    let returns_by_reference = f.ret.is_reference && f.ret.token == 5 && !f.ret.is_object_handle;
+    let body = fold_returned_temporaries(
+        &body,
+        &inferred_locals,
+        &numkinds,
+        &ret,
+        returns_by_reference,
+    );
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
     // (a wrong type just becomes a compile error the in-game loop force-stubs, rather than the
     // whole function stubbing on an undeclared identifier).
@@ -1574,6 +1586,10 @@ fn emit_function_ctor(
         // into `TY __na_tK = <call>; local_N = __na_tK;` — the lvalue assign compiles (proven
         // in-game: `__return = local_16;` never errored in the batch-19 capture) and the temp
         // lives/dies on adjacent lines of the same block, so it is scope-safe by construction.
+        // Before the split below: `__return = <call>; return __return;` is a RETURN, and a
+        // return copy-constructs — it never goes through the non-const `opAssign` the split
+        // exists to avoid. Folded first, there is no assignment left for the split to name.
+        let body = fold_return_slot_stores(&body);
         let body = rewrite_no_assign_residual_assigns(&body, &locals, &ret);
         // Iterator locals have no default ctor either; declare them at their `Iterator()` call.
         let (body, iter_suppressed) = rewrite_iterator_decl_init(&body, &locals);
@@ -1659,7 +1675,6 @@ fn emit_function_ctor(
         // and fold the RVODEF default-return into it so there is a single coherent return local.
         // A handle return defaults to null on declaration, so `UFoo __return;` is valid (no
         // "no default constructor" issue that bare struct RVODEF hits).
-        let body = fold_return_slot_stores(&body);
         let uses_return_slot = body.contains("__return");
         if uses_return_slot {
             let _ = writeln!(s, "{ind}    {ret} __return;");
@@ -5926,6 +5941,78 @@ fn extract_member_initializers(constructors: &mut String) -> HashMap<String, Str
 /// construct at the top of the function and an assignment at every return, which is two
 /// instructions vanilla never emitted. Only an adjacent, resolved store folds — a `return
 /// __return;` that stands alone still says the path did not provably write the slot.
+/// `local_N = <expr>; return local_N;` is `return <expr>;`. The name is the whole cost: a
+/// declaration, a store, a copy back out, and for a value type a destructor that sinks to the end
+/// of the function. The source returned the expression.
+///
+/// A slot whose declared type is not the function's own return type is left alone: there the
+/// store IS a conversion, and returning the expression directly would convert somewhere else —
+/// or not at all.
+fn fold_returned_temporaries(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+    numkinds: &HashMap<i32, NumKind>,
+    ret: &str,
+    returns_by_reference: bool,
+) -> String {
+    if returns_by_reference {
+        return body.to_owned();
+    }
+    let returns_the_same_type = |ident: &str| -> bool {
+        let Some(slot) = ident.strip_prefix("local_").and_then(|s| s.parse::<i32>().ok()) else {
+            return false;
+        };
+        // A slot the numeric-kind pass still has an opinion about can be declared with a
+        // different keyword than `infer_locals` gave it, and this check would then be reading
+        // the wrong type.
+        !numkinds.contains_key(&slot) && locals.get(&slot).is_some_and(|ty| ty == ret)
+    };
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<String> = Vec::new();
+    let mut at = 0usize;
+    while at < lines.len() {
+        let folded = lines
+            .get(at + 1)
+            .and_then(|next| next.trim().strip_prefix("return ")?.strip_suffix(';'))
+            .filter(|name| returns_the_same_type(name))
+            .and_then(|name| {
+                let store = lines[at].trim();
+                let value = store
+                    .strip_prefix(name)?
+                    .strip_prefix(" = ")?
+                    .strip_suffix(';')?;
+                let usable = !value.is_empty()
+                    && !value.contains('\u{1}')
+                    && !value.contains('\u{2}')
+                    && !value.contains(name)
+                    && !value.contains("__return")
+                    && !value.contains(RVODEF)
+                    && indent_of(lines[at]) == indent_of(lines[at + 1]);
+                usable.then(|| format!("{}return {value};", indent_of(lines[at])))
+            });
+        match folded {
+            Some(replacement) => {
+                kept.push(replacement);
+                at += 2;
+            }
+            None => {
+                kept.push(lines[at].to_string());
+                at += 1;
+            }
+        }
+    }
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// The leading whitespace of a line.
+fn indent_of(line: &str) -> String {
+    line.chars().take_while(|c| c.is_whitespace()).collect()
+}
+
 fn fold_return_slot_stores(body: &str) -> String {
     let mut kept: Vec<String> = Vec::new();
     for line in body.lines() {
