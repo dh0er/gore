@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 94.29% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 94.49% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **94.29%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **94.49%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | full corpus, all 7,308 modules | 7,276 (**99.6%**) — last full sweep, predates the temporary-naming work below |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**9,407 functions (5.72%) recompile to bytecode that differs semantically.** A semantic
+**9,075 functions (5.51%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -47,24 +47,34 @@ The largest classes, by the opcodes that differ:
 
 | Class | Functions |
 |-------|-----------|
-| Same opcodes and operands in the compared window, evaluated in a different order | 3,677 |
-| A `!` materialized into a named local instead of staying in the expression | 273 |
-| A conditional expression written as an `if`/`else` over a named local | 508 |
-| A comparison materialized into a slot instead of read where it is used | 124 |
+| Same opcodes and operands in the compared window, evaluated in a different order | 4,874 |
+| A conditional expression written as an `if`/`else` over a named local | 786 |
+| A reference argument passed through a named local (`PshVPtr` vs `PSF`) | 83 |
 | Everything else | the rest |
 
 Every one of these is the same defect wearing different clothes: **a temporary the compiler
 invented is given a name in the source**, and the name costs instructions the original did not
 spend — a declaration, a copy in and out, and for a value type a destructor that sinks to the end
-of the function. Removing two of those namings (a call whose result nothing reads, and the hidden
-out-slot of a by-value return) took this number from 12,170 to 9,407 in one step.
+of the function. Removing three of those namings (a call whose result nothing reads, the hidden
+out-slot of a by-value return, and a negation applied through a slot) took this number from
+14,134 to 9,075 over this run.
 
 What limits the rest is TYPE evidence. A slot declaration also performs the conversion the direct
 read would not, so moving a producer into its reader needs proof that the read has the same type.
-Two widenings were measured and rejected rather than shipped: moving any operand without that
-proof costs 1,021 compile errors (almost all `int` to `bool` and back), and writing every unread
-call result as a bare statement costs 265 — the compiler treats "Result of expression is unused"
-as an error and many of those functions are `nodiscard`. Both need a witness the cache can give.
+Three widenings were measured and rejected rather than shipped:
+
+- moving any operand without that proof costs 1,021 compile errors, almost all `int` to `bool`
+  and back;
+- writing every unread call result as a bare statement costs 265 — the compiler treats "Result
+  of expression is unused" as an error and many of those functions are `nodiscard`;
+- writing the remaining `if`/`else`-over-one-slot as the conditional expression it was fails to
+  compile at all: vanilla's two arms are an int constant and a bool call, and AngelScript's `?:`
+  requires one type. Recovering those needs the arms' types, not just their shape.
+
+Each needs a witness the cache can give, and none of them may ship on a plausible-looking shape
+alone. One collision is worth recording: the emitter marks an operand it could not resolve with
+` ? `, which is also how a conditional expression reads — anything that emits one has to teach
+that check the difference.
 
 Cutting across them, 37 are `__InitDefaults`, dominated by a float constant the language cannot
 spell: AngelScript has no infinity literal, so `+inf` is written as the largest finite float and
@@ -184,8 +194,8 @@ Same run as "What is measured, and on what" above — full corpus, build `Build5
 | Byte-faithful (`IDENTICAL`+`BENIGN`, `--norm-slots`) | 29,968 (**99.88%**) |
 
 The whole emitted tree recompiles with no errors, and `gore as bytediff --norm-slots` reports no
-alignment loss at all and B1 **94.29%** over all 164,607 aligned functions — up from 88.78% before
-this work, with 9,407 semantic differences left against 18,288.
+alignment loss at all and B1 **94.49%** over all 164,607 aligned functions — up from 88.78% before
+this work, with 9,075 semantic differences left against 18,288.
 
 Editing an existing module's defaults and splicing it back works. Getting there needed six
 identity fixes, because a decompiled module is only re-splicable when every symbol it references
