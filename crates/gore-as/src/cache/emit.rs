@@ -878,6 +878,8 @@ fn emit_function_ctor(
     // The type each slot's captured call result actually has — the witness the operand gates
     // need to tell a plain read from a read the declaration converts.
     let call_result_types = call_result_types(f, refs);
+    // Producers the SOURCE kept as statements of their own — see `statement_producer_slots`.
+    let statement_producers = statement_producer_slots(f);
     // The same witness types the slots a bool travels INTO: the merge slot of a short-circuit
     // or a guarded assignment is written by a copy, not by the call itself.
     bool_overrides.extend(
@@ -1297,6 +1299,7 @@ fn emit_function_ctor(
         fields,
         !f.name.contains("__InitDefaults"),
         &call_result_types,
+        &statement_producers,
     );
     // Runs after the producers have moved into their readers: only then is the value arm of a
     // short circuit the single assignment it was in source.
@@ -3408,6 +3411,56 @@ fn record_slot_type(
     }
 }
 
+/// Slots whose producer the SOURCE kept as a statement of its own. AngelScript evaluates a
+/// call's arguments last to first and emits each argument's code immediately before its own
+/// push, so a value that is written and only pushed AFTER some other operand went on the stack
+/// was computed before the call — a statement. A value pushed with nothing in between was
+/// evaluated at the call.
+///
+/// Only the proven case is collected. A slot this says nothing about is not thereby proven
+/// inline: reading it that way refuses far more than it should (measured: 4,222 functions).
+fn statement_producer_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let pushes = |name: &str| matches!(name, "PshVPtr" | "PshV4" | "PshV8" | "PshC4" | "PshC8" | "PshGPtr" | "PshNull" | "PSF");
+    let mut statements = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if !matches!(
+            ins.op.name,
+            "STOREOBJ" | "CpyRtoV1" | "CpyRtoV4" | "CpyRtoV8"
+        ) {
+            continue;
+        }
+        let Some(slot) = ins.words.first().map(|word| *word as i16 as i32) else {
+            continue;
+        };
+        if slot <= 0 {
+            continue;
+        }
+        // Walk forward to this slot's own push, counting what went on the stack before it.
+        let mut others = 0usize;
+        for next in &instrs[at + 1..] {
+            if !pushes(next.op.name) {
+                if matches!(next.op.name, "CALL" | "CALLSYS" | "CALLINTF" | "CALLBND") {
+                    break; // the call went out without pushing this slot
+                }
+                continue;
+            }
+            if next.words.first().map(|word| *word as i16 as i32) == Some(slot)
+                && matches!(next.op.name, "PshVPtr" | "PshV4" | "PshV8" | "PSF")
+            {
+                if others > 0 {
+                    statements.insert(slot);
+                }
+                break;
+            }
+            others += 1;
+        }
+    }
+    statements
+}
+
 /// Slots that take a COMPARISON's result. `CMP*` + `T*` leaves a boolean in the value register,
 /// and the slot that catches it holds a bool — typed int instead, every read of it is wrapped
 /// `(x != 0)` and the write becomes `int(<cmp>)`, which costs a compare and a test per use.
@@ -5248,6 +5301,7 @@ fn inline_call_argument_temporaries(
     fields: Option<&HashMap<String, String>>,
     operands_move: bool,
     call_types: &HashMap<i32, String>,
+    statement_producers: &HashSet<i32>,
 ) -> String {
     const MAX_ARGUMENT_INLINE_PASSES: usize = 8;
     let trailing_newline = body.ends_with('\n');
@@ -5305,6 +5359,7 @@ fn inline_call_argument_temporaries(
             for (temp, position) in candidates {
                 if inline_temporary_into(
                     &mut lines, index, &temp, &callee, position, locals, refs, fields, call_types,
+                    statement_producers,
                 ) {
                     changed = true;
                     moved = true;
@@ -5341,8 +5396,21 @@ fn inline_temporary_into(
     refs: &RefResolver,
     fields: Option<&HashMap<String, String>>,
     call_types: &HashMap<i32, String>,
+    statement_producers: &HashSet<i32>,
 ) -> bool {
     let receiver = position == Position::Receiver;
+    // Where the bytecode PROVES the source evaluated this producer before it pushed the call's
+    // other arguments, it was a statement of its own, and moving it into the call would reorder
+    // the evaluation. Absence of that proof is not proof of the opposite: a slot the witness
+    // says nothing about keeps the gates below.
+    if temp
+        .strip_prefix("local_")
+        .and_then(|slot| slot.parse::<i32>().ok())
+        .is_some_and(|slot| statement_producers.contains(&slot))
+    {
+        inline_reject("order", callee);
+        return false;
+    }
     // The slot's declaration converts whenever the captured call's return type is not the type
     // the slot was declared with. Where they agree, the read is plain and the value may take its
     // place anywhere the slot could stand.
