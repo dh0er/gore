@@ -93,6 +93,13 @@ declared type the read is plain and its value may stand wherever the slot could.
 for a SCALAR, and only when the slot catches ONE type — a slot catching two is the compiler
 reusing it.
 
+A fourth was tried and rejected: whether a producer stood INSIDE the expression that reads it is
+decidable from the bytecode — AngelScript emits each argument's own code immediately before its
+push — but approximating that as "the store is adjacent to the push" refuses far more than it
+should and costs 4,222 functions (8,507 to 12,729, measured). The real test is the producer's
+position relative to the OTHER arguments' pushes, which needs the call's push order, not one
+instruction's neighbour.
+
 The third is now answered rather than open: it was the witness the `?:` needed, and with it the
 form compiles and still does not match. What is left of that class is a codegen shape, not a
 missing rule. One collision is worth recording: the emitter marks an operand it could not resolve with
