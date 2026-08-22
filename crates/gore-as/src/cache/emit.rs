@@ -1307,11 +1307,13 @@ fn emit_function_ctor(
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
     let body = drop_unreachable_statements(&body);
-    // Runs before the declarations are hoisted, so a temporary this pass empties out never gets
-    // one.
+    // All three run before the declarations are hoisted, so a temporary they empty out never
+    // gets one.
     // A function that returns by REFERENCE keeps its named local: the name is what makes the
     // returned thing outlive the expression (same condition as `ref_ret` below).
     let returns_by_reference = f.ret.is_reference && f.ret.token == 5 && !f.ret.is_object_handle;
+    let body = fold_condition_temporaries(&body, &proven_locals, refs, fields);
+    let body = fold_alias_copies(&body, &inferred_locals);
     let body = fold_returned_temporaries(
         &body,
         &inferred_locals,
@@ -5936,11 +5938,176 @@ fn extract_member_initializers(constructors: &mut String) -> HashMap<String, Str
     initializers
 }
 
-/// `__return = <val>;` immediately before `return __return;` is one `return <val>;`. The hidden
-/// out-slot of a by-value struct return is the compiler's, not the source's: naming it costs a
-/// construct at the top of the function and an assignment at every return, which is two
-/// instructions vanilla never emitted. Only an adjacent, resolved store folds — a `return
-/// __return;` that stands alone still says the path did not provably write the slot.
+/// `local_N = <expr>; if (local_N)` is `if (<expr>)`. The name buys a declaration and a copy of
+/// the value into its own slot — vanilla tested the expression's own slot and branched.
+///
+/// Where the slot IS the whole condition, the type table has to call it `bool` and the value has
+/// to render as one: a condition is a boolean context, and handing it an `int` is a compile
+/// error, not a conversion. Where the slot is an `int` the emitter reads as a bool by comparing
+/// it against zero, the comparison goes with the slot — but only once the value is PROVEN a
+/// bool, because otherwise the same conversion is asked for in the other direction (measured:
+/// folding any left-hand relation without that proof costs 44 errors).
+///
+/// Either way only a slot read exactly once, on that very line: a second reader would have to
+/// evaluate the expression again.
+fn fold_condition_temporaries(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+    refs: &RefResolver,
+    fields: Option<&HashMap<String, String>>,
+) -> String {
+    let reads = |name: &str| -> usize {
+        body.match_indices(name)
+            .filter(|(at, _)| {
+                let before = body[..*at].chars().next_back();
+                let after = body[at + name.len()..].chars().next();
+                !before.is_some_and(|c| c.is_alphanumeric() || c == '_')
+                    && !after.is_some_and(|c| c.is_alphanumeric() || c == '_')
+            })
+            .count()
+    };
+    // A field of the class carries its type in the class's own map, which `renders_a_bool` does
+    // not read.
+    let is_a_bool = |value: &str| {
+        renders_a_bool(value, locals, refs)
+            || value
+                .strip_prefix("this.")
+                .and_then(|field| fields?.get(field))
+                .is_some_and(|ty| ty == "bool")
+    };
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<String> = Vec::new();
+    let mut at = 0usize;
+    while at < lines.len() {
+        let folded = (|| {
+            let (name, value) = slot_store(lines[at])?;
+            let tested = lines.get(at + 1)?.trim();
+            let condition = tested.strip_prefix("if (")?.strip_suffix(')')?;
+            if value.contains(&name)
+                || value.chars().any(char::is_control)
+                || reads(&name) != 2
+                || count_ident(tested, &name) != 1
+            {
+                return None;
+            }
+            // The whole condition IS the slot: a boolean context, so both the slot and the value
+            // have to be bools — handing a condition an `int` is an error, not a conversion.
+            let whole = (condition == name
+                || condition == format!("!{name}")
+                || condition == format!("!({name})"))
+                .then(|| match condition == name {
+                    true => format!("({value})"),
+                    false => format!("(!({value}))"),
+                })
+                .filter(|_| {
+                    temporary_type(locals, &name) == Some("bool")
+                        && renders_a_bool(&value, locals, refs)
+                });
+            // Or the slot is an INT the emitter compares against zero to read as a bool. Where
+            // the value is a bool, that comparison is the int slot's doing and nothing else's:
+            // the source tested the value. Keeping it would ask the compiler to convert an `int`
+            // to a `bool`, which it refuses (measured: 44 errors).
+            let unwrapped = || {
+                let negated = match condition.strip_prefix(name.as_str())? {
+                    " != 0" => false,
+                    " == 0" => true,
+                    _ => return None,
+                };
+                is_a_bool(&value).then(|| match negated {
+                    true => format!("(!({value}))"),
+                    false => format!("({value})"),
+                })
+            };
+            let folded = whole.or_else(unwrapped)?;
+            Some(format!("{}if {folded}", indent_of(lines[at + 1])))
+        })();
+        match folded {
+            Some(replacement) => {
+                kept.push(replacement);
+                at += 2;
+            }
+            None => {
+                kept.push(lines[at].to_string());
+                at += 1;
+            }
+        }
+    }
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
+
+/// `local_A = local_B; <reader of local_A>` is the reader reading `local_B`. A handle assigned
+/// straight from another handle and read once is a name for something that already had one, and
+/// it costs the push and the `RefCpyV` that name it.
+///
+/// Only an alias of the SAME declared type: a copy between different handle types is an implicit
+/// cast, and the reader would then see the other type. And only a slot read exactly once, on the
+/// line right after the copy — anything further away could see `local_B` reassigned in between.
+fn fold_alias_copies(body: &str, locals: &BTreeMap<i32, String>) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<String> = Vec::new();
+    let mut at = 0usize;
+    while at < lines.len() {
+        let folded = (|| {
+            let (target, source) = slot_store(lines[at])?;
+            if !is_local_ident(&source) || source == target {
+                return None;
+            }
+            let ty = temporary_type(locals, &target)?;
+            if temporary_type(locals, &source) != Some(ty) {
+                return None;
+            }
+            if count_ident(body, &target) != 2 {
+                return None;
+            }
+            // The single reader may sit further down, but only inside the same block and with
+            // nothing reassigning the source on the way: a copy that does not dominate its
+            // reader, or a source that has moved on, is not the same value any more.
+            let indent = indent_of(lines[at]);
+            let mut found = None;
+            for (offset, line) in lines[at + 1..].iter().enumerate() {
+                if !line.trim().is_empty() && indent_of(line).len() < indent.len() {
+                    break; // left the block the copy stands in
+                }
+                if slot_store(line).is_some_and(|(lhs, _)| lhs == source) {
+                    break; // the source moved on
+                }
+                if count_ident(line, &target) > 0 {
+                    let usable = count_ident(line, &target) == 1
+                        && !slot_store(line).is_some_and(|(lhs, _)| lhs == target)
+                        && indent_of(line) == indent;
+                    found = usable.then_some(at + 1 + offset);
+                    break;
+                }
+            }
+            let reader = found?;
+            let mut out: Vec<String> = lines[at + 1..reader].iter().map(|l| (*l).to_owned()).collect();
+            out.push(rename_ident(lines[reader], &target, &source));
+            Some((out, reader + 1))
+        })();
+        match folded {
+            Some((replacement, after)) => {
+                kept.extend(replacement);
+                at = after;
+            }
+            None => {
+                kept.push(lines[at].to_string());
+                at += 1;
+            }
+        }
+    }
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
+
 /// `local_N = <expr>; return local_N;` is `return <expr>;`. The name is the whole cost: a
 /// declaration, a store, a copy back out, and for a value type a destructor that sinks to the end
 /// of the function. The source returned the expression.
@@ -6013,6 +6180,11 @@ fn indent_of(line: &str) -> String {
     line.chars().take_while(|c| c.is_whitespace()).collect()
 }
 
+/// `__return = <val>;` immediately before `return __return;` is one `return <val>;`. The hidden
+/// out-slot of a by-value struct return is the compiler's, not the source's: naming it costs a
+/// construct at the top of the function and an assignment at every return, which is two
+/// instructions vanilla never emitted. Only an adjacent, resolved store folds — a `return
+/// __return;` that stands alone still says the path did not provably write the slot.
 fn fold_return_slot_stores(body: &str) -> String {
     let mut kept: Vec<String> = Vec::new();
     for line in body.lines() {
