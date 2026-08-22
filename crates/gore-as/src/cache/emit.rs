@@ -874,6 +874,7 @@ fn emit_function_ctor(
     // `local = int(local == 0);` and the compiler materializes a comparison vanilla never had.
     bool_overrides.extend(not_operand_slots(f));
     bool_overrides.extend(bool_call_result_slots(f, refs));
+    bool_overrides.extend(comparison_result_slots(f));
     // The type each slot's captured call result actually has — the witness the operand gates
     // need to tell a plain read from a read the declaration converts.
     let call_result_types = call_result_types(f, refs);
@@ -899,6 +900,7 @@ fn emit_function_ctor(
     // `NOT` and the callee's declared return type are both PROOFS of the slot's type; the
     // int-family hints below only describe how a value is passed.
     let mut proven_bool = not_operand_slots(f);
+    proven_bool.extend(comparison_result_slots(f));
     proven_bool.extend(
         call_result_types
             .iter()
@@ -3392,6 +3394,34 @@ fn record_slot_type(
             types.insert(slot, ty);
         }
     }
+}
+
+/// Slots that take a COMPARISON's result. `CMP*` + `T*` leaves a boolean in the value register,
+/// and the slot that catches it holds a bool — typed int instead, every read of it is wrapped
+/// `(x != 0)` and the write becomes `int(<cmp>)`, which costs a compare and a test per use.
+fn comparison_result_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let mut slots = HashSet::new();
+    let mut tested = false;
+    for ins in &instrs {
+        match ins.op.name {
+            "TZ" | "TNZ" | "TS" | "TNS" | "TP" | "TNP" => tested = true,
+            "CpyRtoV1" | "CpyRtoV4" => {
+                if tested {
+                    if let Some(slot) = ins.words.first().map(|word| *word as i16 as i32) {
+                        if slot > 0 {
+                            slots.insert(slot);
+                        }
+                    }
+                }
+                tested = false;
+            }
+            _ => tested = false,
+        }
+    }
+    slots
 }
 
 /// Slots that take a bool-returning call's result. `CpyRtoV*` right after a call copies the
