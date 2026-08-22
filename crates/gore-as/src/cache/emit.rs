@@ -1256,6 +1256,7 @@ fn emit_function_ctor(
     let body = fold_literal_temporaries(&body, refs);
     let body = fold_constant_comparisons(&body);
     let body = fold_double_negations(&body);
+    let body = fold_negated_stores(&body);
     // `__InitDefaults` is where the class's values live, and their recovery is fail-closed: a
     // temporary left without a reader there costs the whole class its `default` statements
     // (measured: 358 classes). Move only what a call reads there, never a plain operand.
@@ -5283,6 +5284,17 @@ fn is_object_handle_type(ty: &str) -> bool {
 /// The value is a CALL’s result. A parenthesized expression ends in `)` as well and has no call
 /// to move, and moving it into a receiver position makes a temporary out of it.
 fn is_call_result(value: &str) -> bool {
+    // `!(<call>)` reads the same value the call produced, one operator on top, and a fully
+    // parenthesized call is still that call.
+    if let Some(negated) = value.strip_prefix('!') {
+        return is_call_result(negated);
+    }
+    if value.starts_with('(')
+        && matching_paren(value, 0) == Some(value.len() - 1)
+        && value.len() > 2
+    {
+        return is_call_result(&value[1..value.len() - 1]);
+    }
     let Some(inner) = value.strip_suffix(')') else {
         return false;
     };
@@ -5378,7 +5390,24 @@ fn is_local_ident(text: &str) -> bool {
 
 /// The callee name and top-level argument list of a statement that IS one call.
 fn call_arguments(line: &str) -> Option<(String, Vec<String>)> {
-    let statement = statement_expression(line)?;
+    // `!(<call>)` and `(<call>)` are still that call, and its parameters still decide what may
+    // stand in each position.
+    let mut statement = statement_expression(line)?;
+    loop {
+        let stripped = statement.strip_prefix('!').unwrap_or(statement);
+        let stripped = if stripped.starts_with('(')
+            && matching_paren(stripped, 0) == Some(stripped.len() - 1)
+            && stripped.len() > 2
+        {
+            &stripped[1..stripped.len() - 1]
+        } else {
+            stripped
+        };
+        if stripped == statement {
+            break;
+        }
+        statement = stripped;
+    }
     let open = statement.find('(')?;
     if matching_paren(statement, open)? != statement.len() - 1 {
         return None; // not a single call: something follows the closing parenthesis
@@ -5544,6 +5573,45 @@ fn fold_return_slot_stores(body: &str) -> String {
         joined.push('\n');
     }
     joined
+}
+
+/// `local_N = <expr>; local_N = !local_N;` is one `local_N = !(<expr>);`. The slot is the
+/// compiler's own temporary for the negation, and the round trip through it costs a copy in and
+/// a copy out that vanilla never spent — it applies `NOT` to the value where it already sits.
+fn fold_negated_stores(body: &str) -> String {
+    let mut kept: Vec<String> = Vec::new();
+    for line in body.lines() {
+        let folded = negated_self_store(line)
+            .and_then(|slot| {
+                let previous = kept.last()?;
+                let (target, value) = previous.trim().strip_suffix(';')?.split_once(" = ")?;
+                let declares = target.split_whitespace().last()? == slot.as_str();
+                (declares && count_ident(value, &slot) == 0 && !value.starts_with('!')).then(|| {
+                    let indent: String =
+                        previous.chars().take_while(|c| c.is_whitespace()).collect();
+                    format!("{indent}{target} = !({value});")
+                })
+            });
+        match folded {
+            Some(replacement) => {
+                kept.pop();
+                kept.push(replacement);
+            }
+            None => kept.push(line.to_string()),
+        }
+    }
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// The slot a statement negates in place (`local_5 = !local_5;`).
+fn negated_self_store(line: &str) -> Option<String> {
+    let (target, value) = line.trim().strip_suffix(';')?.split_once(" = ")?;
+    let negated = value.strip_prefix('!')?;
+    (is_local_ident(target) && negated == target).then(|| target.to_owned())
 }
 
 /// Drop what follows a statement that always leaves the block. Recovering a branch's own return
