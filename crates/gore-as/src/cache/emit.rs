@@ -5483,7 +5483,10 @@ fn inline_temporary_into(
                 || (reads_plain() && assigns_a_scalar(&lines[index], locals)))
                 && (same_typed_own_field(&value, temp, locals, fields) || is_call_result(&value))
         }
-        _ => is_call_result(&value),
+        // An argument or a receiver takes the value as it is, so a member read may travel there
+        // too — reading a member has no side effect of its own, and the field map proves the
+        // slot's declaration was not also converting it.
+        _ => is_call_result(&value) || same_typed_own_field(&value, temp, locals, fields),
     };
     if !movable {
         inline_reject("not-a-call", callee);
