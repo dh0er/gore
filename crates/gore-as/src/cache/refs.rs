@@ -100,6 +100,8 @@ pub struct RefResolver {
     /// Class -> the `name/arity` keys it declares ITSELF (not inherited). An override calling
     /// the method it overrides was written `Super::`, and rendering it as `this.` would recurse.
     class_methods: HashMap<String, HashSet<String>>,
+    /// Method names the cache records a CONST overload for (see `names_a_const_method`).
+    const_method_names: HashSet<String>,
     /// `(owner, function)` -> the declared default argument of each parameter, normalized.
     /// An empty entry means that parameter has none. The owner is `""` for a free function.
     param_defaults: HashMap<(String, String), Vec<String>>,
@@ -299,6 +301,9 @@ impl RefResolver {
             }
             if is_const_method {
                 r.const_method_ptrs.insert(key);
+                // By NAME as well: a caller rendered as text has the name and nothing else, and
+                // a const call's result may not be thrown away.
+                r.const_method_names.insert(name.clone());
             }
             {
                 let accepts: Vec<bool> = params
@@ -1033,7 +1038,21 @@ impl RefResolver {
     }
     /// Install `class -> its OWN declared `name/arity` keys` from the parsed modules.
     pub fn set_class_methods(&mut self, by_class: HashMap<String, HashSet<String>>) {
+        self.const_method_names.extend(
+            by_class
+                .values()
+                .flatten()
+                .filter_map(|key| key.strip_suffix("/const"))
+                .filter_map(|key| key.rsplit_once('/').map(|(name, _)| name.to_owned())),
+        );
         self.class_methods = by_class;
+    }
+
+    /// True when the cache records a CONST method by this name. A const call has no side effect
+    /// to keep, so its result may not be thrown away ("Result of expression is unused", which
+    /// this compiler treats as an error).
+    pub fn names_a_const_method(&self, method: &str) -> bool {
+        self.const_method_names.contains(method)
     }
     /// True when `class` or an ancestor declares a CONST overload of `method`. A const method
     /// calling it resolves to that overload, so the call does not make the caller non-const.

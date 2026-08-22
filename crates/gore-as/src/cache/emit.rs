@@ -1550,6 +1550,7 @@ fn emit_function_ctor(
         // legal form is declaration-with-initializer (copy-construction). Rewrite qualifying
         // executor locals to decl-init at their assignment sites.
         let (body, na_suppressed) = rewrite_no_assign_locals(&body, &locals);
+        let (body, discarded) = drop_unread_call_results(&body, &locals, refs);
         // Batch-20 Class A residue: executor locals whose reference shape failed the decl-init
         // gates above (multi-assign with reads, read-before-assign, cross-block reads) still
         // carry `local_N = <call>;` assignments — temporary into non-const opAssign. Split each
@@ -1579,6 +1580,7 @@ fn emit_function_ctor(
             let ty = &qualified;
             if suppressed.contains(slot)
                 || na_suppressed.contains(slot)
+                || discarded.contains(slot)
                 || iter_suppressed.contains(slot)
                 || value_suppressed.contains(slot)
                 || foreach_suppressed.contains(slot)
@@ -4681,6 +4683,121 @@ fn rewrite_no_assign_locals(body: &str, locals: &BTreeMap<i32, String>) -> (Stri
         suppressed.insert(*slot);
     }
     (out, suppressed)
+}
+
+/// A local whose every occurrence is `local_N = <call>;` is nothing but a name for the call's
+/// discarded result. Vanilla made the call and destroyed the result where it stood; naming it
+/// costs the declaration and, for a value type, sinks the destructor to the end of the function.
+/// Write the call as the statement it is — the same rule as the `no_assign_type` write-only arm,
+/// for every other type (`FName`, `const UStoryG1R`, …).
+fn drop_unread_call_results(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+    refs: &RefResolver,
+) -> (String, HashSet<i32>) {
+    let mut dropped: HashSet<i32> = HashSet::new();
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    for slot in locals.keys() {
+        let ident = format!("local_{slot}");
+        let mut sites: Vec<usize> = Vec::new();
+        let mut every_use_is_a_discard = true;
+        for (at, line) in lines.iter().enumerate() {
+            if count_ident(line, &ident) == 0 {
+                continue;
+            }
+            match discardable_call(line, &ident, refs) {
+                Some(_) => sites.push(at),
+                None => {
+                    every_use_is_a_discard = false;
+                    break;
+                }
+            }
+        }
+        if !every_use_is_a_discard || sites.is_empty() {
+            continue;
+        }
+        for at in sites {
+            let indent: String = lines[at].chars().take_while(|c| c.is_whitespace()).collect();
+            let call = discardable_call(&lines[at], &ident, refs).expect("matched above");
+            lines[at] = format!("{indent}{call};");
+        }
+        dropped.insert(*slot);
+    }
+    let mut joined = lines.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    (joined, dropped)
+}
+
+/// The name of the call a value ENDS in. `A(x).B()` is a call to `B`, and reading the first name
+/// instead asks about the wrong function entirely.
+fn outer_callee(value: &str) -> Option<String> {
+    let inner = value.strip_suffix(')')?;
+    let mut depth = 1usize;
+    for (at, c) in inner.char_indices().rev() {
+        match c {
+            ')' => depth += 1,
+            '(' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(inner[..at].rsplit(['.', ':']).next()?.to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The call a statement assigns to `ident` and nothing else, when that call's result may be
+/// thrown away at all. Two shapes may not: CONSTRUCTING a value and dropping it is "Result of
+/// expression is unused", and a handful of bound functions are `nodiscard` — neither the script
+/// cache nor `Binds.Cache` records that flag, so the names come from what the compiler reported
+/// (1,207 and 265 errors respectively, measured on this corpus).
+fn discardable_call(line: &str, ident: &str, refs: &RefResolver) -> Option<String> {
+    // What the cache cannot say and the compiler did: `nodiscard` is a property of the C++
+    // binding and appears in neither the script cache nor `Binds.Cache`, and one const method
+    // (`GetCurrentCombo`) the function table records without its const flag. Every name here was
+    // reported by the compiler on this corpus, not guessed.
+    const REFUSED_BY_THE_COMPILER: [&str; 8] = [
+        "FScopeCycleCounter",
+        "RandRange",
+        "FString",
+        "FName",
+        "FPlane",
+        "Abs",
+        "Sqrt",
+        "GetCurrentCombo",
+    ];
+    let statement = line.trim().strip_suffix(';')?;
+    let (head, value) = statement.split_once(" = ")?;
+    let declares = head.split_whitespace().last()? == ident;
+    if !declares || count_ident(value, ident) != 0 || !value.ends_with(')') || !value.contains('(')
+    {
+        return None;
+    }
+    let callee = outer_callee(value)?;
+    let callee = callee.as_str();
+    // A parenthesized expression has no callee at all, and a CONST method has no side effect to
+    // keep — the compiler refuses to throw either result away.
+    if callee.is_empty()
+        || !callee.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        || refs.names_a_const_method(callee)
+    {
+        return None;
+    }
+    let constructs = callee
+        .split('<')
+        .next()
+        .and_then(|name| {
+            let bytes = name.as_bytes();
+            (bytes.len() >= 2).then(|| {
+                matches!(bytes[0], b'F' | b'U' | b'A' | b'E' | b'T') && bytes[1].is_ascii_uppercase()
+            })
+        })
+        .unwrap_or(false);
+    (!constructs && !REFUSED_BY_THE_COMPILER.contains(&callee)).then(|| value.to_owned())
 }
 
 /// Residual pass behind [`rewrite_no_assign_locals`]: any REMAINING `local_N = <call>;` (or
