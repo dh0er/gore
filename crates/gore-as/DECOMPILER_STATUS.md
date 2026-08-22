@@ -97,6 +97,14 @@ declared type the read is plain and its value may stand wherever the slot could.
 for a SCALAR, and only when the slot catches ONE type — a slot catching two is the compiler
 reusing it.
 
+A fifth is the architectural one, and its first increment was tried and rejected too. The order
+class exists because `block_stmts_in` materializes every store as a statement, so a name is
+created that eight later passes have to take away again. Carrying the value instead — suppressing
+the store when the very next instruction pushes that slot and nothing else reads it — is the
+smallest form of the fix, and it costs three classes their `default` statements and fails the
+whole-tree compile. The defaults path reads the same statement stream and is fail-closed, so this
+has to be a project with that path protected, not an increment.
+
 A fourth was tried and rejected: whether a producer stood INSIDE the expression that reads it is
 decidable from the bytecode — AngelScript emits each argument's own code immediately before its
 push — but approximating that as "the store is adjacent to the push" refuses far more than it
