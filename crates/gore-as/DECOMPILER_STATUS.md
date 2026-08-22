@@ -25,7 +25,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
 | Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **94.86%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
-| Splice back (`extract-remap`) | full corpus, all 7,308 modules | 7,277 (**99.58%**) |
+| Splice back (`extract-remap`) | full corpus, all 7,308 modules | 7,278 (**99.59%**) |
 
 Every measurement now covers the whole corpus. The splice sweep takes about two hours (each run
 re-reads both 100+ MB caches), which is why earlier revisions of this document reported it from a
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**8,455 functions (5.14%) recompile to bytecode that differs semantically.** A semantic
+**8,459 functions (5.14%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -61,7 +61,7 @@ invented is given a name in the source**, and the name costs instructions the or
 spend — a declaration, a copy in and out, and for a value type a destructor that sinks to the end
 of the function. Removing three of those namings (a call whose result nothing reads, the hidden
 out-slot of a by-value return, and a negation applied through a slot) took this number from
-14,134 to 8,455 over this run.
+14,134 to 8,459 over this run.
 
 What limits the rest is TYPE evidence. A slot declaration also performs the conversion the direct
 read would not, so moving a producer into its reader needs proof that the read has the same type.
@@ -115,8 +115,8 @@ infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds t
 vanilla holds, where the largest finite float came back one ULP low every time. The belief that
 it could not was carried in this file for months and was never probed.
 
-**31 of the 7,308 modules cannot be spliced back** (99.58% can). Each is a template instantiation
-or a behaviour the base cache never recorded — 15 `$beh0` constructors, 13 `TArray` iterators, and
+**30 of the 7,308 modules cannot be spliced back** (99.59% can). Each is a template instantiation
+or a behaviour the base cache never recorded — 14 `$beh0` constructors, 13 `TArray` iterators, and
 a tail of single cases (`opAssign`, `GetRootNode`, `AssertEquals`). They share the root
 cause of the ordering classes above: vanilla wrote the expression inline where the emitter
 materializes a local, and that local asks for a copy the base cache has no row for.
@@ -230,7 +230,7 @@ Same run as "What is measured, and on what" above — full corpus, build `Build5
 
 The whole emitted tree recompiles with no errors, and `gore as bytediff --norm-slots` reports no
 alignment loss at all and B1 **94.86%** over all 164,607 aligned functions — up from 88.78% before
-this work, with 8,455 semantic differences left against 18,288.
+this work, with 8,459 semantic differences left against 18,288.
 
 Editing an existing module's defaults and splicing it back works. Getting there needed six
 identity fixes, because a decompiled module is only re-splicable when every symbol it references
@@ -289,7 +289,7 @@ default constructor and an `opAssign` keeps the hoisted declaration and its assi
 shapes compile; only the one the base cache has a row for can be spliced back.
 
 Measured over the whole corpus, `extract-remap` against the base cache succeeds for 7,276 of 7,308
-modules (**99.58%**). The same measurement scored 43 of 60 before the identity work and 58 of 60
+modules (**99.59%**). The same measurement scored 43 of 60 before the identity work and 58 of 60
 after it, on the 60-module sample it started from.
 
 A method's RETURN `const` is part of its identity and is emitted again. It used to be stripped
