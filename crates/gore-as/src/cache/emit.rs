@@ -5160,6 +5160,17 @@ fn sole_use_is_a_conversion(line: &str, ident: &str, refs: &RefResolver) -> bool
             }
         }
     }
+    // A literal is legal wherever a TEMPORARY is, and the cache says which parameter positions
+    // those are — the same witness the producer inlining asks. That is the position this fold
+    // used to refuse for want of one, and it is where most of these constants go.
+    if let Some((callee, arguments)) = call_arguments(line) {
+        let rendered = arguments.len();
+        if arguments.iter().enumerate().any(|(position, argument)| {
+            argument == ident && refs.arg_position_accepts_temporary(&callee, rendered, position)
+        }) {
+            return true;
+        }
+    }
     let marker = format!("({ident})");
     let Some(at) = line.find(&marker) else {
         return false;
