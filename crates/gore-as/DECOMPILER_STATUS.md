@@ -158,13 +158,15 @@ The widenings that were measured and rejected rather than shipped:
   whether or not the caller cares. What closes it is the call's own function POINTER: it names one
   overload, and `func_params_by_ptr` gives that row's parameter flags exactly. Shipped with both
   witnesses (0 errors);
-- protecting the destination of a numeric CONVERSION from the folds — the slot where a `float32`
-  becomes the `float` vanilla compares in, so that `if (x > 0.0)` runs at the width the original
-  ran at — was measured twice and rejected twice. Refusing every conversion destination costs 74
-  functions; narrowing it to the one widening that matters (`fTOd`) still costs 12. The shape is
-  real and the emitted comparison genuinely runs at the wrong width, but a blanket refusal on the
-  slot blocks more good folds than it saves. The fix has to sit at the READER — keep the widening
-  where the reader is a comparison — not on the slot;
+- protecting the `float32`-to-`float` widening from the folds, so that `if (x > 0.0)` runs at the
+  width the original ran at, was measured THREE times and rejected three times: refusing every
+  conversion destination costs 74 functions, narrowing it to the one widening that matters
+  (`fTOd`) costs 12, and leaving that widening's whole statement untouched on both sides — which
+  reproduces vanilla's three slots exactly, verified by hand — still costs 3. Each variant fixes
+  its own 28 functions and loses slightly more elsewhere. The shape is real; what is missing is a
+  reason to keep this one statement that does not also keep statements nothing depends on. The
+  value reaches the comparison through a CHAIN of copies, so no test on the immediate reader can
+  see it — that is what makes the cheap versions of this rule too broad;
 - three separate widenings measured EXACTLY neutral and were taken back out rather than kept:
   ungating the bool-field witness from the enum state machine, stepping the return-value scan back
   over a scope's cleanup, and running the temporary folds to a fixpoint. Each asks a question the
