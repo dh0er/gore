@@ -1259,60 +1259,6 @@ fn emit_function_ctor(
         }
         typed
     };
-    let const_result_slots = infer_const_result_slots(f, refs);
-    let body = if enum_overrides.is_empty() {
-        body
-    } else {
-        let candidates: HashSet<i32> = used_locals(&body)
-            .into_iter()
-            .filter(|slot| {
-                let typed_state =
-                    enum_overrides.contains_key(slot) || bool_overrides.contains(slot);
-                let primitive_scratch = inferred_locals
-                    .get(slot)
-                    .map(|ty| is_primitive(ty))
-                    .unwrap_or_else(|| !f.obj_locals.iter().any(|(obj_slot, _)| obj_slot == slot));
-                // Preserve a compiler-reused primitive carrier with multiple definition/use
-                // segments. Folding each adjacent segment is source-semantically valid, but it
-                // can split one VM live range into several compiler temporaries and defeat the
-                // byte-faithfulness oracle. Proven enum/bool state slots remain eligible because
-                // their concrete type is the purpose of this pass; ordinary primitive scratch is
-                // eliminated only when it has a single producer assignment in the whole body.
-                adjacent_value_slot_is_candidate(&body, *slot, typed_state, primitive_scratch)
-            })
-            .collect();
-        rewrite_adjacent_value_temporaries(&body, &candidates).0
-    };
-    let (body, _) = rewrite_value_temporaries(&body, &inferred_locals);
-    let body = drop_dead_stores(&body);
-    let body = fold_literal_temporaries(&body, refs);
-    let body = fold_constant_comparisons(&body);
-    let body = fold_double_negations(&body);
-    let body = fold_negated_stores(&body);
-    // `__InitDefaults` is where the class's values live, and their recovery is fail-closed: a
-    // temporary left without a reader there costs the whole class its `default` statements
-    // (measured: 358 classes). Move only what a call reads there, never a plain operand.
-    let body = inline_call_argument_temporaries(
-        &body,
-        refs,
-        &inferred_locals,
-        fields,
-        !f.name.contains("__InitDefaults"),
-        &call_result_types,
-        &statement_producers,
-    );
-    // Runs after the producers have moved into their readers: only then is the value arm of a
-    // short circuit the single assignment it was in source.
-    let body = fold_short_circuits(&body, &proven_locals, refs);
-    let body = join_short_circuit_chains(&body);
-    let body = rewrite_operator_calls(&body);
-    let body = fold_cast_diamonds(&body);
-    let body = drop_unreachable_statements(&body);
-    // All three run before the declarations are hoisted, so a temporary they empty out never
-    // gets one.
-    // A function that returns by REFERENCE keeps its named local: the name is what makes the
-    // returned thing outlive the expression (same condition as `ref_ret` below).
-    let returns_by_reference = f.ret.is_reference && f.ret.token == 5 && !f.ret.is_object_handle;
     // The slot types the DECLARATIONS will carry, as far as they are decided here: the inferred
     // table with the numeric-kind, enum and bool overrides the hoist below applies in that order.
     // A fold that compares a slot against a type has to compare against the type the slot will be
@@ -1349,6 +1295,60 @@ fn emit_function_ctor(
         }
         view
     };
+    let const_result_slots = infer_const_result_slots(f, refs);
+    let body = if enum_overrides.is_empty() {
+        body
+    } else {
+        let candidates: HashSet<i32> = used_locals(&body)
+            .into_iter()
+            .filter(|slot| {
+                let typed_state =
+                    enum_overrides.contains_key(slot) || bool_overrides.contains(slot);
+                let primitive_scratch = inferred_locals
+                    .get(slot)
+                    .map(|ty| is_primitive(ty))
+                    .unwrap_or_else(|| !f.obj_locals.iter().any(|(obj_slot, _)| obj_slot == slot));
+                // Preserve a compiler-reused primitive carrier with multiple definition/use
+                // segments. Folding each adjacent segment is source-semantically valid, but it
+                // can split one VM live range into several compiler temporaries and defeat the
+                // byte-faithfulness oracle. Proven enum/bool state slots remain eligible because
+                // their concrete type is the purpose of this pass; ordinary primitive scratch is
+                // eliminated only when it has a single producer assignment in the whole body.
+                adjacent_value_slot_is_candidate(&body, *slot, typed_state, primitive_scratch)
+            })
+            .collect();
+        rewrite_adjacent_value_temporaries(&body, &candidates).0
+    };
+    let (body, _) = rewrite_value_temporaries(&body, &inferred_locals);
+    let body = drop_dead_stores(&body);
+    let body = fold_literal_temporaries(&body, refs);
+    let body = fold_constant_comparisons(&body);
+    let body = fold_double_negations(&body);
+    let body = fold_negated_stores(&body);
+    // `__InitDefaults` is where the class's values live, and their recovery is fail-closed: a
+    // temporary left without a reader there costs the whole class its `default` statements
+    // (measured: 358 classes). Move only what a call reads there, never a plain operand.
+    let body = inline_call_argument_temporaries(
+        &body,
+        refs,
+        &declared_locals,
+        fields,
+        !f.name.contains("__InitDefaults"),
+        &call_result_types,
+        &statement_producers,
+    );
+    // Runs after the producers have moved into their readers: only then is the value arm of a
+    // short circuit the single assignment it was in source.
+    let body = fold_short_circuits(&body, &proven_locals, refs);
+    let body = join_short_circuit_chains(&body);
+    let body = rewrite_operator_calls(&body);
+    let body = fold_cast_diamonds(&body);
+    let body = drop_unreachable_statements(&body);
+    // All three run before the declarations are hoisted, so a temporary they empty out never
+    // gets one.
+    // A function that returns by REFERENCE keeps its named local: the name is what makes the
+    // returned thing outlive the expression (same condition as `ref_ret` below).
+    let returns_by_reference = f.ret.is_reference && f.ret.token == 5 && !f.ret.is_object_handle;
     let body = fold_condition_temporaries(&body, &declared_locals, refs, fields);
     let body = fold_alias_copies(&body, &declared_locals);
     let body = fold_returned_temporaries(&body, &declared_locals, &ret, returns_by_reference);
