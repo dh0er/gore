@@ -5931,7 +5931,30 @@ fn extract_member_initializers(constructors: &mut String) -> HashMap<String, Str
         }
         index = close + 1;
     }
+    // A constructor the pass above could not lift from — one that also takes a value from a
+    // parameter — still carries the member initializer the compiler puts at the top of EVERY
+    // constructor. The declaration now says it once; saying it again here is a store vanilla
+    // never emitted (measured: 283 of them).
     if !initializers.is_empty() {
+        let mut body_indent = String::new();
+        let mut written: HashSet<String> = HashSet::new();
+        keep.retain(|line| {
+            if line.trim() == "{" {
+                written.clear();
+                body_indent = format!("{}    ", indent_of(line));
+                return true;
+            }
+            // Only a store at the constructor's own level: one inside a branch happens on some
+            // paths and not others, which is not what a declaration says.
+            if indent_of(line) != body_indent {
+                return true;
+            }
+            let Some((field, value)) = member_store(line) else {
+                return true;
+            };
+            let first_write = written.insert(field.clone());
+            !(first_write && initializers.get(&field).is_some_and(|init| *init == value))
+        });
         *constructors = keep.join("\n");
         constructors.push('\n');
     }
