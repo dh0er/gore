@@ -1313,15 +1313,45 @@ fn emit_function_ctor(
     // A function that returns by REFERENCE keeps its named local: the name is what makes the
     // returned thing outlive the expression (same condition as `ref_ret` below).
     let returns_by_reference = f.ret.is_reference && f.ret.token == 5 && !f.ret.is_object_handle;
-    let body = fold_condition_temporaries(&body, &proven_locals, refs, fields);
-    let body = fold_alias_copies(&body, &inferred_locals);
-    let body = fold_returned_temporaries(
-        &body,
-        &inferred_locals,
-        &numkinds,
-        &ret,
-        returns_by_reference,
-    );
+    // The slot types the DECLARATIONS will carry, as far as they are decided here: the inferred
+    // table with the numeric-kind, enum and bool overrides the hoist below applies in that order.
+    // A fold that compares a slot against a type has to compare against the type the slot will be
+    // declared with — reading the table inference started from refuses, among others, every
+    // `bool` the cache proved from a comparison or a call's return.
+    let declared_locals = {
+        let mut view = inferred_locals.clone();
+        for (slot, kd) in &numkinds {
+            let kw = match kd {
+                NumKind::F32 => "float32",
+                NumKind::F64 => "float",
+                NumKind::I64 => "int64",
+            };
+            if matches!(
+                view.get(slot).map(String::as_str),
+                None | Some("int" | "int64" | "float" | "double")
+            ) {
+                view.insert(*slot, kw.to_string());
+            }
+        }
+        for (slot, ty) in &enum_overrides {
+            if view
+                .get(slot)
+                .map(|known| is_primitive(known) || known == ty)
+                .unwrap_or(true)
+            {
+                view.insert(*slot, ty.clone());
+            }
+        }
+        for slot in &bool_overrides {
+            if view.get(slot).map(|known| is_primitive(known)).unwrap_or(true) {
+                view.insert(*slot, "bool".into());
+            }
+        }
+        view
+    };
+    let body = fold_condition_temporaries(&body, &declared_locals, refs, fields);
+    let body = fold_alias_copies(&body, &declared_locals);
+    let body = fold_returned_temporaries(&body, &declared_locals, &ret, returns_by_reference);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
     // (a wrong type just becomes a compile error the in-game loop force-stubs, rather than the
     // whole function stubbing on an undeclared identifier).
@@ -6185,7 +6215,6 @@ fn fold_alias_copies(body: &str, locals: &BTreeMap<i32, String>) -> String {
 fn fold_returned_temporaries(
     body: &str,
     locals: &BTreeMap<i32, String>,
-    numkinds: &HashMap<i32, NumKind>,
     ret: &str,
     returns_by_reference: bool,
 ) -> String {
@@ -6196,10 +6225,7 @@ fn fold_returned_temporaries(
         let Some(slot) = ident.strip_prefix("local_").and_then(|s| s.parse::<i32>().ok()) else {
             return false;
         };
-        // A slot the numeric-kind pass still has an opinion about can be declared with a
-        // different keyword than `infer_locals` gave it, and this check would then be reading
-        // the wrong type.
-        !numkinds.contains_key(&slot) && locals.get(&slot).is_some_and(|ty| ty == ret)
+        locals.get(&slot).is_some_and(|ty| ty == ret)
     };
     let lines: Vec<&str> = body.lines().collect();
     let mut kept: Vec<String> = Vec::new();
