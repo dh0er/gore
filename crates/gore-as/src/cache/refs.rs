@@ -156,6 +156,10 @@ pub struct RefResolver {
     /// overloads, and a call renders without the arguments that only restate a default, so the
     /// lookup consults every declared arity from the rendered one upwards.
     temporary_arg_positions: HashMap<String, HashMap<usize, Vec<bool>>>,
+    /// The same, for CONSTRUCTORS, keyed by the type they build. A constructor is recorded under
+    /// the behaviour name `$beh0`, not under the type's own name, so a call written as
+    /// `FThing(a, b)` finds nothing in the map above — and "nothing" is refused, not unknown.
+    ctor_arg_positions: HashMap<String, HashMap<usize, Vec<bool>>>,
     /// `name/type` keys for one-parameter functions whose parameter accepts a TEMPORARY — by
     /// value, or by const reference. A name is recorded only when EVERY one-parameter row of it
     /// taking that type accepts one, so a single non-const-reference overload disqualifies it.
@@ -259,6 +263,7 @@ impl RefResolver {
         // type tables, which are still borrowed mutably here.
         let mut owned_methods: Vec<(i64, String, usize)> = Vec::new();
         let mut one_arg_params: Vec<(String, DataType, bool)> = Vec::new();
+        let mut ctor_params: Vec<(i64, Vec<bool>)> = Vec::new();
         let mut const_returns: HashMap<String, bool> = HashMap::new();
         let function_reference_count = c.read_count("FunctionReferences")?;
         c.ensure_minimum_remaining(function_reference_count, 80, "FunctionReferences")?;
@@ -331,6 +336,9 @@ impl RefResolver {
                     .iter()
                     .map(|p| !p.is_reference || p.is_object_const || p.is_read_only)
                     .collect();
+                if name == "$beh0" && objtype != 0 {
+                    ctor_params.push((objtype, accepts.clone()));
+                }
                 let by_arity = r.temporary_arg_positions.entry(name.clone()).or_default();
                 match by_arity.get_mut(&accepts.len()) {
                     Some(seen) => {
@@ -426,6 +434,25 @@ impl RefResolver {
             .into_iter()
             .filter_map(|(key, accepts)| accepts.then_some(key))
             .collect();
+        for (objtype, accepts) in ctor_params {
+            let Some(owner) = r.composed_type_name(objtype) else {
+                continue;
+            };
+            let by_arity = r
+                .ctor_arg_positions
+                .entry(strip_namespaces(&owner).to_string())
+                .or_default();
+            match by_arity.get_mut(&accepts.len()) {
+                Some(seen) => {
+                    for (slot, accepted) in seen.iter_mut().zip(&accepts) {
+                        *slot &= *accepted;
+                    }
+                }
+                None => {
+                    by_arity.insert(accepts.len(), accepts);
+                }
+            }
+        }
         for (objtype, name, arity) in owned_methods {
             let Some(owner) = r.composed_type_name(objtype) else {
                 continue;
@@ -1179,7 +1206,11 @@ impl RefResolver {
         rendered: usize,
         position: usize,
     ) -> bool {
-        let Some(by_arity) = self.temporary_arg_positions.get(name) else {
+        let Some(by_arity) = self
+            .temporary_arg_positions
+            .get(name)
+            .or_else(|| self.ctor_arg_positions.get(name))
+        else {
             return false;
         };
         let mut reachable = by_arity
