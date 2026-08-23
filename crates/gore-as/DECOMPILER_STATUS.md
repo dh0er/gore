@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 97.96% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 97.97% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **97.96%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **97.97%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**3,359 functions (2.04%) recompile to bytecode that differs semantically.** A semantic
+**3,339 functions (2.03%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -304,8 +304,8 @@ Same run as "What is measured, and on what" above — full corpus, build `Build5
 | Byte-faithful (`IDENTICAL`+`BENIGN`, `--norm-slots`) | 29,999 (**99.98%**) |
 
 The whole emitted tree recompiles with no errors, and `gore as bytediff --norm-slots` reports no
-alignment loss at all and B1 **97.96%** over all 164,607 aligned functions — up from 88.78% before
-this work, with 3,359 semantic differences left against 18,288.
+alignment loss at all and B1 **97.97%** over all 164,607 aligned functions — up from 88.78% before
+this work, with 3,339 semantic differences left against 18,288.
 
 Editing an existing module's defaults and splicing it back works. Getting there needed six
 identity fixes, because a decompiled module is only re-splicable when every symbol it references
