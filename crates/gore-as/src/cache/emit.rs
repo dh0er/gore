@@ -1711,6 +1711,13 @@ fn emit_function_ctor(
         .collect();
         let (body, first_use_suppressed) =
             rewrite_first_use_decl_init(&body, &locals, refs, &already_declared_at_use);
+        let (body, first_write_suppressed) = rewrite_bare_decl_at_first_write(
+            &body,
+            &locals,
+            refs,
+            &already_declared_at_use,
+            &first_use_suppressed,
+        );
         // Hoist local declarations. A primitive may stay bare only when its first source-level
         // reference is a top-level write-only assignment; this is the same definite-assignment
         // proof used for inferred enums. Everything else gets an explicit default initializer so
@@ -1726,6 +1733,7 @@ fn emit_function_ctor(
                 || foreach_suppressed.contains(slot)
                 || const_suppressed.contains(slot)
                 || first_use_suppressed.contains(slot)
+                || first_write_suppressed.contains(slot)
             {
                 continue; // declared at its (rewritten) assignment/Iterator() site instead
             }
@@ -7735,6 +7743,68 @@ fn rewrite_value_decl_init(
     let is_value =
         |_slot: i32, ty: &str| is_value_struct_type(ty) && !constructs_by_assignment(ty, refs);
     rewrite_decl_at_assignment(body, locals, &is_value, &|ty| ty.to_string())
+}
+
+/// A local whose first reference WRITES it through a member or an element — `local_N.Field = …;`
+/// — was declared just there in the source. It cannot take a declaration-with-initializer (there
+/// is no whole value to initialize it with), so the hoist put it at the top of the function and
+/// the compiler ran its constructor before the guards that decide whether it is needed at all.
+///
+/// Only where the write stands at the function's own level and nothing reads the slot before it.
+fn rewrite_bare_decl_at_first_write(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+    refs: &RefResolver,
+    already: &HashSet<i32>,
+    placed: &HashSet<i32>,
+) -> (String, HashSet<i32>) {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut suppressed = HashSet::new();
+    for (slot, ty) in locals {
+        if already.contains(slot) || placed.contains(slot) {
+            continue;
+        }
+        let ident = format!("local_{slot}");
+        // The first reference, and the brace depth it sits at — a function's own level is depth
+        // zero, whether the function is a method or free (its body indent differs).
+        let mut depth = 0i32;
+        let mut first = None;
+        for (at, line) in lines.iter().enumerate() {
+            if count_ident(line, &ident) > 0 {
+                first = Some((at, depth));
+                break;
+            }
+            depth += brace_net(line);
+        }
+        let Some((at, depth)) = first.filter(|(_, depth)| *depth == 0) else {
+            continue;
+        };
+        let trimmed = lines[at].trim_start();
+        // The FIRST reference has to be the write itself, at the function's own level, and it
+        // has to reach the slot through a member or an element — a plain `local_N = …` belongs
+        // to the declaration-with-initializer pass above.
+        let writes_through = trimmed
+            .strip_prefix(&ident)
+            .and_then(|rest| rest.split_once(" = "))
+            .is_some_and(|(path, _)| {
+                !path.is_empty()
+                    && path.starts_with(['.', '['])
+                    && !path.contains('(')
+                    && !path.contains(' ')
+            });
+        let _ = depth;
+        if !writes_through || count_ident(&lines[at], &ident) != 1 || !trimmed.ends_with(';') {
+            continue;
+        }
+        let indent = indent_of(&lines[at]);
+        lines.insert(at, format!("{indent}{} {ident};", qualify_decl_type(ty, refs)));
+        suppressed.insert(*slot);
+    }
+    let mut joined = lines.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    (joined, suppressed)
 }
 
 /// Every remaining local whose first reference is the assignment that gives it its value: the
