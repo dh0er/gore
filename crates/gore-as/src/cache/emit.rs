@@ -1607,6 +1607,27 @@ fn emit_function_ctor(
         // declared where it gets its value.
         let (body, const_suppressed) =
             rewrite_const_decl_init(&body, &locals, &const_result_slots, refs);
+        // Everything left: a local whose first reference is the assignment that gives it its
+        // value was DECLARED there in the source. Hoisting the declaration and assigning
+        // afterwards makes the compiler spend its own temporary for the value and copy it into
+        // the declared slot — a copy vanilla never emitted, and the single largest remaining
+        // class of divergence.
+        let already_declared_at_use: HashSet<i32> = [
+            &suppressed,
+            &na_suppressed,
+            &discarded,
+            &iter_suppressed,
+            &value_suppressed,
+            &foreach_suppressed,
+            &const_suppressed,
+            &const_slots,
+        ]
+        .into_iter()
+        .flatten()
+        .copied()
+        .collect();
+        let (body, first_use_suppressed) =
+            rewrite_first_use_decl_init(&body, &locals, refs, &already_declared_at_use);
         // Hoist local declarations. A primitive may stay bare only when its first source-level
         // reference is a top-level write-only assignment; this is the same definite-assignment
         // proof used for inferred enums. Everything else gets an explicit default initializer so
@@ -1621,6 +1642,7 @@ fn emit_function_ctor(
                 || value_suppressed.contains(slot)
                 || foreach_suppressed.contains(slot)
                 || const_suppressed.contains(slot)
+                || first_use_suppressed.contains(slot)
             {
                 continue; // declared at its (rewritten) assignment/Iterator() site instead
             }
@@ -7221,6 +7243,26 @@ fn rewrite_value_decl_init(
     let is_value =
         |_slot: i32, ty: &str| is_value_struct_type(ty) && !constructs_by_assignment(ty, refs);
     rewrite_decl_at_assignment(body, locals, &is_value, &|ty| ty.to_string())
+}
+
+/// Every remaining local whose first reference is the assignment that gives it its value: the
+/// source declared it there. Hoisting the declaration instead makes the compiler put the value in
+/// a temporary of its own and copy it into the declared slot.
+///
+/// Runs last, so a slot one of the typed rewrites above already placed keeps that placement.
+fn rewrite_first_use_decl_init(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+    refs: &RefResolver,
+    already: &HashSet<i32>,
+) -> (String, HashSet<i32>) {
+    // Only where the assignment stands at the FUNCTION's own level. Inside a loop or a branch a
+    // declaration is entered and left again with the block, and the compiler spends the slot's
+    // construction and release on every pass — which vanilla, having hoisted it, does not
+    // (measured: 94 functions lost against 46 gained when this was not required).
+    let wanted =
+        |slot: i32, _ty: &str| !already.contains(&slot) && first_top_level_assignment_before_read(body, slot);
+    rewrite_decl_at_assignment(body, locals, &wanted, &|ty| qualify_decl_type(ty, refs))
 }
 
 /// Shared engine for both: declare a local at the assignment that first gives it a value,
