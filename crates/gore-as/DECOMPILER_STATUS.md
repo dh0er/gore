@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 97.90% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 97.96% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **97.90%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **97.96%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**3,461 functions (2.10%) recompile to bytecode that differs semantically.** A semantic
+**3,359 functions (2.04%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -49,23 +49,26 @@ figure is 531:
 
 | Class | Functions | Share |
 |-------|-----------|-------|
-| Different instructions on the two sides | 1,617 | 46.4% |
-| Other extra instructions | 607 | 17.4% |
-| Same instructions, different order | 537 | 15.4% |
-| One or more extra slot-to-slot copies, nothing else | 349 | 10.0% |
-| Identical but for an engine-internal type id | 177 | 5.1% |
-| One or more extra handle aliases, nothing else | 131 | 3.8% |
-| Identical but for a slot number, or extra copies AND aliases | 64 | 1.8% |
+| Different instructions on the two sides | 1,446 | 43.0% |
+| Other extra instructions | 636 | 18.9% |
+| Same instructions, different order | 545 | 16.2% |
+| One or more extra slot-to-slot copies, nothing else | 357 | 10.6% |
+| Identical but for an engine-internal type id | 177 | 5.3% |
+| One or more extra handle aliases, nothing else | 132 | 3.9% |
+| Identical but for a slot number, or extra copies AND aliases | 66 | 2.0% |
 
 The classes that used to dominate — a named temporary costing a copy or an alias — are now the
 small ones. Over this run's work the total went from 14,134 to 3,511, and `__InitDefaults`
 differences from 37 to 4.
 
-The largest sub-shapes inside what is left, each measured over the whole corpus: 74 functions
-where a byte-backed enum still round-trips through an `int`, 60 where an extra constructor and
-destructor pair says the emitter named a value the source built at a call site, 49 carrying one
-extra member-read, 33 that re-materialize a cast diamond because a slot is declared wider than
-the cast that fills it, and 537 whose instructions match but run in a different order.
+No single shape dominates any more: the largest signature inside the largest class is 38
+functions, where it was 754. The ones worth naming: 38 where an extra constructor and destructor
+pair says the emitter named a value the source built at a call site, 31 and 30 where a branch is
+tested the other way round, 30 where a constant is written that vanilla copied, 28 where a
+`float32` value is compared without the widening to `float` vanilla performed first (the
+comparison then runs at the wrong width — the widening is rendered as a plain assignment, so the
+folds collapse it as if it were an alias), and 545 whose instructions match but run in a
+different order.
 
 The 177 with an engine type id are not reachable from source, and that is now proven rather than
 assumed: after stripping the operand flag bits, vanilla's id and ours resolve through each cache's
@@ -292,8 +295,8 @@ Same run as "What is measured, and on what" above — full corpus, build `Build5
 | Byte-faithful (`IDENTICAL`+`BENIGN`, `--norm-slots`) | 29,999 (**99.98%**) |
 
 The whole emitted tree recompiles with no errors, and `gore as bytediff --norm-slots` reports no
-alignment loss at all and B1 **97.90%** over all 164,607 aligned functions — up from 88.78% before
-this work, with 3,461 semantic differences left against 18,288.
+alignment loss at all and B1 **97.96%** over all 164,607 aligned functions — up from 88.78% before
+this work, with 3,359 semantic differences left against 18,288.
 
 Editing an existing module's defaults and splicing it back works. Getting there needed six
 identity fixes, because a decompiled module is only re-splicable when every symbol it references
