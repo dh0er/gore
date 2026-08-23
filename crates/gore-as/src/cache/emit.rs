@@ -1030,6 +1030,18 @@ fn emit_function_ctor(
             local_types.insert(*slot, "bool".into());
         }
     }
+    // A slot the compiler fills from a `Cast<T>` holds a T. The cache can record the coarser
+    // handle type it was allocated with (`UObject`), and the structurer then has to write a
+    // SECOND `Cast<T>` at every method call on it just to make the call legal — a cast vanilla
+    // never had. Where the recorded type is a base the cast is narrower than, take the cast's.
+    for (slot, ty) in cast_result_slots(f, refs) {
+        let narrows = local_types
+            .get(&slot)
+            .is_some_and(|wide| wide != &ty && (wide == "UObject" || refs.is_subclass(&ty, wide)));
+        if narrows {
+            local_types.insert(slot, ty);
+        }
+    }
     // member-access-derived types (`member_overrides`, computed above as the type lower-bound):
     // the field's declaring class is the strongest signal for a slot used as a member-access
     // base; apply AFTER (overriding) the call-arg guess.
@@ -1634,6 +1646,18 @@ fn emit_function_ctor(
         // write-only `local_N = TY(...);` shape, suppress the hoist and rewrite each
         // assignment to a declaration-with-initializer (in-place construction — the original
         // source form). Any other reference shape keeps the hoist (status quo).
+        // Last, after every other override: the declaration has to name what the structurer's
+        // view names, or the body calls a method the declared type does not have. Same narrowing
+        // rule and same witness as the view — a base the cast is narrower than, or the `?` the
+        // cache records for a cast out-slot.
+        for (slot, ty) in cast_result_slots(f, refs) {
+            let narrows = locals.get(&slot).is_some_and(|wide| {
+                wide != &ty && (wide == "UObject" || wide == "?" || refs.is_subclass(&ty, wide))
+            });
+            if narrows {
+                locals.insert(slot, ty);
+            }
+        }
         let (body, suppressed) = rewrite_ctor_only_locals(&body, &locals);
         // FAbilityTaskExecutor's opAssign takes a NON-const reference, so assigning a by-value
         // call result to a declared local ('local = DrawMeleeWeapon(AI);') fails "Cannot pass a
@@ -3600,6 +3624,55 @@ fn temporary_receiver_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         })
         .map(|(slot, _)| slot)
         .collect()
+}
+
+/// Slots a `Cast<T>` fills, with the T it fills them with: the cast writes its own out-slot and
+/// the source's slot takes it through `PshVPtr <out>; RefCpyV <slot>`, with the diamond's join
+/// jump and null arm in between.
+fn cast_result_slots(f: &Func, refs: &RefResolver) -> Vec<(i32, String)> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    let (mut tid, mut out) = (None, None);
+    for (at, ins) in instrs.iter().enumerate() {
+        match ins.op.name {
+            "TYPEID" => {
+                tid = ins.dwords.first().map(|d| *d as i32);
+                out = None;
+            }
+            "PSF" if tid.is_some() => out = ins.words.first().map(|word| *word as i16 as i32),
+            "CALLSYS"
+                if refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64)
+                    == Some("opCast") =>
+            {
+                let target = tid.and_then(|tid| super::structure::resolve_cast_typeid(refs, tid));
+                if let (Some(target), Some(out)) = (target, out) {
+                    if matches!(target.bytes().next(), Some(b'U') | Some(b'A')) {
+                        let copy = (at + 1..instrs.len().min(at + 5))
+                            .find(|k| !matches!(instrs[*k].op.name, "JMP" | "ClrVPtr"))
+                            .filter(|k| {
+                                instrs[*k].op.name == "PshVPtr"
+                                    && instrs[*k].words.first().map(|w| *w as i16 as i32)
+                                        == Some(out)
+                            });
+                        let slot = copy
+                            .and_then(|k| instrs.get(k + 1))
+                            .filter(|next| next.op.name == "RefCpyV")
+                            .and_then(|next| next.words.first())
+                            .map(|word| *word as i16 as i32);
+                        if let Some(slot) = slot.filter(|slot| *slot > 0) {
+                            found.push((slot, target));
+                        }
+                    }
+                }
+                tid = None;
+                out = None;
+            }
+            _ => {}
+        }
+    }
+    found
 }
 
 /// Slots that take a COMPARISON's result. `CMP*` + `T*` leaves a boolean in the value register,
