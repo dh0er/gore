@@ -883,6 +883,8 @@ fn emit_function_ctor(
     let statement_producers = statement_producer_slots(f);
     // Where vanilla destroyed a value slot mid-expression it was calling on a temporary there.
     let temporary_receivers = temporary_receiver_slots(f, refs);
+    // The elements of a range-for: released once per iteration, and what the loop fold matches.
+    let loop_elements = loop_element_slots(f);
     // The same witness types the slots a bool travels INTO: the merge slot of a short-circuit
     // or a guarded assignment is written by a copy, not by the call itself.
     bool_overrides.extend(
@@ -1352,6 +1354,7 @@ fn emit_function_ctor(
         &call_result_types,
         &statement_producers,
         &temporary_receivers,
+        &loop_elements,
     );
     // Runs after the producers have moved into their readers: only then is the value arm of a
     // short circuit the single assignment it was in source.
@@ -1377,6 +1380,7 @@ fn emit_function_ctor(
         &call_result_types,
         &statement_producers,
         &temporary_receivers,
+        &loop_elements,
     );
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
@@ -3684,6 +3688,23 @@ fn cast_result_slots(f: &Func, refs: &RefResolver) -> Vec<(i32, String)> {
     found
 }
 
+/// Slots the compiler RELEASES with `FreeNullV8` — the element of a range-for, released at the
+/// end of every iteration. A slot with an iteration-scoped lifetime is not a droppable alias for
+/// something that outlives it, and dropping it is what leaves the loop rendered as
+/// `while (it.CanProceed)` instead of the range-for the source wrote: `rewrite_foreach_loops`
+/// matches on that very element.
+fn loop_element_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    instrs
+        .iter()
+        .filter(|ins| matches!(ins.op.name, "FreeNullV8" | "FreeNullV4" | "FREE"))
+        .filter_map(|ins| ins.words.first().map(|word| *word as i16 as i32))
+        .filter(|slot| *slot > 0)
+        .collect()
+}
+
 /// Slots that take a COMPARISON's result. `CMP*` + `T*` leaves a boolean in the value register,
 /// and the slot that catches it holds a bool — typed int instead, every read of it is wrapped
 /// `(x != 0)` and the write becomes `int(<cmp>)`, which costs a compare and a test per use.
@@ -5526,6 +5547,7 @@ fn inline_call_argument_temporaries(
     call_types: &HashMap<i32, String>,
     statement_producers: &HashSet<i32>,
     temporary_receivers: &HashSet<i32>,
+    loop_elements: &HashSet<i32>,
 ) -> String {
     const MAX_ARGUMENT_INLINE_PASSES: usize = 8;
     let trailing_newline = body.ends_with('\n');
@@ -5583,7 +5605,7 @@ fn inline_call_argument_temporaries(
             for (temp, position) in candidates {
                 if inline_temporary_into(
                     &mut lines, index, &temp, &callee, position, locals, refs, fields, call_types,
-                    statement_producers, temporary_receivers,
+                    statement_producers, temporary_receivers, loop_elements,
                 ) {
                     changed = true;
                     moved = true;
@@ -5622,8 +5644,19 @@ fn inline_temporary_into(
     call_types: &HashMap<i32, String>,
     statement_producers: &HashSet<i32>,
     temporary_receivers: &HashSet<i32>,
+    loop_elements: &HashSet<i32>,
 ) -> bool {
     let receiver = position == Position::Receiver;
+    // The element of a range-for lives for one iteration and the compiler releases it at the end
+    // of each; moving it into its reader takes away what the range-for fold matches on.
+    if temp
+        .strip_prefix("local_")
+        .and_then(|slot| slot.parse::<i32>().ok())
+        .is_some_and(|slot| loop_elements.contains(&slot))
+    {
+        inline_reject("loop-element", callee, temp, &lines[index]);
+        return false;
+    }
     // Where the bytecode PROVES the source evaluated this producer before it pushed the call's
     // other arguments, it was a statement of its own, and moving it into the call would reorder
     // the evaluation. Absence of that proof is not proof of the opposite: a slot the witness
