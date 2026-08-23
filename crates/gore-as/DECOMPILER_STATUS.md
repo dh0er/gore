@@ -158,6 +158,13 @@ The widenings that were measured and rejected rather than shipped:
   whether or not the caller cares. What closes it is the call's own function POINTER: it names one
   overload, and `func_params_by_ptr` gives that row's parameter flags exactly. Shipped with both
   witnesses (0 errors);
+- protecting the destination of a numeric CONVERSION from the folds — the slot where a `float32`
+  becomes the `float` vanilla compares in, so that `if (x > 0.0)` runs at the width the original
+  ran at — was measured twice and rejected twice. Refusing every conversion destination costs 74
+  functions; narrowing it to the one widening that matters (`fTOd`) still costs 12. The shape is
+  real and the emitted comparison genuinely runs at the wrong width, but a blanket refusal on the
+  slot blocks more good folds than it saves. The fix has to sit at the READER — keep the widening
+  where the reader is a comparison — not on the slot;
 - three separate widenings measured EXACTLY neutral and were taken back out rather than kept:
   ungating the bool-field witness from the enum state machine, stepping the return-value scan back
   over a scope's cleanup, and running the temporary folds to a fixpoint. Each asks a question the
