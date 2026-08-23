@@ -1378,6 +1378,7 @@ fn emit_function_ctor(
     let body = fold_alias_copies(&body, &declared_locals);
     let body = fold_copy_out_temporaries(&body, &declared_locals, &const_result_slots, fields);
     let body = fold_cast_operands(&body, &declared_locals, &call_result_types);
+    let body = fold_enum_round_trips(&body, fields);
     let body =
         fold_returned_temporaries(&body, &declared_locals, refs, &ret, returns_by_reference);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
@@ -6440,6 +6441,53 @@ fn fold_cast_operands(
                 return None;
             }
             Some(rename_ident(reader, &name, &value))
+        })();
+        match folded {
+            Some(replacement) => {
+                kept.push(replacement);
+                at += 2;
+            }
+            None => {
+                kept.push(lines[at].to_string());
+                at += 1;
+            }
+        }
+    }
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// `local_N = int(this.F); … EFoo(local_N) …` is the reader reading `this.F`. A byte-backed enum
+/// field read into an `int` slot and cast back at the use site is a round trip the source never
+/// wrote — it costs a widening and a narrowing, and it costs the slot.
+///
+/// The witness is an exact name match, not an inference: the class field map says what `this.F`
+/// is, and the cast at the read spells the same type. Where the two names differ, the conversion
+/// is real and the slot stays.
+fn fold_enum_round_trips(body: &str, fields: Option<&HashMap<String, String>>) -> String {
+    let Some(fields) = fields else {
+        return body.to_owned();
+    };
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<String> = Vec::new();
+    let mut at = 0usize;
+    while at < lines.len() {
+        let folded = (|| {
+            let (name, value) = slot_store(lines[at])?;
+            let field = value.strip_prefix("int(")?.strip_suffix(')')?;
+            let declared = fields.get(field.strip_prefix("this.")?)?;
+            let reader = lines.get(at + 1)?;
+            let cast = format!("{declared}({name})");
+            if !reader.contains(&cast)
+                || count_ident(reader, &name) != 1
+                || !read_once_at(&lines, at, at + 1, &name)
+            {
+                return None;
+            }
+            Some(reader.replacen(&cast, field, 1))
         })();
         match folded {
             Some(replacement) => {
