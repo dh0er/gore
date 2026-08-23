@@ -1365,7 +1365,8 @@ fn emit_function_ctor(
     let returns_by_reference = f.ret.is_reference && f.ret.token == 5 && !f.ret.is_object_handle;
     let body = fold_condition_temporaries(&body, &declared_locals, refs, fields);
     let body = fold_alias_copies(&body, &declared_locals);
-    let body = fold_returned_temporaries(&body, &declared_locals, &ret, returns_by_reference);
+    let body =
+        fold_returned_temporaries(&body, &declared_locals, refs, &ret, returns_by_reference);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
     // (a wrong type just becomes a compile error the in-game loop force-stubs, rather than the
     // whole function stubbing on an undeclared identifier).
@@ -6280,6 +6281,7 @@ fn fold_alias_copies(body: &str, locals: &BTreeMap<i32, String>) -> String {
 fn fold_returned_temporaries(
     body: &str,
     locals: &BTreeMap<i32, String>,
+    refs: &RefResolver,
     ret: &str,
     returns_by_reference: bool,
 ) -> String {
@@ -6290,7 +6292,13 @@ fn fold_returned_temporaries(
         let Some(slot) = ident.strip_prefix("local_").and_then(|s| s.parse::<i32>().ok()) else {
             return false;
         };
-        locals.get(&slot).is_some_and(|ty| ty == ret)
+        // Both names have to be spelled the same way before they can be compared. The slot table
+        // holds the BARE class name — the opCast retype writes what `type_by_id` returns — while
+        // the return type is rendered with its namespace, so the comparison was dead for every
+        // namespaced class (measured: 680 sites, all of them `return Cast<T>(…)`).
+        locals
+            .get(&slot)
+            .is_some_and(|ty| qualify_decl_type(ty, refs) == ret)
     };
     let lines: Vec<&str> = body.lines().collect();
     let mut kept: Vec<String> = Vec::new();
