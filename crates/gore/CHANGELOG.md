@@ -121,6 +121,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A comparison handed to a call sits inside the call.
 - A bool the cache proved from a comparison, a `!` or a call's return is
   recognized as one everywhere, and so is a bool field of the class.
+- A guard that returns is written as one: an early `return` no longer goes
+  missing, so the code behind it stays guarded.
+- A cast reads the call it casts, a value the source built at a call site is
+  written there, and an enum field is passed as itself.
 
 ## [0.1.0] - 2026-08-18
 

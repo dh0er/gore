@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 97.28% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 97.87% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,9 +23,9 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **97.28%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **97.87%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
-| Splice back (`extract-remap`) | full corpus, all 7,308 modules | 7,278 (**99.59%**) |
+| Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
 Every measurement now covers the whole corpus. The splice sweep takes about two hours (each run
 re-reads both 100+ MB caches), which is why earlier revisions of this document reported it from a
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**4,478 functions (2.72%) recompile to bytecode that differs semantically.** A semantic
+**3,511 functions (2.13%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -45,29 +45,37 @@ encodings and (opt-in) slot allocation before judging the rest.
 Classified over WHOLE functions — every instruction of both sides, not the window around the
 first divergence. An earlier revision of this document classified the window instead and reported
 order as the largest class at 4,861; that number was an artifact of the window, and the real
-figure is 510:
+figure is 531:
 
 | Class | Functions | Share |
 |-------|-----------|-------|
-| Different instructions on the two sides | 2,910 | 65.0% |
-| Same instructions, different order | 510 | 11.4% |
-| Other extra instructions | 484 | 10.8% |
-| One or more extra slot-to-slot copies, nothing else | 240 | 5.4% |
-| Identical but for an engine-internal type id | 189 | 4.2% |
-| One or more extra handle aliases, nothing else | 105 | 2.3% |
-| Identical but for a slot number, or extra copies AND aliases | 40 | 0.9% |
+| Different instructions on the two sides | 1,618 | 45.8% |
+| Other extra instructions | 679 | 19.2% |
+| Same instructions, different order | 531 | 15.0% |
+| One or more extra slot-to-slot copies, nothing else | 344 | 9.7% |
+| Identical but for an engine-internal type id | 177 | 5.0% |
+| One or more extra handle aliases, nothing else | 131 | 3.7% |
+| Identical but for a slot number, or extra copies AND aliases | 51 | 1.5% |
 
 The classes that used to dominate — a named temporary costing a copy or an alias — are now the
-small ones. Over this run's work the total went from 14,134 to 4,478.
+small ones. Over this run's work the total went from 14,134 to 3,511, and `__InitDefaults`
+differences from 37 to 4.
 
-The 189 with an engine type id are not reachable from source, and that is now proven rather than
+The largest sub-shapes inside what is left, each measured over the whole corpus: 74 functions
+where a byte-backed enum still round-trips through an `int`, 60 where an extra constructor and
+destructor pair says the emitter named a value the source built at a call site, 49 carrying one
+extra member-read, 33 that re-materialize a cast diamond because a slot is declared wider than
+the cast that fills it, and 531 whose instructions match but run in a different order.
+
+The 177 with an engine type id are not reachable from source, and that is now proven rather than
 assumed: after stripping the operand flag bits, vanilla's id and ours resolve through each cache's
-own type tables to the SAME type identity in all 189 cases. The regen registers six fewer types
-than vanilla (37,159 against 37,165) because our source never instantiates fourteen const-iterator
-template types, which renumbers everything after them. And none of the 189 functions has any
-emitted source at all: 186 are the compiler-generated `Get`/`GetOrCreate`/`Create` component
-accessors and three are generated delegate thunks. The honest fix is in the oracle, which compares
-these operands by raw value.
+own type tables to the SAME type identity in every case. The regen registers six fewer types than
+vanilla (37,159 against 37,165) because our source never instantiates fourteen const-iterator
+template types, which renumbers everything after them. And none of those functions has any emitted
+source at all: they are the compiler-generated `Get`/`GetOrCreate`/`Create` component accessors and
+generated delegate thunks. The honest fix is in the oracle, which compares these operands by raw
+value. The same missing instantiations are what the splice sweep's three failures name (`$beh0`
+and `Iterator` symbols with no row in the base cache).
 
 What limits the rest is TYPE evidence. A slot declaration also performs the conversion the direct
 read would not, so moving a producer into its reader needs proof that the read has the same type.
@@ -121,7 +129,11 @@ The widenings that were measured and rejected rather than shipped:
   row can admit a producer, is the one experiment that broke ALIGNMENT: the tree compiled, but the
   generator emitted 287 fewer functions than vanilla has, and byte-identical collapsed from 6,924
   to 1,010. Nothing about widening where a producer may travel is safe without watching that
-  number — a compile that exits 0 is not by itself evidence.
+  number — a compile that exits 0 is not by itself evidence;
+- three separate widenings measured EXACTLY neutral and were taken back out rather than kept:
+  ungating the bool-field witness from the enum state machine, stepping the return-value scan back
+  over a scope's cleanup, and running the temporary folds to a fixpoint. Each asks a question the
+  cache answers correctly; each was already answered by a rule that fires first.
 
 A fourth was tried and rejected: whether a producer stood INSIDE the expression that reads it is
 decidable from the bytecode — AngelScript emits each argument's own code immediately before its
@@ -255,8 +267,8 @@ Same run as "What is measured, and on what" above — full corpus, build `Build5
 | Byte-faithful (`IDENTICAL`+`BENIGN`, `--norm-slots`) | 29,999 (**99.98%**) |
 
 The whole emitted tree recompiles with no errors, and `gore as bytediff --norm-slots` reports no
-alignment loss at all and B1 **97.28%** over all 164,607 aligned functions — up from 88.78% before
-this work, with 4,478 semantic differences left against 18,288.
+alignment loss at all and B1 **97.87%** over all 164,607 aligned functions — up from 88.78% before
+this work, with 3,511 semantic differences left against 18,288.
 
 Editing an existing module's defaults and splicing it back works. Getting there needed six
 identity fixes, because a decompiled module is only re-splicable when every symbol it references
