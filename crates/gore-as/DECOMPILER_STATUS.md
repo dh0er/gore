@@ -77,6 +77,18 @@ generated delegate thunks. The honest fix is in the oracle, which compares these
 value. The same missing instantiations are what the splice sweep's three failures name (`$beh0`
 and `Iterator` symbols with no row in the base cache).
 
+### The install is shared
+
+The game installation is not this project's alone: a second worktree runs a standalone compiler
+that stages its own `.as` tree into `G1R/Script` and swaps the same caches. Cooperating GORE
+processes serialize on `.gore-install-mutation.lock`, but a run started with a different or older
+binary need not honour it, and two compiles overlapping do not fail — they produce a regen cache
+built from a MIXED tree, which reads as alignment loss.
+
+`scratchpad/cycle.sh` therefore waits for the game to exit AND for any live lock owner to finish,
+refuses to start unless the shipping cache is the vanilla hash, and prints that hash again
+afterwards. A cycle whose "after" line is not vanilla measured something else.
+
 What limits the rest is TYPE evidence. A slot declaration also performs the conversion the direct
 read would not, so moving a producer into its reader needs proof that the read has the same type.
 The widenings that were measured and rejected rather than shipped:
@@ -129,7 +141,11 @@ The widenings that were measured and rejected rather than shipped:
   row can admit a producer, is the one experiment that broke ALIGNMENT: the tree compiled, but the
   generator emitted 287 fewer functions than vanilla has, and byte-identical collapsed from 6,924
   to 1,010. Nothing about widening where a producer may travel is safe without watching that
-  number — a compile that exits 0 is not by itself evidence;
+  number — a compile that exits 0 is not by itself evidence. **This one result is not confirmed**:
+  a second worktree runs a standalone compiler that stages its own tree into the same install, and
+  two compiles overlapping produce a regen cache built from a MIXED tree, which is exactly what
+  alignment loss looks like. The measurement predates the interlock below, so it may be
+  cross-talk rather than the change. Re-run it under the guard before treating it as settled;
 - substituting a default-constructed `T()` at any ARGUMENT position took three measurements to
   get right, and the sequence is the lesson. Asking `arg_position_accepts_temporary`, which is
   keyed by the callee's NAME, costs 35 errors: for `FindFloorAtLocation(Location, FHitResult(), …)`
