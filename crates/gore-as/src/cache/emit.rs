@@ -8,6 +8,7 @@
 //! hoisted local declarations; bodies the decompiler can't recover fall back to a
 //! signature-matched STUB so the module still compiles.
 
+use super::disasm::Instr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -880,6 +881,8 @@ fn emit_function_ctor(
     let call_result_types = call_result_types(f, refs);
     // Producers the SOURCE kept as statements of their own — see `statement_producer_slots`.
     let statement_producers = statement_producer_slots(f);
+    // Where vanilla destroyed a value slot mid-expression it was calling on a temporary there.
+    let temporary_receivers = temporary_receiver_slots(f, refs);
     // The same witness types the slots a bool travels INTO: the merge slot of a short-circuit
     // or a guarded assignment is written by a copy, not by the call itself.
     bool_overrides.extend(
@@ -1336,6 +1339,7 @@ fn emit_function_ctor(
         !f.name.contains("__InitDefaults"),
         &call_result_types,
         &statement_producers,
+        &temporary_receivers,
     );
     // Runs after the producers have moved into their readers: only then is the value arm of a
     // short circuit the single assignment it was in source.
@@ -1360,6 +1364,7 @@ fn emit_function_ctor(
         !f.name.contains("__InitDefaults"),
         &call_result_types,
         &statement_producers,
+        &temporary_receivers,
     );
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
@@ -3554,6 +3559,48 @@ fn statement_producer_slots(f: &Func) -> HashSet<i32> {
     statements
 }
 
+/// Slots vanilla itself treated as a full-expression TEMPORARY: destroyed exactly once, right
+/// where the expression that used them ended, rather than at every exit from a block.
+///
+/// AngelScript destroys a named block-scope value local on every path out of its block, so its
+/// destructor appears once per exit and always in the trailing group before a `RET` or a `JMP`.
+/// A destructor that stands mid-expression, with ordinary work behind it, can only belong to a
+/// temporary — which means vanilla ran that method on a temporary at that exact site, and so may
+/// we. That is a stronger answer than `has_const_overload`, whose table has nothing to say about
+/// most native value types.
+fn temporary_receiver_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let destroys = |ins: &Instr| {
+        ins.op.name == "CALLSYS"
+            && refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64) == Some("$beh2")
+    };
+    let mut destructions: HashMap<i32, Vec<usize>> = HashMap::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if at == 0 || !destroys(ins) || instrs[at - 1].op.name != "PSF" {
+            continue;
+        }
+        let Some(slot) = instrs[at - 1].words.first().map(|word| *word as i16 as i32) else {
+            continue;
+        };
+        destructions.entry(slot).or_default().push(at);
+    }
+    destructions
+        .into_iter()
+        .filter(|(slot, at)| *slot > 0 && at.len() == 1)
+        .filter(|(_, at)| {
+            // Mid-expression: what follows is real work, not the rest of a scope's cleanup group
+            // running into the block's exit.
+            instrs[at[0] + 1..]
+                .iter()
+                .find(|next| next.op.name != "PSF" && !destroys(next))
+                .is_some_and(|next| !matches!(next.op.name, "RET" | "JMP"))
+        })
+        .map(|(slot, _)| slot)
+        .collect()
+}
+
 /// Slots that take a COMPARISON's result. `CMP*` + `T*` leaves a boolean in the value register,
 /// and the slot that catches it holds a bool — typed int instead, every read of it is wrapped
 /// `(x != 0)` and the write becomes `int(<cmp>)`, which costs a compare and a test per use.
@@ -5395,6 +5442,7 @@ fn inline_call_argument_temporaries(
     operands_move: bool,
     call_types: &HashMap<i32, String>,
     statement_producers: &HashSet<i32>,
+    temporary_receivers: &HashSet<i32>,
 ) -> String {
     const MAX_ARGUMENT_INLINE_PASSES: usize = 8;
     let trailing_newline = body.ends_with('\n');
@@ -5452,7 +5500,7 @@ fn inline_call_argument_temporaries(
             for (temp, position) in candidates {
                 if inline_temporary_into(
                     &mut lines, index, &temp, &callee, position, locals, refs, fields, call_types,
-                    statement_producers,
+                    statement_producers, temporary_receivers,
                 ) {
                     changed = true;
                     moved = true;
@@ -5490,6 +5538,7 @@ fn inline_temporary_into(
     fields: Option<&HashMap<String, String>>,
     call_types: &HashMap<i32, String>,
     statement_producers: &HashSet<i32>,
+    temporary_receivers: &HashSet<i32>,
 ) -> bool {
     let receiver = position == Position::Receiver;
     // Where the bytecode PROVES the source evaluated this producer before it pushed the call's
@@ -5534,7 +5583,17 @@ fn inline_temporary_into(
                 &method,
             ))
         };
-        if !ty.is_some_and(is_object_handle_type) && const_method() != Some(true) {
+        // Where VANILLA destroyed this slot mid-expression it was itself calling on a temporary
+        // at that site, which settles the question the const table cannot answer for a native
+        // value type.
+        let vanilla_used_a_temporary = temp
+            .strip_prefix("local_")
+            .and_then(|slot| slot.parse::<i32>().ok())
+            .is_some_and(|slot| temporary_receivers.contains(&slot));
+        if !ty.is_some_and(is_object_handle_type)
+            && const_method() != Some(true)
+            && !vanilla_used_a_temporary
+        {
             inline_reject("receiver", callee, &temp, &lines[index]);
             return false;
         }
