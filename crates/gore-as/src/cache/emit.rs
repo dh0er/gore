@@ -1304,6 +1304,7 @@ fn emit_function_ctor(
     // Runs after the producers have moved into their readers: only then is the value arm of a
     // short circuit the single assignment it was in source.
     let body = fold_short_circuits(&body, &proven_locals, refs);
+    let body = join_short_circuit_chains(&body);
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
     let body = drop_unreachable_statements(&body);
@@ -6252,6 +6253,10 @@ fn fold_return_slot_stores(body: &str) -> String {
 /// `if (c) { X = false; } else { X = b; }` is `X = !(c) && b;`
 /// `if (c) { X = true;  } else { X = b; }` is `X = c || b;`
 ///
+/// The condition may well be the slot itself — `if (!(X)) { X = false; } else { X = b; }` is
+/// `X = X && b`, which is what a CHAIN of `&&` lowers to, one link at a time. The slot is read
+/// before it is written there, so folding it is the same statement, not a cycle.
+///
 /// `&&` and `||` take BOOL operands, and an operand that is not one is not merely refused — it
 /// takes the compiler down (measured: the whole tree, twice). So both sides are checked against
 /// the cache before anything is folded.
@@ -6288,17 +6293,33 @@ fn short_circuit(
     refs: &RefResolver,
 ) -> Option<(String, usize)> {
     let condition = lines.get(at)?.trim().strip_prefix("if (")?.strip_suffix(')')?;
-    if lines.get(at + 1)?.trim() != "{"
-        || lines.get(at + 3)?.trim() != "}"
-        || lines.get(at + 4)?.trim() != "else"
-        || lines.get(at + 5)?.trim() != "{"
-        || lines.get(at + 7)?.trim() != "}"
-    {
+    if lines.get(at + 1)?.trim() != "{" {
+        return None;
+    }
+    let then_end = block_end(lines, at + 1)?;
+    if lines.get(then_end + 1)?.trim() != "else" || lines.get(then_end + 2)?.trim() != "{" {
+        return None;
+    }
+    let else_end = block_end(lines, then_end + 2)?;
+    // The deciding arm is one store of the constant that settles the whole expression.
+    if then_end != at + 3 {
         return None;
     }
     let (target, deciding) = slot_store(lines.get(at + 2)?)?;
-    let (else_target, value) = slot_store(lines.get(at + 6)?)?;
-    if target != else_target || condition.contains(&target) {
+    // The value arm ends in the store to the same slot. Where it takes a step through a
+    // temporary of its own first — which is how the compiler evaluates the right-hand operand —
+    // that step IS the value, and vanilla spends the same slot for it.
+    let (else_target, value) = slot_store(lines.get(else_end - 1)?)?;
+    let value = match else_end - (then_end + 3) {
+        1 => value,
+        2 => {
+            let (carrier, carried) = slot_store(lines.get(then_end + 3)?)?;
+            let arm = lines[then_end + 3..else_end].join("\n");
+            (carrier == value && count_ident(&arm, &carrier) == 2).then_some(carried)?
+        }
+        _ => return None,
+    };
+    if target != else_target {
         return None;
     }
     // BOTH operands have to be bool: the slot the expression writes, and the value the other arm
@@ -6312,17 +6333,103 @@ fn short_circuit(
     {
         return None;
     }
-    let operator = match deciding.as_str() {
+    let (left, operator) = match deciding.as_str() {
         // The left operand of `&&` is the condition the branch did NOT take. Turning the
         // comparison around is what vanilla wrote; wrapping it in `!` makes the compiler
         // materialize the negation instead of inverting the jump (measured: `CmpPtrNull; TZ;
         // CpyRtoV4; NOT` for what vanilla did with `CmpPtrNull; JNZ`).
-        "false" => format!("{} &&", turned_around(condition)),
-        "true" => format!("{condition} ||"),
+        "false" => (turned_around(condition), "&&"),
+        "true" => (condition.to_owned(), "||"),
         _ => return None,
     };
-    let indent: String = lines[at].chars().take_while(|c| c.is_whitespace()).collect();
-    Some((format!("{indent}{target} = {operator} {value};"), at + 8))
+    let left = parenthesize_mixed(&left, operator);
+    let value = parenthesize_mixed(&value, operator);
+    let indent = indent_of(lines[at]);
+    Some((
+        format!("{indent}{target} = {left} {operator} {value};"),
+        else_end + 1,
+    ))
+}
+
+/// One side of a logical operator, parenthesized where it holds the OTHER one. Mixing `&&` and
+/// `||` without parentheses is a warning here, and the game compiles warnings as errors — so the
+/// precedence that was already meant has to be written down.
+fn parenthesize_mixed(part: &str, operator: &str) -> String {
+    let other = match operator {
+        "&&" => "||",
+        _ => "&&",
+    };
+    match part.contains(other) {
+        true => format!("({part})"),
+        false => part.to_owned(),
+    }
+}
+
+/// The index of the `}` closing the `{` at `open`, or None if the block does not close inside
+/// `lines`.
+fn block_end(lines: &[&str], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (at, line) in lines.iter().enumerate().skip(open) {
+        match line.trim() {
+            "{" => depth += 1,
+            "}" => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(at);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `X = <a>; X = X && <b>;` is `X = <a> && <b>;`. A chain of `&&` lowers to one branch per link,
+/// and each link recovers as its own statement writing the same slot — which then costs a copy
+/// per link. Only a slot the first statement does not itself read is joined, and the left side is
+/// parenthesized where the two operators would otherwise re-bind it.
+fn join_short_circuit_chains(body: &str) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<String> = Vec::new();
+    for line in lines {
+        let joined = (|| {
+            // Parsed here rather than through `slot_store`, which refuses a store that reads its
+            // own target — and reading its own target is exactly what a chain link does.
+            let (target, value) = line.trim().strip_suffix(';')?.split_once(" = ")?;
+            if !is_local_ident(target) {
+                return None;
+            }
+            let previous = kept.last()?;
+            let (before, first) = slot_store(previous)?;
+            if before != target || count_ident(&first, target) != 0 {
+                return None;
+            }
+            let (operator, rest) = ["&&", "||"]
+                .iter()
+                .find_map(|op| Some((*op, value.strip_prefix(&format!("{target} {op} "))?)))?;
+            // Mixing `&&` and `||` without parentheses is a WARNING here, and warnings are
+            // errors (measured: 10 of them). Either side that holds the other operator gets its
+            // own parentheses — which is what the precedence already meant, said out loud.
+            let left = parenthesize_mixed(&first, operator);
+            let rest = parenthesize_mixed(rest, operator);
+            Some(format!(
+                "{}{target} = {left} {operator} {rest};",
+                indent_of(previous)
+            ))
+        })();
+        match joined {
+            Some(replacement) => {
+                kept.pop();
+                kept.push(replacement);
+            }
+            None => kept.push(line.to_string()),
+        }
+    }
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
 }
 
 /// A condition with its comparison turned around. Only a single top-level relation is turned;
