@@ -6163,8 +6163,14 @@ fn fold_condition_temporaries(
 /// temporaries, so counting the name over the whole body answers a question nobody asked: what
 /// matters is the live range of THIS store.
 fn read_once_by_the_next_line(lines: &[&str], at: usize, name: &str) -> bool {
+    read_once_at(lines, at, at + 1, name)
+}
+
+/// The same question where the reader is not the next line: the store at `at` is read by
+/// `reader` and by nothing else before the slot is written again.
+fn read_once_at(lines: &[&str], at: usize, reader: usize, name: &str) -> bool {
     // Forward, from past the reader to the next write of the same slot.
-    for line in &lines[at + 2..] {
+    for line in &lines[reader + 1..] {
         if is_definition_line(line, name) {
             break;
         }
@@ -6213,9 +6219,7 @@ fn fold_alias_copies(body: &str, locals: &BTreeMap<i32, String>) -> String {
             if temporary_type(locals, &source) != Some(ty) {
                 return None;
             }
-            if count_ident(body, &target) != 2 {
-                return None;
-            }
+
             // The single reader may sit further down, but only inside the same block and with
             // nothing reassigning the source on the way: a copy that does not dominate its
             // reader, or a source that has moved on, is not the same value any more.
@@ -6237,6 +6241,12 @@ fn fold_alias_copies(body: &str, locals: &BTreeMap<i32, String>) -> String {
                 }
             }
             let reader = found?;
+            // And nothing reads this copy's value after that: the slot is the compiler's, reused
+            // for other temporaries elsewhere in the body, so the name's total count says
+            // nothing.
+            if !read_once_at(&lines, at, reader, &target) {
+                return None;
+            }
             let mut out: Vec<String> = lines[at + 1..reader].iter().map(|l| (*l).to_owned()).collect();
             out.push(rename_ident(lines[reader], &target, &source));
             Some((out, reader + 1))
