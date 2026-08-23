@@ -6063,11 +6063,21 @@ impl Structurer<'_> {
                 let then_end = else_idx.unwrap_or(stop).min(stop).max(i + 1);
                 let _ = writeln!(out, "{ind}if ({cond})");
                 let _ = writeln!(out, "{ind}{{");
+                let then_body_at = out.len();
                 if let Some(t) = then_idx {
                     if t > i && t <= then_end {
                         self.emit_range(t, then_end, depth + 1, out);
                     }
                 }
+                // Whether the arm we just WROTE ends in a return. The bytecode saying the branch
+                // returns is not enough: a return this renderer cannot express — a void one, a
+                // handle one, an RVO one — leaves the arm empty, and dropping the `else` would
+                // then let what follows run on the path that was supposed to have left.
+                let then_arm_returns = out[then_body_at..]
+                    .lines()
+                    .rev()
+                    .find(|line| !line.trim().is_empty())
+                    .is_some_and(|line| line.trim_start().starts_with("return"));
                 let _ = writeln!(out, "{ind}}}");
                 next = then_end;
                 if let Some(ei) = else_idx {
@@ -6099,7 +6109,7 @@ impl Structurer<'_> {
                         && ei > 0
                         && self.jump_op(ei - 1) == "JMP"
                         && !then_exits_loop
-                        && !then_returns
+                        && !(then_returns && then_arm_returns)
                     {
                         let after_idx = self.g.blocks[ei - 1]
                             .succs
