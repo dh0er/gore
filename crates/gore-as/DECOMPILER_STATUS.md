@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 95.18% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 96.20% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **95.18%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **96.20%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | full corpus, all 7,308 modules | 7,278 (**99.59%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**7,926 functions (4.81%) recompile to bytecode that differs semantically.** A semantic
+**6,248 functions (3.80%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -45,27 +45,32 @@ encodings and (opt-in) slot allocation before judging the rest.
 Classified over WHOLE functions — every instruction of both sides, not the window around the
 first divergence. An earlier revision of this document classified the window instead and reported
 order as the largest class at 4,861; that number was an artifact of the window, and the real
-figure is 409:
+figure is 465:
 
 | Class | Functions | Share |
 |-------|-----------|-------|
-| One or more extra slot-to-slot copies, nothing else | 3,611 | 45.6% |
-| Different instructions on the two sides | 1,739 | 21.9% |
-| One or more extra handle aliases, nothing else | 982 | 12.4% |
-| Other extra instructions | 860 | 10.9% |
-| Same instructions, different order | 409 | 5.2% |
-| Identical but for an engine-internal type id | 189 | 2.4% |
-| Extra copies AND aliases | 117 | 1.5% |
-| Identical but for a slot number or a jump target | 19 | 0.2% |
+| Different instructions on the two sides | 1,865 | 29.8% |
+| One or more extra slot-to-slot copies, nothing else | 1,745 | 27.9% |
+| One or more extra handle aliases, nothing else | 988 | 15.8% |
+| Other extra instructions | 856 | 13.7% |
+| Same instructions, different order | 465 | 7.4% |
+| Identical but for an engine-internal type id | 189 | 3.0% |
+| Extra copies AND aliases | 89 | 1.4% |
+| Identical but for a slot number or a jump target | 51 | 0.8% |
 
-Two thirds of it is still the same defect wearing different clothes: **a temporary the compiler
-invented is given a name in the source**, and the name costs instructions the original did not
-spend — a declaration, a copy in and out, and for a value type a destructor that sinks to the end
-of the function. Over this run's work the total went from 14,134 to 7,926.
+Most of it is still the same defect wearing different clothes: **a temporary the compiler invented
+is given a name in the source**, and the name costs instructions the original did not spend — a
+declaration, a copy in and out, and for a value type a destructor that sinks to the end of the
+function. Over this run's work the total went from 14,134 to 6,248.
 
-The 189 with an engine type id are not reachable from source: the ids differ by one to seven,
-which is a type registered somewhere else in the tree shifting the numbering, not a different
-type being named. Nothing in the emitted source decides them.
+The 189 with an engine type id are not reachable from source, and that is now proven rather than
+assumed: after stripping the operand flag bits, vanilla's id and ours resolve through each cache's
+own type tables to the SAME type identity in all 189 cases. The regen registers six fewer types
+than vanilla (37,159 against 37,165) because our source never instantiates fourteen const-iterator
+template types, which renumbers everything after them. And none of the 189 functions has any
+emitted source at all: 186 are the compiler-generated `Get`/`GetOrCreate`/`Create` component
+accessors and three are generated delegate thunks. The honest fix is in the oracle, which compares
+these operands by raw value.
 
 What limits the rest is TYPE evidence. A slot declaration also performs the conversion the direct
 read would not, so moving a producer into its reader needs proof that the read has the same type.
@@ -104,7 +109,17 @@ The widenings that were measured and rejected rather than shipped:
   With the cast's null-guarded if/else folded first it costs 1,172 functions (7,926 to 9,098);
   with the fold left where it was it costs 1,343 (to 9,269). Refusing the receiver position
   outright recovers 14 of them, so the receiver is not what does the damage — a cast is simply
-  not a call whose operand the source evaluated at the call.
+  not a call whose operand the source evaluated at the call;
+- opening up `try_eliminate_adjacent_value_slot`, which today runs only for a function the enum
+  pass had something to say about, was measured and rejected over five whole-tree runs. Removing
+  the enum gate alone costs 5 functions and 4 byte-identical ones. Admitting a slot by a proof
+  read out of the ISA's own operand roles — every read of the slot is the instruction directly
+  after a write of it, so it holds a run of one-instruction live ranges and no source variable
+  ever occupied it — gains 6 and still loses the same 4. Lifting the pass's other three gates on
+  top (a consumer past block punctuation, a call with several arguments, `X = !X` over any
+  producer) does not compile: it drops a `const` qualifier a later pass would have written, and
+  the type witness that would say so is not in reach at that point in the pipeline. The proof
+  itself is sound; what is missing is the constness the slot table does not spell.
 
 A fourth was tried and rejected: whether a producer stood INSIDE the expression that reads it is
 decidable from the bytecode — AngelScript emits each argument's own code immediately before its
@@ -238,8 +253,8 @@ Same run as "What is measured, and on what" above — full corpus, build `Build5
 | Byte-faithful (`IDENTICAL`+`BENIGN`, `--norm-slots`) | 29,999 (**99.98%**) |
 
 The whole emitted tree recompiles with no errors, and `gore as bytediff --norm-slots` reports no
-alignment loss at all and B1 **95.18%** over all 164,607 aligned functions — up from 88.78% before
-this work, with 7,926 semantic differences left against 18,288.
+alignment loss at all and B1 **96.20%** over all 164,607 aligned functions — up from 88.78% before
+this work, with 6,248 semantic differences left against 18,288.
 
 Editing an existing module's defaults and splicing it back works. Getting there needed six
 identity fixes, because a decompiled module is only re-splicable when every symbol it references

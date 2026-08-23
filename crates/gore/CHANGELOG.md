@@ -116,6 +116,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   per link.
 - A value passed to a constructor sits inside the call, where it used to be
   left behind in a local.
+- A condition or a call argument holds the expression it tests, instead of a
+  local the source never named — including a whole `&&` chain.
+- A comparison handed to a call sits inside the call.
+- A bool the cache proved from a comparison, a `!` or a call's return is
+  recognized as one everywhere, and so is a bool field of the class.
 
 ## [0.1.0] - 2026-08-18
 
