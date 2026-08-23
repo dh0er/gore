@@ -1365,7 +1365,7 @@ fn emit_function_ctor(
     let returns_by_reference = f.ret.is_reference && f.ret.token == 5 && !f.ret.is_object_handle;
     let body = fold_condition_temporaries(&body, &declared_locals, refs, fields);
     let body = fold_alias_copies(&body, &declared_locals);
-    let body = fold_copy_out_temporaries(&body, &declared_locals, &const_result_slots);
+    let body = fold_copy_out_temporaries(&body, &declared_locals, &const_result_slots, fields);
     let body =
         fold_returned_temporaries(&body, &declared_locals, refs, &ret, returns_by_reference);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
@@ -6284,6 +6284,7 @@ fn fold_copy_out_temporaries(
     body: &str,
     locals: &BTreeMap<i32, String>,
     const_slots: &HashSet<i32>,
+    fields: Option<&HashMap<String, String>>,
 ) -> String {
     let lines: Vec<&str> = body.lines().collect();
     let mut kept: Vec<String> = Vec::new();
@@ -6291,14 +6292,26 @@ fn fold_copy_out_temporaries(
     while at < lines.len() {
         let folded = (|| {
             let (carrier, value) = slot_store(lines[at])?;
-            let (target, copied) = slot_store(lines.get(at + 1)?)?;
-            if copied != carrier || target == carrier || !is_local_ident(&target) {
+            let copy = lines.get(at + 1)?.trim().strip_suffix(';')?;
+            let (target, copied) = copy.split_once(" = ")?;
+            if copied != carrier || target == carrier {
                 return None;
             }
-            let (a, b) = (slot_of(&carrier)?, slot_of(&target)?);
-            if locals.get(&a).is_none()
-                || locals.get(&a) != locals.get(&b)
-                || const_slots.contains(&a) != const_slots.contains(&b)
+            let a = slot_of(&carrier)?;
+            let carrier_type = locals.get(&a)?;
+            // The target says what it holds either through the slot table or, for a member of
+            // this class, through the class's own field map. Anything else — an index, a member
+            // of something else — has no type here and keeps its carrier.
+            let target_type = match slot_of(target) {
+                Some(b) => {
+                    if const_slots.contains(&a) != const_slots.contains(&b) {
+                        return None;
+                    }
+                    locals.get(&b)
+                }
+                None => fields?.get(target.strip_prefix("this.")?),
+            };
+            if target_type != Some(carrier_type)
                 || indent_of(lines[at]) != indent_of(lines[at + 1])
                 || !read_once_at(&lines, at, at + 1, &carrier)
             {
