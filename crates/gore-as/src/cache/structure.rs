@@ -2278,9 +2278,52 @@ fn temporary_argument_call(
     ty: &str,
     value: &str,
     refs: &RefResolver,
+    sole_mention: bool,
+    resolved: &HashMap<(String, usize), Vec<bool>>,
 ) -> Option<String> {
-    let call = statement.strip_suffix(&format!("({slot});"))?;
-    let method = call.rsplit(['.', ':']).next()?;
+    // The sole-argument form, decided by the TYPE-keyed table.
+    if let Some(call) = statement.strip_suffix(&format!("({slot});")) {
+        let method = call.rsplit(['.', ':']).next()?;
+        if !method.is_empty()
+            && method
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            && refs.one_arg_call_accepts_temporary(method, ty)
+        {
+            return Some(format!("{call}({value});"));
+        }
+        return None;
+    }
+    // Any OTHER argument position. Two things have to be true, and neither is the by-name table:
+    // the slot is mentioned NOWHERE else in the body — a value the caller reads back is read back
+    // somewhere — and the parameter of the overload THIS call resolves to takes a value rather
+    // than a non-const reference. Deciding the second from the callee's name instead costs 35
+    // errors, and adding only the first still leaves 15.
+    if !sole_mention {
+        return None;
+    }
+    let call = statement.trim_end().strip_suffix(';')?.trim_end();
+    if !call.ends_with(')') || count_word(call, slot) != 1 {
+        return None;
+    }
+    let bytes = call.as_bytes();
+    let mut depth = 0i32;
+    let mut open = None;
+    for at in (0..bytes.len()).rev() {
+        match bytes[at] {
+            b')' => depth += 1,
+            b'(' => {
+                depth -= 1;
+                if depth == 0 {
+                    open = Some(at);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let open = open?;
+    let method = call[..open].rsplit(['.', ':']).next()?;
     if method.is_empty()
         || !method
             .bytes()
@@ -2288,8 +2331,34 @@ fn temporary_argument_call(
     {
         return None;
     }
-    refs.one_arg_call_accepts_temporary(method, ty)
-        .then(|| format!("{call}({value});"))
+    let inner = &call[open + 1..call.len() - 1];
+    let mut arguments: Vec<&str> = Vec::new();
+    let (mut depth, mut start) = (0i32, 0usize);
+    for (at, byte) in inner.bytes().enumerate() {
+        match byte {
+            b'(' | b'<' | b'[' => depth += 1,
+            b')' | b'>' | b']' => depth -= 1,
+            b',' if depth == 0 => {
+                arguments.push(inner[start..at].trim());
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    if !inner.trim().is_empty() {
+        arguments.push(inner[start..].trim());
+    }
+    let position = arguments.iter().position(|argument| *argument == slot)?;
+    resolved
+        .get(&(method.to_owned(), arguments.len()))
+        .and_then(|accepts| accepts.get(position))
+        .copied()
+        .unwrap_or(false)
+        .then(|| {
+            let mut rebuilt = arguments.clone();
+            rebuilt[position] = value;
+            format!("{}({});", &call[..open], rebuilt.join(", "))
+        })
 }
 
 /// UHT reserves the `b<Uppercase>` prefix for bool UPROPERTYs, so the last path segment of a
@@ -2416,6 +2485,10 @@ fn block_stmts_in(
     // when the source temp was default-built of the SAME value type. Cleared when the slot is
     // overwritten by any non-construct producer.
     let mut default_ctor_temp: HashMap<String, String> = HashMap::new();
+    // Per-call parameter flags read from the pointer the call ACTUALLY uses, keyed by name and
+    // arity. The global by-name table merges every overload in the cache and answers the
+    // constness question wrongly for a name the engine reuses; the pointer names one row.
+    let mut resolved_params: HashMap<(String, usize), Vec<bool>> = HashMap::new();
     let mut pending: Option<String> = None; // unconsumed call/ctor result
     let mut pending_ty: Option<String> = None; // recovered type of `pending` (call return type)
                                                // batch-20 Class B: the call returns a CONST object handle (`const UCharacterAIState`).
@@ -3730,6 +3803,22 @@ fn block_stmts_in(
                 flush_b2!();
                 let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
                 let f = ctx.refs.func_by_ptr(ptr).unwrap_or("syscall?").to_string();
+                if let Some(params) = ctx.refs.func_params_by_ptr(ptr) {
+                    let accepts: Vec<bool> = params
+                        .iter()
+                        .map(|p| !p.is_reference || p.is_object_const || p.is_read_only)
+                        .collect();
+                    match resolved_params.get_mut(&(f.clone(), accepts.len())) {
+                        Some(seen) => {
+                            for (slot, accepted) in seen.iter_mut().zip(&accepts) {
+                                *slot &= *accepted;
+                            }
+                        }
+                        None => {
+                            resolved_params.insert((f.clone(), accepts.len()), accepts);
+                        }
+                    }
+                }
                 // A behaviour emits no statement of its own and consumes only its own operands,
                 // so a statement flushed for it may still belong to a chain the very next
                 // `PshRPtr` continues. Note it; the flush itself stays, so nothing is lost if
@@ -5185,6 +5274,9 @@ fn block_stmts_in(
             continue;
         }
         let value = format!("{ty}()");
+        // A slot the body mentions exactly once was never read back, which is what an `&out`
+        // parameter's caller does.
+        let sole_mention = out.iter().filter(|s| count_word(s, slot) > 0).count() == 1;
         for statement in out.iter_mut() {
             if let Some(lhs) = statement
                 .strip_suffix(&format!(" = {slot};"))
@@ -5196,8 +5288,15 @@ fn block_stmts_in(
             // A container's own mutator takes its element by CONST reference, so a temporary is
             // legal there too — `PursuedCrimes.Add(FCrimeEntry());` is what the source wrote.
             // Proven per site from the receiver's own field type, never from the method name.
-            if let Some(rewritten) = temporary_argument_call(statement, slot, ty, &value, ctx.refs)
-            {
+            if let Some(rewritten) = temporary_argument_call(
+                statement,
+                slot,
+                ty,
+                &value,
+                ctx.refs,
+                sole_mention,
+                &resolved_params,
+            ) {
                 *statement = rewritten;
             }
         }
