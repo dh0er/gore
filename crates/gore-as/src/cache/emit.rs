@@ -1366,6 +1366,7 @@ fn emit_function_ctor(
     let body = fold_condition_temporaries(&body, &declared_locals, refs, fields);
     let body = fold_alias_copies(&body, &declared_locals);
     let body = fold_copy_out_temporaries(&body, &declared_locals, &const_result_slots, fields);
+    let body = fold_cast_operands(&body, &declared_locals, &call_result_types);
     let body =
         fold_returned_temporaries(&body, &declared_locals, refs, &ret, returns_by_reference);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
@@ -6318,6 +6319,62 @@ fn fold_copy_out_temporaries(
                 return None;
             }
             Some(format!("{}{target} = {value};", indent_of(lines[at])))
+        })();
+        match folded {
+            Some(replacement) => {
+                kept.push(replacement);
+                at += 2;
+            }
+            None => {
+                kept.push(lines[at].to_string());
+                at += 1;
+            }
+        }
+    }
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// `local_N = <call>; … Cast<T>(local_N) …` is the cast reading the call. A cast always
+/// materializes its operand into a slot of its own — vanilla's stream shows `CALLSYS f; STOREOBJ
+/// d; CmpPtrNull d; JZ; TYPEID; PSF out; PshVPtr d; CALLSYS opCast`, where `d` is the compiler's,
+/// not the source's. Naming it makes the recompile spend a second slot and a copy.
+///
+/// The witness that the name performs no conversion is the one the producer sweep already uses:
+/// the slot catches EXACTLY what the callee returns. Where the declaration widened the value, the
+/// cast would otherwise see the other type.
+fn fold_cast_operands(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+    call_types: &HashMap<i32, String>,
+) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<String> = Vec::new();
+    let mut at = 0usize;
+    while at < lines.len() {
+        let folded = (|| {
+            let (name, value) = slot_store(lines[at])?;
+            let slot = slot_of(&name)?;
+            let declared = locals.get(&slot)?;
+            if call_types.get(&slot) != Some(declared) {
+                return None;
+            }
+            let reader = lines.get(at + 1)?;
+            let marker = format!("({name})");
+            let opens = reader.find(&marker)?;
+            // The operand of a CAST, not of anything else: the character before the parenthesis
+            // closes the template argument.
+            if reader[..opens].chars().next_back() != Some('>')
+                || !reader[..opens].contains("Cast<")
+                || count_ident(reader, &name) != 1
+                || !read_once_at(&lines, at, at + 1, &name)
+            {
+                return None;
+            }
+            Some(rename_ident(reader, &name, &value))
         })();
         match folded {
             Some(replacement) => {
