@@ -6360,14 +6360,25 @@ impl Structurer<'_> {
     /// in that slot. This is the plain-block counterpart of [`Self::region_exit_stmt`] and
     /// [`Self::loop_exit_stmt`], and is consulted only after both of them.
     fn plain_return_exit_stmt(&self, bi: usize) -> Option<String> {
-        if self.ctx.ret_via_rvo()
-            || self.ctx.ret_is_ref()
-            || self.ctx.ret_ty.map(|t| t.token) == Some(0x52)
-        {
+        if self.ctx.ret_via_rvo() || self.ctx.ret_is_ref() {
             return None;
         }
         let b = &self.g.blocks[bi];
-        if b.instr_hi - b.instr_lo < 2 || self.ctx.instrs[b.instr_hi - 1].op.name != "JMP" {
+        if b.instr_hi == b.instr_lo || self.ctx.instrs[b.instr_hi - 1].op.name != "JMP" {
+            return None;
+        }
+        // A VOID function's early return carries no value: the whole of it is the jump to the
+        // shared exit row. Rendered as nothing, the branch it sits in looks like it falls
+        // through — which is not a byte difference but a WRONG program, and it is what made
+        // `if (x == nullptr) { … }` run the null-dereferencing tail behind it.
+        if self.ctx.ret_ty.map(|t| t.token) == Some(0x52) {
+            return b
+                .succs
+                .first()
+                .is_some_and(|t| self.is_bare_ret_off(*t))
+                .then(|| "return;".to_owned());
+        }
+        if b.instr_hi - b.instr_lo < 2 {
             return None;
         }
         if !matches!(
