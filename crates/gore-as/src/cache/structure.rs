@@ -6381,9 +6381,12 @@ impl Structurer<'_> {
         if b.instr_hi - b.instr_lo < 2 {
             return None;
         }
+        // `LOADOBJ` is how a HANDLE return puts its value in place, exactly as `CpyVtoR*` does
+        // for a scalar — and `scan_back_retval_floor` already reads it. Without it a handle
+        // function's early return rendered as nothing, the same silence the void case had.
         if !matches!(
             self.ctx.instrs[b.instr_hi - 2].op.name,
-            "CpyVtoR1" | "CpyVtoR4" | "CpyVtoR8"
+            "CpyVtoR1" | "CpyVtoR4" | "CpyVtoR8" | "LOADOBJ"
         ) {
             return None;
         }
