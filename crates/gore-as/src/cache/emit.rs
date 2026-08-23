@@ -1341,6 +1341,12 @@ fn emit_function_ctor(
     // short circuit the single assignment it was in source.
     let body = fold_short_circuits(&body, &proven_locals, refs, fields);
     let body = join_short_circuit_chains(&body);
+    // Again, now that the chain IS one expression: the negation fold ran before the short
+    // circuits were recovered, so `X = A && B; X = !X;` was still two branches then. Left as two
+    // statements the negation costs a copy out, a `NOT` and a copy back where vanilla applied
+    // `NOT` in place — and the named result stops the compiler folding the chain's own left test
+    // into its branch.
+    let body = fold_negated_stores(&body);
     // Again, now that a short circuit IS an expression. The sweep above ran before the folds,
     // so a value the source wrote inside a call's argument as `A && B` was still an `if`/`else`
     // over a named local when the producers moved, and nothing looked at it afterwards. Writing
