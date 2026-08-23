@@ -5339,7 +5339,7 @@ fn inline_call_argument_temporaries(
             // A temporary this statement refuses in one position must not come back through
             // another: the operand sweep below sees the same name and knows less about it.
             let mut refused: Vec<String> = Vec::new();
-            if let Some((callee, arguments)) = &called {
+            for (callee, arguments) in &call_sites(&lines[index]) {
                 for (position, argument) in arguments.iter().enumerate() {
                     let Some(temp) = argument_temporary(argument) else {
                         continue;
@@ -5350,7 +5350,7 @@ fn inline_call_argument_temporaries(
                     if *argument == temp
                         && !refs.arg_position_accepts_temporary(callee, arguments.len(), position)
                     {
-                        inline_reject("param", callee);
+                        inline_reject("param", callee, &temp);
                         refused.push(temp);
                         continue;
                     }
@@ -5426,7 +5426,7 @@ fn inline_temporary_into(
         .and_then(|slot| slot.parse::<i32>().ok())
         .is_some_and(|slot| statement_producers.contains(&slot))
     {
-        inline_reject("order", callee);
+        inline_reject("order", callee, &temp);
         return false;
     }
     // The slot's declaration converts whenever the captured call's return type is not the type
@@ -5460,12 +5460,12 @@ fn inline_temporary_into(
             ))
         };
         if !ty.is_some_and(is_object_handle_type) && const_method() != Some(true) {
-            inline_reject("receiver", callee);
+            inline_reject("receiver", callee, &temp);
             return false;
         }
     }
     if count_ident(&lines[index], temp) != 1 {
-        inline_reject("uses", callee);
+        inline_reject("uses", callee, &temp);
         return false; // inlining a value read twice would evaluate it twice
     }
     // The compiler re-uses one slot for several temporaries, so the definition that matters is
@@ -5475,7 +5475,7 @@ fn inline_temporary_into(
         .rev()
         .find(|line| definition_value(&lines[*line], temp).is_some())
     else {
-        inline_reject("definitions", callee);
+        inline_reject("definitions", callee, &temp);
         return false;
     };
     let region_end = (definition + 1..lines.len())
@@ -5485,7 +5485,7 @@ fn inline_temporary_into(
         .filter(|line| count_ident(&lines[*line], temp) > 0)
         .collect();
     if uses_in_region != [index] {
-        inline_reject("uses", callee);
+        inline_reject("uses", callee, &temp);
         return false; // this call has to be the only reader of that definition
     }
     let value = definition_value(&lines[definition], temp)
@@ -5511,7 +5511,7 @@ fn inline_temporary_into(
         _ => is_call_result(&value) || same_typed_own_field(&value, temp, locals, fields),
     };
     if !movable {
-        inline_reject("not-a-call", callee);
+        inline_reject("not-a-call", callee, &temp);
         return false;
     }
     // The rendered read compares the slot against zero, which is how an int-typed slot spells a
@@ -5523,7 +5523,7 @@ fn inline_temporary_into(
             .iter()
             .any(|test| lines[index].contains(&format!("{temp}{test}")))
     {
-        inline_reject("wrapped", callee);
+        inline_reject("wrapped", callee, &temp);
         return false;
     }
     // Everything between has to feed THIS call as well, or the order of a side effect would
@@ -5536,7 +5536,7 @@ fn inline_temporary_into(
                 .is_some_and(|feeder| count_ident(&lines[index], &feeder) > 0)
     });
     if !between_feeds_this_call {
-        inline_reject("between", callee);
+        inline_reject("between", callee, &temp);
         return false;
     }
     lines[index] = rename_ident(&lines[index], temp, &value);
@@ -5794,9 +5794,30 @@ fn is_local_ident(text: &str) -> bool {
 
 /// The callee name and top-level argument list of a statement that IS one call.
 fn call_arguments(line: &str) -> Option<(String, Vec<String>)> {
+    call_of_expression(statement_expression(line)?)
+}
+
+/// Every call ON a line, outermost first: the statement's own call, and then the calls its
+/// arguments are. An argument that is itself a call has arguments of its own, and each of those
+/// is read where it stands — the outer call's parameter table says nothing about them.
+fn call_sites(line: &str) -> Vec<(String, Vec<String>)> {
+    let mut sites = Vec::new();
+    let mut pending: Vec<String> = statement_expression(line).into_iter().map(str::to_owned).collect();
+    while let Some(expression) = pending.pop() {
+        let Some((callee, arguments)) = call_of_expression(&expression) else {
+            continue;
+        };
+        pending.extend(arguments.iter().cloned());
+        sites.push((callee, arguments));
+    }
+    sites
+}
+
+/// The callee and arguments of an expression that IS one call, or None.
+fn call_of_expression(expression: &str) -> Option<(String, Vec<String>)> {
     // `!(<call>)` and `(<call>)` are still that call, and its parameters still decide what may
     // stand in each position.
-    let mut statement = statement_expression(line)?;
+    let mut statement = expression;
     loop {
         let stripped = statement.strip_prefix('!').unwrap_or(statement);
         let stripped = if stripped.starts_with('(')
@@ -6599,9 +6620,9 @@ fn strip_unreachable<'a>(lines: &[&'a str], at: &mut usize, kept: &mut Vec<&'a s
 }
 
 /// Diagnostic counter for why an argument could not be moved back into its call.
-fn inline_reject(reason: &str, callee: &str) {
+fn inline_reject(reason: &str, callee: &str, temp: &str) {
     if std::env::var_os("GORE_AS_INLINE_DIAG").is_some() {
-        eprintln!("[inline-reject] {reason} {callee}");
+        eprintln!("[inline-reject] {reason} {callee} {temp}");
     }
 }
 

@@ -108,6 +108,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   instead of refusing the module.
 - `GORE_AS_REMAP_DIAG=1` prints the two identities behind an unresolved or
   ambiguous reference.
+- A function returns its expression instead of naming it first, a condition
+  tests its expression, and a handle copied from another handle is gone.
+- A class says a member's initial value once instead of repeating it in every
+  constructor that also takes a parameter.
+- A chain of `&&` comes back as the chain it was rather than one `if`/`else`
+  per link.
+- A value passed to a constructor sits inside the call, where it used to be
+  left behind in a local.
 
 ## [0.1.0] - 2026-08-18
 
