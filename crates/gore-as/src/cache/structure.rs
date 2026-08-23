@@ -5161,10 +5161,21 @@ fn block_stmts_in(
         eprintln!("[ctor-temp] {default_ctor_temp:?}");
     }
     for (slot, ty) in &default_ctor_temp {
+        // Any write to the slot — the whole value, or a member or element of it — is a write the
+        // substituted `T()` would throw away. Reading only whole-value assignments let a
+        // configured query be passed as a freshly default-constructed one (measured: the
+        // argument arrived empty where vanilla had filled it in).
         let assigned = out.iter().any(|s| {
             s.trim_start()
                 .strip_prefix(slot.as_str())
-                .is_some_and(|rest| rest.starts_with(" = "))
+                .is_some_and(|rest| {
+                    rest.starts_with(" = ")
+                        || rest.split_once(" = ").is_some_and(|(path, _)| {
+                            path.starts_with(['.', '['])
+                                && !path.contains('(')
+                                && !path.contains(' ')
+                        })
+                })
         });
         // A bare template head (`TArray`) is not a constructible type name, and a temporary
         // cannot be passed by non-const reference or receive a non-const method call — so the
