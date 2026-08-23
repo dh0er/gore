@@ -1676,6 +1676,7 @@ fn emit_function_ctor(
         // return copy-constructs — it never goes through the non-const `opAssign` the split
         // exists to avoid. Folded first, there is no assignment left for the split to name.
         let body = fold_return_slot_stores(&body);
+        let body = fold_return_slot_arms(&body);
         let body = rewrite_no_assign_residual_assigns(&body, &locals, &ret);
         // Iterator locals have no default ctor either; declare them at their `Iterator()` call.
         let (body, iter_suppressed) = rewrite_iterator_decl_init(&body, &locals);
@@ -6666,6 +6667,69 @@ fn fold_returned_temporaries(
 /// The leading whitespace of a line.
 fn indent_of(line: &str) -> String {
     line.chars().take_while(|c| c.is_whitespace()).collect()
+}
+
+/// Every arm of an if/else ending in `__return = <val>;`, with the shared `return __return;` as
+/// the function's last statement, is each arm returning its own value. The hidden return slot
+/// then needs no declaration at all — and vanilla constructs the returned object inside the arm
+/// that produces it, not once at the top of the function whatever happens afterwards.
+///
+/// Only where EVERY store to the slot is the last statement of its block and nothing else reads
+/// it: a path that falls through without assigning still needs the shared return.
+fn fold_return_slot_arms(body: &str) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    // The shared exit is spelled `return __return;` or, before that rewrite, the unrecovered
+    // default-return marker — both mean the same statement here.
+    let Some(last) = lines
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .filter(|at| {
+            let tail = lines[*at].trim();
+            tail == "return __return;" || tail == format!("return {RVODEF};")
+        })
+    else {
+        return body.to_owned();
+    };
+    let names_the_slot = lines[last].contains("__return");
+    // The shared return has to close an if/else, or some path reaches it without a value.
+    if last == 0 || lines[last - 1].trim() != "}" {
+        return body.to_owned();
+    }
+    let stores: Vec<usize> = (0..last)
+        .filter(|at| lines[*at].trim().starts_with("__return = "))
+        .collect();
+    // Exactly the two arms of the if/else the shared return closes, and nothing else. A store
+    // nested deeper leaves a path that reaches the shared return without a value — one such
+    // function ("Not all paths return a value") is what a looser rule costs.
+    let two_arms = matches!(stores.as_slice(), [then, other]
+        if lines.get(then + 1).is_some_and(|line| line.trim() == "}")
+            && lines.get(then + 2).is_some_and(|line| line.trim() == "else")
+            && lines.get(then + 3).is_some_and(|line| line.trim() == "{")
+            && *other == then + 4
+            && lines.get(other + 1).is_some_and(|line| line.trim() == "}")
+            && other + 2 == last);
+    if !two_arms || body.matches("__return").count() != stores.len() + usize::from(names_the_slot)
+    {
+        return body.to_owned();
+    }
+    let mut kept: Vec<String> = Vec::with_capacity(lines.len());
+    for (at, line) in lines.iter().enumerate() {
+        if at == last {
+            continue;
+        }
+        match stores.contains(&at) {
+            true => {
+                let value = line.trim().trim_start_matches("__return = ");
+                kept.push(format!("{}return {value}", indent_of(line)));
+            }
+            false => kept.push((*line).to_owned()),
+        }
+    }
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
 }
 
 /// `__return = <val>;` immediately before `return __return;` is one `return <val>;`. The hidden
