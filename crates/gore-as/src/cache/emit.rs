@@ -7755,8 +7755,13 @@ fn element_is_written_through(
                 }
                 continue;
             }
+            // A HANDLE element is a different question: `for (auto Arm : Arms)` binds the
+            // handle, and the handle's own constness is not the object's — vanilla calls
+            // `Arm.FinalizeAttack()`, a non-const method, from exactly such a loop. Only a VALUE
+            // element is read-only in a way a non-const call would break.
             if ty.is_some_and(|ty| {
-                refs.calls_non_const_method(super::structure::bare_type_name(ty), method)
+                !is_object_handle_type(ty)
+                    && refs.calls_non_const_method(super::structure::bare_type_name(ty), method)
             }) {
                 return true;
             }
