@@ -133,9 +133,12 @@ The widenings that were measured and rejected rather than shipped:
 - substituting a default-constructed `T()` at any ARGUMENT position, not only where it is a call's
   sole argument, costs 35 errors: `arg_position_accepts_temporary` is keyed by the callee's NAME,
   and for `FindFloorAtLocation(Location, FHitResult(), …)` it answers yes for a parameter the
-  callee writes THROUGH. The sole-argument path is safe because it consults the type-keyed table
-  instead. Injecting a fresh temporary needs a witness that the call site itself built one — the
-  position of the `$beh0` inside that call's own push window — not a table keyed by a name;
+  callee writes THROUGH. Requiring in addition that the slot is mentioned NOWHERE else in the body
+  — a value the caller reads back is read back somewhere — is a real witness and halves it, to 15,
+  but does not close it: the compiler refuses a temporary for a non-const reference whether or not
+  the caller cares about the result, and that constness is what the name-keyed table gets wrong.
+  The sole-argument path is safe because it consults the TYPE-keyed table instead. Doing this
+  needs the parameter's own constness for the overload the call actually resolves to;
 - three separate widenings measured EXACTLY neutral and were taken back out rather than kept:
   ungating the bool-field witness from the enum state machine, stepping the return-value scan back
   over a scope's cleanup, and running the temporary folds to a fixpoint. Each asks a question the
