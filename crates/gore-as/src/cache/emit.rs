@@ -5573,8 +5573,15 @@ fn inline_temporary_into(
         }
         // An argument or a receiver takes the value as it is, so a member read may travel there
         // too — reading a member has no side effect of its own, and the field map proves the
-        // slot's declaration was not also converting it.
-        _ => is_call_result(&value) || same_typed_own_field(&value, temp, locals, fields),
+        // slot's declaration was not also converting it. A value that renders as a BOOL may
+        // travel as well: the parameter row already said the position takes a value, and a bool
+        // is the one type the slot's declaration cannot have been converting on the way in.
+        _ => {
+            is_call_result(&value)
+                || same_typed_own_field(&value, temp, locals, fields)
+                || (temporary_type(locals, temp) == Some("bool")
+                    && renders_a_bool(&value, locals, refs, fields))
+        }
     };
     if !movable {
         inline_reject("not-a-call", callee, &temp, &lines[index]);
