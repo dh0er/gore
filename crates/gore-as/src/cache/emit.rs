@@ -6084,16 +6084,6 @@ fn fold_condition_temporaries(
     refs: &RefResolver,
     fields: Option<&HashMap<String, String>>,
 ) -> String {
-    let reads = |name: &str| -> usize {
-        body.match_indices(name)
-            .filter(|(at, _)| {
-                let before = body[..*at].chars().next_back();
-                let after = body[at + name.len()..].chars().next();
-                !before.is_some_and(|c| c.is_alphanumeric() || c == '_')
-                    && !after.is_some_and(|c| c.is_alphanumeric() || c == '_')
-            })
-            .count()
-    };
     // A field of the class carries its type in the class's own map, which `renders_a_bool` does
     // not read.
     let is_a_bool = |value: &str| {
@@ -6113,8 +6103,8 @@ fn fold_condition_temporaries(
             let condition = tested.strip_prefix("if (")?.strip_suffix(')')?;
             if value.contains(&name)
                 || value.chars().any(char::is_control)
-                || reads(&name) != 2
                 || count_ident(tested, &name) != 1
+                || !read_once_by_the_next_line(&lines, at, &name)
             {
                 return None;
             }
@@ -6167,6 +6157,40 @@ fn fold_condition_temporaries(
     joined
 }
 
+
+/// Whether the store at `at` is read exactly once — by the line right after it — and by nothing
+/// else before the slot is written again. The compiler reuses ONE slot for many unrelated
+/// temporaries, so counting the name over the whole body answers a question nobody asked: what
+/// matters is the live range of THIS store.
+fn read_once_by_the_next_line(lines: &[&str], at: usize, name: &str) -> bool {
+    // Forward, from past the reader to the next write of the same slot.
+    for line in &lines[at + 2..] {
+        if is_definition_line(line, name) {
+            break;
+        }
+        if count_ident(line, name) > 0 {
+            return false;
+        }
+    }
+    // A loop carries the value back: a read placed BEFORE the store inside the same loop body
+    // reads what this store left behind on the previous pass.
+    let indent = indent_of(lines[at]).len();
+    for start in (0..at).rev() {
+        let trimmed = lines[start].trim_start();
+        if indent_of(lines[start]).len() >= indent
+            || !(trimmed.starts_with("while (") || trimmed.starts_with("for ("))
+        {
+            continue;
+        }
+        if block_end(lines, start + 1).is_some_and(|end| end > at) {
+            return !lines[start + 1..at]
+                .iter()
+                .any(|line| count_ident(line, name) > 0);
+        }
+        break;
+    }
+    true
+}
 
 /// `local_A = local_B; <reader of local_A>` is the reader reading `local_B`. A handle assigned
 /// straight from another handle and read once is a name for something that already had one, and
