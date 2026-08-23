@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 97.87% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 97.88% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **97.87%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **97.88%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**3,511 functions (2.13%) recompile to bytecode that differs semantically.** A semantic
+**3,482 functions (2.12%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -49,13 +49,13 @@ figure is 531:
 
 | Class | Functions | Share |
 |-------|-----------|-------|
-| Different instructions on the two sides | 1,618 | 45.8% |
-| Other extra instructions | 679 | 19.2% |
-| Same instructions, different order | 531 | 15.0% |
-| One or more extra slot-to-slot copies, nothing else | 344 | 9.7% |
-| Identical but for an engine-internal type id | 177 | 5.0% |
-| One or more extra handle aliases, nothing else | 131 | 3.7% |
-| Identical but for a slot number, or extra copies AND aliases | 51 | 1.5% |
+| Different instructions on the two sides | 1,617 | 46.4% |
+| Other extra instructions | 607 | 17.4% |
+| Same instructions, different order | 537 | 15.4% |
+| One or more extra slot-to-slot copies, nothing else | 349 | 10.0% |
+| Identical but for an engine-internal type id | 177 | 5.1% |
+| One or more extra handle aliases, nothing else | 131 | 3.8% |
+| Identical but for a slot number, or extra copies AND aliases | 64 | 1.8% |
 
 The classes that used to dominate — a named temporary costing a copy or an alias — are now the
 small ones. Over this run's work the total went from 14,134 to 3,511, and `__InitDefaults`
@@ -65,7 +65,7 @@ The largest sub-shapes inside what is left, each measured over the whole corpus:
 where a byte-backed enum still round-trips through an `int`, 60 where an extra constructor and
 destructor pair says the emitter named a value the source built at a call site, 49 carrying one
 extra member-read, 33 that re-materialize a cast diamond because a slot is declared wider than
-the cast that fills it, and 531 whose instructions match but run in a different order.
+the cast that fills it, and 537 whose instructions match but run in a different order.
 
 The 177 with an engine type id are not reachable from source, and that is now proven rather than
 assumed: after stripping the operand flag bits, vanilla's id and ours resolve through each cache's
@@ -130,6 +130,12 @@ The widenings that were measured and rejected rather than shipped:
   generator emitted 287 fewer functions than vanilla has, and byte-identical collapsed from 6,924
   to 1,010. Nothing about widening where a producer may travel is safe without watching that
   number — a compile that exits 0 is not by itself evidence;
+- substituting a default-constructed `T()` at any ARGUMENT position, not only where it is a call's
+  sole argument, costs 35 errors: `arg_position_accepts_temporary` is keyed by the callee's NAME,
+  and for `FindFloorAtLocation(Location, FHitResult(), …)` it answers yes for a parameter the
+  callee writes THROUGH. The sole-argument path is safe because it consults the type-keyed table
+  instead. Injecting a fresh temporary needs a witness that the call site itself built one — the
+  position of the `$beh0` inside that call's own push window — not a table keyed by a name;
 - three separate widenings measured EXACTLY neutral and were taken back out rather than kept:
   ungating the bool-field witness from the enum state machine, stepping the return-value scan back
   over a scope's cleanup, and running the temporary folds to a fixpoint. Each asks a question the
@@ -267,8 +273,8 @@ Same run as "What is measured, and on what" above — full corpus, build `Build5
 | Byte-faithful (`IDENTICAL`+`BENIGN`, `--norm-slots`) | 29,999 (**99.98%**) |
 
 The whole emitted tree recompiles with no errors, and `gore as bytediff --norm-slots` reports no
-alignment loss at all and B1 **97.87%** over all 164,607 aligned functions — up from 88.78% before
-this work, with 3,511 semantic differences left against 18,288.
+alignment loss at all and B1 **97.88%** over all 164,607 aligned functions — up from 88.78% before
+this work, with 3,482 semantic differences left against 18,288.
 
 Editing an existing module's defaults and splicing it back works. Getting there needed six
 identity fixes, because a decompiled module is only re-splicable when every symbol it references
