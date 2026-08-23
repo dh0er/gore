@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 94.86% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 95.18% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -9,7 +9,7 @@ was measured, and what is left.
 
 ## What is measured, and on what
 
-Measured 2026-08-21 against build `Build55_CL171864` (script cache SHA-256
+Measured 2026-08-23 against build `Build55_CL171864` (script cache SHA-256
 `D0AFAF909E62867FAEDC3678A1175F5E8DE5E784DC503A14FFBDE4726F297231`, GUID
 `be78fe0a46ac6643968597e85c7e5b3f`). This build is not one of the audited generations, so the
 numbers qualify the DECOMPILER, not the build.
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **94.86%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **95.18%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | full corpus, all 7,308 modules | 7,278 (**99.59%**) |
 
@@ -37,35 +37,39 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**8,459 functions (5.14%) recompile to bytecode that differs semantically.** A semantic
+**7,926 functions (4.81%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
 
-What is left is dominated by the ORDER the recompiler emits instructions in, not by wrong values.
-The largest classes, by the opcodes that differ:
+Classified over WHOLE functions — every instruction of both sides, not the window around the
+first divergence. An earlier revision of this document classified the window instead and reported
+order as the largest class at 4,861; that number was an artifact of the window, and the real
+figure is 409:
 
-| Class | Functions |
-|-------|-----------|
-| Same opcodes and operands in the compared window, evaluated in a different order | 4,861 |
-| A short circuit still written as an `if`/`else` over a named local | 280 |
-| One extra slot-to-slot copy — a temporary that still carries a name | 186 |
-| Everything else | the rest |
+| Class | Functions | Share |
+|-------|-----------|-------|
+| One or more extra slot-to-slot copies, nothing else | 3,611 | 45.6% |
+| Different instructions on the two sides | 1,739 | 21.9% |
+| One or more extra handle aliases, nothing else | 982 | 12.4% |
+| Other extra instructions | 860 | 10.9% |
+| Same instructions, different order | 409 | 5.2% |
+| Identical but for an engine-internal type id | 189 | 2.4% |
+| Extra copies AND aliases | 117 | 1.5% |
+| Identical but for a slot number or a jump target | 19 | 0.2% |
 
-The first class dominates now precisely because the others shrank; over WHOLE functions (rather
-than the compared window) only about a fifth of it is order alone, and the rest still emits more
-instructions than vanilla.
-
-Every one of these is the same defect wearing different clothes: **a temporary the compiler
+Two thirds of it is still the same defect wearing different clothes: **a temporary the compiler
 invented is given a name in the source**, and the name costs instructions the original did not
 spend — a declaration, a copy in and out, and for a value type a destructor that sinks to the end
-of the function. Removing three of those namings (a call whose result nothing reads, the hidden
-out-slot of a by-value return, and a negation applied through a slot) took this number from
-14,134 to 8,459 over this run.
+of the function. Over this run's work the total went from 14,134 to 7,926.
+
+The 189 with an engine type id are not reachable from source: the ids differ by one to seven,
+which is a type registered somewhere else in the tree shifting the numbering, not a different
+type being named. Nothing in the emitted source decides them.
 
 What limits the rest is TYPE evidence. A slot declaration also performs the conversion the direct
 read would not, so moving a producer into its reader needs proof that the read has the same type.
-Three widenings were measured and rejected rather than shipped:
+The widenings that were measured and rejected rather than shipped:
 
 - moving any operand without that proof costs 1,021 compile errors, almost all `int` to `bool`
   and back;
@@ -77,34 +81,30 @@ Three widenings were measured and rejected rather than shipped:
 - the remaining `if`/`else`-over-one-slot is the SHORT CIRCUIT `A && B`, not `A ? false : B`:
   different AngelScript codegen paths, and only `&&` writes its deciding constant straight into
   the result slot (13,255 `SetV4 x,0` stores sitting between a conditional jump and a `JMP`,
-  against 1,303 `SetV1 x,1` for the `||` mirror). Written back as the operator it was, it
-  compiles and reproduces vanilla's guard — shipped. Feeding `&&` a NON-bool operand takes the
-  compiler down without a diagnostic, which cost two whole-tree runs before the type check went
-  in, and the left operand has to be turned around (`x != nullptr`) rather than wrapped in `!`,
-  or the compiler materializes the negation where vanilla inverted the jump;
+  against 1,303 `SetV1 x,1` for the `||` mirror). Written back as the operator it was — including
+  the self-referential links of a CHAIN, and arms that step through a temporary of their own — it
+  compiles and reproduces vanilla's guard. Feeding `&&` a NON-bool operand takes the compiler
+  down without a diagnostic, which cost two whole-tree runs before the type check went in; the
+  left operand has to be turned around (`x != nullptr`) rather than wrapped in `!`, or the
+  compiler materializes the negation where vanilla inverted the jump; and mixing `&&` with `||`
+  without parentheses is a warning, which this compiler treats as an error;
 - writing the remaining `if`/`else`-over-one-slot as the conditional expression it was is
   reachable — the witness types those merge slots `bool`, so both arms unify and the tree
   compiles — but it does NOT reproduce vanilla: the compiler still materializes the constant arm
   in a temporary and copies it (`SetV1 t,0; CpyVtoV4 slot,t`), where vanilla writes `SetV4
   slot,0` straight into the pre-allocated slot. All three source forms have now been measured
   against the real compiler — `if`/`else` over a named local, `?:`, and `?:` with the arms cast —
-  and none of them emits vanilla's shape. This class is not reachable from source.
-
-The first of these now has its witness and is in place: the slot that catches a call's result
-holds what that callee returns, and the witness follows a slot-to-slot copy so the slot the
-source actually named is typed too (`call_result_types`). Where that agrees with the slot's
-declared type the read is plain and its value may stand wherever the slot could. It only counts
-for a SCALAR, and only when the slot catches ONE type — a slot catching two is the compiler
-reusing it.
-
-A fifth is the architectural one, and its first increment was tried and rejected too. The order
-class exists because `block_stmts_in` materializes every store as a statement, so a name is
-created that eight later passes have to take away again. Carrying the value instead — suppressing
-the store when the very next instruction pushes that slot and nothing else reads it — is the
-smallest form of the fix. It costs three classes their `default` statements, because the defaults
-recovery reads the same statement stream and is fail-closed; excluding `__InitDefaults` restores
-those, and the whole-tree compile STILL fails, twice, with no diagnostic the hook can capture.
-The store site would have to know what the later passes know, which is the project this is.
+  and none of them emits vanilla's shape. This class is not reachable from source;
+- folding a temporary into a condition needs the same proof in BOTH directions. Where the slot is
+  an `int` the emitter compares against zero, dropping the comparison is right only once the
+  value is PROVEN a bool — the class's own field map answers that where the local type table
+  cannot. Folding any left-hand relation without that proof costs 44 errors, all of them `No
+  conversion from 'int' to 'bool'`;
+- treating `Cast<T>(x)` as a call the producers may move into was measured and rejected twice.
+  With the cast's null-guarded if/else folded first it costs 1,172 functions (7,926 to 9,098);
+  with the fold left where it was it costs 1,343 (to 9,269). Refusing the receiver position
+  outright recovers 14 of them, so the receiver is not what does the damage — a cast is simply
+  not a call whose operand the source evaluated at the call.
 
 A fourth was tried and rejected: whether a producer stood INSIDE the expression that reads it is
 decidable from the bytecode — AngelScript emits each argument's own code immediately before its
@@ -235,11 +235,11 @@ Same run as "What is measured, and on what" above — full corpus, build `Build5
 | `default` statements written | 281,422 |
 | Vanilla `__InitDefaults` methods | 30,005 |
 | Aligned after recompile | 30,005 (**all of them**) |
-| Byte-faithful (`IDENTICAL`+`BENIGN`, `--norm-slots`) | 29,968 (**99.88%**) |
+| Byte-faithful (`IDENTICAL`+`BENIGN`, `--norm-slots`) | 29,999 (**99.98%**) |
 
 The whole emitted tree recompiles with no errors, and `gore as bytediff --norm-slots` reports no
-alignment loss at all and B1 **94.86%** over all 164,607 aligned functions — up from 88.78% before
-this work, with 8,459 semantic differences left against 18,288.
+alignment loss at all and B1 **95.18%** over all 164,607 aligned functions — up from 88.78% before
+this work, with 7,926 semantic differences left against 18,288.
 
 Editing an existing module's defaults and splicing it back works. Getting there needed six
 identity fixes, because a decompiled module is only re-splicable when every symbol it references
