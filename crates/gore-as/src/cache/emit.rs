@@ -7876,24 +7876,34 @@ fn rewrite_bare_decl_at_first_write(
             }
             depth += brace_net(line);
         }
-        let Some((at, depth)) = first.filter(|(_, depth)| *depth == 0) else {
+        let Some((at, depth)) = first else {
             continue;
         };
         let trimmed = lines[at].trim_start();
-        // The FIRST reference has to be the write itself, at the function's own level, and it
-        // has to reach the slot through a member or an element — a plain `local_N = …` belongs
-        // to the declaration-with-initializer pass above.
-        let writes_through = trimmed
-            .strip_prefix(&ident)
-            .and_then(|rest| rest.split_once(" = "))
-            .is_some_and(|(path, _)| {
-                !path.is_empty()
-                    && path.starts_with(['.', '['])
-                    && !path.contains('(')
-                    && !path.contains(' ')
-            });
-        let _ = depth;
-        if !writes_through || count_ident(&lines[at], &ident) != 1 || !trimmed.ends_with(';') {
+        // Either the first reference WRITES the slot through a member or an element — a plain
+        // `local_N = …` belongs to the declaration-with-initializer pass above — at the
+        // function's own level…
+        let writes_through = depth == 0
+            && trimmed
+                .strip_prefix(&ident)
+                .and_then(|rest| rest.split_once(" = "))
+                .is_some_and(|(path, _)| {
+                    !path.is_empty()
+                        && path.starts_with(['.', '['])
+                        && !path.contains('(')
+                        && !path.contains(' ')
+                });
+        // …or the whole body mentions the slot exactly once, and the declaration belongs on that
+        // line whatever depth it sits at: nothing outside can be looking at it. That is the
+        // default-constructed value a call takes by reference, which vanilla declares inside the
+        // branch that uses it rather than at the top of the function.
+        // Only a type that default-constructs itself. A PRIMITIVE declared bare and then read is
+        // "may not be initialized", which is a warning, which is an error here (measured: 7).
+        let sole_mention = count_ident(body, &ident) == 1 && !is_primitive(ty);
+        if (!writes_through && !sole_mention)
+            || count_ident(&lines[at], &ident) != 1
+            || !trimmed.ends_with(';')
+        {
             continue;
         }
         let indent = indent_of(&lines[at]);

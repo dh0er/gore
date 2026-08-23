@@ -3926,6 +3926,15 @@ fn block_stmts_in(
                     continue;
                 }
                 if f == "$beh0" {
+                    if std::env::var_os("GORE_AS_DEFAULTS_DEBUG").is_some() {
+                        eprintln!(
+                            "[beh0] params={:?} psf={:?} top={:?} owner={:?}",
+                            ctx.refs.func_params_by_ptr(ptr).map(|p| p.len()),
+                            stack.last().map(|t| t.is_psf),
+                            stack.last().map(|t| t.s.clone()),
+                            ctx.refs.func_owner_by_ptr(ptr)
+                        );
+                    }
                     // batch-46a (FIX-5, GameplayTag default-init triad): a 0-param `$beh0` CONSTRUCT
                     // on a PSF'd temp slot of a VALUE type (owner F*/T*/E*) default-initialises that
                     // temp (`PSF t; CALLSYS $beh0(0-param)`). The temp carries no `.ty` (a bare PSF
