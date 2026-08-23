@@ -6734,11 +6734,14 @@ fn fold_return_slot_arms(body: &str) -> String {
     // Exactly the two arms of the if/else the shared return closes, and nothing else. A store
     // nested deeper leaves a path that reaches the shared return without a value — one such
     // function ("Not all paths return a value") is what a looser rule costs.
+    // Each store is the last statement of its arm, the two arms are the two halves of ONE
+    // if/else, and that if/else is the last thing in the function. The arms may hold anything
+    // else before their store; requiring them to hold nothing else missed most of the shape.
     let two_arms = matches!(stores.as_slice(), [then, other]
         if lines.get(then + 1).is_some_and(|line| line.trim() == "}")
             && lines.get(then + 2).is_some_and(|line| line.trim() == "else")
             && lines.get(then + 3).is_some_and(|line| line.trim() == "{")
-            && *other == then + 4
+            && *other > then + 3
             && lines.get(other + 1).is_some_and(|line| line.trim() == "}")
             && other + 2 == last);
     if !two_arms || body.matches("__return").count() != stores.len() + usize::from(names_the_slot)
