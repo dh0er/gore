@@ -6849,6 +6849,7 @@ fn drop_unreachable_statements(body: &str) -> String {
     let mut kept: Vec<&str> = Vec::new();
     let mut at = 0usize;
     strip_unreachable(&lines, &mut at, &mut kept);
+    drop_return_after_exhaustive_switch(&mut kept);
     let mut joined = kept.join("\n");
     if body.ends_with('\n') {
         joined.push('\n');
@@ -6859,6 +6860,45 @@ fn drop_unreachable_statements(body: &str) -> String {
 /// Copy statements until this block's closing brace (left for the caller) or the end of the
 /// body. Returns true when the run always leaves the block — a `return`/`break`/`continue`, or
 /// an `if`/`else` whose arms BOTH leave.
+/// A bare `return;` after a `switch` that has a `default:` and no `break` anywhere in it: every
+/// arm leaves through a `return`, so the switch never falls out the bottom and the statement
+/// behind it is unreachable — which this compiler reports as a warning, and treats as an error.
+///
+/// The `break`-free requirement is what makes "every arm returns" safe to conclude without a
+/// control-flow graph: an arm that neither breaks nor returns would fall through to the next arm,
+/// and the last arm is the `default`.
+fn drop_return_after_exhaustive_switch(kept: &mut Vec<&str>) {
+    let Some(last) = kept.len().checked_sub(1) else {
+        return;
+    };
+    if kept[last].trim() != "return;" || last == 0 || kept[last - 1].trim() != "}" {
+        return;
+    }
+    let mut depth = 0i32;
+    for at in (0..last).rev() {
+        depth += kept[at].matches('}').count() as i32;
+        depth -= kept[at].matches('{').count() as i32;
+        if depth != 0 {
+            continue;
+        }
+        // `at` opens the block the `}` above closed; the `switch (` heads it.
+        if !at
+            .checked_sub(1)
+            .is_some_and(|line| kept[line].trim().starts_with("switch ("))
+        {
+            return;
+        }
+        let arms = &kept[at..last];
+        if arms.iter().any(|line| line.trim().starts_with("break"))
+            || !arms.iter().any(|line| line.trim() == "default:")
+        {
+            return;
+        }
+        kept.truncate(last);
+        return;
+    }
+}
+
 fn strip_unreachable<'a>(lines: &[&'a str], at: &mut usize, kept: &mut Vec<&'a str>) -> bool {
     let mut leaves = false;
     while *at < lines.len() {

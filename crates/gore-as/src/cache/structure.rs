@@ -6084,7 +6084,22 @@ impl Structurer<'_> {
                                 t == ls.break_off || t == ls.continue_off || self.is_bare_ret_off(t)
                             })
                     });
-                    if ei >= then_end && ei > 0 && self.jump_op(ei - 1) == "JMP" && !then_exits_loop
+                    // Outside a loop the same fact holds on its own: a then-arm whose
+                    // terminator jumps to the function's bare `RET` RETURNS, so there is no join
+                    // and there is no `else` — the rest of the function is sequential. Writing
+                    // one costs a `JMP` to a join vanilla never had (measured: 301 functions
+                    // carry exactly that extra jump).
+                    let then_returns = ei > 0
+                        && self.jump_op(ei - 1) == "JMP"
+                        && self.g.blocks[ei - 1]
+                            .succs
+                            .first()
+                            .is_some_and(|&t| self.is_bare_ret_off(t));
+                    if ei >= then_end
+                        && ei > 0
+                        && self.jump_op(ei - 1) == "JMP"
+                        && !then_exits_loop
+                        && !then_returns
                     {
                         let after_idx = self.g.blocks[ei - 1]
                             .succs
