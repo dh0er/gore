@@ -1341,6 +1341,20 @@ fn emit_function_ctor(
     // short circuit the single assignment it was in source.
     let body = fold_short_circuits(&body, &proven_locals, refs, fields);
     let body = join_short_circuit_chains(&body);
+    // Again, now that a short circuit IS an expression. The sweep above ran before the folds,
+    // so a value the source wrote inside a call's argument as `A && B` was still an `if`/`else`
+    // over a named local when the producers moved, and nothing looked at it afterwards. Writing
+    // the operand into a name is not free: the compiler then materializes the left side of the
+    // `&&` into a variable before branching, where vanilla branched on the comparison itself.
+    let body = inline_call_argument_temporaries(
+        &body,
+        refs,
+        &declared_locals,
+        fields,
+        !f.name.contains("__InitDefaults"),
+        &call_result_types,
+        &statement_producers,
+    );
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
     let body = drop_unreachable_statements(&body);
@@ -5591,6 +5605,16 @@ fn inline_temporary_into(
         inline_reject("between", callee, &temp, &lines[index]);
         return false;
     }
+    // Mixing `&&` and `||` without parentheses is a warning here, and warnings are errors
+    // (measured: 12 of them). A value that carries one logical operator into a line that already
+    // holds the other gets its own parentheses — the precedence that was already meant.
+    let mixes_logical_operators = |a: &str, b: &str| {
+        (a.contains(" && ") && b.contains(" || ")) || (a.contains(" || ") && b.contains(" && "))
+    };
+    let value = match mixes_logical_operators(&value, &lines[index]) {
+        true => format!("({value})"),
+        false => value,
+    };
     lines[index] = rename_ident(&lines[index], temp, &value);
     lines[definition].clear();
     true
