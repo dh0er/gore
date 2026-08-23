@@ -1365,6 +1365,7 @@ fn emit_function_ctor(
     let returns_by_reference = f.ret.is_reference && f.ret.token == 5 && !f.ret.is_object_handle;
     let body = fold_condition_temporaries(&body, &declared_locals, refs, fields);
     let body = fold_alias_copies(&body, &declared_locals);
+    let body = fold_copy_out_temporaries(&body, &declared_locals, &const_result_slots);
     let body =
         fold_returned_temporaries(&body, &declared_locals, refs, &ret, returns_by_reference);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
@@ -6270,6 +6271,63 @@ fn fold_alias_copies(body: &str, locals: &BTreeMap<i32, String>) -> String {
     joined
 }
 
+
+/// `local_A = <expr>; local_B = local_A;` is `local_B = <expr>;`. A cast, and any call the
+/// compiler lands in a slot of its own, writes that slot and then copies it into the one the
+/// source named. Naming BOTH makes the recompile allocate two variables where the original had
+/// one and the compiler's temporary — and pay a `PshVPtr`/`RefCpyV` to get between them.
+///
+/// Only where the carrier is read exactly once, by that copy, and where the two slots agree on
+/// type AND on constness: the carrier's declaration is what performs a conversion, and handing
+/// the value straight to the target would skip it.
+fn fold_copy_out_temporaries(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+    const_slots: &HashSet<i32>,
+) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<String> = Vec::new();
+    let mut at = 0usize;
+    while at < lines.len() {
+        let folded = (|| {
+            let (carrier, value) = slot_store(lines[at])?;
+            let (target, copied) = slot_store(lines.get(at + 1)?)?;
+            if copied != carrier || target == carrier || !is_local_ident(&target) {
+                return None;
+            }
+            let (a, b) = (slot_of(&carrier)?, slot_of(&target)?);
+            if locals.get(&a).is_none()
+                || locals.get(&a) != locals.get(&b)
+                || const_slots.contains(&a) != const_slots.contains(&b)
+                || indent_of(lines[at]) != indent_of(lines[at + 1])
+                || !read_once_at(&lines, at, at + 1, &carrier)
+            {
+                return None;
+            }
+            Some(format!("{}{target} = {value};", indent_of(lines[at])))
+        })();
+        match folded {
+            Some(replacement) => {
+                kept.push(replacement);
+                at += 2;
+            }
+            None => {
+                kept.push(lines[at].to_string());
+                at += 1;
+            }
+        }
+    }
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// The slot number a `local_N` identifier names.
+fn slot_of(ident: &str) -> Option<i32> {
+    ident.strip_prefix("local_")?.parse().ok()
+}
 
 /// `local_N = <expr>; return local_N;` is `return <expr>;`. The name is the whole cost: a
 /// declaration, a store, a copy back out, and for a value type a destructor that sinks to the end
