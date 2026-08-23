@@ -816,6 +816,78 @@ fn scan_back_retval(ctx: &Ctx, before: usize) -> Option<String> {
 /// [`scan_back_retval`] bounded below by `floor` (instruction index): used by the switch
 /// recovery's synthesized `return`s so a case's value never leaks in from a PRECEDING case
 /// region (the linear scan would otherwise cross the region boundary).
+/// Which loop shape produced a condition, and what its test block carried, behind
+/// `GORE_AS_LOOP_DIAG`.
+fn loop_diag(path: &str, stmts: &[String], cond: &str) {
+    if std::env::var_os("GORE_AS_LOOP_DIAG").is_some() {
+        eprintln!("[loop] {path} cond={cond} stmts={stmts:?}");
+    }
+}
+
+/// `local_N = <value>;` as a loop header's only statement, tested by `local_N != 0` or
+/// `local_N == 0`: the loop's condition is that value, or its negation.
+fn fold_loop_header_store(stmts: &[String], cond: &str) -> Option<String> {
+    if stmts.is_empty() {
+        return None;
+    }
+    let is_local = |name: &str| {
+        name.strip_prefix("local_")
+            .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+    };
+    // The header builds one value in one slot, in steps: read it, then negate it. Compose the
+    // steps back into the expression they spell.
+    let mut slot: Option<&str> = None;
+    let mut value = String::new();
+    for stmt in stmts {
+        let (target, rhs) = stmt.trim().strip_suffix(';')?.split_once(" = ")?;
+        if !is_local(target) || rhs.is_empty() || *slot.get_or_insert(target) != target {
+            return None;
+        }
+        value = match count_word(rhs, target) {
+            0 if value.is_empty() => rhs.to_owned(),
+            // A step that reads the slot back continues the expression built so far.
+            1 if !value.is_empty() => rhs.replace(target, &format!("({value})")),
+            _ => return None,
+        };
+    }
+    // A slot the tables call `bool` is tested bare; an int-declared one through `!= 0`. The
+    // branch's own inversion can arrive as a double negation — `!(!(local_1))` is `local_1`.
+    let slot = slot?;
+    let mut cond = cond;
+    while let Some(inner) = cond
+        .strip_prefix("!(!(")
+        .and_then(|rest| rest.strip_suffix("))"))
+    {
+        cond = inner;
+    }
+    // A BARE test says the slot is a bool, so the value it was built from is one too. A test
+    // against zero says the opposite — the slot is an int, and the comparison carries the type.
+    // Dropping it there writes `while (1)`, which the compiler refuses ("Expression must be of
+    // boolean type"); an integer LITERAL is the one value that can lose it, as `true`/`false`.
+    let literal = value.parse::<i64>().ok();
+    match cond {
+        _ if cond == slot => Some(value),
+        _ if cond == format!("!{slot}") || cond == format!("!({slot})") => {
+            Some(format!("!({value})"))
+        }
+        _ => match (cond.strip_prefix(slot)?, literal) {
+            (" != 0", Some(n)) => Some(bool_literal(n != 0)),
+            (" == 0", Some(n)) => Some(bool_literal(n == 0)),
+            (" != 0", None) => Some(format!("({value}) != 0")),
+            (" == 0", None) => Some(format!("({value}) == 0")),
+            _ => None,
+        },
+    }
+}
+
+/// AngelScript's spelling of a boolean constant.
+fn bool_literal(value: bool) -> String {
+    match value {
+        true => "true".to_owned(),
+        false => "false".to_owned(),
+    }
+}
+
 fn scan_back_retval_floor(ctx: &Ctx, before: usize, floor: usize) -> Option<String> {
     for i in (floor..before).rev() {
         let ins = &ctx.instrs[i];
@@ -6072,13 +6144,17 @@ impl Structurer<'_> {
                 let _ = writeln!(out, "{ind}}}");
                 next = test_idx + 1;
             } else if let Some(latch) = self.loop_latch(i, stop) {
-                let lcmp = block_stmts(
+                let (lstmts, lcmp) = block_stmts(
                     self.ctx,
                     self.g.blocks[latch].instr_lo,
                     self.g.blocks[latch].instr_hi,
-                )
-                .1;
+                );
                 let cond = branch_cond(&lcmp, self.jump_op(latch));
+                // The latch's own statements are part of the test, re-run on every iteration —
+                // see `fold_loop_header_store`. Dropped, they leave `while (local_1)` over a slot
+                // nothing fills.
+                loop_diag("latch", lstmts.as_slice(), &cond);
+                let cond = fold_loop_header_store(lstmts.as_slice(), &cond).unwrap_or(cond);
                 let _ = writeln!(out, "{ind}while ({cond})");
                 let _ = writeln!(out, "{ind}{{");
                 // batch-36 (Stage A): the loop body is blocks [i, latch) — block `i` (the loop
@@ -8365,8 +8441,16 @@ impl Structurer<'_> {
         if self.g.blocks[prev].succs.first().copied() != Some(b.start_dw) {
             return None;
         }
-        let cmp = block_stmts(self.ctx, b.instr_lo, b.instr_hi).1;
+        let (stmts, cmp) = block_stmts(self.ctx, b.instr_lo, b.instr_hi);
         let cond = negate(&branch_cond(&cmp, self.jump_op(i)));
+        // Whatever the header computes IS part of the condition — it is re-evaluated on every
+        // iteration, so it can be neither hoisted in front of the loop nor dropped. Dropped is
+        // what used to happen, and it leaves the test reading a slot nothing ever fills: a
+        // `while (!this.bDone)` came out as `bool local_1 = false; while (local_1)`, a loop that
+        // never runs. Fold the header's single store into the test where its shape allows it;
+        // anything else keeps the old rendering rather than risking a worse one.
+        loop_diag("top-test", stmts.as_slice(), &cond);
+        let cond = fold_loop_header_store(stmts.as_slice(), &cond).unwrap_or(cond);
         Some((taken_idx, cond))
     }
 
