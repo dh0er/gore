@@ -1339,7 +1339,7 @@ fn emit_function_ctor(
     );
     // Runs after the producers have moved into their readers: only then is the value arm of a
     // short circuit the single assignment it was in source.
-    let body = fold_short_circuits(&body, &proven_locals, refs);
+    let body = fold_short_circuits(&body, &proven_locals, refs, fields);
     let body = join_short_circuit_chains(&body);
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
@@ -5554,7 +5554,7 @@ fn inline_temporary_into(
                 // A `return` is refused because a returned REFERENCE may not be a temporary.
                 // A bool is not one, and the cache can say so.
                 || (lines[index].trim().starts_with("return ")
-                    && renders_a_bool(&value, locals, refs)))
+                    && renders_a_bool(&value, locals, refs, fields)))
                 && (same_typed_own_field(&value, temp, locals, fields) || is_call_result(&value))
         }
         // An argument or a receiver takes the value as it is, so a member read may travel there
@@ -6066,7 +6066,7 @@ fn fold_condition_temporaries(
     // A field of the class carries its type in the class's own map, which `renders_a_bool` does
     // not read.
     let is_a_bool = |value: &str| {
-        renders_a_bool(value, locals, refs)
+        renders_a_bool(value, locals, refs, fields)
             || value
                 .strip_prefix("this.")
                 .and_then(|field| fields?.get(field))
@@ -6098,7 +6098,7 @@ fn fold_condition_temporaries(
                 })
                 .filter(|_| {
                     temporary_type(locals, &name) == Some("bool")
-                        && renders_a_bool(&value, locals, refs)
+                        && renders_a_bool(&value, locals, refs, fields)
                 });
             // Or the slot is an INT the emitter compares against zero to read as a bool. Where
             // the value is a bool, that comparison is the int slot's doing and nothing else's:
@@ -6333,12 +6333,13 @@ fn fold_short_circuits(
     body: &str,
     locals: &BTreeMap<i32, String>,
     refs: &RefResolver,
+    fields: Option<&HashMap<String, String>>,
 ) -> String {
     let lines: Vec<&str> = body.lines().collect();
     let mut kept: Vec<String> = Vec::new();
     let mut at = 0usize;
     while at < lines.len() {
-        if let Some((folded, after)) = short_circuit(&lines, at, locals, refs) {
+        if let Some((folded, after)) = short_circuit(&lines, at, locals, refs, fields) {
             kept.push(folded);
             at = after;
             continue;
@@ -6360,6 +6361,7 @@ fn short_circuit(
     at: usize,
     locals: &BTreeMap<i32, String>,
     refs: &RefResolver,
+    fields: Option<&HashMap<String, String>>,
 ) -> Option<(String, usize)> {
     let condition = lines.get(at)?.trim().strip_prefix("if (")?.strip_suffix(')')?;
     if lines.get(at + 1)?.trim() != "{" {
@@ -6372,6 +6374,7 @@ fn short_circuit(
     let else_end = block_end(lines, then_end + 2)?;
     // The deciding arm is one store of the constant that settles the whole expression.
     if then_end != at + 3 {
+        sc_reject("then-arm", lines[at]);
         return None;
     }
     let (target, deciding) = slot_store(lines.get(at + 2)?)?;
@@ -6384,16 +6387,33 @@ fn short_circuit(
         2 => {
             let (carrier, carried) = slot_store(lines.get(then_end + 3)?)?;
             let arm = lines[then_end + 3..else_end].join("\n");
-            (carrier == value && count_ident(&arm, &carrier) == 2).then_some(carried)?
+            match carrier == value && count_ident(&arm, &carrier) == 2 {
+                true => carried,
+                false => {
+                    sc_reject("carrier", lines[at]);
+                    return None;
+                }
+            }
         }
-        _ => return None,
+        _ => {
+            sc_reject("else-arm", lines[at]);
+            return None;
+        }
     };
     if target != else_target {
+        sc_reject("target", lines[at]);
         return None;
     }
     // BOTH operands have to be bool: the slot the expression writes, and the value the other arm
     // gives it. The condition is one already — it is what the branch tested.
-    if temporary_type(locals, &target) != Some("bool") || !renders_a_bool(&value, locals, refs) {
+    if temporary_type(locals, &target) != Some("bool") || !renders_a_bool(&value, locals, refs, fields) {
+        sc_reject(
+            match temporary_type(locals, &target) {
+                Some("bool") => "value-not-bool",
+                _ => "target-not-bool",
+            },
+            lines[at],
+        );
         return None;
     }
     if [condition, value.as_str()]
@@ -6431,6 +6451,13 @@ fn parenthesize_mixed(part: &str, operator: &str) -> String {
     match part.contains(other) {
         true => format!("({part})"),
         false => part.to_owned(),
+    }
+}
+
+/// Why a short circuit was not folded, behind `GORE_AS_SC_DIAG`.
+fn sc_reject(reason: &str, line: &str) {
+    if std::env::var_os("GORE_AS_SC_DIAG").is_some() {
+        eprintln!("[sc-reject] {reason} | {}", line.trim());
     }
 }
 
@@ -6531,20 +6558,32 @@ fn turned_around(condition: &str) -> String {
 /// Whether a rendered value is a bool: a slot the type table calls one, a bool literal, or a call
 /// every declaration of that name returns bool from. An operand that is not one may not carry a
 /// `&&` — and the compiler does not merely refuse it, it goes down.
-fn renders_a_bool(value: &str, locals: &BTreeMap<i32, String>, refs: &RefResolver) -> bool {
+fn renders_a_bool(
+    value: &str,
+    locals: &BTreeMap<i32, String>,
+    refs: &RefResolver,
+    fields: Option<&HashMap<String, String>>,
+) -> bool {
     if matches!(value, "true" | "false") || temporary_type(locals, value) == Some("bool") {
         return true;
+    }
+    // A field of the class carries its type in the class's own map — the slot table knows
+    // nothing about `this.bFlag`.
+    if let Some(field) = value.strip_prefix("this.") {
+        if fields.and_then(|map| map.get(field)).is_some_and(|ty| ty == "bool") {
+            return true;
+        }
     }
     // A negation and a comparison are bools whatever they wrap, and a fully parenthesized value
     // is whatever it holds.
     if let Some(negated) = value.strip_prefix('!') {
-        return renders_a_bool(negated, locals, refs);
+        return renders_a_bool(negated, locals, refs, fields);
     }
     if value.starts_with('(')
         && matching_paren(value, 0) == Some(value.len() - 1)
         && value.len() > 2
     {
-        return renders_a_bool(&value[1..value.len() - 1], locals, refs);
+        return renders_a_bool(&value[1..value.len() - 1], locals, refs, fields);
     }
     if [" == ", " != ", " < ", " > ", " <= ", " >= ", " && ", " || "]
         .iter()
