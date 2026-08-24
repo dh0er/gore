@@ -1407,6 +1407,7 @@ fn emit_function_ctor(
         )
         .collect();
     let body = fold_enum_round_trips(&body, fields, &path_roots, refs);
+    let body = fold_member_read_temporaries(&body, &declared_locals, fields, &path_roots, refs);
     let body =
         fold_returned_temporaries(&body, &declared_locals, refs, &ret, returns_by_reference);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
@@ -6793,6 +6794,98 @@ fn enum_of_member_path(
             .to_owned();
     }
     ty.starts_with('E').then_some(ty)
+}
+
+/// The declared type a member PATH names, by the same walk without the enum requirement.
+fn type_of_member_path(
+    path: &str,
+    fields: Option<&HashMap<String, String>>,
+    roots: &HashMap<String, String>,
+    refs: &RefResolver,
+) -> Option<String> {
+    let mut steps = path.split('.');
+    let root = steps.next()?;
+    let mut ty = match root {
+        "this" => fields?.get(steps.next()?)?.clone(),
+        named => roots.get(named)?.clone(),
+    };
+    for step in steps {
+        ty = refs
+            .field_type_by_class(&ty, step)
+            .or_else(|| refs.native_field_type(&ty, step))?
+            .to_owned();
+    }
+    Some(ty)
+}
+
+/// `T local_N = this.Member;` read once is that member read where it is read. Vanilla reads a
+/// member straight into the instruction that uses it; a name in between costs the slot and a copy
+/// out of it.
+///
+/// The path has to be pure — no call and no index, so reading it twice cannot differ — nothing
+/// may assign it between the read and its use, and the slot's declared type has to be the
+/// member's own, or the declaration was performing a conversion.
+fn fold_member_read_temporaries(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+    fields: Option<&HashMap<String, String>>,
+    roots: &HashMap<String, String>,
+    refs: &RefResolver,
+) -> String {
+    let pure_path = |path: &str| {
+        path.contains('.')
+            && path
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b':'))
+    };
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<String> = Vec::new();
+    let mut at = 0usize;
+    while at < lines.len() {
+        let folded = (|| {
+            let (name, path) = slot_store(lines[at])?;
+            let slot = slot_of(&name)?;
+            if !pure_path(&path) {
+                return None;
+            }
+            if locals.get(&slot) != type_of_member_path(&path, fields, roots, refs).as_ref() {
+                return None;
+            }
+            let mut reader = None;
+            for (offset, line) in lines[at + 1..].iter().enumerate() {
+                if slot_store(line).is_some_and(|(target, _)| target == path) {
+                    break; // the member moved on
+                }
+                if count_ident(line, &name) > 0 {
+                    reader = (count_ident(line, &name) == 1).then_some(at + 1 + offset);
+                    break;
+                }
+            }
+            let reader = reader?;
+            if !read_once_at(&lines, at, reader, &name) {
+                return None;
+            }
+            let mut out: Vec<String> =
+                lines[at + 1..reader].iter().map(|l| (*l).to_owned()).collect();
+            out.push(rename_ident(lines[reader], &name, &path));
+            Some((out, reader + 1))
+        })();
+        match folded {
+            Some((replacement, after)) => {
+                kept.extend(replacement);
+                at = after;
+            }
+            None => {
+                kept.push(lines[at].to_owned());
+                at += 1;
+            }
+        }
+    }
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
 }
 
 /// `EFoo(int(<path>))` written inline, with no slot to travel through, is `<path>`.
