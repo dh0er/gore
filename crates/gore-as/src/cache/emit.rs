@@ -8134,27 +8134,19 @@ fn rewrite_bare_decl_at_first_write(
             continue;
         };
         let trimmed = lines[at].trim_start();
-        // Either the first reference WRITES the slot through a member or an element — a plain
-        // `local_N = …` belongs to the declaration-with-initializer pass above — at the
-        // function's own level…
-        let writes_through = depth == 0
-            && trimmed
-                .strip_prefix(&ident)
-                .and_then(|rest| rest.split_once(" = "))
-                .is_some_and(|(path, _)| {
-                    !path.is_empty()
-                        && path.starts_with(['.', '['])
-                        && !path.contains('(')
-                        && !path.contains(' ')
-                });
-        // …or the whole body mentions the slot exactly once, and the declaration belongs on that
-        // line whatever depth it sits at: nothing outside can be looking at it. That is the
-        // default-constructed value a call takes by reference, which vanilla declares inside the
-        // branch that uses it rather than at the top of the function.
-        // Only a type that default-constructs itself. A PRIMITIVE declared bare and then read is
+        // Either the first reference stands at the function's own level, whatever it does with
+        // the slot: writing it through a member, handing it to a call that fills it, or reading
+        // it. The declaration belongs there because that is where the source put it — vanilla
+        // constructs the value behind the guard that decides whether it is needed, not at the
+        // top of the function. (A plain `local_N = …` first reference belongs to the
+        // declaration-with-initializer pass above, and those slots are already spoken for.)
+        // Only a type that default-constructs itself: a PRIMITIVE declared bare and then read is
         // "may not be initialized", which is a warning, which is an error here (measured: 7).
+        let first_use_at_top = depth == 0 && !is_primitive(ty);
+        // …or the whole body mentions the slot exactly once, and the declaration belongs on that
+        // line whatever depth it sits at: nothing outside can be looking at it.
         let sole_mention = count_ident(body, &ident) == 1 && !is_primitive(ty);
-        if (!writes_through && !sole_mention)
+        if (!first_use_at_top && !sole_mention)
             || count_ident(&lines[at], &ident) != 1
             || !trimmed.ends_with(';')
         {
