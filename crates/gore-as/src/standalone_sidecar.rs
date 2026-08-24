@@ -3511,12 +3511,14 @@ mod tests {
             relative_path: "Module.as",
         }];
 
-    // These FullGraph fixtures start a Python process and perform several filesystem operations.
-    // Windows CI can spend more than five seconds starting that process under concurrent load;
-    // the production timeout is unrelated and remains unchanged.
-    const FULL_GRAPH_FAKE_SIDECAR_TEST_TIMEOUT: Duration = Duration::from_secs(30);
+    // The fake sidecars use Python as a process harness. Starting many of them concurrently can
+    // starve suspended-process startup on Windows CI and makes the timeout test measure unrelated
+    // queueing. Production sidecars remain concurrent; only these filesystem/process fixtures are
+    // serialized.
+    static TEST_FIXTURE_PROCESS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     struct TestFixture {
+        _process_guard: std::sync::MutexGuard<'static, ()>,
         root: PathBuf,
         profile_root: PathBuf,
         manifest: PathBuf,
@@ -3532,6 +3534,9 @@ mod tests {
         }
 
         fn create_for_request_version(label: &str, request_version: u32) -> Self {
+            let process_guard = TEST_FIXTURE_PROCESS_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let root = std::env::temp_dir().join(format!(
                 "gore-as-sidecar-test-{label}-{}-{}",
                 std::process::id(),
@@ -3988,6 +3993,7 @@ mod tests {
             let manifest = profile_root.join("profile.json");
             std::fs::write(&manifest, serde_json::to_vec(&profile).unwrap()).unwrap();
             Self {
+                _process_guard: process_guard,
                 root,
                 profile_root,
                 manifest,
@@ -4042,6 +4048,11 @@ mod tests {
     }
 
     fn find_python() -> Option<PathBuf> {
+        static PYTHON: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+        PYTHON.get_or_init(find_python_uncached).clone()
+    }
+
+    fn find_python_uncached() -> Option<PathBuf> {
         let names: &[&str] = if cfg!(windows) {
             &["python.exe", "python3.exe"]
         } else {
@@ -4418,7 +4429,7 @@ output = pathlib.Path(request["output"]["cache_path"])
 output.write_bytes(data)
 print(json.dumps({"response_version":1,"ok":True,"output":{"cache_path":str(output),"byte_len":len(data),"sha256":hashlib.sha256(data).hexdigest(),"profile_sha256":request["profile"]["profile_sha256"]},"diagnostics":[]}))
 "#,
-            FULL_GRAPH_FAKE_SIDECAR_TEST_TIMEOUT,
+            Duration::from_secs(5),
         ) else {
             eprintln!("python unavailable; fake-sidecar FullGraph test skipped");
             return;
@@ -4489,7 +4500,7 @@ output = pathlib.Path(request["output"]["cache_path"])
 output.write_bytes(data)
 print(json.dumps({"response_version":1,"ok":True,"output":{"cache_path":str(output),"byte_len":len(data),"sha256":hashlib.sha256(data).hexdigest(),"profile_sha256":request["profile"]["profile_sha256"]},"diagnostics":[]}))
 "#,
-            FULL_GRAPH_FAKE_SIDECAR_TEST_TIMEOUT,
+            Duration::from_secs(5),
         ) else {
             eprintln!("python unavailable; fake-sidecar delete-only test skipped");
             return;
