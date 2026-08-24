@@ -4048,8 +4048,13 @@ mod tests {
     }
 
     fn find_python() -> Option<PathBuf> {
-        static PYTHON: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
-        PYTHON.get_or_init(find_python_uncached).clone()
+        static PYTHON: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+        if let Some(python) = PYTHON.get() {
+            return Some(python.clone());
+        }
+        let discovered = find_python_uncached()?;
+        let _ = PYTHON.set(discovered.clone());
+        Some(PYTHON.get().cloned().unwrap_or(discovered))
     }
 
     fn find_python_uncached() -> Option<PathBuf> {
