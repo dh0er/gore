@@ -123,7 +123,7 @@ promotion check.
 `OfflineQualificationCaptureBackendV1`. It owns `full_qualification_corpus_v1()` and rejects any
 caller case which is not byte-for-byte the corresponding sealed row. Construction strictly reloads
 the fixed-name unqualified materializer package, binds its corpus payload seal to the executable
-25-case corpus, verifies Shipping/Binds against the profile, and verifies the opened sidecar against
+26-case corpus, verifies Shipping/Binds against the profile, and verifies the opened sidecar against
 an externally authorized final executable identity. The external identity is the one unavoidable
 pre-promotion input: an unqualified package cannot authenticate the binary which is about to qualify
 it. It must come from the signed sidecar release/catalog authority, never the package directory.

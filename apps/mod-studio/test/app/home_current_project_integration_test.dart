@@ -5666,7 +5666,7 @@ void main() {
   );
 
   testWidgets(
-    'Test and Release runs the project compiler through the coordinator only',
+    'Test and Release runs the explicit game compiler through the coordinator only',
     (tester) async {
       await _setDesktopTestSurface(tester);
       final gameRoot = Directory.systemTemp.createTempSync(
@@ -5730,6 +5730,12 @@ void main() {
       );
       await tester.ensureVisible(scriptsAction);
       await tester.tap(scriptsAction);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('revision3-project-compiler-backend')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Game compiler').last);
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('revision3-project-compiler-run')));
       await tester.pumpAndSettle();
