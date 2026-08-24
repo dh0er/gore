@@ -3511,12 +3511,15 @@ mod tests {
             relative_path: "Module.as",
         }];
 
-    // These FullGraph fixtures start a Python process and perform several filesystem operations.
-    // Windows CI can spend more than five seconds starting that process under concurrent load;
-    // the production timeout is unrelated and remains unchanged.
-    const FULL_GRAPH_FAKE_SIDECAR_TEST_TIMEOUT: Duration = Duration::from_secs(30);
+    // The fake sidecars use Python as a process harness. Starting many of them concurrently can
+    // starve suspended-process startup on Windows CI and makes the timeout test measure unrelated
+    // queueing. Production sidecars remain concurrent; only these filesystem/process fixtures are
+    // serialized.
+    static TEST_FIXTURE_PROCESS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     struct TestFixture {
+        _process_guard: std::sync::MutexGuard<'static, ()>,
+        python: Option<PathBuf>,
         root: PathBuf,
         profile_root: PathBuf,
         manifest: PathBuf,
@@ -3532,6 +3535,13 @@ mod tests {
         }
 
         fn create_for_request_version(label: &str, request_version: u32) -> Self {
+            let process_guard = TEST_FIXTURE_PROCESS_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            // The manifest and every runner created from this fixture must use one exact sidecar
+            // identity. A later fixture may retry transient discovery, but this fixture may not
+            // switch from the dummy identity to a real interpreter halfway through the test.
+            let python = find_python();
             let root = std::env::temp_dir().join(format!(
                 "gore-as-sidecar-test-{label}-{}-{}",
                 std::process::id(),
@@ -3849,8 +3859,9 @@ mod tests {
             };
             expected_results.seal().unwrap();
             let diagnostics_sha256 = expected_results.results[0].diagnostics_sha256().unwrap();
-            let qualified_sidecar = find_python()
-                .map(|path| executable_seal(&path))
+            let qualified_sidecar = python
+                .as_ref()
+                .map(|path| executable_seal(path))
                 .map(|seal| QualifiedSidecarIdentityV1 {
                     byte_len: seal.byte_len,
                     sha256: seal.sha256,
@@ -3988,6 +3999,8 @@ mod tests {
             let manifest = profile_root.join("profile.json");
             std::fs::write(&manifest, serde_json::to_vec(&profile).unwrap()).unwrap();
             Self {
+                _process_guard: process_guard,
+                python,
                 root,
                 profile_root,
                 manifest,
@@ -4004,7 +4017,7 @@ mod tests {
             script: &str,
             timeout: Duration,
         ) -> Option<StandaloneSidecarRunnerV1> {
-            let python = find_python()?;
+            let python = self.python.clone()?;
             let script_path = self.root.join(format!("{label}.py"));
             std::fs::write(&script_path, script).unwrap();
             let mut config = StandaloneSidecarConfigV1::new(
@@ -4041,34 +4054,68 @@ mod tests {
         }
     }
 
+    enum PythonDiscovery {
+        Found(PathBuf),
+        Absent,
+        Retry,
+    }
+
     fn find_python() -> Option<PathBuf> {
+        static PYTHON: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+        if let Some(cached) = PYTHON.get() {
+            return cached.clone();
+        }
+        let discovered = match find_python_uncached() {
+            PythonDiscovery::Found(python) => Some(python),
+            PythonDiscovery::Absent => None,
+            // Do not turn a transient canonicalization or process-start failure into a permanent
+            // skip for every remaining Python-backed test.
+            PythonDiscovery::Retry => return None,
+        };
+        let _ = PYTHON.set(discovered.clone());
+        PYTHON.get().cloned().unwrap_or(discovered)
+    }
+
+    fn find_python_uncached() -> PythonDiscovery {
         let names: &[&str] = if cfg!(windows) {
             &["python.exe", "python3.exe"]
         } else {
             &["python3", "python"]
         };
-        for directory in std::env::split_paths(&std::env::var_os("PATH")?) {
+        let Some(path) = std::env::var_os("PATH") else {
+            return PythonDiscovery::Absent;
+        };
+        let mut retry = false;
+        for directory in std::env::split_paths(&path) {
             for name in names {
                 let candidate = directory.join(name);
                 if !candidate.is_file() {
                     continue;
                 }
                 let Ok(candidate) = std::fs::canonicalize(candidate) else {
+                    retry = true;
                     continue;
                 };
-                if Command::new(&candidate)
+                match Command::new(&candidate)
                     .arg("--version")
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .status()
-                    .is_ok_and(|status| status.success())
                 {
-                    return Some(candidate);
+                    Ok(status) if status.success() => {
+                        return PythonDiscovery::Found(candidate);
+                    }
+                    Ok(_) => {}
+                    Err(_) => retry = true,
                 }
             }
         }
-        None
+        if retry {
+            PythonDiscovery::Retry
+        } else {
+            PythonDiscovery::Absent
+        }
     }
 
     fn executable_seal(path: &Path) -> SidecarExecutableSealV1 {
@@ -4264,7 +4311,7 @@ print(json.dumps({"response_version":1,"ok":True,"output":{"cache_path":str(outp
     #[test]
     fn qualification_v3_request_has_no_caller_witness_and_binds_same_process_evidence() {
         let fixture = TestFixture::create("qualification-v3-wire");
-        let Some(python) = find_python() else {
+        let Some(python) = fixture.python.clone() else {
             eprintln!("python unavailable; qualification-v3 wire test skipped");
             return;
         };
@@ -4418,7 +4465,7 @@ output = pathlib.Path(request["output"]["cache_path"])
 output.write_bytes(data)
 print(json.dumps({"response_version":1,"ok":True,"output":{"cache_path":str(output),"byte_len":len(data),"sha256":hashlib.sha256(data).hexdigest(),"profile_sha256":request["profile"]["profile_sha256"]},"diagnostics":[]}))
 "#,
-            FULL_GRAPH_FAKE_SIDECAR_TEST_TIMEOUT,
+            Duration::from_secs(5),
         ) else {
             eprintln!("python unavailable; fake-sidecar FullGraph test skipped");
             return;
@@ -4489,7 +4536,7 @@ output = pathlib.Path(request["output"]["cache_path"])
 output.write_bytes(data)
 print(json.dumps({"response_version":1,"ok":True,"output":{"cache_path":str(output),"byte_len":len(data),"sha256":hashlib.sha256(data).hexdigest(),"profile_sha256":request["profile"]["profile_sha256"]},"diagnostics":[]}))
 "#,
-            FULL_GRAPH_FAKE_SIDECAR_TEST_TIMEOUT,
+            Duration::from_secs(5),
         ) else {
             eprintln!("python unavailable; fake-sidecar delete-only test skipped");
             return;
@@ -4737,7 +4784,7 @@ time.sleep(30)
     #[test]
     fn sidecar_memory_limit_is_bounded_before_process_start() {
         let fixture = TestFixture::create("memory-limit");
-        let Some(python) = find_python() else {
+        let Some(python) = fixture.python.clone() else {
             eprintln!("python unavailable; sidecar configuration test skipped");
             return;
         };
@@ -4758,7 +4805,7 @@ time.sleep(30)
     #[test]
     fn sidecar_executable_must_match_the_packaged_seal() {
         let fixture = TestFixture::create("executable-seal");
-        let Some(python) = find_python() else {
+        let Some(python) = fixture.python.clone() else {
             eprintln!("python unavailable; sidecar seal test skipped");
             return;
         };
