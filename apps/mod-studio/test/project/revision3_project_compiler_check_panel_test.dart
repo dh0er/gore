@@ -24,6 +24,8 @@ enum _ReceiptKind {
   compiled,
   empty,
   rejected,
+  standaloneRejected,
+  twoRunFallbackRejected,
   fallbackRejected,
   preflight,
   preflightAfterRunner,
@@ -70,6 +72,31 @@ void main() {
     expect(rejected.checkState, Revision3TestReleaseCheckState.needsAttention);
     expect(rejected.receipt?.result.compiler.runCount, 1);
     expect(rejected.failure?.message, 'Unexpected token in project script.');
+    final standaloneRejected = await run(_ReceiptKind.standaloneRejected);
+    expect(
+      standaloneRejected.outcome,
+      Revision3ProjectCompilerOutcome.rejected,
+    );
+    expect(
+      standaloneRejected.checkState,
+      Revision3TestReleaseCheckState.needsAttention,
+    );
+    expect(
+      standaloneRejected.receipt?.result.compiler.installRestore,
+      ScriptCompileInstallRestore.notStarted,
+    );
+    final twoRunFallbackRejected = await run(
+      _ReceiptKind.twoRunFallbackRejected,
+    );
+    expect(
+      twoRunFallbackRejected.outcome,
+      Revision3ProjectCompilerOutcome.rejected,
+    );
+    expect(
+      twoRunFallbackRejected.checkState,
+      Revision3TestReleaseCheckState.needsAttention,
+    );
+    expect(twoRunFallbackRejected.receipt?.result.compiler.runCount, 2);
     final preflight = await run(_ReceiptKind.preflight);
     expect(preflight.outcome, Revision3ProjectCompilerOutcome.preflightBlocked);
     final preflightAfterRunner = await run(_ReceiptKind.preflightAfterRunner);
@@ -136,6 +163,8 @@ void main() {
       compiled,
       empty,
       rejected,
+      standaloneRejected,
+      twoRunFallbackRejected,
       preflight,
       preflightAfterRunner,
       runnerSetupFailure,
@@ -663,9 +692,12 @@ ManagedRevision3ProjectCompilerCheckReceipt _receipt(
       'recovery_required': false,
       'output_disposition': 'not_created',
     },
-    _ReceiptKind.rejected || _ReceiptKind.fallbackRejected => <String, Object?>{
+    _ReceiptKind.rejected ||
+    _ReceiptKind.standaloneRejected ||
+    _ReceiptKind.twoRunFallbackRejected ||
+    _ReceiptKind.fallbackRejected => <String, Object?>{
       'outcome': 'failed',
-      'run_count': 1,
+      'run_count': kind == _ReceiptKind.twoRunFallbackRejected ? 2 : 1,
       'compile_error': <String, Object?>{
         'code': 'COMPILER_REGEN_FAILED',
         'message': 'Unexpected token in project script.',
@@ -685,7 +717,9 @@ ManagedRevision3ProjectCompilerCheckReceipt _receipt(
         ],
         'omitted': kind == _ReceiptKind.fallbackRejected ? 4 : 0,
       },
-      'install_restore': 'restored_exact',
+      'install_restore': kind == _ReceiptKind.standaloneRejected
+          ? 'not_started'
+          : 'restored_exact',
       'recovery_required': false,
       'output_disposition': 'discarded',
     },
@@ -743,6 +777,39 @@ ManagedRevision3ProjectCompilerCheckReceipt _receipt(
       'output_disposition': 'recovery_retained',
     },
   };
+  final backendMode = switch (kind) {
+    _ReceiptKind.standaloneRejected => ScriptCompilerBackendMode.standalone,
+    _ReceiptKind.twoRunFallbackRejected =>
+      ScriptCompilerBackendMode.standaloneThenGame,
+    _ => null,
+  };
+  if (backendMode != null) {
+    compiler['compiler_backend'] = switch (backendMode) {
+      ScriptCompilerBackendMode.standalone => <String, Object?>{
+        'requested_mode': 'standalone',
+        'result_backend': null,
+        'standalone_attempted': true,
+        'game_attempted': false,
+        'qualified_package': _qualifiedPackage(),
+        'fallback_reason': null,
+      },
+      ScriptCompilerBackendMode.standaloneThenGame => <String, Object?>{
+        'requested_mode': 'standalone_then_game',
+        'result_backend': null,
+        'standalone_attempted': true,
+        'game_attempted': true,
+        'qualified_package': _qualifiedPackage(),
+        'fallback_reason': <String, Object?>{
+          'failed_backend': 'standalone',
+          'failure_kind': 'rejected',
+          'detail': 'standalone rejected the sealed graph',
+        },
+      },
+      ScriptCompilerBackendMode.game => throw StateError(
+        'the fixture does not request an explicit game backend',
+      ),
+    };
+  }
   final result = AuthoringRevision3ProjectCompilerCheckResult.fromJson(
     <String, Object?>{
       'ok': true,
@@ -781,6 +848,7 @@ ManagedRevision3ProjectCompilerCheckReceipt _receipt(
       'publication_status': 'not_supported',
     },
     expectedHead: head,
+    expectedBackend: backendMode,
   );
   return ManagedRevision3ProjectCompilerCheckReceipt(
     result: result,
@@ -791,6 +859,32 @@ ManagedRevision3ProjectCompilerCheckReceipt _receipt(
 Map<String, Object?> _seal(String digit, int bytes) => <String, Object?>{
   'byte_len': bytes,
   'sha256': List<String>.filled(64, digit).join(),
+};
+
+Map<String, Object?> _qualifiedPackage() => <String, Object?>{
+  'catalog_sha256': List<String>.filled(64, '1').join(),
+  'sidecar_byte_len': 1966592,
+  'sidecar_sha256': List<String>.filled(64, '2').join(),
+  'request_version': 2,
+  'response_version': 1,
+  'manifest_byte_len': 4096,
+  'manifest_sha256': List<String>.filled(64, '3').join(),
+  'profile_sha256': List<String>.filled(64, '4').join(),
+  'target': <String, Object?>{
+    'target': <String, Object?>{
+      'steam_app_id': 1297900,
+      'steam_build_id': 24539464,
+      'depot_id': 1297901,
+      'depot_manifest_gid': 1585071322101748861,
+      'platform': 'windows',
+      'architecture': 'x86_64',
+      'build_configuration': 'shipping',
+    },
+    'pe_codeview': <String, Object?>{
+      'guid': 'be78fe0a-46ac-6643-9685-97e85c7e5b3f',
+      'age': 1,
+    },
+  },
 };
 
 ScriptCompileInstallSafetyController _safety() =>

@@ -289,13 +289,19 @@ final class Revision3ProjectCompilerCheckController extends ChangeNotifier {
         result.closingAudit.game ==
             AuthoringRevision3ProjectCompilerClosingAuditStatus.notRun ||
         compiler.runCount == 0 ||
-        compiler.installRestore == ScriptCompileInstallRestore.notStarted ||
         (diagnostics == null &&
             compiler.outputDisposition ==
                 AuthoringRevision3ProjectCompilerOutputDisposition.notCreated);
+    final attemptedRestoreIsSafe = switch (compiler.backend) {
+      null =>
+        compiler.installRestore == ScriptCompileInstallRestore.restoredExact,
+      final backend when backend.gameAttempted =>
+        compiler.installRestore == ScriptCompileInstallRestore.restoredExact,
+      _ => compiler.installRestore == ScriptCompileInstallRestore.notStarted,
+    };
     final cleanCompilerRejection =
-        compiler.runCount == 1 &&
-        compiler.installRestore == ScriptCompileInstallRestore.restoredExact &&
+        compiler.runCount > 0 &&
+        attemptedRestoreIsSafe &&
         compiler.failure?.code == 'COMPILER_REGEN_FAILED' &&
         diagnostics != null &&
         (diagnostics.capture == ScriptCompileCaptureDisposition.captured ||
