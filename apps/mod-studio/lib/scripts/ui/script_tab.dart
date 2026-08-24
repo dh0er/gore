@@ -1005,7 +1005,9 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
         }
         if (mounted) {
           setState(() {
-            if (!report.recoveryRequired) _compileReport = report;
+            if (!report.recoveryRequired || report.outputRecoveryRequired) {
+              _compileReport = report;
+            }
             _error = true;
             _status = '${_failedCompileSummary(report)}$cleanupWarning';
           });

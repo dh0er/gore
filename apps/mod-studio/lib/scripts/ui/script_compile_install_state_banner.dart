@@ -119,6 +119,8 @@ String _formatCompileReport(ScriptCompileReport report) {
   final lines = <String>[
     'Outcome: ${report.compiled ? 'compiled' : 'failed'}',
     'Game install: ${_restoreLabel(report.installRestore)}',
+    if (report.outputRecoveryRequired)
+      'Private compiler output: recovery required',
     if (diagnostics != null)
       'Diagnostics: ${_captureLabel(diagnostics.capture)}',
     if (report.failure != null) '',

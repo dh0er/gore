@@ -23,6 +23,32 @@ List<ScriptModuleInfo> _fakeModules() => [
   ScriptModuleInfo(name: 'Quux', file: 'Misc/Other.as'),
 ];
 
+Map<String, Object?> _qualifiedPackage() => <String, Object?>{
+  'catalog_sha256': List<String>.filled(64, '1').join(),
+  'sidecar_byte_len': 1966592,
+  'sidecar_sha256': List<String>.filled(64, '2').join(),
+  'request_version': 2,
+  'response_version': 1,
+  'manifest_byte_len': 4096,
+  'manifest_sha256': List<String>.filled(64, '3').join(),
+  'profile_sha256': List<String>.filled(64, '4').join(),
+  'target': <String, Object?>{
+    'target': <String, Object?>{
+      'steam_app_id': 1297900,
+      'steam_build_id': 24539464,
+      'depot_id': 1297901,
+      'depot_manifest_gid': 1585071322101748861,
+      'platform': 'windows',
+      'architecture': 'x86_64',
+      'build_configuration': 'shipping',
+    },
+    'pe_codeview': <String, Object?>{
+      'guid': 'be78fe0a-46ac-6643-9685-97e85c7e5b3f',
+      'age': 1,
+    },
+  },
+};
+
 ScriptMod _stagedBar() => const ScriptMod(
   op: ScriptOp.edit,
   moduleName: 'Bar',
@@ -255,6 +281,99 @@ void main() {
             .widget<FilledButton>(find.widgetWithText(FilledButton, 'Compile'))
             .onPressed,
         isNotNull,
+      );
+    },
+  );
+
+  testWidgets(
+    'private output recovery keeps an openable report without blocking the game install',
+    (tester) async {
+      final fixture = Directory.systemTemp.createTempSync(
+        'gore-script-output-recovery-widget-',
+      );
+      addTearDown(() => fixture.deleteSync(recursive: true));
+      Directory(p.join(fixture.path, 'G1R')).createSync();
+      final source = File(p.join(fixture.path, 'Bar.as'))
+        ..writeAsStringSync('class Bar {}\n');
+      final config = SharedConfig(File(p.join(fixture.path, 'config.json')))
+        ..setGamePath(fixture.path);
+      final core = _ScriptCompileFixtureCore(outputRecovery: true);
+      addTearDown(core.deleteCreatedWorkspaces);
+      final staged = ScriptMod(
+        op: ScriptOp.edit,
+        moduleName: 'Bar',
+        relPath: 'Bar.as',
+        asPath: source.path,
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            sharedConfigProvider.overrideWithValue(config),
+            coreServiceProvider.overrideWithValue(core),
+            scriptModulesProvider.overrideWith((ref) async => _fakeModules()),
+            scriptModsProvider.overrideWith(
+              (ref) => ScriptModsNotifier()..setMod(staged),
+            ),
+          ],
+          child: const MaterialApp(home: Scaffold(body: ScriptTab())),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Bar.as').first);
+      await tester.pump();
+      await tester.tap(find.widgetWithText(FilledButton, 'Compile'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.widgetWithText(FilledButton, 'Compile'),
+        ),
+      );
+      await tester.pump();
+      await tester.runAsync(() async {
+        for (
+          var attempt = 0;
+          attempt < 100 &&
+              core.calls.every(
+                (call) => call.command != 'script_compile_report_v2',
+              );
+          attempt++
+        ) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+      });
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(
+        find.textContaining(
+          'private compiler working data could not be removed',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('script-compile-install-state-banner')),
+        findsNothing,
+      );
+      expect(find.text('Compiler report'), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Compile'))
+            .onPressed,
+        isNotNull,
+      );
+
+      await tester.tap(find.text('Compiler report'));
+      await tester.pumpAndSettle();
+      expect(find.text('Compilation failed'), findsOneWidget);
+      expect(
+        find.textContaining('Private compiler output: recovery required'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Game install: not touched'), findsOneWidget);
+      expect(
+        find.textContaining('standalone module output disposal failed'),
+        findsOneWidget,
       );
     },
   );
@@ -911,9 +1030,13 @@ void main() {
 }
 
 final class _ScriptCompileFixtureCore implements GoreCoreFfiService {
-  _ScriptCompileFixtureCore({this.compileRecovery = false});
+  _ScriptCompileFixtureCore({
+    this.compileRecovery = false,
+    this.outputRecovery = false,
+  }) : assert(!(compileRecovery && outputRecovery));
 
   final bool compileRecovery;
+  final bool outputRecovery;
   bool safe = true;
   final List<({String command, Map<String, Object?> payload})> calls = [];
   final List<Directory> _createdWorkspaces = [];
@@ -961,16 +1084,44 @@ final class _ScriptCompileFixtureCore implements GoreCoreFfiService {
         _createdWorkspaces.add(work);
         final backend = <String, Object?>{
           'requested_mode': 'standalone_then_game',
-          'result_backend': compileRecovery ? null : 'game',
-          'standalone_attempted': false,
-          'game_attempted': !compileRecovery,
-          'qualified_package': null,
-          'fallback_reason': <String, Object?>{
-            'failed_backend': 'standalone',
-            'failure_kind': 'unavailable',
-            'detail': 'No qualified standalone compiler package is installed.',
-          },
+          'result_backend': outputRecovery
+              ? 'standalone'
+              : compileRecovery
+              ? null
+              : 'game',
+          'standalone_attempted': outputRecovery,
+          'game_attempted': !compileRecovery && !outputRecovery,
+          'qualified_package': outputRecovery ? _qualifiedPackage() : null,
+          'fallback_reason': outputRecovery
+              ? null
+              : <String, Object?>{
+                  'failed_backend': 'standalone',
+                  'failure_kind': 'unavailable',
+                  'detail':
+                      'No qualified standalone compiler package is installed.',
+                },
         };
+        if (outputRecovery) {
+          return <String, Object?>{
+            'ok': true,
+            'outcome': 'failed',
+            'mini_path': null,
+            'module': null,
+            'compile_error': <String, Object?>{
+              'code': 'COMPILER_REGEN_FAILED',
+              'message': 'standalone module output disposal failed',
+            },
+            'compiler_diagnostics': <String, Object?>{
+              'capture': 'captured',
+              'messages': <Object?>[],
+              'omitted': 0,
+            },
+            'install_restore': 'not_started',
+            'recovery_required': true,
+            'output_recovery_required': true,
+            'compiler_backend': backend,
+          };
+        }
         if (compileRecovery) {
           safe = false;
           return <String, Object?>{
