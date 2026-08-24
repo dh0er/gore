@@ -175,6 +175,14 @@ impl StandaloneCompilerOutputV1 {
             None => Err("standalone compiler output has no owned cleanup capability".to_owned()),
         }
     }
+
+    /// Dispose an owned scratch lifecycle while allowing detached in-process adapters.
+    fn discard_if_owned(mut self) -> Result<(), String> {
+        match self.cleanup.take() {
+            Some(cleanup) => cleanup(),
+            None => Ok(()),
+        }
+    }
 }
 
 impl Drop for StandaloneCompilerOutputV1 {
@@ -881,6 +889,7 @@ pub struct CompileModuleReport {
     fallback_reason: Option<CompilerBackendFallbackReasonV1>,
     standalone_attempted: bool,
     game_attempted: bool,
+    output_recovery_required: bool,
     target_pins: Option<ProjectGameInputPins>,
 }
 
@@ -921,6 +930,21 @@ impl CompileModuleReport {
     /// Whether the game runner seam was entered, independently of install restoration metadata.
     pub fn game_attempted(&self) -> bool {
         self.game_attempted
+    }
+
+    /// Whether a private compiler output could not be proven removed.
+    pub fn output_recovery_required(&self) -> bool {
+        self.output_recovery_required
+    }
+
+    /// Whether either the live installation or private compiler output needs recovery.
+    pub fn recovery_required(&self) -> bool {
+        self.output_recovery_required
+            || matches!(
+                self.install_restore,
+                InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed
+                    | InstallRestoreDisposition::RecoveryRequiredRestoreFailed
+            )
     }
 
     /// Build caller-owned evidence while the exact qualified target remains pinned.
@@ -1699,6 +1723,7 @@ pub fn compile_module_with_diagnostics_report_with_guard(
         fallback_reason: None,
         standalone_attempted: false,
         game_attempted: backend_started.get(),
+        output_recovery_required: false,
         target_pins: None,
     }
 }
@@ -1739,6 +1764,7 @@ where
         fallback_reason: None,
         standalone_attempted: false,
         game_attempted: backend_started.get(),
+        output_recovery_required: false,
         target_pins: None,
     }
 }
@@ -1809,8 +1835,21 @@ where
                     })
             });
             // The returned full cache is needed through every downstream validation above, but
-            // never after the resulting mini/error has been materialized.
-            drop(retained_output.into_inner());
+            // never after the resulting mini/error has been materialized. A failed owned cleanup
+            // is terminal: starting the game fallback would hide and race retained private state.
+            if let Some(output) = retained_output.into_inner() {
+                if let Err(error) = output.discard_if_owned() {
+                    drop(result);
+                    let failure = CompilerBackendFailureV1::with_diagnostics(
+                        CompilerBackendFailureKindV1::RecoveryRequired,
+                        format!("standalone module output disposal failed: {error}"),
+                        standalone_backend_diagnostics.borrow().clone(),
+                    );
+                    *standalone_compile_error.borrow_mut() =
+                        Some(CompileError::Regen(failure.to_string()));
+                    return Err(failure);
+                }
+            }
             match result {
                 Ok(output) => Ok(output),
                 Err(error) => {
@@ -1921,6 +1960,8 @@ where
         fallback_reason,
         standalone_attempted: standalone_runner_called.get(),
         game_attempted: game_runner_called.get(),
+        output_recovery_required: terminal_kind
+            == Some(CompilerBackendFailureKindV1::RecoveryRequired),
         target_pins: None,
     }
 }
@@ -12637,6 +12678,7 @@ mod tests {
             fallback_reason: None,
             standalone_attempted: true,
             game_attempted: false,
+            output_recovery_required: false,
             target_pins: Some(ProjectGameInputPins {
                 _executable: Some(open_pin()),
                 shipping: open_pin(),
@@ -15818,6 +15860,72 @@ mod tests {
             report.install_restore_disposition(),
             InstallRestoreDisposition::NotStarted
         );
+
+        drop(report);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compile_module_backend_v1_reports_owned_scratch_cleanup_failure() {
+        let root = unique_test_root("backend-v1-cleanup-recovery");
+        std::fs::create_dir_all(&root).unwrap();
+        let opts = CompileOpts {
+            game_dir: root.join("game"),
+            op: "add".to_owned(),
+            module_name: "NewModule".to_owned(),
+            rel_path: "NewModule.as".to_owned(),
+            as_path: root.join("must-not-be-opened.as"),
+            source_override: Some(b"// standalone source\n".to_vec()),
+            work_dir: root.join("work"),
+            allow_new_symbols: true,
+            base_override: Some(cache_with_empty_modules(&[("Base", "Base.as")])),
+            binds_override: None,
+        };
+        let generated =
+            cache_with_empty_modules(&[("Base", "Base.as"), ("NewModule", "NewModule.as")]);
+        let private_output = root.join("retained-standalone.cache");
+        let mut standalone = |_: StandaloneCompilerInputsV1<'_>| {
+            std::fs::write(&private_output, &generated).unwrap();
+            Ok(StandaloneCompilerOutputV1::with_cleanup(
+                private_output.clone(),
+                || Err("scratch tree is still held".to_owned()),
+            ))
+        };
+        let game_calls = std::cell::Cell::new(0u8);
+
+        let report = compile_module_report_with_backend_runner_v1(
+            &opts,
+            CompilerBackendModeV1::StandaloneThenGame,
+            Some(&mut standalone),
+            |_, _| {
+                game_calls.set(game_calls.get().saturating_add(1));
+                panic!("private-output recovery must be terminal")
+            },
+        );
+
+        let CompileModuleReportOutcome::Failed(error) = &report.outcome else {
+            panic!("scratch cleanup failure was reported as success")
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("standalone module output disposal failed"),
+            "unexpected recovery detail: {error}"
+        );
+        assert_eq!(
+            report.backend_name(),
+            Some(CompilerBackendNameV1::Standalone)
+        );
+        assert!(report.standalone_attempted());
+        assert!(!report.game_attempted());
+        assert_eq!(game_calls.get(), 0);
+        assert!(report.output_recovery_required());
+        assert!(report.recovery_required());
+        assert_eq!(
+            report.install_restore_disposition(),
+            InstallRestoreDisposition::NotStarted
+        );
+        assert!(private_output.exists());
 
         drop(report);
         std::fs::remove_dir_all(root).unwrap();

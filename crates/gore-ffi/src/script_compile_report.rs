@@ -1353,6 +1353,7 @@ pub(super) fn report_response_with_policy(
     standalone_install_untouched: bool,
 ) -> Value {
     let restore = report.install_restore_disposition();
+    let recovery_required = report.recovery_required();
     let diagnostics_rejection = if standalone_install_untouched {
         backend_diagnostics_rejection(report.backend_diagnostics())
     } else {
@@ -1366,12 +1367,6 @@ pub(super) fn report_response_with_policy(
             .map(|report| diagnostics_json(report.disposition(), report.diagnostics()))
     };
     let install_restore = install_restore_label(restore);
-    let recovery_required = matches!(
-        restore,
-        InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed
-            | InstallRestoreDisposition::RecoveryRequiredRestoreFailed
-    );
-
     match report.outcome {
         CompileModuleReportOutcome::Compiled(output) => compiled_response(
             output,
