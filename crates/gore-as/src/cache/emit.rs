@@ -1797,6 +1797,11 @@ fn emit_function_ctor(
         // and fold the RVODEF default-return into it so there is a single coherent return local.
         // A handle return defaults to null on declaration, so `UFoo __return;` is valid (no
         // "no default constructor" issue that bare struct RVODEF hits).
+        // Last of the body passes: the destination of a compound assignment is a member of
+        // something the source NAMED, and the naming is handed out above. Earlier the receiver
+        // still reads `this.GetG1R()`, and a call in the path is exactly what must not fold —
+        // evaluating it twice is not the same as evaluating it once.
+        let body = fold_compound_assignments(&body);
         let uses_return_slot = body.contains("__return");
         if uses_return_slot {
             let _ = writeln!(s, "{ind}    {ret} __return;");
@@ -6628,6 +6633,125 @@ fn fold_enum_round_trips(body: &str, fields: Option<&HashMap<String, String>>) -
         if ty.starts_with('E') {
             joined = joined.replace(&format!("{ty}(int(this.{field}))"), &format!("this.{field}"));
         }
+    }
+    joined
+}
+
+/// `X.F = X.F + 1;` is `X.F += 1;`. Spelling the destination twice makes the compiler compute
+/// its address twice — an extra `LoadRObjR` per statement — where vanilla loaded it once and
+/// wrote back through the same pointer.
+///
+/// Only a pure member path may fold: no parentheses and no brackets, so nothing in the
+/// destination is a call or an index whose second evaluation could differ. And only where the two
+/// spellings are character-for-character the same, which is what makes them the same object.
+fn fold_compound_assignments(body: &str) -> String {
+    const OPERATORS: [&str; 7] = [" + ", " - ", " * ", " / ", " | ", " & ", " ^ "];
+    let pure_member_path = |path: &str| {
+        path.contains('.')
+            && !path.is_empty()
+            && path
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b':'))
+    };
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<String> = Vec::with_capacity(lines.len());
+    let mut at = 0usize;
+    while at < lines.len() {
+        // Written out in one statement.
+        let direct = (|| {
+            let statement = lines[at].trim().strip_suffix(';')?;
+            let (target, value) = statement.split_once(" = ")?;
+            if !pure_member_path(target) {
+                return None;
+            }
+            let rest = value.strip_prefix(target)?;
+            let operator = OPERATORS.iter().find(|op| rest.starts_with(**op))?;
+            let addend = &rest[operator.len()..];
+            (!addend.is_empty() && !addend.contains(target))
+                .then(|| format!("{}{target} {}= {addend};", indent_of(lines[at]), operator.trim()))
+        })();
+        if let Some(replacement) = direct {
+            kept.push(replacement);
+            at += 1;
+            continue;
+        }
+        // Or through a carrier the decompiler put in: read the member, change it, write it back.
+        // Three statements, one member path, and a local nothing else in the body touches.
+        let refuse = |reason: &str| -> Option<String> {
+            if std::env::var_os("GORE_AS_COMPOUND_DIAG").is_some() {
+                eprintln!("[compound] {reason} | {}", lines[at].trim());
+            }
+            None
+        };
+        let carried = (|| {
+            // The read may carry its own declaration: `int local_N = int(X.F);`.
+            let (carrier, read) = slot_store(lines[at]).or_else(|| {
+                let statement = lines[at].trim().strip_suffix(';')?;
+                let (head, value) = statement.split_once(" = ")?;
+                let name = head.rsplit(' ').next()?;
+                // A local a splitting pass has versioned reads `local_27_2`, which the plain
+                // `local_<digits>` test refuses — and those are most of the sites here.
+                let named_local = name.strip_prefix("local_").is_some_and(|rest| {
+                    !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit() || b == b'_')
+                });
+                (named_local && head.contains(' ')).then(|| (name.to_owned(), value.to_owned()))
+            })?;
+            let path = read.strip_prefix("int(").and_then(|r| r.strip_suffix(')')).unwrap_or(&read);
+            if !pure_member_path(path) {
+                return refuse("path");
+            }
+            // `local_N = local_N <op> <addend>;` — the value reads its own target, which is
+            // exactly what `slot_store` refuses, so it is split here.
+            let (changed, value) = lines
+                .get(at + 1)?
+                .trim()
+                .strip_suffix(';')?
+                .split_once(" = ")?;
+            if changed != carrier {
+                return refuse("carrier");
+            }
+            let Some(rest) = value.strip_prefix(carrier.as_str()) else {
+                return refuse("self-read");
+            };
+            let Some(operator) = OPERATORS.iter().find(|op| rest.starts_with(**op)) else {
+                return refuse("operator");
+            };
+            let addend = &rest[operator.len()..];
+            // `X.F = local_N;` — the target is a member path, which `slot_store` also refuses.
+            let (written, back) = lines
+                .get(at + 2)?
+                .trim()
+                .strip_suffix(';')?
+                .split_once(" = ")?;
+            if written != path || back != carrier || addend.is_empty() || addend.contains(&carrier)
+            {
+                return refuse("write-back");
+            }
+            // The carrier exists only for this round trip: the read, the two in `c = c + n`, and
+            // the write-back — four mentions, no more.
+            if count_ident(body, &carrier) != 4 {
+                return refuse("mentions");
+            }
+            Some(format!(
+                "{}{path} {}= {addend};",
+                indent_of(lines[at]),
+                operator.trim()
+            ))
+        })();
+        match carried {
+            Some(replacement) => {
+                kept.push(replacement);
+                at += 3;
+            }
+            None => {
+                kept.push(lines[at].to_owned());
+                at += 1;
+            }
+        }
+    }
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
     }
     joined
 }
