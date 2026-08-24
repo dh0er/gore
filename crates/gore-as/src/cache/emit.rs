@@ -6620,6 +6620,15 @@ fn fold_enum_round_trips(body: &str, fields: Option<&HashMap<String, String>>) -
     if body.ends_with('\n') {
         joined.push('\n');
     }
+    // The same round trip written INLINE, with no slot to travel through:
+    // `EPerceptionSense(int(this.Sense))` is `this.Sense`. Same witness — the class field map
+    // names the field's type and the cast spells the same name — and the same refusal where the
+    // two names differ, because then the conversion is real.
+    for (field, ty) in fields {
+        if ty.starts_with('E') {
+            joined = joined.replace(&format!("{ty}(int(this.{field}))"), &format!("this.{field}"));
+        }
+    }
     joined
 }
 
