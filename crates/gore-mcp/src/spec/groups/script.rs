@@ -916,13 +916,13 @@ mod tests {
     }
 
     #[test]
-    fn only_compile_can_overwrite_the_installed_cache() {
+    fn compiler_commands_never_claim_an_in_place_cache_overwrite() {
         let in_place: Vec<&str> = AS
             .commands
             .iter()
             .filter(|command| command.safety.in_place_without.is_some())
             .map(|command| command.sub)
             .collect();
-        assert_eq!(in_place, vec!["compile"]);
+        assert!(in_place.is_empty());
     }
 }
