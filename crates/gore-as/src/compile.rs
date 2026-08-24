@@ -6465,22 +6465,32 @@ fn preflight_full_graph_path_layout_v1(opts: &FullGraphCompileOptsV1) -> Result<
         .game_dir
         .canonicalize()
         .map_err(|error| CompileError::Io(format!("resolving game root: {error}")))?;
+    let projected_work_root =
+        resolve_missing_path_via_existing_ancestor_v1(&opts.work_dir, "full-graph work directory")?;
+    let projected_output_parent = resolve_missing_path_via_existing_ancestor_v1(
+        requested_output_parent,
+        "full-graph output parent",
+    )?;
 
-    // Reject obvious containment before either directory helper is allowed to create anything.
-    if path_is_within_v1(&opts.work_dir, &game_root)
-        || path_is_within_v1(&game_root, &opts.work_dir)
+    // Resolve the deepest existing ancestor before either directory helper may create anything.
+    // Windows runner temp paths can have a different canonical spelling from their requested
+    // spelling even without a reparse component visible to this process. Comparing only the raw
+    // request to the canonical game root would then detect containment only after creating the
+    // work directory inside the installation.
+    if path_is_within_v1(&projected_work_root, &game_root)
+        || path_is_within_v1(&game_root, &projected_work_root)
     {
         return Err(CompileError::Other(
             "full-graph work directory must be strictly outside the game installation".to_owned(),
         ));
     }
-    if path_is_within_v1(requested_output_parent, &game_root) {
+    if path_is_within_v1(&projected_output_parent, &game_root) {
         return Err(CompileError::Other(
             "full-graph output must be outside the game installation".to_owned(),
         ));
     }
-    if path_is_within_v1(&opts.work_dir, requested_output_parent)
-        || path_is_within_v1(requested_output_parent, &opts.work_dir)
+    if path_is_within_v1(&projected_work_root, &projected_output_parent)
+        || path_is_within_v1(&projected_output_parent, &projected_work_root)
     {
         return Err(CompileError::Other(
             "full-graph work directory and output parent must be disjoint".to_owned(),
@@ -6517,6 +6527,57 @@ fn preflight_full_graph_path_layout_v1(opts: &FullGraphCompileOptsV1) -> Result<
         ));
     }
     Ok(())
+}
+
+/// Resolve an absolute path without creating its missing suffix.
+///
+/// `Path::canonicalize` needs the whole path to exist. Full-graph work/output directories are
+/// intentionally allowed to be new, so walk to the deepest existing ancestor, canonicalize that
+/// ancestor, and append the missing components lexically. Existing aliases are therefore resolved
+/// before containment checks, while the caller can still create the path only after those checks.
+fn resolve_missing_path_via_existing_ancestor_v1(
+    path: &Path,
+    label: &str,
+) -> Result<PathBuf, CompileError> {
+    let mut cursor = path;
+    let mut missing = Vec::<std::ffi::OsString>::new();
+    loop {
+        match std::fs::symlink_metadata(cursor) {
+            Ok(_) => {
+                let mut resolved = cursor.canonicalize().map_err(|error| {
+                    CompileError::Io(format!("resolving existing {label} ancestor: {error}"))
+                })?;
+                for component in missing.iter().rev() {
+                    resolved.push(component);
+                }
+                return Ok(resolved);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let component = cursor.file_name().ok_or_else(|| {
+                    CompileError::Other(format!(
+                        "{label} has no existing ancestor that can be resolved"
+                    ))
+                })?;
+                missing.push(component.to_os_string());
+                let parent = cursor.parent().ok_or_else(|| {
+                    CompileError::Other(format!(
+                        "{label} has no existing ancestor that can be resolved"
+                    ))
+                })?;
+                if parent == cursor {
+                    return Err(CompileError::Other(format!(
+                        "{label} has no existing ancestor that can be resolved"
+                    )));
+                }
+                cursor = parent;
+            }
+            Err(error) => {
+                return Err(CompileError::Io(format!(
+                    "inspecting existing {label} ancestor: {error}"
+                )));
+            }
+        }
+    }
 }
 
 fn preflight_full_graph_publication_v1(opts: &FullGraphCompileOptsV1) -> Result<(), CompileError> {
