@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 97.97% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 98.11% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **97.97%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **98.11%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**3,339 functions (2.03%) recompile to bytecode that differs semantically.** A semantic
+**3,103 functions (1.89%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -49,13 +49,13 @@ figure is 531:
 
 | Class | Functions | Share |
 |-------|-----------|-------|
-| Different instructions on the two sides | 1,446 | 43.0% |
-| Other extra instructions | 636 | 18.9% |
-| Same instructions, different order | 545 | 16.2% |
-| One or more extra slot-to-slot copies, nothing else | 357 | 10.6% |
-| Identical but for an engine-internal type id | 177 | 5.3% |
-| One or more extra handle aliases, nothing else | 132 | 3.9% |
-| Identical but for a slot number, or extra copies AND aliases | 66 | 2.0% |
+| Different instructions on the two sides | 1,394 | 44.9% |
+| Same instructions, different order | 562 | 18.1% |
+| Other extra instructions | 469 | 15.1% |
+| One or more extra slot-to-slot copies, nothing else | 304 | 9.8% |
+| Identical but for an engine-internal type id | 177 | 5.7% |
+| One or more extra handle aliases, nothing else | 138 | 4.4% |
+| Identical but for a slot number, or extra copies AND aliases | 59 | 1.9% |
 
 The classes that used to dominate — a named temporary costing a copy or an alias — are now the
 small ones. Over this run's work the total went from 14,134 to 3,511, and `__InitDefaults`
