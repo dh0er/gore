@@ -442,9 +442,9 @@ class ScriptCompileFailure {
 
 /// Whether recovery evidence concerns the selected game installation.
 ///
-/// Full-graph compiler reports also use `recoveryRequired` when a private
-/// compiler output could not be removed. That output must still block adoption
-/// of the compiler result, but it does not make the game installation unsafe.
+/// Compiler reports also use `recoveryRequired` when a private compiler output
+/// could not be removed. That output must still block adoption of the compiler
+/// result, but it does not make the game installation unsafe.
 bool scriptCompileRequiresGameInstallRecovery({
   required bool recoveryRequired,
   required ScriptCompileInstallRestore installRestore,
@@ -474,6 +474,7 @@ class ScriptCompileReport {
     required this.diagnostics,
     required this.installRestore,
     required this.recoveryRequired,
+    required this.outputRecoveryRequired,
     required this.backend,
   });
 
@@ -484,6 +485,7 @@ class ScriptCompileReport {
   final ScriptCompilerDiagnostics? diagnostics;
   final ScriptCompileInstallRestore installRestore;
   final bool recoveryRequired;
+  final bool outputRecoveryRequired;
   final ScriptCompilerBackendEvidence? backend;
 
   bool get compiled => outcome == ScriptCompileOutcome.compiled;
@@ -509,6 +511,9 @@ class ScriptCompileReport {
       'install_restore',
       'recovery_required',
     };
+    if (json.containsKey('output_recovery_required')) {
+      fields.add('output_recovery_required');
+    }
     if (expectedBackend != null) fields.add('compiler_backend');
     if (json.length != fields.length || !fields.every(json.containsKey)) {
       throw const FormatException('compile report fields');
@@ -534,6 +539,12 @@ class ScriptCompileReport {
     if (recoveryRequired is! bool) {
       throw const FormatException('compile report recovery');
     }
+    final outputRecoveryRequired = json.containsKey('output_recovery_required')
+        ? switch (json['output_recovery_required']) {
+            true => true,
+            _ => throw const FormatException('compile report output recovery'),
+          }
+        : false;
     final miniPath = _optionalBoundedString(
       json['mini_path'],
       _maxScriptCompilePathBytes,
@@ -564,8 +575,14 @@ class ScriptCompileReport {
         outcome == ScriptCompileOutcome.failed &&
         failure != null &&
         _preexistingRecoveryFailureCodes.contains(failure.code);
-    if (recoveryRequired != (restoreRequiresRecovery || preexistingRecovery)) {
+    if (recoveryRequired !=
+        (restoreRequiresRecovery ||
+            preexistingRecovery ||
+            outputRecoveryRequired)) {
       throw const FormatException('compile report recovery');
+    }
+    if (outputRecoveryRequired && outcome != ScriptCompileOutcome.failed) {
+      throw const FormatException('compile report output recovery');
     }
 
     if (outcome == ScriptCompileOutcome.compiled) {
@@ -608,6 +625,7 @@ class ScriptCompileReport {
       diagnostics: diagnostics,
       installRestore: installRestore,
       recoveryRequired: recoveryRequired,
+      outputRecoveryRequired: outputRecoveryRequired,
       backend: backend,
     );
   }

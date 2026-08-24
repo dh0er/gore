@@ -1353,6 +1353,7 @@ pub(super) fn report_response_with_policy(
     standalone_install_untouched: bool,
 ) -> Value {
     let restore = report.install_restore_disposition();
+    let output_recovery_required = report.output_recovery_required();
     let recovery_required = report.recovery_required();
     let diagnostics_rejection = if standalone_install_untouched {
         backend_diagnostics_rejection(report.backend_diagnostics())
@@ -1367,7 +1368,7 @@ pub(super) fn report_response_with_policy(
             .map(|report| diagnostics_json(report.disposition(), report.diagnostics()))
     };
     let install_restore = install_restore_label(restore);
-    match report.outcome {
+    let mut response = match report.outcome {
         CompileModuleReportOutcome::Compiled(output) => compiled_response(
             output,
             restore,
@@ -1388,7 +1389,14 @@ pub(super) fn report_response_with_policy(
                 recovery_required,
             )
         }
+    };
+    if output_recovery_required {
+        response
+            .as_object_mut()
+            .expect("compile report responses are JSON objects")
+            .insert("output_recovery_required".to_owned(), Value::Bool(true));
     }
+    response
 }
 
 fn compiled_response(

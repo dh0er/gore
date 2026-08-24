@@ -1110,6 +1110,9 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
   );
 
   String _failedCompileSummary(ScriptCompileReport report) {
+    if (report.outputRecoveryRequired) {
+      return 'Compilation stopped: private compiler working data could not be removed. Open the compiler report before another compile.';
+    }
     if (report.recoveryRequired) {
       return 'Compilation stopped: exact game-install restoration could not be proven. Open the compiler report before another compile.';
     }

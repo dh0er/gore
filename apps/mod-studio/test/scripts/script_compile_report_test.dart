@@ -24,7 +24,8 @@ Map<String, Object?> _report({
   },
   String installRestore = 'restored_exact',
   bool recoveryRequired = false,
-}) => {
+  bool? outputRecoveryRequired,
+}) => <String, Object?>{
   'ok': true,
   'outcome': outcome,
   'mini_path': miniPath,
@@ -33,6 +34,7 @@ Map<String, Object?> _report({
   'compiler_diagnostics': diagnostics,
   'install_restore': installRestore,
   'recovery_required': recoveryRequired,
+  'output_recovery_required': ?outputRecoveryRequired,
 };
 
 Map<String, Object?> _qualifiedPackage() => {
@@ -238,6 +240,38 @@ void main() {
     expect(
       report.installRestore,
       ScriptCompileInstallRestore.recoveryRequiredProcessExitUnconfirmed,
+    );
+  });
+
+  test('keeps private output recovery separate from game-install recovery', () {
+    final report = ScriptCompileReport.fromJson(
+      _report(
+        installRestore: 'not_started',
+        recoveryRequired: true,
+        outputRecoveryRequired: true,
+      ),
+    );
+
+    expect(report.recoveryRequired, isTrue);
+    expect(report.outputRecoveryRequired, isTrue);
+    expect(report.gameInstallRecoveryRequired, isFalse);
+    expect(report.installRestore, ScriptCompileInstallRestore.notStarted);
+  });
+
+  test('rejects non-canonical private output recovery evidence', () {
+    expect(
+      () =>
+          ScriptCompileReport.fromJson(_report(outputRecoveryRequired: false)),
+      throwsFormatException,
+    );
+    final nullEvidence = _report()..['output_recovery_required'] = null;
+    expect(
+      () => ScriptCompileReport.fromJson(nullEvidence),
+      throwsFormatException,
+    );
+    expect(
+      () => ScriptCompileReport.fromJson(_report(outputRecoveryRequired: true)),
+      throwsFormatException,
     );
   });
 

@@ -3301,30 +3301,31 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 ),
             };
             let restore = report.install_restore_disposition();
+            let recovery_required = report.recovery_required();
             let used_backend = report.backend_name();
             let fallback_reason = report.fallback_reason().cloned();
             let compiled = match report.outcome {
                 gore_as::compile::CompileModuleReportOutcome::Compiled(output)
-                    if matches!(
-                        (used_backend, restore),
-                        (
-                            Some(gore_as::compile::CompilerBackendNameV1::Standalone),
-                            gore_as::compile::InstallRestoreDisposition::NotStarted
-                        ) | (
-                            Some(gore_as::compile::CompilerBackendNameV1::Game),
-                            gore_as::compile::InstallRestoreDisposition::RestoredExact
-                        )
-                    ) => output,
+                    if !recovery_required
+                        && matches!(
+                            (used_backend, restore),
+                            (
+                                Some(gore_as::compile::CompilerBackendNameV1::Standalone),
+                                gore_as::compile::InstallRestoreDisposition::NotStarted
+                            ) | (
+                                Some(gore_as::compile::CompilerBackendNameV1::Game),
+                                gore_as::compile::InstallRestoreDisposition::RestoredExact
+                            )
+                        ) =>
+                {
+                    output
+                }
                 gore_as::compile::CompileModuleReportOutcome::Compiled(_) => bail!(
                     "COMPILE_RECOVERY_REQUIRED: compiler output was produced without proving an \
                      exact backend/install disposition"
                 ),
                 gore_as::compile::CompileModuleReportOutcome::Failed(error)
-                    if matches!(
-                        restore,
-                        gore_as::compile::InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed
-                            | gore_as::compile::InstallRestoreDisposition::RecoveryRequiredRestoreFailed
-                    ) =>
+                    if recovery_required =>
                 {
                     bail!("COMPILE_RECOVERY_REQUIRED: {error}")
                 }
