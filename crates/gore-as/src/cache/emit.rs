@@ -1394,7 +1394,19 @@ fn emit_function_ctor(
     let body = fold_alias_copies(&body, &declared_locals);
     let body = fold_copy_out_temporaries(&body, &declared_locals, &const_result_slots, fields);
     let body = fold_cast_operands(&body, &declared_locals, &call_result_types);
-    let body = fold_enum_round_trips(&body, fields, refs);
+    // What a member path can start from: a local the declarations will name, or one of the
+    // function's own parameters. Both carry their type in a table; neither needs an inference.
+    let path_roots: HashMap<String, String> = declared_locals
+        .iter()
+        .map(|(slot, ty)| (format!("local_{slot}"), ty.clone()))
+        .chain(
+            f.params
+                .iter()
+                .filter(|p| !p.name.is_empty())
+                .map(|p| (p.name.clone(), p.ty.base_name(refs))),
+        )
+        .collect();
+    let body = fold_enum_round_trips(&body, fields, &path_roots, refs);
     let body =
         fold_returned_temporaries(&body, &declared_locals, refs, &ret, returns_by_reference);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
@@ -6591,6 +6603,7 @@ fn fold_cast_operands(
 fn fold_enum_round_trips(
     body: &str,
     fields: Option<&HashMap<String, String>>,
+    roots: &HashMap<String, String>,
     refs: &RefResolver,
 ) -> String {
     let lines: Vec<&str> = body.lines().collect();
@@ -6600,7 +6613,7 @@ fn fold_enum_round_trips(
         let folded = (|| {
             let (name, value) = slot_store(lines[at])?;
             let read = value.strip_prefix("int(")?.strip_suffix(')')?;
-            let declared = &enum_of_member_path(read, fields, refs)?;
+            let declared = &enum_of_member_path(read, fields, roots, refs)?;
             let field = read;
             let reader = lines.get(at + 1)?;
             let cast = format!("{declared}({name})");
@@ -6631,7 +6644,7 @@ fn fold_enum_round_trips(
     // `EPerceptionSense(int(this.Sense))` is `this.Sense`. Same witness — the class field map
     // names the field's type and the cast spells the same name — and the same refusal where the
     // two names differ, because then the conversion is real.
-    joined = rewrite_inline_enum_round_trips(&joined, fields, refs);
+    joined = rewrite_inline_enum_round_trips(&joined, fields, roots, refs);
     joined
 }
 
@@ -6754,16 +6767,25 @@ fn fold_compound_assignments(body: &str) -> String {
     joined
 }
 
-/// The enum a member PATH names, walking `this.A.B.C` one field at a time: the class's own field
-/// map answers the first step, the cache's per-class field types answer the rest. `None` unless
-/// every step resolves and the last one is an enum — a path this cannot follow keeps its cast.
+/// The enum a member PATH names, walked one field at a time. The root is `this`, a local or a
+/// parameter — the class's own field map answers the first, the slot table and the parameter list
+/// answer the others — and the cache's per-class field types answer every step after that. `None`
+/// unless every step resolves and the last one is an enum: a path this cannot follow keeps its
+/// cast, because then the conversion may be real.
 fn enum_of_member_path(
     path: &str,
     fields: Option<&HashMap<String, String>>,
+    roots: &HashMap<String, String>,
     refs: &RefResolver,
 ) -> Option<String> {
-    let mut steps = path.strip_prefix("this.")?.split('.');
-    let mut ty = fields?.get(steps.next()?)?.clone();
+    let mut steps = path.split('.');
+    let root = steps.next()?;
+    // The root is `this`, and then the first step is a field of this class — or it is a local or
+    // a parameter, and its own declared type starts the walk.
+    let mut ty = match root {
+        "this" => fields?.get(steps.next()?)?.clone(),
+        named => roots.get(named)?.clone(),
+    };
     for step in steps {
         ty = refs
             .field_type_by_class(&ty, step)
@@ -6777,6 +6799,7 @@ fn enum_of_member_path(
 fn rewrite_inline_enum_round_trips(
     body: &str,
     fields: Option<&HashMap<String, String>>,
+    roots: &HashMap<String, String>,
     refs: &RefResolver,
 ) -> String {
     let mut out = body.to_owned();
@@ -6791,7 +6814,7 @@ fn rewrite_inline_enum_round_trips(
         match close.filter(|_| !name.is_empty()) {
             Some(close) => {
                 let path = out[inner..close].to_owned();
-                let resolved = enum_of_member_path(&path, fields, refs);
+                let resolved = enum_of_member_path(&path, fields, roots, refs);
                 if resolved.as_deref() == Some(name) {
                     let start = head.map_or(0, |k| k + 1);
                     out.replace_range(start..close + 2, &path);
