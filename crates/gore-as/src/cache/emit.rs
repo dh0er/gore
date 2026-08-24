@@ -885,6 +885,14 @@ fn emit_function_ctor(
     let temporary_receivers = temporary_receiver_slots(f, refs);
     // The elements of a range-for: released once per iteration, and what the loop fold matches.
     let loop_elements = loop_element_slots(f);
+    // Where a widening's result was copied ON, the source named it; folding that name away
+    // changes the width the arithmetic behind it happens at.
+    let widened = widened_slots(f);
+    // Slots the function does not touch until it has branched: their declaration lives in the
+    // block that touches them, not at the top.
+    let touched_after_branch = slots_touched_only_after_a_branch(f);
+    // Handles vanilla ALIASED into a slot of their own: that alias is a name the source wrote.
+    let aliased = handle_alias_slots(f);
     // The same witness types the slots a bool travels INTO: the merge slot of a short-circuit
     // or a guarded assignment is written by a copy, not by the call itself.
     bool_overrides.extend(
@@ -1355,6 +1363,8 @@ fn emit_function_ctor(
         &statement_producers,
         &temporary_receivers,
         &loop_elements,
+        &widened,
+        &aliased,
     );
     // Runs after the producers have moved into their readers: only then is the value arm of a
     // short circuit the single assignment it was in source.
@@ -1381,9 +1391,30 @@ fn emit_function_ctor(
         &statement_producers,
         &temporary_receivers,
         &loop_elements,
+        &widened,
+        &aliased,
     );
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
+    // A third time, now that a cast IS an expression. Until the diamond folded, the cast stood as
+    // a branch over a named slot and the producer feeding it stood on a line of its own — a line
+    // between a temporary and its reader that does not feed that reader, which is what the sweep
+    // refuses to move across. Fold the diamond and both go away; nothing had looked again.
+    // Vanilla proves the temporary had no name: it calls straight on the cast's own slot, where a
+    // named handle would have been aliased into its own with `RefCpyV` first.
+    let body = inline_call_argument_temporaries(
+        &body,
+        refs,
+        &declared_locals,
+        fields,
+        !f.name.contains("__InitDefaults"),
+        &call_result_types,
+        &statement_producers,
+        &temporary_receivers,
+        &loop_elements,
+        &widened,
+        &aliased,
+    );
     let body = drop_unreachable_statements(&body);
     // All three run before the declarations are hoisted, so a temporary they empty out never
     // gets one.
@@ -1701,7 +1732,15 @@ fn emit_function_ctor(
         // exists to avoid. Folded first, there is no assignment left for the split to name.
         let body = fold_return_slot_stores(&body);
         let body = fold_return_slot_arms(&body);
-        let body = drop_else_after_returning_arm(&body);
+        // Only where vanilla let the arm FALL THROUGH into the rest of the function. Where the
+        // last thing before the epilogue is a jump INTO it, both arms jumped to a common join —
+        // which is what an `else` behind a returning arm compiles to, and dropping it emits one
+        // jump fewer than vanilla had.
+        let body = if epilogue_is_joined(f) {
+            body
+        } else {
+            drop_else_after_returning_arm(&body)
+        };
         let body = rewrite_no_assign_residual_assigns(&body, &locals, &ret);
         // Iterator locals have no default ctor either; declare them at their `Iterator()` call.
         let (body, iter_suppressed) = rewrite_iterator_decl_init(&body, &locals);
@@ -1744,6 +1783,10 @@ fn emit_function_ctor(
             &already_declared_at_use,
             &first_use_suppressed,
         );
+        // Where the declarations start, so the whole block plus the body it heads can be handed
+        // to the sink below: a declaration only moves once it stands next to the code that uses
+        // it, and the two are written from different places.
+        let declarations_at = s.len();
         // Hoist local declarations. A primitive may stay bare only when its first source-level
         // reference is a top-level write-only assignment; this is the same definite-assignment
         // proof used for inferred enums. Everything else gets an explicit default initializer so
@@ -1821,6 +1864,10 @@ fn emit_function_ctor(
         // something the source NAMED, and the naming is handed out above. Earlier the receiver
         // still reads `this.GetG1R()`, and a call in the path is exactly what must not fold —
         // evaluating it twice is not the same as evaluating it once.
+        // Before the compound-assignment fold, which would rewrite the middle line out of the
+        // shape this one matches on.
+        let body = collapse_single_use_accumulators(&body, &widened);
+        let body = fold_enum_call_round_trips(&body, &call_result_types);
         let body = fold_compound_assignments(&body);
         let uses_return_slot = body.contains("__return");
         if uses_return_slot {
@@ -1846,6 +1893,12 @@ fn emit_function_ctor(
         } else {
             s.push_str(&body);
         }
+        // Declarations and body are one text now. A struct declared at function scope costs a
+        // constructor at entry and a destructor on every path out; where vanilla touched the slot
+        // only after it had branched, the declaration stood in the block that touches it.
+        let rendered = sink_declarations_into_their_block(&s[declarations_at..], &touched_after_branch);
+        s.truncate(declarations_at);
+        s.push_str(&rendered);
     } else {
         // stub fallback so the module still compiles (reason recorded for aggregation)
         let _ = writeln!(
@@ -3714,6 +3767,66 @@ fn cast_result_slots(f: &Func, refs: &RefResolver) -> Vec<(i32, String)> {
     found
 }
 
+/// Slots vanilla ALIASED a handle into with `RefCpyV`.
+///
+/// Nothing in an expression needs that instruction. Calling on a handle an expression produced
+/// pushes the handle straight from wherever it landed; the alias exists because the source gave
+/// the handle a name and every later mention reads it through that name. So its presence is the
+/// proof a name was there, and its absence — vanilla calling on the producing slot itself — the
+/// proof there was none.
+fn handle_alias_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    instrs
+        .iter()
+        .filter(|ins| ins.op.name == "RefCpyV")
+        .filter_map(|ins| ins.words.first().map(|word| *word as i16 as i32))
+        .filter(|slot| *slot > 0)
+        .collect()
+}
+
+/// The slots of a WIDENING that the source gave a NAME to.
+///
+/// A widening (`fTOd` and friends) writes a value into a slot wider than the value's own type.
+/// Two shapes produce one, and only one of them is a name:
+///
+/// * `fTOd t, x; CpyVtoV8 n, t` — the widened value is copied ON into another slot. Nothing in an
+///   expression needs that copy; it is a declaration, `float n = <float32 expr>`. Both `t` and `n`
+///   belong to it.
+/// * `fTOd t, x; MULd t, t, y` — the widening is consumed where it lands. That is an expression
+///   temporary and folding it away is exactly right.
+///
+/// Only the first shape is protected, and it has to be: fold the name away and the arithmetic
+/// behind it happens at the narrower width — vanilla's `CMPd` against a `f64` becomes a single
+/// `CMPIf`, which is a different comparison, not a shorter spelling of the same one.
+fn widened_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let slot = |word: Option<&u16>| word.map(|word| *word as i16 as i32);
+    let widened: HashSet<i32> = instrs
+        .iter()
+        .filter(|ins| matches!(ins.op.name, "fTOd" | "iTOd" | "uTOd" | "i64TOd" | "u64TOd"))
+        .filter_map(|ins| slot(ins.words.first()))
+        .filter(|dest| *dest > 0)
+        .collect();
+    let mut named = HashSet::new();
+    for ins in &instrs {
+        if !matches!(ins.op.name, "CpyVtoV4" | "CpyVtoV8") {
+            continue;
+        }
+        let (Some(dest), Some(src)) = (slot(ins.words.first()), slot(ins.words.get(1))) else {
+            continue;
+        };
+        if dest > 0 && widened.contains(&src) {
+            named.insert(dest);
+            named.insert(src);
+        }
+    }
+    named
+}
+
 /// Slots the compiler RELEASES with `FreeNullV8` — the element of a range-for, released at the
 /// end of every iteration. A slot with an iteration-scoped lifetime is not a droppable alias for
 /// something that outlives it, and dropping it is what leaves the loop rendered as
@@ -5574,6 +5687,8 @@ fn inline_call_argument_temporaries(
     statement_producers: &HashSet<i32>,
     temporary_receivers: &HashSet<i32>,
     loop_elements: &HashSet<i32>,
+    widened: &HashSet<i32>,
+    aliased: &HashSet<i32>,
 ) -> String {
     const MAX_ARGUMENT_INLINE_PASSES: usize = 8;
     let trailing_newline = body.ends_with('\n');
@@ -5631,7 +5746,7 @@ fn inline_call_argument_temporaries(
             for (temp, position) in candidates {
                 if inline_temporary_into(
                     &mut lines, index, &temp, &callee, position, locals, refs, fields, call_types,
-                    statement_producers, temporary_receivers, loop_elements,
+                    statement_producers, temporary_receivers, loop_elements, widened, aliased,
                 ) {
                     changed = true;
                     moved = true;
@@ -5671,6 +5786,8 @@ fn inline_temporary_into(
     statement_producers: &HashSet<i32>,
     temporary_receivers: &HashSet<i32>,
     loop_elements: &HashSet<i32>,
+    widened: &HashSet<i32>,
+    aliased: &HashSet<i32>,
 ) -> bool {
     let receiver = position == Position::Receiver;
     // The element of a range-for lives for one iteration and the compiler releases it at the end
@@ -5678,9 +5795,11 @@ fn inline_temporary_into(
     if temp
         .strip_prefix("local_")
         .and_then(|slot| slot.parse::<i32>().ok())
-        .is_some_and(|slot| loop_elements.contains(&slot))
+        .is_some_and(|slot| {
+            loop_elements.contains(&slot) || widened.contains(&slot) || aliased.contains(&slot)
+        })
     {
-        inline_reject("loop-element", callee, temp, &lines[index]);
+        inline_reject("named-by-vanilla", callee, temp, &lines[index]);
         return false;
     }
     // Where the bytecode PROVES the source evaluated this producer before it pushed the call's
@@ -6663,6 +6782,331 @@ fn fold_enum_round_trips(
 /// Only a pure member path may fold: no parentheses and no brackets, so nothing in the
 /// destination is a call or an index whose second evaluation could differ. And only where the two
 /// spellings are character-for-character the same, which is what makes them the same object.
+/// `T X = <expr>; X = X <op> <rest>;` followed by a single read of `X` is one expression.
+///
+/// The compiler evaluates `<expr>`, applies `<op>`, and passes the result on — the same three
+/// steps in the same order as the inlined `(<expr> <op> <rest>)`. What the name costs is a copy:
+/// vanilla widens or loads straight into the slot the arithmetic runs on (`fTOd t, x; MULd t, t,
+/// y`), while a declared local makes the compiler copy the value on to the slot it declared.
+///
+/// Two witnesses have to hold. `X` is mentioned exactly three times in the body, so the read
+/// after the accumulation is its last, and `X` is not one of the slots `widened_slots` proves the
+/// source NAMED — there the copy IS the declaration and taking it out changes the width the
+/// arithmetic happens at.
+fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>) -> String {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for index in 0..lines.len().saturating_sub(2) {
+            let Some((indent, name, init)) = declaration_with_initializer(&lines[index]) else {
+                continue;
+            };
+            if name
+                .strip_prefix("local_")
+                .and_then(|slot| slot.split('_').next())
+                .and_then(|slot| slot.parse::<i32>().ok())
+                .is_some_and(|slot| widened.contains(&slot))
+            {
+                continue;
+            }
+            let accumulate = lines[index + 1].trim();
+            let Some(rest) = accumulate
+                .strip_prefix(&format!("{name} = {name} "))
+                .and_then(|rest| rest.strip_suffix(';'))
+            else {
+                continue;
+            };
+            let Some((op, right)) = rest.split_once(' ') else {
+                continue;
+            };
+            if !matches!(op, "+" | "-" | "*" | "/") || right.contains(&name) {
+                continue;
+            }
+            // Four across the whole body, so a mention in a LATER block counts too: the
+            // declaration, twice in the accumulation, and the single read that consumes it.
+            if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != 4 {
+                continue;
+            }
+            let Some(reader) = (index + 2..lines.len()).find(|at| count_ident(&lines[*at], &name) == 1)
+            else {
+                continue;
+            };
+            let folded = format!("({init} {op} {right})");
+            lines[reader] = rename_ident(&lines[reader], &name, &folded);
+            lines.drain(index..index + 2);
+            let _ = indent;
+            changed = true;
+            break;
+        }
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// The `(indent, name, initializer)` of a `T NAME = <init>;` line whose NAME is a decompiler
+/// local. A declaration is the only place a type stands before the name, which is what separates
+/// it from the assignment that may follow.
+fn declaration_with_initializer(line: &str) -> Option<(String, String, String)> {
+    let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+    let rest = line.trim().strip_suffix(';')?;
+    let (left, init) = rest.split_once(" = ")?;
+    let name = left.rsplit(' ').next()?;
+    if left.len() == name.len() || !is_decompiler_local(name) {
+        return None;
+    }
+    // A declared type never contains a call or an index.
+    let ty = &left[..left.len() - name.len() - 1];
+    if ty.contains('(') || ty.contains('[') || ty.contains('=') {
+        return None;
+    }
+    Some((indent, name.to_owned(), init.to_owned()))
+}
+
+/// A name the decompiler handed out: `local_12`, or its versioned form `local_12_2`.
+fn is_decompiler_local(name: &str) -> bool {
+    name.strip_prefix("local_")
+        .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit() || c == '_'))
+}
+
+/// `int X = int(<call>);` read once as `E(X)` is the call itself.
+///
+/// The enum round-trip fold walks a MEMBER path to find the enum a value came from. A call has no
+/// path to walk, so the pair of casts stayed and the compiler emitted the round trip they ask for
+/// — `sbTOi` down to an int and `iTOb` back up — where vanilla passed the call's own slot.
+///
+/// The witness is the callee's declared return type, which the cache carries and
+/// `call_result_types` has already resolved per slot: when the enum being constructed IS what the
+/// call returns, both casts name a type the value already has. Anything else — a different enum,
+/// an unresolved callee, a second read of the name — is left alone.
+fn fold_enum_call_round_trips(body: &str, call_types: &HashMap<i32, String>) -> String {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for index in 0..lines.len() {
+            let Some((_, name, init)) = declaration_with_initializer(&lines[index]) else {
+                continue;
+            };
+            let Some(inner) = init.strip_prefix("int(").and_then(|rest| rest.strip_suffix(')'))
+            else {
+                continue;
+            };
+            if !lines[index].trim_start().starts_with("int ") || !inner.contains('(') {
+                continue;
+            }
+            let Some(slot) = name
+                .strip_prefix("local_")
+                .and_then(|rest| rest.split('_').next())
+                .and_then(|rest| rest.parse::<i32>().ok())
+            else {
+                continue;
+            };
+            let Some(returned) = call_types.get(&slot) else {
+                continue;
+            };
+            if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != 2 {
+                continue;
+            }
+            let round_trip = format!("{returned}({name})");
+            let Some(reader) = (index + 1..lines.len()).find(|at| lines[*at].contains(&round_trip))
+            else {
+                continue;
+            };
+            lines[reader] = lines[reader].replace(&round_trip, inner);
+            lines.remove(index);
+            changed = true;
+            break;
+        }
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// Slots the function does not touch until AFTER its first conditional jump.
+///
+/// A local declared at function scope is CONSTRUCTED at function scope: the compiler runs its
+/// `$beh0` before the first branch and its `$beh2` on every path out, including the early returns
+/// that never reach the value. Vanilla doing neither is the proof that the declaration stood
+/// inside the block that uses it. The first touch of the slot is where the compiler put it.
+fn slots_touched_only_after_a_branch(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let first_branch = instrs
+        .iter()
+        .position(|ins| ins.op.name.starts_with('J') && ins.op.name != "JMP");
+    let Some(first_branch) = first_branch else {
+        return HashSet::new();
+    };
+    let mut before = HashSet::new();
+    let mut after = HashSet::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        // Only the instructions that name a slot as their FIRST operand address one; a call's
+        // words are a pointer, not a frame offset.
+        if !matches!(
+            ins.op.name,
+            "PSF" | "PshVPtr" | "STOREOBJ" | "CpyVtoV4" | "CpyVtoV8" | "SetV1" | "SetV4" | "SetV8"
+        ) {
+            continue;
+        }
+        let Some(slot) = ins.words.first().map(|word| *word as i16 as i32) else {
+            continue;
+        };
+        if slot <= 0 {
+            continue;
+        }
+        if at < first_branch {
+            before.insert(slot);
+        } else {
+            after.insert(slot);
+        }
+    }
+    after.difference(&before).copied().collect()
+}
+
+/// Moves a bare declaration down into the block that holds every mention of it.
+///
+/// The decompiler writes a local's declaration where the slot table lists it, which is the top of
+/// the function. A struct declared there costs a constructor at entry and a destructor on every
+/// path out — including the early returns that leave before the value exists. `after_branch`
+/// carries the slots vanilla proves were not declared there.
+fn sink_declarations_into_their_block(body: &str, after_branch: &HashSet<i32>) -> String {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    // One move per pass, then everything is derived again: a move renumbers every line after it,
+    // and two moves planned against the same numbering land in each other's way.
+    for _ in 0..lines.len() {
+        let Some((from, to, text)) = next_declaration_to_sink(&lines, after_branch) else {
+            break;
+        };
+        lines.remove(from);
+        let to = if to > from { to - 1 } else { to };
+        lines.insert(to, text);
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// The first declaration in `lines` that may move, as `(from, to, text)`.
+fn next_declaration_to_sink(
+    lines: &[String],
+    after_branch: &HashSet<i32>,
+) -> Option<(usize, usize, String)> {
+    let depths = block_depths(lines);
+    for (index, line) in lines.iter().enumerate() {
+        let Some((indent, name)) = bare_declaration(line) else {
+            continue;
+        };
+        let Some(slot) = name
+            .strip_prefix("local_")
+            .and_then(|rest| rest.split('_').next())
+            .and_then(|rest| rest.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        if !after_branch.contains(&slot) {
+            continue;
+        }
+        // One declaration only: a second one elsewhere means moving this is what makes the two
+        // collide.
+        if lines
+            .iter()
+            .filter(|line| {
+                bare_declaration(line).is_some_and(|(_, other)| other == name)
+                    || declaration_with_initializer(line)
+                        .is_some_and(|(_, other, _)| other == name)
+            })
+            .count()
+            != 1
+        {
+            continue;
+        }
+        let mentions: Vec<usize> = (0..lines.len())
+            .filter(|at| *at != index && count_ident(&lines[*at], &name) > 0)
+            .collect();
+        let (Some(first), Some(last)) = (mentions.first(), mentions.last()) else {
+            continue;
+        };
+        // A mention ABOVE the declaration means the name is already read where the declaration
+        // would no longer stand.
+        if *first < index {
+            continue;
+        }
+        // One block holds them all when nothing between them ever leaves the depth they sit at.
+        let depth = depths[*first];
+        if depth <= depths[index] || (*first..=*last).any(|at| depths[at] < depth) {
+            continue;
+        }
+        // The block's opening line is the last one shallower than the mentions.
+        let Some(open) = (0..*first).rev().find(|at| depths[*at] < depth) else {
+            continue;
+        };
+        // It has to be a block the declaration can move INTO, and one that opens below the
+        // declaration: a brace of its own, never a `case` label or a one-line body, and never a
+        // loop — a struct declared in a loop body is built and destroyed once per iteration,
+        // which is not what a function-scope declaration did.
+        if open <= index || lines[open].trim() != "{" {
+            continue;
+        }
+        let heads_a_loop = lines[..open]
+            .iter()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .is_some_and(|line| {
+                let head = line.trim_start();
+                head.starts_with("for") || head.starts_with("while") || head.starts_with("do")
+            });
+        if heads_a_loop {
+            continue;
+        }
+        let extra = "    ".repeat(depth - depths[index]);
+        return Some((index, open + 1, format!("{indent}{extra}{}", line.trim())));
+    }
+    None
+}
+
+/// The brace depth each line SITS at: a line that opens a block belongs to the outer one, a
+/// closing brace to the block it closes.
+fn block_depths(lines: &[String]) -> Vec<usize> {
+    let mut depths = Vec::with_capacity(lines.len());
+    let mut depth = 0usize;
+    for line in lines {
+        let trimmed = line.trim();
+        let closes = trimmed.starts_with('}');
+        if closes {
+            depth = depth.saturating_sub(1);
+        }
+        depths.push(depth);
+        let opens = line.matches('{').count();
+        let shuts = line.matches('}').count();
+        depth = (depth + opens).saturating_sub(if closes { shuts - 1 } else { shuts });
+    }
+    depths
+}
+
+/// The `(indent, name)` of a `T NAME;` line — a declaration with no initializer.
+fn bare_declaration(line: &str) -> Option<(String, String)> {
+    let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+    let rest = line.trim().strip_suffix(';')?;
+    if rest.contains('=') || rest.contains('(') {
+        return None;
+    }
+    let name = rest.rsplit(' ').next()?;
+    if rest.len() == name.len() || !is_decompiler_local(name) {
+        return None;
+    }
+    Some((indent, name.to_owned()))
+}
+
 fn fold_compound_assignments(body: &str) -> String {
     const OPERATORS: [&str; 7] = [" + ", " - ", " * ", " / ", " | ", " & ", " ^ "];
     let pure_member_path = |path: &str| {
@@ -7085,6 +7529,34 @@ fn indent_of(line: &str) -> String {
 /// `return`, so a block it wrote as an `else` can still be one after the arm has learned to
 /// return; the compiler then adds a jump to a join that is the very next instruction, which
 /// vanilla never had.
+/// Whether the function's exit is a JOIN — the instruction before its final `RET` jumps to that
+/// `RET` rather than running into it.
+///
+/// A returning arm followed by an `else` compiles to exactly that: each arm jumps to a shared
+/// epilogue. An arm that falls through has nothing to jump to, so the jump is absent. That makes
+/// the last instruction the witness for which of the two shapes the source was written in.
+fn epilogue_is_joined(f: &Func) -> bool {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return false;
+    };
+    let Some(ret) = instrs.iter().rposition(|ins| ins.op.name == "RET") else {
+        return false;
+    };
+    if ret == 0 {
+        return false;
+    }
+    let before = &instrs[ret - 1];
+    if before.op.name != "JMP" {
+        return false;
+    }
+    // A jump's operand is a signed dword offset relative to the dword AFTER it.
+    let Some(offset) = before.dwords.first().map(|word| *word as i32) else {
+        return false;
+    };
+    let target = before.offset_dw as i64 + 2 + i64::from(offset);
+    target == instrs[ret].offset_dw as i64
+}
+
 fn drop_else_after_returning_arm(body: &str) -> String {
     let lines: Vec<&str> = body.lines().collect();
     let mut kept: Vec<String> = Vec::new();
@@ -8755,6 +9227,119 @@ fn is_generated(
     class_members
         .get(f.namespace.as_str())
         .is_some_and(|members| members.contains(f.name.as_str()))
+}
+
+#[cfg(test)]
+mod enum_call_round_trip_tests {
+    use super::fold_enum_call_round_trips;
+    use std::collections::HashMap;
+
+    fn types() -> HashMap<i32, String> {
+        HashMap::from([(5, "ERelationship".to_owned())])
+    }
+
+    #[test]
+    fn a_round_trip_through_the_calls_own_enum_is_the_call() {
+        let body = "    int local_5 = int(this.GetRelationship(Entry));\n    this.Severities.Find(ERelationship(local_5), local_2);\n";
+        assert_eq!(
+            fold_enum_call_round_trips(body, &types()),
+            "    this.Severities.Find(this.GetRelationship(Entry), local_2);\n",
+            "both casts name the type the call already returns"
+        );
+    }
+
+    #[test]
+    fn a_round_trip_through_another_enum_is_a_conversion() {
+        let body = "    int local_5 = int(this.GetRelationship(Entry));\n    this.Severities.Find(EGuild(local_5), local_2);\n";
+        assert_eq!(
+            fold_enum_call_round_trips(body, &types()),
+            body,
+            "a different enum converts, and the conversion has to stay"
+        );
+    }
+
+    #[test]
+    fn an_unresolved_callee_keeps_its_casts() {
+        let body = "    int local_5 = int(this.GetRelationship(Entry));\n    this.Severities.Find(ERelationship(local_5), local_2);\n";
+        assert_eq!(
+            fold_enum_call_round_trips(body, &HashMap::new()),
+            body,
+            "with no return type there is no witness, so nothing moves"
+        );
+    }
+}
+
+#[cfg(test)]
+mod declaration_sink_tests {
+    use super::sink_declarations_into_their_block;
+    use std::collections::HashSet;
+
+    const BODY: &str = "    FThing local_9;\n    if (Guard())\n    {\n        return;\n    }\n    if (Other())\n    {\n        local_9.Field = 1;\n        Use(local_9);\n    }\n    return;\n";
+
+    #[test]
+    fn a_declaration_used_in_one_block_moves_into_it() {
+        let sunk = sink_declarations_into_their_block(BODY, &HashSet::from([9]));
+        assert_eq!(
+            sunk,
+            "    if (Guard())\n    {\n        return;\n    }\n    if (Other())\n    {\n        FThing local_9;\n        local_9.Field = 1;\n        Use(local_9);\n    }\n    return;\n",
+            "the constructor belongs where the block that uses it begins"
+        );
+    }
+
+    #[test]
+    fn a_slot_touched_before_the_branch_stays_where_it_was() {
+        assert_eq!(
+            sink_declarations_into_their_block(BODY, &HashSet::new()),
+            BODY,
+            "without the witness the declaration was at function scope and stays there"
+        );
+    }
+
+    #[test]
+    fn mentions_in_two_blocks_stay_at_function_scope() {
+        let body = "    FThing local_9;\n    if (A())\n    {\n        Use(local_9);\n    }\n    if (B())\n    {\n        Use(local_9);\n    }\n";
+        assert_eq!(
+            sink_declarations_into_their_block(body, &HashSet::from([9])),
+            body,
+            "no single block holds every mention, so nothing can hold the declaration"
+        );
+    }
+}
+
+#[cfg(test)]
+mod accumulator_tests {
+    use super::collapse_single_use_accumulators;
+    use std::collections::HashSet;
+
+    const BODY: &str = "    float local_10 = Thing.GetRadius();\n    local_10 = local_10 * Multiplier;\n    return Use(local_10);\n";
+
+    #[test]
+    fn accumulator_collapses_into_its_single_reader() {
+        let folded = collapse_single_use_accumulators(BODY, &HashSet::new());
+        assert_eq!(
+            folded, "    return Use((Thing.GetRadius() * Multiplier));\n",
+            "declare, accumulate, read once is one expression: {folded}"
+        );
+    }
+
+    #[test]
+    fn accumulator_read_twice_keeps_its_name() {
+        let body = "    float local_10 = Thing.GetRadius();\n    local_10 = local_10 * Multiplier;\n    return Use(local_10, local_10);\n";
+        assert_eq!(
+            collapse_single_use_accumulators(body, &HashSet::new()),
+            body,
+            "a value read twice has to keep the name it is read through"
+        );
+    }
+
+    #[test]
+    fn accumulator_on_a_named_widening_keeps_its_name() {
+        assert_eq!(
+            collapse_single_use_accumulators(BODY, &HashSet::from([10])),
+            BODY,
+            "where the copy IS the declaration, folding it changes the width of the arithmetic"
+        );
+    }
 }
 
 #[cfg(test)]
