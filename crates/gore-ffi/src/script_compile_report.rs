@@ -838,7 +838,7 @@ fn compile_report_with_available_product_package(
                 false,
                 false,
                 Some(authority.identity()),
-                None,
+                runner_unavailable.clone(),
             ),
         );
     }
@@ -873,7 +873,7 @@ fn compile_report_with_available_product_package(
                         false,
                         false,
                         Some(authority.identity()),
-                        None,
+                        runner_unavailable.clone(),
                     ),
                 );
             }
