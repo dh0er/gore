@@ -6832,8 +6832,11 @@ fn fold_member_read_temporaries(
     roots: &HashMap<String, String>,
     refs: &RefResolver,
 ) -> String {
+    // A path, not a literal: `5.0f` also contains a dot, and reading it as a member path made
+    // every float constant look like an unresolvable member.
     let pure_path = |path: &str| {
         path.contains('.')
+            && path.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
             && path
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b':'))
@@ -6848,7 +6851,20 @@ fn fold_member_read_temporaries(
             if !pure_path(&path) {
                 return None;
             }
-            if locals.get(&slot) != type_of_member_path(&path, fields, roots, refs).as_ref() {
+            let member = type_of_member_path(&path, fields, roots, refs);
+            if locals.get(&slot) != member.as_ref() {
+                if std::env::var_os("GORE_AS_MEMBER_DIAG").is_some() {
+                    eprintln!(
+                        "[member] {} slot={:?} member={:?} | {}",
+                        match member.is_none() {
+                            true => "unresolved",
+                            false => "type",
+                        },
+                        locals.get(&slot),
+                        member,
+                        lines[at].trim()
+                    );
+                }
                 return None;
             }
             let mut reader = None;
