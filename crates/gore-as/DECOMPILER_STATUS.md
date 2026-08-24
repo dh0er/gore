@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 98.11% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 98.22% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **98.11%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **98.22%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**3,103 functions (1.89%) recompile to bytecode that differs semantically.** A semantic
+**2,926 functions (1.78%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -49,11 +49,10 @@ figure is 531:
 
 | Class | Functions | Share |
 |-------|-----------|-------|
-| Different instructions on the two sides | 1,394 | 44.9% |
+| Different instructions on the two sides | 1,394 | 47.6% |
 | Same instructions, different order | 562 | 18.1% |
 | Other extra instructions | 469 | 15.1% |
 | One or more extra slot-to-slot copies, nothing else | 304 | 9.8% |
-| Identical but for an engine-internal type id | 177 | 5.7% |
 | One or more extra handle aliases, nothing else | 138 | 4.4% |
 | Identical but for a slot number, or extra copies AND aliases | 59 | 1.9% |
 
@@ -70,15 +69,14 @@ comparison then runs at the wrong width — the widening is rendered as a plain 
 folds collapse it as if it were an alias), and 545 whose instructions match but run in a
 different order.
 
-The 177 with an engine type id are not reachable from source, and that is now proven rather than
-assumed: after stripping the operand flag bits, vanilla's id and ours resolve through each cache's
-own type tables to the SAME type identity in every case. The regen registers six fewer types than
-vanilla (37,159 against 37,165) because our source never instantiates fourteen const-iterator
-template types, which renumbers everything after them. And none of those functions has any emitted
-source at all: they are the compiler-generated `Get`/`GetOrCreate`/`Create` component accessors and
-generated delegate thunks. The honest fix is in the oracle, which compares these operands by raw
-value. The same missing instantiations are what the splice sweep's three failures name (`$beh0`
-and `Iterator` symbols with no row in the base cache).
+The engine type ids are gone from this table, and not by fiat. A `TYPEID` operand's numeric value
+is an `asCTypeInfo` id the engine assigns as it registers types; it drifts whenever the set or
+order of registrations changes, which is the same build noise the reference normalizer already
+takes out. N7 resolves such an operand through the side's OWN type table and compares the type it
+NAMES, carrying the handle and const-handle bits along so a handle is never equated with a value.
+It is fail-closed: an id either side cannot resolve stays compared by value. It moved exactly the
+177 functions and nothing else — every one of which had no emitted source at all, being a
+generated component accessor or delegate thunk.
 
 ### The install is shared
 

@@ -5,7 +5,7 @@
 //! Thesis: the AS compiler emits identical bytecode for identical source on the same engine
 //! build, MODULO a handful of build-non-determinism sources — ref/type-id keys (runtime
 //! pointers), jump absolutes (shift with instruction size), and constant raw encodings. This
-//! tool normalizes exactly those (N1/N3/N4, plus opt-in fail-closed slot-allocation proofs N2) and classifies each
+//! tool normalizes exactly those (N1/N3/N4/N7, plus opt-in fail-closed slot-allocation proofs N2) and classifies each
 //! aligned function IDENTICAL / BENIGN-DIFF / SEMANTIC-DIFF. A residual diff after normalization
 //! is a difference the compiler was FORCED to make by different SOURCE — a real behavior change.
 //!
@@ -129,6 +129,14 @@ enum Operand {
     /// the raw id. Only produced after the runtime-object-typeid + feeds-matching-opCast gate;
     /// a genuine primitive type-id stays a value-compared `Ref(Primitive)`.
     OpCastTypeId,
+    /// N7: a LARGE runtime object type-id resolved, through the side's OWN type table, to the
+    /// type it names. The numeric `asCTypeInfo` id is assigned as the engine registers types and
+    /// drifts whenever the set or order of registrations changes — the same build noise N1
+    /// normalizes away for reference keys. What the operand MEANS is the type, so two such
+    /// operands compare equal when they resolve to the same type identity, and the handle and
+    /// const-handle flag bits travel with the token so a handle is never equated with a value.
+    /// Fail-closed: an id either side cannot resolve stays a value-compared `Ref(Primitive)`.
+    TypeIdentity(String),
     /// A raw dword/qword the classifier does not model as slot/const/ref/jump — compared verbatim
     /// (conservative: an unmodeled operand difference stays SEMANTIC).
     RawDw(u32),
@@ -210,6 +218,36 @@ impl Side {
         let ident = RefIdentity::build(bytes)?;
         Ok(Side { refs, ident })
     }
+}
+
+/// N7: the type a runtime object type-id names, as a token that carries the handle and
+/// const-handle flags alongside the resolved name. The id's index part is what the engine assigns
+/// at registration time and what drifts; the flags are part of what the operand means.
+///
+/// `None` when this side's table cannot resolve the id, which leaves the operand compared by
+/// value — the fail-closed default.
+fn resolved_type_identity(id: &OperandId, side: &Side) -> Option<String> {
+    const OBJHANDLE: u32 = 0x4000_0000;
+    const HANDLETOCONST: u32 = 0x2000_0000;
+    let OperandId::Primitive(raw) = id else {
+        return None;
+    };
+    let raw = *raw as u32;
+    for candidate in [raw, raw & !OBJHANDLE, raw & !(OBJHANDLE | HANDLETOCONST)] {
+        if let Some(name) = side.refs.type_by_id_composed(candidate as i32) {
+            return Some(type_identity_token(&name, raw));
+        }
+    }
+    None
+}
+
+/// The N7 token: the resolved type name plus the handle and const-handle flags the id carries.
+/// Those two bits are part of what the operand means — a handle is not the value — while the
+/// index below them is what the engine assigns at registration time and what drifts.
+fn type_identity_token(name: &str, raw: u32) -> String {
+    const OBJHANDLE: u32 = 0x4000_0000;
+    const HANDLETOCONST: u32 = 0x2000_0000;
+    format!("{name}#{:#x}", raw & (OBJHANDLE | HANDLETOCONST))
 }
 
 /// Read a qword (2 dwords LE) from the bytecode at absolute dword offset.
@@ -330,6 +368,15 @@ fn normalize_operands(
             {
                 out.push(Operand::OpCastTypeId);
                 continue;
+            }
+            // N7: any other runtime object type-id resolves to the type it names.
+            if let Operand::Ref(id) = operand {
+                if id.is_runtime_object_typeid() {
+                    if let Some(identity) = resolved_type_identity(id, side) {
+                        out.push(Operand::TypeIdentity(identity));
+                        continue;
+                    }
+                }
             }
             out.push(operand.clone());
             continue;
@@ -2153,6 +2200,7 @@ fn render_operand(op: &Operand) -> String {
         Operand::StaticName(Some(s)) => format!("n\"{s}\""),
         Operand::StaticName(None) => "n<?>".to_string(),
         Operand::OpCastTypeId => "opcast-typeid".to_string(),
+        Operand::TypeIdentity(name) => format!("type {name}"),
         Operand::RawDw(d) => format!("0x{d:x}"),
         Operand::RawQw(q) => format!("0x{q:x}"),
     }
@@ -3466,6 +3514,24 @@ mod tests {
     /// which does NOT feed an `opCast` (no matching call follows) must stay raw, so two different
     /// large ids still differ (SEMANTIC). This proves the gate requires the opCast, not merely a
     /// large id.
+    #[test]
+    /// N7 keeps the handle bits in the token: the same registered type used as a value, as a
+    /// handle and as a const handle are three different operands, and only the drifting index
+    /// below those bits is normalized away.
+    #[test]
+    fn n7_type_identity_separates_handle_flags() {
+        let value = type_identity_token("AGothicCharacter", 0x0C00_1234);
+        let handle = type_identity_token("AGothicCharacter", 0x4C00_1234);
+        let const_handle = type_identity_token("AGothicCharacter", 0x6C00_1234);
+        let other_index = type_identity_token("AGothicCharacter", 0x4C00_9999);
+        assert_ne!(value, handle, "a value must not equal a handle");
+        assert_ne!(handle, const_handle, "a handle must not equal a const handle");
+        assert_eq!(
+            handle, other_index,
+            "the same type with the same flags is the same operand whatever index it drifted to"
+        );
+    }
+
     #[test]
     fn gap_c_typeid_without_opcast_stays_primitive() {
         let side = side_or_skip!();
