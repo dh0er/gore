@@ -141,14 +141,15 @@ The widenings that were measured and rejected rather than shipped:
   the type witness that would say so is not in reach at that point in the pipeline. The proof
   itself is sound; what is missing is the constness the slot table does not spell;
 - peeling a fluent method chain from the right, so each link becomes a call site whose parameter
-  row can admit a producer, is the one experiment that broke ALIGNMENT: the tree compiled, but the
-  generator emitted 287 fewer functions than vanilla has, and byte-identical collapsed from 6,924
-  to 1,010. Nothing about widening where a producer may travel is safe without watching that
-  number — a compile that exits 0 is not by itself evidence. **This one result is not confirmed**:
-  a second worktree runs a standalone compiler that stages its own tree into the same install, and
-  two compiles overlapping produce a regen cache built from a MIXED tree, which is exactly what
-  alignment loss looks like. The measurement predates the interlock below, so it may be
-  cross-talk rather than the change. Re-run it under the guard before treating it as settled;
+  row can admit a producer, is the one experiment that breaks ALIGNMENT, and it is now CONFIRMED
+  under guard: the tree compiles with 0 errors, the install is verified vanilla before and after,
+  and the generator still emits 287 fewer functions than vanilla has. Byte-identical collapses
+  from 7,051 to 1,038 and the reference normalizer fires on nearly every function, which is what a
+  shifted function table looks like. An earlier revision of this document called the result
+  unconfirmed because the install is shared with another worktree's compiler; it is not that.
+  (Two `Resulting reference cannot be returned` errors have to be guarded away first — nothing may
+  move into the `return` of a function that returns by reference — or the tree does not compile at
+  all and the alignment question never gets asked.);
 - substituting a default-constructed `T()` at any ARGUMENT position took three measurements to
   get right, and the sequence is the lesson. Asking `arg_position_accepts_temporary`, which is
   keyed by the callee's NAME, costs 35 errors: for `FindFloorAtLocation(Location, FHitResult(), …)`
