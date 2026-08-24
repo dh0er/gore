@@ -5,10 +5,10 @@ use sha2::{Digest as _, Sha256};
 use super::super::frontend::{ClassGeneratorConfigV1, CompilerOptionsV1, PreprocessorConfigV1};
 use super::super::manifest::Sha256Digest;
 use super::super::registry::{
-    EnginePropertySettingV1, OrderedEnginePropertiesV1, PostBindEntryV1, PostBindResultV1,
-    PostBindSnapshotV1, PostBindStateV1, RegistrationEntryV1, RegistrationTraceV1,
-    ENGINE_PROPERTIES_SCHEMA, POST_BIND_SNAPSHOT_SCHEMA, REGISTRATION_TRACE_SCHEMA,
-    REGISTRY_SCHEMA_VERSION,
+    EnginePropertySettingV1, FixedTypeOperationsV1, HostStubKindV1, OrderedEnginePropertiesV1,
+    PostBindEntryV1, PostBindResultV1, PostBindSnapshotV1, PostBindStateV1, PrimitiveTypeV1,
+    RegistrationEntryV1, RegistrationTraceV1, ENGINE_PROPERTIES_SCHEMA, POST_BIND_SNAPSHOT_SCHEMA,
+    REGISTRATION_TRACE_SCHEMA, REGISTRY_SCHEMA_VERSION,
 };
 use super::model::*;
 
@@ -471,14 +471,45 @@ impl StreamDecoder {
         if support.host_stub_pointers.len() != support.host_stubs.len() {
             return order("registry support must map every host stub to pointer provenance");
         }
+        let mut opaque_object_tokens = BTreeSet::new();
+        let mut opaque_storage_tokens = BTreeSet::new();
         for (ordinal, mapping) in support.host_stub_pointers.iter().enumerate() {
-            if mapping.stub_id != ordinal as u32
-                || support.host_stubs[ordinal].stub_id != mapping.stub_id
-                || !self.pointer_tokens.contains_key(&mapping.pointer_token)
-            {
-                return order("registry support host-stub pointer mapping is invalid");
+            let descriptor = &support.host_stubs[ordinal];
+            if mapping.stub_id != ordinal as u32 || descriptor.stub_id != mapping.stub_id {
+                return order(format!(
+                    "registry support host-stub pointer mapping is invalid at ordinal {ordinal}: mapping stub {}, descriptor stub {}",
+                    mapping.stub_id,
+                    descriptor.stub_id,
+                ));
+            }
+            match descriptor.descriptor {
+                HostStubKindV1::Callable { .. } => {
+                    if !self.pointer_tokens.contains_key(&mapping.pointer_token) {
+                        return order(format!(
+                            "registry support callable host stub {ordinal} names unknown primary-image pointer token {}",
+                            mapping.pointer_token,
+                        ));
+                    }
+                }
+                HostStubKindV1::Object { .. } => {
+                    opaque_object_tokens.insert(mapping.pointer_token);
+                }
+                HostStubKindV1::Storage { .. } => {
+                    opaque_storage_tokens.insert(mapping.pointer_token);
+                }
             }
         }
+        for (class, tokens) in [
+            ("object", &opaque_object_tokens),
+            ("storage", &opaque_storage_tokens),
+        ] {
+            if !tokens.iter().copied().eq(0..tokens.len() as u32) {
+                return order(format!(
+                    "registry support {class} capability tokens are not a contiguous zero-based namespace"
+                ));
+            }
+        }
+        validate_target_fixed_operations(&support)?;
         self.registry_support = Some(support);
         Ok(())
     }
@@ -539,7 +570,7 @@ impl StreamDecoder {
         let mut cursor = Cursor::new(payload);
         let build_identifier = cursor.u32()?;
         let flags = cursor.u32()?;
-        if flags & !0x0f != 0 {
+        if flags & !0xff != 0 {
             return Err(CaptureDecodeError::ReservedBits("build/JIT flags"));
         }
         let precompiled_guid = cursor.take(16)?.try_into().expect("fixed guid length");
@@ -552,6 +583,10 @@ impl StreamDecoder {
             jit_guid_matches: flags & 2 != 0,
             jit_database_cleared: flags & 4 != 0,
             shipping_cache_matches: flags & 8 != 0,
+            as_reference_debugging: flags & 0x10 != 0,
+            fork_opcode_table_201_212_present: flags & 0x20 != 0,
+            reference_debug_opcodes_emittable: flags & 0x40 != 0,
+            resolve_object_ptr_callback_registered: flags & 0x80 != 0,
             precompiled_guid,
             compiled_jit_guid,
             get_build_identifier_rva,
@@ -563,6 +598,10 @@ impl StreamDecoder {
             || fact.get_build_identifier_rva != RVA_GET_BUILD_IDENTIFIER
             || fact.get_static_jit_info_rva != RVA_GET_STATIC_JIT_INFO
             || fact.jit_database_cleared
+            || fact.as_reference_debugging
+            || !fact.fork_opcode_table_201_212_present
+            || fact.reference_debug_opcodes_emittable
+            || fact.resolve_object_ptr_callback_registered
         {
             return Err(CaptureDecodeError::Unqualified(
                 "build/JIT identity mismatch",
@@ -797,6 +836,23 @@ impl StreamDecoder {
                 .collect(),
             canonical_sha256: zero_digest(),
         };
+        for entry in &registration_trace.entries {
+            if let RegistrationEntryV1::GlobalFunction { declaration, .. } = entry {
+                if declaration.is_empty()
+                    || declaration.len() > 64 * 1024
+                    || declaration.contains('\0')
+                    || declaration
+                        .chars()
+                        .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+                {
+                    return Err(CaptureDecodeError::RegistryProfile(format!(
+                        "registration {} global_function declaration is not neutral text: {:?}",
+                        entry.ordinal(),
+                        declaration
+                    )));
+                }
+            }
+        }
         registration_trace
             .seal()
             .map_err(|error| CaptureDecodeError::RegistryProfile(error.to_string()))?;
@@ -829,6 +885,7 @@ impl StreamDecoder {
             })
             .map_err(|error| CaptureDecodeError::RegistryProfile(error.to_string()))?;
         Ok(DecodedCaptureV1 {
+            _decoder_validated: (),
             header: self.header,
             engine_properties: self.engine_properties,
             pointer_tokens: self.pointer_tokens,
@@ -845,6 +902,86 @@ impl StreamDecoder {
             sealed_stream_sha256,
         })
     }
+}
+
+fn validate_target_fixed_operations(
+    support: &RegistrySupportCaptureV1,
+) -> Result<(), CaptureDecodeError> {
+    let identities = [
+        (PrimitiveTypeV1::Bool, 1, 1),
+        (PrimitiveTypeV1::Int8, 1, 1),
+        (PrimitiveTypeV1::Int16, 2, 2),
+        (PrimitiveTypeV1::Int32, 4, 4),
+        (PrimitiveTypeV1::Int64, 8, 8),
+        (PrimitiveTypeV1::Uint8, 1, 1),
+        (PrimitiveTypeV1::Uint16, 2, 2),
+        (PrimitiveTypeV1::Uint32, 4, 4),
+        (PrimitiveTypeV1::Uint64, 8, 8),
+        (PrimitiveTypeV1::Float32, 4, 4),
+        (PrimitiveTypeV1::Float64, 8, 8),
+    ];
+    if support.primitive_operations.len() != identities.len() {
+        return Err(CaptureDecodeError::Unqualified(
+            "primitive operation table does not match BuildID 24539464",
+        ));
+    }
+    for (ordinal, (captured, (primitive, size, alignment))) in support
+        .primitive_operations
+        .iter()
+        .zip(identities)
+        .enumerate()
+    {
+        let expected = FixedTypeOperationsV1 {
+            can_create_property: true,
+            never_requires_gc: false,
+            requires_property: false,
+            can_be_template_subtype: true,
+            can_construct: true,
+            need_construct: false,
+            can_destruct: true,
+            need_destruct: false,
+            can_copy: true,
+            need_copy: false,
+            can_compare: true,
+            can_hash_value: true,
+            value_size: size,
+            value_alignment: alignment,
+            is_object_pointer: false,
+        };
+        if captured.ordinal != ordinal as u32
+            || captured.primitive != primitive
+            || captured.operations != expected
+        {
+            return Err(CaptureDecodeError::Unqualified(
+                "primitive operation table does not match BuildID 24539464",
+            ));
+        }
+    }
+    let dynamic = FixedTypeOperationsV1 {
+        can_create_property: true,
+        never_requires_gc: false,
+        requires_property: false,
+        can_be_template_subtype: true,
+        can_construct: true,
+        need_construct: true,
+        can_destruct: true,
+        need_destruct: true,
+        can_copy: true,
+        need_copy: true,
+        can_compare: true,
+        can_hash_value: false,
+        value_size: 16,
+        value_alignment: 8,
+        is_object_pointer: false,
+    };
+    if support.dynamic_script_operations.delegate != dynamic
+        || support.dynamic_script_operations.multicast_delegate != dynamic
+    {
+        return Err(CaptureDecodeError::Unqualified(
+            "dynamic script operation table does not match BuildID 24539464",
+        ));
+    }
+    Ok(())
 }
 
 fn frontend_config_set_digest(configs: &CapturedFrontendConfigsV1) -> Sha256Digest {
@@ -915,16 +1052,28 @@ fn validate_registration_pointer_tokens(
         pointer_tokens: &BTreeMap<u32, PointerTokenV1>,
         stub_id: u32,
     ) -> Result<(), CaptureDecodeError> {
-        let token_id = support
+        let mapping = support
             .host_stub_pointers
             .get(stub_id as usize)
             .filter(|mapping| mapping.stub_id == stub_id)
-            .map(|mapping| mapping.pointer_token)
             .ok_or(CaptureDecodeError::UnknownHostStub(stub_id))?;
-        pointer_tokens
-            .contains_key(&token_id)
-            .then_some(())
-            .ok_or(CaptureDecodeError::UnknownPointerToken(token_id))
+        let descriptor = support
+            .host_stubs
+            .get(stub_id as usize)
+            .filter(|descriptor| descriptor.stub_id == stub_id)
+            .ok_or(CaptureDecodeError::UnknownHostStub(stub_id))?;
+        match descriptor.descriptor {
+            HostStubKindV1::Callable { .. } => pointer_tokens
+                .contains_key(&mapping.pointer_token)
+                .then_some(())
+                .ok_or(CaptureDecodeError::UnknownPointerToken(
+                    mapping.pointer_token,
+                )),
+            // Object and storage capabilities are deliberately address-free, class-local
+            // provenance tokens. Their descriptor kind supplies the namespace; standalone
+            // replay creates compile-only replacements and never dereferences the source.
+            HostStubKindV1::Object { .. } | HostStubKindV1::Storage { .. } => Ok(()),
+        }
     }
     let require_pair = |callable: u32, auxiliary: Option<u32>| {
         require(support, pointer_tokens, callable)?;
@@ -1276,7 +1425,7 @@ pub enum CaptureDecodeError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::compiler_profile::frontend::{
         ClassGeneratorConfigV1, CompilerOptionsV1, EffectivePreprocessorFlagV1,
@@ -1350,6 +1499,21 @@ mod tests {
         stream
     }
 
+    fn record_payload_offset(stream: &[u8], wanted: RecordKindV1) -> usize {
+        let mut offset = CAPTURE_HEADER_BYTES_V1;
+        while offset < stream.len() {
+            let header_end = offset + CAPTURE_RECORD_HEADER_BYTES_V1;
+            let kind = u16::from_le_bytes(stream[offset..offset + 2].try_into().unwrap());
+            let payload_bytes =
+                u32::from_le_bytes(stream[offset + 8..offset + 12].try_into().unwrap()) as usize;
+            if kind == wanted as u16 {
+                return header_end;
+            }
+            offset = header_end + payload_bytes;
+        }
+        panic!("fixture record is missing")
+    }
+
     fn frontend_configs() -> CapturedFrontendConfigsV1 {
         let names = [
             "COOK_COMMANDLET",
@@ -1416,6 +1580,9 @@ mod tests {
 
     fn fixed_operations(value_size: u32, value_alignment: u32) -> FixedTypeOperationsV1 {
         FixedTypeOperationsV1 {
+            can_create_property: true,
+            never_requires_gc: false,
+            requires_property: false,
             can_be_template_subtype: true,
             can_construct: true,
             need_construct: false,
@@ -1465,12 +1632,27 @@ mod tests {
                 .map(|(ordinal, primitive)| PrimitiveTypeOperationsV1 {
                     ordinal: ordinal as u32,
                     primitive,
-                    operations: fixed_operations(if ordinal == 0 { 1 } else { 8 }, 1),
+                    operations: {
+                        let size = [1, 1, 2, 4, 8, 1, 2, 4, 8, 4, 8][ordinal];
+                        fixed_operations(size, size)
+                    },
                 })
                 .collect(),
             dynamic_script_operations: DynamicScriptTypeOperationsV1 {
-                delegate: fixed_operations(16, 8),
-                multicast_delegate: fixed_operations(16, 8),
+                delegate: FixedTypeOperationsV1 {
+                    need_construct: true,
+                    need_destruct: true,
+                    need_copy: true,
+                    can_hash_value: false,
+                    ..fixed_operations(16, 8)
+                },
+                multicast_delegate: FixedTypeOperationsV1 {
+                    need_construct: true,
+                    need_destruct: true,
+                    need_copy: true,
+                    can_hash_value: false,
+                    ..fixed_operations(16, 8)
+                },
             },
         }
     }
@@ -1656,7 +1838,9 @@ mod tests {
 
         let mut build = Vec::new();
         u32le(&mut build, PINNED_BUILD_IDENTIFIER);
-        u32le(&mut build, 8);
+        // Shipping cache matches + fork opcode table 201..=212 present. The exact pinned
+        // Shipping build has neither reference debugging nor a ResolveObjectPtr callback.
+        u32le(&mut build, 8 | 0x20);
         build.extend_from_slice(&PINNED_PRECOMPILED_GUID);
         build.extend_from_slice(&[0; 16]);
         u32le(&mut build, RVA_GET_BUILD_IDENTIFIER);
@@ -1689,6 +1873,11 @@ mod tests {
         (out, 16)
     }
 
+    pub(crate) fn complete_capture_fixture() -> Vec<u8> {
+        let (stream, count) = fixture_stream();
+        reseal(stream, count)
+    }
+
     #[test]
     fn decodes_complete_pointer_neutral_fixture() {
         let (stream, count) = fixture_stream();
@@ -1703,6 +1892,80 @@ mod tests {
         assert_eq!(decoded.frontend_boundaries.len(), 3);
         assert!(decoded.build_jit.shipping_cache_matches);
         assert!(!decoded.build_jit.jit_info_present);
+        assert!(!decoded.build_jit.as_reference_debugging);
+        assert!(decoded.build_jit.fork_opcode_table_201_212_present);
+        assert!(!decoded.build_jit.reference_debug_opcodes_emittable);
+        assert!(!decoded.build_jit.resolve_object_ptr_callback_registered);
+    }
+
+    #[test]
+    fn rejects_build_jit_compiler_flag_drift_and_reserved_bits() {
+        let (stream, count) = fixture_stream();
+        let payload_offset = record_payload_offset(&stream, RecordKindV1::BuildJit);
+        let flags_offset = payload_offset + 4;
+
+        for invalid_flags in [
+            8u32 | 0x10 | 0x20,
+            8u32,
+            8u32 | 0x20 | 0x40,
+            8u32 | 0x20 | 0x80,
+        ] {
+            let mut invalid = stream.clone();
+            invalid[flags_offset..flags_offset + 4].copy_from_slice(&invalid_flags.to_le_bytes());
+            assert!(matches!(
+                decode_capture_v1(&reseal(invalid, count)),
+                Err(CaptureDecodeError::Unqualified(
+                    "build/JIT identity mismatch"
+                ))
+            ));
+        }
+
+        let mut reserved = stream;
+        reserved[flags_offset..flags_offset + 4]
+            .copy_from_slice(&(8u32 | 0x20 | 0x100).to_le_bytes());
+        assert!(matches!(
+            decode_capture_v1(&reseal(reserved, count)),
+            Err(CaptureDecodeError::ReservedBits("build/JIT flags"))
+        ));
+    }
+
+    #[test]
+    fn rejects_target_fixed_operation_drift() {
+        let mut support = registry_support();
+        validate_target_fixed_operations(&support).unwrap();
+
+        let mutations: [fn(&mut FixedTypeOperationsV1); 3] = [
+            |operations: &mut FixedTypeOperationsV1| operations.can_create_property = false,
+            |operations: &mut FixedTypeOperationsV1| operations.never_requires_gc = true,
+            |operations: &mut FixedTypeOperationsV1| operations.requires_property = true,
+        ];
+        for mutate in mutations {
+            let mut drifted = registry_support();
+            mutate(&mut drifted.primitive_operations[3].operations);
+            assert!(matches!(
+                validate_target_fixed_operations(&drifted),
+                Err(CaptureDecodeError::Unqualified(
+                    "primitive operation table does not match BuildID 24539464"
+                ))
+            ));
+        }
+
+        support.primitive_operations[3].operations.value_alignment = 8;
+        assert!(matches!(
+            validate_target_fixed_operations(&support),
+            Err(CaptureDecodeError::Unqualified(
+                "primitive operation table does not match BuildID 24539464"
+            ))
+        ));
+
+        let mut support = registry_support();
+        support.dynamic_script_operations.delegate.can_hash_value = true;
+        assert!(matches!(
+            validate_target_fixed_operations(&support),
+            Err(CaptureDecodeError::Unqualified(
+                "dynamic script operation table does not match BuildID 24539464"
+            ))
+        ));
     }
 
     #[test]

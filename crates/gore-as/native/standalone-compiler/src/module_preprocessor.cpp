@@ -459,12 +459,28 @@ std::string ascii_fold(std::string value) {
     return value;
 }
 
+bool is_name_none_spelling(const std::string& spelling) {
+    if (spelling.empty()) return true;
+    const bool ascii = std::all_of(
+        spelling.begin(), spelling.end(), [](const char character) {
+            return static_cast<unsigned char>(character) < 0x80U;
+        });
+    return ascii && ascii_fold(spelling) == "none";
+}
+
 using fname_key_map = std::unordered_map<std::string, std::string>;
 
 bool fname_comparison_identity(
     const std::string& spelling,
     const fname_key_map& captured,
     std::string& identity) {
+    // FName() and every ASCII-case spelling of "None" are NAME_None in the
+    // pinned donor.  Its cached display spelling is always the canonical
+    // "None", so they must also share one comparison identity here.
+    if (is_name_none_spelling(spelling)) {
+        identity = "ascii:none";
+        return true;
+    }
     const bool ascii = std::all_of(
         spelling.begin(), spelling.end(), [](const char character) {
             return static_cast<unsigned char>(character) < 0x80U;
@@ -474,8 +490,23 @@ bool fname_comparison_identity(
         return true;
     }
     const auto found = captured.find(spelling);
-    if (found == captured.end()) return false;
-    identity = "captured:" + found->second;
+    if (found != captured.end()) {
+        identity = "captured:" + found->second;
+        return true;
+    }
+
+    // Build 24539464 preserves non-ASCII code points but folds ASCII letters in
+    // the same FName.  Derive an uncaptured spelling only when all captured
+    // spellings with that byte-preserving ASCII fold agree on one target key.
+    const std::string folded = ascii_fold(spelling);
+    const std::string* matched_key = nullptr;
+    for (const auto& [captured_spelling, captured_key] : captured) {
+        if (ascii_fold(captured_spelling) != folded) continue;
+        if (matched_key != nullptr && *matched_key != captured_key) return false;
+        matched_key = &captured_key;
+    }
+    if (matched_key == nullptr) return false;
+    identity = "captured:" + *matched_key;
     return true;
 }
 
@@ -795,16 +826,27 @@ std::string generate_static_name(
     const std::string& name,
     std::vector<std::string>& static_names,
     std::unordered_map<std::string, std::size_t>& static_name_indices,
+    std::vector<static_name_use>& static_name_uses,
+    std::vector<std::uint8_t>& static_name_seen,
     const fname_key_map& captured_fname_keys,
     bool& limit_exceeded,
     bool& comparison_missing) {
+    const std::string canonical_name =
+        is_name_none_spelling(name) ? "None" : name;
     std::string key;
-    if (!fname_comparison_identity(name, captured_fname_keys, key)) {
+    if (!fname_comparison_identity(canonical_name, captured_fname_keys, key)) {
         comparison_missing = true;
         return "__STATIC_NAME(0)";
     }
     const auto found = static_name_indices.find(key);
     if (found != static_name_indices.end()) {
+        if (static_name_seen.size() <= found->second) {
+            static_name_seen.resize(found->second + 1U, 0U);
+        }
+        if (static_name_seen[found->second] == 0U) {
+            static_name_seen[found->second] = 1U;
+            static_name_uses.push_back({found->second, canonical_name});
+        }
         return "__STATIC_NAME(" + std::to_string(found->second) + ")";
     }
     if (static_names.size() >= max_preprocessor_static_names) {
@@ -812,8 +854,11 @@ std::string generate_static_name(
         return "__STATIC_NAME(0)";
     }
     const std::size_t index = static_names.size();
-    static_names.push_back(name);
+    static_names.push_back(canonical_name);
     static_name_indices.emplace(key, index);
+    if (static_name_seen.size() <= index) static_name_seen.resize(index + 1U, 0U);
+    static_name_seen[index] = 1U;
+    static_name_uses.push_back({index, canonical_name});
     return "__STATIC_NAME(" + std::to_string(index) + ")";
 }
 
@@ -821,6 +866,8 @@ void lower_name_and_format_literals(
     std::string& code,
     std::vector<std::string>& static_names,
     std::unordered_map<std::string, std::size_t>& static_name_indices,
+    std::vector<static_name_use>& static_name_uses,
+    std::vector<std::uint8_t>& static_name_seen,
     const fname_key_map& captured_fname_keys,
     bool& static_name_limit_exceeded,
     bool& fname_comparison_missing,
@@ -880,6 +927,8 @@ void lower_name_and_format_literals(
                                 position - name_literal_start - 2U),
                             static_names,
                             static_name_indices,
+                            static_name_uses,
+                            static_name_seen,
                             captured_fname_keys,
                             static_name_limit_exceeded,
                             fname_comparison_missing)});
@@ -1098,7 +1147,7 @@ bool validate_inputs(
         return false;
     }
     if (options.blueprint_event_argument_specializations.size() >
-        max_preprocessor_flags) {
+        max_blueprint_event_argument_specializations) {
         result.diagnostics.push_back({
             preprocessor_diagnostic_severity::error, {}, 1U, 1U,
             "blueprint-event argument specialization count exceeds the bounded maximum"});
@@ -1410,13 +1459,11 @@ std::optional<reflection_macro> parse_reflection_macro(
     if (subject_end >= range_end) return std::nullopt;
 
     std::size_t end_of_word = subject_end;
-    while (end_of_word > 0U &&
-           (code[end_of_word - 1U] == ' ' || code[end_of_word - 1U] == '\t')) {
+    while (end_of_word > 0U && is_whitespace(code[end_of_word - 1U])) {
         --end_of_word;
     }
     std::size_t start_of_word = end_of_word;
-    while (start_of_word > 0U && code[start_of_word - 1U] != ' ' &&
-           code[start_of_word - 1U] != '\t') {
+    while (start_of_word > 0U && !is_whitespace(code[start_of_word - 1U])) {
         --start_of_word;
     }
     if (start_of_word == end_of_word) return std::nullopt;
@@ -1427,7 +1474,12 @@ std::optional<reflection_macro> parse_reflection_macro(
     macro.end = close + 1U;
     macro.name_start = start_of_word;
     macro.name_end = end_of_word;
-    macro.line = line;
+    // The donor records FMacro::FileLineNumber when it reaches the function's
+    // opening parenthesis or the property's terminator, not when it first sees
+    // UPROPERTY/UFUNCTION or the subject name.
+    macro.line = line + static_cast<std::uint32_t>(std::count(
+        code.begin() + static_cast<std::ptrdiff_t>(position),
+        code.begin() + static_cast<std::ptrdiff_t>(subject_end), '\n'));
     macro.arguments = code.substr(open + 1U, close - open - 1U);
     macro.name = code.substr(start_of_word, end_of_word - start_of_word);
     if (kind == reflection_macro_kind::property) {
@@ -1640,6 +1692,8 @@ std::string generate_blueprint_event_wrapper(
     const std::string& function_name,
     std::vector<std::string>& static_names,
     std::unordered_map<std::string, std::size_t>& static_name_indices,
+    std::vector<static_name_use>& static_name_uses,
+    std::vector<std::uint8_t>& static_name_seen,
     const fname_key_map& captured_fname_keys,
     bool& static_name_limit_exceeded,
     bool& fname_comparison_missing) {
@@ -1682,6 +1736,8 @@ std::string generate_blueprint_event_wrapper(
         function_name,
         static_names,
         static_name_indices,
+        static_name_uses,
+        static_name_seen,
         captured_fname_keys,
         static_name_limit_exceeded,
         fname_comparison_missing) + ");";
@@ -2026,6 +2082,8 @@ void process_function_macro(
     std::vector<text_replacement>& replacements,
     std::vector<std::string>& static_names,
     std::unordered_map<std::string, std::size_t>& static_name_indices,
+    std::vector<static_name_use>& static_name_uses,
+    std::vector<std::uint8_t>& static_name_seen,
     const fname_key_map& captured_fname_keys,
     bool& static_name_limit_exceeded,
     bool& fname_comparison_missing,
@@ -2087,6 +2145,8 @@ void process_function_macro(
                     function.function_name,
                     static_names,
                     static_name_indices,
+                    static_name_uses,
+                    static_name_seen,
                     captured_fname_keys,
                     static_name_limit_exceeded,
                     fname_comparison_missing);
@@ -2122,6 +2182,8 @@ void process_function_macro(
                     function.function_name,
                     static_names,
                     static_name_indices,
+                    static_name_uses,
+                    static_name_seen,
                     captured_fname_keys,
                     static_name_limit_exceeded,
                     fname_comparison_missing);
@@ -2168,6 +2230,8 @@ void process_function_macro(
                     function.function_name,
                     static_names,
                     static_name_indices,
+                    static_name_uses,
+                    static_name_seen,
                     captured_fname_keys,
                     static_name_limit_exceeded,
                     fname_comparison_missing);
@@ -2268,6 +2332,8 @@ void scan_function_macros_in_range(
     std::vector<text_replacement>& replacements,
     std::vector<std::string>& static_names,
     std::unordered_map<std::string, std::size_t>& static_name_indices,
+    std::vector<static_name_use>& static_name_uses,
+    std::vector<std::uint8_t>& static_name_seen,
     const fname_key_map& captured_fname_keys,
     bool& static_name_limit_exceeded,
     bool& fname_comparison_missing,
@@ -2303,6 +2369,8 @@ void scan_function_macros_in_range(
                     replacements,
                     static_names,
                     static_name_indices,
+                    static_name_uses,
+                    static_name_seen,
                     captured_fname_keys,
                     static_name_limit_exceeded,
                     fname_comparison_missing,
@@ -2343,6 +2411,8 @@ void process_function_macros(
     lexical_preprocess_result& result,
     std::vector<std::string>& static_names,
     std::unordered_map<std::string, std::size_t>& static_name_indices,
+    std::vector<static_name_use>& static_name_uses,
+    std::vector<std::uint8_t>& static_name_seen,
     const fname_key_map& captured_fname_keys) {
     std::string& code = state.module.code.front().conditioned_code;
     std::vector<text_replacement> replacements;
@@ -2365,6 +2435,8 @@ void process_function_macros(
             replacements,
             static_names,
             static_name_indices,
+            static_name_uses,
+            static_name_seen,
             captured_fname_keys,
             static_name_limit_exceeded,
             fname_comparison_missing,
@@ -2429,6 +2501,8 @@ void process_function_macros(
                     replacements,
                     static_names,
                     static_name_indices,
+                    static_name_uses,
+                    static_name_seen,
                     captured_fname_keys,
                     static_name_limit_exceeded,
                     fname_comparison_missing,
@@ -3235,16 +3309,17 @@ void resolve_class_hierarchy(
     lexical_preprocess_result& result,
     const preprocessor_hooks* const hooks) {
     std::unordered_map<std::string, const native_super_type*> native_types;
-    std::unordered_map<std::string, native_super_kind> native_kinds_by_path;
+    std::unordered_map<std::string, const native_super_type*> native_types_by_path;
     native_types.reserve(options.native_super_types.size());
-    native_kinds_by_path.reserve(options.native_super_types.size());
+    native_types_by_path.reserve(options.native_super_types.size());
     for (const native_super_type& type : options.native_super_types) {
         native_types.emplace(type.angelscript_type_name, &type);
-        native_kinds_by_path.emplace(type.unreal_class_path, type.kind);
+        native_types_by_path.emplace(type.unreal_class_path, &type);
     }
     struct base_class_info {
         const preprocessor_base_class* description = nullptr;
         native_super_kind code_super_kind = native_super_kind::other_uobject;
+        bool code_super_game_state_subsystem = false;
     };
     std::unordered_set<std::string> edited_modules;
     for (const preprocessor_source& source : sources) {
@@ -3257,8 +3332,8 @@ void resolve_class_hierarchy(
         if (edited_modules.find(module.module_name) != edited_modules.end()) continue;
         for (const preprocessor_base_class& type : module.classes) {
             if (type.is_struct) continue;
-            const auto kind = native_kinds_by_path.find(type.code_super_class);
-            if (kind == native_kinds_by_path.end()) {
+            const auto native = native_types_by_path.find(type.code_super_class);
+            if (native == native_types_by_path.end()) {
                 result.diagnostics.push_back({
                     preprocessor_diagnostic_severity::error, {}, 1U, 1U,
                     "base class " + type.class_name +
@@ -3266,7 +3341,12 @@ void resolve_class_hierarchy(
                         type.code_super_class});
                 continue;
             }
-            base_classes.emplace(type.class_name, base_class_info{&type, kind->second});
+            base_classes.emplace(
+                type.class_name,
+                base_class_info{
+                    &type,
+                    native->second->kind,
+                    native->second->game_state_subsystem});
         }
     }
     std::unordered_map<std::string, class_location> classes;
@@ -3309,6 +3389,8 @@ void resolve_class_hierarchy(
             description.super_is_code_class = true;
             description.code_super_class = native->second->unreal_class_path;
             description.code_super_kind = native->second->kind;
+            description.code_super_game_state_subsystem =
+                native->second->game_state_subsystem;
             if (native->second->cannot_derive_angelscript) {
                 add_diagnostic(
                     result,
@@ -3330,6 +3412,8 @@ void resolve_class_hierarchy(
                 description.code_super_class =
                     base_parent->second.description->code_super_class;
                 description.code_super_kind = base_parent->second.code_super_kind;
+                description.code_super_game_state_subsystem =
+                    base_parent->second.code_super_game_state_subsystem;
             } else if (parent == classes.end() ||
                 (visits.find(description.super_class) != visits.end() &&
                  visits[description.super_class] == visit_state::resolving) ||
@@ -3347,6 +3431,8 @@ void resolve_class_hierarchy(
                     states[parent->second.state_index].module.classes[parent->second.class_index];
                 description.code_super_class = parent_description.code_super_class;
                 description.code_super_kind = parent_description.code_super_kind;
+                description.code_super_game_state_subsystem =
+                    parent_description.code_super_game_state_subsystem;
             }
         }
         visits[description.class_name] = visit_state::resolved;
@@ -3835,6 +3921,7 @@ lexical_preprocess_result preprocess_lexical_module_graph(
             static_name_indices.emplace(std::move(identity), index);
         }
     }
+    std::vector<std::uint8_t> static_name_seen(result.static_names.size(), 0U);
 
     std::vector<source_state> states;
     states.reserve(sources.size());
@@ -3884,6 +3971,8 @@ lexical_preprocess_result preprocess_lexical_module_graph(
             code,
             result.static_names,
             static_name_indices,
+            result.static_name_uses,
+            static_name_seen,
             captured_fname_keys,
             static_name_limit_exceeded,
             fname_comparison_missing,
@@ -3912,6 +4001,8 @@ lexical_preprocess_result preprocess_lexical_module_graph(
             result,
             result.static_names,
             static_name_indices,
+            result.static_name_uses,
+            static_name_seen,
             captured_fname_keys);
     }
 
@@ -3957,6 +4048,12 @@ lexical_preprocess_result preprocess_lexical_module_graph(
 
     result.modules.reserve(order.size());
     for (const std::size_t index : order) result.modules.push_back(std::move(states[index].module));
+    result.static_name_comparison_identities.reserve(result.static_names.size());
+    for (const std::string& name : result.static_names) {
+        std::string identity;
+        if (!fname_comparison_identity(name, captured_fname_keys, identity)) identity.clear();
+        result.static_name_comparison_identities.push_back(std::move(identity));
+    }
     result.ok = std::none_of(
         result.diagnostics.begin(), result.diagnostics.end(),
         [](const preprocessor_diagnostic& diagnostic) {

@@ -111,6 +111,9 @@ enum class primitive_type {
 };
 
 struct fixed_type_operations {
+    bool can_create_property = false;
+    bool never_requires_gc = false;
+    bool requires_property = false;
     bool can_be_template_subtype = false;
     bool can_construct = false;
     bool need_construct = true;
@@ -137,6 +140,12 @@ struct dynamic_script_type_operations {
 };
 
 enum class dynamic_script_type_category { script_struct, delegate, multicast_delegate };
+
+struct class_generator_type_capabilities {
+    bool can_create_property = false;
+    bool never_requires_gc = false;
+    bool requires_property = false;
+};
 
 enum class type_operations_kind { unavailable, fixed, t_array, t_map, t_set, t_optional };
 
@@ -313,6 +322,16 @@ struct registry_replay_result {
     [[nodiscard]] bool succeeded() const noexcept { return code >= 0; }
 };
 
+// Qualification-only, compiler-owned donor adapters. Product compilation leaves this disabled;
+// an enabled mode is still accepted only when the captured registrations, ABI layout and
+// post-bind metadata exactly match the pinned implementation.
+enum class qualification_runtime_kind {
+    none,
+    t_array_int32,
+    fname_equivalence,
+    fstring_roundtrip,
+};
+
 class registry_runtime final {
 public:
     class impl;
@@ -323,6 +342,34 @@ public:
     registry_runtime& operator=(registry_runtime&&) noexcept;
     registry_runtime(const registry_runtime&) = delete;
     registry_runtime& operator=(const registry_runtime&) = delete;
+
+    bool configure_qualification_runtime(
+        qualification_runtime_kind kind,
+        const std::vector<std::string>& static_names,
+        const std::vector<std::string>& static_name_comparison_identities,
+        std::string& detail);
+    [[nodiscard]] bool qualification_runtime_ready(std::string& detail) const;
+    [[nodiscard]] bool prepare_qualification_runtime(
+        asIScriptEngine& engine, std::string& detail);
+    [[nodiscard]] bool qualification_function_allowed(
+        const asIScriptFunction* function) const noexcept;
+    [[nodiscard]] bool qualification_object_type_allowed(
+        const asITypeInfo* type) const noexcept;
+    [[nodiscard]] bool qualification_global_address_allowed(
+        const void* address) const noexcept;
+    [[nodiscard]] bool qualification_instruction_allowed(
+        asIScriptEngine& engine, const asDWORD* instruction, asBYTE opcode,
+        std::string& detail) const;
+    [[nodiscard]] qualification_runtime_kind qualification_kind() const noexcept;
+    [[nodiscard]] bool read_qualification_tarray_int32(
+        const void* object, std::vector<std::int32_t>& values, std::string& detail) const;
+    [[nodiscard]] bool read_qualification_fstring(
+        const void* object, std::string& value, std::string& detail) const;
+    [[nodiscard]] bool resolve_class_generator_type_capabilities(
+        asIScriptEngine& engine,
+        int type_id,
+        class_generator_type_capabilities& output,
+        std::string& detail);
 
 private:
     std::unique_ptr<impl> impl_;

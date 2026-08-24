@@ -22,7 +22,9 @@ pub const MAX_COMPILER_OPTIONS_BYTES_V1: usize = 64 * 1024;
 
 const MAX_PREPROCESSOR_FLAGS: usize = 4096;
 const MAX_FLAG_BYTES: usize = 4096;
-const MAX_BLUEPRINT_EVENT_ARGUMENT_SPECIALIZATIONS: usize = 4096;
+// BuildID 24539464 exposes 12,904 entries in this target-owned set. Keep the
+// bound power-of-two and fail closed above the witnessed capacity class.
+const MAX_BLUEPRINT_EVENT_ARGUMENT_SPECIALIZATIONS: usize = 16_384;
 const MAX_BLUEPRINT_EVENT_ARGUMENT_SPECIALIZATION_BYTES: usize = 4096;
 const MAX_NATIVE_SUPER_TYPES: usize = 1_000_000;
 const MAX_NATIVE_SUPER_TYPE_NAME_BYTES: usize = 4096;
@@ -104,6 +106,9 @@ pub struct NativeSuperTypeV1 {
     /// `UClass::GetPropertiesSize()` used as the script shadow-layout offset.
     pub property_offset: u64,
     pub kind: NativeSuperKindV1,
+    /// BuildID-pinned `UClass::IsChildOf(UGameStateSubsystem)` result used by
+    /// G1R's bound ClassAnalyze delegate to emit its additional static getter.
+    pub game_state_subsystem: bool,
     pub cannot_derive_angelscript: bool,
 }
 
@@ -1001,6 +1006,7 @@ mod tests {
                     unreal_class_path: "/Script/Engine.Actor".to_owned(),
                     property_offset: 0,
                     kind: NativeSuperKindV1::Actor,
+                    game_state_subsystem: false,
                     cannot_derive_angelscript: false,
                 },
                 NativeSuperTypeV1 {
@@ -1009,6 +1015,7 @@ mod tests {
                     unreal_class_path: "/Script/CoreUObject.Object".to_owned(),
                     property_offset: 0,
                     kind: NativeSuperKindV1::OtherUObject,
+                    game_state_subsystem: false,
                     cannot_derive_angelscript: false,
                 },
             ],
@@ -1135,10 +1142,10 @@ mod tests {
         ));
 
         let mut duplicated_native_path = preprocessor();
-        duplicated_native_path.native_super_types[1].unreal_class_path =
-            duplicated_native_path.native_super_types[0]
-                .unreal_class_path
-                .clone();
+        duplicated_native_path.native_super_types[1].unreal_class_path = duplicated_native_path
+            .native_super_types[0]
+            .unreal_class_path
+            .clone();
         assert!(matches!(
             duplicated_native_path.seal(),
             Err(FrontendProfileError::InvalidField {
@@ -1148,8 +1155,7 @@ mod tests {
         ));
 
         let mut oversized_property_offset = preprocessor();
-        oversized_property_offset.native_super_types[0].property_offset =
-            i32::MAX as u64 + 1;
+        oversized_property_offset.native_super_types[0].property_offset = i32::MAX as u64 + 1;
         assert!(matches!(
             oversized_property_offset.seal(),
             Err(FrontendProfileError::InvalidField {

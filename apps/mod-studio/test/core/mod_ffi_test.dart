@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/core_service.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
+import 'package:gore_mod/scripts/domain/script_compile_report.dart';
 import 'package:path/path.dart' as p;
 
 Map<String, Object?> _compiledScriptReport(String miniPath) =>
@@ -23,6 +24,29 @@ Map<String, Object?> _compiledScriptReport(String miniPath) =>
       'install_restore': 'restored_exact',
       'recovery_required': false,
     };
+
+Map<String, Object?> _qualifiedCompilerPackage() => {
+  'catalog_sha256': List.filled(64, '1').join(),
+  'sidecar_byte_len': 1966592,
+  'sidecar_sha256': List.filled(64, '2').join(),
+  'request_version': 2,
+  'response_version': 1,
+  'manifest_byte_len': 4096,
+  'manifest_sha256': List.filled(64, '3').join(),
+  'profile_sha256': List.filled(64, '4').join(),
+  'target': {
+    'target': {
+      'steam_app_id': 1297900,
+      'steam_build_id': 24539464,
+      'depot_id': 1297901,
+      'depot_manifest_gid': 1585071322101748861,
+      'platform': 'windows',
+      'architecture': 'x86_64',
+      'build_configuration': 'shipping',
+    },
+    'pe_codeview': {'guid': 'be78fe0a-46ac-6643-9685-97e85c7e5b3f', 'age': 1},
+  },
+};
 
 const _storyCatalogRequest = '{"format":"story_catalog"}';
 const _storyCatalogGameRoot = 'C:/Games/Gothic';
@@ -885,6 +909,54 @@ void main() {
       expect(report.diagnostics!.messages.single.line, 5);
       expect(core.calls.single.command, 'script_compile_report_v1');
       expect(core.calls.single.payload['allow_new_symbols'], isTrue);
+    },
+  );
+
+  test(
+    'scriptCompileReportV2 accepts a qualified untouched standalone result',
+    () async {
+      final work = Directory.systemTemp.createTempSync(
+        'gore-owned-standalone-test-',
+      );
+      addTearDown(() => work.deleteSync(recursive: true));
+      final owned = Directory(
+        p.join(work.path, 'gore-owned-compile-a1b2c3d4e5f6'),
+      )..createSync();
+      File(
+        p.join(owned.path, '.gore-owned-compile-v1'),
+      ).writeAsStringSync('gore-owned-compile-staging-v1\n');
+      final mini = File(p.join(owned.path, 'module.cache'))
+        ..writeAsBytesSync(const [1, 2, 3]);
+      final response = _compiledScriptReport(mini.path)
+        ..['install_restore'] = 'not_started'
+        ..['compiler_backend'] = {
+          'requested_mode': 'standalone',
+          'result_backend': 'standalone',
+          'standalone_attempted': true,
+          'game_attempted': false,
+          'qualified_package': _qualifiedCompilerPackage(),
+          'fallback_reason': null,
+        };
+      final core = FakeGoreCoreFfiService(
+        responses: {'script_compile_report_v2': response},
+      );
+
+      final report = await ModFfi(core).scriptCompileReportV2(
+        gameDir: r'C:\Game',
+        op: 'add',
+        moduleName: 'GoreMods.Probe',
+        relPath: 'GoreMods/Probe.as',
+        asPath: r'C:\Source\Probe.as',
+        workDir: work.path,
+        compilerBackend: ScriptCompilerBackendMode.standalone,
+        allowNewSymbols: true,
+      );
+
+      expect(report.compiled, isTrue);
+      expect(report.installRestore, ScriptCompileInstallRestore.notStarted);
+      expect(report.backend!.qualifiedPackage, isNotNull);
+      expect(core.calls.single.command, 'script_compile_report_v2');
+      expect(core.calls.single.payload['compiler_backend'], 'standalone');
     },
   );
 

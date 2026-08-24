@@ -206,6 +206,9 @@ if(BUILD_TESTING)
 
     add_executable(gore-as-precompiled-engine-smoke tests/precompiled_engine_smoke.cpp)
     target_link_libraries(gore-as-precompiled-engine-smoke PRIVATE gore-as-unreangel-core)
+    target_include_directories(gore-as-precompiled-engine-smoke SYSTEM PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/unreangel/source"
+    )
     target_compile_options(gore-as-precompiled-engine-smoke PRIVATE
         /W4 /WX /permissive- /utf-8 /sdl /guard:cf /Brepro
     )
@@ -218,6 +221,9 @@ if(BUILD_TESTING)
 
     add_executable(gore-as-mixed-engine-smoke tests/mixed_engine_smoke.cpp)
     target_link_libraries(gore-as-mixed-engine-smoke PRIVATE gore-as-unreangel-core)
+    target_include_directories(gore-as-mixed-engine-smoke SYSTEM PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/unreangel/source"
+    )
     target_compile_options(gore-as-mixed-engine-smoke PRIVATE
         /W4 /WX /permissive- /utf-8 /sdl /guard:cf /Brepro
     )
@@ -274,6 +280,9 @@ if(BUILD_TESTING)
 
     add_executable(gore-as-frontend-compile-smoke tests/frontend_compile_smoke.cpp)
     target_link_libraries(gore-as-frontend-compile-smoke PRIVATE gore-as-unreangel-core)
+    target_include_directories(gore-as-frontend-compile-smoke SYSTEM PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/unreangel/source"
+    )
     target_compile_options(gore-as-frontend-compile-smoke PRIVATE
         /W4 /WX /permissive- /utf-8 /sdl /guard:cf /Brepro
     )

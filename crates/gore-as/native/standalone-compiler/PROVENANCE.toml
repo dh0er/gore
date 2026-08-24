@@ -15,7 +15,20 @@ contains_g1r_profile_data = false
 contains_unreangel_source = true
 contains_reverse_derived_precompiled_schema = true
 vendored_unreangel_source_files = 64
-vendored_files_modified = false
+vendored_files_modified = true
+vendored_files_modified_count = 2
+
+[[current_tree.downstream_patch]]
+vendored_path = "vendor/unreangel/source/as_builder.cpp"
+upstream_sha256 = "80829d2dc65d1cc5a99d4387c6cf8790472862a49de70e75096cd658bf73b77f"
+vendored_sha256 = "9578bc855e65dc3805918567b0b648dbe579ea1ae01eb14cea56a9a828d82076"
+rationale = "match the captured half-open editor-only code range"
+
+[[current_tree.downstream_patch]]
+vendored_path = "vendor/unreangel/source/as_scriptengine.cpp"
+upstream_sha256 = "a206a68659e4b638ef84369c27c89f8267694daf6ec7eea433cb122313ee9767"
+vendored_sha256 = "2e0ea668b62a8eb75ecbc8af05972ede8d219ed18b623b8f354b365d692476e5"
+rationale = "expose the captured automatic-imports engine property to the standalone frontend"
 
 [[planned_upstream]]
 name = "UNREANGEL"

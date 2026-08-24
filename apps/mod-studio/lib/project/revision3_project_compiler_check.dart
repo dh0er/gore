@@ -231,7 +231,7 @@ final class AuthoringRevision3ProjectCompilerEvidence {
       ),
     };
     final runCount = json['run_count'];
-    if (runCount is! int || runCount < 0 || runCount > 1) {
+    if (runCount is! int || runCount < 0 || runCount > 2) {
       throw const FormatException(
         'authoring revision-3 project compiler run count is invalid',
       );
@@ -276,6 +276,20 @@ final class AuthoringRevision3ProjectCompilerEvidence {
             json['compiler_backend'],
             expectedMode: expectedBackend,
           );
+    if (backend != null) {
+      final backendAttemptCount =
+          (backend.standaloneAttempted ? 1 : 0) +
+          (backend.gameAttempted ? 1 : 0);
+      if (runCount != backendAttemptCount) {
+        throw const FormatException(
+          'authoring revision-3 project compiler run count disagrees with backend attempts',
+        );
+      }
+    } else if (runCount > 1) {
+      throw const FormatException(
+        'authoring revision-3 project compiler V1 reported multiple runs',
+      );
+    }
 
     final restoreRequiresRecovery =
         installRestore ==
@@ -301,9 +315,9 @@ final class AuthoringRevision3ProjectCompilerEvidence {
         'authoring revision-3 project compiler recovery evidence disagrees',
       );
     }
-    if (recoveryRequired != outputRequiresRecovery) {
+    if (runCount == 0 && outputRequiresRecovery) {
       throw const FormatException(
-        'authoring revision-3 project compiler output lost recovery dominance',
+        'authoring revision-3 project compiler retained output without a compiler run',
       );
     }
     if (diagnostics?.capture ==
@@ -321,10 +335,15 @@ final class AuthoringRevision3ProjectCompilerEvidence {
 
     switch (outcome) {
       case AuthoringRevision3ProjectCompilerOutcome.compiledEvidenceOnly:
-        if (runCount != 1 ||
+        final restoreIsSafe =
+            installRestore == ScriptCompileInstallRestore.restoredExact ||
+            (installRestore == ScriptCompileInstallRestore.notStarted &&
+                backend?.resultBackend == ScriptCompilerBackendName.standalone);
+        if (runCount < 1 ||
             failure != null ||
             !_revision3ProjectCompilerDiagnosticsAreAccepted(diagnostics) ||
-            installRestore != ScriptCompileInstallRestore.restoredExact ||
+            !restoreIsSafe ||
+            (backend != null && backend.resultBackend == null) ||
             recoveryRequired ||
             outputDisposition !=
                 AuthoringRevision3ProjectCompilerOutputDisposition.discarded) {
@@ -345,30 +364,30 @@ final class AuthoringRevision3ProjectCompilerEvidence {
           );
         }
       case AuthoringRevision3ProjectCompilerOutcome.failed:
-        final cleanAttemptedFailure =
-            installRestore == ScriptCompileInstallRestore.restoredExact &&
-            (outputDisposition ==
-                    AuthoringRevision3ProjectCompilerOutputDisposition
-                        .discarded ||
-                outputDisposition ==
-                    AuthoringRevision3ProjectCompilerOutputDisposition
-                        .notCreated);
-        final cleanNotStartedFailure =
-            installRestore == ScriptCompileInstallRestore.notStarted &&
-            diagnostics == null &&
+        final cleanOutput =
+            outputDisposition ==
+                AuthoringRevision3ProjectCompilerOutputDisposition.discarded ||
             outputDisposition ==
                 AuthoringRevision3ProjectCompilerOutputDisposition.notCreated;
+        final attemptedRestoreIsSafe = switch (backend?.resultBackend) {
+          ScriptCompilerBackendName.standalone =>
+            installRestore == ScriptCompileInstallRestore.notStarted,
+          ScriptCompilerBackendName.game =>
+            installRestore == ScriptCompileInstallRestore.restoredExact,
+          null =>
+            installRestore == ScriptCompileInstallRestore.notStarted ||
+                installRestore == ScriptCompileInstallRestore.restoredExact,
+        };
         if (failure == null ||
-            (runCount == 0 &&
-                !recoveryRequired &&
-                (installRestore != ScriptCompileInstallRestore.notStarted ||
-                    outputDisposition !=
-                        AuthoringRevision3ProjectCompilerOutputDisposition
-                            .notCreated)) ||
-            (runCount == 1 &&
-                !recoveryRequired &&
-                !cleanAttemptedFailure &&
-                !cleanNotStartedFailure)) {
+            (!recoveryRequired &&
+                ((runCount == 0 &&
+                        (installRestore !=
+                                ScriptCompileInstallRestore.notStarted ||
+                            outputDisposition !=
+                                AuthoringRevision3ProjectCompilerOutputDisposition
+                                    .notCreated)) ||
+                    (runCount > 0 &&
+                        (!cleanOutput || !attemptedRestoreIsSafe))))) {
           throw const FormatException(
             'authoring revision-3 project compiler failure evidence is invalid',
           );

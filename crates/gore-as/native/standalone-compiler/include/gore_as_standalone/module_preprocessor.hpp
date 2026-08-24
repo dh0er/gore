@@ -10,6 +10,9 @@ namespace gore::as::standalone {
 
 inline constexpr std::size_t max_preprocessor_sources = 4'096U;
 inline constexpr std::size_t max_preprocessor_flags = 4'096U;
+// BuildID 24539464 exposes 12,904 target-owned Blueprint event argument
+// specializations. This is deliberately separate from ordinary preprocessor flags.
+inline constexpr std::size_t max_blueprint_event_argument_specializations = 16'384U;
 inline constexpr std::size_t max_preprocessor_path_bytes = 4'096U;
 inline constexpr std::size_t max_preprocessor_source_bytes = 16U * 1024U * 1024U;
 inline constexpr std::size_t max_preprocessor_total_source_bytes = 256U * 1024U * 1024U;
@@ -66,6 +69,7 @@ struct native_super_type {
     std::string unreal_class_path;
     std::uint64_t property_offset = 0U;
     native_super_kind kind = native_super_kind::other_uobject;
+    bool game_state_subsystem = false;
     bool cannot_derive_angelscript = false;
 };
 
@@ -152,6 +156,7 @@ struct preprocessed_class_description {
     bool super_is_code_class = false;
     std::string code_super_class;
     native_super_kind code_super_kind = native_super_kind::other_uobject;
+    bool code_super_game_state_subsystem = false;
     std::string config_name;
     std::string compose_onto_class;
     std::vector<preprocessor_metadata> metadata;
@@ -258,10 +263,23 @@ struct lexical_module_description {
     std::vector<editor_only_line_block> editor_only_blocks;
 };
 
+struct static_name_use {
+    std::size_t global_index = 0U;
+    std::string spelling;
+};
+
 struct lexical_preprocess_result {
     bool ok = false;
     std::vector<lexical_module_description> modules;
     std::vector<std::string> static_names;
+    // Global table indices in exact first-use order while the donor phases
+    // lower source literals and generated wrappers. This includes reused rows
+    // from the base prefix and lets qualification build its independent local
+    // FName table without changing the full product graph.
+    std::vector<static_name_use> static_name_uses;
+    // Opaque, profile-derived FName comparison identities aligned 1:1 with static_names.
+    // Empty means that the target profile cannot authorize runtime comparison for that row.
+    std::vector<std::string> static_name_comparison_identities;
     std::vector<preprocessor_diagnostic> diagnostics;
 };
 

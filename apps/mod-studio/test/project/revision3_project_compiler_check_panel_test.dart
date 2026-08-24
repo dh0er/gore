@@ -338,6 +338,7 @@ void main() {
       addTearDown(controller.dispose);
       final safety = _safety();
       String? checkedRoot;
+      ScriptCompilerBackendMode? checkedBackend;
       var checkCalls = 0;
 
       await _pumpDialog(
@@ -349,6 +350,7 @@ void main() {
         check: ({required gameRoot, required compilerBackend}) async {
           checkCalls++;
           checkedRoot = gameRoot;
+          checkedBackend = compilerBackend;
           return _receipt(checkpoint, _ReceiptKind.fallbackRejected);
         },
       );
@@ -361,6 +363,7 @@ void main() {
       );
       expect(checkCalls, 1);
       expect(checkedRoot, _gameRoot);
+      expect(checkedBackend, ScriptCompilerBackendMode.productDefault);
       expect(
         find.text('Unexpected token in project script.'),
         findsNWidgets(2),
@@ -701,7 +704,7 @@ ManagedRevision3ProjectCompilerCheckReceipt _receipt(
       'compiler_diagnostics': null,
       'install_restore': 'not_started',
       'recovery_required': true,
-      'output_disposition': 'recovery_retained',
+      'output_disposition': 'not_created',
     },
     _ReceiptKind.outputRecovery => <String, Object?>{
       'outcome': 'failed',

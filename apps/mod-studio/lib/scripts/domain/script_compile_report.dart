@@ -43,6 +43,10 @@ enum ScriptCompilerBackendMode {
 
   final String wireName;
   final String label;
+
+  /// Normal product policy: use the qualified standalone compiler first and
+  /// start the game compiler only after a visible, structured fallback.
+  static const productDefault = ScriptCompilerBackendMode.standaloneThenGame;
 }
 
 enum ScriptCompilerBackendName { game, standalone }
@@ -50,9 +54,9 @@ enum ScriptCompilerBackendName { game, standalone }
 enum ScriptCompilerBackendFailureKind {
   unavailable,
   preflight,
+  unsupported,
   rejected,
   invalidOutput,
-  timeout,
   internal,
   recoveryRequired,
 }
@@ -69,12 +73,61 @@ final class ScriptCompilerBackendFallback {
   final String detail;
 }
 
+final class ScriptCompilerQualifiedTarget {
+  const ScriptCompilerQualifiedTarget({
+    required this.steamAppId,
+    required this.steamBuildId,
+    required this.depotId,
+    required this.depotManifestGid,
+    required this.platform,
+    required this.architecture,
+    required this.buildConfiguration,
+    required this.codeViewGuid,
+    required this.codeViewAge,
+  });
+
+  final int steamAppId;
+  final int steamBuildId;
+  final int depotId;
+  final int depotManifestGid;
+  final String platform;
+  final String architecture;
+  final String buildConfiguration;
+  final String codeViewGuid;
+  final int codeViewAge;
+}
+
+final class ScriptCompilerQualifiedPackage {
+  const ScriptCompilerQualifiedPackage({
+    required this.catalogSha256,
+    required this.sidecarByteLen,
+    required this.sidecarSha256,
+    required this.requestVersion,
+    required this.responseVersion,
+    required this.manifestByteLen,
+    required this.manifestSha256,
+    required this.profileSha256,
+    required this.target,
+  });
+
+  final String catalogSha256;
+  final int sidecarByteLen;
+  final String sidecarSha256;
+  final int requestVersion;
+  final int responseVersion;
+  final int manifestByteLen;
+  final String manifestSha256;
+  final String profileSha256;
+  final ScriptCompilerQualifiedTarget target;
+}
+
 final class ScriptCompilerBackendEvidence {
   const ScriptCompilerBackendEvidence._({
     required this.requestedMode,
     required this.resultBackend,
     required this.standaloneAttempted,
     required this.gameAttempted,
+    required this.qualifiedPackage,
     required this.fallbackReason,
   });
 
@@ -82,6 +135,7 @@ final class ScriptCompilerBackendEvidence {
   final ScriptCompilerBackendName? resultBackend;
   final bool standaloneAttempted;
   final bool gameAttempted;
+  final ScriptCompilerQualifiedPackage? qualifiedPackage;
   final ScriptCompilerBackendFallback? fallbackReason;
 
   factory ScriptCompilerBackendEvidence.fromJson(
@@ -118,11 +172,9 @@ final class ScriptCompilerBackendEvidence {
     if (standaloneAttempted is! bool || gameAttempted is! bool) {
       throw const FormatException('compiler backend attempt evidence');
     }
-    // The current product deliberately has no package-authorized bundle. A
-    // future non-null package identity requires its own typed, signed schema.
-    if (value['qualified_package'] != null) {
-      throw const FormatException('compiler backend package authority');
-    }
+    final qualifiedPackage = _parseCompilerQualifiedPackage(
+      value['qualified_package'],
+    );
     final fallbackReason = _parseCompilerBackendFallback(
       value['fallback_reason'],
     );
@@ -130,14 +182,18 @@ final class ScriptCompilerBackendEvidence {
         (resultBackend == ScriptCompilerBackendName.standalone &&
             !standaloneAttempted) ||
         (requestedMode == ScriptCompilerBackendMode.game &&
-            (standaloneAttempted || fallbackReason != null)) ||
+            (standaloneAttempted ||
+                qualifiedPackage != null ||
+                fallbackReason != null)) ||
         (requestedMode == ScriptCompilerBackendMode.standalone &&
             (gameAttempted || fallbackReason != null)) ||
         (requestedMode == ScriptCompilerBackendMode.standaloneThenGame &&
             resultBackend != ScriptCompilerBackendName.standalone &&
-            fallbackReason == null) ||
+            fallbackReason == null &&
+            (resultBackend != null || standaloneAttempted || gameAttempted)) ||
         (resultBackend == ScriptCompilerBackendName.standalone &&
             (gameAttempted || fallbackReason != null)) ||
+        (standaloneAttempted && qualifiedPackage == null) ||
         (fallbackReason != null &&
             (requestedMode != ScriptCompilerBackendMode.standaloneThenGame ||
                 fallbackReason.failedBackend !=
@@ -149,9 +205,155 @@ final class ScriptCompilerBackendEvidence {
       resultBackend: resultBackend,
       standaloneAttempted: standaloneAttempted,
       gameAttempted: gameAttempted,
+      qualifiedPackage: qualifiedPackage,
       fallbackReason: fallbackReason,
     );
   }
+}
+
+ScriptCompilerQualifiedPackage? _parseCompilerQualifiedPackage(Object? value) {
+  if (value == null) return null;
+  if (value is! Map ||
+      value.length != 9 ||
+      !value.containsKey('catalog_sha256') ||
+      !value.containsKey('sidecar_byte_len') ||
+      !value.containsKey('sidecar_sha256') ||
+      !value.containsKey('request_version') ||
+      !value.containsKey('response_version') ||
+      !value.containsKey('manifest_byte_len') ||
+      !value.containsKey('manifest_sha256') ||
+      !value.containsKey('profile_sha256') ||
+      !value.containsKey('target')) {
+    throw const FormatException('compiler backend package fields');
+  }
+  final catalogSha256 = _qualifiedSha256(
+    value['catalog_sha256'],
+    'catalog digest',
+  );
+  final sidecarSha256 = _qualifiedSha256(
+    value['sidecar_sha256'],
+    'sidecar digest',
+  );
+  final manifestSha256 = _qualifiedSha256(
+    value['manifest_sha256'],
+    'manifest digest',
+  );
+  final profileSha256 = _qualifiedSha256(
+    value['profile_sha256'],
+    'profile digest',
+  );
+  final sidecarByteLen = _positiveBoundedInt(
+    value['sidecar_byte_len'],
+    512 * 1024 * 1024,
+    'sidecar length',
+  );
+  final manifestByteLen = _positiveBoundedInt(
+    value['manifest_byte_len'],
+    4 * 1024 * 1024,
+    'manifest length',
+  );
+  final requestVersion = value['request_version'];
+  final responseVersion = value['response_version'];
+  if (requestVersion is! int ||
+      (requestVersion != 1 && requestVersion != 2) ||
+      responseVersion != 1) {
+    throw const FormatException('compiler backend package protocol');
+  }
+  return ScriptCompilerQualifiedPackage(
+    catalogSha256: catalogSha256,
+    sidecarByteLen: sidecarByteLen,
+    sidecarSha256: sidecarSha256,
+    requestVersion: requestVersion,
+    responseVersion: responseVersion as int,
+    manifestByteLen: manifestByteLen,
+    manifestSha256: manifestSha256,
+    profileSha256: profileSha256,
+    target: _parseCompilerQualifiedTarget(value['target']),
+  );
+}
+
+ScriptCompilerQualifiedTarget _parseCompilerQualifiedTarget(Object? value) {
+  if (value is! Map ||
+      value.length != 2 ||
+      !value.containsKey('target') ||
+      !value.containsKey('pe_codeview')) {
+    throw const FormatException('compiler backend package target fields');
+  }
+  final target = value['target'];
+  final codeView = value['pe_codeview'];
+  if (target is! Map ||
+      target.length != 7 ||
+      !target.containsKey('steam_app_id') ||
+      !target.containsKey('steam_build_id') ||
+      !target.containsKey('depot_id') ||
+      !target.containsKey('depot_manifest_gid') ||
+      !target.containsKey('platform') ||
+      !target.containsKey('architecture') ||
+      !target.containsKey('build_configuration') ||
+      codeView is! Map ||
+      codeView.length != 2 ||
+      !codeView.containsKey('guid') ||
+      !codeView.containsKey('age')) {
+    throw const FormatException('compiler backend package target shape');
+  }
+  final guid = codeView['guid'];
+  final guidPattern = RegExp(
+    r'^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$',
+  );
+  if (target['platform'] != 'windows' ||
+      target['architecture'] != 'x86_64' ||
+      target['build_configuration'] != 'shipping' ||
+      guid is! String ||
+      !guidPattern.hasMatch(guid)) {
+    throw const FormatException('compiler backend package target identity');
+  }
+  return ScriptCompilerQualifiedTarget(
+    steamAppId: _positiveBoundedInt(
+      target['steam_app_id'],
+      0xffffffff,
+      'Steam app id',
+    ),
+    steamBuildId: _positiveBoundedInt(
+      target['steam_build_id'],
+      0x7fffffffffffffff,
+      'Steam build id',
+    ),
+    depotId: _positiveBoundedInt(
+      target['depot_id'],
+      0xffffffff,
+      'Steam depot id',
+    ),
+    depotManifestGid: _positiveBoundedInt(
+      target['depot_manifest_gid'],
+      0x7fffffffffffffff,
+      'Steam depot manifest',
+    ),
+    platform: target['platform'] as String,
+    architecture: target['architecture'] as String,
+    buildConfiguration: target['build_configuration'] as String,
+    codeViewGuid: guid,
+    codeViewAge: _positiveBoundedInt(
+      codeView['age'],
+      0xffffffff,
+      'CodeView age',
+    ),
+  );
+}
+
+String _qualifiedSha256(Object? value, String label) {
+  if (value is! String ||
+      !RegExp(r'^[0-9a-f]{64}$').hasMatch(value) ||
+      RegExp(r'^0{64}$').hasMatch(value)) {
+    throw FormatException('compiler backend package $label');
+  }
+  return value;
+}
+
+int _positiveBoundedInt(Object? value, int max, String label) {
+  if (value is! int || value <= 0 || value > max) {
+    throw FormatException('compiler backend package $label');
+  }
+  return value;
 }
 
 ScriptCompilerBackendFallback? _parseCompilerBackendFallback(Object? value) {
@@ -171,9 +373,9 @@ ScriptCompilerBackendFallback? _parseCompilerBackendFallback(Object? value) {
   final failureKind = switch (value['failure_kind']) {
     'unavailable' => ScriptCompilerBackendFailureKind.unavailable,
     'preflight' => ScriptCompilerBackendFailureKind.preflight,
+    'unsupported' => ScriptCompilerBackendFailureKind.unsupported,
     'rejected' => ScriptCompilerBackendFailureKind.rejected,
     'invalid_output' => ScriptCompilerBackendFailureKind.invalidOutput,
-    'timeout' => ScriptCompilerBackendFailureKind.timeout,
     'internal' => ScriptCompilerBackendFailureKind.internal,
     'recovery_required' => ScriptCompilerBackendFailureKind.recoveryRequired,
     _ => throw const FormatException('compiler backend fallback kind'),
@@ -251,6 +453,7 @@ class ScriptCompileReport {
     required this.diagnostics,
     required this.installRestore,
     required this.recoveryRequired,
+    required this.backend,
   });
 
   final ScriptCompileOutcome outcome;
@@ -260,11 +463,15 @@ class ScriptCompileReport {
   final ScriptCompilerDiagnostics? diagnostics;
   final ScriptCompileInstallRestore installRestore;
   final bool recoveryRequired;
+  final ScriptCompilerBackendEvidence? backend;
 
   bool get compiled => outcome == ScriptCompileOutcome.compiled;
 
-  factory ScriptCompileReport.fromJson(Map<String, Object?> json) {
-    const fields = {
+  factory ScriptCompileReport.fromJson(
+    Map<String, Object?> json, {
+    ScriptCompilerBackendMode? expectedBackend,
+  }) {
+    final fields = <String>{
       'ok',
       'outcome',
       'mini_path',
@@ -274,6 +481,7 @@ class ScriptCompileReport {
       'install_restore',
       'recovery_required',
     };
+    if (expectedBackend != null) fields.add('compiler_backend');
     if (json.length != fields.length || !fields.every(json.containsKey)) {
       throw const FormatException('compile report fields');
     }
@@ -310,6 +518,12 @@ class ScriptCompileReport {
     );
     final failure = _parseFailure(json['compile_error']);
     final diagnostics = _parseDiagnostics(json['compiler_diagnostics']);
+    final backend = expectedBackend == null
+        ? null
+        : ScriptCompilerBackendEvidence.fromJson(
+            json['compiler_backend'],
+            expectedMode: expectedBackend,
+          );
 
     final restoreRequiresRecovery =
         installRestore ==
@@ -342,7 +556,10 @@ class ScriptCompileReport {
           diagnostics.capture == ScriptCompileCaptureDisposition.disabled ||
           diagnostics.capture ==
               ScriptCompileCaptureDisposition.processExitUnconfirmed ||
-          installRestore != ScriptCompileInstallRestore.restoredExact ||
+          (installRestore != ScriptCompileInstallRestore.restoredExact &&
+              !(installRestore == ScriptCompileInstallRestore.notStarted &&
+                  backend?.resultBackend ==
+                      ScriptCompilerBackendName.standalone)) ||
           recoveryRequired) {
         throw const FormatException('compiled report invariant');
       }
@@ -363,6 +580,7 @@ class ScriptCompileReport {
       diagnostics: diagnostics,
       installRestore: installRestore,
       recoveryRequired: recoveryRequired,
+      backend: backend,
     );
   }
 }

@@ -35,8 +35,19 @@ foreach ($row in $rows | Where-Object { $_.match_kind -eq 'exact' -and $_.sha256
             throw "Missing vendored inventory file: $($row.vendored_path)"
         }
         $vendorHash = (Get-FileHash -LiteralPath $vendorPath -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($vendorHash -ne $row.sha256) {
-            throw "Vendored file is not byte-exact: $($row.vendored_path)"
+        $expectedVendorHash = if ($row.disposition -eq 'vendored_modified') {
+            if ([string]::IsNullOrWhiteSpace($row.vendored_sha256) -or $row.vendored_sha256 -eq '-') {
+                throw "Modified vendored file has no downstream SHA-256: $($row.vendored_path)"
+            }
+            $row.vendored_sha256
+        } else {
+            if (-not [string]::IsNullOrWhiteSpace($row.vendored_sha256)) {
+                throw "Byte-exact vendored file unexpectedly has a downstream SHA-256: $($row.vendored_path)"
+            }
+            $row.sha256
+        }
+        if ($vendorHash -ne $expectedVendorHash) {
+            throw "Vendored file SHA-256 differs: $($row.vendored_path)"
         }
     }
 }
@@ -55,9 +66,11 @@ if (Compare-Object -ReferenceObject $listedVendorPaths -DifferenceObject $actual
     throw 'Vendored tree and SOURCE_INVENTORY.tsv do not contain the same files.'
 }
 
-$sourceImportCount = @($rows | Where-Object { $_.disposition -eq 'vendored_exact' }).Count
-if ($sourceImportCount -ne 64 -or $vendoredRows.Count -ne 65) {
+$sourceImports = @($rows | Where-Object { $_.disposition -in @('vendored_exact', 'vendored_modified') })
+$sourceImportCount = $sourceImports.Count
+$modifiedImportCount = @($sourceImports | Where-Object { $_.disposition -eq 'vendored_modified' }).Count
+if ($sourceImportCount -ne 64 -or $modifiedImportCount -ne 2 -or $vendoredRows.Count -ne 65) {
     throw "Unexpected import count: $sourceImportCount source files, $($vendoredRows.Count) total vendored files."
 }
 
-Write-Host "Verified $sourceImportCount exact source imports plus one license notice at $actualRevision."
+Write-Host "Verified $sourceImportCount source imports ($modifiedImportCount downstream-modified) plus one license notice at $actualRevision."

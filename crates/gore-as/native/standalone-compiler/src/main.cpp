@@ -49,7 +49,12 @@ void print_capabilities() {
     std::cout
         << "{\"backend\":\"gore-as-standalone-compiler\",\"backend_version\":\""
         << wire::kBackendVersion
-        << "\",\"request_version\":" << wire::kRequestProtocolVersion
+        << "\",\"request_version\":" << wire::kRequestProtocolVersionV2
+        << ",\"request_versions\":[" << wire::kRequestProtocolVersionV1
+        << ',' << wire::kRequestProtocolVersionV2 << ']'
+        << ",\"qualification\":{\"available\":true,\"request_version\":"
+        << wire::kQualificationProtocolVersionV3
+        << ",\"requires_qualified_profile\":false,\"caller_witnesses\":false}"
         << ",\"response_version\":" << wire::kResponseProtocolVersion
         << ",\"transport\":{\"kind\":\"file\",\"encoding\":\"utf-8-json\"}"
         << ",\"core\":{\"available\":true,\"version\":\"" << wire::kCoreVersion
@@ -85,8 +90,14 @@ int wmain(const int argc, wchar_t* argv[]) {
         std::cout << result.response_json;
         return static_cast<int>(result.exit_code);
     }
+    if (argc == 4 && std::wstring_view(argv[1]) == L"qualify" &&
+        std::wstring_view(argv[2]) == L"--request") {
+        auto result = gore::as::standalone::compile_sidecar_request(argv[3], true);
+        std::cout << result.response_json;
+        return static_cast<int>(result.exit_code);
+    }
     return emit_failure(
         wire::ExitCode::usage,
         "GORE_AS_ARGUMENTS_INVALID",
-        "usage: gore-as-standalone-compiler --version | --capabilities | compile --request <file>");
+        "usage: gore-as-standalone-compiler --version | --capabilities | compile --request <file> | qualify --request <file>");
 }

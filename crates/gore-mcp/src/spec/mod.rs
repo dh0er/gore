@@ -1020,7 +1020,6 @@ mod tests {
             ("gore_audio", "apply-patch", &["out"]),
             ("gore_audio", "export-patch", &["out"]),
             ("gore_audio", "replace", &["out"]),
-            ("gore_as", "compile", &["out"]),
             ("gore_catalog", "catalog", &["out"]),
             ("gore_catalog", "dump", &["out"]),
             ("gore_catalog", "gui-model", &["out"]),

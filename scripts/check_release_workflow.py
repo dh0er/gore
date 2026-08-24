@@ -21,6 +21,7 @@ from typing import Iterable, Mapping, Sequence
 ROOT = Path(__file__).resolve().parent.parent
 CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_PATH = ROOT / ".github" / "workflows" / "release.yml"
+PROMOTION_PATH = ROOT / ".github" / "workflows" / "standalone-compiler-promotion.yml"
 
 README_PATH = ROOT / "README.md"
 
@@ -137,7 +138,7 @@ def _cli_version_command() -> str:
     return "\n".join(
         (
             "$manifest = Get-Content crates/gore/Cargo.toml -Raw",
-            r'''if ($manifest -notmatch '(?m)^version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"') {''',
+            r"""if ($manifest -notmatch '(?m)^version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"') {""",
             "  Write-Error 'Cargo.toml version must be X.Y.Z'",
             "  exit 1",
             "}",
@@ -192,9 +193,7 @@ APPCAST_KEYS: dict[str, AppcastKeyContract] = {
 PRODUCTS: dict[str, ProductContract] = {
     "gore-save-editor": ProductContract(
         tag_prefix="gore-save-editor-v",
-        version_command=_app_version_command(
-            "apps/save-editor", "gore-save-editor-v"
-        ),
+        version_command=_app_version_command("apps/save-editor", "gore-save-editor-v"),
         release_notes_command=_release_notes_command(
             "apps/save-editor/CHANGELOG.md", "dist/gore-save-editor"
         ),
@@ -238,9 +237,7 @@ PRODUCTS: dict[str, ProductContract] = {
     ),
     "gore-mod-studio": ProductContract(
         tag_prefix="gore-mod-studio-v",
-        version_command=_app_version_command(
-            "apps/mod-studio", "gore-mod-studio-v"
-        ),
+        version_command=_app_version_command("apps/mod-studio", "gore-mod-studio-v"),
         release_notes_command=_release_notes_command(
             "apps/mod-studio/CHANGELOG.md", "dist/gore-mod-studio"
         ),
@@ -284,9 +281,7 @@ PRODUCTS: dict[str, ProductContract] = {
     ),
     "gore-mod-manager": ProductContract(
         tag_prefix="gore-mod-manager-v",
-        version_command=_app_version_command(
-            "apps/mod-manager", "gore-mod-manager-v"
-        ),
+        version_command=_app_version_command("apps/mod-manager", "gore-mod-manager-v"),
         release_notes_command=_release_notes_command(
             "apps/mod-manager/CHANGELOG.md", "dist/gore-mod-manager"
         ),
@@ -665,10 +660,9 @@ def _validate_ci(root: dict[str, Field], problems: list[str]) -> None:
         "name:gore-mod-studio analyze + test",
         "name:gore-mod-manager analyze + test",
         "name:Docs, plugin, and release contracts",
+        "name:Standalone compiler native source gates",
     )
-    actual_order = tuple(
-        _step_identity(step, "ci.jobs.test.steps") for step in steps
-    )
+    actual_order = tuple(_step_identity(step, "ci.jobs.test.steps") for step in steps)
     if actual_order != expected_order:
         problems.append(
             f"ci.jobs.test.steps: exact step order changed ({actual_order!r})"
@@ -694,7 +688,9 @@ def _validate_ci(root: dict[str, Field], problems: list[str]) -> None:
     _expect_keys(
         steps[3].fields, {"name", "uses", "with"}, "ci flutter setup", problems
     )
-    _expect_scalar(steps[3].fields, "name", "Install Flutter", "ci flutter setup", problems)
+    _expect_scalar(
+        steps[3].fields, "name", "Install Flutter", "ci flutter setup", problems
+    )
     _expect_scalar(
         steps[3].fields,
         "uses",
@@ -757,8 +753,24 @@ def _validate_ci(root: dict[str, Field], problems: list[str]) -> None:
         problems,
     )
     final_run = steps[7].fields.get("run")
-    if final_run is None or _scalar(final_run, "ci repository contracts") != expected_run:
+    if (
+        final_run is None
+        or _scalar(final_run, "ci repository contracts") != expected_run
+    ):
         problems.append("ci: final repository-check command list changed")
+    _expect_simple_step(
+        steps[8],
+        {
+            "name": "Standalone compiler native source gates",
+            "working-directory": ".",
+            "run": (
+                "python scripts/standalone_compiler_bundle.py build-native "
+                "--build-root ${{ runner.temp }}\\gore-as-native-gates"
+            ),
+        },
+        "ci standalone compiler native source gates",
+        problems,
+    )
 
 
 def _validate_release_input(root: dict[str, Field], problems: list[str]) -> None:
@@ -773,7 +785,9 @@ def _validate_release_input(root: dict[str, Field], problems: list[str]) -> None
         _expect_keys(push_fields, {"tags"}, "release.on.push", problems)
         tags = push_fields.get("tags")
         if tags is not None:
-            expected_tags = [f'"{contract.tag_prefix}*"' for contract in PRODUCTS.values()]
+            expected_tags = [
+                f'"{contract.tag_prefix}*"' for contract in PRODUCTS.values()
+            ]
             actual_tags = _sequence(tags, "release.on.push.tags")
             if len(actual_tags) != len(expected_tags) or set(actual_tags) != set(
                 expected_tags
@@ -811,16 +825,19 @@ def _validate_release_input(root: dict[str, Field], problems: list[str]) -> None
     required = _required(project_fields, "required", "release input project", problems)
     kind = _required(project_fields, "type", "release input project", problems)
     options = _required(project_fields, "options", "release input project", problems)
-    if description is not None and _scalar(description, "release input description") != (
-        '"Smoke-build a project without publishing"'
-    ):
+    if description is not None and _scalar(
+        description, "release input description"
+    ) != ('"Smoke-build a project without publishing"'):
         problems.append("release input project: description changed")
     if required is not None and _scalar(required, "release input required") != "true":
         problems.append("release input project: required must be true")
     if kind is not None and _scalar(kind, "release input type") != "choice":
         problems.append("release input project: type must remain choice")
     expected_options = "[" + ", ".join(PRODUCTS) + "]"
-    if options is not None and _scalar(options, "release input options") != expected_options:
+    if (
+        options is not None
+        and _scalar(options, "release input options") != expected_options
+    ):
         problems.append("release input project: product options changed")
 
 
@@ -1011,7 +1028,10 @@ def _validate_product_steps(
         )
         uses = upload.fields.get("uses")
         with_field = upload.fields.get("with")
-        if uses is None or _scalar(uses, f"{context} upload") != "actions/upload-artifact@v4":
+        if (
+            uses is None
+            or _scalar(uses, f"{context} upload") != "actions/upload-artifact@v4"
+        ):
             problems.append(f"{context}: upload action changed")
         if with_field is not None:
             with_fields = _mapping(with_field, f"{context} upload.with")
@@ -1080,7 +1100,9 @@ def _validate_product_steps(
         if (uses := step.fields.get("uses")) is not None
         and "action-gh-release" in _scalar(uses, context)
     ]
-    if len(release_like) != 1 or (publish is not None and release_like[0] is not publish):
+    if len(release_like) != 1 or (
+        publish is not None and release_like[0] is not publish
+    ):
         problems.append(f"{context}: unexpected or duplicate GitHub release action")
 
     appcast_like = [
@@ -1115,8 +1137,13 @@ def _validate_product_steps(
                 if secret is not None and _scalar(secret, context) != (
                     "${{ secrets.WINSPARKLE_DSA_PRIV_KEY_B64 }}"
                 ):
-                    problems.append(f"{context}: appcast signing secret binding changed")
-            if run is None or _normalise_space(_scalar(run, context)) != contract.appcast_command:
+                    problems.append(
+                        f"{context}: appcast signing secret binding changed"
+                    )
+            if (
+                run is None
+                or _normalise_space(_scalar(run, context)) != contract.appcast_command
+            ):
                 problems.append(f"{context}: signed appcast command changed")
         if len(appcast_like) != 1 or (
             appcast is not None and appcast_like[0] is not appcast
@@ -1146,7 +1173,10 @@ def _validate_product_steps(
             shell = feed.fields.get("shell")
             env = feed.fields.get("env")
             run = feed.fields.get("run")
-            if guard is None or _normalise_space(_scalar(guard, context)) != PUBLISH_GUARD:
+            if (
+                guard is None
+                or _normalise_space(_scalar(guard, context)) != PUBLISH_GUARD
+            ):
                 problems.append(f"{context}: appcast feed lost its push-tag-only guard")
             if shell is None or _scalar(shell, context) != "pwsh":
                 problems.append(f"{context}: appcast feed shell changed")
@@ -1232,9 +1262,7 @@ def _validate_release(root: dict[str, Field], problems: list[str]) -> None:
             continue
         context = f"release.jobs.{product}"
         fields = _mapping(job, context)
-        _expect_keys(
-            fields, {"needs", "if", "runs-on", "steps"}, context, problems
-        )
+        _expect_keys(fields, {"needs", "if", "runs-on", "steps"}, context, problems)
         needs = _required(fields, "needs", context, problems)
         condition = _required(fields, "if", context, problems)
         runs_on = _required(fields, "runs-on", context, problems)
@@ -1255,16 +1283,497 @@ def _validate_release(root: dict[str, Field], problems: list[str]) -> None:
             _validate_product_steps(product, contract, steps, problems)
 
 
-def validate_workflows(ci_text: str, release_text: str) -> list[str]:
+def _validate_promotion(root: dict[str, Field], problems: list[str]) -> None:
+    context = "standalone compiler promotion"
+    _expect_keys(
+        root,
+        {"name", "on", "permissions", "concurrency", "jobs"},
+        context,
+        problems,
+    )
+    _expect_scalar(
+        root,
+        "name",
+        "Standalone compiler promotion candidate",
+        context,
+        problems,
+    )
+    on = _required(root, "on", context, problems)
+    if on is not None:
+        triggers = _mapping(on, f"{context}.on")
+        _expect_keys(triggers, {"workflow_dispatch"}, f"{context}.on", problems)
+        dispatch = triggers.get("workflow_dispatch")
+        if dispatch is not None:
+            _expect_keys(
+                _mapping(dispatch, f"{context}.on.workflow_dispatch"),
+                set(),
+                f"{context}.on.workflow_dispatch",
+                problems,
+            )
+    permissions = _required(root, "permissions", context, problems)
+    if permissions is not None:
+        _expect_scalar_map(
+            permissions, {"contents": "read"}, f"{context}.permissions", problems
+        )
+    concurrency = _required(root, "concurrency", context, problems)
+    if concurrency is not None:
+        _expect_scalar_map(
+            concurrency,
+            {
+                "group": "standalone-compiler-promotion-${{ github.sha }}",
+                "cancel-in-progress": "false",
+            },
+            f"{context}.concurrency",
+            problems,
+        )
+    jobs = _required(root, "jobs", context, problems)
+    if jobs is None:
+        return
+    job_fields = _mapping(jobs, f"{context}.jobs")
+    _expect_keys(
+        job_fields,
+        {"quality-gates", "build-sign-candidate"},
+        f"{context}.jobs",
+        problems,
+    )
+    quality = job_fields.get("quality-gates")
+    if quality is not None:
+        fields = _mapping(quality, f"{context}.jobs.quality-gates")
+        _expect_keys(
+            fields,
+            {"name", "permissions", "uses"},
+            f"{context}.jobs.quality-gates",
+            problems,
+        )
+        _expect_scalar(
+            fields,
+            "name",
+            "Exact-commit CI quality gates",
+            f"{context}.jobs.quality-gates",
+            problems,
+        )
+        _expect_scalar(
+            fields,
+            "uses",
+            REUSABLE_CI,
+            f"{context}.jobs.quality-gates",
+            problems,
+        )
+        quality_permissions = fields.get("permissions")
+        if quality_permissions is not None:
+            _expect_scalar_map(
+                quality_permissions,
+                {"contents": "read"},
+                f"{context}.jobs.quality-gates.permissions",
+                problems,
+            )
+    build = job_fields.get("build-sign-candidate")
+    if build is None:
+        return
+    fields = _mapping(build, f"{context}.jobs.build-sign-candidate")
+    _expect_keys(
+        fields,
+        {"name", "needs", "runs-on", "permissions", "steps"},
+        f"{context}.jobs.build-sign-candidate",
+        problems,
+    )
+    _expect_scalar(
+        fields,
+        "name",
+        "Build, attest, and publish the one-time candidate",
+        f"{context}.jobs.build-sign-candidate",
+        problems,
+    )
+    _expect_scalar(
+        fields,
+        "needs",
+        "quality-gates",
+        f"{context}.jobs.build-sign-candidate",
+        problems,
+    )
+    _expect_scalar(
+        fields,
+        "runs-on",
+        "windows-latest",
+        f"{context}.jobs.build-sign-candidate",
+        problems,
+    )
+    build_permissions = fields.get("permissions")
+    if build_permissions is not None:
+        _expect_scalar_map(
+            build_permissions,
+            {
+                "attestations": "write",
+                "contents": "write",
+                "id-token": "write",
+            },
+            f"{context}.jobs.build-sign-candidate.permissions",
+            problems,
+        )
+    steps_field = _required(
+        fields, "steps", f"{context}.jobs.build-sign-candidate", problems
+    )
+    if steps_field is None:
+        return
+    steps = _parse_steps(steps_field, f"{context}.jobs.build-sign-candidate.steps")
+    step_context = f"{context}.jobs.build-sign-candidate.steps"
+    expected_order = (
+        "uses:actions/checkout@v4",
+        "name:Build and test the unsigned native candidate",
+        "name:Permanently claim the exact commit before signing",
+        "name:Sign the candidate exactly once",
+        "name:Attest the signed candidate and promotion evidence",
+        "name:Verify and stage the GitHub attestation bundle",
+        "name:Publish the immutable attested signed candidate",
+    )
+    actual_order = tuple(_step_identity(step, step_context) for step in steps)
+    if actual_order != expected_order:
+        problems.append(f"{step_context}: exact step order changed ({actual_order!r})")
+    if len(steps) != len(expected_order):
+        return
+    checkout_context = f"{step_context}.checkout"
+    _expect_keys(steps[0].fields, {"uses", "with"}, checkout_context, problems)
+    _expect_scalar(
+        steps[0].fields, "uses", "actions/checkout@v4", checkout_context, problems
+    )
+    checkout_with = steps[0].fields.get("with")
+    if checkout_with is not None:
+        _expect_scalar_map(
+            checkout_with,
+            {"persist-credentials": "false"},
+            f"{checkout_context}.with",
+            problems,
+        )
+    _expect_simple_step(
+        steps[1],
+        {
+            "name": "Build and test the unsigned native candidate",
+            "shell": "pwsh",
+            "run": (
+                "$buildRoot = Join-Path $env:RUNNER_TEMP 'gore-as-promotion-native'\n"
+                "python scripts/standalone_compiler_bundle.py build-native --build-root $buildRoot"
+            ),
+        },
+        f"{step_context}.build",
+        problems,
+    )
+    claim_run = (
+        "$claimTag = 'gore-as-signing-claim-${{ github.sha }}'\n"
+        "$promotionTag = 'gore-as-promotion-${{ github.sha }}'\n"
+        "$repo = '${{ github.repository }}'\n"
+        "$claimRoot = Join-Path $env:RUNNER_TEMP 'gore-as-promotion-claim'\n"
+        "New-Item -ItemType Directory -Path $claimRoot | Out-Null\n"
+        "$claimFile = Join-Path $claimRoot 'signing-claim.json'\n"
+        "[ordered]@{\n"
+        "  schema = 'gore.as.standalone-compiler-signing-claim'\n"
+        "  schema_version = 1\n"
+        "  repository = $repo\n"
+        "  commit = '${{ github.sha }}'\n"
+        "  workflow_sha = '${{ github.workflow_sha }}'\n"
+        "  claim_tag = $claimTag\n"
+        "  promotion_tag = $promotionTag\n"
+        "  workflow_run_id = [UInt64]'${{ github.run_id }}'\n"
+        "  workflow_run_attempt = [UInt32]'${{ github.run_attempt }}'\n"
+        "} | ConvertTo-Json | Set-Content -LiteralPath $claimFile -Encoding utf8NoBOM\n"
+        'gh api --method POST "repos/$repo/git/refs" `\n'
+        '  --raw-field "ref=refs/tags/$claimTag" `\n'
+        '  --raw-field "sha=${{ github.sha }}" *> $null\n'
+        "if ($LASTEXITCODE -ne 0) {\n"
+        '  Write-Error "signing target $claimTag was already claimed or could not be claimed; refusing another signature"\n'
+        "  exit 1\n"
+        "}\n"
+        "gh release create $claimTag $claimFile `\n"
+        "  --repo $repo `\n"
+        "  --verify-tag `\n"
+        "  --prerelease `\n"
+        "  --latest=false `\n"
+        '  --title "Standalone compiler signing claim ${{ github.sha }}" `\n'
+        '  --notes "Permanent public one-time signing claim for exact commit ${{ github.sha }}. If promotion fails, keep this tag and release and use a new commit."\n'
+        "if ($LASTEXITCODE -ne 0) {\n"
+        '  Write-Error "the permanent tag was claimed, but its immutable public release could not be created; do not delete it or retry this commit"\n'
+        "  exit 1\n"
+        "}\n"
+        "$tagSha = gh api \"repos/$repo/git/ref/tags/$claimTag\" --jq '.object.sha'\n"
+        '$release = gh api "repos/$repo/releases/tags/$claimTag" | ConvertFrom-Json\n'
+        "$claimDigest = 'sha256:' + (Get-FileHash -LiteralPath $claimFile -Algorithm SHA256).Hash.ToLowerInvariant()\n"
+        "$claimAsset = @($release.assets | Where-Object name -eq 'signing-claim.json')\n"
+        "if ($LASTEXITCODE -ne 0 -or $tagSha -ne '${{ github.sha }}' -or `\n"
+        "    $release.draft -or -not $release.prerelease -or -not $release.immutable -or `\n"
+        "    $release.tag_name -ne $claimTag -or $null -eq $release.published_at -or `\n"
+        "    @($release.assets).Count -ne 1 -or $claimAsset.Count -ne 1 -or `\n"
+        "    $claimAsset[0].digest -ne $claimDigest -or `\n"
+        "    $claimAsset[0].size -ne (Get-Item -LiteralPath $claimFile).Length) {\n"
+        '  Write-Error "signing claim is not the expected exact immutable public prerelease"\n'
+        "  exit 1\n"
+        "}"
+    )
+    _expect_keys(
+        steps[2].fields,
+        {"name", "shell", "env", "run"},
+        f"{step_context}.claim",
+        problems,
+    )
+    _expect_scalar(
+        steps[2].fields,
+        "name",
+        "Permanently claim the exact commit before signing",
+        f"{step_context}.claim",
+        problems,
+    )
+    _expect_scalar(steps[2].fields, "shell", "pwsh", f"{step_context}.claim", problems)
+    claim_env = steps[2].fields.get("env")
+    if claim_env is not None:
+        _expect_scalar_map(
+            claim_env,
+            {"GH_TOKEN": "${{ github.token }}"},
+            f"{step_context}.claim.env",
+            problems,
+        )
+    _expect_scalar(steps[2].fields, "run", claim_run, f"{step_context}.claim", problems)
+    sign_run = (
+        "$buildRoot = Join-Path $env:RUNNER_TEMP 'gore-as-promotion-native'\n"
+        "$outputRoot = Join-Path $env:RUNNER_TEMP 'gore-as-promotion-output'\n"
+        "New-Item -ItemType Directory -Path $outputRoot | Out-Null\n"
+        "$sidecar = Join-Path $buildRoot 'sidecar\\Release\\gore-as-standalone-compiler.exe'\n"
+        "$identity = Join-Path $outputRoot 'signed-sidecar-identity.json'\n"
+        "python scripts/standalone_compiler_bundle.py sign-sidecar-once `\n"
+        "  --sidecar $sidecar `\n"
+        "  --identity-output $identity\n"
+        "$publishedSidecar = Join-Path $outputRoot 'gore-as-standalone-compiler.exe'\n"
+        "[IO.File]::Copy($sidecar, $publishedSidecar, $false)\n"
+        "$identityRecord = Get-Content -Raw -LiteralPath $identity | ConvertFrom-Json\n"
+        "$publishedLength = (Get-Item -LiteralPath $publishedSidecar).Length\n"
+        "$publishedSha256 = (Get-FileHash -LiteralPath $publishedSidecar -Algorithm SHA256).Hash.ToLowerInvariant()\n"
+        "if ($identityRecord.schema -ne 'gore.as.signed-standalone-compiler-identity' -or `\n"
+        "    $identityRecord.schema_version -ne 1 -or `\n"
+        "    $identityRecord.signed.byte_len -ne $publishedLength -or `\n"
+        "    $identityRecord.signed.sha256 -ne $publishedSha256) {\n"
+        '  Write-Error "published sidecar differs from its one-time signing identity"\n'
+        "  exit 1\n"
+        "}\n"
+        "$signature = Get-AuthenticodeSignature -LiteralPath $publishedSidecar\n"
+        "if ($signature.Status -ne 'Valid') {\n"
+        '  Write-Error "final Authenticode status is $($signature.Status)"\n'
+        "  exit 1\n"
+        "}\n"
+        "$identityBytes = [IO.File]::ReadAllBytes($identity)\n"
+        "[ordered]@{\n"
+        "  schema = 'gore.as.promotion-candidate-provenance'\n"
+        "  schema_version = 2\n"
+        "  repository = '${{ github.repository }}'\n"
+        "  commit = '${{ github.sha }}'\n"
+        "  workflow_sha = '${{ github.workflow_sha }}'\n"
+        "  claim_tag = 'gore-as-signing-claim-${{ github.sha }}'\n"
+        "  promotion_tag = 'gore-as-promotion-${{ github.sha }}'\n"
+        "  workflow_run_id = [UInt64]'${{ github.run_id }}'\n"
+        "  workflow_run_attempt = [UInt32]'${{ github.run_attempt }}'\n"
+        "  signed_identity = [ordered]@{\n"
+        "    byte_len = [UInt64]$identityBytes.LongLength\n"
+        "    sha256 = (Get-FileHash -LiteralPath $identity -Algorithm SHA256).Hash.ToLowerInvariant()\n"
+        "  }\n"
+        "} | ConvertTo-Json | Set-Content `\n"
+        "  -LiteralPath (Join-Path $outputRoot 'source-provenance.json') `\n"
+        "  -Encoding utf8NoBOM"
+    )
+    sign_context = f"{step_context}.sign"
+    _expect_keys(
+        steps[3].fields, {"name", "shell", "env", "run"}, sign_context, problems
+    )
+    _expect_scalar(
+        steps[3].fields,
+        "name",
+        "Sign the candidate exactly once",
+        sign_context,
+        problems,
+    )
+    _expect_scalar(steps[3].fields, "shell", "pwsh", sign_context, problems)
+    sign_env = steps[3].fields.get("env")
+    if sign_env is not None:
+        _expect_scalar_map(
+            sign_env,
+            {
+                "GORE_SIGN": '"1"',
+                "TRUSTED_SIGNING_ENDPOINT": "${{ secrets.TRUSTED_SIGNING_ENDPOINT }}",
+                "TRUSTED_SIGNING_ACCOUNT": "${{ secrets.TRUSTED_SIGNING_ACCOUNT }}",
+                "TRUSTED_SIGNING_PROFILE": "${{ secrets.TRUSTED_SIGNING_PROFILE }}",
+                "AZURE_TENANT_ID": "${{ secrets.AZURE_TENANT_ID }}",
+                "AZURE_CLIENT_ID": "${{ secrets.AZURE_CLIENT_ID }}",
+                "AZURE_CLIENT_SECRET": "${{ secrets.AZURE_CLIENT_SECRET }}",
+            },
+            f"{sign_context}.env",
+            problems,
+        )
+    _expect_scalar(steps[3].fields, "run", sign_run, sign_context, problems)
+
+    attest_context = f"{step_context}.attest"
+    _expect_keys(
+        steps[4].fields, {"name", "id", "uses", "with"}, attest_context, problems
+    )
+    _expect_scalar(
+        steps[4].fields,
+        "name",
+        "Attest the signed candidate and promotion evidence",
+        attest_context,
+        problems,
+    )
+    _expect_scalar(steps[4].fields, "id", "attest", attest_context, problems)
+    _expect_scalar(
+        steps[4].fields, "uses", "actions/attest@v4", attest_context, problems
+    )
+    attest_with = steps[4].fields.get("with")
+    if attest_with is not None:
+        _expect_scalar_map(
+            attest_with,
+            {
+                "github-token": "${{ github.token }}",
+                "subject-path": (
+                    "${{ runner.temp }}/gore-as-promotion-output/gore-as-standalone-compiler.exe\n"
+                    "${{ runner.temp }}/gore-as-promotion-output/signed-sidecar-identity.json\n"
+                    "${{ runner.temp }}/gore-as-promotion-output/source-provenance.json"
+                ),
+            },
+            f"{attest_context}.with",
+            problems,
+        )
+
+    verify_attestation_run = (
+        "$outputRoot = Join-Path $env:RUNNER_TEMP 'gore-as-promotion-output'\n"
+        "$bundle = Join-Path $outputRoot 'github-attestation.sigstore.json'\n"
+        "[IO.File]::Copy('${{ steps.attest.outputs.bundle-path }}', $bundle, $false)\n"
+        "$subjects = @(\n"
+        "  (Join-Path $outputRoot 'gore-as-standalone-compiler.exe'),\n"
+        "  (Join-Path $outputRoot 'signed-sidecar-identity.json'),\n"
+        "  (Join-Path $outputRoot 'source-provenance.json')\n"
+        ")\n"
+        "foreach ($subject in $subjects) {\n"
+        "  gh attestation verify $subject `\n"
+        "    --repo '${{ github.repository }}' `\n"
+        "    --bundle $bundle `\n"
+        "    --signer-workflow '${{ github.repository }}/.github/workflows/standalone-compiler-promotion.yml' `\n"
+        "    --signer-digest '${{ github.workflow_sha }}' `\n"
+        "    --source-digest '${{ github.sha }}' `\n"
+        "    --deny-self-hosted-runners\n"
+        "  if ($LASTEXITCODE -ne 0) {\n"
+        '    Write-Error "GitHub attestation verification failed for $subject"\n'
+        "    exit 1\n"
+        "  }\n"
+        "}"
+    )
+    _expect_simple_step(
+        steps[5],
+        {
+            "name": "Verify and stage the GitHub attestation bundle",
+            "shell": "pwsh",
+            "run": verify_attestation_run,
+        },
+        f"{step_context}.verify-attestation",
+        problems,
+    )
+
+    publish_run = (
+        "$claimTag = 'gore-as-signing-claim-${{ github.sha }}'\n"
+        "$promotionTag = 'gore-as-promotion-${{ github.sha }}'\n"
+        "$repo = '${{ github.repository }}'\n"
+        "$outputRoot = Join-Path $env:RUNNER_TEMP 'gore-as-promotion-output'\n"
+        "$claimSha = gh api \"repos/$repo/git/ref/tags/$claimTag\" --jq '.object.sha'\n"
+        '$claim = gh api "repos/$repo/releases/tags/$claimTag" | ConvertFrom-Json\n'
+        "if ($LASTEXITCODE -ne 0 -or $claimSha -ne '${{ github.sha }}' -or `\n"
+        "    -not $claim.immutable -or `\n"
+        "    $claim.draft -or -not $claim.prerelease -or $claim.tag_name -ne $claimTag) {\n"
+        '  Write-Error "immutable signing claim changed before candidate publication"\n'
+        "  exit 1\n"
+        "}\n"
+        'gh api --method POST "repos/$repo/git/refs" `\n'
+        '  --raw-field "ref=refs/tags/$promotionTag" `\n'
+        '  --raw-field "sha=${{ github.sha }}" *> $null\n'
+        "if ($LASTEXITCODE -ne 0) {\n"
+        '  Write-Error "promotion target $promotionTag already exists or could not be claimed"\n'
+        "  exit 1\n"
+        "}\n"
+        "$files = @(\n"
+        "  (Join-Path $outputRoot 'gore-as-standalone-compiler.exe'),\n"
+        "  (Join-Path $outputRoot 'signed-sidecar-identity.json'),\n"
+        "  (Join-Path $outputRoot 'source-provenance.json'),\n"
+        "  (Join-Path $outputRoot 'github-attestation.sigstore.json')\n"
+        ")\n"
+        "gh release create $promotionTag @files `\n"
+        "  --repo $repo `\n"
+        "  --verify-tag `\n"
+        "  --prerelease `\n"
+        "  --latest=false `\n"
+        '  --title "Standalone compiler promotion ${{ github.sha }}" `\n'
+        '  --notes "Immutable signed standalone compiler candidate, identity, source provenance, and GitHub Sigstore attestation bundle for exact commit ${{ github.sha }}."\n'
+        "if ($LASTEXITCODE -ne 0) {\n"
+        '  Write-Error "immutable attested candidate release could not be published"\n'
+        "  exit 1\n"
+        "}\n"
+        "$tagSha = gh api \"repos/$repo/git/ref/tags/$promotionTag\" --jq '.object.sha'\n"
+        '$release = gh api "repos/$repo/releases/tags/$promotionTag" | ConvertFrom-Json\n'
+        "if ($LASTEXITCODE -ne 0 -or $tagSha -ne '${{ github.sha }}' -or `\n"
+        "    $release.draft -or -not $release.prerelease -or -not $release.immutable -or `\n"
+        "    $release.tag_name -ne $promotionTag -or $null -eq $release.published_at -or `\n"
+        "    @($release.assets).Count -ne 4) {\n"
+        '  Write-Error "candidate release is not the expected immutable public prerelease"\n'
+        "  exit 1\n"
+        "}\n"
+        "foreach ($file in $files) {\n"
+        "  $name = Split-Path -Leaf $file\n"
+        "  $asset = @($release.assets | Where-Object name -eq $name)\n"
+        "  $digest = 'sha256:' + (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()\n"
+        "  if ($asset.Count -ne 1 -or $asset[0].digest -ne $digest -or `\n"
+        "      $asset[0].size -ne (Get-Item -LiteralPath $file).Length) {\n"
+        '    Write-Error "published promotion asset $name differs from the local verified file"\n'
+        "    exit 1\n"
+        "  }\n"
+        "}"
+    )
+    _expect_keys(
+        steps[6].fields,
+        {"name", "shell", "env", "run"},
+        f"{step_context}.publish",
+        problems,
+    )
+    _expect_scalar(
+        steps[6].fields,
+        "name",
+        "Publish the immutable attested signed candidate",
+        f"{step_context}.publish",
+        problems,
+    )
+    _expect_scalar(
+        steps[6].fields, "shell", "pwsh", f"{step_context}.publish", problems
+    )
+    publish_env = steps[6].fields.get("env")
+    if publish_env is not None:
+        _expect_scalar_map(
+            publish_env,
+            {"GH_TOKEN": "${{ github.token }}"},
+            f"{step_context}.publish.env",
+            problems,
+        )
+    _expect_scalar(
+        steps[6].fields, "run", publish_run, f"{step_context}.publish", problems
+    )
+
+
+def validate_workflows(
+    ci_text: str, release_text: str, promotion_text: str
+) -> list[str]:
     """Return contract violations; an empty list means the workflows are safe."""
     try:
         ci_root = _parse_fields(_source(ci_text, "ci.yml"), 0, "ci.yml")
         release_root = _parse_fields(
             _source(release_text, "release.yml"), 0, "release.yml"
         )
+        promotion_root = _parse_fields(
+            _source(promotion_text, "standalone-compiler-promotion.yml"),
+            0,
+            "standalone-compiler-promotion.yml",
+        )
         problems: list[str] = []
         _validate_ci(ci_root, problems)
         _validate_release(release_root, problems)
+        _validate_promotion(promotion_root, problems)
         return problems
     except WorkflowParseError as error:
         return [str(error)]
@@ -1297,9 +1806,7 @@ def validate_appcast_key_resources(
     return problems
 
 
-def validate_download_table(
-    readme_text: str, ref_name: str | None = None
-) -> list[str]:
+def validate_download_table(readme_text: str, ref_name: str | None = None) -> list[str]:
     """Keep README's download table pinned to real, current release tags."""
     problems: list[str] = []
 
@@ -1350,9 +1857,7 @@ def validate_download_table(
                 f"README.md: {tool} link text must be the release tag {tag}"
             )
         if match.group("url") != f"{RELEASE_TAG_URL}{tag}":
-            problems.append(
-                f"README.md: {tool} must link to {RELEASE_TAG_URL}{tag}"
-            )
+            problems.append(f"README.md: {tool} must link to {RELEASE_TAG_URL}{tag}")
 
     for tool in DOWNLOAD_TOOLS:
         if tool not in versions:
@@ -1383,16 +1888,20 @@ def main() -> int:
     try:
         ci_text = CI_PATH.read_text(encoding="utf-8")
         release_text = RELEASE_PATH.read_text(encoding="utf-8")
+        promotion_text = PROMOTION_PATH.read_text(encoding="utf-8")
         runner_resources = {
             product: (ROOT / contract.runner_rc).read_text(encoding="utf-8")
             for product, contract in APPCAST_KEYS.items()
         }
         readme_text = README_PATH.read_text(encoding="utf-8")
     except OSError as error:
-        print(f"release workflow check could not read its inputs: {error}", file=sys.stderr)
+        print(
+            f"release workflow check could not read its inputs: {error}",
+            file=sys.stderr,
+        )
         return 1
 
-    problems = validate_workflows(ci_text, release_text)
+    problems = validate_workflows(ci_text, release_text, promotion_text)
     problems.extend(validate_appcast_key_resources(runner_resources))
     problems.extend(
         validate_download_table(readme_text, os.environ.get("GITHUB_REF_NAME"))
@@ -1400,7 +1909,9 @@ def main() -> int:
     if problems:
         for problem in problems:
             print(problem, file=sys.stderr)
-        print(f"{len(problems)} release workflow contract violation(s).", file=sys.stderr)
+        print(
+            f"{len(problems)} release workflow contract violation(s).", file=sys.stderr
+        )
         return 1
 
     print("OK: release jobs are gated by the exact normal CI workflow.")

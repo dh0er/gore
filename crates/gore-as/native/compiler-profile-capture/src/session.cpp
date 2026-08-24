@@ -97,7 +97,9 @@ bool hash_handle_prefix(
     if (!SetFilePointerEx(file, zero, nullptr, FILE_BEGIN)) {
       break;
     }
-    std::array<std::byte, 1024 * 1024> buffer{};
+    // Keep capture sealing independent of the host thread's stack reservation. A 1 MiB local
+    // array exhausts the default Windows stack once the bridge and caller frames are present.
+    std::array<std::byte, 64 * 1024> buffer{};
     std::uint64_t remaining = byte_count;
     while (remaining != 0) {
       const auto request = static_cast<DWORD>(std::min<std::uint64_t>(remaining, buffer.size()));
@@ -155,7 +157,9 @@ std::optional<std::uint32_t> rva_to_file_offset(
   return std::nullopt;
 }
 
-bool verify_pe_and_codeview(const HANDLE file, const std::uint64_t file_bytes) noexcept {
+[[maybe_unused]] bool verify_pe_and_codeview(
+    const HANDLE file,
+    const std::uint64_t file_bytes) noexcept {
   const HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
   if (mapping == nullptr) {
     return false;
@@ -223,23 +227,43 @@ bool verify_loaded_image(const void* image_base) noexcept {
   if (image_base == nullptr) {
     return false;
   }
-  std::array<std::byte, 4096> headers{};
-  SIZE_T read = 0;
-  if (!ReadProcessMemory(
-          GetCurrentProcess(), image_base, headers.data(), headers.size(), &read) ||
-      read < sizeof(IMAGE_DOS_HEADER)) {
+  MEMORY_BASIC_INFORMATION region{};
+  if (VirtualQuery(image_base, &region, sizeof(region)) != sizeof(region) ||
+      region.State != MEM_COMMIT ||
+      (region.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0) {
     return false;
   }
+  const auto protection = region.Protect & 0xffu;
+  if (protection != PAGE_READONLY && protection != PAGE_READWRITE &&
+      protection != PAGE_WRITECOPY && protection != PAGE_EXECUTE_READ &&
+      protection != PAGE_EXECUTE_READWRITE && protection != PAGE_EXECUTE_WRITECOPY) {
+    return false;
+  }
+  const auto base = reinterpret_cast<std::uintptr_t>(image_base);
+  const auto region_base = reinterpret_cast<std::uintptr_t>(region.BaseAddress);
+  if (region.RegionSize < 4096 || region_base > base ||
+      base - region_base > region.RegionSize - 4096) {
+    return false;
+  }
+  std::array<std::byte, 4096> headers{};
+  std::memcpy(headers.data(), image_base, headers.size());
   const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(headers.data());
   if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 0 ||
-      static_cast<std::size_t>(dos->e_lfanew) + sizeof(IMAGE_NT_HEADERS64) > read) {
+      static_cast<std::size_t>(dos->e_lfanew) + sizeof(IMAGE_NT_HEADERS64) > headers.size()) {
     return false;
   }
   const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(headers.data() + dos->e_lfanew);
+#if defined(GORE_AS_CAPTURE_TEST_TARGET)
+  return nt->Signature == IMAGE_NT_SIGNATURE &&
+         nt->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64 &&
+         nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC &&
+         nt->OptionalHeader.SizeOfImage != 0;
+#else
   return nt->Signature == IMAGE_NT_SIGNATURE &&
          nt->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64 &&
          nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC &&
          nt->OptionalHeader.SizeOfImage == kPeSizeOfImage;
+#endif
 }
 
 bool valid_json(std::span<const std::byte> json) noexcept {
@@ -388,7 +412,12 @@ CaptureError CaptureSession::open_pinned(
     return impl_ ? impl_->fail(CaptureError::invalid_argument) : CaptureError::invalid_state;
   }
   impl_->open_attempted = true;
-  if (observed_steam_build_id != kSteamBuildId ||
+#if defined(GORE_AS_CAPTURE_TEST_TARGET)
+  constexpr std::uint64_t expected_observed_build_id = 0xf17e'2453'9464'0001ull;
+#else
+  constexpr std::uint64_t expected_observed_build_id = kSteamBuildId;
+#endif
+  if (observed_steam_build_id != expected_observed_build_id ||
       std::all_of(capture_id.begin(), capture_id.end(), [](const std::byte value) {
         return value == std::byte{0};
       })) {
@@ -411,6 +440,10 @@ CaptureError CaptureSession::open_pinned(
       return impl_->fail(source.error);
     }
     LARGE_INTEGER file_size{};
+#if defined(GORE_AS_CAPTURE_TEST_TARGET)
+    const bool target_ok = GetFileSizeEx(source.executable.get(), &file_size) &&
+                           file_size.QuadPart > 0;
+#else
     Digest executable_sha{};
     const bool target_ok = GetFileSizeEx(source.executable.get(), &file_size) &&
                            static_cast<std::uint64_t>(file_size.QuadPart) == kExecutableBytes &&
@@ -418,6 +451,7 @@ CaptureError CaptureSession::open_pinned(
                                source.executable.get(), kExecutableBytes, {}, executable_sha) &&
                            executable_sha == kExecutableSha256 &&
                            verify_pe_and_codeview(source.executable.get(), kExecutableBytes);
+#endif
     if (!target_ok) {
       return impl_->fail(CaptureError::wrong_target);
     }
@@ -581,6 +615,9 @@ CaptureError CaptureSession::append_build_jit(const BuildJitFact& fact) noexcept
       impl_->final_state_count == 0 || impl_->build_seen ||
       fact.build_identifier != kBuildIdentifier || !fact.shipping_cache_matches ||
       fact.jit_database_cleared || fact.precompiled_guid != kPrecompiledGuid ||
+      fact.as_reference_debugging || !fact.fork_opcode_table_201_212_present ||
+      fact.reference_debug_opcodes_emittable ||
+      fact.resolve_object_ptr_callback_registered ||
       fact.get_build_identifier_rva != kRvaGetBuildIdentifier ||
       fact.get_static_jit_info_rva != kRvaGetStaticJitInfo ||
       (fact.jit_info_present &&
@@ -593,6 +630,10 @@ CaptureError CaptureSession::append_build_jit(const BuildJitFact& fact) noexcept
   flags |= fact.jit_guid_matches ? 2u : 0u;
   flags |= fact.jit_database_cleared ? 4u : 0u;
   flags |= fact.shipping_cache_matches ? 8u : 0u;
+  flags |= fact.as_reference_debugging ? 16u : 0u;
+  flags |= fact.fork_opcode_table_201_212_present ? 32u : 0u;
+  flags |= fact.reference_debug_opcodes_emittable ? 64u : 0u;
+  flags |= fact.resolve_object_ptr_callback_registered ? 128u : 0u;
   std::vector<std::byte> payload;
   payload.reserve(48);
   put_u32(payload, fact.build_identifier);

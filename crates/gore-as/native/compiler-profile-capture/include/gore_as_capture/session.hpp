@@ -34,6 +34,10 @@ struct BuildJitFact final {
   bool jit_info_present{};
   bool jit_guid_matches{};
   bool jit_database_cleared{};
+  bool as_reference_debugging{};
+  bool fork_opcode_table_201_212_present{};
+  bool reference_debug_opcodes_emittable{};
+  bool resolve_object_ptr_callback_registered{};
   GuidBytes precompiled_guid{};
   GuidBytes compiled_jit_guid{};
   std::uint32_t get_build_identifier_rva{};

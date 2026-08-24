@@ -34,6 +34,7 @@ struct compiler_profile_manifest {
     sealed_blob preprocessor_config;
     sealed_blob class_generator_config;
     sealed_blob compiler_options;
+    sealed_blob codegen_probe_corpus;
     std::vector<sealed_blob> all_blobs;
 };
 
@@ -90,7 +91,8 @@ struct external_frontend_profile {
 bool parse_compiler_profile_manifest(
     std::string_view bytes,
     compiler_profile_manifest& output,
-    std::string& detail);
+    std::string& detail,
+    bool require_qualified = true);
 
 bool parse_registry_profile_payloads(
     std::string_view ordered_properties_json,

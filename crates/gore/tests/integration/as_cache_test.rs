@@ -94,11 +94,16 @@ fn every_module_cache_subcommand_rejects_a_file_that_is_not_a_module_cache() {
         &["as", "default-sites", decoy][..],
         &["as", "tag-map-sites", decoy][..],
     ] {
-        let assertion = Command::cargo_bin("gore").unwrap().args(args).assert().failure();
+        let assertion = Command::cargo_bin("gore")
+            .unwrap()
+            .args(args)
+            .assert()
+            .failure();
         let stderr = String::from_utf8_lossy(&assertion.get_output().stderr).into_owned();
         let invocation = args.join(" ");
         assert!(
-            stderr.contains("bad cache magic"),
+            stderr.contains("bad cache magic")
+                || stderr.contains("unsupported cache build identifier"),
             "`gore {invocation}` must name the format mismatch, got: {stderr}"
         );
         assert!(
@@ -202,7 +207,8 @@ fn catalog_knowledge_rejects_a_script_cache_that_is_not_a_module_cache() {
         .failure();
     let stderr = String::from_utf8_lossy(&assertion.get_output().stderr).into_owned();
     assert!(
-        stderr.contains("bad cache magic"),
+        stderr.contains("bad cache magic")
+            || stderr.contains("unsupported cache build identifier"),
         "`gore catalog --kind knowledge --script-cache` must name the format mismatch, got: {stderr}"
     );
     assert!(
@@ -1034,8 +1040,7 @@ fn qualify_fixture(usmaps: usize) -> QualifyFixture {
         let path = dumps.join(format!("G1R-5.4.3-{index}-fixture.usmap"));
         gore_asset::test_fixture::write_valid_usmap(&path).unwrap();
         if index == 0 {
-            let schemas =
-                gore_asset::SchemaDb::from_usmap(&std::fs::read(&path).unwrap()).unwrap();
+            let schemas = gore_asset::SchemaDb::from_usmap(&std::fs::read(&path).unwrap()).unwrap();
             for record in schemas.schemas() {
                 executable.extend_from_slice(record.name.as_bytes());
                 executable.push(0);

@@ -5,6 +5,8 @@
 #include <array>
 #include <iostream>
 #include <string>
+#include <string_view>
+#include <utility>
 
 namespace {
 
@@ -14,7 +16,8 @@ bool expect(const bool condition, const char* const detail) {
 }
 
 std::string fixed_operations(const unsigned size, const unsigned alignment) {
-    return "{\"can_be_template_subtype\":true,\"can_construct\":true,\"need_construct\":false,"
+    return "{\"can_create_property\":true,\"never_requires_gc\":false,\"requires_property\":false,"
+           "\"can_be_template_subtype\":true,\"can_construct\":true,\"need_construct\":false,"
         "\"can_destruct\":true,\"need_destruct\":false,\"can_copy\":true,\"need_copy\":false,"
         "\"can_compare\":true,\"can_hash_value\":true,\"value_size\":" + std::to_string(size) +
         ",\"value_alignment\":" + std::to_string(alignment) + ",\"is_object_pointer\":false}";
@@ -86,7 +89,8 @@ bool profile_loader_smoke() {
         "\"blueprint_event_argument_specializations\":[\"FName\"],\"native_super_types\":["
         "{\"ordinal\":0,\"angelscript_type_name\":\"UObject\","
         "\"unreal_class_path\":\"/Script/CoreUObject.Object\",\"property_offset\":64,"
-        "\"kind\":\"other_u_object\",\"cannot_derive_angelscript\":false}],"
+        "\"kind\":\"other_u_object\",\"game_state_subsystem\":false,"
+        "\"cannot_derive_angelscript\":false}],"
         "\"fname_comparison_keys\":[{\"ordinal\":0,\"spelling\":\"Gr\\u00f6\\u00dfe\","
         "\"comparison_key\":\"fname-key-17\"}],\"external_hooks\":{"
         "\"class_analyze\":{\"bound\":false,\"captures\":[]},"
@@ -191,6 +195,31 @@ bool profile_loader_smoke() {
     if (!expect(parse_compiler_profile_manifest(manifest_json, manifest, detail), detail.c_str())) return false;
     if (!expect(manifest.build_identifier < 0 && manifest.all_blobs.size() == 16U,
             "compiler manifest projection mismatch")) return false;
+    for (const auto& drift : std::array<std::pair<std::string_view, std::string_view>, 3U>{{
+             {"\"steam_app_id\":1297900", "\"steam_app_id\":1297901"},
+             {"\"steam_build_id\":24539464", "\"steam_build_id\":24539465"},
+             {"\"depot_id\":1297901", "\"depot_id\":1297902"},
+         }}) {
+        std::string foreign_payload = payload;
+        const std::size_t position = foreign_payload.find(drift.first);
+        if (!expect(position != std::string::npos, "target drift fixture field is missing")) {
+            return false;
+        }
+        foreign_payload.replace(position, drift.first.size(), drift.second);
+        sha256 foreign_hash;
+        foreign_hash.update(domain, sizeof(domain) - 1U);
+        foreign_hash.update(foreign_payload);
+        std::string foreign_manifest = foreign_payload;
+        foreign_manifest.pop_back();
+        foreign_manifest += ",\"profile_sha256\":\"" +
+            sha256_hex(foreign_hash.finish()) + "\"}";
+        compiler_profile_manifest rejected;
+        if (!expect(
+                !parse_compiler_profile_manifest(foreign_manifest, rejected, detail),
+                "resealed foreign compiler target was accepted")) {
+            return false;
+        }
+    }
     return true;
 }
 

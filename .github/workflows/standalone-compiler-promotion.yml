@@ -1,0 +1,242 @@
+name: Standalone compiler promotion candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: standalone-compiler-promotion-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  quality-gates:
+    name: Exact-commit CI quality gates
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  build-sign-candidate:
+    name: Build, attest, and publish the one-time candidate
+    needs: quality-gates
+    runs-on: windows-latest
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build and test the unsigned native candidate
+        shell: pwsh
+        run: |
+          $buildRoot = Join-Path $env:RUNNER_TEMP 'gore-as-promotion-native'
+          python scripts/standalone_compiler_bundle.py build-native --build-root $buildRoot
+
+      - name: Permanently claim the exact commit before signing
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $claimTag = 'gore-as-signing-claim-${{ github.sha }}'
+          $promotionTag = 'gore-as-promotion-${{ github.sha }}'
+          $repo = '${{ github.repository }}'
+          $claimRoot = Join-Path $env:RUNNER_TEMP 'gore-as-promotion-claim'
+          New-Item -ItemType Directory -Path $claimRoot | Out-Null
+          $claimFile = Join-Path $claimRoot 'signing-claim.json'
+          [ordered]@{
+            schema = 'gore.as.standalone-compiler-signing-claim'
+            schema_version = 1
+            repository = $repo
+            commit = '${{ github.sha }}'
+            workflow_sha = '${{ github.workflow_sha }}'
+            claim_tag = $claimTag
+            promotion_tag = $promotionTag
+            workflow_run_id = [UInt64]'${{ github.run_id }}'
+            workflow_run_attempt = [UInt32]'${{ github.run_attempt }}'
+          } | ConvertTo-Json | Set-Content -LiteralPath $claimFile -Encoding utf8NoBOM
+          gh api --method POST "repos/$repo/git/refs" `
+            --raw-field "ref=refs/tags/$claimTag" `
+            --raw-field "sha=${{ github.sha }}" *> $null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "signing target $claimTag was already claimed or could not be claimed; refusing another signature"
+            exit 1
+          }
+          gh release create $claimTag $claimFile `
+            --repo $repo `
+            --verify-tag `
+            --prerelease `
+            --latest=false `
+            --title "Standalone compiler signing claim ${{ github.sha }}" `
+            --notes "Permanent public one-time signing claim for exact commit ${{ github.sha }}. If promotion fails, keep this tag and release and use a new commit."
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "the permanent tag was claimed, but its immutable public release could not be created; do not delete it or retry this commit"
+            exit 1
+          }
+          $tagSha = gh api "repos/$repo/git/ref/tags/$claimTag" --jq '.object.sha'
+          $release = gh api "repos/$repo/releases/tags/$claimTag" | ConvertFrom-Json
+          $claimDigest = 'sha256:' + (Get-FileHash -LiteralPath $claimFile -Algorithm SHA256).Hash.ToLowerInvariant()
+          $claimAsset = @($release.assets | Where-Object name -eq 'signing-claim.json')
+          if ($LASTEXITCODE -ne 0 -or $tagSha -ne '${{ github.sha }}' -or `
+              $release.draft -or -not $release.prerelease -or -not $release.immutable -or `
+              $release.tag_name -ne $claimTag -or $null -eq $release.published_at -or `
+              @($release.assets).Count -ne 1 -or $claimAsset.Count -ne 1 -or `
+              $claimAsset[0].digest -ne $claimDigest -or `
+              $claimAsset[0].size -ne (Get-Item -LiteralPath $claimFile).Length) {
+            Write-Error "signing claim is not the expected exact immutable public prerelease"
+            exit 1
+          }
+
+      - name: Sign the candidate exactly once
+        shell: pwsh
+        env:
+          GORE_SIGN: "1"
+          TRUSTED_SIGNING_ENDPOINT: ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}
+          TRUSTED_SIGNING_ACCOUNT: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
+          TRUSTED_SIGNING_PROFILE: ${{ secrets.TRUSTED_SIGNING_PROFILE }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: |
+          $buildRoot = Join-Path $env:RUNNER_TEMP 'gore-as-promotion-native'
+          $outputRoot = Join-Path $env:RUNNER_TEMP 'gore-as-promotion-output'
+          New-Item -ItemType Directory -Path $outputRoot | Out-Null
+          $sidecar = Join-Path $buildRoot 'sidecar\Release\gore-as-standalone-compiler.exe'
+          $identity = Join-Path $outputRoot 'signed-sidecar-identity.json'
+          python scripts/standalone_compiler_bundle.py sign-sidecar-once `
+            --sidecar $sidecar `
+            --identity-output $identity
+          $publishedSidecar = Join-Path $outputRoot 'gore-as-standalone-compiler.exe'
+          [IO.File]::Copy($sidecar, $publishedSidecar, $false)
+          $identityRecord = Get-Content -Raw -LiteralPath $identity | ConvertFrom-Json
+          $publishedLength = (Get-Item -LiteralPath $publishedSidecar).Length
+          $publishedSha256 = (Get-FileHash -LiteralPath $publishedSidecar -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($identityRecord.schema -ne 'gore.as.signed-standalone-compiler-identity' -or `
+              $identityRecord.schema_version -ne 1 -or `
+              $identityRecord.signed.byte_len -ne $publishedLength -or `
+              $identityRecord.signed.sha256 -ne $publishedSha256) {
+            Write-Error "published sidecar differs from its one-time signing identity"
+            exit 1
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $publishedSidecar
+          if ($signature.Status -ne 'Valid') {
+            Write-Error "final Authenticode status is $($signature.Status)"
+            exit 1
+          }
+          $identityBytes = [IO.File]::ReadAllBytes($identity)
+          [ordered]@{
+            schema = 'gore.as.promotion-candidate-provenance'
+            schema_version = 2
+            repository = '${{ github.repository }}'
+            commit = '${{ github.sha }}'
+            workflow_sha = '${{ github.workflow_sha }}'
+            claim_tag = 'gore-as-signing-claim-${{ github.sha }}'
+            promotion_tag = 'gore-as-promotion-${{ github.sha }}'
+            workflow_run_id = [UInt64]'${{ github.run_id }}'
+            workflow_run_attempt = [UInt32]'${{ github.run_attempt }}'
+            signed_identity = [ordered]@{
+              byte_len = [UInt64]$identityBytes.LongLength
+              sha256 = (Get-FileHash -LiteralPath $identity -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+          } | ConvertTo-Json | Set-Content `
+            -LiteralPath (Join-Path $outputRoot 'source-provenance.json') `
+            -Encoding utf8NoBOM
+
+      - name: Attest the signed candidate and promotion evidence
+        id: attest
+        uses: actions/attest@v4
+        with:
+          github-token: ${{ github.token }}
+          subject-path: |
+            ${{ runner.temp }}/gore-as-promotion-output/gore-as-standalone-compiler.exe
+            ${{ runner.temp }}/gore-as-promotion-output/signed-sidecar-identity.json
+            ${{ runner.temp }}/gore-as-promotion-output/source-provenance.json
+
+      - name: Verify and stage the GitHub attestation bundle
+        shell: pwsh
+        run: |
+          $outputRoot = Join-Path $env:RUNNER_TEMP 'gore-as-promotion-output'
+          $bundle = Join-Path $outputRoot 'github-attestation.sigstore.json'
+          [IO.File]::Copy('${{ steps.attest.outputs.bundle-path }}', $bundle, $false)
+          $subjects = @(
+            (Join-Path $outputRoot 'gore-as-standalone-compiler.exe'),
+            (Join-Path $outputRoot 'signed-sidecar-identity.json'),
+            (Join-Path $outputRoot 'source-provenance.json')
+          )
+          foreach ($subject in $subjects) {
+            gh attestation verify $subject `
+              --repo '${{ github.repository }}' `
+              --bundle $bundle `
+              --signer-workflow '${{ github.repository }}/.github/workflows/standalone-compiler-promotion.yml' `
+              --signer-digest '${{ github.workflow_sha }}' `
+              --source-digest '${{ github.sha }}' `
+              --deny-self-hosted-runners
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "GitHub attestation verification failed for $subject"
+              exit 1
+            }
+          }
+
+      - name: Publish the immutable attested signed candidate
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $claimTag = 'gore-as-signing-claim-${{ github.sha }}'
+          $promotionTag = 'gore-as-promotion-${{ github.sha }}'
+          $repo = '${{ github.repository }}'
+          $outputRoot = Join-Path $env:RUNNER_TEMP 'gore-as-promotion-output'
+          $claimSha = gh api "repos/$repo/git/ref/tags/$claimTag" --jq '.object.sha'
+          $claim = gh api "repos/$repo/releases/tags/$claimTag" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $claimSha -ne '${{ github.sha }}' -or `
+              -not $claim.immutable -or `
+              $claim.draft -or -not $claim.prerelease -or $claim.tag_name -ne $claimTag) {
+            Write-Error "immutable signing claim changed before candidate publication"
+            exit 1
+          }
+          gh api --method POST "repos/$repo/git/refs" `
+            --raw-field "ref=refs/tags/$promotionTag" `
+            --raw-field "sha=${{ github.sha }}" *> $null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "promotion target $promotionTag already exists or could not be claimed"
+            exit 1
+          }
+          $files = @(
+            (Join-Path $outputRoot 'gore-as-standalone-compiler.exe'),
+            (Join-Path $outputRoot 'signed-sidecar-identity.json'),
+            (Join-Path $outputRoot 'source-provenance.json'),
+            (Join-Path $outputRoot 'github-attestation.sigstore.json')
+          )
+          gh release create $promotionTag @files `
+            --repo $repo `
+            --verify-tag `
+            --prerelease `
+            --latest=false `
+            --title "Standalone compiler promotion ${{ github.sha }}" `
+            --notes "Immutable signed standalone compiler candidate, identity, source provenance, and GitHub Sigstore attestation bundle for exact commit ${{ github.sha }}."
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "immutable attested candidate release could not be published"
+            exit 1
+          }
+          $tagSha = gh api "repos/$repo/git/ref/tags/$promotionTag" --jq '.object.sha'
+          $release = gh api "repos/$repo/releases/tags/$promotionTag" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $tagSha -ne '${{ github.sha }}' -or `
+              $release.draft -or -not $release.prerelease -or -not $release.immutable -or `
+              $release.tag_name -ne $promotionTag -or $null -eq $release.published_at -or `
+              @($release.assets).Count -ne 4) {
+            Write-Error "candidate release is not the expected immutable public prerelease"
+            exit 1
+          }
+          foreach ($file in $files) {
+            $name = Split-Path -Leaf $file
+            $asset = @($release.assets | Where-Object name -eq $name)
+            $digest = 'sha256:' + (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($asset.Count -ne 1 -or $asset[0].digest -ne $digest -or `
+                $asset[0].size -ne (Get-Item -LiteralPath $file).Length) {
+              Write-Error "published promotion asset $name differs from the local verified file"
+              exit 1
+            }
+          }

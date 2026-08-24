@@ -397,21 +397,19 @@ void main() {
       gameRoot: _gameRoot,
       autoRefresh: false,
     );
+    ScriptCompilerBackendMode? requestedBackend;
     await _pumpPanel(
       tester,
       safety: safety,
-      check: ({required compilerBackend}) async =>
-          _receipt(backendMode: compilerBackend),
+      check: ({required compilerBackend}) async {
+        requestedBackend = compilerBackend;
+        return _receipt(backendMode: compilerBackend);
+      },
     );
 
-    await tester.tap(
-      find.byKey(const Key('revision3-managed-compiler-backend')),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Standalone, then game fallback').last);
-    await tester.pumpAndSettle();
     await _runPanel(tester);
 
+    expect(requestedBackend, ScriptCompilerBackendMode.productDefault);
     expect(
       find.byKey(const Key('revision3-managed-compiler-backend-result')),
       findsOneWidget,

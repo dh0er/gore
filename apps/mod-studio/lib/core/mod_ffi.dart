@@ -2796,6 +2796,53 @@ class ModFfi {
     }
   }
 
+  /// Compile one module through an explicit product compiler policy.
+  ///
+  /// Package paths and seals never cross this wire. A standalone result is
+  /// accepted only when the response carries a fully typed product package
+  /// identity; `standaloneThenGame` is the sole mode that may start G1R after
+  /// a visible standalone failure.
+  Future<ScriptCompileReport> scriptCompileReportV2({
+    required String gameDir,
+    required String op,
+    required String moduleName,
+    required String relPath,
+    required String asPath,
+    required String workDir,
+    required ScriptCompilerBackendMode compilerBackend,
+    bool allowNewSymbols = false,
+  }) async {
+    const command = 'script_compile_report_v2';
+    final response = await _call(command, {
+      'game_dir': gameDir,
+      'op': op,
+      'module_name': moduleName,
+      'rel_path': relPath,
+      'as_path': asPath,
+      'work_dir': workDir,
+      'allow_new_symbols': allowNewSymbols,
+      'compiler_backend': compilerBackend.wireName,
+    });
+    try {
+      final report = ScriptCompileReport.fromJson(
+        response,
+        expectedBackend: compilerBackend,
+      );
+      if (report.compiled) {
+        _requireOwnedScriptCompileOutput(
+          workDir: workDir,
+          miniPath: report.miniPath!,
+        );
+      }
+      return report;
+    } on FormatException {
+      throw const ModFfiException._malformed(
+        command: command,
+        reason: 'compile report V2 schema is invalid',
+      );
+    }
+  }
+
   /// Read-only, fail-closed inspection of whether the configured game install
   /// may enter a compiler/deploy mutation window.
   Future<ScriptCompileInstallState> scriptCompileInstallStateV1({

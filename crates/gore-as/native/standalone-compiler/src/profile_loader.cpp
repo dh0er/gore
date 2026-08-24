@@ -23,6 +23,10 @@ constexpr std::size_t max_json_depth = 32U;
 constexpr std::string_view profile_hash_domain{
     "gore-as-compiler-profile-v1\0",
     sizeof("gore-as-compiler-profile-v1\0") - 1U};
+constexpr std::uint32_t pinned_steam_app_id = 1'297'900U;
+constexpr std::uint64_t pinned_steam_build_id = 24'539'464U;
+constexpr std::uint32_t pinned_depot_id = 1'297'901U;
+constexpr std::uint64_t pinned_depot_manifest_gid = 1'585'071'322'101'748'861U;
 
 bool parsed(std::string_view bytes, value& output, std::string& detail) {
     json::parse_error error;
@@ -151,10 +155,14 @@ bool add_blob(
 bool fixed_operations(const value& input, fixed_type_operations& output, std::string& detail) {
     if (!json::require_object_keys(
             input,
-            {"can_be_template_subtype", "can_construct", "need_construct", "can_destruct",
+            {"can_create_property", "never_requires_gc", "requires_property",
+             "can_be_template_subtype", "can_construct", "need_construct", "can_destruct",
              "need_destruct", "can_copy", "need_copy", "can_compare", "can_hash_value",
              "value_size", "value_alignment", "is_object_pointer"},
             {}, detail) ||
+        !json::get_bool(input, "can_create_property", output.can_create_property, detail) ||
+        !json::get_bool(input, "never_requires_gc", output.never_requires_gc, detail) ||
+        !json::get_bool(input, "requires_property", output.requires_property, detail) ||
         !json::get_bool(input, "can_be_template_subtype", output.can_be_template_subtype, detail) ||
         !json::get_bool(input, "can_construct", output.can_construct, detail) ||
         !json::get_bool(input, "need_construct", output.need_construct, detail) ||
@@ -865,7 +873,8 @@ bool parse_enum_native_super(const std::string& text, native_super_kind& output,
 bool parse_compiler_profile_manifest(
     const std::string_view bytes,
     compiler_profile_manifest& output,
-    std::string& detail) {
+    std::string& detail,
+    const bool require_qualified) {
     try {
         value root;
         if (bytes.size() > 4U * 1024U * 1024U || !parsed(bytes, root, detail) ||
@@ -908,15 +917,17 @@ bool parse_compiler_profile_manifest(
                  "architecture", "build_configuration"}, {}, detail)) return false;
         std::uint32_t app_id = 0U;
         std::string platform, architecture, configuration;
-        if (!u32(*target, "steam_app_id", app_id, detail) || app_id == 0U ||
+        if (!u32(*target, "steam_app_id", app_id, detail) ||
             !json::get_u64(*target, "steam_build_id", staged.steam_build_id, detail) ||
             !u32(*target, "depot_id", staged.depot_id, detail) ||
             !json::get_u64(*target, "depot_manifest_gid", staged.depot_manifest_gid, detail) ||
             !json::get_string(*target, "platform", platform, detail) || platform != "windows" ||
             !json::get_string(*target, "architecture", architecture, detail) || architecture != "x86_64" ||
             !json::get_string(*target, "build_configuration", configuration, detail) || configuration != "shipping" ||
-            staged.steam_build_id == 0U || staged.depot_id == 0U || staged.depot_manifest_gid == 0U) {
-            if (detail.empty()) detail = "compiler target identity is unsupported or incomplete";
+            app_id != pinned_steam_app_id || staged.steam_build_id != pinned_steam_build_id ||
+            staged.depot_id != pinned_depot_id ||
+            staged.depot_manifest_gid != pinned_depot_manifest_gid) {
+            if (detail.empty()) detail = "compiler target is not the pinned BuildID-24539464 target";
             return false;
         }
 
@@ -1010,7 +1021,8 @@ bool parse_compiler_profile_manifest(
             !json::get_string(*bytecode, "opcode_table_version", opcode_version, detail) || opcode_version.empty() ||
             !add_blob(*bytecode, "opcode_table", staged.all_blobs, detail) ||
             !add_blob(*bytecode, "operand_schema", staged.all_blobs, detail) ||
-            !add_blob(*bytecode, "codegen_probe_corpus", staged.all_blobs, detail) ||
+            !find_blob(*bytecode, "codegen_probe_corpus", staged.codegen_probe_corpus,
+                staged.all_blobs, detail) ||
             !add_blob(*bytecode, "expected_probe_results", staged.all_blobs, detail)) return false;
 
         const value* writer = nullptr;
@@ -1036,7 +1048,8 @@ bool parse_compiler_profile_manifest(
             staged.required_probe_suite_version.empty() ||
             !add_blob(*qualification, "diagnostic_parity", staged.all_blobs, detail) ||
             !add_blob(*qualification, "semantic_parity", staged.all_blobs, detail) ||
-            !json::get_bool(*qualification, "qualified", qualified, detail) || !qualified) {
+            !json::get_bool(*qualification, "qualified", qualified, detail) ||
+            (require_qualified && !qualified)) {
             if (detail.empty()) detail = "compiler profile is not qualified";
             return false;
         }
@@ -1172,7 +1185,7 @@ bool parse_frontend_profile_payloads(
 
         const value* specializations = nullptr;
         if (!json::get_array(pre_root, "blueprint_event_argument_specializations", specializations, detail) ||
-            specializations->elements.size() > 4096U) return false;
+            specializations->elements.size() > 16'384U) return false;
         for (const auto& item : specializations->elements) {
             if (item.kind != value_kind::string || item.text.empty()) {
                 detail = "blueprint event specialization is not a nonempty string";
@@ -1190,13 +1203,15 @@ bool parse_frontend_profile_payloads(
             std::string kind;
             if (!json::require_object_keys(item,
                     {"ordinal", "angelscript_type_name", "unreal_class_path", "property_offset", "kind",
-                     "cannot_derive_angelscript"}, {}, detail) ||
+                     "game_state_subsystem", "cannot_derive_angelscript"}, {}, detail) ||
                 !u32(item, "ordinal", ordinal, detail) || ordinal != staged_pre.native_super_types.size() ||
                 !json::get_string(item, "angelscript_type_name", native.angelscript_type_name, detail) ||
                 !json::get_string(item, "unreal_class_path", native.unreal_class_path, detail) ||
                 !json::get_u64(item, "property_offset", native.property_offset, detail) ||
                 !json::get_string(item, "kind", kind, detail) ||
                 !parse_enum_native_super(kind, native.kind, detail) ||
+                !json::get_bool(item, "game_state_subsystem",
+                    native.game_state_subsystem, detail) ||
                 !json::get_bool(item, "cannot_derive_angelscript", native.cannot_derive_angelscript, detail)) return false;
             staged_pre.native_super_types.push_back(std::move(native));
         }

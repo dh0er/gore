@@ -2,6 +2,8 @@
 #include "gore_as_standalone/precompiled_data.hpp"
 #include "gore_as_standalone/precompiled_engine.hpp"
 
+#include "as_scriptfunction.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
@@ -24,6 +26,8 @@ void message_callback(const asSMessageInfo* message, void*) {
     std::cerr << message->section << ':' << message->row << ':' << message->col
               << ": " << message->message << '\n';
 }
+
+void accept_generic_value(asIScriptGeneric*) {}
 
 precompiled::map_string module_key(const char* const name) {
     const std::string text(name);
@@ -150,6 +154,9 @@ int main() {
     std::int32_t source_seed = 40;
     counter_value source_counter{40};
     if (source_engine->RegisterGlobalProperty("int Seed", &source_seed) < 0 ||
+        source_engine->RegisterGlobalFunction(
+            "void AcceptGeneric(const ?&in Value)",
+            asFUNCTION(accept_generic_value), asCALL_GENERIC) < 0 ||
         !register_counter(*source_engine, source_counter, false)) {
         std::cerr << "could not register source globals/types\n";
         source_engine->ShutDownAndRelease();
@@ -160,6 +167,7 @@ int main() {
         int Add(int Left, int Right) { return Left + Right; }
         int CallAdd() { return Add(20, 22); }
         int ReadSeed() { return Seed + 2; }
+        void CallGeneric() { AcceptGeneric(Seed); }
         int ReadCounter() { return CounterValue.Health + 2; }
         struct UCounter
         {
@@ -248,7 +256,7 @@ int main() {
     }
     cache.modules.emplace_back(key, std::move(exported));
     precompiled::precompiled_module import_probe;
-    import_probe.module_name.bytes = "ImportProbe";
+    import_probe.module_name.bytes = "Import Probe";
     import_probe.script_relative_filename.bytes = "ImportProbe.as";
     import_probe.imported_modules.push_back(precompiled::archive_string{"RoundTrip"});
     precompiled::function_import imported_add;
@@ -271,7 +279,7 @@ int main() {
     imported_add.signature.parameter_flags = add_record->parameter_flags;
     imported_add.signature.parameter_default_args = add_record->parameter_default_args;
     import_probe.function_imports.push_back(std::move(imported_add));
-    cache.modules.emplace_back(module_key("ImportProbe"), std::move(import_probe));
+    cache.modules.emplace_back(module_key("Import Probe"), std::move(import_probe));
     precompiled::codec_error codec_error;
     std::vector<std::uint8_t> bytes;
     if (!precompiled::encode(cache, bytes, codec_error)) {
@@ -291,8 +299,17 @@ int main() {
     std::int32_t target_seed = 40;
     counter_value target_counter{40};
     if (target_engine->RegisterGlobalProperty("int Seed", &target_seed) < 0 ||
+        target_engine->RegisterGlobalFunction(
+            "void AcceptGeneric(const ?&in Value)",
+            asFUNCTION(accept_generic_value), asCALL_GENERIC) < 0 ||
         !register_counter(*target_engine, target_counter, true)) {
         std::cerr << "could not register target globals/types\n";
+        target_engine->ShutDownAndRelease();
+        source_engine->ShutDownAndRelease();
+        return 7;
+    }
+    if (target_engine->SetDefaultNamespace("LeakedRegistrationContext") < 0) {
+        std::cerr << "could not stage non-root registration context\n";
         target_engine->ShutDownAndRelease();
         source_engine->ShutDownAndRelease();
         return 7;
@@ -300,6 +317,7 @@ int main() {
     std::vector<asIScriptModule*> loaded;
     const auto load_result =
         precompiled::rehydrate_cache_checkpoint(*target_engine, decoded, loaded);
+    target_engine->SetDefaultNamespace("");
     const asUINT imported_count = loaded.size() == 2U
         ? loaded[1]->GetImportedFunctionCount()
         : 0U;
@@ -334,6 +352,59 @@ int main() {
         return 7;
     }
 
+    // The bridge must reject full function-state corruption during preflight,
+    // before any module becomes visible in the target engine.
+    std::vector<std::pair<const char*, precompiled::cache>> invalid_function_caches;
+    {
+        precompiled::cache invalid = decoded;
+        auto& function = invalid.modules.front().second.functions.front();
+        function.variable_space = 1;
+        function.stack_needed = 0;
+        invalid_function_caches.emplace_back("stack below variable space", std::move(invalid));
+    }
+    {
+        precompiled::cache invalid = decoded;
+        auto& function = invalid.modules.front().second.functions.front();
+        function.object_variables_on_heap =
+            static_cast<std::int32_t>(function.object_variable_positions.size() + 1U);
+        invalid_function_caches.emplace_back("invalid object heap prefix", std::move(invalid));
+    }
+    {
+        precompiled::cache invalid = decoded;
+        auto& function = invalid.modules.front().second.functions.front();
+        function.variable_info_program_positions.push_back(0);
+        function.variable_info_offsets.push_back(0);
+        function.variable_info_options.push_back(asBLOCK_BEGIN);
+        invalid_function_caches.emplace_back("unclosed variable-info block", std::move(invalid));
+    }
+    {
+        precompiled::cache invalid = decoded;
+        invalid.modules.front().second.functions.front().line_numbers.push_back(0);
+        invalid_function_caches.emplace_back("odd line-number array", std::move(invalid));
+    }
+    {
+        precompiled::cache invalid = decoded;
+        auto& functions = invalid.modules.front().second.functions;
+        functions[1].id = functions[0].id;
+        invalid_function_caches.emplace_back("duplicate function id", std::move(invalid));
+    }
+    for (const auto& [label, invalid] : invalid_function_caches) {
+        asIScriptEngine* invalid_engine = asCreateScriptEngine();
+        std::vector<asIScriptModule*> invalid_loaded{source_module};
+        const auto invalid_result =
+            precompiled::rehydrate_cache_checkpoint(*invalid_engine, invalid, invalid_loaded);
+        if (invalid_result.succeeded() ||
+            invalid_loaded != std::vector<asIScriptModule*>{source_module} ||
+            invalid_engine->GetModule("RoundTrip", asGM_ONLY_IF_EXISTS) != nullptr) {
+            std::cerr << "invalid function state was not rejected atomically: " << label << '\n';
+            invalid_engine->ShutDownAndRelease();
+            target_engine->ShutDownAndRelease();
+            source_engine->ShutDownAndRelease();
+            return 8;
+        }
+        invalid_engine->ShutDownAndRelease();
+    }
+
     // Unsupported reference tables must reject the whole cache before module
     // creation, leaving both the caller output and target engine untouched.
     asIScriptEngine* rejected_engine = asCreateScriptEngine();
@@ -348,7 +419,7 @@ int main() {
         rejected_engine->ShutDownAndRelease();
         target_engine->ShutDownAndRelease();
         source_engine->ShutDownAndRelease();
-        return 8;
+        return 9;
     }
 
     rejected_engine->ShutDownAndRelease();

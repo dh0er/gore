@@ -154,6 +154,10 @@ pub struct BuildJitCaptureV1 {
     pub jit_info_present: bool,
     pub jit_guid_matches: bool,
     pub jit_database_cleared: bool,
+    pub as_reference_debugging: bool,
+    pub fork_opcode_table_201_212_present: bool,
+    pub reference_debug_opcodes_emittable: bool,
+    pub resolve_object_ptr_callback_registered: bool,
     pub precompiled_guid: [u8; 16],
     pub compiled_jit_guid: [u8; 16],
     pub get_build_identifier_rva: u32,
@@ -189,7 +193,11 @@ pub struct CapturedFrontendConfigsV1 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// This private unit is a decoder-provenance capability, not a forward-compatibility marker.
+#[allow(clippy::manual_non_exhaustive)]
 pub struct DecodedCaptureV1 {
+    /// Capability marker: only the sibling strict decoder may construct this projection.
+    pub(super) _decoder_validated: (),
     pub header: CaptureHeaderV1,
     pub engine_properties: Vec<CapturedEnginePropertyV1>,
     pub pointer_tokens: BTreeMap<u32, PointerTokenV1>,

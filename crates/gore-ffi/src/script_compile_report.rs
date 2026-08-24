@@ -14,12 +14,14 @@ use std::time::Duration;
 #[cfg(not(test))]
 use gore_as::compile::acquire_compile_install_mutation;
 use gore_as::compile::{
+    compile_module_with_backend_v1, compile_module_with_backend_v1_with_guard_and_target,
     compile_module_with_diagnostics_report_with_guard, probe_install_compile_state, CompileError,
-    CompileModuleReport, CompileModuleReportOutcome, CompileOpts, CompilerBackendNameV1,
-    InstallCompileArtifactKind, InstallCompileGameProcessDisposition,
+    CompileModuleReport, CompileModuleReportOutcome, CompileOpts, CompilerBackendModeV1,
+    CompilerBackendNameV1, InstallCompileArtifactKind, InstallCompileGameProcessDisposition,
     InstallCompileInspectionIssueKind, InstallCompileStateDisposition, InstallCompileStateProbe,
     InstallMutationGuard, InstallRestoreDisposition,
 };
+use gore_as::compiler_backend::CompilerBackendDiagnosticSeverityV1;
 use gore_as::diagnostics::{
     CompilerDiagnostic, DiagnosticSeverity, DiagnosticsCaptureDisposition, DiagnosticsOptions,
 };
@@ -29,8 +31,9 @@ use sha2::{Digest, Sha256};
 
 use crate::err;
 use crate::standalone_compiler_package::{
-    backend_evidence, bundle_absent_fallback_reason, resolve_product_standalone_compiler_v1,
-    CompilerBackendWireV2, StandaloneCompilerPackageStatusV1, BUNDLE_ABSENT_DETAIL,
+    backend_evidence, backend_evidence_with_package, bundle_absent_fallback_reason,
+    package_unavailable_fallback_reason, resolve_product_standalone_compiler_for_game_v1,
+    CompilerBackendWireV2, ResolvedProductStandaloneCompilerV1, BUNDLE_ABSENT_DETAIL,
 };
 
 pub(super) const COMMAND: &str = "script_compile_report_v1";
@@ -627,8 +630,8 @@ pub(super) fn compile_report_v2_raw(input: &str) -> Value {
     let requested = payload.compiler_backend;
     match requested {
         CompilerBackendWireV2::Game => {
-            let response = compile_report_v1_payload(payload.into_v1());
-            let game_attempted = response_game_attempted(&response);
+            let (response, game_attempted) =
+                compile_report_v1_payload_with_attempt(payload.into_v1());
             attach_backend_evidence(
                 response,
                 backend_evidence(
@@ -640,41 +643,282 @@ pub(super) fn compile_report_v2_raw(input: &str) -> Value {
                 ),
             )
         }
-        CompilerBackendWireV2::Standalone => {
-            let StandaloneCompilerPackageStatusV1::BundleAbsent =
-                resolve_product_standalone_compiler_v1();
-            attach_backend_evidence(
-                preflight_failure(
-                    "COMPILE_STANDALONE_BUNDLE_ABSENT",
-                    BUNDLE_ABSENT_DETAIL.to_owned(),
-                ),
-                backend_evidence(requested, None, false, false, None),
-            )
+        CompilerBackendWireV2::Standalone | CompilerBackendWireV2::StandaloneThenGame => {
+            compile_report_v2_product_payload(payload.into_v1(), requested)
         }
-        CompilerBackendWireV2::StandaloneThenGame => {
-            let StandaloneCompilerPackageStatusV1::BundleAbsent =
-                resolve_product_standalone_compiler_v1();
-            let response = compile_report_v1_payload(payload.into_v1());
-            let game_attempted = response_game_attempted(&response);
-            attach_backend_evidence(
+    }
+}
+
+fn compile_report_v2_product_payload(
+    payload: CompileWirePayload,
+    requested: CompilerBackendWireV2,
+) -> Value {
+    let game_dir = PathBuf::from(&payload.game_dir);
+    let resolution = match resolve_product_standalone_compiler_for_game_v1(&game_dir) {
+        Ok(resolution) => resolution,
+        Err(message) => {
+            if requested == CompilerBackendWireV2::Standalone {
+                return attach_backend_evidence(
+                    preflight_failure("COMPILE_STANDALONE_PACKAGE_LOCATION", message),
+                    backend_evidence(requested, None, false, false, None),
+                );
+            }
+            let (response, game_attempted) = compile_report_v1_payload_with_attempt(payload);
+            return attach_backend_evidence(
                 response,
                 backend_evidence(
                     requested,
                     game_attempted.then_some(CompilerBackendNameV1::Game),
                     false,
                     game_attempted,
-                    Some(bundle_absent_fallback_reason()),
+                    Some(json!({
+                        "failed_backend": CompilerBackendNameV1::Standalone.as_str(),
+                        "failure_kind": "unavailable",
+                        "detail": message,
+                    })),
                 ),
-            )
+            );
+        }
+    };
+    match resolution {
+        ResolvedProductStandaloneCompilerV1::BundleAbsent => {
+            if requested == CompilerBackendWireV2::Standalone {
+                attach_backend_evidence(
+                    preflight_failure(
+                        "COMPILE_STANDALONE_BUNDLE_ABSENT",
+                        BUNDLE_ABSENT_DETAIL.to_owned(),
+                    ),
+                    backend_evidence(requested, None, false, false, None),
+                )
+            } else {
+                let (response, game_attempted) = compile_report_v1_payload_with_attempt(payload);
+                attach_backend_evidence(
+                    response,
+                    backend_evidence(
+                        requested,
+                        game_attempted.then_some(CompilerBackendNameV1::Game),
+                        false,
+                        game_attempted,
+                        Some(bundle_absent_fallback_reason()),
+                    ),
+                )
+            }
+        }
+        ResolvedProductStandaloneCompilerV1::Unavailable(reason) => {
+            if requested == CompilerBackendWireV2::Standalone {
+                attach_backend_evidence(
+                    preflight_failure(
+                        "COMPILE_STANDALONE_PACKAGE_UNAVAILABLE",
+                        format!("{:?}: {}", reason.kind(), reason.detail()),
+                    ),
+                    backend_evidence(requested, None, false, false, None),
+                )
+            } else {
+                let fallback = package_unavailable_fallback_reason(&reason);
+                let (response, game_attempted) = compile_report_v1_payload_with_attempt(payload);
+                attach_backend_evidence(
+                    response,
+                    backend_evidence(
+                        requested,
+                        game_attempted.then_some(CompilerBackendNameV1::Game),
+                        false,
+                        game_attempted,
+                        Some(fallback),
+                    ),
+                )
+            }
+        }
+        ResolvedProductStandaloneCompilerV1::Available(package) => {
+            compile_report_with_available_product_package(payload, requested, package)
         }
     }
 }
 
-fn response_game_attempted(response: &Value) -> bool {
-    matches!(
-        response.get("install_restore").and_then(Value::as_str),
-        Some(disposition) if disposition != "not_started"
-    )
+fn compile_report_with_available_product_package(
+    payload: CompileWirePayload,
+    requested: CompilerBackendWireV2,
+    package: gore_as::standalone_package_resolver::AvailableProductStandaloneCompilerPackageV1,
+) -> Value {
+    debug_assert!(requested != CompilerBackendWireV2::Game);
+    let game_dir = PathBuf::from(&payload.game_dir);
+    let staging = match OwnedCompileStaging::create(Path::new(&payload.work_dir), &game_dir) {
+        Ok(staging) => staging,
+        Err(message) => {
+            return attach_backend_evidence(
+                preflight_failure("COMPILE_STAGING_UNAVAILABLE", message),
+                backend_evidence_with_package(
+                    requested,
+                    None,
+                    false,
+                    false,
+                    Some(package.identity()),
+                    None,
+                ),
+            );
+        }
+    };
+    let config = gore_as::standalone_sidecar::StandaloneSidecarConfigV1::new(
+        package.sidecar_path().to_path_buf(),
+        package.sidecar_seal(),
+        package.profile_manifest_path().to_path_buf(),
+        package.profile_root().to_path_buf(),
+        staging.path().to_path_buf(),
+    );
+    let mut runner = match gore_as::standalone_sidecar::StandaloneSidecarRunnerV1::new(config) {
+        Ok(runner) => runner,
+        Err(failure) => {
+            let package_identity = package.identity().clone();
+            let mut failure_detail = Value::String(failure.to_string());
+            crate::authoring_story_compiler_revision3::redact_private_paths(
+                &mut failure_detail,
+                &[
+                    staging.path(),
+                    package.sidecar_path(),
+                    package.profile_manifest_path(),
+                    package.profile_root(),
+                ],
+            );
+            let failure_detail = failure_detail
+                .as_str()
+                .unwrap_or("standalone runner initialization failed")
+                .to_owned();
+            if requested == CompilerBackendWireV2::Standalone {
+                return attach_backend_evidence(
+                    preflight_failure("COMPILE_STANDALONE_RUNNER_UNAVAILABLE", failure_detail),
+                    backend_evidence_with_package(
+                        requested,
+                        None,
+                        false,
+                        false,
+                        Some(&package_identity),
+                        None,
+                    ),
+                );
+            }
+            let fallback = json!({
+                "failed_backend": CompilerBackendNameV1::Standalone.as_str(),
+                "failure_kind": failure.kind().as_str(),
+                "detail": failure_detail,
+            });
+            let (response, game_attempted) = compile_report_v1_payload_with_attempt(payload);
+            return attach_backend_evidence(
+                response,
+                backend_evidence_with_package(
+                    requested,
+                    game_attempted.then_some(CompilerBackendNameV1::Game),
+                    false,
+                    game_attempted,
+                    Some(&package_identity),
+                    Some(fallback),
+                ),
+            );
+        }
+    };
+    let (authority, target) = package.into_execution_parts();
+    let opts = CompileOpts {
+        game_dir: game_dir.clone(),
+        op: payload.op,
+        module_name: payload.module_name,
+        rel_path: payload.rel_path,
+        as_path: PathBuf::from(payload.as_path),
+        source_override: None,
+        work_dir: staging.path().to_path_buf(),
+        allow_new_symbols: payload.allow_new_symbols,
+        base_override: Some(target.shipping_cache().to_vec()),
+        binds_override: Some(target.binds_cache().to_vec()),
+    };
+    if let Err(message) = staging.verify_owned() {
+        return attach_backend_evidence(
+            preflight_failure("COMPILE_STAGING_CHANGED", message),
+            backend_evidence_with_package(
+                requested,
+                None,
+                false,
+                false,
+                Some(authority.identity()),
+                None,
+            ),
+        );
+    }
+    let mut strict_target = Some(target);
+    let report = if requested == CompilerBackendWireV2::Standalone {
+        // `target` remains alive for the whole attempt and pins EXE/Shipping/Binds without ever
+        // acquiring the install-mutation guard or touching the selected installation.
+        let report = compile_module_with_backend_v1(
+            &opts,
+            &DiagnosticsOptions {
+                disabled: false,
+                hook_dll: None,
+                inject_delay: Duration::from_secs(2),
+            },
+            CompilerBackendModeV1::Standalone,
+            Some(&mut runner),
+        );
+        report
+    } else {
+        let guard = match acquire_guard(&game_dir) {
+            Ok(guard) => guard,
+            Err(message) => {
+                return attach_backend_evidence(
+                    install_guard_failure(&game_dir, message),
+                    backend_evidence_with_package(
+                        requested,
+                        None,
+                        false,
+                        false,
+                        Some(authority.identity()),
+                        None,
+                    ),
+                );
+            }
+        };
+        compile_module_with_backend_v1_with_guard_and_target(
+            &opts,
+            &DiagnosticsOptions {
+                disabled: false,
+                hook_dll: None,
+                inject_delay: Duration::from_secs(2),
+            },
+            CompilerBackendModeV1::StandaloneThenGame,
+            Some(&mut runner),
+            guard,
+            strict_target
+                .take()
+                .expect("the authenticated target is transferred once"),
+        )
+    };
+    let result_backend = report.backend_name();
+    let standalone_attempted = report.standalone_attempted();
+    let game_attempted = report.game_attempted();
+    let fallback = report.fallback_reason().map(|reason| {
+        json!({
+            "failed_backend": reason.failed_backend().as_str(),
+            "failure_kind": reason.failure_kind().as_str(),
+            "detail": reason.detail(),
+        })
+    });
+    let evidence = backend_evidence_with_package(
+        requested,
+        result_backend,
+        standalone_attempted,
+        game_attempted,
+        Some(authority.identity()),
+        fallback,
+    );
+    report.finish_while_target_pinned(|report| {
+        finish_while_target_pinned(strict_target, || {
+            attach_backend_evidence(
+                finish_compile_report_in_staging(report, staging, true),
+                evidence,
+            )
+        })
+    })
+}
+
+fn finish_while_target_pinned<T, R>(target: Option<T>, finish: impl FnOnce() -> R) -> R {
+    let response = finish();
+    drop(target);
+    response
 }
 
 fn attach_backend_evidence(mut response: Value, evidence: Value) -> Value {
@@ -685,6 +929,19 @@ fn attach_backend_evidence(mut response: Value, evidence: Value) -> Value {
 }
 
 fn compile_report_v1_payload(payload: CompileWirePayload) -> Value {
+    compile_report_v1_payload_with_attempt(payload).0
+}
+
+fn compile_report_v1_payload_with_attempt(payload: CompileWirePayload) -> (Value, bool) {
+    let mut game_attempted = false;
+    let response = compile_report_v1_payload_recording_attempt(payload, &mut game_attempted);
+    (response, game_attempted)
+}
+
+fn compile_report_v1_payload_recording_attempt(
+    payload: CompileWirePayload,
+    game_attempted: &mut bool,
+) -> Value {
     let game_dir = PathBuf::from(&payload.game_dir);
     // This guard remains held across authoritative pristine selection and the complete compiler
     // transaction, so deploy/undeploy cannot change the selected bytes before live compiler use.
@@ -755,7 +1012,22 @@ fn compile_report_v1_payload(payload: CompileWirePayload) -> Value {
         },
         guard,
     );
-    let diagnostics_rejection = diagnostics_rejection(report.diagnostics());
+    *game_attempted = report.game_attempted();
+    finish_compile_report_in_staging(report, staging, false)
+}
+
+fn finish_compile_report_in_staging(
+    report: CompileModuleReport,
+    staging: OwnedCompileStaging,
+    allow_standalone_install_untouched: bool,
+) -> Value {
+    let standalone_selected = allow_standalone_install_untouched
+        && report.backend_name() == Some(CompilerBackendNameV1::Standalone);
+    let diagnostics_rejection = if standalone_selected {
+        backend_diagnostics_rejection(report.backend_diagnostics())
+    } else {
+        diagnostics_rejection(report.diagnostics())
+    };
     let output_rejection = match &report.outcome {
         CompileModuleReportOutcome::Compiled(output) => {
             anchor_owned_compiled_mini(&staging, output).err()
@@ -767,6 +1039,7 @@ fn compile_report_v1_payload(payload: CompileWirePayload) -> Value {
             report.install_restore_disposition(),
             diagnostics_rejection,
             output_rejection.is_none(),
+            standalone_selected,
         );
     if retain_staging {
         // The response's mini_path remains usable after this call. Failed/recovery-required
@@ -774,7 +1047,7 @@ fn compile_report_v1_payload(payload: CompileWirePayload) -> Value {
         let _retained = staging.retain();
         debug_assert!(output_rejection.is_none());
     }
-    report_response(report, output_rejection)
+    report_response_with_policy(report, output_rejection, standalone_selected)
 }
 
 pub(super) fn install_state_v1_raw(input: &str) -> Value {
@@ -1063,11 +1336,27 @@ pub(super) fn report_response(
     report: CompileModuleReport,
     output_rejection: Option<String>,
 ) -> Value {
+    report_response_with_policy(report, output_rejection, false)
+}
+
+pub(super) fn report_response_with_policy(
+    report: CompileModuleReport,
+    output_rejection: Option<String>,
+    standalone_install_untouched: bool,
+) -> Value {
     let restore = report.install_restore_disposition();
-    let diagnostics_rejection = diagnostics_rejection(report.diagnostics());
-    let diagnostics = report
-        .diagnostics()
-        .map(|report| diagnostics_json(report.disposition(), report.diagnostics()));
+    let diagnostics_rejection = if standalone_install_untouched {
+        backend_diagnostics_rejection(report.backend_diagnostics())
+    } else {
+        diagnostics_rejection(report.diagnostics())
+    };
+    let diagnostics = if standalone_install_untouched {
+        Some(backend_diagnostics_json(report.backend_diagnostics()))
+    } else {
+        report
+            .diagnostics()
+            .map(|report| diagnostics_json(report.disposition(), report.diagnostics()))
+    };
     let install_restore = install_restore_label(restore);
     let recovery_required = matches!(
         restore,
@@ -1084,6 +1373,7 @@ pub(super) fn report_response(
             diagnostics,
             install_restore,
             recovery_required,
+            standalone_install_untouched,
         ),
         CompileModuleReportOutcome::Failed(error) => {
             let (code, message) = compile_error_parts(error);
@@ -1106,8 +1396,11 @@ fn compiled_response(
     diagnostics: Option<Value>,
     install_restore: &'static str,
     recovery_required: bool,
+    standalone_install_untouched: bool,
 ) -> Value {
-    if restore != InstallRestoreDisposition::RestoredExact {
+    let restore_is_valid = restore == InstallRestoreDisposition::RestoredExact
+        || (standalone_install_untouched && restore == InstallRestoreDisposition::NotStarted);
+    if !restore_is_valid {
         return preflight_failure_with_diagnostics(
             "COMPILE_RESTORE_INVARIANT",
             "the compiler produced output without proving an exact installation restore",
@@ -1150,10 +1443,51 @@ fn compiled_output_is_usable(
     restore: InstallRestoreDisposition,
     diagnostics_rejection: Option<(&'static str, &'static str)>,
     output_is_anchored: bool,
+    standalone_install_untouched: bool,
 ) -> bool {
-    restore == InstallRestoreDisposition::RestoredExact
+    (restore == InstallRestoreDisposition::RestoredExact
+        || (standalone_install_untouched && restore == InstallRestoreDisposition::NotStarted))
         && diagnostics_rejection.is_none()
         && output_is_anchored
+}
+
+fn backend_diagnostics_rejection(
+    diagnostics: &[gore_as::compiler_backend::CompilerBackendDiagnosticV1],
+) -> Option<(&'static str, &'static str)> {
+    diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity() == CompilerBackendDiagnosticSeverityV1::Error)
+        .then_some((
+            "COMPILE_DIAGNOSTICS_REPORTED_ERROR",
+            "the standalone compiler reported an error; compiled output was discarded",
+        ))
+}
+
+fn backend_diagnostics_json(
+    diagnostics: &[gore_as::compiler_backend::CompilerBackendDiagnosticV1],
+) -> Value {
+    let messages = diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let severity = match diagnostic.severity() {
+                CompilerBackendDiagnosticSeverityV1::Info => "note",
+                CompilerBackendDiagnosticSeverityV1::Warning => "warning",
+                CompilerBackendDiagnosticSeverityV1::Error => "error",
+            };
+            json!({
+                "file": diagnostic.source_path().unwrap_or(""),
+                "line": diagnostic.line().unwrap_or(0),
+                "column": diagnostic.column().unwrap_or(0),
+                "severity": severity,
+                "message": format!("{}: {}", diagnostic.code(), diagnostic.message()),
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "capture": "captured",
+        "messages": messages,
+        "omitted": 0,
+    })
 }
 
 pub(super) fn diagnostics_rejection(
@@ -1363,6 +1697,26 @@ mod tests {
     use super::*;
     use gore_as::compile::{InstallCompileArtifact, InstallCompileInspectionIssue};
     use std::fs;
+
+    #[test]
+    fn response_is_finished_before_the_qualified_target_pin_is_dropped() {
+        struct DropWitness(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+        impl Drop for DropWitness {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let response = finish_while_target_pinned(Some(DropWitness(dropped.clone())), || {
+            assert!(!dropped.load(std::sync::atomic::Ordering::SeqCst));
+            json!({"qualified_evidence": true})
+        });
+
+        assert_eq!(response["qualified_evidence"], true);
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+    }
 
     fn request(payload: Value) -> String {
         json!({"command": COMMAND, "payload": payload}).to_string()
@@ -1689,6 +2043,7 @@ mod tests {
             None,
             "restored_exact",
             false,
+            false,
         );
         assert_eq!(response["outcome"], "failed");
         assert_eq!(response["compile_error"]["code"], "COMPILE_OUTPUT_UNSAFE");
@@ -1697,6 +2052,7 @@ mod tests {
         assert!(!compiled_output_is_usable(
             InstallRestoreDisposition::RestoredExact,
             None,
+            false,
             false,
         ));
 
@@ -2070,6 +2426,7 @@ mod tests {
                 InstallRestoreDisposition::RestoredExact,
                 rejection,
                 true,
+                false,
             ));
             let response = compiled_response(
                 gore_as::compile::CompileOutput::detached(
@@ -2081,6 +2438,7 @@ mod tests {
                 None,
                 Some(diagnostics_json(disposition, &diagnostics)),
                 "restored_exact",
+                false,
                 false,
             );
             assert_eq!(response["outcome"], "failed");
@@ -2106,5 +2464,36 @@ mod tests {
             install_restore_label(InstallRestoreDisposition::RecoveryRequiredRestoreFailed),
             "recovery_required_restore_failed"
         );
+    }
+
+    #[test]
+    fn qualified_standalone_output_requires_install_untouched_policy() {
+        assert!(compiled_output_is_usable(
+            InstallRestoreDisposition::NotStarted,
+            None,
+            true,
+            true,
+        ));
+        assert!(!compiled_output_is_usable(
+            InstallRestoreDisposition::NotStarted,
+            None,
+            true,
+            false,
+        ));
+        let response = compiled_response(
+            gore_as::compile::CompileOutput::detached(
+                PathBuf::from("owned-standalone.cache"),
+                "GoreMods.Probe".to_owned(),
+            ),
+            InstallRestoreDisposition::NotStarted,
+            None,
+            None,
+            Some(json!({"capture":"captured","messages":[],"omitted":0})),
+            "not_started",
+            false,
+            true,
+        );
+        assert_eq!(response["outcome"], "compiled");
+        assert_eq!(response["install_restore"], "not_started");
     }
 }

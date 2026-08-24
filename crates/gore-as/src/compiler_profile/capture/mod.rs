@@ -6,7 +6,9 @@
 //! compiler profile input.
 
 mod decode;
+mod materialize;
 mod model;
 
 pub use decode::{decode_capture_v1, CaptureDecodeError};
+pub use materialize::*;
 pub use model::*;

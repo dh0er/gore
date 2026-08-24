@@ -1,4 +1,5 @@
 #include "gore_as_standalone/module_preprocessor.hpp"
+#include "gore_as_standalone/sidecar_compile.hpp"
 
 #include <iostream>
 #include <string>
@@ -130,6 +131,31 @@ int main() {
         return fail("empty donor source set did not remain a successful no-op");
     }
 
+    const auto none_names = standalone::preprocess_lexical_module_graph(
+        {}, {source("Names/None.as", R"AS(
+FName EmptyName = n"";
+FName CanonicalName = n"None";
+FName MixedCaseName = n"nOnE";
+)AS")});
+    if (!none_names.ok || !none_names.diagnostics.empty() ||
+        none_names.static_names != std::vector<std::string>{"None"} ||
+        none_names.static_name_uses.size() != 1U ||
+        none_names.static_name_uses[0].global_index != 0U ||
+        none_names.static_name_uses[0].spelling != "None") {
+        return fail("NAME_None literals did not share the donor's canonical cache name");
+    }
+    const std::string& none_code = none_names.modules[0].code[0].conditioned_code;
+    std::size_t none_calls = 0U;
+    for (std::size_t position = 0U;
+         (position = none_code.find("__STATIC_NAME(0)", position)) !=
+             std::string::npos;
+         position += sizeof("__STATIC_NAME(0)") - 1U) {
+        ++none_calls;
+    }
+    if (none_calls != 3U || none_code.find("__STATIC_NAME(1)") != std::string::npos) {
+        return fail("NAME_None literal lowering assigned more than one static-name index");
+    }
+
     standalone::preprocessor_options explicit_imports;
     explicit_imports.automatic_imports = false;
     explicit_imports.flags = {
@@ -258,10 +284,10 @@ const string Literal = "import Not.A.Module;";
     dialect.static_names = {"Existing"};
     dialect.blueprint_event_argument_specializations = {"int32"};
     dialect.native_super_types = {
-        {"AActor", "/Script/Engine.Actor", 0U, standalone::native_super_kind::actor, false},
+        {"AActor", "/Script/Engine.Actor", 0U, standalone::native_super_kind::actor, false, false},
         {"UEditorSubsystem", "/Script/EditorSubsystem.EditorSubsystem", 0U,
-            standalone::native_super_kind::editor_subsystem, false},
-        {"UObject", "/Script/CoreUObject.Object", 0U, standalone::native_super_kind::other_uobject, false},
+            standalone::native_super_kind::editor_subsystem, false, false},
+        {"UObject", "/Script/CoreUObject.Object", 0U, standalone::native_super_kind::other_uobject, false, false},
     };
     const auto dialect_result = standalone::preprocess_lexical_module_graph(
         dialect,
@@ -315,7 +341,14 @@ asset Settings of UMySettings
     if (!dialect_result.ok || !dialect_result.diagnostics.empty() ||
         dialect_result.modules.size() != 1U ||
         dialect_result.static_names !=
-            std::vector<std::string>{"Existing", "Added", "Compute"}) {
+            std::vector<std::string>{"Existing", "Added", "Compute"} ||
+        dialect_result.static_name_uses.size() != 3U ||
+        dialect_result.static_name_uses[0].global_index != 0U ||
+        dialect_result.static_name_uses[0].spelling != "Existing" ||
+        dialect_result.static_name_uses[1].global_index != 1U ||
+        dialect_result.static_name_uses[1].spelling != "Added" ||
+        dialect_result.static_name_uses[2].global_index != 2U ||
+        dialect_result.static_name_uses[2].spelling != "Compute") {
         return fail("dialect frontend or manager-global static-name order drifted");
     }
     const auto& dialect_module = dialect_result.modules[0];
@@ -406,8 +439,8 @@ asset Settings of UMySettings
 
     standalone::preprocessor_options forbidden_options;
     forbidden_options.native_super_types = {
-        {"AForbidden", "/Script/Test.Forbidden", 0U, standalone::native_super_kind::actor, true},
-        {"UObject", "/Script/CoreUObject.Object", 0U, standalone::native_super_kind::other_uobject, false},
+        {"AForbidden", "/Script/Test.Forbidden", 0U, standalone::native_super_kind::actor, false, true},
+        {"UObject", "/Script/CoreUObject.Object", 0U, standalone::native_super_kind::other_uobject, false, false},
     };
     const auto forbidden = standalone::preprocess_lexical_module_graph(
         forbidden_options,
@@ -422,7 +455,7 @@ asset Settings of UMySettings
     standalone::preprocessor_options condition_options;
     condition_options.flags = {{"DISABLED", false}, {"FEATURE", true}};
     condition_options.native_super_types = {
-        {"UObject", "/Script/CoreUObject.Object", 0U, standalone::native_super_kind::other_uobject, false},
+        {"UObject", "/Script/CoreUObject.Object", 0U, standalone::native_super_kind::other_uobject, false, false},
     };
     const auto condition_result = standalone::preprocess_lexical_module_graph(
         condition_options,
@@ -447,8 +480,8 @@ asset Settings of UMySettings
 
     standalone::preprocessor_options base_options;
     base_options.native_super_types = {
-        {"AActor", "/Script/Engine.Actor", 0U, standalone::native_super_kind::actor, false},
-        {"UObject", "/Script/CoreUObject.Object", 0U, standalone::native_super_kind::other_uobject, false},
+        {"AActor", "/Script/Engine.Actor", 0U, standalone::native_super_kind::actor, false, false},
+        {"UObject", "/Script/CoreUObject.Object", 0U, standalone::native_super_kind::other_uobject, false, false},
     };
     const std::vector<standalone::preprocessor_base_module> base_modules = {{
         "Game.Base",
@@ -520,6 +553,34 @@ asset Settings of UMySettings
         non_haze_dev.diagnostics[0].message.find("Unknown function specifier DevFunction") != 0U) {
         return fail("non-Haze dialect accepted a Haze-only function specifier");
     }
+    const auto multiline_invalid_specifier =
+        standalone::preprocess_lexical_module_graph(
+            base_options,
+            {source(
+                "Bad/InvalidSpecifier.as",
+                "UFUNCTION(NotARealSpecifier)\nvoid InvalidMetadata() {}")});
+    if (multiline_invalid_specifier.ok ||
+        multiline_invalid_specifier.diagnostics.size() != 1U ||
+        multiline_invalid_specifier.diagnostics[0].row != 2U ||
+        multiline_invalid_specifier.diagnostics[0].column != 1U ||
+        multiline_invalid_specifier.diagnostics[0].message.find(
+            "Unknown function specifier NotARealSpecifier") != 0U) {
+        return fail("reflection diagnostics did not use the subject declaration line");
+    }
+    const auto split_invalid_specifier =
+        standalone::preprocess_lexical_module_graph(
+            base_options,
+            {source(
+                "Bad/SplitInvalidSpecifier.as",
+                "UFUNCTION(NotARealSpecifier)\nvoid InvalidMetadata\n() {}")});
+    if (split_invalid_specifier.ok ||
+        split_invalid_specifier.diagnostics.size() != 1U ||
+        split_invalid_specifier.diagnostics[0].row != 3U ||
+        split_invalid_specifier.diagnostics[0].column != 1U ||
+        split_invalid_specifier.diagnostics[0].message.find(
+            "Unknown function specifier NotARealSpecifier") != 0U) {
+        return fail("reflection diagnostics did not use the donor subject terminator line");
+    }
     standalone::preprocessor_options validation_options = base_options;
     validation_options.enforce_server_rpc_validation = true;
     const auto missing_validation = standalone::preprocess_lexical_module_graph(
@@ -545,11 +606,11 @@ asset Settings of UMySettings
         0U,
         standalone::native_super_kind::other_uobject,
         false,
+        false,
     }};
     external_options.static_names = {"\xc3\x84pfel"};
     external_options.fname_comparison_keys = {
         {"\xc3\x84pfel", "g1r-name-17"},
-        {"\xc3\xa4PFEL", "g1r-name-17"},
     };
     external_hook_state hook_state;
     const standalone::preprocessor_hooks hooks{
@@ -562,7 +623,7 @@ asset Settings of UMySettings
         external_options,
         {source("Game/Hooked.as", R"AS(#if EDITOR
 class AHooked : UObject {}
-FName SameName = n"äPFEL";
+    FName SameName = n"ÄPFEL";
 #endif
 )AS")},
         {},
@@ -576,7 +637,10 @@ FName SameName = n"äPFEL";
         external.modules[0].editor_only_blocks.size() != 1U ||
         external.modules[0].editor_only_blocks[0].first_line != 1U ||
         external.modules[0].editor_only_blocks[0].last_line != 4U ||
-        external.static_names != std::vector<std::string>{"\xc3\x84pfel"}) {
+        external.static_names != std::vector<std::string>{"\xc3\x84pfel"} ||
+        external.static_name_uses.size() != 1U ||
+        external.static_name_uses[0].global_index != 0U ||
+        external.static_name_uses[0].spelling != "\xc3\x84PFEL") {
         return fail("external frontend hooks, ComposeOnto, editor lines or FName identity drifted");
     }
     const std::string& external_code = external.modules[0].code[0].conditioned_code;
@@ -600,7 +664,57 @@ FName SameName = n"äPFEL";
         return fail("non-ASCII FName comparison did not fail closed without a profile key");
     }
 
+    const auto changed_unicode_code_point = standalone::preprocess_lexical_module_graph(
+        external_options,
+        {source("Bad/UnicodeCaseFold.as", "FName Value = n\"\xc3\xa4PFEL\";\n")});
+    if (changed_unicode_code_point.ok ||
+        changed_unicode_code_point.diagnostics.size() != 1U ||
+        changed_unicode_code_point.diagnostics[0].message !=
+            "non-ASCII FName has no authoritative comparison key in the frontend profile") {
+        return fail("FName comparison incorrectly folded a non-ASCII code point");
+    }
+
+    standalone::preprocessor_options game_state_options;
+    game_state_options.native_super_types = {{
+        "UGameStateSubsystem",
+        "/Script/GameStateSubsystem.GameStateSubsystem",
+        0U,
+        standalone::native_super_kind::other_uobject,
+        true,
+        false,
+    }};
+    const auto game_state = standalone::preprocess_lexical_module_graph(
+        game_state_options,
+        {source("Game/State.as", "UCLASS()\nclass UState : UGameStateSubsystem {}\n")});
+    if (!game_state.ok || game_state.modules.size() != 1U ||
+        game_state.modules[0].classes.size() != 1U ||
+        !game_state.modules[0].classes[0].code_super_game_state_subsystem) {
+        return fail("captured GameStateSubsystem ancestry bit did not reach ClassAnalyze");
+    }
+    const auto& game_state_class = game_state.modules[0].classes[0];
+    std::string game_state_statics = "prefix";
+    bool game_state_has_statics = false;
+    standalone::apply_target_class_analyze_v24539464(
+        game_state_class, game_state_statics, game_state_has_statics);
+    const std::string expected_game_state_statics =
+        "prefix\n UState Get() __generated {return Cast<UState>(GameStateSubsystem::"
+        "GetGameStateSubsystem(" + game_state_class.static_class_global_variable_name +
+        ".Get()));}";
+    if (!game_state_has_statics || game_state_statics != expected_game_state_statics) {
+        return fail("reversed BuildID-24539464 ClassAnalyze callback drifted");
+    }
+    auto ordinary_class = game_state_class;
+    ordinary_class.code_super_game_state_subsystem = false;
+    std::string ordinary_statics = "unchanged";
+    bool ordinary_has_statics = false;
+    standalone::apply_target_class_analyze_v24539464(
+        ordinary_class, ordinary_statics, ordinary_has_statics);
+    if (ordinary_statics != "unchanged" || ordinary_has_statics) {
+        return fail("ClassAnalyze callback changed a non-GameStateSubsystem class");
+    }
+
     std::cout << "G1R preprocessor smoke covered conditionals, graph order, reflection "
-                 "macros, dialect switches, base ancestry, delegates and source lowering\n";
+                 "macros, dialect switches, base ancestry, delegates, source lowering and "
+                 "the exact ClassAnalyze callback\n";
     return 0;
 }

@@ -13,6 +13,22 @@ metadata_projection_result fail(std::string detail) {
     return {false, std::move(detail)};
 }
 
+metadata_projection_result compile_error(
+    std::string detail,
+    const lexical_module_description& module,
+    const std::uint32_t line) {
+    metadata_projection_result result;
+    result.ok = false;
+    result.detail = std::move(detail);
+    result.is_compile_diagnostic = true;
+    result.diagnostic_source = module.code.empty()
+        ? module.module_name
+        : module.code.front().absolute_path;
+    result.diagnostic_line = line;
+    result.diagnostic_column = 1U;
+    return result;
+}
+
 bool metadata_key(
     const preprocessor_metadata& entry,
     std::unordered_set<std::string>& keys) {
@@ -67,6 +83,33 @@ precompiled_property* find_property(
     return found;
 }
 
+const class_generator_class_capabilities* find_capability_class(
+    const class_generator_capability_table& table,
+    const precompiled_class& type) {
+    const class_generator_class_capabilities* found = nullptr;
+    for (const class_generator_class_capabilities& candidate : table.classes) {
+        if (candidate.class_name != type.class_name.bytes ||
+            candidate.name_space != type.name_space.bytes) {
+            continue;
+        }
+        if (found != nullptr) return nullptr;
+        found = &candidate;
+    }
+    return found;
+}
+
+const class_generator_property_capabilities* find_capability_property(
+    const class_generator_class_capabilities& type,
+    const std::string& name) {
+    const class_generator_property_capabilities* found = nullptr;
+    for (const class_generator_property_capabilities& candidate : type.properties) {
+        if (candidate.property_name != name) continue;
+        if (found != nullptr) return nullptr;
+        found = &candidate;
+    }
+    return found;
+}
+
 precompiled_function* find_function(
     std::vector<precompiled_function>& functions,
     const std::string& name) {
@@ -106,6 +149,12 @@ bool apply_function(
     function.dev_function = description.dev_function;
     function.is_static = description.is_static;
     function.thread_safe = description.thread_safe;
+    // ClassGenerator only asks AngelScript whether an empty implementation is
+    // a no-op for Blueprint event/override functions. Ordinary UFUNCTIONs keep
+    // the descriptor default even when their script body is empty.
+    if (!description.blueprint_event && !description.blueprint_override) {
+        function.is_no_op = false;
+    }
     return true;
 }
 
@@ -186,13 +235,31 @@ bool preserve_function_vector(
 
 metadata_projection_result project_preprocessed_metadata(
     const lexical_module_description& description,
-    precompiled_module& module) {
+    precompiled_module& module,
+    const bool mark_non_uproperty_properties_as_transient,
+    const class_generator_capability_table* const capabilities) {
     try {
         if (description.module_name.empty() ||
             description.module_name != module.module_name.bytes) {
             return fail("module descriptor does not match the exported module name");
         }
         precompiled_module staged = module;
+        if (capabilities == nullptr || capabilities->classes.size() != staged.classes.size()) {
+            return fail("class-generator capability table does not cover the exported classes");
+        }
+        for (const precompiled_class& type : staged.classes) {
+            const class_generator_class_capabilities* const capability_class =
+                find_capability_class(*capabilities, type);
+            if (capability_class == nullptr ||
+                capability_class->properties.size() != type.properties.size()) {
+                return fail("class-generator capability table does not cover an exported class");
+            }
+            for (const precompiled_property& property : type.properties) {
+                if (find_capability_property(*capability_class, property.name.bytes) == nullptr) {
+                    return fail("class-generator capability table does not cover an exported property");
+                }
+            }
+        }
         staged.code_hash = description.code_hash;
         staged.imported_modules.clear();
         staged.imported_modules.reserve(description.imported_modules.size());
@@ -278,6 +345,38 @@ metadata_projection_result project_preprocessed_metadata(
                     !apply_property(property_description, *property)) {
                     return fail("reflected property descriptor does not map uniquely to output");
                 }
+            }
+            const class_generator_class_capabilities* const capability_class =
+                find_capability_class(*capabilities, *type);
+            if (capability_class == nullptr) {
+                return fail("class-generator capability class disappeared during projection");
+            }
+            // BuildID 24539464 first selects all non-NeverRequiresGC struct
+            // fields plus all RequiresProperty class fields, then skips
+            // explicit descriptors and rejects a selected type that cannot
+            // create an Unreal property.
+            for (precompiled_property& property : type->properties) {
+                if (property.is_unreal_property) continue;
+                const class_generator_property_capabilities* const capability =
+                    find_capability_property(*capability_class, property.name.bytes);
+                if (capability == nullptr) {
+                    return fail("class-generator property capability disappeared during projection");
+                }
+                const bool should_make_property =
+                    (class_description.is_struct && !capability->never_requires_gc) ||
+                    capability->requires_property;
+                if (!should_make_property) continue;
+                if (!capability->can_create_property) {
+                    return compile_error(
+                        "Property " + property.name.bytes + " with type " +
+                            capability->type_declaration +
+                            " is in a context where a UPROPERTY must be generated for GC reasons, "
+                            "but the property type is not supported by UPROPERTY.",
+                        description, class_description.line);
+                }
+                property.is_unreal_property = true;
+                property.transient = mark_non_uproperty_properties_as_transient ||
+                    !class_description.is_struct;
             }
             for (const preprocessed_function_description& function_description :
                  class_description.methods) {

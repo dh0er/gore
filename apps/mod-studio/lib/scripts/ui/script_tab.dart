@@ -974,15 +974,21 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
         }
         return;
       }
-      if (mounted) setState(() => _status = 'Compiling via game…');
+      if (mounted) {
+        setState(
+          () => _status =
+              'Compiling standalone first; the game remains available as fallback…',
+        );
+      }
       work = await Directory.systemTemp.createTemp('goremod_as_compile_');
-      final report = await ffi.scriptCompileReportV1(
+      final report = await ffi.scriptCompileReportV2(
         gameDir: gameRoot,
         op: scriptOpToString(mod.op),
         moduleName: mod.moduleName,
         relPath: mod.relPath,
         asPath: mod.asPath,
         workDir: work.path,
+        compilerBackend: ScriptCompilerBackendMode.productDefault,
         allowNewSymbols: mod.allowNewSymbols,
       );
       installSafety.recordCompileReport(report, gameRoot: gameRoot);
@@ -1081,12 +1087,14 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
   Future<bool?> _confirmCompile() => showDialog<bool>(
     context: context,
     builder: (dialogContext) => AlertDialog(
-      title: const Text('Compile with the game'),
+      title: const Text('Compile standalone first'),
       content: const Text(
-        'Close Gothic 1 Remake before continuing. The compiler temporarily stages a complete '
-        'AngelScript tree in the game installation, then restores every touched path. It does '
-        'not load or change a save. If exact restoration cannot be proven, Mod Studio will stop '
-        'and show recovery details.',
+        'Mod Studio first uses the qualified standalone compiler. If that compiler is unavailable '
+        'or rejects its output, Mod Studio shows the reason and may fall back to the game compiler. '
+        'Keep Gothic 1 Remake closed: the fallback temporarily stages a complete AngelScript tree '
+        'in the game installation and then restores every touched path. Neither route loads or '
+        'changes a save. If exact restoration cannot be proven, Mod Studio stops and shows '
+        'recovery details.',
       ),
       actions: [
         TextButton(
@@ -1113,21 +1121,34 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
       final diagnostic = firstErrors.first;
       return '${diagnostic.location}: ${diagnostic.message}';
     }
-    return report.failure?.message ?? 'Compilation failed.';
+    final failure = report.failure?.message ?? 'Compilation failed.';
+    final fallback = report.backend?.fallbackReason;
+    return fallback == null
+        ? failure
+        : '$failure Standalone compiler fallback reason: ${fallback.detail}';
   }
 
   String _compiledSummary(ScriptCompileReport report) {
     final diagnostics = report.diagnostics!;
+    final backend = report.backend;
+    final backendSummary = switch (backend?.resultBackend) {
+      ScriptCompilerBackendName.standalone =>
+        'Compiled ✓ with the standalone compiler',
+      ScriptCompilerBackendName.game when backend?.fallbackReason != null =>
+        'Compiled ✓ with the game fallback — standalone compiler: ${backend!.fallbackReason!.detail}',
+      ScriptCompilerBackendName.game => 'Compiled ✓ with the game compiler',
+      null => 'Compiled ✓',
+    };
     if (diagnostics.usedNormalFallback) {
-      return 'Compiled ✓ — diagnostics hook unavailable; normal compiler fallback used.';
+      return '$backendSummary — diagnostics hook unavailable; normal diagnostic path used.';
     }
     final count = diagnostics.messages.length;
     if (count > 0) {
       final omitted = diagnostics.omitted == 0
           ? ''
           : ' (+${diagnostics.omitted} omitted)';
-      return 'Compiled ✓ — $count compiler message(s)$omitted.';
+      return '$backendSummary — $count compiler message(s)$omitted.';
     }
-    return 'Compiled ✓';
+    return backendSummary;
   }
 }

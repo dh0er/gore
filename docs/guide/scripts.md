@@ -2,8 +2,8 @@
 
 The game's compiled AngelScript lives in a precompiled cache,
 `$GAME\G1R\Script\PrecompiledScript_Shipping.Cache`. `gore as` reads that cache,
-turns modules back into readable AngelScript, drives the game's own compiler,
-and splices edited modules back in.
+turns modules back into readable AngelScript, compiles complete source graphs or
+individual modules, and splices edited modules back in.
 
 This is reverse-engineering-stage tooling. It works, and the complete
 new-dialog path has been validated in game, but treat every step as
@@ -43,44 +43,63 @@ entries; pass indices to print specific ones. These are the literals that
 Decompilation and emit resolve native-call arities from a `Binds.Cache` placed
 next to the input cache, or from the path in `GORE_AS_BINDS`.
 
-## Recompiling: the game is the compiler
+## Recompiling: standalone first, game fallback
 
-There is no standalone AngelScript compiler for this game. The shipping
-executable **is** the compiler: it accepts
-**`-as-generate-precompiled-data`**, which makes it read the loose `.as` files
-under `<install>\G1R\Script\`, compile them, and overwrite
-`PrecompiledScript_Shipping.Cache` in that same folder.
+GORE ships a standalone compiler package for each exactly qualified game build.
+The normal product commands find that package automatically beside the GORE
+executable and authenticate its sidecar, profile, target executable,
+`PrecompiledScript_Shipping.Cache`, and `Binds.Cache` against GORE's embedded
+catalog. Users do not provide sidecar paths or hashes.
 
-`gore as compile` wraps that flag as an ordinary compiler. Give it a source
-tree and optionally an output path; it does the backup, staging into `Script\`,
-launching the game, and restoring the install itself.
+The default policy is `standalone-then-game`: GORE tries the qualified
+standalone compiler first. If the package is absent, does not match the selected
+game build, or the standalone result is rejected, the reason is retained and
+shown before GORE uses the game's embedded compiler as a fallback. That fallback
+launches the shipping executable with **`-as-generate-precompiled-data`** and
+temporarily stages loose `.as` files under `<install>\G1R\Script\`.
+
+`gore as compile` takes one complete authoritative source tree and always
+publishes a separate complete cache. It never installs that output implicitly.
 
 ```powershell
 # dump the vanilla modules as an editable tree
 gore as emit-all "$GAME\G1R\Script\PrecompiledScript_Shipping.Cache" out_as
 # …edit modules in out_as…
 
-# compile to a cache file, leaving the install untouched
-gore as compile out_as -o regen.Cache --game "$GAME"
-
-# …or install the fresh cache in place (previous one saved to *.gore-bak)
-gore as compile out_as --game "$GAME"
-
-# with no source tree: recompile whatever .as already sit in Script\
-gore as compile --game "$GAME"
+# compile to a new no-clobber cache file
+New-Item -ItemType Directory -Force .gore-as-work | Out-Null
+gore as compile out_as -o regen.Cache --work-dir .gore-as-work --game "$GAME"
 ```
 
 The install is resolved from `--game`, else the configured game path, else
-Steam auto-detect. `--no-backup` skips the `*.gore-bak` when installing in
-place.
+Steam auto-detect. The source tree, output, and workspace are required. The
+output must be outside the game installation and outside the workspace; it is
+published without overwriting an existing file.
+
+Choose the policy explicitly when needed:
+
+```powershell
+# Never launch or modify the game; fail if the exact standalone package is unavailable.
+gore as compile out_as -o regen.Cache --work-dir .gore-as-work `
+  --backend standalone --game "$GAME"
+
+# Deliberately use only the game's embedded compiler.
+gore as compile out_as -o regen.Cache --work-dir .gore-as-work `
+  --backend game --game "$GAME"
+```
+
+`--backend standalone-then-game` is the default. `standalone` and `game` never
+fall back silently.
 
 ### Safety rules around compilation
 
 These are enforced, not advisory:
 
-- Before any staging, compile **fails closed** if the shipping game process is
-  running, if process inspection is unavailable, or if a prior compile/recovery
-  artifact exists.
+- Strict `standalone` does not launch the game and does not enter a live-install
+  mutation window.
+- A game-capable policy (`game` or `standalone-then-game`) **fails closed**
+  before any staging if the shipping game process is running, if process
+  inspection is unavailable, or if a prior compile/recovery artifact exists.
 - Compile, deploy, manager apply, and undeploy share the atomic
   `.gore-install-mutation.lock`, so two toolkit processes cannot mutate the same
   installation concurrently.
@@ -95,10 +114,12 @@ These are enforced, not advisory:
 
 ### Compiler diagnostics
 
-On Windows, compile automatically attempts an embedded, temporary x86-64
-diagnostics hook. When the selected AMD64 executable has exactly one raw masked
-callback match and its sparse `asSMessageInfo` structure fingerprint verifies,
-errors are printed like a normal compiler:
+When the game fallback runs on Windows, compile automatically attempts an
+embedded, temporary x86-64 diagnostics hook. The selected AMD64 executable must
+have exactly one raw masked match for both the AngelScript callback and the
+manager's structured ClassGenerator-diagnostic boundary; their sparse
+`asSMessageInfo` and `FString`/`FDiagnostic` structure fingerprints must both
+verify. Errors are then printed like a normal compiler:
 
 ```
 file:line:column: error: message
@@ -118,15 +139,14 @@ gore as diagnostics-check --game "$GAME"
 gore as diagnostics-check --exe "D:\Custom\G1R\Binaries\Win64\G1R-Win64-Shipping.exe"
 ```
 
-The check reports the executable's SHA-256, the raw match count, the matched
-RVA(s), and callback-structure verification. An explicitly trusted helper
+The check reports the executable's SHA-256, both raw match counts and RVA sets,
+and both structure-verification results. An explicitly trusted helper
 override is available through `--diagnostics-hook DLL` or `GORE_AS_DIAGNOSTICS_HOOK`;
 the embedded and sibling release helpers are SHA-256 verified.
 
-The currently embedded helper has passed both a full-tree positive compile and
-an intentional compiler-error run on the installed 1.0.3 executable. Archived
-1.0.0–1.0.3 executables pass the same offline signature and structure audit;
-only installed 1.0.3 has been runtime-injected.
+Archived 1.0.0–1.0.4a executables pass the same offline two-boundary signature
+and structure audit. Runtime results for the pinned standalone-compiler target
+are recorded with its differential qualification evidence.
 
 ## The normal authoring workflow: one module
 
@@ -147,12 +167,35 @@ gore as compile-module --op add --module MyMod.Dialog `
 | `--module <NAME>` | Expected module name. For `add`, the compiler-detected name is reported and used. |
 | `--rel-path <PATH>` | Safe path of the authored file relative to the game's `Script\` tree. |
 | `--source <FILE>` | The authored `.as` file to overlay. |
-| `--work-dir <DIR>` | Persistent compiler workspace (emitted tree + intermediate regen cache). |
+| `--work-dir <DIR>` | Existing workspace outside the game installation (emitted tree + intermediate cache). |
 | `--allow-new-symbols` | Retain minimal rows for classes/functions/names absent from the pristine cache. |
 | `-o, --out <PATH>` | The remapped 1-module mini-cache. |
 
 `compile-module` is the CLI equivalent of Mod Studio's Compile action, and it
-restores the game install after the compiler run.
+uses the same `standalone-then-game` default. It resolves the embedded,
+catalogued package automatically. If fallback launches the game compiler, GORE
+restores the game install before returning the mini-cache; the command prints
+the standalone failure that caused that fallback. Use `--backend standalone` to
+forbid a game launch or `--backend game` to request the embedded game compiler
+directly.
+
+For compiler development only, `compile-module` retains a separate complete
+override group:
+
+```powershell
+gore as compile-module ... --backend standalone `
+  --development-standalone-sidecar .\gore-as-standalone-compiler.exe `
+  --development-standalone-sidecar-sha256 <64-lowercase-hex> `
+  --development-compiler-profile-manifest .\profile.json `
+  --development-compiler-profile-root .\profile-root `
+  --development-standalone-scratch-root .\scratch
+```
+
+All five development values are required together. They are not a product
+package and cannot request `--generation-receipt`. The module receipt is a local
+V1 build record produced only after the normal package was authenticated for
+that run; unlike the full-graph V2 receipt, it does not itself carry the product
+catalog identity. Normal users should not set the development overrides.
 
 ## Low-level splicing
 
@@ -223,9 +266,11 @@ used the PR #91-fixed app-local Core DLL. It was not a genuine third-party
 AngelScript mod or a three-way script conflict, and no save was written during
 the check. See the [Manager evidence boundary](mod-manager.md#evidence-boundary).
 
-The `-o` form of `compile` leaves the install exactly as it was, so the live
-`PrecompiledScript_Shipping.Cache` is still the pristine cache these commands
-use as `vanilla.Cache`.
+`compile` always leaves its result outside the installation. After a successful
+standalone run the installation was never changed; after a successful game
+fallback exact restoration has been proven. The live
+`PrecompiledScript_Shipping.Cache` therefore remains the pristine cache these
+commands use as `vanilla.Cache`.
 
 ## Verifying faithfulness
 

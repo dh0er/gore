@@ -20,6 +20,36 @@ Map<String, Object?> _seal(int byteLength, String sha256) => <String, Object?>{
   'sha256': sha256,
 };
 
+Map<String, Object?> _qualifiedPackage() => <String, Object?>{
+  'catalog_sha256':
+      '1111111111111111111111111111111111111111111111111111111111111111',
+  'sidecar_byte_len': 1966592,
+  'sidecar_sha256':
+      '2222222222222222222222222222222222222222222222222222222222222222',
+  'request_version': 2,
+  'response_version': 1,
+  'manifest_byte_len': 4096,
+  'manifest_sha256':
+      '3333333333333333333333333333333333333333333333333333333333333333',
+  'profile_sha256':
+      '4444444444444444444444444444444444444444444444444444444444444444',
+  'target': <String, Object?>{
+    'target': <String, Object?>{
+      'steam_app_id': 1297900,
+      'steam_build_id': 24539464,
+      'depot_id': 1297901,
+      'depot_manifest_gid': 1585071322101748861,
+      'platform': 'windows',
+      'architecture': 'x86_64',
+      'build_configuration': 'shipping',
+    },
+    'pe_codeview': <String, Object?>{
+      'guid': 'be78fe0a-46ac-6643-9685-97e85c7e5b3f',
+      'age': 1,
+    },
+  },
+};
+
 String _headJson({String sha256 = _projectSha}) => jsonEncode(<String, Object?>{
   'store_format': 1,
   'snapshot': _seal(_projectBytes, sha256),
@@ -195,6 +225,115 @@ void main() {
     expect(result.compiler.backend?.standaloneAttempted, isFalse);
     expect(result.compiler.backend?.gameAttempted, isFalse);
     expect(result.compiler.failure?.code, contains('BUNDLE_ABSENT'));
+  });
+
+  test(
+    'V2 accepts untouched install only for a standalone compiled result',
+    () async {
+      final standaloneCompiler = _compiledEvidence()
+        ..['install_restore'] = 'not_started'
+        ..['compiler_backend'] = <String, Object?>{
+          'requested_mode': 'standalone',
+          'result_backend': 'standalone',
+          'standalone_attempted': true,
+          'game_attempted': false,
+          'qualified_package': _qualifiedPackage(),
+          'fallback_reason': null,
+        };
+      final standaloneCore = FakeGoreCoreFfiService(
+        responses: <String, Map<String, Object?>>{
+          'authoring_store_check_revision3_quest_compiler_v2': _response(
+            compiler: standaloneCompiler,
+          ),
+        },
+      );
+      final standalone = await ModFfi(standaloneCore)
+          .authoringStoreCheckRevision3QuestCompilerV2(
+            root: _root,
+            gameRoot: _gameRoot,
+            expectedHead: AuthoringWorkingHead.fromCanonicalJson(_headJson()),
+            questId: _questId,
+            compilerBackend: ScriptCompilerBackendMode.standalone,
+          );
+      expect(standalone.compiler.compiledEvidenceOnly, isTrue);
+      expect(
+        standalone.compiler.installRestore,
+        ScriptCompileInstallRestore.notStarted,
+      );
+
+      final gameCompiler = _compiledEvidence()
+        ..['install_restore'] = 'not_started'
+        ..['compiler_backend'] = <String, Object?>{
+          'requested_mode': 'game',
+          'result_backend': 'game',
+          'standalone_attempted': false,
+          'game_attempted': true,
+          'qualified_package': null,
+          'fallback_reason': null,
+        };
+      final gameCore = FakeGoreCoreFfiService(
+        responses: <String, Map<String, Object?>>{
+          'authoring_store_check_revision3_quest_compiler_v2': _response(
+            compiler: gameCompiler,
+          ),
+        },
+      );
+      await expectLater(
+        ModFfi(gameCore).authoringStoreCheckRevision3QuestCompilerV2(
+          root: _root,
+          gameRoot: _gameRoot,
+          expectedHead: AuthoringWorkingHead.fromCanonicalJson(_headJson()),
+          questId: _questId,
+          compilerBackend: ScriptCompilerBackendMode.game,
+        ),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            ModFfiException.malformedNativeResponseCode,
+          ),
+        ),
+      );
+    },
+  );
+
+  test('V2 retains a game attempt before restore metadata exists', () async {
+    final compiler = _failedEvidence(installRestore: 'not_started')
+      ..['compiler_backend'] = <String, Object?>{
+        'requested_mode': 'game',
+        'result_backend': 'game',
+        'standalone_attempted': false,
+        'game_attempted': true,
+        'qualified_package': null,
+        'fallback_reason': null,
+      };
+    final core = FakeGoreCoreFfiService(
+      responses: <String, Map<String, Object?>>{
+        'authoring_store_check_revision3_quest_compiler_v2': _response(
+          compiler: compiler,
+        ),
+      },
+    );
+
+    final result = await ModFfi(core)
+        .authoringStoreCheckRevision3QuestCompilerV2(
+          root: _root,
+          gameRoot: _gameRoot,
+          expectedHead: AuthoringWorkingHead.fromCanonicalJson(_headJson()),
+          questId: _questId,
+          compilerBackend: ScriptCompilerBackendMode.game,
+        );
+
+    expect(result.compiler.failure, isNotNull);
+    expect(
+      result.compiler.installRestore,
+      ScriptCompileInstallRestore.notStarted,
+    );
+    expect(
+      result.compiler.backend!.resultBackend,
+      ScriptCompilerBackendName.game,
+    );
+    expect(result.compiler.backend!.gameAttempted, isTrue);
   });
 
   test(

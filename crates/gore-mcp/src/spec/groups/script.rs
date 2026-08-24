@@ -3,9 +3,9 @@
 //!
 //! Two things here are unlike anything else in the table:
 //!
-//! - `compile` and `compile-module` drive the game's own compiler by launching the game executable.
-//!   They are [`Safety::game_launch`], which requires `--allow-write` as well: compiling also
-//!   stages its result in the installation.
+//! - `compile` and `compile-module` expose an explicit standalone/game backend policy. The MCP
+//!   boundary conservatively keeps both behind [`Safety::game_launch`] because `game` and
+//!   `standalone-then-game` may launch the executable; strict standalone itself never does.
 //! - `bytediff` spells `--json` as a *path* to write a report to, not as a switch that changes
 //!   stdout. It is therefore an ordinary argument and is never passed implicitly; passing it
 //!   automatically would create a file nobody asked for.
@@ -278,24 +278,40 @@ const COMPILE_ARGS: &[ArgSpec] = &[
         "src",
         Positional { order: 0 },
         Path,
-        "Source `.as` tree (a directory) to compile. Omit to recompile the loose `.as` already \
-         installed under `<game>/G1R/Script/`.",
-        false,
+        "Complete authoritative `.as` source tree. Missing base modules are explicit deletes.",
+        true,
     ),
     ArgSpec::new(
         "out",
         Long("out"),
         Path,
-        "Write the compiled cache here and leave the game install untouched. Omitting this \
-         installs the fresh cache in place under `Script/`.",
-        false,
+        "Publish the complete cache here with atomic no-clobber semantics. Must be outside the \
+         game installation.",
+        true,
+    ),
+    ArgSpec::new(
+        "work_dir",
+        Long("work-dir"),
+        Path,
+        "Existing private workspace outside the game installation.",
+        true,
     ),
     GAME,
     ArgSpec::new(
-        "no_backup",
-        Switch("no-backup"),
-        Bool,
-        "When installing in place, do NOT back up the previous cache.",
+        "backend",
+        Long("backend"),
+        Enum(&["game", "standalone", "standalone-then-game"]),
+        "Product-owned compiler selection. Standalone package paths and hashes are never \
+         accepted from this command line.",
+        false,
+    )
+    .with_default("standalone-then-game"),
+    ArgSpec::new(
+        "generation_receipt",
+        Long("generation-receipt"),
+        Path,
+        "Publish a product-authoritative full-graph receipt when the installed target matches an \
+         embedded qualified compiler package.",
         false,
     ),
     NO_DIAGNOSTICS,
@@ -330,7 +346,8 @@ const COMPILE_MODULE_ARGS: &[ArgSpec] = &[
         "work_dir",
         Long("work-dir"),
         Path,
-        "Persistent compiler workspace used for the emitted tree and intermediate regen cache.",
+        "Existing persistent compiler workspace outside the game installation, used for the \
+         emitted tree and intermediate compiler cache.",
         true,
     ),
     ArgSpec::new(
@@ -349,6 +366,58 @@ const COMPILE_MODULE_ARGS: &[ArgSpec] = &[
         true,
     ),
     GAME,
+    ArgSpec::new(
+        "backend",
+        Long("backend"),
+        Enum(&["game", "standalone", "standalone-then-game"]),
+        "Compiler policy. GORE resolves its catalog-authenticated standalone package \
+         automatically; the game compiler is the visible fallback by default.",
+        false,
+    )
+    .with_default("standalone-then-game"),
+    ArgSpec::new(
+        "development_standalone_sidecar",
+        Long("development-standalone-sidecar"),
+        Path,
+        "Development-only native standalone sidecar override. All development override values \
+         are required together and conflict with `generation_receipt`.",
+        false,
+    ),
+    ArgSpec::new(
+        "development_standalone_sidecar_sha256",
+        Long("development-standalone-sidecar-sha256"),
+        Hex,
+        "Development-only SHA-256 of the exact override sidecar.",
+        false,
+    ),
+    ArgSpec::new(
+        "development_compiler_profile_manifest",
+        Long("development-compiler-profile-manifest"),
+        Path,
+        "Development-only typed compiler-profile manifest.",
+        false,
+    ),
+    ArgSpec::new(
+        "development_compiler_profile_root",
+        Long("development-compiler-profile-root"),
+        Path,
+        "Development-only root containing every sealed compiler-profile payload.",
+        false,
+    ),
+    ArgSpec::new(
+        "development_standalone_scratch_root",
+        Long("development-standalone-scratch-root"),
+        Path,
+        "Development-only existing private scratch root used by the override sidecar.",
+        false,
+    ),
+    ArgSpec::new(
+        "generation_receipt",
+        Long("generation-receipt"),
+        Path,
+        "Publish a local V1 no-clobber receipt after automatic product-package authentication.",
+        false,
+    ),
     NO_DIAGNOSTICS,
     DIAGNOSTICS_HOOK,
     DIAGNOSTICS_DELAY,
@@ -663,10 +732,10 @@ const AS_COMMANDS: &[CommandSpec] = &[
     .guide("scripts"),
     CommandSpec::new(
         "compile",
-        "Compile AngelScript into a precompiled cache by driving the game's own \
-         `-as-generate-precompiled-data` flag. Launches the game.",
+        "Compile a complete authoritative AngelScript tree into a new precompiled cache. Uses the \
+         requested standalone/game policy; only game or explicit fallback may launch the game.",
         COMPILE_ARGS,
-        Safety::game_launch().in_place_without(&["out"]),
+        Safety::game_launch(),
         T_COMPILE,
     )
     .at_most_one(DIAGNOSTICS_CONFLICT)
@@ -674,7 +743,7 @@ const AS_COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(
         "compile-module",
         "Compile one authored module into a deployable 1-module mini-cache. Wraps the complete \
-         Studio pipeline and launches the game.",
+         Studio pipeline with an explicit standalone/game policy.",
         COMPILE_MODULE_ARGS,
         Safety::game_launch(),
         T_COMPILE,
@@ -736,9 +805,8 @@ pub const AS: GroupSpec = GroupSpec {
     cli: "as",
     summary: "AngelScript precompiled-cache tooling: inspect and decompile the shipped script \
               cache, patch scalar defaults in place, and compile authored modules back in. \
-              Inspection is free; `compile` and `compile-module` launch the game and stage the \
-              result in the installation, so they need both --allow-game-launch and \
-              --allow-write.",
+              Compilation has an explicit standalone/game policy; the MCP boundary \
+              conservatively requires both --allow-game-launch and --allow-write.",
     shape: GroupShape::Nested,
     commands: AS_COMMANDS,
 };
@@ -762,6 +830,41 @@ mod tests {
             .map(|command| command.sub)
             .collect();
         assert_eq!(launching, vec!["compile", "compile-module"]);
+    }
+
+    #[test]
+    fn product_compilers_default_to_standalone_then_game_and_manual_paths_are_development_only() {
+        for sub in ["compile", "compile-module"] {
+            let backend = AS
+                .command(sub)
+                .expect("compiler command")
+                .arg("backend")
+                .expect("backend argument");
+            assert_eq!(backend.default_hint, Some("standalone-then-game"), "{sub}");
+        }
+
+        let module = AS.command("compile-module").expect("compile-module");
+        for name in [
+            "development_standalone_sidecar",
+            "development_standalone_sidecar_sha256",
+            "development_compiler_profile_manifest",
+            "development_compiler_profile_root",
+            "development_standalone_scratch_root",
+        ] {
+            assert!(module.arg(name).is_some(), "missing {name}");
+        }
+        for product_forbidden in [
+            "standalone_sidecar",
+            "standalone_sidecar_sha256",
+            "compiler_profile_manifest",
+            "compiler_profile_root",
+            "standalone_scratch_root",
+        ] {
+            assert!(
+                module.arg(product_forbidden).is_none(),
+                "normal product schema still exposes {product_forbidden}"
+            );
+        }
     }
 
     /// The generator's own deadline, from `gore-as` (`compile.rs`: `Duration::from_secs(30 * 60)`).

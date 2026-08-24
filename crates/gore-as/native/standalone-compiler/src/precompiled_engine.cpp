@@ -47,7 +47,7 @@ engine_bridge_result failure(
         return false;
     }
     for (const std::uint8_t value : key.payload) {
-        if (value < 0x21U || value > 0x7eU || value == '\\' || value == '/') {
+        if (value < 0x20U || value > 0x7eU || value == '\\' || value == '/') {
             return false;
         }
     }
@@ -94,6 +94,10 @@ engine_bridge_result failure(
 }
 
 [[nodiscard]] bool is_parameter_type(const data_type& type) noexcept {
+    if (type.type_info == 0 && type.token_type == static_cast<std::int32_t>(ttQuestion)) {
+        return type.is_reference && !type.is_auto && !type.is_object_handle &&
+            !type.if_handle_then_const;
+    }
     return valid_data_type_shape(type) && !type.is_auto &&
            type.token_type != static_cast<std::int32_t>(ttVoid);
 }
@@ -251,6 +255,21 @@ bool validate_function_shape(
         detail = "function parameter arrays do not have identical lengths";
         return false;
     }
+    if (function.function_name.bytes.find('\0') != std::string::npos ||
+        function.name_space.bytes.find('\0') != std::string::npos ||
+        std::any_of(
+            function.parameter_names.begin(), function.parameter_names.end(),
+            [](const archive_string& value) {
+                return value.bytes.find('\0') != std::string::npos;
+            }) ||
+        std::any_of(
+            function.parameter_default_args.begin(), function.parameter_default_args.end(),
+            [](const archive_string& value) {
+                return value.bytes.find('\0') != std::string::npos;
+            })) {
+        detail = "function identity, parameter name, or default argument contains an embedded NUL";
+        return false;
+    }
     if (!valid_data_type_shape(function.return_type) ||
         std::any_of(
             function.parameter_types.begin(), function.parameter_types.end(),
@@ -273,10 +292,88 @@ bool validate_function_shape(
         detail = "compiled function variable-space and stack requirements must be non-negative";
         return false;
     }
+    if (function.stack_needed < function.variable_space) {
+        detail = "compiled function stack requirement is smaller than its variable space";
+        return false;
+    }
+    std::unordered_set<std::int32_t> object_positions;
+    for (const std::int32_t position : function.object_variable_positions) {
+        if (position <= 0 || position > function.variable_space ||
+            !object_positions.emplace(position).second) {
+            detail = "function object-local position is outside VariableSpace or duplicated";
+            return false;
+        }
+    }
+    if (function.object_variables_on_heap < 0 ||
+        static_cast<std::size_t>(function.object_variables_on_heap) >
+            function.object_variable_positions.size()) {
+        detail = "function object-local heap prefix is outside the object-local array";
+        return false;
+    }
     if (function.variable_info_program_positions.size() != function.variable_info_offsets.size() ||
         function.variable_info_program_positions.size() != function.variable_info_options.size()) {
         detail = "function variable-info arrays do not have identical lengths";
         return false;
+    }
+    std::int32_t previous_program_position = -1;
+    std::size_t block_depth = 0U;
+    for (std::size_t index = 0U;
+         index < function.variable_info_program_positions.size(); ++index) {
+        const std::int32_t program_position =
+            function.variable_info_program_positions[index];
+        const std::int32_t variable_offset = function.variable_info_offsets[index];
+        const std::int32_t option = function.variable_info_options[index];
+        if (program_position < 0 ||
+            static_cast<std::size_t>(program_position) > function.byte_code.size() ||
+            program_position < previous_program_position) {
+            detail = "function variable-info program positions are out of bytecode range or order";
+            return false;
+        }
+        previous_program_position = program_position;
+        switch (option) {
+        case asOBJ_UNINIT:
+        case asOBJ_INIT:
+            if (object_positions.count(variable_offset) == 0U) {
+                detail = "function variable-info object offset is absent from object locals";
+                return false;
+            }
+            break;
+        case asBLOCK_BEGIN:
+            if (variable_offset != 0) {
+                detail = "function variable-info block begin carries a nonzero offset";
+                return false;
+            }
+            ++block_depth;
+            break;
+        case asBLOCK_END:
+            if (variable_offset != 0 || block_depth == 0U) {
+                detail = "function variable-info block end is unmatched or carries an offset";
+                return false;
+            }
+            --block_depth;
+            break;
+        default:
+            detail = "function variable-info option is unknown";
+            return false;
+        }
+    }
+    if (block_depth != 0U) {
+        detail = "function variable-info blocks are not balanced";
+        return false;
+    }
+    if ((function.line_numbers.size() & 1U) != 0U) {
+        detail = "function line-number array does not contain position/value pairs";
+        return false;
+    }
+    std::int32_t previous_line_position = -1;
+    for (std::size_t index = 0U; index < function.line_numbers.size(); index += 2U) {
+        const std::int32_t position = function.line_numbers[index];
+        if (position < 0 || static_cast<std::size_t>(position) > function.byte_code.size() ||
+            position < previous_line_position) {
+            detail = "function line-number positions are out of bytecode range or order";
+            return false;
+        }
+        previous_line_position = position;
     }
     if (function.is_unreal_function && !allow_unreal_metadata) {
         detail = "checkpoint bridge does not yet attach UFunction descriptors";
@@ -321,9 +418,13 @@ bool validate_module_shape(
     std::string& module_name,
     std::string& detail,
     const bool allow_mixed_metadata = false) {
-    if (!plain_module_name(entry.first, module_name) ||
-        entry.second.module_name.bytes != module_name) {
-        detail = "module TMap key and inner ModuleName must be the same non-empty ASCII name";
+    const bool plain_key = plain_module_name(entry.first, module_name);
+    if (!plain_key || entry.second.module_name.bytes != module_name) {
+        detail = "module TMap key and inner ModuleName must be the same non-empty ASCII name"
+            " (key=" + (plain_key ? module_name : std::string("<non-ASCII-or-empty>")) +
+            ", key_utf16=" + std::to_string(entry.first.utf16) +
+            ", key_bytes=" + std::to_string(entry.first.payload.size()) +
+            ", inner=" + entry.second.module_name.bytes + ")";
         return false;
     }
     const precompiled_module& module = entry.second;
@@ -425,6 +526,7 @@ engine_bridge_result preflight_cache(
     std::vector<std::string>& module_names,
     const bool allow_mixed_metadata = false) {
     std::unordered_set<std::string> unique_names;
+    std::unordered_set<std::uint32_t> declared_function_ids;
     module_names.clear();
     module_names.reserve(input.modules.size());
     for (std::size_t index = 0U; index < input.modules.size(); ++index) {
@@ -442,6 +544,35 @@ engine_bridge_result preflight_cache(
             return failure(
                 engine_bridge_phase::preflight, index,
                 "target engine already contains a module with this name", asALREADY_REGISTERED);
+        }
+        const auto record_function = [&](const precompiled_function& function) {
+            return function.id != 0U && declared_function_ids.emplace(function.id).second;
+        };
+        bool function_ids_valid = true;
+        for (const precompiled_function& function : input.modules[index].second.functions) {
+            function_ids_valid = function_ids_valid && record_function(function);
+        }
+        for (const precompiled_class& type : input.modules[index].second.classes) {
+            for (const precompiled_function& function : type.methods) {
+                function_ids_valid = function_ids_valid && record_function(function);
+            }
+            for (const precompiled_function& function : type.constructors) {
+                function_ids_valid = function_ids_valid && record_function(function);
+            }
+            for (const precompiled_function& function : type.behaviour_functions) {
+                function_ids_valid = function_ids_valid && record_function(function);
+            }
+        }
+        for (const precompiled_global& global : input.modules[index].second.global_variables) {
+            if (global.has_init_function) {
+                function_ids_valid =
+                    function_ids_valid && record_function(global.init_function);
+            }
+        }
+        if (!function_ids_valid) {
+            return failure(
+                engine_bridge_phase::preflight, index,
+                "serialized function ids must be nonzero and unique across the cache");
         }
         module_names.push_back(std::move(name));
     }
@@ -473,21 +604,46 @@ engine_bridge_result preflight_cache(
     }
 
     std::unordered_set<std::int64_t> function_keys;
-    for (const auto& entry : input.function_references) {
+    for (std::size_t function_index = 0U;
+         function_index < input.function_references.size(); ++function_index) {
+        const auto& entry = input.function_references[function_index];
         const function_reference& reference = entry.second;
-        if (entry.first == 0 || !pointer_keys.emplace(entry.first).second ||
-            !function_keys.emplace(entry.first).second || !engine_name(reference.name) ||
-            reference.module.bytes.find('\0') != std::string::npos ||
-            reference.name_space.bytes.find('\0') != std::string::npos ||
-            !valid_data_type_shape(reference.return_type) ||
-            std::any_of(
+        std::string reason;
+        if (entry.first == 0) reason = "zero pointer key";
+        else if (pointer_keys.count(entry.first) != 0U) reason = "pointer key collides with another reference table";
+        else if (function_keys.count(entry.first) != 0U) reason = "duplicate function pointer key";
+        else if (!engine_name(reference.name)) reason = "empty or NUL-containing function name";
+        else if (reference.module.bytes.find('\0') != std::string::npos) reason = "NUL-containing module name";
+        else if (reference.name_space.bytes.find('\0') != std::string::npos) reason = "NUL-containing namespace";
+        else if (!valid_data_type_shape(reference.return_type)) reason = "invalid return type";
+        else {
+            const auto invalid_parameter = std::find_if(
                 reference.parameter_types.begin(), reference.parameter_types.end(),
-                [](const data_type& type) { return !is_parameter_type(type); }) ||
-            (reference.is_method && reference.object_type == 0)) {
+                [](const data_type& type) { return !is_parameter_type(type); });
+            if (invalid_parameter != reference.parameter_types.end()) {
+                reason = "invalid parameter type at index " + std::to_string(
+                    static_cast<std::size_t>(invalid_parameter - reference.parameter_types.begin())) +
+                    " (type_info=" + std::to_string(invalid_parameter->type_info) +
+                    ", token_type=" + std::to_string(invalid_parameter->token_type) +
+                    ", is_reference=" + std::to_string(invalid_parameter->is_reference) +
+                    ", is_object_handle=" + std::to_string(invalid_parameter->is_object_handle) +
+                    ", is_auto=" + std::to_string(invalid_parameter->is_auto) +
+                    ", if_handle_then_const=" +
+                    std::to_string(invalid_parameter->if_handle_then_const) + ")";
+            } else if (reference.is_method && reference.object_type == 0) {
+                reason = "method has no object type";
+            }
+        }
+        if (!reason.empty()) {
             return failure(
                 engine_bridge_phase::preflight, kNoModule,
-                "invalid or colliding function-reference table entry");
+                "invalid or colliding function-reference table entry (index=" +
+                    std::to_string(function_index) + ", key=" +
+                    std::to_string(entry.first) + ", name=" + reference.name.bytes +
+                    ", module=" + reference.module.bytes + ", reason=" + reason + ")");
         }
+        pointer_keys.emplace(entry.first);
+        function_keys.emplace(entry.first);
     }
     std::unordered_set<std::int32_t> function_id_keys;
     for (const auto& entry : input.function_id_reference_to_pointer) {
@@ -540,7 +696,7 @@ engine_bridge_result preflight_cache(
 }
 
 asSNameSpace* name_space(asCScriptEngine& engine, const archive_string& value) {
-    return value.bytes.empty() ? engine.defaultNamespace : engine.AddNameSpace(value.bytes.c_str());
+    return engine.AddNameSpace(value.bytes.c_str());
 }
 
 class reference_resolver final {
@@ -602,6 +758,12 @@ public:
             if (add_ref) {
                 type->AddRefInternal();
             }
+            return true;
+        }
+        if (input.token_type == static_cast<std::int32_t>(ttQuestion) &&
+            is_parameter_type(input)) {
+            output = asCDataType::CreatePrimitive(ttQuestion, input.is_object_const);
+            output.MakeReference(true);
             return true;
         }
         if (!is_primitive(input)) {
@@ -669,7 +831,12 @@ public:
             }
         }
         if (found == nullptr) {
-            detail = "saved type reference could not be resolved by module/name/namespace";
+            detail = "saved type reference could not be resolved by module/name/namespace"
+                " (pointer=" + std::to_string(old_reference) +
+                ", name=" + reference.name.bytes +
+                ", module=" + reference.module.bytes +
+                ", namespace=" + reference.name_space.bytes +
+                ", subtypes=" + std::to_string(reference.sub_types.size()) + ")";
             return false;
         }
         if (!reference.sub_types.empty()) {
@@ -757,13 +924,24 @@ public:
         return true;
     }
 
+    void stage_function_bytecode(
+        asCScriptFunction& function,
+        const std::vector<std::int32_t>& bytecode) {
+        pending_bytecode_.emplace(&function, &bytecode);
+    }
+
     bool relocate_function(asCScriptFunction& function, std::string& detail) {
         if (function.scriptData == nullptr) {
             return true;
         }
-        std::unordered_set<asCGlobalProperty*> referenced_globals;
-        asDWORD* instruction = function.scriptData->byteCode.AddressOf();
-        asDWORD* const end = instruction + function.scriptData->byteCode.GetLength();
+        const auto pending = pending_bytecode_.find(&function);
+        if (pending == pending_bytecode_.end()) {
+            detail = "function bytecode was not staged for transactional relocation";
+            return false;
+        }
+        std::vector<std::int32_t> relocated = *pending->second;
+        asDWORD* instruction = reinterpret_cast<asDWORD*>(relocated.data());
+        asDWORD* const end = instruction + relocated.size();
         while (instruction < end) {
             const auto opcode = static_cast<asEBCInstr>(*reinterpret_cast<asBYTE*>(instruction));
             switch (opcode) {
@@ -783,16 +961,13 @@ public:
                     return false;
                 }
                 asBC_PTRARG(instruction) = reinterpret_cast<asPWORD>(address);
-                if (property != nullptr && referenced_globals.emplace(property).second) {
-                    property->AddRef();
-                }
                 break;
             }
             case asBC_CALL:
             case asBC_CALLBND:
             case asBC_CALLINTF: {
                 int id = 0;
-                if (!get_function_id(asBC_INTARG(instruction), id, true, detail)) {
+                if (!get_function_id(asBC_INTARG(instruction), id, false, detail)) {
                     return false;
                 }
                 asBC_INTARG(instruction) = id;
@@ -806,7 +981,7 @@ public:
                 asCTypeInfo* type = nullptr;
                 if (!get_type_info(
                         static_cast<std::int64_t>(asBC_PTRARG(instruction)),
-                        type, true, detail)) {
+                        type, false, detail)) {
                     return false;
                 }
                 asBC_PTRARG(instruction) = reinterpret_cast<asPWORD>(type);
@@ -814,7 +989,7 @@ public:
             }
             case asBC_COPY: {
                 int id = 0;
-                if (!get_type_id(asBC_INTARG(instruction), id, true, detail)) {
+                if (!get_type_id(asBC_INTARG(instruction), id, false, detail)) {
                     return false;
                 }
                 asBC_INTARG(instruction) = id;
@@ -837,7 +1012,7 @@ public:
                 asCScriptFunction* target = nullptr;
                 if (!get_function(
                         static_cast<std::int64_t>(asBC_PTRARG(instruction)),
-                        target, true, true, detail)) {
+                        target, false, true, detail)) {
                     return false;
                 }
                 asBC_PTRARG(instruction) = reinterpret_cast<asPWORD>(target);
@@ -847,13 +1022,13 @@ public:
                 asCTypeInfo* type = nullptr;
                 if (!get_type_info(
                         static_cast<std::int64_t>(asBC_PTRARG(instruction)),
-                        type, true, detail)) {
+                        type, false, detail)) {
                     return false;
                 }
                 asBC_PTRARG(instruction) = reinterpret_cast<asPWORD>(type);
                 int id = 0;
                 if (!get_function_id(
-                        asBC_INTARG(instruction + AS_PTR_SIZE), id, true, detail)) {
+                        asBC_INTARG(instruction + AS_PTR_SIZE), id, false, detail)) {
                     return false;
                 }
                 asBC_INTARG(instruction + AS_PTR_SIZE) = id;
@@ -862,7 +1037,7 @@ public:
             case asBC_TYPEID:
             case asBC_Cast: {
                 int id = 0;
-                if (!get_type_id(asBC_INTARG(instruction), id, true, detail)) {
+                if (!get_type_id(asBC_INTARG(instruction), id, false, detail)) {
                     return false;
                 }
                 asBC_INTARG(instruction) = id;
@@ -870,7 +1045,7 @@ public:
             }
             case asBC_SetListType: {
                 int id = 0;
-                if (!get_type_id(asBC_INTARG(instruction + 1), id, true, detail)) {
+                if (!get_type_id(asBC_INTARG(instruction + 1), id, false, detail)) {
                     return false;
                 }
                 asBC_INTARG(instruction + 1) = id;
@@ -915,23 +1090,40 @@ public:
             }
             instruction += size;
         }
-        return instruction == end;
+        if (instruction != end) return false;
+        function.scriptData->byteCode.SetLength(static_cast<asUINT>(relocated.size()));
+        if (!relocated.empty()) {
+            std::memcpy(
+                function.scriptData->byteCode.AddressOf(), relocated.data(),
+                relocated.size() * sizeof(relocated[0]));
+        }
+        function.AddReferences();
+        pending_bytecode_.erase(pending);
+        return true;
     }
 
 private:
     bool signature_matches(
         const function_reference& reference,
         asCScriptFunction& function,
-        std::string& detail) {
+        std::string& detail,
+        asCObjectType* const template_instance = nullptr) {
         if (function.IsReadOnly() != reference.is_const ||
             function.parameterTypes.GetLength() != reference.parameter_types.size()) {
             return false;
         }
+        const bool substitute_template_types = template_instance != nullptr &&
+            template_instance->templateBaseType != nullptr &&
+            function.traits.GetTrait(asTRAIT_GENERIC_TEMPLATE_FUNCTION);
         asCDataType expected_return;
         if (!create_data_type(reference.return_type, expected_return, false, detail)) {
             return false;
         }
-        if (function.returnType != expected_return) {
+        const asCDataType actual_return = substitute_template_types
+            ? engine_.DetermineTypeForTemplate(
+                  function.returnType, template_instance->templateBaseType, template_instance)
+            : function.returnType;
+        if (actual_return != expected_return) {
             return false;
         }
         for (asUINT index = 0U; index < function.parameterTypes.GetLength(); ++index) {
@@ -939,7 +1131,12 @@ private:
             if (!create_data_type(reference.parameter_types[index], expected, false, detail)) {
                 return false;
             }
-            if (function.parameterTypes[index] != expected) {
+            const asCDataType actual = substitute_template_types
+                ? engine_.DetermineTypeForTemplate(
+                      function.parameterTypes[index], template_instance->templateBaseType,
+                      template_instance)
+                : function.parameterTypes[index];
+            if (actual != expected) {
                 return false;
             }
         }
@@ -974,6 +1171,18 @@ private:
         }
         const function_reference& reference = *saved->second;
         asCScriptFunction* found = nullptr;
+        std::string resolved_owner_name;
+        std::string candidate_declarations;
+        const auto remember_candidate = [&](asCScriptFunction* candidate) {
+            if (candidate == nullptr || candidate_declarations.size() >= 2048U) {
+                return;
+            }
+            if (!candidate_declarations.empty()) {
+                candidate_declarations.append(" | ");
+            }
+            const char* declaration = candidate->GetDeclaration(true, true, true, true);
+            candidate_declarations.append(declaration == nullptr ? "<no declaration>" : declaration);
+        };
         if (reference.is_imported_decl) {
             auto* module = static_cast<asCModule*>(
                 engine_.GetModule(reference.module.bytes.c_str(), false));
@@ -998,23 +1207,39 @@ private:
                 detail = "saved method reference resolves to a non-object type";
                 return false;
             }
+            if (type->GetNamespace() != nullptr && *type->GetNamespace() != '\0') {
+                resolved_owner_name.assign(type->GetNamespace());
+                resolved_owner_name.append("::");
+            }
+            if (type->GetName() != nullptr) resolved_owner_name.append(type->GetName());
+            const auto match_method_candidate = [&](asCScriptFunction* candidate) {
+                remember_candidate(candidate);
+                if (!signature_matches(reference, *candidate, detail, type)) {
+                    return false;
+                }
+                if (candidate->traits.GetTrait(asTRAIT_GENERIC_TEMPLATE_FUNCTION) &&
+                    type->templateBaseType != nullptr) {
+                    candidate = engine_.GenerateTemplateFunction(type, candidate);
+                    if (candidate == nullptr) {
+                        detail = "engine could not instantiate a saved generic template method";
+                        return true;
+                    }
+                }
+                found = candidate;
+                return true;
+            };
             type->FindMethodUntil(
                 reference.name.bytes.c_str(),
                 [&](asCScriptFunction* candidate) {
-                    if (signature_matches(reference, *candidate, detail)) {
-                        found = candidate;
-                        return true;
-                    }
-                    return false;
+                    return match_method_candidate(candidate);
                 });
             const auto check_behaviour = [&](const int id) {
                 if (found != nullptr || id == 0) {
                     return;
                 }
                 asCScriptFunction* candidate = engine_.GetScriptFunction(id);
-                if (candidate != nullptr && candidate->name == reference.name.bytes.c_str() &&
-                    signature_matches(reference, *candidate, detail)) {
-                    found = candidate;
+                if (candidate != nullptr && candidate->name == reference.name.bytes.c_str()) {
+                    (void)match_method_candidate(candidate);
                 }
             };
             check_behaviour(type->beh.factory);
@@ -1061,7 +1286,18 @@ private:
         }
         if (found == nullptr) {
             if (detail.empty()) {
-                detail = "saved function reference could not be resolved by its signature";
+                detail = "saved function reference could not be resolved by its signature"
+                    " (pointer=" + std::to_string(old_reference) +
+                    ", name=" + reference.name.bytes +
+                    ", module=" + reference.module.bytes +
+                    ", namespace=" + reference.name_space.bytes +
+                    ", is_const=" + std::to_string(reference.is_const) +
+                    ", is_imported=" + std::to_string(reference.is_imported_decl) +
+                    ", is_method=" + std::to_string(reference.is_method) +
+                    ", object_type=" + std::to_string(reference.object_type) +
+                    ", resolved_owner=" + resolved_owner_name +
+                    ", parameters=" + std::to_string(reference.parameter_types.size()) +
+                    ", candidates=" + candidate_declarations + ")";
             }
             return false;
         }
@@ -1197,6 +1433,8 @@ private:
     std::unordered_map<std::int64_t, asCScriptFunction*> function_cache_;
     std::unordered_map<std::int64_t, asCGlobalProperty*> global_cache_;
     std::unordered_map<std::int64_t, std::pair<short, int>> property_cache_;
+    std::unordered_map<asCScriptFunction*, const std::vector<std::int32_t>*>
+        pending_bytecode_;
 };
 
 bool create_function(
@@ -1211,7 +1449,7 @@ bool create_function(
     function->funcType = asFUNC_SCRIPT;
     function->name = input.function_name.bytes.c_str();
     function->nameSpace = name_space(engine, input.name_space);
-    if (!references.create_data_type(input.return_type, function->returnType, true, detail)) {
+    if (!references.create_data_type(input.return_type, function->returnType, false, detail)) {
         asDELETE(function, asCScriptFunction);
         return false;
     }
@@ -1223,7 +1461,7 @@ bool create_function(
     function->defaultArgs.SetLength(parameter_count);
     for (asUINT index = 0U; index < parameter_count; ++index) {
         if (!references.create_data_type(
-                input.parameter_types[index], function->parameterTypes[index], true, detail)) {
+                input.parameter_types[index], function->parameterTypes[index], false, detail)) {
             asDELETE(function, asCScriptFunction);
             return false;
         }
@@ -1239,12 +1477,7 @@ bool create_function(
     function->traits.traits = static_cast<asDWORD>(input.function_traits);
     function->AllocateScriptFunctionData();
     auto* const script = function->scriptData;
-    script->byteCode.SetLength(static_cast<asUINT>(input.byte_code.size()));
-    if (!input.byte_code.empty()) {
-        std::memcpy(
-            script->byteCode.AddressOf(), input.byte_code.data(),
-            input.byte_code.size() * sizeof(input.byte_code[0]));
-    }
+    references.stage_function_bytecode(*function, input.byte_code);
     script->variableSpace = input.variable_space;
     const asUINT object_variable_count =
         static_cast<asUINT>(input.object_variable_types.size());
@@ -2299,12 +2532,10 @@ engine_bridge_result export_function(
     encoded.id = static_cast<std::uint32_t>(function.id);
     encoded.is_const_method = function.IsReadOnly();
     encoded.is_no_op = function.IsNoOp();
-    encoded.declared_at = script.declaredAt;
-    if (script.lineNumbers.GetLength() != 0U) {
-        encoded.line_numbers.assign(
-            script.lineNumbers.AddressOf(),
-            script.lineNumbers.AddressOf() + script.lineNumbers.GetLength());
-    }
+    // BuildID 24539464 is a Shipping build. The donor serializer compiles these fields out with
+    // `#if !UE_BUILD_SHIPPING`, even though the AngelScript builder keeps them in memory.
+    encoded.declared_at = 0;
+    encoded.line_numbers.clear();
     if (references != nullptr) {
         if (!references->store_bytecode(encoded.byte_code, detail)) {
             return failure(engine_bridge_phase::export_module, kNoModule, std::move(detail));
@@ -2464,6 +2695,62 @@ engine_bridge_result export_class(
         return failure(engine_bridge_phase::export_module, kNoModule, std::move(detail));
     }
     output = std::move(encoded);
+    return {};
+}
+
+engine_bridge_result collect_class_generator_capabilities(
+    asCModule& module,
+    registry_runtime& registry,
+    class_generator_capability_table& output) {
+    class_generator_capability_table staged;
+    staged.classes.reserve(module.classTypes.GetLength());
+    for (asUINT type_index = 0U; type_index < module.classTypes.GetLength(); ++type_index) {
+        const asCObjectType& type = *module.classTypes[type_index];
+        class_generator_class_capabilities class_capabilities;
+        class_capabilities.class_name = type.GetName();
+        class_capabilities.name_space = type.GetNamespace();
+        const int first_local_offset = type.derivedFrom != nullptr
+            ? type.derivedFrom->size
+            : type.shadowType != nullptr ? type.basePropertyOffset : 0;
+        for (asUINT property_index = 0U;
+             property_index < type.properties.GetLength(); ++property_index) {
+            const asCObjectProperty& property = *type.properties[property_index];
+            if (property.byteOffset < first_local_offset) continue;
+            class_generator_type_capabilities resolved;
+            std::string detail;
+            const int type_id = module.engine->GetTypeIdFromDataType(property.type);
+            const char* const type_declaration =
+                module.engine->GetTypeDeclaration(type_id, true);
+            if (type_declaration == nullptr || *type_declaration == '\0') {
+                return failure(
+                    engine_bridge_phase::export_module,
+                    kNoModule,
+                    "class-generator type declaration resolution failed for " +
+                        class_capabilities.class_name + "::" +
+                        property.name.AddressOf(),
+                    asERROR);
+            }
+            if (!registry.resolve_class_generator_type_capabilities(
+                    *module.engine, type_id, resolved, detail)) {
+                return failure(
+                    engine_bridge_phase::export_module,
+                    kNoModule,
+                    "class-generator capability resolution failed for " +
+                        class_capabilities.class_name + "::" +
+                        property.name.AddressOf() + ": " + detail,
+                    asERROR);
+            }
+            class_capabilities.properties.push_back({
+                property.name.AddressOf(),
+                type_declaration,
+                resolved.can_create_property,
+                resolved.never_requires_gc,
+                resolved.requires_property,
+            });
+        }
+        staged.classes.push_back(std::move(class_capabilities));
+    }
+    output = std::move(staged);
     return {};
 }
 
@@ -2696,7 +2983,10 @@ private:
                 if (property.type.type_info == 0) continue;
                 asCTypeInfo* property_type = nullptr;
                 if (!references_.get_type_info(
-                        property.type.type_info, property_type, false, detail) ||
+                        property.type.type_info, property_type, false, detail)) {
+                    return false;
+                }
+                if ((property_type->flags & asOBJ_VALUE) != 0U &&
                     !process_dependency(property_type, module_index, detail)) {
                     return false;
                 }
@@ -3518,6 +3808,13 @@ engine_bridge_result compile_mixed_cache_checkpoint(
                 "mixed graph contains invalid template instances", asERROR);
         }
         for (std::size_t index = 0U; index < states.size(); ++index) {
+            // Cached modules are compiler inputs, not a replacement game
+            // runtime. Their initializers may call host APIs whose real
+            // implementations and world state intentionally do not exist in
+            // the standalone process. Newly compiled modules still receive
+            // the fork's normal initialization so qualification adapters can
+            // execute their probe entry points.
+            if (states[index].source == nullptr) continue;
             const int code = states[index].module->ResetGlobalVars(nullptr);
             if (code != asSUCCESS) {
                 return failure(
@@ -3546,13 +3843,72 @@ engine_bridge_result compile_mixed_cache_checkpoint(
     }
 }
 
-engine_bridge_result export_module_checkpoint(
+engine_bridge_result apply_shipping_static_jit_checkpoint(
+    const std::vector<asIScriptModule*>& modules) {
+    try {
+        std::unordered_set<asCScriptFunction*> functions_with_virtual_overrides;
+        for (asIScriptModule* const module_interface : modules) {
+            if (module_interface == nullptr) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "Shipping StaticJIT analysis received a null module", asINVALID_ARG);
+            }
+            auto& module = static_cast<asCModule&>(*module_interface);
+            for (asUINT type_index = 0U; type_index < module.classTypes.GetLength(); ++type_index) {
+                asCObjectType* const object_type = module.classTypes[type_index];
+                if (object_type == nullptr) continue;
+                for (asUINT slot = 0U; slot < object_type->virtualFunctionTable.GetLength(); ++slot) {
+                    asCScriptFunction* const function = object_type->virtualFunctionTable[slot];
+                    if (function == nullptr || function->vfTableIdx == -1 ||
+                        function->objectType != object_type) {
+                        continue;
+                    }
+                    for (asCObjectType* base = object_type->derivedFrom; base != nullptr;) {
+                        if (function->vfTableIdx >=
+                            static_cast<int>(base->virtualFunctionTable.GetLength())) {
+                            break;
+                        }
+                        asCScriptFunction* const base_function =
+                            base->virtualFunctionTable[function->vfTableIdx];
+                        if (base_function == nullptr || base_function->objectType == nullptr) break;
+                        functions_with_virtual_overrides.insert(base_function);
+                        base = base_function->objectType->derivedFrom;
+                    }
+                }
+            }
+        }
+        for (asIScriptModule* const module_interface : modules) {
+            auto& module = static_cast<asCModule&>(*module_interface);
+            for (asUINT index = 0U; index < module.scriptFunctions.GetLength(); ++index) {
+                asCScriptFunction* const function = module.scriptFunctions[index];
+                if (function == nullptr || function->funcType != asFUNC_SCRIPT) continue;
+                function->traits.SetTrait(
+                    asTRAIT_FINAL,
+                    functions_with_virtual_overrides.find(function) ==
+                        functions_with_virtual_overrides.end());
+            }
+        }
+        return {};
+    } catch (const std::bad_alloc&) {
+        return failure(
+            engine_bridge_phase::cleanup, kNoModule,
+            "allocation failed during Shipping StaticJIT analysis", asOUT_OF_MEMORY);
+    } catch (const std::exception& exception) {
+        return failure(engine_bridge_phase::cleanup, kNoModule, exception.what(), asERROR);
+    } catch (...) {
+        return failure(
+            engine_bridge_phase::cleanup, kNoModule,
+            "unexpected Shipping StaticJIT analysis failure", asERROR);
+    }
+}
+
+static engine_bridge_result export_module_in_place(
     asIScriptModule& module_interface,
     const map_string& module_key,
     const archive_string& script_relative_filename,
     const std::int64_t code_hash,
     precompiled_module& output,
-    cache* reference_tables) {
+    reference_exporter* const exporter_pointer) {
     try {
         auto& module = static_cast<asCModule&>(module_interface);
         std::string key_name;
@@ -3561,16 +3917,6 @@ engine_bridge_result export_module_checkpoint(
                 engine_bridge_phase::export_module, kNoModule,
                 "module key must exactly match the engine module name");
         }
-        cache staged_references;
-        reference_exporter* exporter_pointer = nullptr;
-        std::unique_ptr<reference_exporter> exporter;
-        if (reference_tables != nullptr) {
-            staged_references = *reference_tables;
-            exporter = std::make_unique<reference_exporter>(
-                *module.engine, staged_references);
-            exporter_pointer = exporter.get();
-        }
-
         precompiled_module encoded;
         encoded.module_name.bytes = module.GetName();
         encoded.code_hash = code_hash;
@@ -3711,9 +4057,6 @@ engine_bridge_result export_module_checkpoint(
                 engine_bridge_phase::export_module, kNoModule, std::move(global_failure));
         }
         output = std::move(encoded);
-        if (reference_tables != nullptr) {
-            *reference_tables = std::move(staged_references);
-        }
         return {};
     } catch (const std::bad_alloc&) {
         return failure(
@@ -3728,13 +4071,63 @@ engine_bridge_result export_module_checkpoint(
     }
 }
 
+engine_bridge_result export_module_checkpoint(
+    asIScriptModule& module_interface,
+    const map_string& module_key,
+    const archive_string& script_relative_filename,
+    const std::int64_t code_hash,
+    precompiled_module& output,
+    cache* reference_tables) {
+    try {
+        auto& module = static_cast<asCModule&>(module_interface);
+        cache staged_references;
+        std::unique_ptr<reference_exporter> exporter;
+        if (reference_tables != nullptr) {
+            staged_references = *reference_tables;
+            exporter = std::make_unique<reference_exporter>(
+                *module.engine, staged_references);
+        }
+        precompiled_module staged_output;
+        engine_bridge_result result = export_module_in_place(
+            module_interface, module_key, script_relative_filename, code_hash,
+            staged_output, exporter.get());
+        if (!result.succeeded()) {
+            return result;
+        }
+        output = std::move(staged_output);
+        if (reference_tables != nullptr) {
+            *reference_tables = std::move(staged_references);
+        }
+        return {};
+    } catch (const std::bad_alloc&) {
+        return failure(
+            engine_bridge_phase::export_module, kNoModule,
+            "allocation failed while staging precompiled module export",
+            asOUT_OF_MEMORY);
+    } catch (const std::exception& exception) {
+        return failure(
+            engine_bridge_phase::export_module, kNoModule,
+            exception.what(), asERROR);
+    } catch (...) {
+        return failure(
+            engine_bridge_phase::export_module, kNoModule,
+            "unexpected staged precompiled module export failure", asERROR);
+    }
+}
+
+static bool target_archive_ansi_from_utf8(
+    const std::string& utf8,
+    std::string& output);
+
 engine_bridge_result export_mixed_graph_checkpoint(
     const cache& base,
     const lexical_preprocess_result& source,
     const std::vector<asIScriptModule*>& modules,
     const std::array<std::uint8_t, 16U>& data_guid,
     const std::int32_t build_identifier,
-    cache& output) {
+    cache& output,
+    registry_runtime& registry,
+    const bool mark_non_uproperty_properties_as_transient) {
     try {
         if (!source.ok || build_identifier == -1) {
             return failure(
@@ -3810,17 +4203,33 @@ engine_bridge_result export_mixed_graph_checkpoint(
                 if (source.static_names[index] != base.static_names[index].bytes) {
                     return failure(
                         engine_bridge_phase::preflight, kNoModule,
-                        "preprocessor static-name prefix differs from the base cache",
+                    "preprocessor static-name prefix differs from the base cache",
                         asINVALID_ARG);
                 }
             }
+            staged.static_names = base.static_names;
             staged.static_names.reserve(source.static_names.size());
-            for (const std::string& name : source.static_names) {
-                staged.static_names.push_back({name});
+            for (std::size_t index = base.static_names.size();
+                 index < source.static_names.size(); ++index) {
+                archive_string archived;
+                if (!target_archive_ansi_from_utf8(
+                        source.static_names[index], archived.bytes)) {
+                    return failure(
+                        engine_bridge_phase::preflight, kNoModule,
+                        "source graph contains a non-canonical UTF-8 static name",
+                        asINVALID_ARG);
+                }
+                staged.static_names.push_back(std::move(archived));
             }
         }
 
         staged.modules.reserve(modules.size());
+        std::unique_ptr<reference_exporter> graph_exporter;
+        if (!modules.empty()) {
+            auto& first_module = static_cast<asCModule&>(*modules.front());
+            graph_exporter = std::make_unique<reference_exporter>(
+                *first_module.engine, staged);
+        }
         for (std::size_t index = 0U; index < modules.size(); ++index) {
             const std::string& name = expected_names[index];
             const auto source_record = source_by_name.find(name);
@@ -3847,24 +4256,39 @@ engine_bridge_result export_mixed_graph_checkpoint(
             }
 
             precompiled_module rebuilt;
-            engine_bridge_result result = export_module_checkpoint(
-                *modules[index], key, script_path, code_hash, rebuilt, &staged);
+            engine_bridge_result result = export_module_in_place(
+                *modules[index], key, script_path, code_hash, rebuilt,
+                graph_exporter.get());
             if (!result.succeeded()) {
                 result.module_index = index;
                 return result;
             }
             metadata_projection_result metadata;
             if (source_record != source_by_name.end()) {
+                class_generator_capability_table capabilities;
+                engine_bridge_result capability_result =
+                    collect_class_generator_capabilities(
+                        static_cast<asCModule&>(*modules[index]), registry, capabilities);
+                if (!capability_result.succeeded()) {
+                    capability_result.module_index = index;
+                    return capability_result;
+                }
                 metadata = project_preprocessed_metadata(
-                    *source_record->second, rebuilt);
+                    *source_record->second, rebuilt,
+                    mark_non_uproperty_properties_as_transient, &capabilities);
             } else {
                 metadata = preserve_cached_metadata(
                     base.modules[cached_record->second].second, rebuilt);
             }
             if (!metadata.ok) {
-                return failure(
+                engine_bridge_result metadata_failure = failure(
                     engine_bridge_phase::export_module, index,
                     std::move(metadata.detail), asERROR);
+                metadata_failure.is_compile_diagnostic = metadata.is_compile_diagnostic;
+                metadata_failure.diagnostic_source = std::move(metadata.diagnostic_source);
+                metadata_failure.diagnostic_line = metadata.diagnostic_line;
+                metadata_failure.diagnostic_column = metadata.diagnostic_column;
+                return metadata_failure;
             }
             staged.modules.emplace_back(std::move(key), std::move(rebuilt));
         }
@@ -3891,6 +4315,376 @@ engine_bridge_result export_mixed_graph_checkpoint(
         return failure(
             engine_bridge_phase::cleanup, kNoModule,
             "unexpected mixed graph export failure", asERROR);
+    }
+}
+
+template <typename Visitor>
+static void visit_module_functions(precompiled_module& module, Visitor&& visitor) {
+    for (precompiled_function& function : module.functions) visitor(function);
+    for (precompiled_class& type : module.classes) {
+        for (precompiled_function& function : type.methods) visitor(function);
+        for (precompiled_function& function : type.constructors) visitor(function);
+        for (precompiled_function& function : type.behaviour_functions) visitor(function);
+    }
+    for (precompiled_global& global : module.global_variables) {
+        if (global.has_init_function) visitor(global.init_function);
+    }
+}
+
+static engine_bridge_result rebase_projected_static_names(
+    cache& projected,
+    const std::unordered_map<std::size_t, std::size_t>& global_to_local) {
+    std::unordered_set<std::int64_t> static_name_functions;
+    for (const auto& entry : projected.function_references) {
+        if (entry.second.name.bytes == "__STATIC_NAME") {
+            static_name_functions.insert(entry.first);
+        }
+    }
+    bool failed = false;
+    std::string detail;
+    for (auto& module_entry : projected.modules) {
+        visit_module_functions(module_entry.second, [&](precompiled_function& function) {
+            if (failed) return;
+            std::size_t offset = 0U;
+            while (offset < function.byte_code.size()) {
+                const auto opcode =
+                    static_cast<asEBCInstr>(function.byte_code[offset] & 0xff);
+                const std::size_t size =
+                    static_cast<std::size_t>(asBCTypeSize[asBCInfo[opcode].type]);
+                if (size == 0U || offset > function.byte_code.size() - size) {
+                    failed = true;
+                    detail = "projected function bytecode is not instruction aligned";
+                    return;
+                }
+                const std::size_t next = offset + size;
+                if (opcode == asBC_PshC4 && size >= 2U && next < function.byte_code.size()) {
+                    const auto next_opcode =
+                        static_cast<asEBCInstr>(function.byte_code[next] & 0xff);
+                    const std::size_t next_size =
+                        static_cast<std::size_t>(asBCTypeSize[asBCInfo[next_opcode].type]);
+                    if (next_opcode == asBC_CALLSYS && next_size >= 3U &&
+                        next <= function.byte_code.size() - next_size) {
+                        const std::uint64_t low =
+                            static_cast<std::uint32_t>(function.byte_code[next + 1U]);
+                        const std::uint64_t high =
+                            static_cast<std::uint32_t>(function.byte_code[next + 2U]);
+                        const auto function_key = static_cast<std::int64_t>(low | (high << 32U));
+                        if (static_name_functions.find(function_key) !=
+                            static_name_functions.end()) {
+                            const std::int64_t source_index = function.byte_code[offset + 1U];
+                            if (source_index < 0) {
+                                failed = true;
+                                detail = "qualification source referenced a static name outside its projected rows";
+                                return;
+                            }
+                            const auto local = global_to_local.find(
+                                static_cast<std::size_t>(source_index));
+                            if (local == global_to_local.end() ||
+                                local->second > static_cast<std::size_t>(
+                                    (std::numeric_limits<std::int32_t>::max)())) {
+                                failed = true;
+                                detail = "qualification source referenced a static name outside its projected rows";
+                                return;
+                            }
+                            function.byte_code[offset + 1U] = static_cast<std::int32_t>(
+                                local->second);
+                        }
+                    }
+                }
+                offset = next;
+            }
+        });
+        if (failed) break;
+    }
+    return failed
+        ? failure(engine_bridge_phase::export_module, kNoModule, std::move(detail), asERROR)
+        : engine_bridge_result{};
+}
+
+static bool qualification_rebased_code_hash(
+    asIScriptEngine& engine,
+    const lexical_module_description& description,
+    const std::unordered_map<std::size_t, std::size_t>& global_to_local,
+    std::int64_t& output,
+    std::string& detail) {
+    struct token_span {
+        std::size_t start = 0U;
+        std::size_t length = 0U;
+        asETokenClass kind = asTC_UNKNOWN;
+    };
+    struct replacement {
+        std::size_t start = 0U;
+        std::size_t length = 0U;
+        std::string text;
+    };
+    output = 0;
+    for (const preprocessed_code_section& section : description.code) {
+        std::string code = section.conditioned_code;
+        std::vector<replacement> replacements;
+        for (std::size_t position = 0U; position < code.size();) {
+            asUINT token_length = 0U;
+            const asETokenClass token_class = engine.ParseToken(
+                code.data() + position, code.size() - position, &token_length);
+            if (token_length == 0U) {
+                detail = "qualification source tokenizer made no progress";
+                return false;
+            }
+            if (token_class != asTC_IDENTIFIER ||
+                code.compare(position, token_length, "__STATIC_NAME") != 0) {
+                position += token_length;
+                continue;
+            }
+
+            std::size_t cursor = position + token_length;
+            const auto next_significant = [&](token_span& span) -> bool {
+                while (cursor < code.size()) {
+                    asUINT length = 0U;
+                    const asETokenClass kind = engine.ParseToken(
+                        code.data() + cursor, code.size() - cursor, &length);
+                    if (length == 0U) return false;
+                    span = {cursor, static_cast<std::size_t>(length), kind};
+                    cursor += length;
+                    if (kind != asTC_WHITESPACE && kind != asTC_COMMENT) return true;
+                }
+                return false;
+            };
+            token_span open;
+            token_span digits;
+            token_span close;
+            if (!next_significant(open) ||
+                code.compare(open.start, open.length, "(") != 0 ||
+                !next_significant(digits) || !next_significant(close) ||
+                code.compare(close.start, close.length, ")") != 0) {
+                position += token_length;
+                continue;
+            }
+            std::size_t source_index = 0U;
+            for (std::size_t index = digits.start;
+                 index < digits.start + digits.length; ++index) {
+                if (code[index] < '0' || code[index] > '9') {
+                    detail = "qualification source contains a malformed static-name index";
+                    return false;
+                }
+                const std::size_t digit = static_cast<std::size_t>(code[index] - '0');
+                if (source_index >
+                    ((std::numeric_limits<std::size_t>::max)() - digit) / 10U) {
+                    detail = "qualification source contains an overflowing static-name index";
+                    return false;
+                }
+                source_index = source_index * 10U + digit;
+            }
+            const auto local = global_to_local.find(source_index);
+            if (local == global_to_local.end()) {
+                detail = "qualification source referenced a static name outside its projected rows";
+                return false;
+            }
+            replacements.push_back({
+                digits.start, digits.length, std::to_string(local->second)});
+            position = close.start + close.length;
+        }
+        for (auto replacement = replacements.rbegin();
+             replacement != replacements.rend(); ++replacement) {
+            code.replace(replacement->start, replacement->length, replacement->text);
+        }
+        std::int64_t section_hash = 0;
+        if (!compute_processed_code_hash_utf8(code, section_hash)) {
+            detail = "qualification source is not canonical UTF-8 after static-name rebasing";
+            return false;
+        }
+        output ^= section_hash;
+    }
+    return true;
+}
+
+static bool target_archive_ansi_from_utf8(
+    const std::string& utf8,
+    std::string& output) {
+    output.clear();
+    output.reserve(utf8.size());
+    for (std::size_t index = 0U; index < utf8.size();) {
+        const auto first = static_cast<std::uint8_t>(utf8[index++]);
+        if (first < 0x80U) {
+            output.push_back(static_cast<char>(first));
+            continue;
+        }
+        std::size_t continuation_count = 0U;
+        std::uint32_t scalar = 0U;
+        if (first >= 0xc2U && first <= 0xdfU) {
+            continuation_count = 1U;
+            scalar = first & 0x1fU;
+        } else if (first >= 0xe0U && first <= 0xefU) {
+            continuation_count = 2U;
+            scalar = first & 0x0fU;
+        } else if (first >= 0xf0U && first <= 0xf4U) {
+            continuation_count = 3U;
+            scalar = first & 0x07U;
+        } else {
+            return false;
+        }
+        if (continuation_count > utf8.size() - index) return false;
+        for (std::size_t part = 0U; part < continuation_count; ++part) {
+            const auto value = static_cast<std::uint8_t>(utf8[index++]);
+            if ((value & 0xc0U) != 0x80U) return false;
+            scalar = (scalar << 6U) | (value & 0x3fU);
+        }
+        if ((continuation_count == 2U && scalar < 0x800U) ||
+            (continuation_count == 3U && scalar < 0x10000U) ||
+            scalar > 0x10ffffU || (scalar >= 0xd800U && scalar <= 0xdfffU)) {
+            return false;
+        }
+        // FStringInArchive assigns FString through TCHAR_TO_ANSI. The pinned
+        // target substitutes every non-ANSI UTF-16 code unit with one '?'. A
+        // scalar outside the BMP is therefore archived as the two '?' from its
+        // surrogate pair.
+        output.push_back('?');
+        if (scalar > 0xffffU) output.push_back('?');
+    }
+    return true;
+}
+
+engine_bridge_result export_source_graph_checkpoint(
+    const cache& base,
+    const lexical_preprocess_result& source,
+    const std::vector<asIScriptModule*>& modules,
+    const std::array<std::uint8_t, 16U>& data_guid,
+    const std::int32_t build_identifier,
+    cache& output,
+    registry_runtime& registry,
+    const bool mark_non_uproperty_properties_as_transient) {
+    try {
+        if (!source.ok || source.modules.empty() || modules.empty() || build_identifier == -1 ||
+            source.static_names.size() < base.static_names.size()) {
+            return failure(
+                engine_bridge_phase::preflight, kNoModule,
+                "source projection requires successful preprocessing and a qualified base prefix",
+                asINVALID_ARG);
+        }
+        for (std::size_t index = 0U; index < base.static_names.size(); ++index) {
+            if (source.static_names[index] != base.static_names[index].bytes) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "source projection static-name prefix differs from the sealed base",
+                    asINVALID_ARG);
+            }
+        }
+        std::unordered_map<std::string, asIScriptModule*> module_by_name;
+        module_by_name.reserve(modules.size());
+        for (asIScriptModule* const module : modules) {
+            if (module == nullptr || !module_by_name.emplace(module->GetName(), module).second) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "source projection received null or duplicate engine modules",
+                    asINVALID_ARG);
+            }
+        }
+
+        cache staged;
+        staged.data_guid = data_guid;
+        staged.build_identifier = build_identifier;
+        std::unordered_map<std::size_t, std::size_t> global_to_local;
+        global_to_local.reserve(source.static_name_uses.size());
+        staged.static_names.reserve(source.static_name_uses.size());
+        for (const static_name_use& use : source.static_name_uses) {
+            if (use.global_index >= source.static_names.size() || use.spelling.empty() ||
+                !global_to_local.emplace(
+                    use.global_index, staged.static_names.size()).second) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "source projection has an invalid or repeated static-name use",
+                    asINVALID_ARG);
+            }
+            archive_string archived;
+            if (!target_archive_ansi_from_utf8(
+                    use.spelling, archived.bytes)) {
+                return failure(
+                    engine_bridge_phase::preflight, kNoModule,
+                    "source projection contains a non-canonical UTF-8 static name",
+                    asINVALID_ARG);
+            }
+            staged.static_names.push_back(std::move(archived));
+        }
+        auto& first_module = static_cast<asCModule&>(*modules.front());
+        reference_exporter exporter(*first_module.engine, staged);
+        staged.modules.reserve(source.modules.size());
+        for (std::size_t index = 0U; index < source.modules.size(); ++index) {
+            const lexical_module_description& description = source.modules[index];
+            const auto found = module_by_name.find(description.module_name);
+            if (found == module_by_name.end()) {
+                return failure(
+                    engine_bridge_phase::export_module, index,
+                    "source projection could not find its compiled engine module", asERROR);
+            }
+            map_string key;
+            key.payload.assign(description.module_name.begin(), description.module_name.end());
+            archive_string script_path;
+            if (!description.code.empty()) {
+                script_path.bytes = description.code.front().relative_path;
+            }
+            std::int64_t projected_code_hash = 0;
+            std::string code_hash_detail;
+            if (!qualification_rebased_code_hash(
+                    *first_module.engine, description, global_to_local,
+                    projected_code_hash, code_hash_detail)) {
+                return failure(
+                    engine_bridge_phase::export_module, index,
+                    std::move(code_hash_detail), asERROR);
+            }
+            precompiled_module rebuilt;
+            engine_bridge_result result = export_module_in_place(
+                *found->second, key, script_path, projected_code_hash, rebuilt, &exporter);
+            if (!result.succeeded()) {
+                result.module_index = index;
+                return result;
+            }
+            class_generator_capability_table capabilities;
+            engine_bridge_result capability_result = collect_class_generator_capabilities(
+                static_cast<asCModule&>(*found->second), registry, capabilities);
+            if (!capability_result.succeeded()) {
+                capability_result.module_index = index;
+                return capability_result;
+            }
+            metadata_projection_result metadata = project_preprocessed_metadata(
+                description, rebuilt, mark_non_uproperty_properties_as_transient, &capabilities);
+            if (!metadata.ok) {
+                engine_bridge_result metadata_failure = failure(
+                    engine_bridge_phase::export_module, index,
+                    std::move(metadata.detail), asERROR);
+                metadata_failure.is_compile_diagnostic = metadata.is_compile_diagnostic;
+                metadata_failure.diagnostic_source = std::move(metadata.diagnostic_source);
+                metadata_failure.diagnostic_line = metadata.diagnostic_line;
+                metadata_failure.diagnostic_column = metadata.diagnostic_column;
+                return metadata_failure;
+            }
+            // Metadata projection faithfully carries the product graph's
+            // global hash. Qualification uses the independent local FName
+            // table, so restore the matching locally rebased hash here.
+            rebuilt.code_hash = projected_code_hash;
+            staged.modules.emplace_back(std::move(key), std::move(rebuilt));
+        }
+        engine_bridge_result rebase =
+            rebase_projected_static_names(staged, global_to_local);
+        if (!rebase.succeeded()) return rebase;
+        codec_error codec;
+        std::vector<std::uint8_t> encoded;
+        if (!encode(staged, encoded, codec)) {
+            return failure(
+                engine_bridge_phase::export_module, kNoModule,
+                "source projection failed final wire validation at " + codec.field +
+                    ": " + codec.detail,
+                asERROR);
+        }
+        output = std::move(staged);
+        return {};
+    } catch (const std::bad_alloc&) {
+        return failure(
+            engine_bridge_phase::cleanup, kNoModule,
+            "allocation failed while exporting the source projection", asOUT_OF_MEMORY);
+    } catch (const std::exception& exception) {
+        return failure(engine_bridge_phase::cleanup, kNoModule, exception.what(), asERROR);
+    } catch (...) {
+        return failure(
+            engine_bridge_phase::cleanup, kNoModule,
+            "unexpected source projection export failure", asERROR);
     }
 }
 

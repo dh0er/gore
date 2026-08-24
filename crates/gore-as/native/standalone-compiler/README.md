@@ -83,14 +83,18 @@ non-Haze specifiers and mandatory server-RPC validation are explicit sealed
 profile switches rather than build guesses.
 
 `frontend_compile.hpp` materializes successful module descriptors, attaches
-shadow/delegate pre-class data, binds explicit dependencies and invokes the
-graph barriers atomically. Its smoke compiles a consumer against a provider's
-preprocessed USTRUCT and proves a rejected graph leaves no module behind. This
-does not yet cover the donor's external `OnProcessChunks`/ClassAnalyze hooks,
-editor-only builder hook, exact FName Unicode comparison, authoritative source
-decoding, or automatic dependency closure. Processed-code hashes do now match
-the donor's XXH64(seed 0) over UTF-16LE `FString` code units, including its
-empty-code sentinel and strict UTF-8-to-UTF-16 conversion boundary.
+shadow/delegate pre-class data, binds dependencies and invokes the graph
+barriers atomically. Its smoke compiles a consumer against a provider's
+preprocessed USTRUCT and proves a rejected graph leaves no module behind. The
+product FullGraph path additionally binds the reversed BuildID-24539464
+`ClassAnalyze` callback, enforces the target's unbound `OnProcessChunks` and
+`OnPostProcessCode` delegates, performs editor/release source discovery,
+requires canonical UTF-8 source bytes, resolves automatic dependency closure,
+and uses captured identities for non-ASCII FName comparison. Processed-code
+hashes match the donor's XXH64(seed 0) over UTF-16LE `FString` code units,
+including its empty-code sentinel and strict UTF-8-to-UTF-16 conversion
+boundary. All of these dimensions are mandatory differential-corpus witnesses,
+not capabilities inferred from a successful parse.
 
 The Rust compiler profile now parses and validates all three frontend payloads
 as typed, independently digest-bound schemas. The preprocessor payload carries
@@ -103,8 +107,11 @@ remain represented by their effective ordered registry trace rather than
 duplicated as inputs. The native profile loader now projects these payloads
 into the preprocessor, compiler settings and registry runtime after verifying
 their manifest seals. The class-generator transient switch is parsed and
-retained but remains part of the still-open external ClassAnalyze hook rather
-than being guessed.
+sealed separately from `ClassAnalyze`. The pinned target captures it as
+`false`; implicit struct-property metadata and script-class omission are
+explicit differential witnesses so the sidecar cannot silently ignore the
+donor's independent `RequiresProperty=false` default or its class-versus-struct
+transient rule.
 
 Protocol staging also names every authored add/edit overlay explicitly. The
 sealed source tree still contains compatibility decompilations for the game
@@ -144,8 +151,8 @@ The matching exporter derives functions, object locals, classes, globals,
 initializers and all required reference-tail rows from compiled engine objects.
 Output and reference tables are staged and become visible only together on
 success. A generic engine exposes only its flattened imported-module view; the
-authoritative direct import list/order and all preprocessor-only fields must be
-supplied by the future module descriptor rather than inferred here.
+authoritative direct import list/order and all preprocessor-only fields are
+supplied by the sealed mixed-graph module descriptor rather than inferred here.
 
 The engine smoke compiles real free functions, a value struct and a reference
 class, exports and codec-roundtrips them, rehydrates two modules into a fresh
@@ -180,13 +187,13 @@ a second fresh engine, executes edited/cached/added modules and a string
 literal, verifies a profiled shadow-property offset, and cleanly destroys both
 engines.
 
-This remains a compiler-core checkpoint, not full G1R qualification. The plain
-complete-cache rehydrator intentionally keeps its narrower fail-closed contract.
-An actual captured G1R registry, the external ClassAnalyze/ComposeOnto and
-module-discovery hooks, exact source decoding/FName behavior, and differential
-oracle corpus are still mandatory. Protocol-v1 wiring and create-new
-publication are implemented and covered by a full synthetic request-to-cache
-smoke.
+The plain complete-cache rehydrator intentionally keeps its narrower
+fail-closed contract. The product path uses the mixed graph bridge together
+with a sealed captured registry/frontend profile, exact source/FName behavior,
+the reversed `ClassAnalyze`/ComposeOnto semantics and the mandatory
+differential oracle corpus. Protocol v2 is the production FullGraph contract;
+protocol v1 remains a source-level compatibility smoke only. Create-new
+publication is covered from request through encoded cache.
 
 ## Registry replay checkpoint
 
@@ -227,10 +234,12 @@ all nine adapters, primitive and application values, script structs/enums,
 hash fallback, `opCmp`, cached invalid instances, exact negative diagnostics,
 descriptor mismatch and pre-mutation validation.
 
-The registry smoke uses a deterministic synthetic profile. No G1R registry
-payload has been captured or qualified yet. The replay layer is wired to the
-JSON sidecar request and cannot run until all three sealed registry documents
-parse, cross-reference and replay exactly.
+The registry smoke deliberately uses a deterministic synthetic profile. The
+product replay layer consumes the separately captured G1R registry only through
+all three sealed documents and refuses to compile unless they parse,
+cross-reference, replay and read back exactly. Capture alone does not make a
+profile distributable; catalog admission still requires the complete embedded
+versus standalone differential promotion gate.
 
 ## Build and test
 
@@ -250,6 +259,7 @@ The targets use the static MSVC runtime and Windows system APIs only.
 gore-as-standalone-compiler --version
 gore-as-standalone-compiler --capabilities
 gore-as-standalone-compiler compile --request <utf8-json-file>
+gore-as-standalone-compiler qualify --request <utf8-json-file>
 ```
 
 Protocol versions and hard limits live in
@@ -272,11 +282,23 @@ that an uncaptured game build is accepted. Exit 69 denotes an unavailable or
 mismatched qualified profile; malformed inputs and source rejection use exit
 65, and output/internal failures use exit 70.
 
+`qualify` is an additive promotion-only v3 operation. The normal `compile` command rejects v3.
+It preserves FullGraph-v2 target/profile/cache sealing but may load the typed unqualified
+materializer state, emits request-digest-bound native hook/build evidence, and permits only
+instruction-whitelisted zero-argument invocation. Requests contain no supplemental witness fields.
+Primitive cases stay inside the VM. The sealed TArray<int32>, FName, and FString corpus rows may
+activate narrowly matched donor-ABI adapters only when captured declarations, layouts, type
+operations, call conventions, hidden metadata, string factory, and FName comparison identities all
+agree. Every other host call and host-object return stays unavailable instead of executing the
+registry's compile-only inert stubs.
+
 ## Provenance and extraction boundary
 
-`vendor/unreangel` contains byte-exact files from the pinned UNREANGEL commit and
-its root license notice. `SOURCE_INVENTORY.tsv` records every imported source
-file and notice with an exact source path and SHA-256; it also names candidate
+`vendor/unreangel` contains 62 byte-exact files from the pinned UNREANGEL commit,
+two explicitly inventoried downstream modifications, and the root license notice.
+`SOURCE_INVENTORY.tsv` records every imported source file and notice with an exact
+source path and upstream SHA-256; modified rows additionally record the current
+vendored SHA-256. `PROVENANCE.toml` explains both changes. The inventory also names candidate
 semantic extractions, reference-only files, dead/foreign call backends, and UE
 subtrees that remain excluded. The two embedded xxHash files are not imported;
 their future inventory rows identify BSD-2-Clause and require retention of their
@@ -287,6 +309,15 @@ Inventory selectors use repository-relative `/` paths at the recorded revision.
 future/exclusion boundary: every actual import must first be expanded to exact
 file rows with SHA-256 values and reflected in `PROVENANCE.toml`.
 
-Given a checkout of the recorded revision, verify every upstream hash, vendored
-byte, and inventory/tree membership mechanically with
+Given a checkout of the recorded revision, verify every upstream hash, exact or
+explicitly modified vendored byte set, and inventory/tree membership mechanically with
 `tools/verify-source-inventory.ps1 -UpstreamRoot C:\\path\\to\\UNREANGEL`.
+
+## Product promotion and packaging
+
+The source build is not itself a product bundle. The final executable is signed once, differential
+qualification is bound to those signed bytes, and the resulting sidecar/profile set is frozen as
+an immutable release input. Ordinary CLI/Studio releases only verify and copy that input and
+explicitly exclude the sidecar from later directory signing. The exact offline order, commands,
+absent-state behavior, verifier contract, and remaining real-qualification gate are documented in
+[`docs/standalone-compiler-release.md`](../../../../docs/standalone-compiler-release.md).

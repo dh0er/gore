@@ -227,6 +227,9 @@ impl PrimitiveTypeV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FixedTypeOperationsV1 {
+    pub can_create_property: bool,
+    pub never_requires_gc: bool,
+    pub requires_property: bool,
     pub can_be_template_subtype: bool,
     pub can_construct: bool,
     pub need_construct: bool,
@@ -1813,11 +1816,13 @@ fn validate_text(
     if value.is_empty()
         || value.len() > MAX_DECLARATION_BYTES
         || value.contains('\0')
-        || value.chars().any(|c| c.is_control())
+        || value
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
     {
         return invalid(
             field,
-            "must be non-empty, bounded UTF-8 without control characters",
+            "must be non-empty, bounded UTF-8 without forbidden control characters",
         );
     }
     if identifier && !value.chars().all(|c| c == '_' || c.is_alphanumeric()) {
@@ -2059,6 +2064,9 @@ mod tests {
 
     fn fixed_operations(value_size: u32, value_alignment: u32) -> FixedTypeOperationsV1 {
         FixedTypeOperationsV1 {
+            can_create_property: true,
+            never_requires_gc: false,
+            requires_property: false,
             can_be_template_subtype: true,
             can_construct: true,
             need_construct: false,

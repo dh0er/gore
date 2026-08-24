@@ -42,6 +42,10 @@ struct engine_bridge_result {
     engine_bridge_phase phase = engine_bridge_phase::none;
     std::size_t module_index = static_cast<std::size_t>(-1);
     std::string detail;
+    bool is_compile_diagnostic = false;
+    std::string diagnostic_source;
+    std::uint32_t diagnostic_line = 0U;
+    std::uint32_t diagnostic_column = 0U;
 
     [[nodiscard]] bool succeeded() const noexcept { return code >= 0; }
 };
@@ -73,6 +77,12 @@ engine_bridge_result compile_mixed_cache_checkpoint(
     frontend_compile_runtime& frontend_runtime,
     std::vector<asIScriptModule*>& modules);
 
+// Apply the Shipping StaticJIT analysis that runs immediately before the game serializes
+// precompiled script functions. Methods with a real override remain virtual; every other script
+// function is marked final exactly as the donor's AnalyzeScriptFunction pass does.
+engine_bridge_result apply_shipping_static_jit_checkpoint(
+    const std::vector<asIScriptModule*>& modules);
+
 // Export one compiled module through the same generic fork-side subset.
 // `module_key` is the outer UE FString key; `script_relative_filename`,
 // `code_hash`, direct import ordering and the Unreal/preprocessor-only fields
@@ -98,6 +108,21 @@ engine_bridge_result export_mixed_graph_checkpoint(
     const std::vector<asIScriptModule*>& modules,
     const std::array<std::uint8_t, 16U>& data_guid,
     std::int32_t build_identifier,
-    cache& output);
+    cache& output,
+    registry_runtime& registry,
+    bool mark_non_uproperty_properties_as_transient = false);
+
+// Qualification-only projection of the newly compiled source modules. Production still receives
+// and validates the complete mixed graph; this smaller cache mirrors the embedded compiler's
+// per-run serialization so the two independent compilers can be compared exactly.
+engine_bridge_result export_source_graph_checkpoint(
+    const cache& base,
+    const lexical_preprocess_result& source,
+    const std::vector<asIScriptModule*>& modules,
+    const std::array<std::uint8_t, 16U>& data_guid,
+    std::int32_t build_identifier,
+    cache& output,
+    registry_runtime& registry,
+    bool mark_non_uproperty_properties_as_transient = false);
 
 } // namespace gore::as::standalone::precompiled

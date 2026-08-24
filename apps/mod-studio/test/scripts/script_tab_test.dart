@@ -55,7 +55,7 @@ Future<void> _pumpTab(
 }
 
 void main() {
-  testWidgets('compile confirms live staging and shows normal-fallback report', (
+  testWidgets('compile defaults to standalone and shows the game fallback', (
     tester,
   ) async {
     final fixture = Directory.systemTemp.createTempSync(
@@ -95,13 +95,13 @@ void main() {
 
     await tester.tap(find.widgetWithText(FilledButton, 'Compile'));
     await tester.pumpAndSettle();
-    expect(find.text('Compile with the game'), findsOneWidget);
+    expect(find.text('Compile standalone first'), findsOneWidget);
     expect(
-      find.textContaining('temporarily stages a complete AngelScript tree'),
+      find.textContaining('first uses the qualified standalone compiler'),
       findsOneWidget,
     );
     expect(
-      core.calls.where((call) => call.command == 'script_compile_report_v1'),
+      core.calls.where((call) => call.command == 'script_compile_report_v2'),
       isEmpty,
     );
 
@@ -117,7 +117,7 @@ void main() {
         var attempt = 0;
         attempt < 20 &&
             core.calls.every(
-              (call) => call.command != 'script_compile_report_v1',
+              (call) => call.command != 'script_compile_report_v2',
             );
         attempt++
       ) {
@@ -126,12 +126,18 @@ void main() {
     });
     await tester.pump(const Duration(milliseconds: 300));
     expect(
-      core.calls.where((call) => call.command == 'script_compile_report_v1'),
+      core.calls.where((call) => call.command == 'script_compile_report_v2'),
       hasLength(1),
     );
     expect(
-      find.text(
-        'Compiled ✓ — diagnostics hook unavailable; normal compiler fallback used.',
+      core.calls
+          .singleWhere((call) => call.command == 'script_compile_report_v2')
+          .payload['compiler_backend'],
+      'standalone_then_game',
+    );
+    expect(
+      find.textContaining(
+        'Compiled ✓ with the game fallback — standalone compiler: No qualified standalone compiler package is installed.',
       ),
       findsOneWidget,
     );
@@ -205,7 +211,7 @@ void main() {
           var attempt = 0;
           attempt < 100 &&
               core.calls.every(
-                (call) => call.command != 'script_compile_report_v1',
+                (call) => call.command != 'script_compile_report_v2',
               );
           attempt++
         ) {
@@ -950,9 +956,21 @@ final class _ScriptCompileFixtureCore implements GoreCoreFfiService {
           'artifacts': <Object?>[],
           'issues': <Object?>[],
         };
-      case 'script_compile_report_v1':
+      case 'script_compile_report_v2':
         final work = Directory(payload['work_dir']! as String);
         _createdWorkspaces.add(work);
+        final backend = <String, Object?>{
+          'requested_mode': 'standalone_then_game',
+          'result_backend': compileRecovery ? null : 'game',
+          'standalone_attempted': false,
+          'game_attempted': !compileRecovery,
+          'qualified_package': null,
+          'fallback_reason': <String, Object?>{
+            'failed_backend': 'standalone',
+            'failure_kind': 'unavailable',
+            'detail': 'No qualified standalone compiler package is installed.',
+          },
+        };
         if (compileRecovery) {
           safe = false;
           return <String, Object?>{
@@ -967,6 +985,7 @@ final class _ScriptCompileFixtureCore implements GoreCoreFfiService {
             'compiler_diagnostics': null,
             'install_restore': 'not_started',
             'recovery_required': true,
+            'compiler_backend': backend,
           };
         }
         final owned = Directory(
@@ -990,6 +1009,7 @@ final class _ScriptCompileFixtureCore implements GoreCoreFfiService {
           },
           'install_restore': 'restored_exact',
           'recovery_required': false,
+          'compiler_backend': backend,
         };
       default:
         return <String, Object?>{

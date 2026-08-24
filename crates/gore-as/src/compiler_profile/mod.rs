@@ -6,7 +6,11 @@
 
 pub mod binds;
 pub mod capture;
+pub mod embedded_qualification;
 pub mod frontend;
 pub mod manifest;
 pub mod qualification;
+pub mod qualification_runner;
+pub mod qualification_suite;
 pub mod registry;
+pub mod standalone_qualification;

@@ -6905,7 +6905,7 @@ bool asCBuilder::IsNodeInEditorOnlyCode(asCScriptCode* script, asCScriptNode* no
 
 	for (auto& CharacterStartAndEnd : EditorOnlyBlockCharacterPositions)
 	{
-		if (node->tokenPos >= CharacterStartAndEnd.Key && node->tokenPos <= CharacterStartAndEnd.Value)
+		if (node->tokenPos >= CharacterStartAndEnd.Key && node->tokenPos < CharacterStartAndEnd.Value)
 			return true;
 	}
 

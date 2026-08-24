@@ -18,6 +18,7 @@ gore-generation = { path = "../gore-generation" }
 thiserror = "2"
 anyhow = "1"
 sha2 = "0.10"
+sha1 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
@@ -31,8 +32,16 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_LibraryLoader",
     "Win32_System_JobObjects",
     "Win32_System_Memory",
+    "Win32_System_IO",
     "Win32_System_Threading",
 ] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+libc = "0.2"
+sha2 = "0.10"

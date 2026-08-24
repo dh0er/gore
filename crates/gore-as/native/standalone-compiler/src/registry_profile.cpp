@@ -52,7 +52,9 @@ bool valid_text(const std::string& value) noexcept {
         return false;
     }
     return std::none_of(value.begin(), value.end(), [](const unsigned char character) {
-        return character < 0x20U || character == 0x7fU;
+        return (character < 0x20U && character != '\t' && character != '\n' &&
+                character != '\r') ||
+            character == 0x7fU;
     });
 }
 
@@ -112,7 +114,9 @@ bool valid_fixed_operations(const fixed_type_operations& operations) noexcept {
 }
 
 bool neutral_fixed_operations(const fixed_type_operations& operations) noexcept {
-    return !operations.can_be_template_subtype && !operations.can_construct &&
+    return !operations.can_create_property && !operations.never_requires_gc &&
+        !operations.requires_property && !operations.can_be_template_subtype &&
+        !operations.can_construct &&
         operations.need_construct && !operations.can_destruct && operations.need_destruct &&
         !operations.can_copy && operations.need_copy && !operations.can_compare &&
         !operations.can_hash_value && operations.value_size == 0U &&
@@ -289,19 +293,244 @@ asSFuncPtr callable_stub(const call_convention convention) {
     return asSFuncPtr{};
 }
 
-bool validate_class_template(asITypeInfo* type, asCString* error) {
-    if (type->GetSubTypeCount() != 1U) {
-        return false;
-    }
-    asITypeInfo* subtype = type->GetSubType(0U);
-    if (subtype == nullptr || (subtype->GetFlags() & asOBJ_VALUE) != 0U) {
-        if (error != nullptr) {
-            *error = "Subtype must be a class type";
-        }
-        return false;
-    }
-    return true;
+// ABI projections of the two UE value containers used by the sealed qualification corpus.
+// They intentionally implement only the donor operations required by those exact probes.
+struct qualification_script_array {
+    void* data = nullptr;
+    std::int32_t count = 0;
+    std::int32_t capacity = 0;
+};
+static_assert(sizeof(qualification_script_array) == 16U);
+static_assert(alignof(qualification_script_array) == 8U);
+
+struct qualification_fstring {
+    char16_t* data = nullptr;
+    std::int32_t count = 0; // UE FString includes its terminating NUL when non-empty.
+    std::int32_t capacity = 0;
+
+    qualification_fstring& assign(const qualification_fstring& other);
+};
+static_assert(sizeof(qualification_fstring) == 16U);
+static_assert(alignof(qualification_fstring) == 8U);
+
+struct qualification_fname {
+    std::uint32_t comparison_index = 0U;
+    std::uint32_t number = 0U;
+};
+static_assert(sizeof(qualification_fname) == 8U);
+static_assert(alignof(qualification_fname) == 4U);
+
+constexpr std::int32_t qualification_max_array_values = 1024;
+constexpr std::int32_t qualification_max_utf16_units = 1024 * 1024;
+
+bool qualification_array_metadata_allowed(const asCObjectType* const type) noexcept {
+    if (type == nullptr || type->GetName() == nullptr ||
+        std::string_view(type->GetName()) != "TArray" || type->GetSize() != 16U ||
+        type->GetSubTypeCount() != 1U) return false;
+    const int subtype_id = type->GetSubTypeId(0U);
+    if (subtype_id == asTYPEID_INT32) return true;
+    const asITypeInfo* const subtype = type->GetSubType(0U);
+    return subtype != nullptr && (subtype->GetFlags() & asOBJ_TEMPLATE_SUBTYPE) != 0U;
 }
+
+void qualification_array_construct(qualification_script_array* array) {
+    if (array != nullptr) new(array) qualification_script_array();
+}
+
+void qualification_array_destruct(qualification_script_array& array, asCObjectType*) {
+    _aligned_free(array.data);
+    array = {};
+}
+
+qualification_script_array& qualification_array_assign(
+    qualification_script_array& destination, asCObjectType* type,
+    qualification_script_array& source) {
+    if (!qualification_array_metadata_allowed(type) || source.count < 0 ||
+        source.count > qualification_max_array_values || source.capacity < source.count ||
+        source.capacity > qualification_max_array_values ||
+        (source.count != 0 && source.data == nullptr) || destination.count < 0 ||
+        destination.capacity < destination.count ||
+        destination.capacity > qualification_max_array_values ||
+        (destination.capacity != 0 && destination.data == nullptr)) {
+        if (asIScriptContext* context = asGetActiveContext()) {
+            context->SetException("qualification TArray<int32> assignment contract violation");
+        }
+        return destination;
+    }
+    if (source.count > destination.capacity) {
+        void* const replacement = _aligned_realloc(
+            destination.data, static_cast<std::size_t>(source.count) * sizeof(std::int32_t),
+            alignof(void*));
+        if (replacement == nullptr && source.count != 0) {
+            if (asIScriptContext* context = asGetActiveContext()) {
+                context->SetException("qualification TArray<int32> assignment allocation failed");
+            }
+            return destination;
+        }
+        destination.data = replacement;
+        destination.capacity = source.count;
+    }
+    if (source.count != 0) {
+        std::memcpy(destination.data, source.data,
+            static_cast<std::size_t>(source.count) * sizeof(std::int32_t));
+    }
+    destination.count = source.count;
+    return destination;
+}
+
+void qualification_array_set_num(
+    qualification_script_array& array, asCObjectType* type, const std::int32_t count) {
+    if (!qualification_array_metadata_allowed(type) || count < 0 ||
+        count > qualification_max_array_values || array.count < 0 ||
+        array.capacity < array.count || array.capacity > qualification_max_array_values ||
+        (array.capacity != 0 && array.data == nullptr)) {
+        if (asIScriptContext* context = asGetActiveContext()) {
+            const std::string diagnostic = "qualification TArray<int32> SetNum contract violation (subtype=" +
+                std::to_string(type == nullptr ? -1 : type->GetSubTypeId(0U)) +
+                ", count=" + std::to_string(count) + ", current=" +
+                std::to_string(array.count) + ", capacity=" +
+                std::to_string(array.capacity) + ")";
+            context->SetException(diagnostic.c_str());
+        }
+        return;
+    }
+    if (count > array.capacity) {
+        void* const replacement = _aligned_realloc(array.data,
+            static_cast<std::size_t>(count) * sizeof(std::int32_t), alignof(void*));
+        if (replacement == nullptr && count != 0) {
+            if (asIScriptContext* context = asGetActiveContext()) {
+                context->SetException("qualification TArray<int32> SetNum allocation failed");
+            }
+            return;
+        }
+        array.data = replacement;
+        array.capacity = count;
+    }
+    if (count > array.count) {
+        std::memset(static_cast<std::int32_t*>(array.data) + array.count, 0,
+            static_cast<std::size_t>(count - array.count) * sizeof(std::int32_t));
+    }
+    array.count = count;
+}
+
+void qualification_fstring_construct(qualification_fstring* value) {
+    if (value != nullptr) new(value) qualification_fstring();
+}
+
+void qualification_fstring_copy_construct(
+    qualification_fstring* value, const qualification_fstring& other) {
+    if (value == nullptr) return;
+    new(value) qualification_fstring();
+    value->assign(other);
+}
+
+void qualification_fstring_destruct(qualification_fstring& value) {
+    _aligned_free(value.data);
+    value = {};
+}
+
+qualification_fstring& qualification_fstring::assign(const qualification_fstring& other) {
+    if (&other == this) return *this;
+    if (capacity < 0 || (capacity != 0 && data == nullptr) || other.count < 0 ||
+        other.capacity < other.count ||
+        other.count > qualification_max_utf16_units ||
+        (other.count != 0 && (other.data == nullptr || other.data[other.count - 1] != u'\0'))) {
+        if (asIScriptContext* context = asGetActiveContext()) {
+            context->SetException("qualification FString assignment contract violation");
+        }
+        return *this;
+    }
+    if (other.count > capacity) {
+        void* const replacement = _aligned_realloc(
+            data, static_cast<std::size_t>(other.count) * sizeof(char16_t), alignof(char16_t));
+        if (replacement == nullptr && other.count != 0) {
+            if (asIScriptContext* context = asGetActiveContext()) {
+                context->SetException("qualification FString assignment allocation failed");
+            }
+            return *this;
+        }
+        data = static_cast<char16_t*>(replacement);
+        capacity = other.count;
+    }
+    if (other.count != 0) {
+        std::memcpy(data, other.data, static_cast<std::size_t>(other.count) * sizeof(char16_t));
+    }
+    count = other.count;
+    return *this;
+}
+
+bool qualification_fname_equals(
+    const qualification_fname& left, const qualification_fname& right) noexcept {
+    return left.comparison_index == right.comparison_index && left.number == right.number;
+}
+
+void qualification_fname_construct(qualification_fname* value) {
+    if (value != nullptr) new(value) qualification_fname();
+}
+
+void qualification_fname_copy_construct(
+    qualification_fname* value, const qualification_fname& other) {
+    if (value != nullptr) new(value) qualification_fname(other);
+}
+
+const qualification_fname& qualification_static_name(std::int32_t id);
+
+void qualification_array_construct_caller(asFUNCTION_t, void** arguments, void*) {
+    qualification_array_construct(static_cast<qualification_script_array*>(arguments[0]));
+}
+void qualification_array_destruct_caller(asFUNCTION_t, void** arguments, void*) {
+    qualification_array_destruct(*static_cast<qualification_script_array*>(arguments[0]),
+        static_cast<asCObjectType*>(arguments[1]));
+}
+void qualification_array_assign_caller(
+    asFUNCTION_t, void** arguments, void* return_value) {
+    auto& result = qualification_array_assign(
+        *static_cast<qualification_script_array*>(arguments[0]),
+        static_cast<asCObjectType*>(arguments[1]),
+        *static_cast<qualification_script_array*>(arguments[2]));
+    *static_cast<void**>(return_value) = &result;
+}
+void qualification_array_set_num_caller(asFUNCTION_t, void** arguments, void*) {
+    qualification_array_set_num(*static_cast<qualification_script_array*>(arguments[0]),
+        static_cast<asCObjectType*>(arguments[1]),
+        *static_cast<const std::int32_t*>(arguments[2]));
+}
+void qualification_fname_construct_caller(asFUNCTION_t, void** arguments, void*) {
+    qualification_fname_construct(static_cast<qualification_fname*>(arguments[0]));
+}
+void qualification_fname_copy_construct_caller(asFUNCTION_t, void** arguments, void*) {
+    qualification_fname_copy_construct(static_cast<qualification_fname*>(arguments[0]),
+        *static_cast<const qualification_fname*>(arguments[1]));
+}
+void qualification_fname_equals_caller(
+    asFUNCTION_t, void** arguments, void* return_value) {
+    *static_cast<asDWORD*>(return_value) = qualification_fname_equals(
+        *static_cast<const qualification_fname*>(arguments[0]),
+        *static_cast<const qualification_fname*>(arguments[1])) ? 1U : 0U;
+}
+void qualification_static_name_caller(
+    asFUNCTION_t, void** arguments, void* return_value) {
+    *static_cast<const qualification_fname**>(return_value) =
+        &qualification_static_name(*static_cast<const std::int32_t*>(arguments[0]));
+}
+void qualification_fstring_construct_caller(asFUNCTION_t, void** arguments, void*) {
+    qualification_fstring_construct(static_cast<qualification_fstring*>(arguments[0]));
+}
+void qualification_fstring_copy_construct_caller(asFUNCTION_t, void** arguments, void*) {
+    qualification_fstring_copy_construct(static_cast<qualification_fstring*>(arguments[0]),
+        *static_cast<const qualification_fstring*>(arguments[1]));
+}
+void qualification_fstring_destruct_caller(asFUNCTION_t, void** arguments, void*) {
+    qualification_fstring_destruct(*static_cast<qualification_fstring*>(arguments[0]));
+}
+void qualification_fstring_assign_caller(
+    asMETHOD_t, void** arguments, void* return_value) {
+    auto& result = static_cast<qualification_fstring*>(arguments[0])->assign(
+        *static_cast<const qualification_fstring*>(arguments[1]));
+    *static_cast<void**>(return_value) = &result;
+}
+
+bool validate_class_template(asITypeInfo* type, asCString* error);
 
 bool validate_array_template(asITypeInfo* type, asCString* error);
 bool validate_map_template(asITypeInfo* type, asCString* error);
@@ -349,24 +578,119 @@ asEFirstParamMetaData to_first_param(const first_param_metadata value) {
     return asEFirstParamMetaData::None;
 }
 
+bool qualification_utf8_to_utf16(
+    const std::string_view input, std::vector<char16_t>& output) {
+    output.clear();
+    output.reserve(input.size() + 1U);
+    for (std::size_t offset = 0U; offset < input.size();) {
+        const auto first = static_cast<unsigned char>(input[offset]);
+        std::uint32_t codepoint = 0U;
+        std::size_t width = 0U;
+        if (first < 0x80U) { codepoint = first; width = 1U; }
+        else if ((first & 0xe0U) == 0xc0U) { codepoint = first & 0x1fU; width = 2U; }
+        else if ((first & 0xf0U) == 0xe0U) { codepoint = first & 0x0fU; width = 3U; }
+        else if ((first & 0xf8U) == 0xf0U) { codepoint = first & 0x07U; width = 4U; }
+        else return false;
+        if (offset + width > input.size()) return false;
+        for (std::size_t index = 1U; index < width; ++index) {
+            const auto continuation = static_cast<unsigned char>(input[offset + index]);
+            if ((continuation & 0xc0U) != 0x80U) return false;
+            codepoint = (codepoint << 6U) | (continuation & 0x3fU);
+        }
+        if ((width == 2U && codepoint < 0x80U) ||
+            (width == 3U && codepoint < 0x800U) ||
+            (width == 4U && codepoint < 0x10000U) ||
+            codepoint > 0x10ffffU || (codepoint >= 0xd800U && codepoint <= 0xdfffU)) {
+            return false;
+        }
+        if (codepoint < 0x10000U) {
+            output.push_back(static_cast<char16_t>(codepoint));
+        } else {
+            codepoint -= 0x10000U;
+            output.push_back(static_cast<char16_t>(0xd800U + (codepoint >> 10U)));
+            output.push_back(static_cast<char16_t>(0xdc00U + (codepoint & 0x3ffU)));
+        }
+        if (output.size() >= static_cast<std::size_t>(qualification_max_utf16_units)) return false;
+        offset += width;
+    }
+    output.push_back(u'\0');
+    return true;
+}
+
+bool qualification_utf16_to_utf8(
+    const qualification_fstring& input, std::string& output) {
+    output.clear();
+    if (input.count == 0) return input.data == nullptr && input.capacity >= 0;
+    if (input.count < 1 || input.count > qualification_max_utf16_units ||
+        input.capacity < input.count || input.data == nullptr ||
+        input.data[input.count - 1] != u'\0') return false;
+    for (std::int32_t index = 0; index < input.count - 1; ++index) {
+        std::uint32_t codepoint = input.data[index];
+        if (codepoint >= 0xd800U && codepoint <= 0xdbffU) {
+            if (++index >= input.count - 1) return false;
+            const std::uint32_t low = input.data[index];
+            if (low < 0xdc00U || low > 0xdfffU) return false;
+            codepoint = 0x10000U + ((codepoint - 0xd800U) << 10U) + (low - 0xdc00U);
+        } else if (codepoint >= 0xdc00U && codepoint <= 0xdfffU) {
+            return false;
+        }
+        if (codepoint < 0x80U) output.push_back(static_cast<char>(codepoint));
+        else if (codepoint < 0x800U) {
+            output.push_back(static_cast<char>(0xc0U | (codepoint >> 6U)));
+            output.push_back(static_cast<char>(0x80U | (codepoint & 0x3fU)));
+        } else if (codepoint < 0x10000U) {
+            output.push_back(static_cast<char>(0xe0U | (codepoint >> 12U)));
+            output.push_back(static_cast<char>(0x80U | ((codepoint >> 6U) & 0x3fU)));
+            output.push_back(static_cast<char>(0x80U | (codepoint & 0x3fU)));
+        } else {
+            output.push_back(static_cast<char>(0xf0U | (codepoint >> 18U)));
+            output.push_back(static_cast<char>(0x80U | ((codepoint >> 12U) & 0x3fU)));
+            output.push_back(static_cast<char>(0x80U | ((codepoint >> 6U) & 0x3fU)));
+            output.push_back(static_cast<char>(0x80U | (codepoint & 0x3fU)));
+        }
+    }
+    return true;
+}
+
 class string_pool final : public asIStringFactory {
 public:
+    explicit string_pool(const bool qualification_fstring) noexcept
+        : qualification_fstring_(qualification_fstring) {}
+
     const void* GetStringConstant(const char* data, const asUINT length) override {
         const std::string key(data, static_cast<std::size_t>(length));
-        auto [iterator, inserted] = values_.try_emplace(key, record{key, 0U});
-        (void)inserted;
+        auto [iterator, inserted] = values_.try_emplace(key);
+        if (inserted) {
+            iterator->second.bytes = key;
+            if (qualification_fstring_) {
+                std::vector<char16_t> utf16;
+                if (!qualification_utf8_to_utf16(key, utf16)) {
+                    values_.erase(iterator);
+                    return nullptr;
+                }
+                qualification_fstring source;
+                source.data = utf16.data();
+                source.count = static_cast<std::int32_t>(utf16.size());
+                source.capacity = source.count;
+                iterator->second.value.assign(source);
+            }
+        }
         ++iterator->second.references;
-        return &iterator->second;
+        return qualification_fstring_
+            ? static_cast<const void*>(&iterator->second.value)
+            : static_cast<const void*>(&iterator->second);
     }
 
     int ReleaseStringConstant(const void* value) override {
         if (value == nullptr) {
             return asINVALID_ARG;
         }
-        const auto* record_pointer = static_cast<const record*>(value);
-        const auto iterator = values_.find(record_pointer->bytes);
-        if (iterator == values_.end() || &iterator->second != record_pointer ||
-            iterator->second.references == 0U) {
+        const auto iterator = std::find_if(values_.begin(), values_.end(), [&](const auto& row) {
+            return qualification_fstring_
+                ? static_cast<const void*>(&row.second.value) == value
+                : static_cast<const void*>(&row.second) == value;
+        });
+        if (iterator == values_.end() || iterator->second.references == 0U) {
             return asINVALID_ARG;
         }
         --iterator->second.references;
@@ -380,9 +704,12 @@ public:
         if (value == nullptr || length == nullptr) {
             return asINVALID_ARG;
         }
-        const auto* record_pointer = static_cast<const record*>(value);
-        const auto iterator = values_.find(record_pointer->bytes);
-        if (iterator == values_.end() || &iterator->second != record_pointer ||
+        const auto iterator = std::find_if(values_.begin(), values_.end(), [&](const auto& row) {
+            return qualification_fstring_
+                ? static_cast<const void*>(&row.second.value) == value
+                : static_cast<const void*>(&row.second) == value;
+        });
+        if (iterator == values_.end() ||
             iterator->second.bytes.size() > std::numeric_limits<asUINT>::max()) {
             return asINVALID_ARG;
         }
@@ -394,11 +721,21 @@ public:
         return asSUCCESS;
     }
 
+    [[nodiscard]] bool contains_qualification_value(const void* const value) const noexcept {
+        if (!qualification_fstring_ || value == nullptr) return false;
+        return std::any_of(values_.begin(), values_.end(), [&](const auto& row) {
+            return static_cast<const void*>(&row.second.value) == value;
+        });
+    }
+
 private:
     struct record {
+        qualification_fstring value;
         std::string bytes;
-        std::size_t references;
+        std::size_t references = 0U;
+        ~record() { _aligned_free(value.data); }
     };
+    bool qualification_fstring_ = false;
     std::map<std::string, record> values_;
 };
 
@@ -863,6 +1200,26 @@ struct template_operation_record {
     asIScriptFunction* hash_function = nullptr;
 };
 
+template_operation_record* existing_template_record(
+    class registry_runtime::impl& runtime,
+    asITypeInfo& type);
+
+enum class qualification_adapter_role {
+    array_construct,
+    array_destruct,
+    array_assign,
+    array_set_num,
+    fname_construct,
+    fname_copy_construct,
+    fname_equals,
+    fname_static_name,
+    fstring_construct,
+    fstring_copy_construct,
+    fstring_destruct,
+    fstring_assign,
+    fstring_factory,
+};
+
 } // namespace
 
 class registry_runtime::impl final {
@@ -882,6 +1239,15 @@ public:
     std::vector<std::unique_ptr<template_operation_record>> template_records;
     std::unordered_set<const template_operation_record*> template_record_pointers;
     std::mutex operations_mutex;
+    qualification_runtime_kind qualification_kind = qualification_runtime_kind::none;
+    std::vector<std::string> qualification_static_name_identities;
+    std::vector<qualification_fname> qualification_static_names;
+    std::unordered_set<const asIScriptFunction*> qualification_functions;
+    std::unordered_map<qualification_adapter_role, const asIScriptFunction*>
+        qualification_roles;
+    std::unordered_set<std::uint32_t> qualification_type_ids;
+    std::unordered_set<const asITypeInfo*> qualification_types;
+    bool qualification_string_factory = false;
 };
 
 namespace {
@@ -911,6 +1277,170 @@ registry_runtime::impl* find_runtime(asIScriptEngine* engine) {
     const std::lock_guard<std::mutex> lock(runtime_registry_mutex);
     const auto iterator = runtime_registry.find(engine);
     return iterator == runtime_registry.end() ? nullptr : iterator->second;
+}
+
+const qualification_fname& qualification_static_name(const std::int32_t id) {
+    static const qualification_fname invalid{};
+    asIScriptContext* const context = asGetActiveContext();
+    registry_runtime::impl* const runtime =
+        context == nullptr ? nullptr : find_runtime(context->GetEngine());
+    if (runtime == nullptr ||
+        runtime->qualification_kind != qualification_runtime_kind::fname_equivalence ||
+        id < 0 || static_cast<std::size_t>(id) >= runtime->qualification_static_names.size() ||
+        runtime->qualification_static_name_identities[static_cast<std::size_t>(id)].empty()) {
+        if (context != nullptr) {
+            context->SetException("qualification FName static-name identity is unavailable");
+        }
+        return invalid;
+    }
+    return runtime->qualification_static_names[static_cast<std::size_t>(id)];
+}
+
+bool qualification_object_type_matches(
+    const registry_runtime::impl& runtime,
+    const registration_entry& entry) noexcept {
+    if ((entry.flags & asOBJ_VALUE) == 0U) return false;
+    switch (runtime.qualification_kind) {
+    case qualification_runtime_kind::t_array_int32:
+        return entry.declaration == "TArray<class T>" && entry.byte_size == 16U &&
+            entry.alignment == 8U && entry.operations.kind == type_operations_kind::t_array;
+    case qualification_runtime_kind::fname_equivalence:
+        return entry.declaration == "FName" && entry.byte_size == 8U && entry.alignment == 8U &&
+            entry.operations.kind == type_operations_kind::fixed &&
+            entry.operations.fixed.value_size == 8U &&
+            entry.operations.fixed.value_alignment == 4U &&
+            entry.operations.fixed.can_construct && entry.operations.fixed.can_copy &&
+            entry.operations.fixed.can_compare;
+    case qualification_runtime_kind::fstring_roundtrip:
+        return entry.declaration == "FString" && entry.byte_size == 16U && entry.alignment == 8U &&
+            entry.operations.kind == type_operations_kind::fixed &&
+            entry.operations.fixed.value_size == 16U &&
+            entry.operations.fixed.value_alignment == 8U &&
+            entry.operations.fixed.can_construct && entry.operations.fixed.need_construct &&
+            entry.operations.fixed.can_destruct && entry.operations.fixed.need_destruct &&
+            entry.operations.fixed.can_copy && entry.operations.fixed.need_copy;
+    case qualification_runtime_kind::none:
+        return false;
+    }
+    return false;
+}
+
+struct qualification_adapter {
+    asSFuncPtr function;
+    asFunctionCaller caller;
+    qualification_adapter_role role;
+};
+
+std::optional<qualification_adapter> qualification_adapter_for(
+    registry_runtime::impl& runtime,
+    const registration_entry& entry,
+    const std::string_view owner_declaration) {
+    const bool qualified_owner =
+        runtime.qualification_type_ids.count(entry.owner_type_id) != 0U;
+    switch (runtime.qualification_kind) {
+    case qualification_runtime_kind::t_array_int32:
+        if (!qualified_owner || owner_declaration != "TArray<T>" ||
+            entry.convention != call_convention::cdecl_object_first) return std::nullopt;
+        if (entry.kind == registration_kind::object_behaviour &&
+            entry.behaviour == object_behaviour::construct && entry.declaration == "void f()") {
+            return qualification_adapter{asFUNCTION(qualification_array_construct),
+                asFunctionCaller(&qualification_array_construct_caller),
+                qualification_adapter_role::array_construct};
+        }
+        if (entry.kind == registration_kind::object_behaviour &&
+            entry.behaviour == object_behaviour::destruct && entry.declaration == "void f()") {
+            return qualification_adapter{asFUNCTION(qualification_array_destruct),
+                asFunctionCaller(&qualification_array_destruct_caller),
+                qualification_adapter_role::array_destruct};
+        }
+        if (entry.kind == registration_kind::object_method &&
+            entry.declaration == "TArray<T>& opAssign(const TArray<T>& Other)") {
+            return qualification_adapter{asFUNCTION(qualification_array_assign),
+                asFunctionCaller(&qualification_array_assign_caller),
+                qualification_adapter_role::array_assign};
+        }
+        if (entry.kind == registration_kind::object_method &&
+            entry.declaration == "void SetNum(int32 __any_implicit_integer NewNum = 0)") {
+            return qualification_adapter{asFUNCTION(qualification_array_set_num),
+                asFunctionCaller(&qualification_array_set_num_caller),
+                qualification_adapter_role::array_set_num};
+        }
+        break;
+    case qualification_runtime_kind::fname_equivalence:
+        if (entry.kind == registration_kind::global_function &&
+            entry.context.name_space.empty() && entry.convention == call_convention::cdecl_call &&
+            entry.declaration == "const FName& __STATIC_NAME(int Id) no_discard") {
+            return qualification_adapter{asFUNCTION(qualification_static_name),
+                asFunctionCaller(&qualification_static_name_caller),
+                qualification_adapter_role::fname_static_name};
+        }
+        if (!qualified_owner || owner_declaration != "FName" ||
+            entry.convention != call_convention::cdecl_object_first) return std::nullopt;
+        if (entry.kind == registration_kind::object_behaviour &&
+            entry.behaviour == object_behaviour::construct && entry.declaration == "void f()") {
+            return qualification_adapter{asFUNCTION(qualification_fname_construct),
+                asFunctionCaller(&qualification_fname_construct_caller),
+                qualification_adapter_role::fname_construct};
+        }
+        if (entry.kind == registration_kind::object_behaviour &&
+            entry.behaviour == object_behaviour::construct &&
+            entry.declaration == "void f(const FName& Other)") {
+            return qualification_adapter{asFUNCTION(qualification_fname_copy_construct),
+                asFunctionCaller(&qualification_fname_copy_construct_caller),
+                qualification_adapter_role::fname_copy_construct};
+        }
+        if (entry.kind == registration_kind::object_method &&
+            entry.declaration == "bool opEquals(const FName& Other) const") {
+            return qualification_adapter{asFUNCTION(qualification_fname_equals),
+                asFunctionCaller(&qualification_fname_equals_caller),
+                qualification_adapter_role::fname_equals};
+        }
+        break;
+    case qualification_runtime_kind::fstring_roundtrip:
+        if (!qualified_owner || owner_declaration != "FString") return std::nullopt;
+        if (entry.kind == registration_kind::object_behaviour &&
+            entry.convention == call_convention::cdecl_object_first &&
+            entry.behaviour == object_behaviour::construct && entry.declaration == "void f()") {
+            return qualification_adapter{asFUNCTION(qualification_fstring_construct),
+                asFunctionCaller(&qualification_fstring_construct_caller),
+                qualification_adapter_role::fstring_construct};
+        }
+        if (entry.kind == registration_kind::object_behaviour &&
+            entry.convention == call_convention::cdecl_object_first &&
+            entry.behaviour == object_behaviour::construct &&
+            entry.declaration == "void f(const FString& Other)") {
+            return qualification_adapter{asFUNCTION(qualification_fstring_copy_construct),
+                asFunctionCaller(&qualification_fstring_copy_construct_caller),
+                qualification_adapter_role::fstring_copy_construct};
+        }
+        if (entry.kind == registration_kind::object_behaviour &&
+            entry.convention == call_convention::cdecl_object_first &&
+            entry.behaviour == object_behaviour::destruct && entry.declaration == "void f()") {
+            return qualification_adapter{asFUNCTION(qualification_fstring_destruct),
+                asFunctionCaller(&qualification_fstring_destruct_caller),
+                qualification_adapter_role::fstring_destruct};
+        }
+        if (entry.kind == registration_kind::object_method &&
+            entry.convention == call_convention::thiscall &&
+            entry.declaration == "FString& opAssign(const FString& Other)") {
+            return qualification_adapter{asMETHOD(qualification_fstring, assign),
+                asFunctionCaller(&qualification_fstring_assign_caller),
+                qualification_adapter_role::fstring_assign};
+        }
+        break;
+    case qualification_runtime_kind::none:
+        break;
+    }
+    return std::nullopt;
+}
+
+bool record_qualification_adapter(
+    registry_runtime::impl& runtime,
+    const qualification_adapter& adapter,
+    asCScriptFunction& function) {
+    if (!runtime.qualification_roles.emplace(adapter.role, &function).second) return false;
+    runtime.qualification_functions.insert(&function);
+    return true;
 }
 
 std::string qualified_type_name(const asITypeInfo& type) {
@@ -967,10 +1497,24 @@ resolved_type_operations resolve_type_operations(
 
     asITypeInfo* type = engine.GetTypeInfoById(type_id);
     if (type == nullptr) return {};
+    if (template_operation_record* record = existing_template_record(runtime, *type)) {
+        if (record->kind == type_operations_kind::fixed) {
+            return {record->valid, record->kind, record->first};
+        }
+        fixed_type_operations container;
+        container.can_be_template_subtype = false;
+        return {record->valid, record->kind, container};
+    }
     const asDWORD flags = type->GetFlags();
     if ((flags & asOBJ_SCRIPT_OBJECT) != 0U) {
         const auto category = runtime.dynamic_script_categories.find(type);
         fixed_type_operations operations;
+        operations.can_create_property = true;
+        operations.never_requires_gc = false;
+        // FAngelscriptObjectType inherits the target default RequiresProperty=false even for
+        // script reference classes. asOBJ_REF describes AngelScript storage, not the independent
+        // ClassGenerator policy virtual.
+        operations.requires_property = false;
         operations.can_be_template_subtype = true;
         operations.can_construct = true;
         operations.can_destruct = true;
@@ -1013,6 +1557,9 @@ resolved_type_operations resolve_type_operations(
     }
     if ((flags & asOBJ_ENUM) != 0U && type->GetModule() != nullptr) {
         fixed_type_operations operations;
+        operations.can_create_property = true;
+        operations.never_requires_gc = false;
+        operations.requires_property = false;
         operations.can_be_template_subtype = true;
         operations.can_construct = true;
         operations.need_construct = false;
@@ -1065,6 +1612,42 @@ template_operation_record& cache_template_record(
 
 void set_error(asCString* error, const char* message) {
     if (error != nullptr) *error = message;
+}
+
+bool validate_class_template(asITypeInfo* type, asCString* error) {
+    if (type == nullptr || type->GetSubTypeCount() != 1U) return false;
+    asITypeInfo* subtype = type->GetSubType(0U);
+    if (subtype == nullptr || (subtype->GetFlags() & asOBJ_VALUE) != 0U) {
+        set_error(error, "Subtype must be a class type");
+        return false;
+    }
+    registry_runtime::impl* runtime = find_runtime(type->GetEngine());
+    if (runtime == nullptr) return false;
+    const std::lock_guard<std::mutex> lock(runtime->operations_mutex);
+    if (template_operation_record* existing = existing_template_record(*runtime, *type)) {
+        return existing->valid;
+    }
+    const int size = type->GetSize();
+    const int alignment = static_cast<asCTypeInfo*>(type)->alignment;
+    if (size <= 0 || alignment <= 0) {
+        set_error(error, "Class wrapper has an invalid value layout");
+        return false;
+    }
+    auto record = std::make_unique<template_operation_record>();
+    record->kind = type_operations_kind::fixed;
+    record->first.can_be_template_subtype = true;
+    record->first.can_construct = true;
+    record->first.need_construct = true;
+    record->first.can_destruct = true;
+    record->first.need_destruct = true;
+    record->first.can_copy = true;
+    record->first.need_copy = true;
+    record->first.can_compare = true;
+    record->first.can_hash_value = true;
+    record->first.value_size = static_cast<std::uint32_t>(size);
+    record->first.value_alignment = static_cast<std::uint32_t>(alignment);
+    record->valid = true;
+    return cache_template_record(*runtime, *type, std::move(record)).valid;
 }
 
 asIScriptFunction* find_hash_function(asITypeInfo* type) {
@@ -1222,6 +1805,17 @@ void* auxiliary_pointer(registry_runtime::impl& runtime, const std::uint32_t id)
     return iterator == runtime.objects.end() ? nullptr : iterator->second.get();
 }
 
+std::uint32_t public_type_id(
+    asCScriptEngine& engine,
+    asCTypeInfo& type,
+    const char* const declaration) {
+    if (declaration != nullptr) {
+        const int declared_id = engine.GetTypeIdByDecl(declaration);
+        if (declared_id >= 0) return static_cast<std::uint32_t>(declared_id);
+    }
+    return static_cast<std::uint32_t>(type.GetTypeId());
+}
+
 registry_replay_result register_one(
     asCScriptEngine& engine,
     const registry_profile& profile,
@@ -1257,7 +1851,12 @@ registry_replay_result register_one(
             remember_type_operations(runtime, *type, entry.operations);
             maps.type_declarations.emplace(
                 entry.logical_id, callable_type_declaration(entry.declaration));
-            actual.engine_id = static_cast<std::uint32_t>(type->GetTypeId());
+            actual.engine_id = public_type_id(
+                engine, *type, maps.type_declarations.at(entry.logical_id).c_str());
+            if (qualification_object_type_matches(runtime, entry)) {
+                runtime.qualification_type_ids.insert(entry.logical_id);
+                runtime.qualification_types.insert(type);
+            }
         } else if (code >= 0) {
             return fail(registry_replay_phase::register_entry, entry.ordinal, "object type count did not advance exactly once");
         }
@@ -1287,7 +1886,7 @@ registry_replay_result register_one(
             }
             maps.functions.emplace(entry.logical_id, function);
             actual.engine_id = static_cast<std::uint32_t>(code);
-            actual.owner_engine_type_id = static_cast<std::uint32_t>(owner->GetTypeId());
+            actual.owner_engine_type_id = public_type_id(engine, *owner, owner_decl());
         }
         break;
     case registration_kind::object_property: {
@@ -1298,17 +1897,21 @@ registry_replay_result register_one(
             entry.accessor_type, entry.is_protected);
         if (code >= 0 && owner->GetPropertyCount() == before + 1U) {
             maps.properties.emplace(entry.logical_id, owner->properties[before]);
-            actual.owner_engine_type_id = static_cast<std::uint32_t>(owner->GetTypeId());
+            actual.owner_engine_type_id = public_type_id(engine, *owner, owner_decl());
             actual.index = before;
         } else if (code >= 0) {
             return fail(registry_replay_phase::register_entry, entry.ordinal, "object property count did not advance exactly once");
         }
         break;
     }
-    case registration_kind::object_method:
+    case registration_kind::object_method: {
+        const auto adapter = owner_decl() == nullptr ? std::optional<qualification_adapter>{} :
+            qualification_adapter_for(runtime, entry, owner_decl());
         code = engine.RegisterObjectMethod(
-            owner_decl(), entry.declaration.c_str(), callable_stub(entry.convention),
-            to_call_convention(entry.convention), nullptr, auxiliary(),
+            owner_decl(), entry.declaration.c_str(),
+            adapter.has_value() ? adapter->function : callable_stub(entry.convention),
+            to_call_convention(entry.convention),
+            adapter.has_value() ? adapter->caller : asFunctionCaller{}, auxiliary(),
             static_cast<int>(entry.composite_offset), entry.is_composite_indirect,
             entry.accessor_type);
         if (code >= 0) {
@@ -1317,17 +1920,27 @@ registry_replay_result register_one(
                 return fail(registry_replay_phase::register_entry, entry.ordinal, "registered object method is not reflectable");
             }
             maps.functions.emplace(entry.logical_id, function);
+            if (adapter.has_value() && !record_qualification_adapter(runtime, *adapter, *function)) {
+                return fail(registry_replay_phase::register_entry, entry.ordinal,
+                    "qualification adapter role is duplicated");
+            }
             actual.engine_id = static_cast<std::uint32_t>(code);
-            actual.owner_engine_type_id = static_cast<std::uint32_t>(owner->GetTypeId());
+            actual.owner_engine_type_id = public_type_id(engine, *owner, owner_decl());
         }
         break;
+    }
     case registration_kind::object_behaviour: {
-        const asSFuncPtr function = entry.behaviour == object_behaviour::template_callback
-            ? template_callback(entry.validation_adapter)
-            : callable_stub(entry.convention);
+        const auto adapter = entry.behaviour == object_behaviour::template_callback ||
+            owner_decl() == nullptr ? std::optional<qualification_adapter>{} :
+            qualification_adapter_for(runtime, entry, owner_decl());
+        const asSFuncPtr function = adapter.has_value() ? adapter->function :
+            (entry.behaviour == object_behaviour::template_callback
+                ? template_callback(entry.validation_adapter)
+                : callable_stub(entry.convention));
         code = engine.RegisterObjectBehaviour(
             owner_decl(), to_behaviour(entry.behaviour), entry.declaration.c_str(), function,
-            to_call_convention(entry.convention), nullptr, auxiliary(),
+            to_call_convention(entry.convention),
+            adapter.has_value() ? adapter->caller : asFunctionCaller{}, auxiliary(),
             static_cast<int>(entry.composite_offset), entry.is_composite_indirect);
         if (code >= 0) {
             auto* reflected_function =
@@ -1336,8 +1949,13 @@ registry_replay_result register_one(
                 return fail(registry_replay_phase::register_entry, entry.ordinal, "registered object behaviour is not reflectable");
             }
             maps.functions.emplace(entry.logical_id, reflected_function);
+            if (adapter.has_value() &&
+                !record_qualification_adapter(runtime, *adapter, *reflected_function)) {
+                return fail(registry_replay_phase::register_entry, entry.ordinal,
+                    "qualification adapter role is duplicated");
+            }
             actual.engine_id = static_cast<std::uint32_t>(code);
-            actual.owner_engine_type_id = static_cast<std::uint32_t>(owner->GetTypeId());
+            actual.owner_engine_type_id = public_type_id(engine, *owner, owner_decl());
         }
         break;
     }
@@ -1353,19 +1971,27 @@ registry_replay_result register_one(
         }
         break;
     }
-    case registration_kind::global_function:
+    case registration_kind::global_function: {
+        const auto adapter = qualification_adapter_for(runtime, entry, {});
         code = engine.RegisterGlobalFunction(
-            entry.declaration.c_str(), callable_stub(entry.convention),
-            to_call_convention(entry.convention), nullptr, auxiliary());
+            entry.declaration.c_str(),
+            adapter.has_value() ? adapter->function : callable_stub(entry.convention),
+            to_call_convention(entry.convention),
+            adapter.has_value() ? adapter->caller : asFunctionCaller{}, auxiliary());
         if (code >= 0) {
             auto* function = static_cast<asCScriptFunction*>(engine.GetFunctionById(code));
             if (function == nullptr) {
                 return fail(registry_replay_phase::register_entry, entry.ordinal, "registered global function is not reflectable");
             }
             maps.functions.emplace(entry.logical_id, function);
+            if (adapter.has_value() && !record_qualification_adapter(runtime, *adapter, *function)) {
+                return fail(registry_replay_phase::register_entry, entry.ordinal,
+                    "qualification adapter role is duplicated");
+            }
             actual.engine_id = static_cast<std::uint32_t>(code);
         }
         break;
+    }
     case registration_kind::enum_type:
         code = engine.RegisterEnum(entry.declaration.c_str());
         if (code >= 0) {
@@ -1414,11 +2040,19 @@ registry_replay_result register_one(
         }
         break;
     }
-    case registration_kind::string_factory:
-        runtime.strings = std::make_unique<string_pool>();
+    case registration_kind::string_factory: {
+        const bool qualification_fstring =
+            runtime.qualification_kind == qualification_runtime_kind::fstring_roundtrip &&
+            entry.context.name_space.empty() && entry.declaration == "FString" &&
+            runtime.qualification_type_ids.size() == 1U;
+        runtime.strings = std::make_unique<string_pool>(qualification_fstring);
         code = engine.RegisterStringFactory(entry.declaration.c_str(), runtime.strings.get());
-        if (code >= 0) actual.installed = true;
+        if (code >= 0) {
+            actual.installed = true;
+            runtime.qualification_string_factory = qualification_fstring;
+        }
         break;
+    }
     case registration_kind::default_array_type:
         code = engine.RegisterDefaultArrayType(entry.declaration.c_str());
         if (code >= 0) actual.installed = true;
@@ -1620,6 +2254,412 @@ registry_runtime::~registry_runtime() = default;
 registry_runtime::registry_runtime(registry_runtime&&) noexcept = default;
 registry_runtime& registry_runtime::operator=(registry_runtime&&) noexcept = default;
 
+bool registry_runtime::resolve_class_generator_type_capabilities(
+    asIScriptEngine& engine,
+    const int type_id,
+    class_generator_type_capabilities& output,
+    std::string& detail) {
+    if (impl_ == nullptr || type_id <= 0) {
+        detail = "class-generator type capability request is invalid";
+        return false;
+    }
+    if (primitive_index(type_id).has_value()) {
+        output = {true, false, false};
+        return true;
+    }
+    asITypeInfo* const core_type = engine.GetTypeInfoById(type_id);
+    if (core_type == nullptr) {
+        detail = "class-generator type identity is unavailable";
+        return false;
+    }
+    const asDWORD core_flags = core_type->GetFlags();
+    if ((core_flags & asOBJ_SCRIPT_OBJECT) != 0U) {
+        output = {true, false, false};
+        return true;
+    }
+    if ((core_flags & asOBJ_ENUM) != 0U && core_type->GetModule() != nullptr) {
+        output = {true, false, false};
+        return true;
+    }
+    if (!impl_->bound || impl_->engine != &engine) {
+        detail = "registered class-generator type capability request is not bound to this registry";
+        return false;
+    }
+    const std::lock_guard<std::mutex> lock(impl_->operations_mutex);
+    const resolved_type_operations operations =
+        resolve_type_operations(*impl_, engine, type_id);
+    if (!operations.valid) {
+        detail = "class-generator type capabilities are unavailable";
+        return false;
+    }
+
+    class_generator_type_capabilities resolved;
+    if (operations.kind == type_operations_kind::fixed) {
+        resolved.can_create_property = operations.fixed.can_create_property;
+        resolved.never_requires_gc = operations.fixed.never_requires_gc;
+        resolved.requires_property = operations.fixed.requires_property;
+        output = resolved;
+        return true;
+    }
+
+    template_operation_record* const record =
+        existing_template_record(*impl_, *core_type);
+    if (record == nullptr || record->kind != operations.kind || !record->valid) {
+        detail = "class-generator container capabilities have no validated subtype record";
+        return false;
+    }
+    switch (operations.kind) {
+    case type_operations_kind::t_array:
+    case type_operations_kind::t_optional:
+        resolved.can_create_property = record->first.can_create_property;
+        break;
+    case type_operations_kind::t_set:
+        resolved.can_create_property = record->first.can_create_property &&
+            record->first.can_hash_value;
+        break;
+    case type_operations_kind::t_map:
+        resolved.can_create_property = record->first.can_create_property &&
+            record->first.can_hash_value && record->second.can_create_property;
+        break;
+    case type_operations_kind::unavailable:
+    case type_operations_kind::fixed:
+        detail = "class-generator type capability kind is inconsistent";
+        return false;
+    }
+    // The four captured container implementations inherit both target defaults.
+    resolved.never_requires_gc = false;
+    resolved.requires_property = false;
+    output = resolved;
+    return true;
+}
+
+bool registry_runtime::configure_qualification_runtime(
+    const qualification_runtime_kind kind,
+    const std::vector<std::string>& static_names,
+    const std::vector<std::string>& static_name_comparison_identities,
+    std::string& detail) {
+    if (impl_ == nullptr || impl_->bound || kind == qualification_runtime_kind::none ||
+        static_names.size() != static_name_comparison_identities.size() ||
+        static_names.size() > 1'000'000U) {
+        detail = "qualification runtime configuration is invalid or already bound";
+        return false;
+    }
+    impl_->qualification_kind = kind;
+    impl_->qualification_static_name_identities = static_name_comparison_identities;
+    impl_->qualification_static_names.assign(static_names.size(), {});
+    std::unordered_map<std::string, std::uint32_t> comparison_ids;
+    comparison_ids.reserve(static_names.size());
+    std::uint32_t next_id = 1U;
+    for (std::size_t index = 0U; index < static_names.size(); ++index) {
+        const std::string& identity = static_name_comparison_identities[index];
+        if (identity.empty()) continue;
+        auto [iterator, inserted] = comparison_ids.emplace(identity, next_id);
+        if (inserted) {
+            if (next_id == std::numeric_limits<std::uint32_t>::max()) {
+                detail = "qualification FName comparison identity space is exhausted";
+                return false;
+            }
+            ++next_id;
+        }
+        impl_->qualification_static_names[index].comparison_index = iterator->second;
+    }
+    return true;
+}
+
+bool registry_runtime::qualification_runtime_ready(std::string& detail) const {
+    if (impl_ == nullptr || !impl_->bound ||
+        impl_->qualification_kind == qualification_runtime_kind::none ||
+        impl_->qualification_type_ids.empty()) {
+        detail = "qualification runtime is not bound to a captured host type";
+        return false;
+    }
+    const auto require = [&](const qualification_adapter_role role,
+                             const asEFirstParamMetaData metadata) {
+        const auto found = impl_->qualification_roles.find(role);
+        if (found == impl_->qualification_roles.end() || found->second == nullptr) return false;
+        const auto* const function = static_cast<const asCScriptFunction*>(found->second);
+        return function->sysFuncIntf != nullptr &&
+            function->sysFuncIntf->passFirstParamMetaData == metadata;
+    };
+    bool ready = false;
+    switch (impl_->qualification_kind) {
+    case qualification_runtime_kind::t_array_int32:
+        ready = require(qualification_adapter_role::array_construct, asEFirstParamMetaData::None) &&
+            require(qualification_adapter_role::array_destruct, asEFirstParamMetaData::ScriptObjectType) &&
+            require(qualification_adapter_role::array_assign, asEFirstParamMetaData::ScriptObjectType) &&
+            require(qualification_adapter_role::array_set_num, asEFirstParamMetaData::ScriptObjectType);
+        break;
+    case qualification_runtime_kind::fname_equivalence:
+        ready = require(qualification_adapter_role::fname_equals, asEFirstParamMetaData::None) &&
+            require(qualification_adapter_role::fname_static_name, asEFirstParamMetaData::None);
+        break;
+    case qualification_runtime_kind::fstring_roundtrip:
+        ready = impl_->qualification_string_factory &&
+            require(qualification_adapter_role::fstring_construct, asEFirstParamMetaData::None) &&
+            require(qualification_adapter_role::fstring_copy_construct, asEFirstParamMetaData::None) &&
+            require(qualification_adapter_role::fstring_destruct, asEFirstParamMetaData::None) &&
+            require(qualification_adapter_role::fstring_assign, asEFirstParamMetaData::None);
+        break;
+    case qualification_runtime_kind::none:
+        break;
+    }
+    if (!ready) detail = "captured registry lacks the exact donor ABI adapters required by the qualification invoke";
+    return ready;
+}
+
+bool registry_runtime::prepare_qualification_runtime(
+    asIScriptEngine& interface, std::string& detail) {
+    if (impl_ == nullptr || !impl_->bound || impl_->engine != &interface ||
+        impl_->qualification_kind == qualification_runtime_kind::none) {
+        detail = "qualification runtime is not bound to the requested engine";
+        return false;
+    }
+    auto& engine = static_cast<asCScriptEngine&>(interface);
+    std::vector<asCScriptFunction*> additions;
+    for (asUINT index = 0U; index < engine.scriptFunctions.GetLength(); ++index) {
+        asCScriptFunction* const candidate = engine.scriptFunctions[index];
+        if (candidate == nullptr || candidate->funcType != asFUNC_SYSTEM ||
+            candidate->sysFuncIntf == nullptr || candidate->objectType == nullptr ||
+            impl_->qualification_functions.count(candidate) != 0U ||
+            !qualification_object_type_allowed(candidate->objectType)) {
+            continue;
+        }
+        const asCScriptFunction* donor = nullptr;
+        for (const asIScriptFunction* const allowed : impl_->qualification_functions) {
+            const auto* const captured = static_cast<const asCScriptFunction*>(allowed);
+            if (captured == nullptr || captured->sysFuncIntf == nullptr ||
+                captured->name != candidate->name ||
+                captured->parameterTypes.GetLength() != candidate->parameterTypes.GetLength() ||
+                captured->sysFuncIntf->callConv != candidate->sysFuncIntf->callConv ||
+                captured->sysFuncIntf->caller.type != candidate->sysFuncIntf->caller.type) {
+                continue;
+            }
+            const bool same_caller = captured->sysFuncIntf->caller.type == 1
+                ? captured->sysFuncIntf->caller.FunctionCaller ==
+                    candidate->sysFuncIntf->caller.FunctionCaller
+                : captured->sysFuncIntf->caller.type == 2 &&
+                    captured->sysFuncIntf->caller.MethodCaller ==
+                        candidate->sysFuncIntf->caller.MethodCaller;
+            if (!same_caller) continue;
+            if (donor != nullptr) {
+                detail = "qualification adapter caller resolves to multiple donor roles";
+                return false;
+            }
+            donor = captured;
+        }
+        if (donor == nullptr) continue;
+        const asEFirstParamMetaData donor_metadata =
+            donor->sysFuncIntf->passFirstParamMetaData;
+        if (candidate->sysFuncIntf->passFirstParamMetaData != donor_metadata) {
+            if (impl_->qualification_kind != qualification_runtime_kind::t_array_int32 ||
+                candidate->sysFuncIntf->passFirstParamMetaData !=
+                    asEFirstParamMetaData::None ||
+                donor_metadata != asEFirstParamMetaData::ScriptObjectType) {
+                detail = "qualification adapter clone has incompatible first-parameter metadata";
+                return false;
+            }
+            // The donor fork creates concrete TArray<T> method clones after registration and
+            // drops ScriptObjectType metadata on this path. The function caller is still the
+            // exact qualification adapter, so restore only that captured donor ABI field.
+            candidate->sysFuncIntf->passFirstParamMetaData = donor_metadata;
+        }
+        additions.push_back(candidate);
+    }
+    impl_->qualification_functions.insert(additions.begin(), additions.end());
+    return true;
+}
+
+bool registry_runtime::qualification_function_allowed(
+    const asIScriptFunction* const function) const noexcept {
+    if (impl_ == nullptr || function == nullptr) return false;
+    if (impl_->qualification_functions.count(function) != 0U) return true;
+    const auto* const candidate = static_cast<const asCScriptFunction*>(function);
+    if (candidate->sysFuncIntf == nullptr || candidate->objectType == nullptr ||
+        !qualification_object_type_allowed(candidate->objectType)) return false;
+    return std::any_of(impl_->qualification_functions.begin(),
+        impl_->qualification_functions.end(), [&](const asIScriptFunction* allowed) {
+            const auto* const captured = static_cast<const asCScriptFunction*>(allowed);
+            if (captured == nullptr || captured->sysFuncIntf == nullptr ||
+                captured->sysFuncIntf->caller.type != candidate->sysFuncIntf->caller.type ||
+                captured->sysFuncIntf->callConv != candidate->sysFuncIntf->callConv ||
+                captured->sysFuncIntf->passFirstParamMetaData !=
+                    candidate->sysFuncIntf->passFirstParamMetaData) return false;
+            if (captured->sysFuncIntf->caller.type == 1) {
+                return captured->sysFuncIntf->caller.FunctionCaller ==
+                    candidate->sysFuncIntf->caller.FunctionCaller;
+            }
+            return captured->sysFuncIntf->caller.type == 2 &&
+                captured->sysFuncIntf->caller.MethodCaller ==
+                    candidate->sysFuncIntf->caller.MethodCaller;
+        });
+}
+
+bool registry_runtime::qualification_object_type_allowed(
+    const asITypeInfo* const type) const noexcept {
+    if (impl_ == nullptr || type == nullptr) return false;
+    if (impl_->qualification_types.count(type) != 0U) return true;
+    if (impl_->qualification_kind != qualification_runtime_kind::t_array_int32 ||
+        type->GetName() == nullptr || std::string_view(type->GetName()) != "TArray" ||
+        type->GetSize() != sizeof(qualification_script_array) ||
+        type->GetSubTypeCount() != 1U || type->GetSubTypeId(0U) != asTYPEID_INT32) {
+        return false;
+    }
+    return true;
+}
+
+bool registry_runtime::qualification_global_address_allowed(
+    const void* const address) const noexcept {
+    return impl_ != nullptr && impl_->strings != nullptr &&
+        impl_->strings->contains_qualification_value(address);
+}
+
+bool registry_runtime::qualification_instruction_allowed(
+    asIScriptEngine& engine,
+    const asDWORD* const instruction,
+    const asBYTE opcode,
+    std::string& detail) const {
+    if (impl_ == nullptr || impl_->qualification_kind == qualification_runtime_kind::none ||
+        instruction == nullptr) {
+        detail = "qualification host instruction gate is not configured";
+        return false;
+    }
+    const auto reject = [&]() {
+        detail = "qualification invoke bytecode contains unauthorized opcode ";
+        detail += asBCInfo[opcode].name;
+        return false;
+    };
+    switch (opcode) {
+    case asBC_CALLSYS:
+    case asBC_Thiscall1: {
+        const auto* const function = reinterpret_cast<const asIScriptFunction*>(
+            asBC_PTRARG(instruction));
+        if (qualification_function_allowed(function)) return true;
+        reject();
+        detail += " target=";
+        if (function == nullptr) {
+            detail += "<null>";
+        } else {
+            const char* const declaration = function->GetDeclaration(true, true, true);
+            detail += declaration == nullptr ? "<missing-declaration>" : declaration;
+            detail += " id=" + std::to_string(function->GetId());
+            const asITypeInfo* const owner = function->GetObjectType();
+            detail += " owner=";
+            detail += owner == nullptr || owner->GetName() == nullptr
+                ? "<global>" : owner->GetName();
+            const auto* const candidate = static_cast<const asCScriptFunction*>(function);
+            if (candidate->sysFuncIntf != nullptr) {
+                detail += " abi=(caller=" +
+                    std::to_string(candidate->sysFuncIntf->caller.type) + ",conv=" +
+                    std::to_string(candidate->sysFuncIntf->callConv) + ",meta=" +
+                    std::to_string(static_cast<int>(
+                        candidate->sysFuncIntf->passFirstParamMetaData)) + ")";
+            }
+            detail += " allowed=[";
+            bool first = true;
+            for (const asIScriptFunction* const allowed : impl_->qualification_functions) {
+                if (!first) detail += ';';
+                first = false;
+                const auto* const captured = static_cast<const asCScriptFunction*>(allowed);
+                const char* const captured_declaration =
+                    allowed == nullptr ? nullptr : allowed->GetDeclaration(true, true, true);
+                detail += captured_declaration == nullptr
+                    ? "<missing-declaration>" : captured_declaration;
+                if (captured != nullptr && captured->sysFuncIntf != nullptr) {
+                    const bool same_caller = candidate->sysFuncIntf != nullptr &&
+                        captured->sysFuncIntf->caller.type ==
+                            candidate->sysFuncIntf->caller.type &&
+                        ((captured->sysFuncIntf->caller.type == 1 &&
+                          captured->sysFuncIntf->caller.FunctionCaller ==
+                              candidate->sysFuncIntf->caller.FunctionCaller) ||
+                         (captured->sysFuncIntf->caller.type == 2 &&
+                          captured->sysFuncIntf->caller.MethodCaller ==
+                              candidate->sysFuncIntf->caller.MethodCaller));
+                    detail += "(caller=" +
+                        std::to_string(captured->sysFuncIntf->caller.type) + ",conv=" +
+                        std::to_string(captured->sysFuncIntf->callConv) + ",meta=" +
+                        std::to_string(static_cast<int>(
+                            captured->sysFuncIntf->passFirstParamMetaData)) + ",same=" +
+                        (same_caller ? "1" : "0") + ")";
+                }
+            }
+            detail += ']';
+        }
+        return false;
+    }
+    case asBC_ALLOC: {
+        const auto* const type = reinterpret_cast<const asITypeInfo*>(asBC_PTRARG(instruction));
+        const int function_id = asBC_INTARG(instruction + AS_PTR_SIZE);
+        return (qualification_object_type_allowed(type) && function_id != 0 &&
+            qualification_function_allowed(engine.GetFunctionById(function_id))) || reject();
+    }
+    case asBC_FREE:
+    case asBC_OBJTYPE:
+        return qualification_object_type_allowed(
+            reinterpret_cast<const asITypeInfo*>(asBC_PTRARG(instruction))) || reject();
+    case asBC_TYPEID: {
+        const int type_id = static_cast<int>(asBC_DWORDARG(instruction));
+        return (type_id == asTYPEID_INT32 ||
+            qualification_object_type_allowed(engine.GetTypeInfoById(type_id))) || reject();
+    }
+    case asBC_PGA:
+        return qualification_global_address_allowed(
+            reinterpret_cast<const void*>(asBC_PTRARG(instruction))) || reject();
+    // No script/import/interface/function-pointer calls, arbitrary globals, raw string opcode,
+    // list allocator, script-object lifecycle, object resolver or reference-debug callbacks.
+    case asBC_PshGPtr: case asBC_PshG4: case asBC_LdGRdR4: case asBC_CALL:
+    case asBC_STR: case asBC_CALLBND: case asBC_CpyVtoG4: case asBC_CpyGtoV4:
+    case asBC_LDG: case asBC_SetG4: case asBC_CALLINTF: case asBC_CallPtr:
+    case asBC_FuncPtr: case asBC_LoadThisR: case asBC_AllocMem:
+    case asBC_SetListSize: case asBC_PshListElmnt: case asBC_SetListType:
+    case asBC_FinConstruct: case asBC_DestructScript: case asBC_CopyScript:
+    case asBC_ResolveObjectPtr: case asBC_TrackRef: case asBC_UntrackRef:
+    case asBC_ValidateRef: case asBC_ThrowException:
+        return reject();
+    default:
+        // All remaining instructions operate on the VM stack/registers/local storage. The
+        // request is the exact sealed zero-argument corpus source; the only routes from that
+        // closed VM state into host memory/callables are validated above.
+        return true;
+    }
+}
+
+qualification_runtime_kind registry_runtime::qualification_kind() const noexcept {
+    return impl_ == nullptr ? qualification_runtime_kind::none : impl_->qualification_kind;
+}
+
+bool registry_runtime::read_qualification_tarray_int32(
+    const void* const object,
+    std::vector<std::int32_t>& values,
+    std::string& detail) const {
+    values.clear();
+    if (qualification_kind() != qualification_runtime_kind::t_array_int32 || object == nullptr) {
+        detail = "qualification TArray<int32> return object is unavailable";
+        return false;
+    }
+    const auto& array = *static_cast<const qualification_script_array*>(object);
+    if (array.count < 0 || array.count > qualification_max_array_values ||
+        array.capacity < array.count || array.capacity > qualification_max_array_values ||
+        (array.count != 0 && array.data == nullptr)) {
+        detail = "qualification TArray<int32> return layout is invalid";
+        return false;
+    }
+    const auto* data = static_cast<const std::int32_t*>(array.data);
+    if (array.count != 0) values.assign(data, data + array.count);
+    return true;
+}
+
+bool registry_runtime::read_qualification_fstring(
+    const void* const object,
+    std::string& value,
+    std::string& detail) const {
+    if (qualification_kind() != qualification_runtime_kind::fstring_roundtrip || object == nullptr ||
+        !qualification_utf16_to_utf8(*static_cast<const qualification_fstring*>(object), value)) {
+        detail = "qualification FString return layout/UTF-16 payload is invalid";
+        return false;
+    }
+    return true;
+}
+
 registry_replay_result replay_registry(
     asIScriptEngine& interface,
     const registry_profile& profile,
@@ -1640,6 +2680,10 @@ registry_replay_result replay_registry(
     }
 
     auto prepared = std::make_unique<registry_runtime::impl>();
+    prepared->qualification_kind = runtime.impl_->qualification_kind;
+    prepared->qualification_static_name_identities =
+        runtime.impl_->qualification_static_name_identities;
+    prepared->qualification_static_names = runtime.impl_->qualification_static_names;
     for (std::size_t index = 0U; index < profile.primitive_operations.size(); ++index) {
         prepared->primitive_operations[index] = profile.primitive_operations[index].operations;
     }
@@ -1677,7 +2721,20 @@ registry_replay_result replay_registry(
         result = register_one(engine, profile, entry, *prepared, maps, actual);
         if (!result.succeeded()) return result;
         if (!same_result(actual, profile.expected_results[index])) {
-            return fail(registry_replay_phase::verify_registration_result, index, "registration result differs from captured post-bind identity");
+            const registration_result& expected = profile.expected_results[index];
+            return fail(
+                registry_replay_phase::verify_registration_result, index,
+                "registration result differs from captured post-bind identity: actual(kind=" +
+                    std::to_string(static_cast<unsigned>(actual.kind)) + ",engine_id=" +
+                    std::to_string(actual.engine_id) + ",owner_engine_type_id=" +
+                    std::to_string(actual.owner_engine_type_id) + ",index=" +
+                    std::to_string(actual.index) + ",installed=" +
+                    std::to_string(actual.installed) + "), expected(kind=" +
+                    std::to_string(static_cast<unsigned>(expected.kind)) + ",engine_id=" +
+                    std::to_string(expected.engine_id) + ",owner_engine_type_id=" +
+                    std::to_string(expected.owner_engine_type_id) + ",index=" +
+                    std::to_string(expected.index) + ",installed=" +
+                    std::to_string(expected.installed) + ")");
         }
     }
 

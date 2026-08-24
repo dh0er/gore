@@ -20,7 +20,8 @@ execute_process(
     ERROR_VARIABLE capabilities_stderr
 )
 if(NOT capabilities_result EQUAL 0 OR
-   NOT capabilities_stdout MATCHES "\\\"request_version\\\":1" OR
+   NOT capabilities_stdout MATCHES "\\\"request_version\\\":2" OR
+   NOT capabilities_stdout MATCHES "\\\"request_versions\\\":\\[1,2\\]" OR
    NOT capabilities_stdout MATCHES "\\\"response_version\\\":1" OR
    NOT capabilities_stdout MATCHES "\\\"core\\\":\\{\\\"available\\\":true" OR
    NOT capabilities_stdout MATCHES "247954da5326ecc29724067da7b5880c352fe4ff" OR
@@ -60,7 +61,7 @@ if(NOT missing_result EQUAL 65 OR
 endif()
 
 set(oversized_file "${CMAKE_CURRENT_BINARY_DIR}/standalone-compiler-oversized-request.json")
-string(REPEAT "x" 1048577 oversized_request)
+string(REPEAT "x" 16777217 oversized_request)
 file(WRITE "${oversized_file}" "${oversized_request}")
 unset(oversized_request)
 execute_process(

@@ -16,7 +16,13 @@ pub const PROBE_CORPUS_SCHEMA: &str = "gore.as.compiler-probe-corpus";
 pub const EXPECTED_RESULTS_SCHEMA: &str = "gore.as.compiler-probe-results";
 pub const DIAGNOSTIC_PARITY_SCHEMA: &str = "gore.as.compiler-diagnostic-parity";
 pub const SEMANTIC_PARITY_SCHEMA: &str = "gore.as.compiler-semantic-parity";
-pub const QUALIFICATION_SCHEMA_VERSION: u32 = 1;
+// Wire v2 adds the exact executable/protocol identity used for both parity runs. Keeping this as
+// v1 after adding a mandatory field would make old payloads ambiguous and silently break the
+// versioned contract. The enclosing compiler-profile API remains V1 and may seal v2 payloads.
+pub const QUALIFICATION_SCHEMA_VERSION: u32 = 2;
+pub const QUALIFIED_SIDECAR_REQUEST_VERSION_V1: u32 = 1;
+pub const QUALIFIED_SIDECAR_REQUEST_VERSION_V2: u32 = 2;
+pub const QUALIFIED_SIDECAR_RESPONSE_VERSION_V1: u32 = 1;
 
 pub const MAX_QUALIFICATION_JSON_BYTES_V1: usize = 32 * 1024 * 1024;
 const MAX_PROBE_CASES: usize = 8192;
@@ -25,12 +31,13 @@ const MAX_DIAGNOSTICS_PER_CASE: usize = 4096;
 const MAX_TEXT_BYTES: usize = 64 * 1024;
 const MAX_SOURCE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_TOTAL_SOURCE_BYTES: usize = 24 * 1024 * 1024;
+const MAX_QUALIFIED_SIDECAR_BYTES_V1: u64 = 256 * 1024 * 1024;
 
-const CORPUS_HASH_DOMAIN: &[u8] = b"gore-as-probe-corpus-v1\0";
-const RESULTS_HASH_DOMAIN: &[u8] = b"gore-as-probe-results-v1\0";
-const DIAGNOSTIC_REPORT_HASH_DOMAIN: &[u8] = b"gore-as-diagnostic-parity-v1\0";
-const SEMANTIC_REPORT_HASH_DOMAIN: &[u8] = b"gore-as-semantic-parity-v1\0";
-const DIAGNOSTIC_SET_HASH_DOMAIN: &[u8] = b"gore-as-expected-diagnostics-v1\0";
+const CORPUS_HASH_DOMAIN: &[u8] = b"gore-as-probe-corpus-v2\0";
+const RESULTS_HASH_DOMAIN: &[u8] = b"gore-as-probe-results-v2\0";
+const DIAGNOSTIC_REPORT_HASH_DOMAIN: &[u8] = b"gore-as-diagnostic-parity-v2\0";
+const SEMANTIC_REPORT_HASH_DOMAIN: &[u8] = b"gore-as-semantic-parity-v2\0";
+const DIAGNOSTIC_SET_HASH_DOMAIN: &[u8] = b"gore-as-expected-diagnostics-v2\0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -43,7 +50,16 @@ pub enum ProbeOutcomeV1 {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ProbeModeV1 {
     CompileOnly,
-    Invoke { declaration: String },
+    Invoke {
+        declaration: String,
+    },
+    /// Compile a sealed baseline graph, then replace `changed_modules`, remove
+    /// `deleted_modules`, and compile the final `CompilerProbeCaseV1::sections` graph.
+    CompileGraphTransition {
+        baseline_sections: Vec<ProbeSourceSectionV1>,
+        changed_modules: Vec<String>,
+        deleted_modules: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,43 +138,60 @@ impl CompilerProbeCorpusV1 {
                     return invalid("mode", "a rejected probe cannot request invocation");
                 }
             }
-            check_nonempty_count(
-                "probe source sections",
-                case.sections.len(),
-                MAX_SECTIONS_PER_CASE,
-            )?;
-            let mut section_keys = BTreeSet::new();
-            for (section_index, section) in case.sections.iter().enumerate() {
-                check_ordinal("probe source section", section_index, section.ordinal)?;
-                validate_text(&section.module, "section.module", MAX_TEXT_BYTES, false)?;
-                validate_relative_path(&section.relative_path)?;
-                validate_text(
-                    &section.source_utf8,
-                    "section.source_utf8",
-                    MAX_SOURCE_BYTES,
-                    true,
-                )?;
-                let key = (
-                    section.module.as_str(),
-                    section.relative_path.to_ascii_lowercase(),
-                );
-                if !section_keys.insert(key) {
-                    return invalid(
-                        "sections",
-                        "module/path pairs must be unique under Windows path casing",
-                    );
+            validate_source_sections(&case.sections, &mut total_source_bytes)?;
+            if let ProbeModeV1::CompileGraphTransition {
+                baseline_sections,
+                changed_modules,
+                deleted_modules,
+            } = &case.mode
+            {
+                if case.expected_outcome != ProbeOutcomeV1::Accepted {
+                    return invalid("mode", "a graph transition probe must be accepted");
                 }
-                let actual =
-                    Sha256Digest::from_bytes(Sha256::digest(section.source_utf8.as_bytes()).into());
-                check_digest("probe source", section.source_sha256, actual)?;
-                total_source_bytes = total_source_bytes
-                    .checked_add(section.source_utf8.len())
-                    .ok_or(QualificationError::SourceBytesOverflow)?;
-                if total_source_bytes > MAX_TOTAL_SOURCE_BYTES {
-                    return Err(QualificationError::TotalSourceTooLarge {
-                        actual: total_source_bytes,
-                        max: MAX_TOTAL_SOURCE_BYTES,
-                    });
+                validate_source_sections(baseline_sections, &mut total_source_bytes)?;
+                check_nonempty_count(
+                    "mode.changed_modules",
+                    changed_modules.len(),
+                    MAX_SECTIONS_PER_CASE,
+                )?;
+                check_nonempty_count(
+                    "mode.deleted_modules",
+                    deleted_modules.len(),
+                    MAX_SECTIONS_PER_CASE,
+                )?;
+                let baseline_modules: BTreeSet<_> = baseline_sections
+                    .iter()
+                    .map(|section| section.module.as_str())
+                    .collect();
+                let final_modules: BTreeSet<_> = case
+                    .sections
+                    .iter()
+                    .map(|section| section.module.as_str())
+                    .collect();
+                let mut operations = BTreeSet::new();
+                for module in changed_modules {
+                    validate_text(module, "mode.changed_modules", MAX_TEXT_BYTES, false)?;
+                    if !operations.insert(module.as_str())
+                        || !baseline_modules.contains(module.as_str())
+                        || !final_modules.contains(module.as_str())
+                    {
+                        return invalid(
+                            "mode.changed_modules",
+                            "must be unique and present in both baseline and final graphs",
+                        );
+                    }
+                }
+                for module in deleted_modules {
+                    validate_text(module, "mode.deleted_modules", MAX_TEXT_BYTES, false)?;
+                    if !operations.insert(module.as_str())
+                        || !baseline_modules.contains(module.as_str())
+                        || final_modules.contains(module.as_str())
+                    {
+                        return invalid(
+                            "mode.deleted_modules",
+                            "must be unique, baseline-only, and disjoint from changed modules",
+                        );
+                    }
                 }
             }
         }
@@ -170,6 +203,75 @@ impl CompilerProbeCorpusV1 {
         canonical.canonical_sha256 = zero_digest();
         canonical_digest(CORPUS_HASH_DOMAIN, &canonical)
     }
+}
+
+fn validate_source_sections(
+    sections: &[ProbeSourceSectionV1],
+    total_source_bytes: &mut usize,
+) -> Result<(), QualificationError> {
+    check_nonempty_count(
+        "probe source sections",
+        sections.len(),
+        MAX_SECTIONS_PER_CASE,
+    )?;
+    let mut section_keys = BTreeSet::new();
+    for (section_index, section) in sections.iter().enumerate() {
+        check_ordinal("probe source section", section_index, section.ordinal)?;
+        validate_text(&section.module, "section.module", MAX_TEXT_BYTES, false)?;
+        validate_relative_path(&section.relative_path)?;
+        if section.module != module_name_from_source_path(&section.relative_path) {
+            return invalid(
+                "section.module",
+                "must exactly match the module identity derived from section.relative_path",
+            );
+        }
+        validate_text(
+            &section.source_utf8,
+            "section.source_utf8",
+            MAX_SOURCE_BYTES,
+            true,
+        )?;
+        let key = (
+            section.module.as_str(),
+            section.relative_path.to_ascii_lowercase(),
+        );
+        if !section_keys.insert(key) {
+            return invalid(
+                "sections",
+                "module/path pairs must be unique under Windows path casing",
+            );
+        }
+        let actual =
+            Sha256Digest::from_bytes(Sha256::digest(section.source_utf8.as_bytes()).into());
+        check_digest("probe source", section.source_sha256, actual)?;
+        *total_source_bytes = total_source_bytes
+            .checked_add(section.source_utf8.len())
+            .ok_or(QualificationError::SourceBytesOverflow)?;
+        if *total_source_bytes > MAX_TOTAL_SOURCE_BYTES {
+            return Err(QualificationError::TotalSourceTooLarge {
+                actual: *total_source_bytes,
+                max: MAX_TOTAL_SOURCE_BYTES,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn module_name_from_source_path(path: &str) -> String {
+    let mut module = path.to_owned();
+    let mut position = 0usize;
+    while position + 2 < module.len() {
+        let bytes = module.as_bytes();
+        if bytes[position] == b'.'
+            && bytes[position + 1].eq_ignore_ascii_case(&b'a')
+            && bytes[position + 2].eq_ignore_ascii_case(&b's')
+        {
+            module.replace_range(position..position + 3, "");
+        } else {
+            position += 1;
+        }
+    }
+    module.replace('/', ".")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -298,19 +400,19 @@ impl ExpectedProbeResultsV1 {
                     return invalid(
                         "semantic_sha256",
                         "accepted probes require a semantic result",
-                    )
+                    );
                 }
                 (ProbeOutcomeV1::Accepted, Some(_), true) => {
-                    return invalid("diagnostics", "accepted probes cannot contain an error")
+                    return invalid("diagnostics", "accepted probes cannot contain an error");
                 }
                 (ProbeOutcomeV1::Rejected, Some(_), _) => {
                     return invalid(
                         "semantic_sha256",
                         "rejected probes cannot have a semantic result",
-                    )
+                    );
                 }
                 (ProbeOutcomeV1::Rejected, None, false) => {
-                    return invalid("diagnostics", "rejected probes require an error")
+                    return invalid("diagnostics", "rejected probes require an error");
                 }
                 _ => {}
             }
@@ -335,6 +437,44 @@ pub struct DiagnosticParityEntryV1 {
     pub standalone_sha256: Sha256Digest,
 }
 
+/// Exact final standalone executable used to produce a parity report.
+///
+/// The digest is over the final distributable bytes (including Authenticode, when present). A
+/// profile may only execute through a sidecar whose package seal is exactly this identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QualifiedSidecarIdentityV1 {
+    pub byte_len: u64,
+    pub sha256: Sha256Digest,
+    pub request_version: u32,
+    pub response_version: u32,
+}
+
+impl QualifiedSidecarIdentityV1 {
+    pub fn validate(&self) -> Result<(), QualificationError> {
+        if self.byte_len == 0 || self.byte_len > MAX_QUALIFIED_SIDECAR_BYTES_V1 {
+            return invalid(
+                "standalone_compiler.byte_len",
+                "must identify a bounded non-empty executable",
+            );
+        }
+        if self.sha256 == zero_digest() {
+            return invalid("standalone_compiler.sha256", "must not use the zero digest");
+        }
+        if !matches!(
+            self.request_version,
+            QUALIFIED_SIDECAR_REQUEST_VERSION_V1 | QUALIFIED_SIDECAR_REQUEST_VERSION_V2
+        ) || self.response_version != QUALIFIED_SIDECAR_RESPONSE_VERSION_V1
+        {
+            return invalid(
+                "standalone_compiler protocol",
+                "does not match the qualified sidecar protocol",
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiagnosticParityReportV1 {
@@ -343,12 +483,14 @@ pub struct DiagnosticParityReportV1 {
     pub suite_id: String,
     pub corpus_sha256: Sha256Digest,
     pub expected_results_sha256: Sha256Digest,
+    pub standalone_compiler: QualifiedSidecarIdentityV1,
     pub entries: Vec<DiagnosticParityEntryV1>,
     pub canonical_sha256: Sha256Digest,
 }
 
 impl DiagnosticParityReportV1 {
     pub fn seal(&mut self) -> Result<(), QualificationError> {
+        self.standalone_compiler.validate()?;
         validate_report_header(
             &self.schema,
             self.schema_version,
@@ -361,6 +503,7 @@ impl DiagnosticParityReportV1 {
     }
 
     pub fn validate(&self) -> Result<(), QualificationError> {
+        self.standalone_compiler.validate()?;
         validate_report_header(
             &self.schema,
             self.schema_version,
@@ -409,6 +552,7 @@ pub struct SemanticParityReportV1 {
     pub suite_id: String,
     pub corpus_sha256: Sha256Digest,
     pub expected_results_sha256: Sha256Digest,
+    pub standalone_compiler: QualifiedSidecarIdentityV1,
     pub entries: Vec<SemanticParityEntryV1>,
     /// Human-readable stable difference identifiers retained during an unsuccessful run.
     pub unexplained_differences: Vec<String>,
@@ -442,6 +586,7 @@ impl SemanticParityReportV1 {
     }
 
     fn validate_structure(&self) -> Result<(), QualificationError> {
+        self.standalone_compiler.validate()?;
         validate_report_header(
             &self.schema,
             self.schema_version,
@@ -543,6 +688,12 @@ pub struct ValidatedQualificationV1 {
     pub semantic_parity: SemanticParityReportV1,
 }
 
+impl ValidatedQualificationV1 {
+    pub fn standalone_compiler(&self) -> QualifiedSidecarIdentityV1 {
+        self.diagnostic_parity.standalone_compiler
+    }
+}
+
 /// Parse, seal-check, cross-check, and require exact zero-difference qualification.
 pub fn validate_qualification_payloads(
     bytecode: &BytecodeProfileV1,
@@ -600,6 +751,9 @@ pub fn validate_qualification_payloads(
         || semantic_parity.expected_results_sha256 != expected_results.canonical_sha256
     {
         return mismatch("expected_results_sha256");
+    }
+    if diagnostic_parity.standalone_compiler != semantic_parity.standalone_compiler {
+        return mismatch("standalone_compiler");
     }
     if corpus.cases.len() != expected_results.results.len()
         || corpus.cases.len() != diagnostic_parity.entries.len()
@@ -902,6 +1056,15 @@ mod tests {
         }
     }
 
+    fn sidecar_identity() -> QualifiedSidecarIdentityV1 {
+        QualifiedSidecarIdentityV1 {
+            byte_len: 1_966_592,
+            sha256: digest(0x5a),
+            request_version: QUALIFIED_SIDECAR_REQUEST_VERSION_V1,
+            response_version: QUALIFIED_SIDECAR_RESPONSE_VERSION_V1,
+        }
+    }
+
     fn fixture() -> (
         CompilerProbeCorpusV1,
         ExpectedProbeResultsV1,
@@ -990,6 +1153,7 @@ mod tests {
             suite_id: corpus.suite_id.clone(),
             corpus_sha256: corpus.canonical_sha256,
             expected_results_sha256: expected.canonical_sha256,
+            standalone_compiler: sidecar_identity(),
             entries: corpus
                 .cases
                 .iter()
@@ -1013,6 +1177,7 @@ mod tests {
             suite_id: corpus.suite_id.clone(),
             corpus_sha256: corpus.canonical_sha256,
             expected_results_sha256: expected.canonical_sha256,
+            standalone_compiler: sidecar_identity(),
             entries: vec![SemanticParityEntryV1 {
                 ordinal: 0,
                 case_id: corpus.cases[0].case_id.clone(),
@@ -1068,6 +1233,28 @@ mod tests {
         .unwrap();
         assert_eq!(loaded.corpus.cases.len(), 2);
         assert_eq!(loaded.semantic_parity.entries.len(), 1);
+        assert_eq!(loaded.standalone_compiler(), sidecar_identity());
+
+        let mut wrong_binary = semantics.clone();
+        wrong_binary.standalone_compiler.sha256 = digest(0x6b);
+        wrong_binary.seal().unwrap();
+        let wrong_binary_json = wrong_binary.to_json().unwrap();
+        let mut wrong_binary_profile = qualification.clone();
+        wrong_binary_profile.semantic_parity =
+            blob("qualification/semantics.json", &wrong_binary_json);
+        assert!(matches!(
+            validate_qualification_payloads(
+                &bytecode,
+                &wrong_binary_profile,
+                &corpus_json,
+                &expected_json,
+                &diagnostics_json,
+                &wrong_binary_json,
+            ),
+            Err(QualificationError::CrossReferenceMismatch(
+                "standalone_compiler"
+            ))
+        ));
 
         let mut drifted = diagnostics.clone();
         drifted.entries[1].standalone_sha256 = digest(9);

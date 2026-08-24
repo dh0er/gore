@@ -52,7 +52,7 @@ class Revision3ManagedCompilerCheckPanel extends ConsumerStatefulWidget {
 class _Revision3ManagedCompilerCheckPanelState
     extends ConsumerState<Revision3ManagedCompilerCheckPanel> {
   bool _busy = false;
-  ScriptCompilerBackendMode _backend = ScriptCompilerBackendMode.game;
+  ScriptCompilerBackendMode _backend = ScriptCompilerBackendMode.productDefault;
   ManagedRevision3CompilerCheckReceipt? _receipt;
   Object? _error;
 
@@ -91,12 +91,14 @@ class _Revision3ManagedCompilerCheckPanelState
                 },
         ),
         const SizedBox(height: 6),
-        Text(
-          requiresGameSafety
-              ? 'This route may start the game compiler and requires an exact, safe installation.'
-              : 'This route never starts the game and never mutates the installation. It fails closed unless a qualified standalone package is available.',
-          key: const Key('revision3-managed-compiler-backend-description'),
-        ),
+        Text(switch (_backend) {
+          ScriptCompilerBackendMode.standaloneThenGame =>
+            'Mod Studio tries the qualified standalone compiler first. If it cannot produce an accepted result, the reason stays visible and the game compiler is used as fallback.',
+          ScriptCompilerBackendMode.game =>
+            'This route uses the game compiler and requires an exact, safe installation.',
+          ScriptCompilerBackendMode.standalone =>
+            'This route never starts the game and never mutates the installation. It fails closed unless a qualified standalone package is available.',
+        }, key: const Key('revision3-managed-compiler-backend-description')),
         if (requiresGameSafety && safety.showBlockingBanner) ...[
           const SizedBox(height: 8),
           ScriptCompileInstallStateBanner(
@@ -161,11 +163,14 @@ class _Revision3ManagedCompilerCheckPanelState
       builder: (dialogContext) => AlertDialog(
         key: const Key('revision3-managed-compiler-confirmation'),
         title: Text('Check with ${attemptedBackend.label.toLowerCase()}?'),
-        content: Text(
-          requiresGameSafety
-              ? 'Close Gothic 1 Remake first. Mod Studio may temporarily install only this generated source, run the compiler, restore every touched game path, and discard the compiler output. Your save is not loaded or changed. If exact restoration cannot be proven, all further live changes stay blocked.'
-              : 'Mod Studio will not launch Gothic 1 Remake or modify its installation. The check fails closed when no qualified standalone compiler package is installed, and any temporary compiler output is discarded.',
-        ),
+        content: Text(switch (attemptedBackend) {
+          ScriptCompilerBackendMode.standaloneThenGame =>
+            'Mod Studio first uses the qualified standalone compiler. If fallback is needed, its reason remains in the result. Keep Gothic 1 Remake closed: the fallback may temporarily install only this generated source, run the game compiler, restore every touched game path, and discard the compiler output. Your save is not loaded or changed. If exact restoration cannot be proven, all further live changes stay blocked.',
+          ScriptCompilerBackendMode.game =>
+            'Close Gothic 1 Remake first. Mod Studio may temporarily install only this generated source, run the game compiler, restore every touched game path, and discard the compiler output. Your save is not loaded or changed. If exact restoration cannot be proven, all further live changes stay blocked.',
+          ScriptCompilerBackendMode.standalone =>
+            'Mod Studio will not launch Gothic 1 Remake or modify its installation. The check fails closed when no qualified standalone compiler package is installed, and any temporary compiler output is discarded.',
+        }),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),

@@ -239,7 +239,7 @@ impl ReceiptBackendSelectionV1 {
         Ok(selection)
     }
 
-    fn validate(&self) -> Result<(), GenerationReceiptError> {
+    pub(crate) fn validate(&self) -> Result<(), GenerationReceiptError> {
         if let Some(reason) = &self.fallback_reason {
             validate_bounded_text(
                 "backend.fallback_reason.detail",
@@ -524,9 +524,10 @@ impl GenerationReceiptV1 {
 
     /// Validate the receipt's strict schema and canonical self-integrity.
     ///
-    /// This does not establish compiler qualification authority. Consumers that need to trust the
-    /// qualified-profile claim must call [`Self::validate_against`] with an opaque package loaded
-    /// by [`ValidatedCompilerProfilePackageV1::load`].
+    /// This does not establish compiler qualification authority. `validate_against` with an opaque
+    /// package proves the receipt and typed qualification payloads are self-consistent. Product
+    /// consumers must additionally authenticate that package identity against GORE's embedded
+    /// compiler catalog; a package loaded from caller-selected paths is not a vendor trust root.
     pub fn validate(&self) -> Result<(), GenerationReceiptError> {
         if self.schema != GENERATION_RECEIPT_SCHEMA_V1
             || self.schema_version != GENERATION_RECEIPT_VERSION_V1
@@ -783,7 +784,7 @@ fn rollback_generation_output_exact(_: &Path, _: &[u8]) -> Result<(), String> {
     Err("exact handle-bound output rollback is unavailable on this platform".to_owned())
 }
 
-fn publish_bytes_atomic_no_clobber_v1(
+pub(crate) fn publish_bytes_atomic_no_clobber_v1(
     destination: &Path,
     bytes: &[u8],
     max_bytes: u64,
@@ -937,7 +938,7 @@ fn read_retained_output(output: &CompileOutput) -> Result<Vec<u8>, GenerationRec
     .map_err(GenerationReceiptError::RetainedOutput)
 }
 
-fn read_bounded_file(
+pub(crate) fn read_bounded_file(
     mut file: std::fs::File,
     max: u64,
     label: &'static str,
@@ -1004,7 +1005,7 @@ fn metadata_is_reparse(_: &std::fs::Metadata) -> bool {
 }
 
 #[cfg(windows)]
-fn open_regular_read_no_follow(path: &Path) -> Result<std::fs::File, String> {
+pub(crate) fn open_regular_read_no_follow(path: &Path) -> Result<std::fs::File, String> {
     use std::os::windows::fs::OpenOptionsExt as _;
     use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ};
     let mut options = std::fs::OpenOptions::new();
@@ -1018,7 +1019,7 @@ fn open_regular_read_no_follow(path: &Path) -> Result<std::fs::File, String> {
 }
 
 #[cfg(unix)]
-fn open_regular_read_no_follow(path: &Path) -> Result<std::fs::File, String> {
+pub(crate) fn open_regular_read_no_follow(path: &Path) -> Result<std::fs::File, String> {
     use std::os::unix::fs::OpenOptionsExt as _;
     let mut options = std::fs::OpenOptions::new();
     options
@@ -1030,7 +1031,7 @@ fn open_regular_read_no_follow(path: &Path) -> Result<std::fs::File, String> {
 }
 
 #[cfg(not(any(windows, unix)))]
-fn open_regular_read_no_follow(path: &Path) -> Result<std::fs::File, String> {
+pub(crate) fn open_regular_read_no_follow(path: &Path) -> Result<std::fs::File, String> {
     let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err("path is not a regular file".to_owned());
@@ -1209,9 +1210,10 @@ mod tests {
     use crate::compiler_profile::qualification::{
         CompilerProbeCaseV1, CompilerProbeCorpusV1, DiagnosticParityEntryV1,
         DiagnosticParityReportV1, ExpectedProbeResultV1, ExpectedProbeResultsV1, ProbeModeV1,
-        ProbeOutcomeV1, ProbeSourceSectionV1, SemanticParityEntryV1, SemanticParityReportV1,
-        DIAGNOSTIC_PARITY_SCHEMA, EXPECTED_RESULTS_SCHEMA, PROBE_CORPUS_SCHEMA,
-        QUALIFICATION_SCHEMA_VERSION, SEMANTIC_PARITY_SCHEMA,
+        ProbeOutcomeV1, ProbeSourceSectionV1, QualifiedSidecarIdentityV1, SemanticParityEntryV1,
+        SemanticParityReportV1, DIAGNOSTIC_PARITY_SCHEMA, EXPECTED_RESULTS_SCHEMA,
+        PROBE_CORPUS_SCHEMA, QUALIFICATION_SCHEMA_VERSION, QUALIFIED_SIDECAR_REQUEST_VERSION_V1,
+        QUALIFIED_SIDECAR_RESPONSE_VERSION_V1, SEMANTIC_PARITY_SCHEMA,
     };
     use crate::compiler_profile::registry::{
         DynamicScriptTypeOperationsV1, EnginePropertySettingV1, EnginePropertyV1,
@@ -1367,6 +1369,9 @@ mod tests {
                 (PrimitiveTypeV1::Float64, 8, 8),
             ];
             let fixed_operations = |value_size, value_alignment| FixedTypeOperationsV1 {
+                can_create_property: true,
+                never_requires_gc: false,
+                requires_property: false,
                 can_be_template_subtype: true,
                 can_construct: true,
                 need_construct: false,
@@ -1546,12 +1551,19 @@ mod tests {
             };
             expected.seal().unwrap();
             let diagnostics_sha256 = expected.results[0].diagnostics_sha256().unwrap();
+            let standalone_compiler = QualifiedSidecarIdentityV1 {
+                byte_len: 1_966_592,
+                sha256: Sha256Digest::from_bytes([0x5a; 32]),
+                request_version: QUALIFIED_SIDECAR_REQUEST_VERSION_V1,
+                response_version: QUALIFIED_SIDECAR_RESPONSE_VERSION_V1,
+            };
             let mut diagnostics = DiagnosticParityReportV1 {
                 schema: DIAGNOSTIC_PARITY_SCHEMA.to_owned(),
                 schema_version: QUALIFICATION_SCHEMA_VERSION,
                 suite_id: corpus.suite_id.clone(),
                 corpus_sha256: corpus.canonical_sha256,
                 expected_results_sha256: expected.canonical_sha256,
+                standalone_compiler,
                 entries: vec![DiagnosticParityEntryV1 {
                     ordinal: 0,
                     case_id: corpus.cases[0].case_id.clone(),
@@ -1568,6 +1580,7 @@ mod tests {
                 suite_id: corpus.suite_id.clone(),
                 corpus_sha256: corpus.canonical_sha256,
                 expected_results_sha256: expected.canonical_sha256,
+                standalone_compiler,
                 entries: vec![SemanticParityEntryV1 {
                     ordinal: 0,
                     case_id: corpus.cases[0].case_id.clone(),

@@ -271,15 +271,29 @@ struct CompilerProfileHashPayloadV1<'a> {
 
 impl CompilerProfileV1 {
     pub fn from_json(bytes: &[u8]) -> Result<Self, CompilerProfileError> {
+        let profile = Self::parse_bounded_json(bytes)?;
+        profile.validate_complete()?;
+        Ok(profile)
+    }
+
+    /// Parse a materialized profile which is structurally complete but deliberately unqualified.
+    ///
+    /// This is a separate trust state, not a relaxation of [`Self::from_json`]. Product package
+    /// resolution continues to call `from_json` and therefore rejects these artifacts.
+    pub fn from_unqualified_json(bytes: &[u8]) -> Result<Self, CompilerProfileError> {
+        let profile = Self::parse_bounded_json(bytes)?;
+        profile.validate_unqualified_materialized()?;
+        Ok(profile)
+    }
+
+    fn parse_bounded_json(bytes: &[u8]) -> Result<Self, CompilerProfileError> {
         if bytes.len() > MAX_COMPILER_PROFILE_JSON_BYTES {
             return Err(CompilerProfileError::JsonTooLarge {
                 actual: bytes.len(),
                 max: MAX_COMPILER_PROFILE_JSON_BYTES,
             });
         }
-        let profile: Self = serde_json::from_slice(bytes)?;
-        profile.validate_complete()?;
-        Ok(profile)
+        Ok(serde_json::from_slice(bytes)?)
     }
 
     pub fn computed_sha256(&self) -> Result<Sha256Digest, CompilerProfileError> {
@@ -309,14 +323,34 @@ impl CompilerProfileV1 {
     }
 
     pub fn validate_complete(&self) -> Result<(), CompilerProfileError> {
+        self.validate_structure(QualificationStateV1::Qualified)
+    }
+
+    /// Validate the exact structure and canonical seal of a deliberately unqualified profile.
+    /// Such a profile can be inspected and resumed by offline tooling but cannot enter the
+    /// product resolver or mint qualified compiler authority.
+    pub fn validate_unqualified_materialized(&self) -> Result<(), CompilerProfileError> {
+        self.validate_structure(QualificationStateV1::Unqualified)
+    }
+
+    fn validate_structure(
+        &self,
+        qualification_state: QualificationStateV1,
+    ) -> Result<(), CompilerProfileError> {
         if self.schema != COMPILER_PROFILE_SCHEMA {
             return Err(CompilerProfileError::Schema(self.schema.clone()));
         }
         if self.schema_version != COMPILER_PROFILE_SCHEMA_VERSION {
             return Err(CompilerProfileError::SchemaVersion(self.schema_version));
         }
-        if !self.qualification.qualified {
-            return Err(CompilerProfileError::NotQualified);
+        match (qualification_state, self.qualification.qualified) {
+            (QualificationStateV1::Qualified, false) => {
+                return Err(CompilerProfileError::NotQualified);
+            }
+            (QualificationStateV1::Unqualified, true) => {
+                return Err(CompilerProfileError::UnexpectedQualifiedMaterialization);
+            }
+            _ => {}
         }
         if self.target.steam_app_id == 0
             || self.target.steam_build_id == 0
@@ -453,6 +487,12 @@ impl CompilerProfileV1 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QualificationStateV1 {
+    Qualified,
+    Unqualified,
+}
+
 fn validate_blob_path(field: &'static str, path: &str) -> Result<String, CompilerProfileError> {
     let components_are_safe = path.split('/').all(|part| {
         let device_stem = part
@@ -525,6 +565,8 @@ pub enum CompilerProfileError {
     SchemaVersion(u32),
     #[error("compiler profile is not qualified")]
     NotQualified,
+    #[error("unqualified materialization unexpectedly claims qualification")]
+    UnexpectedQualifiedMaterialization,
     #[error("compiler profile target identity is incomplete")]
     TargetIdentityMissing,
     #[error("{field} has zero bytes")]
@@ -674,6 +716,23 @@ mod tests {
         assert!(matches!(
             profile.validate_complete(),
             Err(CompilerProfileError::NotQualified)
+        ));
+
+        profile.seal().unwrap();
+        let json = serde_json::to_vec(&profile).unwrap();
+        assert_eq!(
+            CompilerProfileV1::from_unqualified_json(&json).unwrap(),
+            profile
+        );
+        assert!(matches!(
+            CompilerProfileV1::from_json(&json),
+            Err(CompilerProfileError::NotQualified)
+        ));
+
+        let qualified_json = serde_json::to_vec(&complete_profile()).unwrap();
+        assert!(matches!(
+            CompilerProfileV1::from_unqualified_json(&qualified_json),
+            Err(CompilerProfileError::UnexpectedQualifiedMaterialization)
         ));
 
         let mut profile = complete_profile();

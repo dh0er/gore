@@ -326,7 +326,10 @@ final class AuthoringRevision3ManagedCompilerEvidence {
           (diagnostics.capture != ScriptCompileCaptureDisposition.captured &&
               diagnostics.capture !=
                   ScriptCompileCaptureDisposition.unavailableFallback) ||
-          installRestore != ScriptCompileInstallRestore.restoredExact ||
+          (installRestore != ScriptCompileInstallRestore.restoredExact &&
+              !(installRestore == ScriptCompileInstallRestore.notStarted &&
+                  backend?.resultBackend ==
+                      ScriptCompilerBackendName.standalone)) ||
           recoveryRequired ||
           !outputDiscarded) {
         throw const FormatException(

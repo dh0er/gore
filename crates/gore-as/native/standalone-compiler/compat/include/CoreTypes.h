@@ -10,6 +10,8 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <iterator>
+#include <optional>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -43,6 +45,10 @@ struct TPair {
 
     TPair() = default;
     TPair(const KeyType& key, const ValueType& value) : Key(key), Value(value) {}
+    TPair(const KeyType& key, ValueType&& value)
+        : Key(key), Value(std::move(value)) {}
+    TPair(KeyType&& key, const ValueType& value)
+        : Key(std::move(key)), Value(value) {}
     TPair(KeyType&& key, ValueType&& value)
         : Key(std::move(key)), Value(std::move(value)) {}
 
@@ -52,6 +58,212 @@ struct TPair {
     friend bool operator<(const TPair& left, const TPair& right) {
         return left.Key < right.Key || (!(right.Key < left.Key) && left.Value < right.Value);
     }
+};
+
+// UE's TMap/TMultiMap store elements in a TSparseArray. Iteration therefore follows stable sparse
+// indices, and the next insertion reuses the most recently freed index. A plain std::vector erase
+// changes every later index, while append-after-remove changes observable iteration order (for
+// example scriptModulesByName Remove/Add during a module rename). This narrow storage reproduces
+// the sparse-array lifetime/order contract needed by the pinned AngelScript core; hashing remains
+// an acceleration detail because lookup equality is still checked on every candidate.
+template <typename KeyType, typename ValueType>
+class TSparsePairStorage {
+public:
+    using ElementType = TPair<KeyType, ValueType>;
+
+private:
+    struct Slot {
+        std::optional<ElementType> element;
+        std::uint64_t hash_chain_order = 0U;
+    };
+
+public:
+
+    template <bool IsConst>
+    class Iterator {
+    public:
+        using Owner = std::conditional_t<IsConst, const TSparsePairStorage, TSparsePairStorage>;
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = ElementType;
+        using difference_type = std::ptrdiff_t;
+        using reference = std::conditional_t<IsConst, const ElementType&, ElementType&>;
+        using pointer = std::conditional_t<IsConst, const ElementType*, ElementType*>;
+
+        Iterator() = default;
+        Iterator(Owner* owner, const std::size_t index) : owner_(owner), index_(index) { seek(); }
+
+        reference operator*() const { return *owner_->slots_[index_].element; }
+        pointer operator->() const { return &*owner_->slots_[index_].element; }
+        Iterator& operator++() {
+            ++index_;
+            seek();
+            return *this;
+        }
+        Iterator operator++(int) {
+            Iterator previous = *this;
+            ++*this;
+            return previous;
+        }
+        friend bool operator==(const Iterator& left, const Iterator& right) {
+            return left.owner_ == right.owner_ && left.index_ == right.index_;
+        }
+        friend bool operator!=(const Iterator& left, const Iterator& right) {
+            return !(left == right);
+        }
+
+    private:
+        void seek() {
+            if (owner_ == nullptr) return;
+            while (index_ < owner_->slots_.size() &&
+                   !owner_->slots_[index_].element.has_value()) {
+                ++index_;
+            }
+        }
+
+        Owner* owner_ = nullptr;
+        std::size_t index_ = 0U;
+    };
+
+    using iterator = Iterator<false>;
+    using const_iterator = Iterator<true>;
+
+    template <typename... ArgumentTypes>
+    std::size_t Emplace(ArgumentTypes&&... arguments) {
+        std::size_t index = 0U;
+        if (free_indices_.empty()) {
+            index = slots_.size();
+            slots_.emplace_back();
+        } else {
+            index = free_indices_.back();
+            free_indices_.pop_back();
+        }
+        slots_[index].element.emplace(std::forward<ArgumentTypes>(arguments)...);
+        set_active_count(active_count() + 1U);
+        const std::uint32_t desired_hash_size =
+            default_hash_bucket_count(active_count());
+        if (desired_hash_size > hash_bucket_count()) {
+            set_hash_bucket_count(desired_hash_size);
+            rebuild_hash_chain_order();
+        } else {
+            std::uint64_t newest = 0U;
+            for (const Slot& slot : slots_) {
+                if (slot.element.has_value()) {
+                    newest = (std::max)(newest, slot.hash_chain_order);
+                }
+            }
+            if (newest == (std::numeric_limits<std::uint64_t>::max)()) {
+                std::abort();
+            }
+            slots_[index].hash_chain_order = newest + 1U;
+        }
+        return index;
+    }
+
+    void RemoveAt(const std::size_t index) {
+        if (index >= slots_.size() || !slots_[index].element.has_value()) return;
+        slots_[index].element.reset();
+        slots_[index].hash_chain_order = 0U;
+        free_indices_.push_back(index);
+        set_active_count(active_count() - 1U);
+    }
+
+    template <typename Predicate>
+    std::size_t FindIndex(Predicate&& predicate) const {
+        for (std::size_t index = 0U; index < slots_.size(); ++index) {
+            if (slots_[index].element.has_value() &&
+                predicate(*slots_[index].element)) return index;
+        }
+        return npos;
+    }
+
+    ElementType* At(const std::size_t index) {
+        return index == npos || index >= slots_.size() ||
+               !slots_[index].element.has_value()
+            ? nullptr
+            : &*slots_[index].element;
+    }
+    const ElementType* At(const std::size_t index) const {
+        return index == npos || index >= slots_.size() ||
+               !slots_[index].element.has_value()
+            ? nullptr
+            : &*slots_[index].element;
+    }
+    [[nodiscard]] bool IsAllocated(const std::size_t index) const {
+        return index < slots_.size() && slots_[index].element.has_value();
+    }
+    [[nodiscard]] std::uint64_t HashChainOrderAt(
+        const std::size_t index) const noexcept {
+        return index < slots_.size() && slots_[index].element.has_value()
+            ? slots_[index].hash_chain_order
+            : 0U;
+    }
+    [[nodiscard]] std::size_t MaxIndex() const { return slots_.size(); }
+    [[nodiscard]] int32 Num() const { return static_cast<int32>(active_count()); }
+    void Reserve(const std::size_t count) {
+        slots_.reserve(count);
+        const std::uint32_t desired_hash_size = default_hash_bucket_count(count);
+        if (desired_hash_size > hash_bucket_count()) {
+            set_hash_bucket_count(desired_hash_size);
+            rebuild_hash_chain_order();
+        }
+    }
+    void Empty() {
+        slots_.clear();
+        free_indices_.clear();
+        packed_state_ = 0U;
+    }
+
+    iterator begin() { return iterator(this, 0U); }
+    iterator end() { return iterator(this, slots_.size()); }
+    const_iterator begin() const { return const_iterator(this, 0U); }
+    const_iterator end() const { return const_iterator(this, slots_.size()); }
+
+    static constexpr std::size_t npos = (std::numeric_limits<std::size_t>::max)();
+
+private:
+    // UE4's default set allocator keeps one bucket below four elements.  From
+    // four onward it rounds (Num / 2 + 8) up to a power of two.  TSet rebuilds
+    // every bucket chain when this value grows, walking occupied sparse slots
+    // from low to high and pushing each slot at the head.  Therefore a rehash
+    // changes a same-key chain to descending sparse-slot order.
+    static std::uint32_t default_hash_bucket_count(const std::size_t count) {
+        if (count < 4U) return 1U;
+        std::uint64_t desired = count / 2U + 8U;
+        std::uint64_t buckets = 1U;
+        while (buckets < desired) {
+            buckets <<= 1U;
+            if (buckets > (std::numeric_limits<std::uint32_t>::max)()) {
+                std::abort();
+            }
+        }
+        return static_cast<std::uint32_t>(buckets);
+    }
+
+    [[nodiscard]] std::size_t active_count() const noexcept {
+        return static_cast<std::uint32_t>(packed_state_ & 0xffffffffULL);
+    }
+    [[nodiscard]] std::uint32_t hash_bucket_count() const noexcept {
+        return static_cast<std::uint32_t>(packed_state_ >> 32U);
+    }
+    void set_active_count(const std::size_t count) {
+        if (count > (std::numeric_limits<std::uint32_t>::max)()) std::abort();
+        packed_state_ = (packed_state_ & 0xffffffff00000000ULL) |
+            static_cast<std::uint32_t>(count);
+    }
+    void set_hash_bucket_count(const std::uint32_t count) noexcept {
+        packed_state_ = (static_cast<std::uint64_t>(count) << 32U) |
+            (packed_state_ & 0xffffffffULL);
+    }
+    void rebuild_hash_chain_order() {
+        std::uint64_t order = 0U;
+        for (Slot& slot : slots_) {
+            if (slot.element.has_value()) slot.hash_chain_order = ++order;
+        }
+    }
+
+    std::vector<Slot> slots_;
+    std::vector<std::size_t> free_indices_;
+    std::uint64_t packed_state_ = 0U;
 };
 
 template <typename ValueType, typename Allocator = FDefaultAllocator>
@@ -213,31 +425,29 @@ template <typename KeyType, typename ValueType>
 class TMap {
 public:
     using ElementType = TPair<KeyType, ValueType>;
-    using Storage = std::vector<ElementType>;
+    using Storage = TSparsePairStorage<KeyType, ValueType>;
 
     ValueType& Add(const KeyType& key, const ValueType& value) {
         if (auto* existing = Find(key)) {
             *existing = value;
             return *existing;
         }
-        entries_.emplace_back(key, value);
-        return entries_.back().Value;
+        return entries_.At(entries_.Emplace(key, value))->Value;
     }
     ValueType& Add(const KeyType& key, ValueType&& value) {
         if (auto* existing = Find(key)) {
             *existing = std::move(value);
             return *existing;
         }
-        entries_.emplace_back(key, std::move(value));
-        return entries_.back().Value;
+        return entries_.At(entries_.Emplace(key, std::move(value)))->Value;
     }
     ValueType* Find(const KeyType& key) {
-        const auto found = find_element(key);
-        return found == entries_.end() ? nullptr : &found->Value;
+        auto* found = entries_.At(find_index(key));
+        return found == nullptr ? nullptr : &found->Value;
     }
     const ValueType* Find(const KeyType& key) const {
-        const auto found = find_element(key);
-        return found == entries_.end() ? nullptr : &found->Value;
+        const auto* found = entries_.At(find_index(key));
+        return found == nullptr ? nullptr : &found->Value;
     }
     [[nodiscard]] ValueType FindRef(const KeyType& key) const {
         const auto* value = Find(key);
@@ -247,21 +457,21 @@ public:
     const ValueType& FindChecked(const KeyType& key) const { return *Find(key); }
     [[nodiscard]] bool Contains(const KeyType& key) const { return Find(key) != nullptr; }
     int32 Remove(const KeyType& key) {
-        const auto found = find_element(key);
-        if (found == entries_.end()) {
+        const auto found = find_index(key);
+        if (found == Storage::npos) {
             return 0;
         }
-        entries_.erase(found);
+        entries_.RemoveAt(found);
         return 1;
     }
-    void Reset() { entries_.clear(); }
-    void Empty() { entries_.clear(); }
+    void Reset() { entries_.Empty(); }
+    void Empty() { entries_.Empty(); }
     void Reserve(const int32 count) {
         if (count > 0) {
-            entries_.reserve(static_cast<std::size_t>(count));
+            entries_.Reserve(static_cast<std::size_t>(count));
         }
     }
-    [[nodiscard]] int32 Num() const { return static_cast<int32>(entries_.size()); }
+    [[nodiscard]] int32 Num() const { return entries_.Num(); }
 
     auto begin() noexcept { return entries_.begin(); }
     auto end() noexcept { return entries_.end(); }
@@ -269,12 +479,8 @@ public:
     auto end() const noexcept { return entries_.end(); }
 
 private:
-    auto find_element(const KeyType& key) {
-        return std::find_if(entries_.begin(), entries_.end(),
-            [&key](const ElementType& element) { return element.Key == key; });
-    }
-    auto find_element(const KeyType& key) const {
-        return std::find_if(entries_.begin(), entries_.end(),
+    std::size_t find_index(const KeyType& key) const {
+        return entries_.FindIndex(
             [&key](const ElementType& element) { return element.Key == key; });
     }
 
@@ -285,7 +491,7 @@ template <typename KeyType, typename ValueType>
 class TMultiMap {
 public:
     using ElementType = TPair<KeyType, ValueType>;
-    using Storage = std::vector<ElementType>;
+    using Storage = TSparsePairStorage<KeyType, ValueType>;
 
     class ConstKeyIterator {
     public:
@@ -293,62 +499,79 @@ public:
             : owner_(&owner), key_(key) {
             seek();
         }
-        explicit operator bool() const { return index_ < owner_->entries_.size(); }
+        explicit operator bool() const { return index_ != Storage::npos; }
         ConstKeyIterator& operator++() {
-            ++index_;
+            before_sequence_ = owner_->entries_.HashChainOrderAt(index_);
             seek();
             return *this;
         }
-        const ValueType& Value() const { return owner_->entries_[index_].Value; }
+        const ValueType& Value() const { return owner_->entries_.At(index_)->Value; }
+        std::size_t Index() const { return index_; }
 
     private:
         void seek() {
-            while (index_ < owner_->entries_.size() &&
-                   !(owner_->entries_[index_].Key == key_)) {
-                ++index_;
+            index_ = Storage::npos;
+            std::uint64_t newest = 0U;
+            for (std::size_t candidate = 0U;
+                 candidate < owner_->entries_.MaxIndex(); ++candidate) {
+                const auto* element = owner_->entries_.At(candidate);
+                if (element == nullptr || !(element->Key == key_)) continue;
+                const std::uint64_t sequence =
+                    owner_->entries_.HashChainOrderAt(candidate);
+                if (sequence < before_sequence_ && sequence > newest) {
+                    newest = sequence;
+                    index_ = candidate;
+                }
             }
         }
 
         const TMultiMap* owner_;
         KeyType key_;
-        std::size_t index_ = 0U;
+        std::uint64_t before_sequence_ =
+            (std::numeric_limits<std::uint64_t>::max)();
+        std::size_t index_ = Storage::npos;
     };
 
-    void Add(const KeyType& key, const ValueType& value) { entries_.emplace_back(key, value); }
+    void Add(const KeyType& key, const ValueType& value) {
+        entries_.Emplace(key, value);
+    }
     void AddUnique(const KeyType& key, const ValueType& value) {
         if (FindPair(key, value) == nullptr) {
             Add(key, value);
         }
     }
     int32 Remove(const KeyType& key, const ValueType& value) {
-        const auto old_size = entries_.size();
-        entries_.erase(std::remove_if(entries_.begin(), entries_.end(),
-            [&key, &value](const ElementType& element) {
-                return element.Key == key && element.Value == value;
-            }), entries_.end());
-        return static_cast<int32>(old_size - entries_.size());
+        int32 removed = 0;
+        for (std::size_t index = 0U; index < entries_.MaxIndex(); ++index) {
+            const auto* element = entries_.At(index);
+            if (element != nullptr && element->Key == key && element->Value == value) {
+                entries_.RemoveAt(index);
+                ++removed;
+            }
+        }
+        return removed;
     }
     ElementType* FindPair(const KeyType& key, const ValueType& value) {
-        const auto found = std::find_if(entries_.begin(), entries_.end(),
-            [&key, &value](const ElementType& element) {
-                return element.Key == key && element.Value == value;
-            });
-        return found == entries_.end() ? nullptr : &*found;
+        for (auto iterator = CreateConstKeyIterator(key); iterator; ++iterator) {
+            if (iterator.Value() == value) return entries_.At(iterator.Index());
+        }
+        return nullptr;
     }
     const ElementType* FindPair(const KeyType& key, const ValueType& value) const {
-        const auto found = std::find_if(entries_.begin(), entries_.end(),
-            [&key, &value](const ElementType& element) {
-                return element.Key == key && element.Value == value;
-            });
-        return found == entries_.end() ? nullptr : &*found;
+        for (auto iterator = CreateConstKeyIterator(key); iterator; ++iterator) {
+            if (iterator.Value() == value) return entries_.At(iterator.Index());
+        }
+        return nullptr;
     }
     ConstKeyIterator CreateConstKeyIterator(const KeyType& key) const {
         return ConstKeyIterator(*this, key);
     }
-    void Empty() { entries_.clear(); }
+    void Empty() {
+        entries_.Empty();
+    }
     void Reserve(const int32 count) {
         if (count > 0) {
-            entries_.reserve(static_cast<std::size_t>(count));
+            entries_.Reserve(static_cast<std::size_t>(count));
         }
     }
 

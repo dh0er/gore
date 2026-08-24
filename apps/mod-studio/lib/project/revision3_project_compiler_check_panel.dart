@@ -380,7 +380,7 @@ class Revision3ProjectCompilerCheckDialog extends ConsumerStatefulWidget {
 
 class _Revision3ProjectCompilerCheckDialogState
     extends ConsumerState<Revision3ProjectCompilerCheckDialog> {
-  ScriptCompilerBackendMode _backend = ScriptCompilerBackendMode.game;
+  ScriptCompilerBackendMode _backend = ScriptCompilerBackendMode.productDefault;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -429,9 +429,14 @@ class _Revision3ProjectCompilerCheckDialogState
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    requiresGameSafety
-                        ? 'This route may start the game compiler and requires an exact, safe installation.'
-                        : 'This route never starts the game and never mutates the installation. It fails closed unless a qualified standalone package is available.',
+                    switch (_backend) {
+                      ScriptCompilerBackendMode.standaloneThenGame =>
+                        'Mod Studio tries the qualified standalone compiler first. If it cannot produce an accepted result, the reason stays visible and the game compiler is used as fallback.',
+                      ScriptCompilerBackendMode.game =>
+                        'This route uses the game compiler and requires an exact, safe installation.',
+                      ScriptCompilerBackendMode.standalone =>
+                        'This route never starts the game and never mutates the installation. It fails closed unless a qualified standalone package is available.',
+                    },
                     key: const Key(
                       'revision3-project-compiler-backend-description',
                     ),

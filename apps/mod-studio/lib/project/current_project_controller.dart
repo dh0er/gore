@@ -3395,7 +3395,8 @@ final class CurrentProjectCoordinator
     required int expectedProjectRevision,
     required AuthoringWorkingHead expectedHead,
     required String gameRoot,
-    ScriptCompilerBackendMode compilerBackend = ScriptCompilerBackendMode.game,
+    ScriptCompilerBackendMode compilerBackend =
+        ScriptCompilerBackendMode.productDefault,
   }) => _enqueue(() async {
     final current = _current;
     if (current == null) throw const NoCurrentProjectException();
@@ -3474,7 +3475,8 @@ final class CurrentProjectCoordinator
     required String expectedModuleId,
     required int expectedModuleRevision,
     required String gameRoot,
-    ScriptCompilerBackendMode compilerBackend = ScriptCompilerBackendMode.game,
+    ScriptCompilerBackendMode compilerBackend =
+        ScriptCompilerBackendMode.productDefault,
   }) => _enqueue(() async {
     final current = _current;
     if (current == null) throw const NoCurrentProjectException();

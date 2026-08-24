@@ -1,8 +1,23 @@
 # Authorized bridge contract for BuildID 24539464
 
-This is a capture specification, not executable hook code. The static library does not install
-these observation points. A later run needs separate authority to start the game and attach or
-load an instrumentation bridge.
+This is the runtime observation specification. The buildable bridge DLL exposes this exact
+BuildID/RVA table, attach/record/seal/detach ABI, and the exact target-specific instrumentation
+contract documented in `INSTRUMENTATION.md`. It never installs anything from `DllMain`, starts a
+process, or attaches to one. Static analysis closed every exact transfer/frame ABI, a separate
+exact fourteen-entry registration-hook contract, the public AS 2.33 registry projection, bounded
+target-witnessed FinalState field extractors, canonical Delta/HostStub/FinalState serializers and
+ID correlation, the target TypeUsage helper/operation vtable, Build/JIT/compiler-flag extraction,
+frontend boundary frames, preprocessor module/source/hash layout, three transient frontend callback
+callsites, pointer-neutral frontend semantic projections and the transactional patch mechanics.
+The bounded immutable-snapshot frontend materializer now closes the target-raw structures. Static
+target-xref proof also closes both graph hooks as unbound: their exact 24-byte runtime objects must
+remain `{pointer=0,num=0,max=0,compaction=2,broadcast_count=0}`, and the resulting frontend config
+must carry ProcessChunks/PostProcessCode `bound=false` with empty captures. Drift is terminal before
+recording. The bounded sparse CurrentProcess snapshot builder, direct 26-site dispatcher and one
+RawMaterializer -> registration/frontend -> serializer -> Bridge phase machine are now connected.
+The production contract currently reports `production_installable=0` while final relay-unwind
+coverage and the complete post-fix gate remain pending. No production installation or target
+execution occurred in this lane.
 
 The bridge must preserve this order:
 
@@ -26,7 +41,14 @@ The bridge must preserve this order:
    and global property. The offline decoder requires exact 1:1 trace coverage.
 6. At `GetBuildIdentifier` RVA `0x48d3230` and `GetStaticJitInfo` RVA `0x48d0f60`, record the
    returned build/JIT facts, including the Shipping cache GUID comparison and whether the JIT
-   database was cleared. The helper accepts only the pinned expected identity.
+   database was cleared. The flags field is exactly: bits 0..3 `jit_info_present`,
+   `jit_guid_matches`, `jit_database_cleared`, `shipping_cache_matches`; bit 4
+   `as_reference_debugging`; bit 5 `fork_opcode_table_201_212_present`; bit 6
+   `reference_debug_opcodes_emittable`; bit 7 `resolve_object_ptr_callback_registered`. All higher
+   bits are reserved. BuildID 24539464 requires bits 4..7 to equal `0x20` (false, true, false,
+   false). Opcode-table presence is not opcode reachability: qualification may expect opcode 204
+   only when bit 7 is true and opcodes 206..208 only when bit 6 is true. The helper accepts only
+   the pinned expected identity.
 7. Serialize the three complete frontend JSON configs. Use their canonical digests to compute
    `SHA256("gore-as-captured-frontend-config-set-v1\\0" || preprocessor_digest ||
    class_generator_digest || compiler_options_digest)` and use that digest at every boundary.
@@ -34,10 +56,32 @@ The bridge must preserve this order:
    precompiled-descriptor request RVA `0x46842d0` or preprocessor-constructed RVA `0x468435d`;
    and successful return RVA `0x4685a46`. Source/module inputs and compiler outputs are digests,
    not pointers.
-9. Call `seal`. Preserve an unsealed file for diagnosis if a fail-closed check trips; the offline
+9. The coordinator calls `seal_and_detach` only after all canonical appends succeed. A fail-closed
+   check calls `abort_and_detach`; the retained unsealed file is diagnostic-only and the offline
    decoder will not accept it as profile evidence.
 
-Only the authorized runtime run can supply the effective property values, callback order,
-registry deltas/results, host-stub traits, post-bind mutations/final states, current JIT facts,
-frontend configuration, and boundary input/output digests. Static analysis established the
-target identity and observation RVAs but cannot honestly substitute values for those facts.
+Only the authorized runtime run can supply the effective property calls; callback and registration
+sequence/results; encountered pointer-capability identities; resulting registry/final values;
+current JIT presence/GUID/clear outcome; and actual frontend configs, descriptor/module/source
+sets and outputs. Static analysis has established the target identity, instruction/frame and
+fourteen registration contracts, target context/result semantics and statically decidable compiler
+flags, but cannot honestly substitute effective values. Object/global target layouts, TypeUsage
+operations, Delta, HostStub and FinalState serialization are now statically closed. The fourteen
+frames map transactionally to typed projections with 1:1 post-bind enumeration. Frontend hashing
+is closed after the new immutable-snapshot materializer has supplied pointer-neutral graphs. For
+this BuildID both graph delegates are provably unbound, so no graph mutation schema is needed and
+their captures must remain empty. State-preserving production shims and their all-or-nothing patch
+coordinator, bounded typed-region snapshot builder and fail-closed semantic dispatcher are
+statically closed. What remains is exclusively the separately authorized observation of the
+effective values above; runtime authority is not permission to guess them.
+
+The observation RVA `0x468435d` is inside the relative operand of the call instruction beginning
+at `0x468435c`. The production adapter pins the entire five-byte call as its patch anchor; a direct
+patch at `0x468435d` is forbidden.
+
+The offline synthetic host exercises the same phase machine with a separately named fixture DLL.
+Its JSON bodies are deliberately structural fixtures, not runtime measurements and not valid
+profile evidence. `gore_as_capture_materializer.exe` produces only a wire-audit summary; the Rust
+`decode_capture_v1` function consumes the original sealed `.capture`, and a later package
+materializer consumes that decoder's typed projections. No synthetic artifact may be catalogued
+as a product profile.

@@ -578,6 +578,9 @@ asPWORD asCScriptEngine::GetEngineProperty(asEEngineProp property) const
 	case asEP_GENERIC_CALL_MODE:
 		return ep.genericCallMode;
 
+	case asEP_AUTOMATIC_IMPORTS:
+		return ep.automaticImports;
+
 	case asEP_TYPECHECK_SWITCH_ENUMS:
 		return ep.typeCheckSwitchEnums;
 
