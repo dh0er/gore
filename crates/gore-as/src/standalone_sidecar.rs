@@ -3519,6 +3519,7 @@ mod tests {
 
     struct TestFixture {
         _process_guard: std::sync::MutexGuard<'static, ()>,
+        python: Option<PathBuf>,
         root: PathBuf,
         profile_root: PathBuf,
         manifest: PathBuf,
@@ -3537,6 +3538,10 @@ mod tests {
             let process_guard = TEST_FIXTURE_PROCESS_LOCK
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            // The manifest and every runner created from this fixture must use one exact sidecar
+            // identity. A later fixture may retry transient discovery, but this fixture may not
+            // switch from the dummy identity to a real interpreter halfway through the test.
+            let python = find_python();
             let root = std::env::temp_dir().join(format!(
                 "gore-as-sidecar-test-{label}-{}-{}",
                 std::process::id(),
@@ -3854,8 +3859,9 @@ mod tests {
             };
             expected_results.seal().unwrap();
             let diagnostics_sha256 = expected_results.results[0].diagnostics_sha256().unwrap();
-            let qualified_sidecar = find_python()
-                .map(|path| executable_seal(&path))
+            let qualified_sidecar = python
+                .as_ref()
+                .map(|path| executable_seal(path))
                 .map(|seal| QualifiedSidecarIdentityV1 {
                     byte_len: seal.byte_len,
                     sha256: seal.sha256,
@@ -3994,6 +4000,7 @@ mod tests {
             std::fs::write(&manifest, serde_json::to_vec(&profile).unwrap()).unwrap();
             Self {
                 _process_guard: process_guard,
+                python,
                 root,
                 profile_root,
                 manifest,
@@ -4010,7 +4017,7 @@ mod tests {
             script: &str,
             timeout: Duration,
         ) -> Option<StandaloneSidecarRunnerV1> {
-            let python = find_python()?;
+            let python = self.python.clone()?;
             let script_path = self.root.join(format!("{label}.py"));
             std::fs::write(&script_path, script).unwrap();
             let mut config = StandaloneSidecarConfigV1::new(
@@ -4304,7 +4311,7 @@ print(json.dumps({"response_version":1,"ok":True,"output":{"cache_path":str(outp
     #[test]
     fn qualification_v3_request_has_no_caller_witness_and_binds_same_process_evidence() {
         let fixture = TestFixture::create("qualification-v3-wire");
-        let Some(python) = find_python() else {
+        let Some(python) = fixture.python.clone() else {
             eprintln!("python unavailable; qualification-v3 wire test skipped");
             return;
         };
@@ -4777,7 +4784,7 @@ time.sleep(30)
     #[test]
     fn sidecar_memory_limit_is_bounded_before_process_start() {
         let fixture = TestFixture::create("memory-limit");
-        let Some(python) = find_python() else {
+        let Some(python) = fixture.python.clone() else {
             eprintln!("python unavailable; sidecar configuration test skipped");
             return;
         };
@@ -4798,7 +4805,7 @@ time.sleep(30)
     #[test]
     fn sidecar_executable_must_match_the_packaged_seal() {
         let fixture = TestFixture::create("executable-seal");
-        let Some(python) = find_python() else {
+        let Some(python) = fixture.python.clone() else {
             eprintln!("python unavailable; sidecar seal test skipped");
             return;
         };
