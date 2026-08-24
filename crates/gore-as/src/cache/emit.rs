@@ -1407,7 +1407,14 @@ fn emit_function_ctor(
         )
         .collect();
     let body = fold_enum_round_trips(&body, fields, &path_roots, refs);
-    let body = fold_member_read_temporaries(&body, &declared_locals, fields, &path_roots, refs);
+    let body = fold_member_read_temporaries(
+        &body,
+        &declared_locals,
+        fields,
+        &path_roots,
+        refs,
+        &member_read_slots(f),
+    );
     let body =
         fold_returned_temporaries(&body, &declared_locals, refs, &ret, returns_by_reference);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
@@ -6790,10 +6797,51 @@ fn enum_of_member_path(
     for step in steps {
         ty = refs
             .field_type_by_class(&ty, step)
-            .or_else(|| refs.native_field_type(&ty, step))?
+            .or_else(|| refs.native_field_type(&ty, step))
+            // A field declared by a NATIVE class appears in no script class-fields map — the
+            // installed `Binds.Cache` is what declares it, and it is read-only evidence.
+            .or_else(|| refs.native_field_value_type(&ty, step))?
             .to_owned();
     }
     ty.starts_with('E').then_some(ty)
+}
+
+/// Slots a direct member read (`RDR1`/`RDR2`/`RDR4`/`RDR8`) writes. The read puts the member's
+/// own value there and converts nothing on the way, so where the body also assigns the slot only
+/// once and reads it once, the name in front of it is free to go — even where the type tables
+/// cannot follow the path, which is what happens for a field declared by a NATIVE base class.
+fn member_read_slots(f: &Func) -> HashMap<i32, u8> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashMap::new();
+    };
+    instrs
+        .iter()
+        .filter_map(|ins| {
+            let width = match ins.op.name {
+                "RDR1" => 1u8,
+                "RDR2" => 2,
+                "RDR4" => 4,
+                "RDR8" => 8,
+                _ => return None,
+            };
+            let slot = ins.words.first().map(|word| *word as i16 as i32)?;
+            (slot > 0).then_some((slot, width))
+        })
+        .collect()
+}
+
+/// How wide a declared type is, where the declaration cannot be doing anything but hold the
+/// value. `None` for anything this cannot answer, which refuses the fold rather than guess.
+fn declared_width(ty: &str) -> Option<u8> {
+    match ty {
+        "bool" | "int8" | "uint8" => Some(1),
+        "int16" | "uint16" => Some(2),
+        "int" | "uint" | "float32" => Some(4),
+        "float" | "double" | "int64" | "uint64" => Some(8),
+        // An enum is byte-backed in this build, and a read of one is `RDR1`.
+        name if super::structure::is_enum_name(name) => Some(1),
+        _ => None,
+    }
 }
 
 /// The declared type a member PATH names, by the same walk without the enum requirement.
@@ -6812,7 +6860,10 @@ fn type_of_member_path(
     for step in steps {
         ty = refs
             .field_type_by_class(&ty, step)
-            .or_else(|| refs.native_field_type(&ty, step))?
+            .or_else(|| refs.native_field_type(&ty, step))
+            // A field declared by a NATIVE class appears in no script class-fields map — the
+            // installed `Binds.Cache` is what declares it, and it is read-only evidence.
+            .or_else(|| refs.native_field_value_type(&ty, step))?
             .to_owned();
     }
     Some(ty)
@@ -6831,6 +6882,7 @@ fn fold_member_read_temporaries(
     fields: Option<&HashMap<String, String>>,
     roots: &HashMap<String, String>,
     refs: &RefResolver,
+    direct_reads: &HashMap<i32, u8>,
 ) -> String {
     // A path, not a literal: `5.0f` also contains a dot, and reading it as a member path made
     // every float constant look like an unresolvable member.
@@ -6851,8 +6903,18 @@ fn fold_member_read_temporaries(
             if !pure_path(&path) {
                 return None;
             }
+            // Either the type tables agree that the declaration converts nothing, or the
+            // bytecode says so outright: the slot's only write is the member read itself.
             let member = type_of_member_path(&path, fields, roots, refs);
-            if locals.get(&slot) != member.as_ref() {
+            // The read's WIDTH has to be the slot's own: `RDR1` into an `int` slot is the
+            // widening the declaration performs, and folding it away asks the compiler to
+            // convert somewhere else (measured: 25 errors, `int` from `bool`).
+            let read_puts_it_there = count_ident(body, &name) == 2
+                && locals
+                    .get(&slot)
+                    .and_then(|ty| declared_width(ty))
+                    .is_some_and(|width| direct_reads.get(&slot) == Some(&width));
+            if locals.get(&slot) != member.as_ref() && !read_puts_it_there {
                 if std::env::var_os("GORE_AS_MEMBER_DIAG").is_some() {
                     eprintln!(
                         "[member] {} slot={:?} member={:?} | {}",
