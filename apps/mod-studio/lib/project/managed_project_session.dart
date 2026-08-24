@@ -147,6 +147,8 @@ final class ManagedRevision3CompilerCheckReceipt {
       storeStillExactCurrent && result.acceptedAtExactCurrent;
 
   bool get recoveryRequired => result.recoveryRequired;
+
+  bool get gameInstallRecoveryRequired => result.gameInstallRecoveryRequired;
 }
 
 /// Evidence from one common project compiler check plus the app-side
@@ -167,6 +169,8 @@ final class ManagedRevision3ProjectCompilerCheckReceipt {
       storeStillExactCurrent && result.acceptedAtExactCurrent;
 
   bool get recoveryRequired => result.recoveryRequired;
+
+  bool get gameInstallRecoveryRequired => result.gameInstallRecoveryRequired;
 }
 
 /// One fully verified in-session recovery of an uncertain revision-3 head.

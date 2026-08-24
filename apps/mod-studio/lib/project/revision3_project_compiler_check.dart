@@ -195,6 +195,13 @@ final class AuthoringRevision3ProjectCompilerEvidence {
   final AuthoringRevision3ProjectCompilerOutputDisposition outputDisposition;
   final ScriptCompilerBackendEvidence? backend;
 
+  bool get gameInstallRecoveryRequired =>
+      scriptCompileRequiresGameInstallRecovery(
+        recoveryRequired: recoveryRequired,
+        installRestore: installRestore,
+        failure: failure,
+      );
+
   bool get compiledEvidenceOnly =>
       outcome == AuthoringRevision3ProjectCompilerOutcome.compiledEvidenceOnly;
 
@@ -484,6 +491,8 @@ final class AuthoringRevision3ProjectCompilerCheckResult {
   final ScriptCompilerBackendMode? backendMode;
 
   bool get recoveryRequired => compiler.recoveryRequired;
+
+  bool get gameInstallRecoveryRequired => compiler.gameInstallRecoveryRequired;
 
   bool get acceptedAtExactCurrent =>
       exactCurrent &&

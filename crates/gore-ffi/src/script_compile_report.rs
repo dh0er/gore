@@ -764,57 +764,59 @@ fn compile_report_with_available_product_package(
         package.profile_root().to_path_buf(),
         staging.path().to_path_buf(),
     );
-    let mut runner = match gore_as::standalone_sidecar::StandaloneSidecarRunnerV1::new(config) {
-        Ok(runner) => runner,
-        Err(failure) => {
-            let package_identity = package.identity().clone();
+    let runner = gore_as::standalone_sidecar::StandaloneSidecarRunnerV1::new(config);
+    let (authority, target) = package.into_execution_parts();
+    let mut runner_unavailable = None;
+    let mut runner = match runner {
+        Ok(runner) => Some(runner),
+        Err(failure) if requested == CompilerBackendWireV2::Standalone => {
             let mut failure_detail = Value::String(failure.to_string());
             crate::authoring_story_compiler_revision3::redact_private_paths(
                 &mut failure_detail,
                 &[
                     staging.path(),
-                    package.sidecar_path(),
-                    package.profile_manifest_path(),
-                    package.profile_root(),
+                    authority.sidecar_path(),
+                    authority.profile_manifest_path(),
+                    authority.profile_root(),
                 ],
             );
             let failure_detail = failure_detail
                 .as_str()
                 .unwrap_or("standalone runner initialization failed")
                 .to_owned();
-            if requested == CompilerBackendWireV2::Standalone {
-                return attach_backend_evidence(
-                    preflight_failure("COMPILE_STANDALONE_RUNNER_UNAVAILABLE", failure_detail),
-                    backend_evidence_with_package(
-                        requested,
-                        None,
-                        false,
-                        false,
-                        Some(&package_identity),
-                        None,
-                    ),
-                );
-            }
-            let fallback = json!({
-                "failed_backend": CompilerBackendNameV1::Standalone.as_str(),
-                "failure_kind": failure.kind().as_str(),
-                "detail": failure_detail,
-            });
-            let (response, game_attempted) = compile_report_v1_payload_with_attempt(payload);
             return attach_backend_evidence(
-                response,
+                preflight_failure("COMPILE_STANDALONE_RUNNER_UNAVAILABLE", failure_detail),
                 backend_evidence_with_package(
                     requested,
-                    game_attempted.then_some(CompilerBackendNameV1::Game),
+                    None,
                     false,
-                    game_attempted,
-                    Some(&package_identity),
-                    Some(fallback),
+                    false,
+                    Some(authority.identity()),
+                    None,
                 ),
             );
         }
+        Err(failure) => {
+            let mut failure_detail = Value::String(failure.to_string());
+            crate::authoring_story_compiler_revision3::redact_private_paths(
+                &mut failure_detail,
+                &[
+                    staging.path(),
+                    authority.sidecar_path(),
+                    authority.profile_manifest_path(),
+                    authority.profile_root(),
+                ],
+            );
+            runner_unavailable = Some(json!({
+                "failed_backend": CompilerBackendNameV1::Standalone.as_str(),
+                "failure_kind": failure.kind().as_str(),
+                "detail": failure_detail
+                    .as_str()
+                    .unwrap_or("standalone runner initialization failed"),
+            }));
+            None
+        }
     };
-    let (authority, target) = package.into_execution_parts();
     let opts = CompileOpts {
         game_dir: game_dir.clone(),
         op: payload.op,
@@ -852,7 +854,11 @@ fn compile_report_with_available_product_package(
                 inject_delay: Duration::from_secs(2),
             },
             CompilerBackendModeV1::Standalone,
-            Some(&mut runner),
+            Some(
+                runner
+                    .as_mut()
+                    .expect("strict standalone returned after runner initialization failure"),
+            ),
         );
         report
     } else {
@@ -880,7 +886,7 @@ fn compile_report_with_available_product_package(
                 inject_delay: Duration::from_secs(2),
             },
             CompilerBackendModeV1::StandaloneThenGame,
-            Some(&mut runner),
+            runner.as_mut().map(|runner| runner as _),
             guard,
             strict_target
                 .take()
@@ -890,11 +896,13 @@ fn compile_report_with_available_product_package(
     let result_backend = report.backend_name();
     let standalone_attempted = report.standalone_attempted();
     let game_attempted = report.game_attempted();
-    let fallback = report.fallback_reason().map(|reason| {
-        json!({
-            "failed_backend": reason.failed_backend().as_str(),
-            "failure_kind": reason.failure_kind().as_str(),
-            "detail": reason.detail(),
+    let fallback = runner_unavailable.or_else(|| {
+        report.fallback_reason().map(|reason| {
+            json!({
+                "failed_backend": reason.failed_backend().as_str(),
+                "failure_kind": reason.failure_kind().as_str(),
+                "detail": reason.detail(),
+            })
         })
     });
     let evidence = backend_evidence_with_package(

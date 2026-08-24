@@ -237,6 +237,10 @@ void main() {
     tester,
   ) async {
     expect(_receipt(kind: _ReceiptKind.recovery).recoveryRequired, isTrue);
+    expect(
+      _receipt(kind: _ReceiptKind.recovery).gameInstallRecoveryRequired,
+      isTrue,
+    );
     final safety = ScriptCompileInstallSafetyController(
       (_) async => _safeInstall(),
       gameRoot: _gameRoot,

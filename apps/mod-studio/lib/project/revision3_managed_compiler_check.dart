@@ -241,6 +241,13 @@ final class AuthoringRevision3ManagedCompilerEvidence {
   bool get compiledEvidenceOnly =>
       outcome == AuthoringRevision3ManagedCompilerOutcome.compiledEvidenceOnly;
 
+  bool get gameInstallRecoveryRequired =>
+      scriptCompileRequiresGameInstallRecovery(
+        recoveryRequired: recoveryRequired,
+        installRestore: installRestore,
+        failure: failure,
+      );
+
   factory AuthoringRevision3ManagedCompilerEvidence._fromJson(
     Object? value, {
     ScriptCompilerBackendMode? expectedBackend,
@@ -397,6 +404,8 @@ final class AuthoringRevision3ManagedCompilerCheckResult {
       exactCurrent && compiler.compiledEvidenceOnly;
 
   bool get recoveryRequired => compiler.recoveryRequired;
+
+  bool get gameInstallRecoveryRequired => compiler.gameInstallRecoveryRequired;
 
   String get projectId => project.id;
   int get projectRevision => project.revision;

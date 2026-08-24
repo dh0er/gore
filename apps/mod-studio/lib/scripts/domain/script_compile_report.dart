@@ -440,6 +440,27 @@ class ScriptCompileFailure {
   final String message;
 }
 
+/// Whether recovery evidence concerns the selected game installation.
+///
+/// Full-graph compiler reports also use `recoveryRequired` when a private
+/// compiler output could not be removed. That output must still block adoption
+/// of the compiler result, but it does not make the game installation unsafe.
+bool scriptCompileRequiresGameInstallRecovery({
+  required bool recoveryRequired,
+  required ScriptCompileInstallRestore installRestore,
+  required ScriptCompileFailure? failure,
+}) {
+  if (!recoveryRequired) return false;
+  return switch (installRestore) {
+    ScriptCompileInstallRestore.recoveryRequiredProcessExitUnconfirmed ||
+    ScriptCompileInstallRestore.recoveryRequiredRestoreFailed => true,
+    ScriptCompileInstallRestore.restoredExact => false,
+    ScriptCompileInstallRestore.notStarted =>
+      failure != null &&
+          _preexistingRecoveryFailureCodes.contains(failure.code),
+  };
+}
+
 /// Closed, bounded projection of one transactional game-compiler attempt.
 ///
 /// A failed compiler attempt is data, not a transport exception. In particular, callers can show
@@ -466,6 +487,13 @@ class ScriptCompileReport {
   final ScriptCompilerBackendEvidence? backend;
 
   bool get compiled => outcome == ScriptCompileOutcome.compiled;
+
+  bool get gameInstallRecoveryRequired =>
+      scriptCompileRequiresGameInstallRecovery(
+        recoveryRequired: recoveryRequired,
+        installRestore: installRestore,
+        failure: failure,
+      );
 
   factory ScriptCompileReport.fromJson(
     Map<String, Object?> json, {

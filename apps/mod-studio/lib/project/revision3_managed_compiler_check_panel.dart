@@ -216,7 +216,7 @@ class _Revision3ManagedCompilerCheckPanelState
         }
         receipt = await widget.check(compilerBackend: attemptedBackend);
         final compiler = receipt.result.compiler;
-        if (requiresGameSafety && compiler.recoveryRequired) {
+        if (requiresGameSafety && receipt.gameInstallRecoveryRequired) {
           final failure = compiler.failure;
           safetyController.recordManagedRecovery(
             gameRoot: attemptedGameRoot,

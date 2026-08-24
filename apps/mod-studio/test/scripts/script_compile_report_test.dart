@@ -234,6 +234,7 @@ void main() {
     );
 
     expect(report.recoveryRequired, isTrue);
+    expect(report.gameInstallRecoveryRequired, isTrue);
     expect(
       report.installRestore,
       ScriptCompileInstallRestore.recoveryRequiredProcessExitUnconfirmed,
@@ -340,6 +341,7 @@ void main() {
 
       expect(report.compiled, isFalse, reason: code);
       expect(report.recoveryRequired, isTrue, reason: code);
+      expect(report.gameInstallRecoveryRequired, isTrue, reason: code);
       expect(report.installRestore, ScriptCompileInstallRestore.notStarted);
     }
   });

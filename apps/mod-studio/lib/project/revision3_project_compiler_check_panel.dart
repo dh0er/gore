@@ -522,7 +522,7 @@ class _Revision3ProjectCompilerCheckDialogState
             gameRoot: attemptedGameRoot,
             compilerBackend: attemptedBackend,
           );
-          if (requiresGameSafety && receipt.recoveryRequired) {
+          if (requiresGameSafety && receipt.gameInstallRecoveryRequired) {
             final compiler = receipt.result.compiler;
             final failure = compiler.failure!;
             safetyController.recordManagedRecovery(
@@ -535,7 +535,7 @@ class _Revision3ProjectCompilerCheckDialogState
           return receipt;
         } finally {
           if (requiresGameSafety &&
-              receipt?.recoveryRequired != true &&
+              receipt?.gameInstallRecoveryRequired != true &&
               _sameRoot(safetyController.current.gameRoot, attemptedGameRoot)) {
             await safetyController.refresh();
           }

@@ -442,7 +442,7 @@ void main() {
     },
   );
 
-  testWidgets('recovery is retained in the shared install safety gate', (
+  testWidgets('private output recovery does not block the game installation', (
     tester,
   ) async {
     final checkpoint = _checkpoint(7);
@@ -465,15 +465,35 @@ void main() {
       controller.snapshot.outcome,
       Revision3ProjectCompilerOutcome.recoveryRequired,
     );
+    expect(safety.current.recoveryRequired, isFalse);
+    expect(safety.current.liveMutationAllowed, isTrue);
+    expect(safety.current.recoveryEvidence, isNull);
+  });
+
+  testWidgets('install recovery is retained in the shared safety gate', (
+    tester,
+  ) async {
+    final checkpoint = _checkpoint(7);
+    final controller = _controller(checkpoint: checkpoint);
+    addTearDown(controller.dispose);
+    final safety = _safety();
+    await _pumpDialog(
+      tester,
+      checkpoint: checkpoint,
+      controller: controller,
+      safety: safety,
+      check: ({required gameRoot, required compilerBackend}) async =>
+          _receipt(checkpoint, _ReceiptKind.recovery),
+    );
+
+    await tester.tap(find.byKey(const Key('revision3-project-compiler-run')));
+    await tester.pumpAndSettle();
+
     expect(safety.current.recoveryRequired, isTrue);
     expect(safety.current.liveMutationAllowed, isFalse);
     expect(
-      safety.current.recoveryEvidence?.installRestore,
-      ScriptCompileInstallRestore.restoredExact,
-    );
-    expect(
       safety.current.recoveryEvidence?.code,
-      'COMPILE_OUTPUT_RECOVERY_REQUIRED',
+      'COMPILE_INSTALL_RECOVERY_REQUIRED',
     );
   });
 
