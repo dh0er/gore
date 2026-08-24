@@ -893,6 +893,9 @@ fn emit_function_ctor(
     let touched_after_branch = slots_touched_only_after_a_branch(f);
     // Handles vanilla ALIASED into a slot of their own: that alias is a name the source wrote.
     let aliased = handle_alias_slots(f);
+    // How often each slot is default-constructed: more than once and the source spelled the
+    // temporary out at every use.
+    let constructions = default_construction_counts(f, refs);
     // The same witness types the slots a bool travels INTO: the merge slot of a short-circuit
     // or a guarded assignment is written by a copy, not by the call itself.
     bool_overrides.extend(
@@ -1897,6 +1900,8 @@ fn emit_function_ctor(
         // constructor at entry and a destructor on every path out; where vanilla touched the slot
         // only after it had branched, the declaration stood in the block that touches it.
         let rendered = sink_declarations_into_their_block(&s[declarations_at..], &touched_after_branch);
+        // Same text, same reason as the sink: the declaration lives in `s`, its uses in `body`.
+        let rendered = spell_out_repeated_temporaries(&rendered, &constructions);
         s.truncate(declarations_at);
         s.push_str(&rendered);
     } else {
@@ -7117,6 +7122,85 @@ fn unwrap_brackets(value: &str) -> &str {
         }
     }
     if depth == 0 { inner } else { value }
+}
+
+/// How often the function DEFAULT-CONSTRUCTS each slot: `PSF <slot>; CALLSYS $beh0`.
+///
+/// One construction is a declaration. Two or more of the SAME slot is the compiler reusing one
+/// piece of frame for a temporary the source wrote out again at each place it was needed —
+/// `f(..., FGameplayTag(), ...)` three times over, not one named local passed three times.
+fn default_construction_counts(f: &Func, refs: &RefResolver) -> HashMap<i32, usize> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashMap::new();
+    };
+    let mut counts: HashMap<i32, usize> = HashMap::new();
+    for pair in instrs.windows(2) {
+        if pair[0].op.name != "PSF" || pair[1].op.name != "CALLSYS" {
+            continue;
+        }
+        let ptr = pair[1].qwords.first().copied().unwrap_or(0) as i64;
+        if refs.func_by_ptr(ptr) != Some("$beh0") {
+            continue;
+        }
+        let Some(slot) = pair[0].words.first().map(|word| *word as i16 as i32) else {
+            continue;
+        };
+        if slot > 0 {
+            *counts.entry(slot).or_default() += 1;
+        }
+    }
+    counts
+}
+
+/// A bare declaration for a slot the function constructs more than once is not a declaration.
+///
+/// The source wrote the value where it was used, and the compiler put each of those temporaries
+/// in the same piece of frame. Written as one named local it is constructed once and passed on,
+/// which is a construction fewer at every use after the first.
+fn spell_out_repeated_temporaries(body: &str, constructions: &HashMap<i32, usize>) -> String {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for index in 0..lines.len() {
+            let Some((_, name)) = bare_declaration(&lines[index]) else {
+                continue;
+            };
+            let Some(slot) = name
+                .strip_prefix("local_")
+                .and_then(|rest| rest.split('_').next())
+                .and_then(|rest| rest.parse::<i32>().ok())
+            else {
+                continue;
+            };
+            if constructions.get(&slot).copied().unwrap_or(0) < 2 {
+                continue;
+            }
+            let ty = lines[index].trim().trim_end_matches(';');
+            let ty = ty[..ty.len() - name.len()].trim().to_owned();
+            // Only where every mention READS it: a write through the name would have to happen to
+            // something, and each spelled-out temporary is a different something.
+            if lines.iter().enumerate().any(|(at, line)| {
+                at != index && line.trim().starts_with(&format!("{name} ")) || line.contains(&format!("{name}."))
+            }) {
+                continue;
+            }
+            let fresh = format!("{ty}()");
+            for at in 0..lines.len() {
+                if at != index {
+                    lines[at] = rename_ident(&lines[at], &name, &fresh);
+                }
+            }
+            lines.remove(index);
+            changed = true;
+            break;
+        }
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') {
+        out.push('\n');
+    }
+    out
 }
 
 fn fold_compound_assignments(
