@@ -174,6 +174,15 @@ The widenings that were measured and rejected rather than shipped:
   store is required to dominate the reader, and the corpus goes from 3,103 to 3,114. Dominance has
   to be same-BLOCK, not same-column: two sibling arms share an indent, and a path through the
   other one reaches the accumulator with nothing in it (6 warnings, then 3, then none);
+- writing an enum constant as its enumerator NAME rather than as a cast of its ordinal —
+  `EPerceptionCharacterType::None` for `EPerceptionCharacterType(0)` — is available and does not
+  pay. An earlier note here said the cache carries no enumerator names; that is wrong for SCRIPT
+  enums, which `read_enum` decodes with their entries. It is right for NATIVE ones, whose names
+  live in `Binds.Cache`, which this project decodes only for field types and arities. So the rule
+  reaches 15 of the corpus's 61,894 enum-constant sites, and the scoreboard does not move. The
+  order class it was meant for — vanilla computing a member's ADDRESS before the value where we
+  compute the value first — needs the native names, or evaluation-order control in the
+  structurer;
 - three separate widenings measured EXACTLY neutral and were taken back out rather than kept:
   ungating the bool-field witness from the enum state machine, stepping the return-value scan back
   over a scope's cleanup, and running the temporary folds to a fixpoint. Each asks a question the
