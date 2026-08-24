@@ -1681,6 +1681,7 @@ fn emit_function_ctor(
         // exists to avoid. Folded first, there is no assignment left for the split to name.
         let body = fold_return_slot_stores(&body);
         let body = fold_return_slot_arms(&body);
+        let body = drop_else_after_returning_arm(&body);
         let body = rewrite_no_assign_residual_assigns(&body, &locals, &ret);
         // Iterator locals have no default ctor either; declare them at their `Iterator()` call.
         let (body, iter_suppressed) = rewrite_iterator_decl_init(&body, &locals);
@@ -6700,6 +6701,71 @@ fn fold_returned_temporaries(
 /// The leading whitespace of a line.
 fn indent_of(line: &str) -> String {
     line.chars().take_while(|c| c.is_whitespace()).collect()
+}
+
+/// An `else` behind an arm that RETURNS is not a branch — the rest of the function is sequential.
+/// The structurer decides the shape before the emitter turns a return-slot store into a real
+/// `return`, so a block it wrote as an `else` can still be one after the arm has learned to
+/// return; the compiler then adds a jump to a join that is the very next instruction, which
+/// vanilla never had.
+fn drop_else_after_returning_arm(body: &str) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<String> = Vec::new();
+    let mut at = 0usize;
+    while at < lines.len() {
+        let dropped = (|| {
+            let indent = indent_of(lines[at]);
+            if lines[at].trim() != "}"
+                || lines.get(at + 1)?.trim() != "else"
+                || lines.get(at + 2)?.trim() != "{"
+                || indent_of(lines[at + 1]) != indent
+                || indent_of(lines[at + 2]) != indent
+            {
+                return None;
+            }
+            // The arm this `}` closes has to end in a return of its own.
+            let returns = kept
+                .iter()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .is_some_and(|line| line.trim_start().starts_with("return"));
+            if !returns {
+                return None;
+            }
+            // The matching `}` of the else block, so its body can be lifted one level.
+            let mut depth = 0i32;
+            let mut close = None;
+            for (offset, line) in lines[at + 2..].iter().enumerate() {
+                depth += brace_net(line);
+                if depth == 0 {
+                    close = Some(at + 2 + offset);
+                    break;
+                }
+            }
+            let close = close?;
+            let body: Vec<String> = lines[at + 3..close]
+                .iter()
+                .map(|line| line.strip_prefix("    ").unwrap_or(line).to_owned())
+                .collect();
+            Some((body, close + 1))
+        })();
+        match dropped {
+            Some((lifted, after)) => {
+                kept.push(lines[at].to_owned());
+                kept.extend(lifted);
+                at = after;
+            }
+            None => {
+                kept.push(lines[at].to_owned());
+                at += 1;
+            }
+        }
+    }
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
 }
 
 /// Every arm of an if/else ending in `__return = <val>;`, with the shared `return __return;` as
