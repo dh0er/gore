@@ -9,6 +9,8 @@ import 'package:gore_mod/project/managed_project_session.dart';
 import 'package:gore_mod/project/revision3_managed_compiler_check_panel.dart';
 import 'package:gore_mod/scripts/domain/script_compile_install_state.dart';
 import 'package:gore_mod/scripts/domain/script_compile_install_state_provider.dart';
+import 'package:gore_mod/scripts/domain/script_compile_report.dart';
+import 'package:gore_mod/scripts/ui/script_compile_install_state_banner.dart';
 
 const _gameRoot = r'C:\Games\Gothic 1 Remake';
 const _projectId = '00000000000000000000000000000031';
@@ -43,6 +45,7 @@ enum _ReceiptKind {
 
 ManagedRevision3CompilerCheckReceipt _receipt({
   _ReceiptKind kind = _ReceiptKind.accepted,
+  ScriptCompilerBackendMode? backendMode,
 }) {
   final head = AuthoringWorkingHead.fromCanonicalJson(_headJson());
   final compiler = switch (kind) {
@@ -123,6 +126,38 @@ ManagedRevision3CompilerCheckReceipt _receipt({
       'output_discarded': false,
     },
   };
+  if (backendMode != null) {
+    compiler['compiler_backend'] = switch (backendMode) {
+      ScriptCompilerBackendMode.game => <String, Object?>{
+        'requested_mode': 'game',
+        'result_backend': 'game',
+        'standalone_attempted': false,
+        'game_attempted': true,
+        'qualified_package': null,
+        'fallback_reason': null,
+      },
+      ScriptCompilerBackendMode.standalone => <String, Object?>{
+        'requested_mode': 'standalone',
+        'result_backend': 'standalone',
+        'standalone_attempted': true,
+        'game_attempted': false,
+        'qualified_package': null,
+        'fallback_reason': null,
+      },
+      ScriptCompilerBackendMode.standaloneThenGame => <String, Object?>{
+        'requested_mode': 'standalone_then_game',
+        'result_backend': 'game',
+        'standalone_attempted': false,
+        'game_attempted': true,
+        'qualified_package': null,
+        'fallback_reason': <String, Object?>{
+          'failed_backend': 'standalone',
+          'failure_kind': 'unavailable',
+          'detail': 'No qualified standalone compiler package is installed.',
+        },
+      },
+    };
+  }
   final result = AuthoringRevision3ManagedCompilerCheckResult.fromJson(
     <String, Object?>{
       'ok': true,
@@ -157,6 +192,7 @@ ManagedRevision3CompilerCheckReceipt _receipt({
     expectedHead: head,
     requestedEntityId: _questId,
     expectedKind: AuthoringRevision3ManagedCompilerEntityKind.questDraft,
+    expectedBackend: backendMode,
   );
   return ManagedRevision3CompilerCheckReceipt(
     result: result,
@@ -178,7 +214,7 @@ void main() {
     await _pumpPanel(
       tester,
       safety: safety,
-      check: () async => _receipt(),
+      check: ({required compilerBackend}) async => _receipt(),
       onAcceptanceChanged: (value) => accepted = value,
       onBusyChanged: busyChanges.add,
     );
@@ -201,6 +237,10 @@ void main() {
     tester,
   ) async {
     expect(_receipt(kind: _ReceiptKind.recovery).recoveryRequired, isTrue);
+    expect(
+      _receipt(kind: _ReceiptKind.recovery).gameInstallRecoveryRequired,
+      isTrue,
+    );
     final safety = ScriptCompileInstallSafetyController(
       (_) async => _safeInstall(),
       gameRoot: _gameRoot,
@@ -210,7 +250,8 @@ void main() {
     await _pumpPanel(
       tester,
       safety: safety,
-      check: () async => _receipt(kind: _ReceiptKind.recovery),
+      check: ({required compilerBackend}) async =>
+          _receipt(kind: _ReceiptKind.recovery),
     );
 
     await tester.tap(
@@ -258,7 +299,8 @@ void main() {
       await _pumpPanel(
         tester,
         safety: safety,
-        check: () async => _receipt(kind: scenario.$1),
+        check: ({required compilerBackend}) async =>
+            _receipt(kind: scenario.$1),
       );
       await _runPanel(tester);
 
@@ -283,7 +325,7 @@ void main() {
       await _pumpPanel(
         tester,
         safety: safety,
-        check: () {
+        check: ({required compilerBackend}) {
           checkStarted = true;
           return pending.future;
         },
@@ -315,6 +357,74 @@ void main() {
       expect(safety.current.recoveryEvidence?.code, 'INSTALL_RESTORE_FAILED');
     },
   );
+
+  testWidgets('strict standalone never consults live-install safety', (
+    tester,
+  ) async {
+    var safetyLoads = 0;
+    final safety = ScriptCompileInstallSafetyController(
+      (_) async {
+        safetyLoads++;
+        throw StateError('standalone must not inspect live mutation safety');
+      },
+      gameRoot: _gameRoot,
+      autoRefresh: false,
+    );
+    ScriptCompilerBackendMode? requestedBackend;
+    await _pumpPanel(
+      tester,
+      safety: safety,
+      check: ({required compilerBackend}) async {
+        requestedBackend = compilerBackend;
+        return _receipt();
+      },
+    );
+
+    await tester.tap(
+      find.byKey(const Key('revision3-managed-compiler-backend')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Standalone compiler').last);
+    await tester.pumpAndSettle();
+    await _runPanel(tester);
+
+    expect(requestedBackend, ScriptCompilerBackendMode.standalone);
+    expect(safetyLoads, 0);
+    expect(find.byType(ScriptCompileInstallStateBanner), findsNothing);
+  });
+
+  testWidgets('fallback result names both backends and the reason', (
+    tester,
+  ) async {
+    final safety = ScriptCompileInstallSafetyController(
+      (_) async => _safeInstall(),
+      gameRoot: _gameRoot,
+      autoRefresh: false,
+    );
+    ScriptCompilerBackendMode? requestedBackend;
+    await _pumpPanel(
+      tester,
+      safety: safety,
+      check: ({required compilerBackend}) async {
+        requestedBackend = compilerBackend;
+        return _receipt(backendMode: compilerBackend);
+      },
+    );
+
+    await _runPanel(tester);
+
+    expect(requestedBackend, ScriptCompilerBackendMode.productDefault);
+    expect(
+      find.byKey(const Key('revision3-managed-compiler-backend-result')),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining(
+        'No qualified standalone compiler package is installed.',
+      ),
+      findsOneWidget,
+    );
+  });
 }
 
 Future<void> _pumpPanel(

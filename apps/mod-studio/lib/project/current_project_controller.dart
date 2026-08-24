@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
 
 import '../core/mod_ffi.dart';
 import '../core/providers.dart';
+import '../scripts/domain/script_compile_report.dart';
 import 'managed_project_session.dart';
 import 'revision3_content_index.dart';
 import 'revision3_dataasset_authoring.dart';
@@ -713,6 +714,23 @@ abstract interface class ManagedRevision3CurrentProjectLease {
   Future<void> close();
 }
 
+abstract interface class ManagedRevision3CompilerBackendCurrentProjectLease {
+  Future<ManagedRevision3ProjectCompilerCheckReceipt> checkProjectCompilerV2({
+    required String gameRoot,
+    required ScriptCompilerBackendMode compilerBackend,
+  });
+
+  Future<ManagedRevision3CompilerCheckReceipt> checkCompilerV2({
+    required AuthoringRevision3ManagedCompilerEntityKind entityKind,
+    required String gameRoot,
+    required String entityId,
+    required int expectedEntityRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+    required ScriptCompilerBackendMode compilerBackend,
+  });
+}
+
 /// Optional exact-current capability for reading one managed LocalizationEntry.
 /// Keeping it separate avoids widening unrelated current-project test leases.
 abstract interface class ManagedRevision3DialogLocalizationReadLease {
@@ -1055,7 +1073,8 @@ final class _ManagedRevision3SessionLease
         ManagedRevision3RestorableProjectExportLease,
         ManagedRevision3StoryDraftRemovalLease,
         ManagedRevision3ProjectBuildPlanLease,
-        ManagedRevision3ItemPatchLease {
+        ManagedRevision3ItemPatchLease,
+        ManagedRevision3CompilerBackendCurrentProjectLease {
   const _ManagedRevision3SessionLease(this._session);
 
   final ManagedRevision3AuthoringProjectSession _session;
@@ -1296,9 +1315,37 @@ final class _ManagedRevision3SessionLease
   );
 
   @override
+  Future<ManagedRevision3CompilerCheckReceipt> checkCompilerV2({
+    required AuthoringRevision3ManagedCompilerEntityKind entityKind,
+    required String gameRoot,
+    required String entityId,
+    required int expectedEntityRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+    required ScriptCompilerBackendMode compilerBackend,
+  }) => _session.checkCompilerV2(
+    entityKind: entityKind,
+    gameRoot: gameRoot,
+    entityId: entityId,
+    expectedEntityRevision: expectedEntityRevision,
+    expectedModuleId: expectedModuleId,
+    expectedModuleRevision: expectedModuleRevision,
+    compilerBackend: compilerBackend,
+  );
+
+  @override
   Future<ManagedRevision3ProjectCompilerCheckReceipt> checkProjectCompilerV1({
     required String gameRoot,
   }) => _session.checkProjectCompilerV1(gameRoot: gameRoot);
+
+  @override
+  Future<ManagedRevision3ProjectCompilerCheckReceipt> checkProjectCompilerV2({
+    required String gameRoot,
+    required ScriptCompilerBackendMode compilerBackend,
+  }) => _session.checkProjectCompilerV2(
+    gameRoot: gameRoot,
+    compilerBackend: compilerBackend,
+  );
 
   @override
   Future<AuthoringRevision3DataAssetPackageIndexResult>
@@ -3348,6 +3395,8 @@ final class CurrentProjectCoordinator
     required int expectedProjectRevision,
     required AuthoringWorkingHead expectedHead,
     required String gameRoot,
+    ScriptCompilerBackendMode compilerBackend =
+        ScriptCompilerBackendMode.productDefault,
   }) => _enqueue(() async {
     final current = _current;
     if (current == null) throw const NoCurrentProjectException();
@@ -3372,7 +3421,18 @@ final class CurrentProjectCoordinator
       throw const Revision3ProjectCompilerCheckStaleCheckpointException();
     }
     try {
-      final receipt = await lease.checkProjectCompilerV1(gameRoot: gameRoot);
+      final receipt = switch (lease) {
+        ManagedRevision3CompilerBackendCurrentProjectLease backendLease =>
+          await backendLease.checkProjectCompilerV2(
+            gameRoot: gameRoot,
+            compilerBackend: compilerBackend,
+          ),
+        _ when compilerBackend == ScriptCompilerBackendMode.game =>
+          await lease.checkProjectCompilerV1(gameRoot: gameRoot),
+        _ => throw const CurrentProjectOperationUnsupportedException(
+          'compiler backend selection is unavailable for this project lease',
+        ),
+      };
       final result = receipt.result;
       if (result.head.canonicalJson != expectedHead.canonicalJson ||
           result.project.id != expectedProjectId ||
@@ -3415,6 +3475,8 @@ final class CurrentProjectCoordinator
     required String expectedModuleId,
     required int expectedModuleRevision,
     required String gameRoot,
+    ScriptCompilerBackendMode compilerBackend =
+        ScriptCompilerBackendMode.productDefault,
   }) => _enqueue(() async {
     final current = _current;
     if (current == null) throw const NoCurrentProjectException();
@@ -3447,14 +3509,30 @@ final class CurrentProjectCoordinator
       throw const Revision3ManagedCompilerCheckStaleCheckpointException();
     }
     try {
-      final receipt = await lease.checkCompilerV1(
-        entityKind: entityKind,
-        gameRoot: gameRoot,
-        entityId: entityId,
-        expectedEntityRevision: expectedEntityRevision,
-        expectedModuleId: expectedModuleId,
-        expectedModuleRevision: expectedModuleRevision,
-      );
+      final receipt = switch (lease) {
+        ManagedRevision3CompilerBackendCurrentProjectLease backendLease =>
+          await backendLease.checkCompilerV2(
+            entityKind: entityKind,
+            gameRoot: gameRoot,
+            entityId: entityId,
+            expectedEntityRevision: expectedEntityRevision,
+            expectedModuleId: expectedModuleId,
+            expectedModuleRevision: expectedModuleRevision,
+            compilerBackend: compilerBackend,
+          ),
+        _ when compilerBackend == ScriptCompilerBackendMode.game =>
+          await lease.checkCompilerV1(
+            entityKind: entityKind,
+            gameRoot: gameRoot,
+            entityId: entityId,
+            expectedEntityRevision: expectedEntityRevision,
+            expectedModuleId: expectedModuleId,
+            expectedModuleRevision: expectedModuleRevision,
+          ),
+        _ => throw const CurrentProjectOperationUnsupportedException(
+          'compiler backend selection is unavailable for this project lease',
+        ),
+      };
       final result = receipt.result;
       if (result.head.canonicalJson != expectedHead.canonicalJson ||
           result.project.id != expectedProjectId ||

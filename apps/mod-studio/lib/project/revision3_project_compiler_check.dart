@@ -183,6 +183,7 @@ final class AuthoringRevision3ProjectCompilerEvidence {
     required this.installRestore,
     required this.recoveryRequired,
     required this.outputDisposition,
+    required this.backend,
   });
 
   final AuthoringRevision3ProjectCompilerOutcome outcome;
@@ -192,6 +193,14 @@ final class AuthoringRevision3ProjectCompilerEvidence {
   final ScriptCompileInstallRestore installRestore;
   final bool recoveryRequired;
   final AuthoringRevision3ProjectCompilerOutputDisposition outputDisposition;
+  final ScriptCompilerBackendEvidence? backend;
+
+  bool get gameInstallRecoveryRequired =>
+      scriptCompileRequiresGameInstallRecovery(
+        recoveryRequired: recoveryRequired,
+        installRestore: installRestore,
+        failure: failure,
+      );
 
   bool get compiledEvidenceOnly =>
       outcome == AuthoringRevision3ProjectCompilerOutcome.compiledEvidenceOnly;
@@ -199,12 +208,15 @@ final class AuthoringRevision3ProjectCompilerEvidence {
   bool get notNeededEmpty =>
       outcome == AuthoringRevision3ProjectCompilerOutcome.notNeededEmpty;
 
-  factory AuthoringRevision3ProjectCompilerEvidence._fromJson(Object? value) {
+  factory AuthoringRevision3ProjectCompilerEvidence._fromJson(
+    Object? value, {
+    ScriptCompilerBackendMode? expectedBackend,
+  }) {
     final json = _authoringRequiredObject(
       value,
       'revision-3 project compiler evidence',
     );
-    _authoringExactFields(json, const <String>{
+    final fields = <String>{
       'outcome',
       'run_count',
       'compile_error',
@@ -212,7 +224,9 @@ final class AuthoringRevision3ProjectCompilerEvidence {
       'install_restore',
       'recovery_required',
       'output_disposition',
-    }, 'revision-3 project compiler evidence');
+    };
+    if (expectedBackend != null) fields.add('compiler_backend');
+    _authoringExactFields(json, fields, 'revision-3 project compiler evidence');
     final outcome = switch (json['outcome']) {
       'compiled_evidence_only' =>
         AuthoringRevision3ProjectCompilerOutcome.compiledEvidenceOnly,
@@ -224,7 +238,7 @@ final class AuthoringRevision3ProjectCompilerEvidence {
       ),
     };
     final runCount = json['run_count'];
-    if (runCount is! int || runCount < 0 || runCount > 1) {
+    if (runCount is! int || runCount < 0 || runCount > 2) {
       throw const FormatException(
         'authoring revision-3 project compiler run count is invalid',
       );
@@ -263,6 +277,26 @@ final class AuthoringRevision3ProjectCompilerEvidence {
         'authoring revision-3 project compiler output disposition is unsupported',
       ),
     };
+    final backend = expectedBackend == null
+        ? null
+        : ScriptCompilerBackendEvidence.fromJson(
+            json['compiler_backend'],
+            expectedMode: expectedBackend,
+          );
+    if (backend != null) {
+      final backendAttemptCount =
+          (backend.standaloneAttempted ? 1 : 0) +
+          (backend.gameAttempted ? 1 : 0);
+      if (runCount != backendAttemptCount) {
+        throw const FormatException(
+          'authoring revision-3 project compiler run count disagrees with backend attempts',
+        );
+      }
+    } else if (runCount > 1) {
+      throw const FormatException(
+        'authoring revision-3 project compiler V1 reported multiple runs',
+      );
+    }
 
     final restoreRequiresRecovery =
         installRestore ==
@@ -288,9 +322,9 @@ final class AuthoringRevision3ProjectCompilerEvidence {
         'authoring revision-3 project compiler recovery evidence disagrees',
       );
     }
-    if (recoveryRequired != outputRequiresRecovery) {
+    if (runCount == 0 && outputRequiresRecovery) {
       throw const FormatException(
-        'authoring revision-3 project compiler output lost recovery dominance',
+        'authoring revision-3 project compiler retained output without a compiler run',
       );
     }
     if (diagnostics?.capture ==
@@ -308,10 +342,15 @@ final class AuthoringRevision3ProjectCompilerEvidence {
 
     switch (outcome) {
       case AuthoringRevision3ProjectCompilerOutcome.compiledEvidenceOnly:
-        if (runCount != 1 ||
+        final restoreIsSafe =
+            installRestore == ScriptCompileInstallRestore.restoredExact ||
+            (installRestore == ScriptCompileInstallRestore.notStarted &&
+                backend?.resultBackend == ScriptCompilerBackendName.standalone);
+        if (runCount < 1 ||
             failure != null ||
             !_revision3ProjectCompilerDiagnosticsAreAccepted(diagnostics) ||
-            installRestore != ScriptCompileInstallRestore.restoredExact ||
+            !restoreIsSafe ||
+            (backend != null && backend.resultBackend == null) ||
             recoveryRequired ||
             outputDisposition !=
                 AuthoringRevision3ProjectCompilerOutputDisposition.discarded) {
@@ -332,30 +371,30 @@ final class AuthoringRevision3ProjectCompilerEvidence {
           );
         }
       case AuthoringRevision3ProjectCompilerOutcome.failed:
-        final cleanAttemptedFailure =
-            installRestore == ScriptCompileInstallRestore.restoredExact &&
-            (outputDisposition ==
-                    AuthoringRevision3ProjectCompilerOutputDisposition
-                        .discarded ||
-                outputDisposition ==
-                    AuthoringRevision3ProjectCompilerOutputDisposition
-                        .notCreated);
-        final cleanNotStartedFailure =
-            installRestore == ScriptCompileInstallRestore.notStarted &&
-            diagnostics == null &&
+        final cleanOutput =
+            outputDisposition ==
+                AuthoringRevision3ProjectCompilerOutputDisposition.discarded ||
             outputDisposition ==
                 AuthoringRevision3ProjectCompilerOutputDisposition.notCreated;
+        final attemptedRestoreIsSafe = switch (backend?.resultBackend) {
+          ScriptCompilerBackendName.standalone =>
+            installRestore == ScriptCompileInstallRestore.notStarted,
+          ScriptCompilerBackendName.game =>
+            installRestore == ScriptCompileInstallRestore.restoredExact,
+          null =>
+            installRestore == ScriptCompileInstallRestore.notStarted ||
+                installRestore == ScriptCompileInstallRestore.restoredExact,
+        };
         if (failure == null ||
-            (runCount == 0 &&
-                !recoveryRequired &&
-                (installRestore != ScriptCompileInstallRestore.notStarted ||
-                    outputDisposition !=
-                        AuthoringRevision3ProjectCompilerOutputDisposition
-                            .notCreated)) ||
-            (runCount == 1 &&
-                !recoveryRequired &&
-                !cleanAttemptedFailure &&
-                !cleanNotStartedFailure)) {
+            (!recoveryRequired &&
+                ((runCount == 0 &&
+                        (installRestore !=
+                                ScriptCompileInstallRestore.notStarted ||
+                            outputDisposition !=
+                                AuthoringRevision3ProjectCompilerOutputDisposition
+                                    .notCreated)) ||
+                    (runCount > 0 &&
+                        (!cleanOutput || !attemptedRestoreIsSafe))))) {
           throw const FormatException(
             'authoring revision-3 project compiler failure evidence is invalid',
           );
@@ -370,6 +409,7 @@ final class AuthoringRevision3ProjectCompilerEvidence {
       installRestore: installRestore,
       recoveryRequired: recoveryRequired,
       outputDisposition: outputDisposition,
+      backend: backend,
     );
   }
 }
@@ -418,7 +458,7 @@ final class AuthoringRevision3ProjectCompilerCheckResult {
     required this.exactCurrent,
     required this.head,
     required this.project,
-    required this.gameInputs,
+    required this._gameInputs,
     required this.coverage,
     required this.compiler,
     required this.closingAudit,
@@ -427,12 +467,18 @@ final class AuthoringRevision3ProjectCompilerCheckResult {
     required this.deployStatus,
     required this.runtimeQualification,
     required this.publicationStatus,
+    required this.backendMode,
   });
 
   final bool exactCurrent;
   final AuthoringWorkingHead head;
   final AuthoringRevision3ProjectCompilerProjectEvidence project;
-  final AuthoringRevision3ProjectCompilerGameInputs gameInputs;
+  final AuthoringRevision3ProjectCompilerGameInputs? _gameInputs;
+  AuthoringRevision3ProjectCompilerGameInputs get gameInputs =>
+      _gameInputs ??
+      (throw StateError('standalone compiler did not inspect game inputs'));
+  AuthoringRevision3ProjectCompilerGameInputs? get gameInputsOrNull =>
+      _gameInputs;
   final AuthoringRevision3ProjectCompilerCoverage coverage;
   final AuthoringRevision3ProjectCompilerEvidence compiler;
   final AuthoringRevision3ProjectCompilerClosingAudit closingAudit;
@@ -442,8 +488,11 @@ final class AuthoringRevision3ProjectCompilerCheckResult {
   final AuthoringRevision3ProjectCompilerRuntimeQualification
   runtimeQualification;
   final AuthoringRevision3ProjectCompilerPublicationStatus publicationStatus;
+  final ScriptCompilerBackendMode? backendMode;
 
   bool get recoveryRequired => compiler.recoveryRequired;
+
+  bool get gameInstallRecoveryRequired => compiler.gameInstallRecoveryRequired;
 
   bool get acceptedAtExactCurrent =>
       exactCurrent &&
@@ -453,6 +502,7 @@ final class AuthoringRevision3ProjectCompilerCheckResult {
   factory AuthoringRevision3ProjectCompilerCheckResult.fromJson(
     Map<String, Object?> json, {
     required AuthoringWorkingHead expectedHead,
+    ScriptCompilerBackendMode? expectedBackend,
   }) {
     _authoringExactFields(json, const <String>{
       'ok',
@@ -512,15 +562,34 @@ final class AuthoringRevision3ProjectCompilerCheckResult {
         'authoring revision-3 project compiler project is not bound to its head',
       );
     }
-    final gameInputs = AuthoringRevision3ProjectCompilerGameInputs._fromJson(
-      json['game_inputs'],
-    );
+    final gameInputs = json['game_inputs'] == null
+        ? null
+        : AuthoringRevision3ProjectCompilerGameInputs._fromJson(
+            json['game_inputs'],
+          );
+    if (expectedBackend == null && gameInputs == null) {
+      throw const FormatException(
+        'authoring revision-3 project compiler V1 omitted game inputs',
+      );
+    }
     final coverage = AuthoringRevision3ProjectCompilerCoverage._fromJson(
       json['coverage'],
     );
     final compiler = AuthoringRevision3ProjectCompilerEvidence._fromJson(
       json['compiler'],
+      expectedBackend: expectedBackend,
     );
+    final backend = compiler.backend;
+    if (gameInputs == null &&
+        (expectedBackend != ScriptCompilerBackendMode.standalone ||
+            backend == null ||
+            backend.resultBackend != null ||
+            backend.standaloneAttempted ||
+            backend.gameAttempted)) {
+      throw const FormatException(
+        'authoring revision-3 project compiler omitted game inputs outside strict standalone preflight',
+      );
+    }
     final closingAudit =
         AuthoringRevision3ProjectCompilerClosingAudit._fromJson(
           json['closing_audit'],
@@ -531,7 +600,7 @@ final class AuthoringRevision3ProjectCompilerCheckResult {
             !compiler.recoveryRequired) ||
         exactCurrent != closingAudit.bothExact ||
         ((compiler.compiledEvidenceOnly || compiler.notNeededEmpty) &&
-            !closingAudit.bothExact)) {
+            (!closingAudit.bothExact || gameInputs == null))) {
       throw const FormatException(
         'authoring revision-3 project compiler result has inconsistent authority',
       );
@@ -552,6 +621,7 @@ final class AuthoringRevision3ProjectCompilerCheckResult {
               .runtimeUnqualified,
       publicationStatus:
           AuthoringRevision3ProjectCompilerPublicationStatus.notSupported,
+      backendMode: expectedBackend,
     );
   }
 }

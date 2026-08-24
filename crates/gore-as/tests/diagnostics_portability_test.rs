@@ -12,6 +12,7 @@ struct ReleaseFixture {
     /// build the table has re-sealed; the three older ones predate the table and carry their own.
     seal: FileSeal,
     callback_rva: u64,
+    manager_diagnostic_rva: u64,
 }
 
 const RELEASE_FIXTURES: &[ReleaseFixture] = &[
@@ -22,6 +23,7 @@ const RELEASE_FIXTURES: &[ReleaseFixture] = &[
             "740abfa9fbaae95beb5378c472ef4454df66205c140c3574eb5ba3695be53c55",
         ),
         callback_rva: 0x467e760,
+        manager_diagnostic_rva: 0x46825f0,
     },
     ReleaseFixture {
         version: "1.0.1",
@@ -30,6 +32,7 @@ const RELEASE_FIXTURES: &[ReleaseFixture] = &[
             "77f3d48ccde47756a6fa94b4b031f0ad58e2b57dcba93451415a5ed1af03f4ab",
         ),
         callback_rva: 0x467ea50,
+        manager_diagnostic_rva: 0x46828e0,
     },
     ReleaseFixture {
         version: "1.0.2",
@@ -38,16 +41,34 @@ const RELEASE_FIXTURES: &[ReleaseFixture] = &[
             "d9f45c72e624f6e27032379a7c3e51454562fd58a7eb9ac9cdaf6574c398afa9",
         ),
         callback_rva: 0x467e200,
+        manager_diagnostic_rva: 0x4682090,
     },
     ReleaseFixture {
         version: "1.0.3 Hotfix 1",
         seal: gore_generation::ROW_G1R_1_0_3.executable,
         callback_rva: 0x467f5b0,
+        manager_diagnostic_rva: 0x4683440,
     },
     ReleaseFixture {
         version: "1.0.3 Hotfix 2",
         seal: gore_generation::ROW_G1R_24169431.executable,
         callback_rva: 0x467fcd0,
+        manager_diagnostic_rva: 0x4683b60,
+    },
+    ReleaseFixture {
+        version: "1.0.4",
+        seal: gore_generation::ROW_G1R_24340829.executable,
+        callback_rva: 0x46861d0,
+        manager_diagnostic_rva: 0x468a060,
+    },
+    ReleaseFixture {
+        version: "1.0.4a",
+        seal: file_seal(
+            171_784_704,
+            "c71c04dd86e11e3e94483ea02c26c612b6243c147f6d83973233b3c8ddc5de25",
+        ),
+        callback_rva: 0x4685ff0,
+        manager_diagnostic_rva: 0x4689e80,
     },
 ];
 
@@ -99,13 +120,16 @@ fn archived_release_executables_keep_the_verified_callback_capability() {
 
         let probe = probe_executable(&exe).unwrap();
         eprintln!(
-            "G1R {}: bytes={} sha256={} matches={} rvas={:?} shape={}",
+            "G1R {}: bytes={} sha256={} callback_matches={} callback_rvas={:?} callback_shape={} manager_matches={} manager_rvas={:?} manager_shape={}",
             fixture.version,
             byte_len,
             probe.sha256,
             probe.match_count,
             probe.matched_rvas,
-            probe.callback_shape_verified
+            probe.callback_shape_verified,
+            probe.manager_match_count,
+            probe.manager_matched_rvas,
+            probe.manager_shape_verified,
         );
         assert_eq!(
             probe.sha256,
@@ -127,6 +151,22 @@ fn archived_release_executables_keep_the_verified_callback_capability() {
         assert!(
             probe.callback_shape_verified,
             "archived release {} callback layout is not verified",
+            fixture.version
+        );
+        assert_eq!(
+            probe.manager_match_count, 1,
+            "archived release {} manager diagnostic signature is not unique",
+            fixture.version
+        );
+        assert_eq!(
+            probe.manager_matched_rvas,
+            [fixture.manager_diagnostic_rva],
+            "archived release {} manager diagnostic RVA changed",
+            fixture.version
+        );
+        assert!(
+            probe.manager_shape_verified,
+            "archived release {} manager diagnostic layout is not verified",
             fixture.version
         );
         assert!(hashes.insert(probe.sha256));

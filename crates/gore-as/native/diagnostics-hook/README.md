@@ -1,20 +1,24 @@
 # G1R AngelScript diagnostics hook
 
-This x86-64 Windows DLL is the minimal native half of `gore as compile` diagnostics. It hooks only
-the UE-AngelScript `LogAngelscriptError(asSMessageInfo*, void*)` callback, writes a bounded
-line-oriented capture, filters routine per-function `Compiling ...` progress before file I/O, and
-reports readiness through a complete newline-terminated token. It contains no popup hook,
-diagnostic-container scan, game-path logic, or permanent installer.
+This x86-64 Windows DLL is the minimal native half of `gore as compile` diagnostics. It hooks the
+UE-AngelScript `LogAngelscriptError(asSMessageInfo*, void*)` callback and the structured
+`FAngelscriptManager::ScriptCompileError(const FString&, const FDiagnostic&)` insertion boundary.
+The second path is required for ClassGenerator/Unreal-reflection errors that never pass through the
+ordinary AngelScript callback. It writes one bounded line-oriented capture, filters routine
+per-function `Compiling ...` progress before file I/O, and reports readiness through a complete
+newline-terminated token. It contains no popup hook, diagnostic-container scan, game-path logic, or
+permanent installer.
 
-The Rust launcher and DLL independently scan the same masked AOB, require exactly one raw match,
-and then verify the same four-clause sparse callback-body fingerprint over a bounded `0x244`-byte
-span. The fingerprint proves the first callback argument and all five `asSMessageInfo` field
-offsets while masking only branch and local-stack displacements. Both sides require the AMD64
-machine type plus PE32+ optional-header magic, accept only the exact `.text` section, and inspect the same raw-backed
+The Rust launcher and DLL independently scan the same two masked AOBs, require exactly one raw match
+for each, and verify the same sparse body fingerprints. The `0x244` callback span proves all five
+`asSMessageInfo` fields; the `0xb0` manager span proves the Windows/x64 arguments plus every
+`FString`/`FDiagnostic` field consumed by the detour. Only irrelevant branch, call, and local-stack
+operands are masked. Both sides require the AMD64 machine type plus PE32+ optional-header magic,
+accept only the exact `.text` section, and inspect the same raw-backed
 `min(VirtualSize, SizeOfRawData)` byte range; file-alignment padding and mapped zero-fill are outside
-both decisions. The known 2026-07-10 hotfix match is documented in source; no fixed RVA is used. Any
-signature, structural, or hook failure causes the Rust side to terminate the diagnostic attempt and
-run the ordinary compiler only after process-tree exit is confirmed.
+both decisions. The known RVAs are documented in source but never used for lookup. Any signature,
+structural, or hook failure causes the Rust side to terminate the diagnostic attempt and run the
+ordinary compiler only after process-tree exit is confirmed.
 
 The read-only four-release regression results and the exact future/non-Steam capability contract are
 documented in [`../../DIAGNOSTICS_PORTABILITY.md`](../../DIAGNOSTICS_PORTABILITY.md).
@@ -34,7 +38,7 @@ Get-FileHash crates/gore-as/assets/gore-as-diagnostics-hook.dll -Algorithm SHA25
 ```
 
 Expected embedded SHA-256:
-`17E0AD3033C31ADD311E3C25BA63615E481C83DCF8E96E83D9B3AC088E55C01C`.
+`3D9852ED4A077C0B987A290FD1B349A92AF394FEEF297A33165464B2E4C2E39D`.
 
 Build products (`*.o`, `ashook.dll`) are ignored/excluded; the one runtime copy is the embedded
 asset under `crates/gore-as/assets/`. The build script deletes stale outputs and rejects the first

@@ -24,7 +24,8 @@ Map<String, Object?> _report({
   },
   String installRestore = 'restored_exact',
   bool recoveryRequired = false,
-}) => {
+  bool? outputRecoveryRequired,
+}) => <String, Object?>{
   'ok': true,
   'outcome': outcome,
   'mini_path': miniPath,
@@ -33,9 +34,132 @@ Map<String, Object?> _report({
   'compiler_diagnostics': diagnostics,
   'install_restore': installRestore,
   'recovery_required': recoveryRequired,
+  'output_recovery_required': ?outputRecoveryRequired,
+};
+
+Map<String, Object?> _qualifiedPackage() => {
+  'catalog_sha256':
+      '1111111111111111111111111111111111111111111111111111111111111111',
+  'sidecar_byte_len': 1966592,
+  'sidecar_sha256':
+      '2222222222222222222222222222222222222222222222222222222222222222',
+  'request_version': 2,
+  'response_version': 1,
+  'manifest_byte_len': 4096,
+  'manifest_sha256':
+      '3333333333333333333333333333333333333333333333333333333333333333',
+  'profile_sha256':
+      '4444444444444444444444444444444444444444444444444444444444444444',
+  'target': {
+    'target': {
+      'steam_app_id': 1297900,
+      'steam_build_id': 24539464,
+      'depot_id': 1297901,
+      'depot_manifest_gid': 1585071322101748861,
+      'platform': 'windows',
+      'architecture': 'x86_64',
+      'build_configuration': 'shipping',
+    },
+    'pe_codeview': {'guid': 'be78fe0a-46ac-6643-9685-97e85c7e5b3f', 'age': 1},
+  },
 };
 
 void main() {
+  test('parses a closed product-qualified standalone package identity', () {
+    final evidence = ScriptCompilerBackendEvidence.fromJson({
+      'requested_mode': 'standalone',
+      'result_backend': 'standalone',
+      'standalone_attempted': true,
+      'game_attempted': false,
+      'qualified_package': _qualifiedPackage(),
+      'fallback_reason': null,
+    }, expectedMode: ScriptCompilerBackendMode.standalone);
+
+    expect(evidence.qualifiedPackage!.requestVersion, 2);
+    expect(evidence.qualifiedPackage!.target.steamBuildId, 24539464);
+  });
+
+  test(
+    'accepts untouched installation state for a qualified standalone result',
+    () {
+      final raw = _report(
+        outcome: 'compiled',
+        miniPath: r'C:\Temp\mini.cache',
+        module: 'GoreMods.Probe',
+        compileError: null,
+        diagnostics: const {
+          'capture': 'captured',
+          'messages': <Object?>[],
+          'omitted': 0,
+        },
+        installRestore: 'not_started',
+      );
+      raw['compiler_backend'] = {
+        'requested_mode': 'standalone',
+        'result_backend': 'standalone',
+        'standalone_attempted': true,
+        'game_attempted': false,
+        'qualified_package': _qualifiedPackage(),
+        'fallback_reason': null,
+      };
+
+      final report = ScriptCompileReport.fromJson(
+        raw,
+        expectedBackend: ScriptCompilerBackendMode.standalone,
+      );
+      expect(report.compiled, isTrue);
+      expect(report.installRestore, ScriptCompileInstallRestore.notStarted);
+      expect(report.backend!.qualifiedPackage, isNotNull);
+    },
+  );
+
+  test('requires package authority for a claimed standalone attempt', () {
+    expect(
+      () => ScriptCompilerBackendEvidence.fromJson({
+        'requested_mode': 'standalone',
+        'result_backend': 'standalone',
+        'standalone_attempted': true,
+        'game_attempted': false,
+        'qualified_package': null,
+        'fallback_reason': null,
+      }, expectedMode: ScriptCompilerBackendMode.standalone),
+      throwsFormatException,
+    );
+  });
+
+  test(
+    'standalone-then-game permits a global preflight before either backend',
+    () {
+      final evidence = ScriptCompilerBackendEvidence.fromJson({
+        'requested_mode': 'standalone_then_game',
+        'result_backend': null,
+        'standalone_attempted': false,
+        'game_attempted': false,
+        'qualified_package': _qualifiedPackage(),
+        'fallback_reason': null,
+      }, expectedMode: ScriptCompilerBackendMode.standaloneThenGame);
+
+      expect(evidence.resultBackend, isNull);
+      expect(evidence.standaloneAttempted, isFalse);
+      expect(evidence.gameAttempted, isFalse);
+      expect(evidence.fallbackReason, isNull);
+    },
+  );
+
+  test('standalone-then-game still requires fallback evidence after a run', () {
+    expect(
+      () => ScriptCompilerBackendEvidence.fromJson({
+        'requested_mode': 'standalone_then_game',
+        'result_backend': 'game',
+        'standalone_attempted': false,
+        'game_attempted': true,
+        'qualified_package': _qualifiedPackage(),
+        'fallback_reason': null,
+      }, expectedMode: ScriptCompilerBackendMode.standaloneThenGame),
+      throwsFormatException,
+    );
+  });
+
   test('parses normal compiler diagnostics independently from restore', () {
     final report = ScriptCompileReport.fromJson(_report());
 
@@ -55,6 +179,27 @@ void main() {
       report.diagnostics!.messages.single.severity,
       ScriptCompilerDiagnosticSeverity.error,
     );
+  });
+
+  test('keeps a game attempt when metadata was unavailable', () {
+    final raw = _report(installRestore: 'not_started', diagnostics: null);
+    raw['compiler_backend'] = <String, Object?>{
+      'requested_mode': 'game',
+      'result_backend': 'game',
+      'standalone_attempted': false,
+      'game_attempted': true,
+      'qualified_package': null,
+      'fallback_reason': null,
+    };
+
+    final report = ScriptCompileReport.fromJson(
+      raw,
+      expectedBackend: ScriptCompilerBackendMode.game,
+    );
+    expect(report.compiled, isFalse);
+    expect(report.installRestore, ScriptCompileInstallRestore.notStarted);
+    expect(report.backend!.resultBackend, ScriptCompilerBackendName.game);
+    expect(report.backend!.gameAttempted, isTrue);
   });
 
   test('accepts a compiled result that used the normal fallback', () {
@@ -91,9 +236,42 @@ void main() {
     );
 
     expect(report.recoveryRequired, isTrue);
+    expect(report.gameInstallRecoveryRequired, isTrue);
     expect(
       report.installRestore,
       ScriptCompileInstallRestore.recoveryRequiredProcessExitUnconfirmed,
+    );
+  });
+
+  test('keeps private output recovery separate from game-install recovery', () {
+    final report = ScriptCompileReport.fromJson(
+      _report(
+        installRestore: 'not_started',
+        recoveryRequired: true,
+        outputRecoveryRequired: true,
+      ),
+    );
+
+    expect(report.recoveryRequired, isTrue);
+    expect(report.outputRecoveryRequired, isTrue);
+    expect(report.gameInstallRecoveryRequired, isFalse);
+    expect(report.installRestore, ScriptCompileInstallRestore.notStarted);
+  });
+
+  test('rejects non-canonical private output recovery evidence', () {
+    expect(
+      () =>
+          ScriptCompileReport.fromJson(_report(outputRecoveryRequired: false)),
+      throwsFormatException,
+    );
+    final nullEvidence = _report()..['output_recovery_required'] = null;
+    expect(
+      () => ScriptCompileReport.fromJson(nullEvidence),
+      throwsFormatException,
+    );
+    expect(
+      () => ScriptCompileReport.fromJson(_report(outputRecoveryRequired: true)),
+      throwsFormatException,
     );
   });
 
@@ -197,6 +375,7 @@ void main() {
 
       expect(report.compiled, isFalse, reason: code);
       expect(report.recoveryRequired, isTrue, reason: code);
+      expect(report.gameInstallRecoveryRequired, isTrue, reason: code);
       expect(report.installRestore, ScriptCompileInstallRestore.notStarted);
     }
   });

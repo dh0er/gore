@@ -5,7 +5,17 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use sha2::{Digest as _, Sha256};
+
 use crate::cache::{emit_all, model, refs::RefResolver, remap, splice};
+use crate::compiler_backend::{run_compiler_backend_v1, CompilerBackendRunnerV1};
+pub use crate::compiler_backend::{
+    CompilerBackendDiagnosticSeverityV1, CompilerBackendDiagnosticV1, CompilerBackendFailureKindV1,
+    CompilerBackendFailureV1, CompilerBackendFallbackReasonV1, CompilerBackendModeV1,
+    CompilerBackendNameV1,
+};
+use crate::compiler_profile::manifest::Sha256Digest;
+use crate::compiler_target::ValidatedCompilerTargetInputsV1;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CompileError {
@@ -51,6 +61,203 @@ pub struct CompileOpts {
     pub binds_override: Option<Vec<u8>>,
 }
 
+/// Explicit inputs for an injected standalone compiler.
+///
+/// `base_cache` and `binds_cache` are the exact caller-sealed snapshots already used by GORE's
+/// orchestration. They are optional at this generic boundary so an implementation can return a
+/// structured `Unavailable` failure; production sidecars must never replace their absence with
+/// implicit live-install reads.
+#[derive(Debug, Clone, Copy)]
+pub struct StandaloneCompilerInputsV1<'a> {
+    pub source_tree: &'a Path,
+    /// Exact authored modules which differ from the sealed base cache. The source tree also
+    /// contains decompiled compatibility sources for the game backend; a standalone compiler
+    /// must not mistake those lossy reconstructions for authoritative base-module input.
+    pub overlays: &'a [StandaloneCompilerOverlayV1<'a>],
+    pub base_cache: Option<&'a [u8]>,
+    pub binds_cache: Option<&'a [u8]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StandaloneCompilerOverlayOperationV1 {
+    Add,
+    Edit,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct StandaloneCompilerOverlayV1<'a> {
+    pub operation: StandaloneCompilerOverlayOperationV1,
+    pub module_name: &'a str,
+    pub relative_path: &'a str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct StandaloneFullGraphChangeV1<'a> {
+    pub operation: FullGraphCompileOperationV1,
+    pub module_name: &'a str,
+    pub relative_path: &'a str,
+}
+
+/// Complete retained-graph request at the injected standalone boundary.
+#[derive(Debug, Clone, Copy)]
+pub struct StandaloneFullGraphCompilerInputsV1<'a> {
+    pub source_tree: &'a Path,
+    pub changes: &'a [StandaloneFullGraphChangeV1<'a>],
+    pub final_manifest: &'a [FullGraphFinalModuleV1],
+    pub base_cache: &'a [u8],
+    pub binds_cache: &'a [u8],
+}
+
+/// Full regenerated-cache output retained until GORE finishes its downstream validation.
+pub struct StandaloneCompilerOutputV1 {
+    path: PathBuf,
+    diagnostics: Vec<CompilerBackendDiagnosticV1>,
+    cleanup: Option<Box<dyn FnOnce() -> Result<(), String> + Send>>,
+}
+
+impl std::fmt::Debug for StandaloneCompilerOutputV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StandaloneCompilerOutputV1")
+            .field("path", &self.path)
+            .field("diagnostic_count", &self.diagnostics.len())
+            .field("retains_cleanup", &self.cleanup.is_some())
+            .finish()
+    }
+}
+
+impl StandaloneCompilerOutputV1 {
+    /// Output without an owned scratch lifecycle, primarily for in-process adapters and tests.
+    pub fn detached(path: PathBuf) -> Self {
+        Self {
+            path,
+            diagnostics: Vec::new(),
+            cleanup: None,
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn diagnostics(&self) -> &[CompilerBackendDiagnosticV1] {
+        &self.diagnostics
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_cleanup(
+        path: PathBuf,
+        cleanup: impl FnOnce() -> Result<(), String> + Send + 'static,
+    ) -> Self {
+        Self {
+            path,
+            diagnostics: Vec::new(),
+            cleanup: Some(Box::new(cleanup)),
+        }
+    }
+
+    pub(crate) fn with_cleanup_and_diagnostics(
+        path: PathBuf,
+        diagnostics: Vec<CompilerBackendDiagnosticV1>,
+        cleanup: impl FnOnce() -> Result<(), String> + Send + 'static,
+    ) -> Self {
+        Self {
+            path,
+            diagnostics,
+            cleanup: Some(Box::new(cleanup)),
+        }
+    }
+
+    /// Explicitly dispose the private output and report whether its scratch lifecycle closed.
+    pub fn discard(mut self) -> Result<(), String> {
+        match self.cleanup.take() {
+            Some(cleanup) => cleanup(),
+            None => Err("standalone compiler output has no owned cleanup capability".to_owned()),
+        }
+    }
+
+    /// Dispose an owned scratch lifecycle while allowing detached in-process adapters.
+    fn discard_if_owned(mut self) -> Result<(), String> {
+        match self.cleanup.take() {
+            Some(cleanup) => cleanup(),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for StandaloneCompilerOutputV1 {
+    fn drop(&mut self) {
+        if let Some(cleanup) = self.cleanup.take() {
+            let _ = cleanup();
+        }
+    }
+}
+
+/// Injectable standalone implementation for the V1 backend contract.
+///
+/// The runner receives the same complete emitted source tree as the historical `run_regen` seam
+/// plus the exact sealed base/Binds snapshots. GORE still owns validation, target extraction,
+/// remapping, and retained mini-cache publication after this call.
+pub trait StandaloneCompilerRunnerV1 {
+    fn run_regen(
+        &mut self,
+        inputs: StandaloneCompilerInputsV1<'_>,
+    ) -> Result<StandaloneCompilerOutputV1, CompilerBackendFailureV1>;
+
+    /// Run one complete graph transformation. Legacy injected runners remain usable for Add/Edit
+    /// requests; Delete is refused unless a runner overrides this method with genuine delete
+    /// semantics. The outer full-graph contract will then use the explicit game fallback only when
+    /// the caller selected `StandaloneThenGame`.
+    fn run_full_graph(
+        &mut self,
+        inputs: StandaloneFullGraphCompilerInputsV1<'_>,
+    ) -> Result<StandaloneCompilerOutputV1, CompilerBackendFailureV1> {
+        if inputs
+            .changes
+            .iter()
+            .any(|change| change.operation == FullGraphCompileOperationV1::Delete)
+        {
+            return Err(CompilerBackendFailureV1::new(
+                CompilerBackendFailureKindV1::Unavailable,
+                "standalone runner does not implement full-graph Delete semantics",
+            ));
+        }
+        let overlays = inputs
+            .changes
+            .iter()
+            .map(|change| StandaloneCompilerOverlayV1 {
+                operation: match change.operation {
+                    FullGraphCompileOperationV1::Add => StandaloneCompilerOverlayOperationV1::Add,
+                    FullGraphCompileOperationV1::Edit => StandaloneCompilerOverlayOperationV1::Edit,
+                    FullGraphCompileOperationV1::Delete => unreachable!("checked above"),
+                },
+                module_name: change.module_name,
+                relative_path: change.relative_path,
+            })
+            .collect::<Vec<_>>();
+        self.run_regen(StandaloneCompilerInputsV1 {
+            source_tree: inputs.source_tree,
+            overlays: &overlays,
+            base_cache: Some(inputs.base_cache),
+            binds_cache: Some(inputs.binds_cache),
+        })
+    }
+}
+
+impl<F> StandaloneCompilerRunnerV1 for F
+where
+    F: for<'a> FnMut(
+        StandaloneCompilerInputsV1<'a>,
+    ) -> Result<StandaloneCompilerOutputV1, CompilerBackendFailureV1>,
+{
+    fn run_regen(
+        &mut self,
+        inputs: StandaloneCompilerInputsV1<'_>,
+    ) -> Result<StandaloneCompilerOutputV1, CompilerBackendFailureV1> {
+        self(inputs)
+    }
+}
+
 /// Maximum number of sealed add-only modules accepted by one project compiler check.
 pub const MAX_PROJECT_COMPILER_CHECK_MODULES: usize = 1_024;
 /// Maximum aggregate authored source bytes accepted by one project compiler check.
@@ -59,6 +266,397 @@ const MAX_PROJECT_COMPILER_CHECK_IDENTITY_BYTES: usize = 4 * 1024;
 const MAX_PROJECT_COMPILER_CHECK_BASE_BYTES: usize = 512 * 1024 * 1024;
 const MAX_PROJECT_COMPILER_CHECK_BINDS_BYTES: usize = 128 * 1024 * 1024;
 const MAX_PROJECT_COMPILER_CHECK_REGEN_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_PROJECT_SOURCE_TREE_FILES: usize = 100_000;
+const MAX_PROJECT_SOURCE_TREE_FILE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_PROJECT_SOURCE_TREE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_PROJECT_BACKEND_EVIDENCE_DETAIL_BYTES: usize = 4 * 1024;
+const MAX_PROJECT_BACKEND_DIAGNOSTICS: usize = 64;
+const MAX_PROJECT_BACKEND_DIAGNOSTIC_CODE_BYTES: usize = 256;
+const MAX_PROJECT_BACKEND_DIAGNOSTIC_MESSAGE_BYTES: usize = 2 * 1024;
+
+/// Maximum number of explicit module changes in one retained full-graph compile.
+///
+/// The current pristine graph contains 7,308 modules. The bound deliberately permits a complete
+/// graph replacement plus more than 100% reserve without turning module identity storage into an
+/// unbounded process input.
+pub const MAX_FULL_GRAPH_COMPILE_CHANGES_V1: usize = 16_384;
+/// Maximum number of modules in the caller-declared and compiler-validated final graph.
+pub const MAX_FULL_GRAPH_FINAL_MODULES_V1: usize = 16_384;
+/// Maximum aggregate authored bytes across Add/Edit changes.
+pub const MAX_FULL_GRAPH_SOURCE_BYTES_V1: usize = 1024 * 1024 * 1024;
+const FULL_GRAPH_PENDING_PREFIX_V1: &str = ".gore-as-full-graph-v1-pending-";
+
+/// One explicit transformation from the sealed base cache to the requested final graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FullGraphCompileOperationV1 {
+    Add,
+    Edit,
+    Delete,
+}
+
+/// One sealed change in a retained full-graph request.
+///
+/// Add/Edit require `source=Some(bytes)`, including for a valid empty source file. Delete requires
+/// `source=None`; it can therefore never be confused with an empty authored module.
+#[derive(Debug, Clone)]
+pub struct FullGraphCompileChangeV1 {
+    pub operation: FullGraphCompileOperationV1,
+    pub module_name: String,
+    pub relative_path: String,
+    pub source: Option<Vec<u8>>,
+}
+
+/// One identity in the complete final module manifest supplied by the caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FullGraphFinalModuleV1 {
+    pub module_name: String,
+    pub relative_path: String,
+}
+
+/// Provenance of one module in the validated final source manifest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FullGraphSourceDispositionV1 {
+    /// The authoritative input remains the sealed base-cache module; no exact authored source was
+    /// claimed for the lossy compatibility source emitted for the game fallback.
+    Base,
+    Added,
+    Edited,
+}
+
+/// Canonical, receipt-ready description of one final module.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FullGraphSourceManifestEntryV1 {
+    pub module_name: String,
+    pub relative_path: String,
+    pub disposition: FullGraphSourceDispositionV1,
+    /// Exact effective compiler-source length after deterministic overlay preparation for
+    /// Added/Edited modules; absent for base-cache modules.
+    pub source_byte_len: Option<u64>,
+    /// Exact effective compiler-source digest after deterministic overlay preparation for
+    /// Added/Edited modules; absent for base-cache modules.
+    pub source_sha256: Option<Sha256Digest>,
+}
+
+/// Canonical record of a base module intentionally absent from the final graph.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FullGraphDeletedModuleV1 {
+    pub module_name: String,
+    pub relative_path: String,
+}
+
+/// Canonical, source-sealed record of one applied graph change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FullGraphChangeManifestEntryV1 {
+    pub operation: FullGraphCompileOperationV1,
+    pub module_name: String,
+    pub relative_path: String,
+    pub source_byte_len: Option<u64>,
+    pub source_sha256: Option<Sha256Digest>,
+}
+
+/// Inputs for one productive, retained full-graph compile.
+///
+/// `final_manifest` is mandatory and complete. GORE derives the only valid manifest by applying
+/// `changes` to the exact base cache and refuses any missing, extra, renamed, or colliding entry
+/// before a backend can run.
+#[derive(Debug)]
+pub struct FullGraphCompileOptsV1 {
+    pub game_dir: PathBuf,
+    pub work_dir: PathBuf,
+    pub output_path: PathBuf,
+    pub changes: Vec<FullGraphCompileChangeV1>,
+    pub final_manifest: Vec<FullGraphFinalModuleV1>,
+    pub base_cache: Vec<u8>,
+    pub binds_cache: Vec<u8>,
+}
+
+/// Return the exact canonical module identities declared by a validated base cache.
+///
+/// This is the offline planning boundary for source-tree callers: module names come from the
+/// serialized cache, while paths use the same normalized emitted layout consumed by FullGraph.
+pub fn base_full_graph_manifest_v1(
+    base_cache: &[u8],
+) -> Result<Vec<FullGraphFinalModuleV1>, CompileError> {
+    validate_generated_cache(base_cache)
+        .map_err(|error| CompileError::Other(format!("invalid sealed base cache: {error}")))?;
+    let modules = model::parse_modules(base_cache)
+        .map_err(|error| CompileError::Other(format!("parsing base module manifest: {error}")))?;
+    let mut manifest = emit_all::validated_module_identities(&modules)
+        .map_err(|error| CompileError::Other(format!("validating base module manifest: {error}")))?
+        .into_iter()
+        .map(|entry| FullGraphFinalModuleV1 {
+            module_name: entry.module_name,
+            relative_path: entry.relative_path,
+        })
+        .collect::<Vec<_>>();
+    sort_full_graph_identities_v1(&mut manifest);
+    Ok(manifest)
+}
+
+/// Derive the module name exactly as the captured game/standalone source discovery path does.
+///
+/// The donor removes every case-insensitive `.as` occurrence and then maps `/` to `.`; preserving
+/// that slightly surprising behavior is required for Add identity parity. Callers receive the
+/// normalized forward-slash path that must be placed in the change/final manifests.
+pub fn module_name_from_relative_path_v1(
+    relative_path: &str,
+) -> Result<(String, String), CompileError> {
+    const MAX_IDENTITY_BYTES: usize = 4 * 1024;
+    if relative_path.is_empty()
+        || relative_path.len() > MAX_IDENTITY_BYTES
+        || relative_path.starts_with('/')
+        || relative_path.contains(['\\', ':', '\0'])
+        || !relative_path
+            .get(relative_path.len().saturating_sub(3)..)
+            .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".as"))
+    {
+        return Err(CompileError::Other(format!(
+            "source path {relative_path:?} is not a donor-compatible relative .as path"
+        )));
+    }
+    if relative_path
+        .split('/')
+        .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(CompileError::Other(format!(
+            "source path {relative_path:?} contains an unsafe component"
+        )));
+    }
+    let bytes = relative_path.as_bytes();
+    let mut module_name = String::with_capacity(relative_path.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if index + 2 < bytes.len()
+            && bytes[index] == b'.'
+            && bytes[index + 1].eq_ignore_ascii_case(&b'a')
+            && bytes[index + 2].eq_ignore_ascii_case(&b's')
+        {
+            index += 3;
+            continue;
+        }
+        let character = relative_path[index..]
+            .chars()
+            .next()
+            .expect("index remains on a UTF-8 boundary");
+        module_name.push(if character == '/' { '.' } else { character });
+        index += character.len_utf8();
+    }
+    if module_name.is_empty() || module_name.chars().any(char::is_control) {
+        return Err(CompileError::Other(format!(
+            "source path {relative_path:?} produces an unsafe empty/control-bearing module name"
+        )));
+    }
+    Ok((module_name, relative_path.to_owned()))
+}
+
+#[derive(Debug)]
+struct ProjectSourceTreeSealEntry {
+    relative_path: PathBuf,
+    byte_len: u64,
+    sha256: [u8; 32],
+    file: std::fs::File,
+    original_readonly: bool,
+}
+
+#[derive(Debug)]
+struct ProjectSourceTreeSeal {
+    root: PathBuf,
+    entries: Vec<ProjectSourceTreeSealEntry>,
+}
+
+impl ProjectSourceTreeSeal {
+    fn capture(root: &Path) -> Result<Self, String> {
+        let paths = project_source_tree_files(root)?;
+        let mut seal = Self {
+            root: root.to_path_buf(),
+            entries: Vec::with_capacity(paths.len()),
+        };
+        let mut aggregate = 0u64;
+        for relative_path in paths {
+            let path = root.join(&relative_path);
+            let mut file = open_project_source_pin(&path)?;
+            let original_readonly = file
+                .metadata()
+                .map_err(|error| format!("inspecting project source permissions: {error}"))?
+                .permissions()
+                .readonly();
+            let bytes = read_open_regular_file_bounded(
+                &mut file,
+                MAX_PROJECT_SOURCE_TREE_FILE_BYTES,
+                "sealed project source",
+            )?;
+            aggregate = aggregate
+                .checked_add(bytes.len() as u64)
+                .filter(|value| *value <= MAX_PROJECT_SOURCE_TREE_BYTES)
+                .ok_or_else(|| {
+                    format!("project source tree exceeds {MAX_PROJECT_SOURCE_TREE_BYTES} bytes")
+                })?;
+            let entry = ProjectSourceTreeSealEntry {
+                relative_path,
+                byte_len: bytes.len() as u64,
+                sha256: Sha256::digest(&bytes).into(),
+                file,
+                original_readonly,
+            };
+            set_project_source_handle_readonly(&entry.file, true)?;
+            seal.entries.push(entry);
+        }
+        Ok(seal)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        let actual_paths = project_source_tree_files(&self.root)?;
+        if actual_paths.len() != self.entries.len() {
+            return Err(format!(
+                "project source tree entry count changed from {} to {} after standalone attempt",
+                self.entries.len(),
+                actual_paths.len()
+            ));
+        }
+        for (actual_path, expected) in actual_paths.iter().zip(&self.entries) {
+            if actual_path != &expected.relative_path {
+                return Err(format!(
+                    "project source tree membership changed after standalone attempt at {:?}",
+                    expected.relative_path
+                ));
+            }
+            if !project_source_handle_is_readonly(&expected.file)? {
+                return Err(format!(
+                    "project source {:?} lost its read-only seal after standalone attempt",
+                    actual_path
+                ));
+            }
+            let mut file = expected
+                .file
+                .try_clone()
+                .map_err(|error| format!("cloning sealed project source handle: {error}"))?;
+            let bytes = read_open_regular_file_bounded(
+                &mut file,
+                MAX_PROJECT_SOURCE_TREE_FILE_BYTES,
+                "revalidated project source",
+            )?;
+            if bytes.len() as u64 != expected.byte_len
+                || <[u8; 32]>::from(Sha256::digest(&bytes)) != expected.sha256
+            {
+                return Err(format!(
+                    "project source {:?} changed after standalone attempt",
+                    actual_path
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ProjectSourceTreeSeal {
+    fn drop(&mut self) {
+        for entry in &self.entries {
+            let _ = set_project_source_handle_readonly(&entry.file, entry.original_readonly);
+        }
+    }
+}
+
+fn project_source_tree_files(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let root_metadata = std::fs::symlink_metadata(root)
+        .map_err(|error| format!("inspecting project source root: {error}"))?;
+    if !root_metadata.is_dir() || metadata_is_link_or_reparse(&root_metadata) {
+        return Err("project source root is not a real directory".to_owned());
+    }
+    let mut pending = vec![PathBuf::new()];
+    let mut files = Vec::new();
+    while let Some(relative_directory) = pending.pop() {
+        let directory = root.join(&relative_directory);
+        let mut entries = std::fs::read_dir(&directory)
+            .map_err(|error| format!("reading project source directory: {error}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("reading project source entry: {error}"))?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries.into_iter().rev() {
+            let relative = relative_directory.join(entry.file_name());
+            let metadata = std::fs::symlink_metadata(entry.path())
+                .map_err(|error| format!("inspecting project source entry: {error}"))?;
+            if metadata_is_link_or_reparse(&metadata) {
+                return Err(format!(
+                    "project source tree contains a link/reparse point at {:?}",
+                    relative
+                ));
+            }
+            if metadata.is_dir() {
+                pending.push(relative);
+            } else if metadata.is_file() {
+                if files.len() == MAX_PROJECT_SOURCE_TREE_FILES {
+                    return Err(format!(
+                        "project source tree exceeds {MAX_PROJECT_SOURCE_TREE_FILES} files"
+                    ));
+                }
+                files.push(relative);
+            } else {
+                return Err(format!(
+                    "project source tree contains a non-regular entry at {:?}",
+                    relative
+                ));
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+#[cfg(windows)]
+fn open_project_source_pin(path: &Path) -> Result<std::fs::File, String> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_SHARE_READ, FILE_WRITE_ATTRIBUTES,
+    };
+
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .access_mode(FILE_GENERIC_READ | FILE_WRITE_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options
+        .open(path)
+        .map_err(|error| format!("opening pinned project source: {error}"))?;
+    validate_opened_compiled_artifact(file)
+}
+
+#[cfg(not(windows))]
+fn open_project_source_pin(path: &Path) -> Result<std::fs::File, String> {
+    open_regular_file_no_follow_read(path)
+}
+
+#[cfg(windows)]
+fn set_project_source_handle_readonly(file: &std::fs::File, readonly: bool) -> Result<(), String> {
+    let mut permissions = file
+        .metadata()
+        .map_err(|error| format!("inspecting project source permissions: {error}"))?
+        .permissions();
+    permissions.set_readonly(readonly);
+    file.set_permissions(permissions)
+        .map_err(|error| format!("sealing project source read-only: {error}"))
+}
+
+#[cfg(not(windows))]
+fn set_project_source_handle_readonly(
+    _file: &std::fs::File,
+    _readonly: bool,
+) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn project_source_handle_is_readonly(file: &std::fs::File) -> Result<bool, String> {
+    Ok(file
+        .metadata()
+        .map_err(|error| format!("inspecting project source permissions: {error}"))?
+        .permissions()
+        .readonly())
+}
+
+#[cfg(not(windows))]
+fn project_source_handle_is_readonly(_file: &std::fs::File) -> Result<bool, String> {
+    Ok(true)
+}
 
 /// One source module sealed by the managed project/store layer.
 ///
@@ -204,6 +802,21 @@ impl CompileOutput {
         }
         Ok(())
     }
+
+    /// Clone the exact create-new output handle for receipt sealing.
+    ///
+    /// This is crate-private so callers cannot turn a successful compile into an unrelated
+    /// pathname-based artifact claim. The generation-receipt layer hashes this handle and checks
+    /// its metadata before and after the bounded read.
+    pub(crate) fn clone_retained_artifact_file(&self) -> Result<std::fs::File, String> {
+        self.validate_retained_artifact()?;
+        self.artifact
+            .as_ref()
+            .expect("validated retained artifact")
+            .file
+            .try_clone()
+            .map_err(|error| format!("cloning retained compiler output handle: {error}"))
+    }
 }
 
 impl CompileError {
@@ -270,7 +883,14 @@ pub enum CompileModuleReportOutcome {
 pub struct CompileModuleReport {
     pub outcome: CompileModuleReportOutcome,
     diagnostics: Option<crate::diagnostics::CompilerDiagnosticsReport>,
+    backend_diagnostics: Vec<CompilerBackendDiagnosticV1>,
     install_restore: InstallRestoreDisposition,
+    backend: Option<CompilerBackendNameV1>,
+    fallback_reason: Option<CompilerBackendFallbackReasonV1>,
+    standalone_attempted: bool,
+    game_attempted: bool,
+    output_recovery_required: bool,
+    target_pins: Option<ProjectGameInputPins>,
 }
 
 impl CompileModuleReport {
@@ -278,8 +898,62 @@ impl CompileModuleReport {
         self.diagnostics.as_ref()
     }
 
+    /// Diagnostics emitted directly by the selected standalone backend.
+    ///
+    /// Game diagnostics remain available through [`Self::diagnostics`]. A game result after an
+    /// explicit fallback has no direct backend diagnostics; the failed standalone attempt stays
+    /// attached to [`Self::fallback_reason`].
+    pub fn backend_diagnostics(&self) -> &[CompilerBackendDiagnosticV1] {
+        &self.backend_diagnostics
+    }
+
     pub fn install_restore_disposition(&self) -> InstallRestoreDisposition {
         self.install_restore
+    }
+
+    /// Backend whose result was consumed by module compilation, or `None` when preflight failed
+    /// before the backend-selection seam was entered.
+    pub fn backend_name(&self) -> Option<CompilerBackendNameV1> {
+        self.backend
+    }
+
+    /// Structured standalone failure that caused an explicitly requested game fallback.
+    pub fn fallback_reason(&self) -> Option<&CompilerBackendFallbackReasonV1> {
+        self.fallback_reason.as_ref()
+    }
+
+    /// Whether the standalone runner seam was entered, independently of its result or cleanup.
+    pub fn standalone_attempted(&self) -> bool {
+        self.standalone_attempted
+    }
+
+    /// Whether the game runner seam was entered, independently of install restoration metadata.
+    pub fn game_attempted(&self) -> bool {
+        self.game_attempted
+    }
+
+    /// Whether a private compiler output could not be proven removed.
+    pub fn output_recovery_required(&self) -> bool {
+        self.output_recovery_required
+    }
+
+    /// Whether either the live installation or private compiler output needs recovery.
+    pub fn recovery_required(&self) -> bool {
+        self.output_recovery_required
+            || matches!(
+                self.install_restore,
+                InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed
+                    | InstallRestoreDisposition::RecoveryRequiredRestoreFailed
+            )
+    }
+
+    /// Build caller-owned evidence while the exact qualified target remains pinned.
+    ///
+    /// Product adapters that expose qualified package identity must use this seam instead of
+    /// dropping the report before their response has been completely materialized.
+    pub fn finish_while_target_pinned<R>(mut self, finish: impl FnOnce(Self) -> R) -> R {
+        let target_pins = self.target_pins.take();
+        finish_while_owned_value_is_pinned(target_pins, || finish(self))
     }
 
     pub fn into_parts(
@@ -324,15 +998,24 @@ pub enum ProjectCompilerClosingAuditDisposition {
 pub struct ProjectCompilerCheckReport {
     pub outcome: ProjectCompilerCheckOutcome,
     diagnostics: Option<crate::diagnostics::CompilerDiagnosticsReport>,
+    backend_diagnostics: Vec<CompilerBackendDiagnosticV1>,
     install_restore: InstallRestoreDisposition,
     output_disposition: ProjectCompilerOutputDisposition,
     closing_audit: ProjectCompilerClosingAuditDisposition,
     runner_invocations: u8,
+    backend: Option<CompilerBackendNameV1>,
+    fallback_reason: Option<CompilerBackendFallbackReasonV1>,
+    standalone_attempted: bool,
+    game_attempted: bool,
 }
 
 impl ProjectCompilerCheckReport {
     pub fn diagnostics(&self) -> Option<&crate::diagnostics::CompilerDiagnosticsReport> {
         self.diagnostics.as_ref()
+    }
+
+    pub fn backend_diagnostics(&self) -> &[CompilerBackendDiagnosticV1] {
+        &self.backend_diagnostics
     }
 
     pub fn install_restore_disposition(&self) -> InstallRestoreDisposition {
@@ -356,10 +1039,26 @@ impl ProjectCompilerCheckReport {
         ) || self.output_disposition == ProjectCompilerOutputDisposition::RecoveryRetained
     }
 
-    /// Number of calls into the injected/production regen runner. This is zero for all source,
-    /// cache, layout, and tree preflight failures and exactly one after the shared tree is ready.
+    /// Number of backend runner calls. This is zero for shared preflight failures, one for strict
+    /// or first-attempt success, and two only for an explicit standalone-to-game fallback.
     pub fn runner_invocations(&self) -> u8 {
         self.runner_invocations
+    }
+
+    pub fn backend_name(&self) -> Option<CompilerBackendNameV1> {
+        self.backend
+    }
+
+    pub fn fallback_reason(&self) -> Option<&CompilerBackendFallbackReasonV1> {
+        self.fallback_reason.as_ref()
+    }
+
+    pub fn standalone_attempted(&self) -> bool {
+        self.standalone_attempted
+    }
+
+    pub fn game_attempted(&self) -> bool {
+        self.game_attempted
     }
 
     pub fn into_parts(
@@ -372,6 +1071,431 @@ impl ProjectCompilerCheckReport {
     }
 }
 
+/// Exact no-clobber publication state for one retained full-graph result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FullGraphPublicationDispositionV1 {
+    /// No final output was made visible. This also covers an ordinary destination collision.
+    NotPublished,
+    /// The complete validated cache is atomically visible at the requested path and its exact file
+    /// object remains held by [`FullGraphCompileArtifactV1`].
+    Published,
+    /// A private pending or published file object could not be proven neutralized. The destination
+    /// must not be consumed until explicit recovery succeeds.
+    RecoveryRequired,
+}
+
+/// One atomically published full-cache artifact retained by its exact file handle.
+pub struct FullGraphCompileArtifactV1 {
+    path: PathBuf,
+    file: std::fs::File,
+    byte_len: u64,
+    sha256: Sha256Digest,
+    module_count: u32,
+    base_cache_sha256: Sha256Digest,
+    final_manifest: Vec<FullGraphSourceManifestEntryV1>,
+    changes: Vec<FullGraphChangeManifestEntryV1>,
+    deleted_modules: Vec<FullGraphDeletedModuleV1>,
+}
+
+impl std::fmt::Debug for FullGraphCompileArtifactV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FullGraphCompileArtifactV1")
+            .field("path", &self.path)
+            .field("byte_len", &self.byte_len)
+            .field("sha256", &self.sha256)
+            .field("module_count", &self.module_count)
+            .field("base_cache_sha256", &self.base_cache_sha256)
+            .field("final_manifest_entries", &self.final_manifest.len())
+            .field("changes", &self.changes.len())
+            .field("deleted_modules", &self.deleted_modules.len())
+            .finish()
+    }
+}
+
+impl FullGraphCompileArtifactV1 {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn byte_len(&self) -> u64 {
+        self.byte_len
+    }
+
+    pub fn sha256(&self) -> Sha256Digest {
+        self.sha256
+    }
+
+    pub fn module_count(&self) -> u32 {
+        self.module_count
+    }
+
+    pub fn base_cache_sha256(&self) -> Sha256Digest {
+        self.base_cache_sha256
+    }
+
+    pub fn final_manifest(&self) -> &[FullGraphSourceManifestEntryV1] {
+        &self.final_manifest
+    }
+
+    pub fn changes(&self) -> &[FullGraphChangeManifestEntryV1] {
+        &self.changes
+    }
+
+    pub fn deleted_modules(&self) -> &[FullGraphDeletedModuleV1] {
+        &self.deleted_modules
+    }
+
+    /// Revalidate length and digest through the exact retained file object, without reopening the
+    /// caller-visible path.
+    pub fn validate_retained_artifact(&self) -> Result<(), String> {
+        let (byte_len, sha256) = hash_compiled_artifact_handle(
+            self.file
+                .try_clone()
+                .map_err(|error| format!("cloning retained full-graph handle: {error}"))?,
+            MAX_PROJECT_COMPILER_CHECK_REGEN_BYTES,
+            "retained full-graph output",
+        )?;
+        if byte_len != self.byte_len || sha256 != self.sha256 {
+            return Err("retained full-graph output bytes changed after publication".to_owned());
+        }
+        Ok(())
+    }
+
+    /// Irreversibly neutralize the exact retained file object after a later receipt/publication
+    /// failure. The pathname may already have moved; cleanup therefore never substitutes a fresh
+    /// pathname lookup for this handle.
+    pub fn neutralize(&self) -> Result<(), String> {
+        self.file
+            .set_len(0)
+            .map_err(|error| format!("neutralizing retained full-graph output: {error}"))?;
+        self.file
+            .sync_all()
+            .map_err(|error| format!("syncing neutralized full-graph output: {error}"))?;
+        if self
+            .file
+            .metadata()
+            .map_err(|error| format!("checking neutralized full-graph output: {error}"))?
+            .len()
+            != 0
+        {
+            return Err("retained full-graph output still contains usable bytes".to_owned());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn clone_retained_artifact_file(&self) -> Result<std::fs::File, String> {
+        self.validate_retained_artifact()?;
+        self.file
+            .try_clone()
+            .map_err(|error| format!("cloning retained full-graph output handle: {error}"))
+    }
+}
+
+/// Test-only bridge for downstream receipt tests which need the same exact-handle artifact shape
+/// without running a compiler process. The supplied cache is still bounded, parsed, identity-
+/// checked, and hashed through the retained file object before it is exposed.
+#[cfg(test)]
+pub(crate) fn bind_full_graph_artifact_for_test(
+    path: PathBuf,
+    base_cache_sha256: Sha256Digest,
+    final_manifest: Vec<FullGraphSourceManifestEntryV1>,
+    deleted_modules: Vec<FullGraphDeletedModuleV1>,
+) -> Result<FullGraphCompileArtifactV1, String> {
+    if final_manifest.is_empty() || final_manifest.len() > MAX_FULL_GRAPH_FINAL_MODULES_V1 {
+        return Err(format!(
+            "test full-graph manifest must contain 1..={} modules",
+            MAX_FULL_GRAPH_FINAL_MODULES_V1
+        ));
+    }
+    let fold = |value: &str| {
+        value
+            .chars()
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    let mut identities = Vec::with_capacity(final_manifest.len());
+    let mut seen_names = std::collections::BTreeSet::new();
+    let mut seen_paths = std::collections::BTreeSet::new();
+    let mut changes = Vec::new();
+    for entry in &final_manifest {
+        if !seen_names.insert(fold(&entry.module_name))
+            || !seen_paths.insert(fold(&entry.relative_path))
+        {
+            return Err("test full-graph manifest contains a case-fold collision".to_owned());
+        }
+        let operation = match (
+            entry.disposition,
+            entry.source_byte_len,
+            entry.source_sha256,
+        ) {
+            (FullGraphSourceDispositionV1::Base, None, None) => None,
+            (FullGraphSourceDispositionV1::Added, Some(_), Some(_)) => {
+                Some(FullGraphCompileOperationV1::Add)
+            }
+            (FullGraphSourceDispositionV1::Edited, Some(_), Some(_)) => {
+                Some(FullGraphCompileOperationV1::Edit)
+            }
+            _ => {
+                return Err(format!(
+                    "test full-graph source seals do not match disposition for {:?}",
+                    entry.module_name
+                ));
+            }
+        };
+        identities.push(FullGraphFinalModuleV1 {
+            module_name: entry.module_name.clone(),
+            relative_path: entry.relative_path.clone(),
+        });
+        if let Some(operation) = operation {
+            changes.push(FullGraphChangeManifestEntryV1 {
+                operation,
+                module_name: entry.module_name.clone(),
+                relative_path: entry.relative_path.clone(),
+                source_byte_len: entry.source_byte_len,
+                source_sha256: entry.source_sha256,
+            });
+        }
+    }
+    let mut canonical_identities = identities.clone();
+    sort_full_graph_identities_v1(&mut canonical_identities);
+    if canonical_identities != identities {
+        return Err("test full-graph manifest is not in canonical order".to_owned());
+    }
+    let mut canonical_deleted = deleted_modules.clone();
+    canonical_deleted.sort_by(|left, right| {
+        fold(&left.module_name)
+            .cmp(&fold(&right.module_name))
+            .then_with(|| fold(&left.relative_path).cmp(&fold(&right.relative_path)))
+            .then_with(|| left.module_name.cmp(&right.module_name))
+            .then_with(|| left.relative_path.cmp(&right.relative_path))
+    });
+    if canonical_deleted != deleted_modules {
+        return Err("test full-graph deleted-module manifest is not in canonical order".to_owned());
+    }
+    for entry in &deleted_modules {
+        if !seen_names.insert(fold(&entry.module_name))
+            || !seen_paths.insert(fold(&entry.relative_path))
+        {
+            return Err("test full-graph deletion collides with the final manifest".to_owned());
+        }
+        changes.push(FullGraphChangeManifestEntryV1 {
+            operation: FullGraphCompileOperationV1::Delete,
+            module_name: entry.module_name.clone(),
+            relative_path: entry.relative_path.clone(),
+            source_byte_len: None,
+            source_sha256: None,
+        });
+    }
+    changes.sort_by(|left, right| {
+        fold(&left.module_name)
+            .cmp(&fold(&right.module_name))
+            .then_with(|| fold(&left.relative_path).cmp(&fold(&right.relative_path)))
+            .then_with(|| left.module_name.cmp(&right.module_name))
+            .then_with(|| left.relative_path.cmp(&right.relative_path))
+    });
+
+    let file = open_compiled_artifact_existing(&path)?;
+    let (byte_len, sha256) = hash_compiled_artifact_handle(
+        file.try_clone()
+            .map_err(|error| format!("cloning test full-graph handle: {error}"))?,
+        MAX_PROJECT_COMPILER_CHECK_REGEN_BYTES,
+        "test full-graph output",
+    )?;
+    let mut bytes = Vec::with_capacity(byte_len as usize);
+    let mut reader = file
+        .try_clone()
+        .map_err(|error| format!("cloning test full-graph read handle: {error}"))?;
+    reader
+        .seek(SeekFrom::Start(0))
+        .and_then(|_| reader.read_to_end(&mut bytes))
+        .map_err(|error| format!("reading test full-graph output: {error}"))?;
+    if bytes.len() as u64 != byte_len || sha256_digest(&bytes) != sha256 {
+        return Err("test full-graph output changed while binding its handle".to_owned());
+    }
+    validate_generated_cache(&bytes)?;
+    validate_full_graph_regen_manifest_v1(&identities, &bytes)?;
+    let (checked_len, checked_sha256) = hash_compiled_artifact_handle(
+        file.try_clone()
+            .map_err(|error| format!("recloning test full-graph handle: {error}"))?,
+        MAX_PROJECT_COMPILER_CHECK_REGEN_BYTES,
+        "test full-graph output",
+    )?;
+    if checked_len != byte_len || checked_sha256 != sha256 {
+        return Err("test full-graph output changed after validation".to_owned());
+    }
+    Ok(FullGraphCompileArtifactV1 {
+        path,
+        file,
+        byte_len,
+        sha256,
+        module_count: u32::try_from(identities.len())
+            .map_err(|_| "test full-graph module count exceeds u32".to_owned())?,
+        base_cache_sha256,
+        final_manifest,
+        changes,
+        deleted_modules,
+    })
+}
+
+/// Build a minimal parser-valid full-cache fixture for sibling receipt tests.
+#[cfg(test)]
+pub(crate) fn build_full_graph_cache_for_test(
+    build_identifier: u32,
+    guid: [u8; 16],
+    modules: &[(&str, &str)],
+) -> Result<Vec<u8>, String> {
+    if build_identifier != crate::cache::header::CACHE_MAGIC {
+        return Err(format!(
+            "test cache build identifier {build_identifier:#010x} is unsupported by the current cache parser"
+        ));
+    }
+    if guid == [0; 16] {
+        return Err("test cache GUID must be nonzero".to_owned());
+    }
+    if modules.is_empty() || modules.len() > MAX_FULL_GRAPH_FINAL_MODULES_V1 {
+        return Err("test cache requires a bounded nonempty module manifest".to_owned());
+    }
+    let write_fstring = |output: &mut Vec<u8>, value: &str| {
+        output.extend_from_slice(&((value.len() + 1) as i32).to_le_bytes());
+        output.extend_from_slice(value.as_bytes());
+        output.push(0);
+    };
+    let write_sia = |output: &mut Vec<u8>, value: &str| {
+        output.extend_from_slice(&(value.len() as i32).to_le_bytes());
+        if !value.is_empty() {
+            output.extend_from_slice(value.as_bytes());
+            output.push(0);
+        }
+    };
+    let mut output = guid.to_vec();
+    output.extend_from_slice(&build_identifier.to_le_bytes());
+    output.extend_from_slice(&(modules.len() as u32).to_le_bytes());
+    for (module_name, relative_path) in modules {
+        write_fstring(&mut output, module_name);
+        write_sia(&mut output, module_name);
+        output.extend_from_slice(&0i32.to_le_bytes()); // functions
+        output.extend_from_slice(&0i32.to_le_bytes()); // classes
+        output.extend_from_slice(&0i32.to_le_bytes()); // enums
+        output.extend_from_slice(&0i32.to_le_bytes()); // globals
+        output.extend_from_slice(&0i32.to_le_bytes()); // function imports
+        output.extend_from_slice(&0i64.to_le_bytes()); // code hash
+        output.extend_from_slice(&0i32.to_le_bytes()); // imported modules
+        write_sia(&mut output, ""); // statics class
+        output.extend_from_slice(&0i32.to_le_bytes()); // events
+        output.extend_from_slice(&0i32.to_le_bytes()); // delegates
+        write_sia(&mut output, relative_path);
+        output.extend_from_slice(&0i32.to_le_bytes()); // post-init functions
+    }
+    for _ in 0..crate::cache::tables::N_TABLES {
+        output.extend_from_slice(&0i32.to_le_bytes());
+    }
+    validate_generated_cache(&output)?;
+    let expected = modules
+        .iter()
+        .map(|(module_name, relative_path)| FullGraphFinalModuleV1 {
+            module_name: (*module_name).to_owned(),
+            relative_path: (*relative_path).to_owned(),
+        })
+        .collect::<Vec<_>>();
+    validate_full_graph_regen_manifest_v1(&expected, &output)?;
+    Ok(output)
+}
+
+#[derive(Debug)]
+pub enum FullGraphCompileOutcomeV1 {
+    Compiled(FullGraphCompileArtifactV1),
+    Failed(CompileError),
+}
+
+/// Productive full-graph result with explicit backend, fallback, installation, audit, and output
+/// evidence. A successful report always owns the exact final-cache file object.
+#[derive(Debug)]
+pub struct FullGraphCompileReportV1 {
+    pub outcome: FullGraphCompileOutcomeV1,
+    diagnostics: Option<crate::diagnostics::CompilerDiagnosticsReport>,
+    backend_diagnostics: Vec<CompilerBackendDiagnosticV1>,
+    install_restore: InstallRestoreDisposition,
+    publication: FullGraphPublicationDispositionV1,
+    closing_audit: ProjectCompilerClosingAuditDisposition,
+    runner_invocations: u8,
+    backend: Option<CompilerBackendNameV1>,
+    fallback_reason: Option<CompilerBackendFallbackReasonV1>,
+    standalone_attempted: bool,
+    game_attempted: bool,
+    output_recovery_required: bool,
+    target_pins: Option<ProjectGameInputPins>,
+}
+
+impl FullGraphCompileReportV1 {
+    pub fn diagnostics(&self) -> Option<&crate::diagnostics::CompilerDiagnosticsReport> {
+        self.diagnostics.as_ref()
+    }
+
+    pub fn backend_diagnostics(&self) -> &[CompilerBackendDiagnosticV1] {
+        &self.backend_diagnostics
+    }
+
+    pub fn install_restore_disposition(&self) -> InstallRestoreDisposition {
+        self.install_restore
+    }
+
+    pub fn publication_disposition(&self) -> FullGraphPublicationDispositionV1 {
+        self.publication
+    }
+
+    pub fn closing_audit_disposition(&self) -> ProjectCompilerClosingAuditDisposition {
+        self.closing_audit
+    }
+
+    pub fn recovery_required(&self) -> bool {
+        matches!(
+            self.install_restore,
+            InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed
+                | InstallRestoreDisposition::RecoveryRequiredRestoreFailed
+        ) || self.output_recovery_required
+    }
+
+    pub fn runner_invocations(&self) -> u8 {
+        self.runner_invocations
+    }
+
+    pub fn backend_name(&self) -> Option<CompilerBackendNameV1> {
+        self.backend
+    }
+
+    pub fn fallback_reason(&self) -> Option<&CompilerBackendFallbackReasonV1> {
+        self.fallback_reason.as_ref()
+    }
+
+    pub fn standalone_attempted(&self) -> bool {
+        self.standalone_attempted
+    }
+
+    pub fn game_attempted(&self) -> bool {
+        self.game_attempted
+    }
+
+    /// Whether a private pending or published output could not be proven neutralized.
+    ///
+    /// This is deliberately independent of live-install recovery: both can be true at once.
+    pub fn output_recovery_required(&self) -> bool {
+        self.output_recovery_required
+    }
+
+    /// Build caller-owned evidence while the exact qualified target remains pinned.
+    pub fn finish_while_target_pinned<R>(mut self, finish: impl FnOnce(Self) -> R) -> R {
+        let target_pins = self.target_pins.take();
+        finish_while_owned_value_is_pinned(target_pins, || finish(self))
+    }
+}
+
+fn finish_while_owned_value_is_pinned<T, R>(pin: T, finish: impl FnOnce() -> R) -> R {
+    let result = finish();
+    drop(pin);
+    result
+}
+
 /// Compile one module through the transactional game compiler while retaining bounded structured
 /// diagnostics and the exact capture/fallback disposition.
 ///
@@ -382,9 +1506,155 @@ pub fn compile_module_with_diagnostics_report(
     opts: &CompileOpts,
     diagnostics: &crate::diagnostics::DiagnosticsOptions,
 ) -> CompileModuleReport {
-    compile_module_report_with(opts, |game_dir, source_tree| {
+    compile_module_with_backend_v1(opts, diagnostics, CompilerBackendModeV1::Game, None)
+}
+
+/// Compile through the versioned backend policy while retaining the existing module report.
+///
+/// The legacy public entry points select [`CompilerBackendModeV1::Game`]. Standalone execution is
+/// possible only when the caller injects a [`StandaloneCompilerRunnerV1`]. The only mode that may
+/// start the game after a standalone failure is `StandaloneThenGame`, and that fallback is always
+/// visible through [`CompileModuleReport::fallback_reason`].
+pub fn compile_module_with_backend_v1(
+    opts: &CompileOpts,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    mode: CompilerBackendModeV1,
+    standalone: Option<&mut dyn StandaloneCompilerRunnerV1>,
+) -> CompileModuleReport {
+    compile_module_report_with_backend_runner_v1(opts, mode, standalone, |game_dir, source_tree| {
         game_run_regen_with_extended_diagnostics_report(game_dir, source_tree, diagnostics)
     })
+}
+
+/// Compile through the explicit backend policy while transferring a caller-held install guard.
+///
+/// The guard must cover the caller's exact base/Binds snapshot. It is consumed by the game
+/// backend if selected, or explicitly released after a standalone/preflight result. This is the
+/// product-integration seam for `standalone-then-game`: both attempts remain bound to the same
+/// authoritative snapshot and a standalone success never launches the game.
+pub fn compile_module_with_backend_v1_with_guard(
+    opts: &CompileOpts,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    mode: CompilerBackendModeV1,
+    standalone: Option<&mut dyn StandaloneCompilerRunnerV1>,
+    guard: InstallMutationGuard,
+) -> CompileModuleReport {
+    compile_module_with_backend_v1_with_guard_and_optional_target(
+        opts,
+        diagnostics,
+        mode,
+        standalone,
+        guard,
+        None,
+    )
+}
+
+/// Guard-aware backend selection with one exact, qualified game-target capability.
+///
+/// The target pins remain live across the standalone attempt. If explicit fallback selects the
+/// game, duplicate handles move into the compile transaction while the originals remain in the
+/// returned report for response/evidence construction. This prevents a fallback artifact or its
+/// qualified identity evidence from crossing an EXE/Shipping/Binds replacement window.
+pub fn compile_module_with_backend_v1_with_guard_and_target(
+    opts: &CompileOpts,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    mode: CompilerBackendModeV1,
+    standalone: Option<&mut dyn StandaloneCompilerRunnerV1>,
+    guard: InstallMutationGuard,
+    target: ValidatedCompilerTargetInputsV1,
+) -> CompileModuleReport {
+    compile_module_with_backend_v1_with_guard_and_optional_target(
+        opts,
+        diagnostics,
+        mode,
+        standalone,
+        guard,
+        Some(target),
+    )
+}
+
+fn compile_module_with_backend_v1_with_guard_and_optional_target(
+    opts: &CompileOpts,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    mode: CompilerBackendModeV1,
+    standalone: Option<&mut dyn StandaloneCompilerRunnerV1>,
+    guard: InstallMutationGuard,
+    target: Option<ValidatedCompilerTargetInputsV1>,
+) -> CompileModuleReport {
+    let guard = std::cell::RefCell::new(Some(guard));
+    let target = std::cell::RefCell::new(target);
+    let retained_target_pins = std::cell::RefCell::new(None);
+    let mut report = compile_module_report_with_backend_runner_v1(
+        opts,
+        mode,
+        standalone,
+        |game_dir, source_tree| {
+            let guard = guard
+                .borrow_mut()
+                .take()
+                .ok_or_else(|| "pre-held compiler guard was consumed more than once".to_owned())?;
+            match target.borrow_mut().take() {
+                Some(target) => {
+                    let retained = ProjectGameInputPins::from_compiler_target(target);
+                    *retained_target_pins.borrow_mut() = Some(retained);
+                    let execution = retained_target_pins
+                        .borrow()
+                        .as_ref()
+                        .expect("qualified target pins were retained above")
+                        .try_clone_for_execution()?;
+                    game_run_regen_with_extended_diagnostics_report_with_guard_and_pins(
+                        game_dir,
+                        source_tree,
+                        diagnostics,
+                        guard,
+                        execution,
+                    )
+                }
+                None => game_run_regen_with_extended_diagnostics_report_with_guard(
+                    game_dir,
+                    source_tree,
+                    diagnostics,
+                    guard,
+                ),
+            }
+        },
+    );
+
+    if let Some(mut unused_guard) = guard.into_inner() {
+        if let Err(release) = unused_guard.release() {
+            unused_guard.preserve_for_manual_recovery();
+            let previous = std::mem::replace(
+                &mut report.outcome,
+                CompileModuleReportOutcome::Failed(CompileError::Other(
+                    "unreachable guard-release placeholder".to_owned(),
+                )),
+            );
+            let primary = match previous {
+                CompileModuleReportOutcome::Compiled(mut output) => {
+                    let cleanup = output
+                        .neutralize_retained_artifact()
+                        .err()
+                        .map(|error| {
+                            format!("; retained compiler output cleanup also failed: {error}")
+                        })
+                        .unwrap_or_default();
+                    format!("compiler output was discarded before publication{cleanup}")
+                }
+                CompileModuleReportOutcome::Failed(error) => error.to_string(),
+            };
+            report.outcome = CompileModuleReportOutcome::Failed(CompileError::Other(format!(
+                "{primary}; additionally failed to release the pre-held install-mutation guard: \
+                 {release}"
+            )));
+            report.install_restore = InstallRestoreDisposition::RecoveryRequiredRestoreFailed;
+        }
+    }
+    report.target_pins = retained_target_pins.into_inner().or_else(|| {
+        target
+            .into_inner()
+            .map(ProjectGameInputPins::from_compiler_target)
+    });
+    report
 }
 
 /// Compile with a caller-held guard acquired by [`acquire_compile_install_mutation`].
@@ -400,7 +1670,9 @@ pub fn compile_module_with_diagnostics_report_with_guard(
 ) -> CompileModuleReport {
     let guard = std::cell::RefCell::new(Some(guard));
     let generated = std::cell::RefCell::new(None);
+    let backend_started = std::cell::Cell::new(false);
     let mut result = compile_module(opts, |game_dir, source_tree| {
+        backend_started.set(true);
         let guard = guard
             .borrow_mut()
             .take()
@@ -445,16 +1717,26 @@ pub fn compile_module_with_diagnostics_report_with_guard(
             Err(error) => CompileModuleReportOutcome::Failed(error),
         },
         diagnostics: generated.and_then(|(diagnostics, _)| diagnostics),
+        backend_diagnostics: Vec::new(),
         install_restore,
+        backend: backend_started.get().then_some(CompilerBackendNameV1::Game),
+        fallback_reason: None,
+        standalone_attempted: false,
+        game_attempted: backend_started.get(),
+        output_recovery_required: false,
+        target_pins: None,
     }
 }
 
+#[cfg(test)]
 fn compile_module_report_with<R>(opts: &CompileOpts, run_regen: R) -> CompileModuleReport
 where
     R: FnOnce(&Path, &Path) -> Result<GameRunRegenExtendedReport, String>,
 {
     let report = std::cell::RefCell::new(None);
+    let backend_started = std::cell::Cell::new(false);
     let result = compile_module(opts, |game_dir, source_tree| {
+        backend_started.set(true);
         let generated = run_regen(game_dir, source_tree)?;
         let mut slot = report.borrow_mut();
         if slot.is_some() {
@@ -469,13 +1751,218 @@ where
         .as_ref()
         .map(|(_, install_restore)| *install_restore)
         .unwrap_or(InstallRestoreDisposition::NotStarted);
+    let backend = backend_started.get().then_some(CompilerBackendNameV1::Game);
     CompileModuleReport {
         outcome: match result {
             Ok(output) => CompileModuleReportOutcome::Compiled(output),
             Err(error) => CompileModuleReportOutcome::Failed(error),
         },
         diagnostics: generated.and_then(|(diagnostics, _)| diagnostics),
+        backend_diagnostics: Vec::new(),
         install_restore,
+        backend,
+        fallback_reason: None,
+        standalone_attempted: false,
+        game_attempted: backend_started.get(),
+        output_recovery_required: false,
+        target_pins: None,
+    }
+}
+
+fn compile_module_report_with_backend_runner_v1<G>(
+    opts: &CompileOpts,
+    mode: CompilerBackendModeV1,
+    mut standalone: Option<&mut dyn StandaloneCompilerRunnerV1>,
+    run_game: G,
+) -> CompileModuleReport
+where
+    G: FnOnce(&Path, &Path) -> Result<GameRunRegenExtendedReport, String>,
+{
+    let standalone_runner_called = std::cell::Cell::new(false);
+    let standalone_runner_failure = std::cell::RefCell::new(None);
+    let standalone_compile_error = std::cell::RefCell::new(None);
+    let standalone_backend_diagnostics = std::cell::RefCell::new(Vec::new());
+    let game_runner_called = std::cell::Cell::new(false);
+    let game_compile_error = std::cell::RefCell::new(None);
+    let game_metadata = std::cell::RefCell::new(None);
+    let mut run_game = Some(run_game);
+    let mut standalone_attempt = standalone.as_deref_mut().map(|runner| {
+        || {
+            let retained_output = std::cell::RefCell::new(None);
+            let result = compile_module(opts, |_, source_tree| {
+                standalone_runner_called.set(true);
+                let operation = match opts.op.as_str() {
+                    "add" => StandaloneCompilerOverlayOperationV1::Add,
+                    "edit" => StandaloneCompilerOverlayOperationV1::Edit,
+                    _ => {
+                        return Err(format!(
+                            "standalone compiler received unsupported operation {:?}",
+                            opts.op
+                        ));
+                    }
+                };
+                let overlays = [StandaloneCompilerOverlayV1 {
+                    operation,
+                    module_name: &opts.module_name,
+                    relative_path: &opts.rel_path,
+                }];
+                runner
+                    .run_regen(StandaloneCompilerInputsV1 {
+                        source_tree,
+                        overlays: &overlays,
+                        base_cache: opts.base_override.as_deref(),
+                        binds_cache: opts.binds_override.as_deref(),
+                    })
+                    .map(|output| {
+                        *standalone_backend_diagnostics.borrow_mut() =
+                            sanitize_project_backend_diagnostics(
+                                output.diagnostics(),
+                                &[source_tree, &opts.work_dir],
+                            );
+                        let path = output.path().to_path_buf();
+                        *retained_output.borrow_mut() = Some(output);
+                        path
+                    })
+                    .map_err(|failure| {
+                        let failure = sanitize_project_backend_failure(
+                            failure,
+                            &[source_tree, &opts.work_dir],
+                        );
+                        *standalone_backend_diagnostics.borrow_mut() =
+                            failure.diagnostics().to_vec();
+                        *standalone_runner_failure.borrow_mut() = Some(failure.clone());
+                        failure.to_string()
+                    })
+            });
+            // The returned full cache is needed through every downstream validation above, but
+            // never after the resulting mini/error has been materialized. A failed owned cleanup
+            // is terminal: starting the game fallback would hide and race retained private state.
+            if let Some(output) = retained_output.into_inner() {
+                if let Err(error) = output.discard_if_owned() {
+                    drop(result);
+                    let failure = CompilerBackendFailureV1::with_diagnostics(
+                        CompilerBackendFailureKindV1::RecoveryRequired,
+                        format!("standalone module output disposal failed: {error}"),
+                        standalone_backend_diagnostics.borrow().clone(),
+                    );
+                    *standalone_compile_error.borrow_mut() =
+                        Some(CompileError::Regen(failure.to_string()));
+                    return Err(failure);
+                }
+            }
+            match result {
+                Ok(output) => Ok(output),
+                Err(error) => {
+                    let failure = standalone_runner_failure
+                        .borrow_mut()
+                        .take()
+                        .unwrap_or_else(|| {
+                            let kind = if !standalone_runner_called.get() {
+                                CompilerBackendFailureKindV1::Preflight
+                            } else if matches!(error, CompileError::ArtifactIo { .. }) {
+                                CompilerBackendFailureKindV1::RecoveryRequired
+                            } else {
+                                // The runner returned a cache path, but one of GORE's full-cache,
+                                // target, extraction, remap, defaults, or mini validations failed.
+                                CompilerBackendFailureKindV1::InvalidOutput
+                            };
+                            CompilerBackendFailureV1::with_diagnostics(
+                                kind,
+                                error.to_string(),
+                                standalone_backend_diagnostics.borrow().clone(),
+                            )
+                        });
+                    *standalone_compile_error.borrow_mut() = Some(error);
+                    Err(failure)
+                }
+            }
+        }
+    });
+    let mut game_attempt = || {
+        let result = compile_module(opts, |game_dir, source_tree| {
+            game_runner_called.set(true);
+            let runner = run_game
+                .take()
+                .ok_or_else(|| "game compiler backend was invoked more than once".to_owned())?;
+            let generated = runner(game_dir, source_tree)?;
+            let GameRunRegenExtendedReport {
+                result,
+                diagnostics,
+                install_restore,
+            } = generated;
+            *game_metadata.borrow_mut() = Some((diagnostics, install_restore));
+            result
+        });
+        match result {
+            Ok(output) => Ok(output),
+            Err(error) => {
+                let kind = if !game_runner_called.get() {
+                    CompilerBackendFailureKindV1::Preflight
+                } else if matches!(error, CompileError::ArtifactIo { .. }) {
+                    CompilerBackendFailureKindV1::RecoveryRequired
+                } else if matches!(error, CompileError::Regen(_)) {
+                    CompilerBackendFailureKindV1::Rejected
+                } else {
+                    CompilerBackendFailureKindV1::InvalidOutput
+                };
+                let failure = CompilerBackendFailureV1::new(kind, error.to_string());
+                *game_compile_error.borrow_mut() = Some(error);
+                Err(failure)
+            }
+        }
+    };
+    let selected = run_compiler_backend_v1(
+        mode,
+        standalone_attempt
+            .as_mut()
+            .map(|runner| runner as &mut dyn CompilerBackendRunnerV1<_>),
+        &mut game_attempt,
+    );
+    drop(standalone_attempt);
+    drop(game_attempt);
+
+    let (selected_result, backend, fallback_reason) = selected.into_parts();
+    let terminal_kind = selected_result.as_ref().err().map(|failure| failure.kind());
+    let backend_diagnostics = if backend == CompilerBackendNameV1::Standalone {
+        selected_result
+            .as_ref()
+            .err()
+            .map(|failure| failure.diagnostics().to_vec())
+            .unwrap_or_else(|| standalone_backend_diagnostics.into_inner())
+    } else {
+        Vec::new()
+    };
+    let outcome = match selected_result {
+        Ok(output) => CompileModuleReportOutcome::Compiled(output),
+        Err(failure) => {
+            let error = match backend {
+                CompilerBackendNameV1::Standalone => standalone_compile_error.into_inner(),
+                CompilerBackendNameV1::Game => game_compile_error.into_inner(),
+            }
+            .unwrap_or_else(|| CompileError::Regen(failure.to_string()));
+            CompileModuleReportOutcome::Failed(error)
+        }
+    };
+    let (diagnostics, install_restore) = if backend == CompilerBackendNameV1::Game {
+        game_metadata
+            .into_inner()
+            .unwrap_or((None, InstallRestoreDisposition::NotStarted))
+    } else {
+        (None, InstallRestoreDisposition::NotStarted)
+    };
+    CompileModuleReport {
+        outcome,
+        diagnostics,
+        backend_diagnostics,
+        install_restore,
+        backend: (terminal_kind != Some(CompilerBackendFailureKindV1::Preflight))
+            .then_some(backend),
+        fallback_reason,
+        standalone_attempted: standalone_runner_called.get(),
+        game_attempted: game_runner_called.get(),
+        output_recovery_required: terminal_kind
+            == Some(CompilerBackendFailureKindV1::RecoveryRequired),
+        target_pins: None,
     }
 }
 
@@ -486,6 +1973,604 @@ struct ProjectCompilerRunnerReport {
     install_restore: InstallRestoreDisposition,
     output_disposition: ProjectCompilerOutputDisposition,
     closing_audit: ProjectCompilerClosingAuditDisposition,
+}
+
+/// Qualification-only retained result from the real embedded compiler. This is crate-private so
+/// an unqualified profile can authorize an oracle capture without becoming a product compiler
+/// capability.
+#[derive(Debug)]
+pub(crate) struct EmbeddedQualificationCompileReportV1 {
+    pub(crate) result: Result<Vec<u8>, String>,
+    pub(crate) diagnostics: Option<crate::diagnostics::CompilerDiagnosticsReport>,
+    pub(crate) install_restore: InstallRestoreDisposition,
+    pub(crate) output_disposition: ProjectCompilerOutputDisposition,
+    pub(crate) closing_audit: ProjectCompilerClosingAuditDisposition,
+}
+
+/// Run one sealed qualification source graph through the embedded game compiler while retaining
+/// the same target pins, install transaction, private-output consumption, restore, and closing
+/// audit used by the product full-graph path.
+pub(crate) fn run_embedded_qualification_compile_v1<A>(
+    game_dir: &Path,
+    source_tree: &Path,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    guard: InstallMutationGuard,
+    target: ValidatedCompilerTargetInputsV1,
+    closing_audit: A,
+) -> EmbeddedQualificationCompileReportV1
+where
+    A: FnOnce() -> Result<(), String>,
+{
+    let report = run_project_compiler_with_guard_and_pins(
+        game_dir,
+        source_tree,
+        diagnostics,
+        guard,
+        ProjectGameInputPins::from_compiler_target(target),
+        closing_audit,
+    );
+    EmbeddedQualificationCompileReportV1 {
+        result: report.result,
+        diagnostics: report.diagnostics,
+        install_restore: report.install_restore,
+        output_disposition: report.output_disposition,
+        closing_audit: report.closing_audit,
+    }
+}
+
+/// Frontend-oracle variant: the capture controller injects the production bridge before the
+/// game's first instruction and the normal diagnostics hook into that same process. The returned
+/// cache and the caller-owned capture file therefore share one process lifetime.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_embedded_frontend_qualification_compile_v1<A>(
+    game_dir: &Path,
+    source_tree: &Path,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    capture_controller: &Path,
+    capture_bridge: &Path,
+    capture_path: &Path,
+    guard: InstallMutationGuard,
+    target: ValidatedCompilerTargetInputsV1,
+    closing_audit: A,
+) -> EmbeddedQualificationCompileReportV1
+where
+    A: FnOnce() -> Result<(), String>,
+{
+    let report = run_project_compiler_with_optional_pins_and_generator(
+        game_dir,
+        source_tree,
+        guard,
+        Some(ProjectGameInputPins::from_compiler_target(target)),
+        closing_audit,
+        |exe, g1r, cache| {
+            real_generate_with_frontend_capture_and_diagnostics_report(
+                exe,
+                g1r,
+                cache,
+                Duration::from_secs(30 * 60),
+                diagnostics,
+                capture_controller,
+                capture_bridge,
+                capture_path,
+            )
+        },
+    );
+    EmbeddedQualificationCompileReportV1 {
+        result: report.result,
+        diagnostics: report.diagnostics,
+        install_restore: report.install_restore,
+        output_disposition: report.output_disposition,
+        closing_audit: report.closing_audit,
+    }
+}
+
+/// Compile and retain one complete graph through a game-capable backend policy.
+///
+/// This guarded entrypoint accepts `Game` or `StandaloneThenGame`; it refuses `Standalone` so a
+/// strict standalone caller can never create an install lock by API accident. Use
+/// [`compile_full_graph_standalone_v1`] for the installations-free path. Final output is published
+/// only after cache/final-manifest validation, the same-guard closing audit, and confirmed guard
+/// release/restoration.
+pub fn compile_full_graph_with_backend_v1_with_guard<A>(
+    opts: &FullGraphCompileOptsV1,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    mode: CompilerBackendModeV1,
+    standalone: Option<&mut dyn StandaloneCompilerRunnerV1>,
+    guard: InstallMutationGuard,
+    closing_audit: A,
+) -> FullGraphCompileReportV1
+where
+    A: FnOnce() -> Result<(), String>,
+{
+    compile_full_graph_with_backend_v1_with_guard_and_optional_target(
+        opts,
+        diagnostics,
+        mode,
+        standalone,
+        Some(guard),
+        closing_audit,
+        None,
+    )
+}
+
+/// Full-graph compile with one already validated target capability retained across a standalone
+/// attempt, duplicated into the game transaction only when explicit fallback selects it, and kept
+/// in the returned report for response/evidence construction.
+pub fn compile_full_graph_with_backend_v1_with_guard_and_target<A>(
+    opts: &FullGraphCompileOptsV1,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    mode: CompilerBackendModeV1,
+    standalone: Option<&mut dyn StandaloneCompilerRunnerV1>,
+    guard: InstallMutationGuard,
+    closing_audit: A,
+    target: ValidatedCompilerTargetInputsV1,
+) -> FullGraphCompileReportV1
+where
+    A: FnOnce() -> Result<(), String>,
+{
+    compile_full_graph_with_backend_v1_with_guard_and_optional_target(
+        opts,
+        diagnostics,
+        mode,
+        standalone,
+        Some(guard),
+        closing_audit,
+        Some(target),
+    )
+}
+
+/// Compile and retain a full graph through the strict standalone backend without acquiring or
+/// consuming any game-install mutation guard.
+///
+/// The caller-provided audit is read-only authority: it runs after the backend and before output
+/// publication. A failure rejects the artifact. This entrypoint cannot select or fall back to the
+/// game backend.
+pub fn compile_full_graph_standalone_v1<A>(
+    opts: &FullGraphCompileOptsV1,
+    standalone: &mut dyn StandaloneCompilerRunnerV1,
+    closing_audit: A,
+) -> FullGraphCompileReportV1
+where
+    A: FnOnce() -> Result<(), String>,
+{
+    compile_full_graph_with_backend_v1_with_guard_and_optional_target(
+        opts,
+        &crate::diagnostics::DiagnosticsOptions::default(),
+        CompilerBackendModeV1::Standalone,
+        Some(standalone),
+        None,
+        closing_audit,
+        None,
+    )
+}
+
+/// Strict standalone compile retaining a previously validated read-only target pin until the
+/// closing audit and artifact publication complete.
+pub fn compile_full_graph_standalone_v1_with_target<A>(
+    opts: &FullGraphCompileOptsV1,
+    standalone: &mut dyn StandaloneCompilerRunnerV1,
+    closing_audit: A,
+    target: ValidatedCompilerTargetInputsV1,
+) -> FullGraphCompileReportV1
+where
+    A: FnOnce() -> Result<(), String>,
+{
+    compile_full_graph_with_backend_v1_with_guard_and_optional_target(
+        opts,
+        &crate::diagnostics::DiagnosticsOptions::default(),
+        CompilerBackendModeV1::Standalone,
+        Some(standalone),
+        None,
+        closing_audit,
+        Some(target),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_full_graph_with_backend_v1_with_guard_and_optional_target<A>(
+    opts: &FullGraphCompileOptsV1,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    mode: CompilerBackendModeV1,
+    mut standalone: Option<&mut dyn StandaloneCompilerRunnerV1>,
+    guard: Option<InstallMutationGuard>,
+    closing_audit: A,
+    target: Option<ValidatedCompilerTargetInputsV1>,
+) -> FullGraphCompileReportV1
+where
+    A: FnOnce() -> Result<(), String>,
+{
+    let guard = std::cell::RefCell::new(guard);
+    let closing_audit = std::cell::RefCell::new(Some(closing_audit));
+    let target = std::cell::RefCell::new(target);
+    let retained_target_pins = std::cell::RefCell::new(None);
+    let diagnostics_report = std::cell::RefCell::new(None);
+    let install_restore = std::cell::Cell::new(InstallRestoreDisposition::NotStarted);
+    let closing_disposition = std::cell::Cell::new(ProjectCompilerClosingAuditDisposition::NotRun);
+    let private_output_recovery = std::cell::Cell::new(false);
+    let standalone_calls = std::cell::Cell::new(0u8);
+    let game_calls = std::cell::Cell::new(0u8);
+    let selected_backend = std::cell::Cell::new(None);
+    let fallback_reason = std::cell::RefCell::new(None);
+    let standalone_backend_diagnostics = std::cell::RefCell::new(Vec::new());
+
+    let mut result = (|| -> Result<(Vec<u8>, PreparedFullGraphRequestV1), CompileError> {
+        match (mode, guard.borrow().is_some()) {
+            (CompilerBackendModeV1::Standalone, true) => {
+                return Err(CompileError::Other(
+                    "strict standalone full-graph compile must not hold an install mutation guard"
+                        .to_owned(),
+                ));
+            }
+            (CompilerBackendModeV1::Game | CompilerBackendModeV1::StandaloneThenGame, false) => {
+                return Err(CompileError::Other(
+                    "game-capable full-graph compile requires a pre-held install mutation guard"
+                        .to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        preflight_full_graph_path_layout_v1(opts)?;
+        preflight_full_graph_publication_v1(opts)?;
+        if let Some(target) = target.borrow().as_ref() {
+            if target.shipping_cache() != opts.base_cache {
+                return Err(CompileError::Other(
+                    "qualified target Shipping bytes do not match the full-graph base snapshot"
+                        .to_owned(),
+                ));
+            }
+            if target.binds_cache() != opts.binds_cache {
+                return Err(CompileError::Other(
+                    "qualified target Binds bytes do not match the full-graph binds snapshot"
+                        .to_owned(),
+                ));
+            }
+        }
+        let prepared = prepare_full_graph_request_v1(opts)?;
+        let tree_seal = ProjectSourceTreeSeal::capture(&prepared.source_tree).map_err(|error| {
+            CompileError::Other(format!(
+                "sealing the prepared full-graph source tree: {error}"
+            ))
+        })?;
+        // Backend wire receives only the canonical identities proven during preparation; caller
+        // path spelling (for example `\\` versus `/`) never diverges from the staged source tree
+        // or the receipt change manifest.
+        let standalone_changes = prepared
+            .changes
+            .iter()
+            .map(|change| StandaloneFullGraphChangeV1 {
+                operation: change.operation,
+                module_name: &change.module_name,
+                relative_path: &change.relative_path,
+            })
+            .collect::<Vec<_>>();
+
+        let mut standalone_attempt = standalone.as_deref_mut().map(|runner| {
+            || {
+                standalone_calls.set(standalone_calls.get().saturating_add(1));
+                let output = runner
+                    .run_full_graph(StandaloneFullGraphCompilerInputsV1 {
+                        source_tree: &prepared.source_tree,
+                        changes: &standalone_changes,
+                        final_manifest: &prepared.final_identities,
+                        base_cache: &opts.base_cache,
+                        binds_cache: &opts.binds_cache,
+                    })
+                    .map_err(|failure| {
+                        if failure.kind() == CompilerBackendFailureKindV1::RecoveryRequired {
+                            private_output_recovery.set(true);
+                        }
+                        let failure = sanitize_project_backend_failure(
+                            failure,
+                            &[&prepared.source_tree, &opts.work_dir],
+                        );
+                        *standalone_backend_diagnostics.borrow_mut() =
+                            failure.diagnostics().to_vec();
+                        failure
+                    })?;
+                *standalone_backend_diagnostics.borrow_mut() = sanitize_project_backend_diagnostics(
+                    output.diagnostics(),
+                    &[&prepared.source_tree, &opts.work_dir],
+                );
+                let direct_error =
+                    standalone_backend_diagnostics
+                        .borrow()
+                        .iter()
+                        .any(|diagnostic| {
+                            diagnostic.severity() == CompilerBackendDiagnosticSeverityV1::Error
+                        });
+                let bytes = read_regular_file_bounded_no_follow(
+                    output.path(),
+                    MAX_PROJECT_COMPILER_CHECK_REGEN_BYTES,
+                    "standalone full-graph compiler output",
+                );
+                if let Err(error) = output.discard() {
+                    private_output_recovery.set(true);
+                    return Err(sanitize_project_backend_failure(
+                        CompilerBackendFailureV1::new(
+                            CompilerBackendFailureKindV1::RecoveryRequired,
+                            format!("standalone full-graph output disposal failed: {error}"),
+                        )
+                        .with_backend_diagnostics(standalone_backend_diagnostics.borrow().clone()),
+                        &[&prepared.source_tree, &opts.work_dir],
+                    ));
+                }
+                if direct_error {
+                    return Err(CompilerBackendFailureV1::with_diagnostics(
+                        CompilerBackendFailureKindV1::Rejected,
+                        "standalone full-graph compiler reported error diagnostics with success",
+                        standalone_backend_diagnostics.borrow().clone(),
+                    ));
+                }
+                let bytes = bytes.map_err(|error| {
+                    sanitize_project_backend_failure(
+                        CompilerBackendFailureV1::new(
+                            CompilerBackendFailureKindV1::InvalidOutput,
+                            error,
+                        )
+                        .with_backend_diagnostics(standalone_backend_diagnostics.borrow().clone()),
+                        &[&prepared.source_tree, &opts.work_dir],
+                    )
+                })?;
+                validate_generated_cache(&bytes).map_err(|error| {
+                    CompilerBackendFailureV1::with_diagnostics(
+                        CompilerBackendFailureKindV1::InvalidOutput,
+                        error,
+                        standalone_backend_diagnostics.borrow().clone(),
+                    )
+                })?;
+                validate_full_graph_regen_manifest_v1(&prepared.final_identities, &bytes).map_err(
+                    |error| {
+                        CompilerBackendFailureV1::with_diagnostics(
+                            CompilerBackendFailureKindV1::InvalidOutput,
+                            error,
+                            standalone_backend_diagnostics.borrow().clone(),
+                        )
+                    },
+                )?;
+                Ok(bytes)
+            }
+        });
+        let mut game_attempt = || {
+            if let Some(blocker) = prepared.game_source_rebuild_preflight.as_deref() {
+                return Err(CompilerBackendFailureV1::new(
+                    CompilerBackendFailureKindV1::Preflight,
+                    format!(
+                        "game full-graph source rebuild is unavailable for this sealed base: \
+                         {blocker}"
+                    ),
+                ));
+            }
+            tree_seal.validate().map_err(|error| {
+                CompilerBackendFailureV1::new(
+                    CompilerBackendFailureKindV1::Preflight,
+                    format!("prepared full-graph source seal no longer matches: {error}"),
+                )
+            })?;
+            let input_pins = match target.borrow_mut().take() {
+                Some(target) => {
+                    let retained = ProjectGameInputPins::from_compiler_target(target);
+                    *retained_target_pins.borrow_mut() = Some(retained);
+                    let execution = retained_target_pins
+                        .borrow()
+                        .as_ref()
+                        .expect("qualified target pins were retained above")
+                        .try_clone_for_execution()
+                        .map_err(|error| {
+                            CompilerBackendFailureV1::new(
+                                CompilerBackendFailureKindV1::Preflight,
+                                error,
+                            )
+                        })?;
+                    execution
+                }
+                None => pin_game_input_seals(&opts.game_dir, &opts.base_cache, &opts.binds_cache)
+                    .map_err(|error| {
+                    CompilerBackendFailureV1::new(CompilerBackendFailureKindV1::Preflight, error)
+                })?,
+            };
+            game_calls.set(game_calls.get().saturating_add(1));
+            let guard = guard.borrow_mut().take().ok_or_else(|| {
+                CompilerBackendFailureV1::new(
+                    CompilerBackendFailureKindV1::Internal,
+                    "pre-held full-graph compiler guard was consumed more than once",
+                )
+            })?;
+            let audit = closing_audit.borrow_mut().take().ok_or_else(|| {
+                CompilerBackendFailureV1::new(
+                    CompilerBackendFailureKindV1::Internal,
+                    "full-graph closing audit was consumed more than once",
+                )
+            })?;
+            let report = run_project_compiler_with_guard_and_pins(
+                &opts.game_dir,
+                &prepared.source_tree,
+                diagnostics,
+                guard,
+                input_pins,
+                audit,
+            );
+            let unsafe_recovery = matches!(
+                report.install_restore,
+                InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed
+                    | InstallRestoreDisposition::RecoveryRequiredRestoreFailed
+            ) || report.output_disposition
+                == ProjectCompilerOutputDisposition::RecoveryRetained;
+            let rejected = report.diagnostics.as_ref().is_some_and(|diagnostics| {
+                diagnostics.diagnostics().iter().any(|diagnostic| {
+                    diagnostic.severity == crate::diagnostics::DiagnosticSeverity::Error
+                })
+            });
+            *diagnostics_report.borrow_mut() = report.diagnostics;
+            install_restore.set(report.install_restore);
+            closing_disposition.set(report.closing_audit);
+            if report.output_disposition == ProjectCompilerOutputDisposition::RecoveryRetained {
+                private_output_recovery.set(true);
+            }
+            let bytes = report.result.map_err(|error| {
+                CompilerBackendFailureV1::new(
+                    if unsafe_recovery {
+                        CompilerBackendFailureKindV1::RecoveryRequired
+                    } else if rejected {
+                        CompilerBackendFailureKindV1::Rejected
+                    } else {
+                        CompilerBackendFailureKindV1::InvalidOutput
+                    },
+                    error,
+                )
+            })?;
+            validate_generated_cache(&bytes).map_err(|error| {
+                CompilerBackendFailureV1::new(CompilerBackendFailureKindV1::InvalidOutput, error)
+            })?;
+            validate_full_graph_regen_manifest_v1(&prepared.final_identities, &bytes).map_err(
+                |error| {
+                    CompilerBackendFailureV1::new(
+                        CompilerBackendFailureKindV1::InvalidOutput,
+                        error,
+                    )
+                },
+            )?;
+            Ok(bytes)
+        };
+        let selected = run_compiler_backend_v1(
+            mode,
+            standalone_attempt
+                .as_mut()
+                .map(|runner| runner as &mut dyn CompilerBackendRunnerV1<_>),
+            &mut game_attempt,
+        );
+        drop(standalone_attempt);
+        let (selected_result, backend, fallback) = selected.into_parts();
+        if backend == CompilerBackendNameV1::Standalone {
+            if let Some(failure) = selected_result.as_ref().err() {
+                *standalone_backend_diagnostics.borrow_mut() = failure.diagnostics().to_vec();
+            }
+        }
+        let terminal_preflight = selected_result
+            .as_ref()
+            .err()
+            .is_some_and(|failure| failure.kind() == CompilerBackendFailureKindV1::Preflight);
+        selected_backend.set((!terminal_preflight).then_some(backend));
+        *fallback_reason.borrow_mut() = fallback;
+        let bytes = selected_result.map_err(|failure| CompileError::Other(failure.to_string()))?;
+        Ok((bytes, prepared))
+    })();
+
+    // Strict standalone owns no install guard, but its read-only closing audit remains mandatory.
+    // Game-capable preflight failures leave guard/audit ownership here. Complete them before a
+    // usable output can be published; a guard-release failure is recovery-dominant.
+    let mut install_restore_value = install_restore.get();
+    let mut closing_disposition_value = closing_disposition.get();
+    let unused_guard = guard.into_inner();
+    let unused_audit = closing_audit.into_inner();
+    if let Some(mut unused_guard) = unused_guard {
+        if let Some(audit) = unused_audit {
+            match audit() {
+                Ok(()) => {
+                    closing_disposition_value = ProjectCompilerClosingAuditDisposition::Passed
+                }
+                Err(error) => {
+                    closing_disposition_value = ProjectCompilerClosingAuditDisposition::Failed;
+                    let primary = result
+                        .as_ref()
+                        .err()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "full-graph compiler backend succeeded".to_owned());
+                    result = Err(CompileError::Other(format!(
+                        "{primary}; closing full-graph audit failed while the install guard was held: {error}"
+                    )));
+                }
+            }
+        }
+        if let Err(error) = unused_guard.release() {
+            unused_guard.preserve_for_manual_recovery();
+            let primary = result
+                .as_ref()
+                .err()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "full-graph compiler backend succeeded".to_owned());
+            result = Err(CompileError::Other(format!(
+                "{primary}; additionally failed to release the pre-held full-graph compiler guard: {error}"
+            )));
+            install_restore_value = InstallRestoreDisposition::RecoveryRequiredRestoreFailed;
+        }
+    } else if let Some(audit) = unused_audit {
+        match audit() {
+            Ok(()) => closing_disposition_value = ProjectCompilerClosingAuditDisposition::Passed,
+            Err(error) => {
+                closing_disposition_value = ProjectCompilerClosingAuditDisposition::Failed;
+                let primary = result
+                    .as_ref()
+                    .err()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| {
+                        "standalone full-graph compiler backend succeeded".to_owned()
+                    });
+                result = Err(CompileError::Other(format!(
+                    "{primary}; read-only standalone closing audit failed: {error}"
+                )));
+            }
+        }
+    }
+
+    let install_recovery_required = matches!(
+        install_restore_value,
+        InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed
+            | InstallRestoreDisposition::RecoveryRequiredRestoreFailed
+    );
+    let mut output_recovery_required = private_output_recovery.get();
+    let mut publication = if output_recovery_required {
+        FullGraphPublicationDispositionV1::RecoveryRequired
+    } else {
+        FullGraphPublicationDispositionV1::NotPublished
+    };
+    let outcome = match result {
+        Ok((bytes, prepared)) if !install_recovery_required && !output_recovery_required => {
+            match publish_full_graph_artifact_v1(opts, &prepared, &bytes) {
+                Ok(artifact) => {
+                    publication = FullGraphPublicationDispositionV1::Published;
+                    FullGraphCompileOutcomeV1::Compiled(artifact)
+                }
+                Err(failure) => {
+                    if failure.recovery_required {
+                        output_recovery_required = true;
+                        publication = FullGraphPublicationDispositionV1::RecoveryRequired;
+                    }
+                    FullGraphCompileOutcomeV1::Failed(failure.error)
+                }
+            }
+        }
+        Ok(_) => FullGraphCompileOutcomeV1::Failed(CompileError::Other(
+            "full-graph backend succeeded while recovery remains required".to_owned(),
+        )),
+        Err(error) => FullGraphCompileOutcomeV1::Failed(error),
+    };
+    let fallback_reason = fallback_reason.into_inner();
+    let backend_diagnostics =
+        if game_calls.get() == 0 && standalone_calls.get() != 0 && fallback_reason.is_none() {
+            standalone_backend_diagnostics.into_inner()
+        } else {
+            Vec::new()
+        };
+    let target_pins = retained_target_pins.into_inner().or_else(|| {
+        target
+            .into_inner()
+            .map(ProjectGameInputPins::from_compiler_target)
+    });
+    FullGraphCompileReportV1 {
+        outcome,
+        diagnostics: diagnostics_report.into_inner(),
+        backend_diagnostics,
+        install_restore: install_restore_value,
+        publication,
+        closing_audit: closing_disposition_value,
+        runner_invocations: standalone_calls.get().saturating_add(game_calls.get()),
+        backend: selected_backend.get(),
+        fallback_reason,
+        standalone_attempted: standalone_calls.get() != 0,
+        game_attempted: game_calls.get() != 0,
+        output_recovery_required,
+        target_pins,
+    }
 }
 
 /// Compile every sealed add-only project module in one shared Shipping source tree and return only
@@ -514,6 +2599,315 @@ where
             )
         },
     )
+}
+
+/// Check one complete project source graph through the explicit backend policy.
+///
+/// The shared tree is prepared exactly once. A standalone result is fully validated before the
+/// policy may accept it or start the explicitly requested game fallback. Both attempts consume the
+/// same sealed base/Binds snapshots and the same dependency-ready source tree.
+pub fn check_project_modules_with_backend_v1_with_guard<A>(
+    opts: &ProjectCompilerCheckOpts,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    mode: CompilerBackendModeV1,
+    standalone: Option<&mut dyn StandaloneCompilerRunnerV1>,
+    guard: InstallMutationGuard,
+    closing_audit: A,
+) -> ProjectCompilerCheckReport
+where
+    A: FnOnce() -> Result<(), String>,
+{
+    check_project_modules_with_backend_v1_with_guard_and_runner(
+        opts,
+        diagnostics,
+        mode,
+        standalone,
+        guard,
+        closing_audit,
+        |game_dir, source_tree, diagnostics, guard, input_pins, closing_audit| {
+            run_project_compiler_with_guard_and_pins(
+                game_dir,
+                source_tree,
+                diagnostics,
+                guard,
+                input_pins,
+                closing_audit,
+            )
+        },
+    )
+}
+
+fn check_project_modules_with_backend_v1_with_guard_and_runner<R, A>(
+    opts: &ProjectCompilerCheckOpts,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    mode: CompilerBackendModeV1,
+    mut standalone: Option<&mut dyn StandaloneCompilerRunnerV1>,
+    guard: InstallMutationGuard,
+    closing_audit: A,
+    run_game: R,
+) -> ProjectCompilerCheckReport
+where
+    R: FnOnce(
+        &Path,
+        &Path,
+        &crate::diagnostics::DiagnosticsOptions,
+        InstallMutationGuard,
+        ProjectGameInputPins,
+        A,
+    ) -> ProjectCompilerRunnerReport,
+    A: FnOnce() -> Result<(), String>,
+{
+    let guard = std::cell::RefCell::new(Some(guard));
+    let closing_audit = std::cell::RefCell::new(Some(closing_audit));
+    let run_game = std::cell::RefCell::new(Some(run_game));
+    let diagnostics_report = std::cell::RefCell::new(None);
+    let install_restore = std::cell::Cell::new(InstallRestoreDisposition::NotStarted);
+    let output_disposition = std::cell::Cell::new(ProjectCompilerOutputDisposition::NotCreated);
+    let closing_disposition = std::cell::Cell::new(ProjectCompilerClosingAuditDisposition::NotRun);
+    let standalone_calls = std::cell::Cell::new(0u8);
+    let game_calls = std::cell::Cell::new(0u8);
+    let selected_backend = std::cell::Cell::new(None);
+    let fallback_reason = std::cell::RefCell::new(None);
+    let standalone_backend_diagnostics = std::cell::RefCell::new(Vec::new());
+
+    let mut result = check_project_modules(opts, |game_dir, source_tree| {
+        let tree_seal = ProjectSourceTreeSeal::capture(source_tree)
+            .map_err(|error| format!("sealing the prepared project source graph: {error}"))?;
+        let mut standalone_attempt = standalone.as_deref_mut().map(|runner| {
+            || {
+                standalone_calls.set(standalone_calls.get().saturating_add(1));
+                let overlays = opts
+                    .overlays
+                    .iter()
+                    .map(|overlay| StandaloneCompilerOverlayV1 {
+                        operation: StandaloneCompilerOverlayOperationV1::Add,
+                        module_name: &overlay.module_name,
+                        relative_path: &overlay.rel_path,
+                    })
+                    .collect::<Vec<_>>();
+                let output = runner
+                    .run_regen(StandaloneCompilerInputsV1 {
+                        source_tree,
+                        overlays: &overlays,
+                        base_cache: Some(&opts.base_cache),
+                        binds_cache: Some(&opts.binds_cache),
+                    })
+                    .map_err(|failure| {
+                        if failure.kind() == CompilerBackendFailureKindV1::RecoveryRequired {
+                            output_disposition
+                                .set(ProjectCompilerOutputDisposition::RecoveryRetained);
+                        }
+                        let failure = sanitize_project_backend_failure(
+                            failure,
+                            &[source_tree, &opts.work_dir],
+                        );
+                        *standalone_backend_diagnostics.borrow_mut() =
+                            failure.diagnostics().to_vec();
+                        failure
+                    })?;
+                *standalone_backend_diagnostics.borrow_mut() = sanitize_project_backend_diagnostics(
+                    output.diagnostics(),
+                    &[source_tree, &opts.work_dir],
+                );
+                let bytes = read_regular_file_bounded_no_follow(
+                    output.path(),
+                    MAX_PROJECT_COMPILER_CHECK_REGEN_BYTES,
+                    "standalone project compiler output",
+                );
+                if let Err(error) = output.discard() {
+                    output_disposition.set(ProjectCompilerOutputDisposition::RecoveryRetained);
+                    return Err(sanitize_project_backend_failure(
+                        CompilerBackendFailureV1::new(
+                            CompilerBackendFailureKindV1::RecoveryRequired,
+                            format!("standalone project output disposal failed: {error}"),
+                        )
+                        .with_backend_diagnostics(standalone_backend_diagnostics.borrow().clone()),
+                        &[source_tree, &opts.work_dir],
+                    ));
+                }
+                output_disposition.set(ProjectCompilerOutputDisposition::Discarded);
+                let bytes = bytes.map_err(|error| {
+                    sanitize_project_backend_failure(
+                        CompilerBackendFailureV1::new(
+                            CompilerBackendFailureKindV1::InvalidOutput,
+                            error,
+                        )
+                        .with_backend_diagnostics(standalone_backend_diagnostics.borrow().clone()),
+                        &[source_tree, &opts.work_dir],
+                    )
+                })?;
+                validate_generated_cache(&bytes).map_err(|error| {
+                    sanitize_project_backend_failure(
+                        CompilerBackendFailureV1::new(
+                            CompilerBackendFailureKindV1::InvalidOutput,
+                            error,
+                        )
+                        .with_backend_diagnostics(standalone_backend_diagnostics.borrow().clone()),
+                        &[source_tree, &opts.work_dir],
+                    )
+                })?;
+                validate_project_regen_manifest_for_opts(opts, &bytes).map_err(|error| {
+                    sanitize_project_backend_failure(
+                        CompilerBackendFailureV1::new(
+                            CompilerBackendFailureKindV1::InvalidOutput,
+                            error,
+                        )
+                        .with_backend_diagnostics(standalone_backend_diagnostics.borrow().clone()),
+                        &[source_tree, &opts.work_dir],
+                    )
+                })?;
+                Ok(bytes)
+            }
+        });
+        let mut game_attempt = || {
+            tree_seal.validate().map_err(|error| {
+                CompilerBackendFailureV1::new(
+                    CompilerBackendFailureKindV1::Preflight,
+                    format!("prepared project source seal no longer matches: {error}"),
+                )
+            })?;
+            let input_pins = pin_project_game_input_seals(opts).map_err(|error| {
+                CompilerBackendFailureV1::new(CompilerBackendFailureKindV1::Preflight, error)
+            })?;
+            game_calls.set(game_calls.get().saturating_add(1));
+            let guard = guard.borrow_mut().take().ok_or_else(|| {
+                CompilerBackendFailureV1::new(
+                    CompilerBackendFailureKindV1::Internal,
+                    "pre-held project compiler guard was consumed more than once",
+                )
+            })?;
+            let audit = closing_audit.borrow_mut().take().ok_or_else(|| {
+                CompilerBackendFailureV1::new(
+                    CompilerBackendFailureKindV1::Internal,
+                    "project closing-audit capability was consumed more than once",
+                )
+            })?;
+            let runner = run_game.borrow_mut().take().ok_or_else(|| {
+                CompilerBackendFailureV1::new(
+                    CompilerBackendFailureKindV1::Internal,
+                    "project game compiler runner was consumed more than once",
+                )
+            })?;
+            let report = runner(game_dir, source_tree, diagnostics, guard, input_pins, audit);
+            let unsafe_recovery = matches!(
+                report.install_restore,
+                InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed
+                    | InstallRestoreDisposition::RecoveryRequiredRestoreFailed
+            ) || report.output_disposition
+                == ProjectCompilerOutputDisposition::RecoveryRetained;
+            let rejected = report.diagnostics.as_ref().is_some_and(|diagnostics| {
+                diagnostics.diagnostics().iter().any(|diagnostic| {
+                    diagnostic.severity == crate::diagnostics::DiagnosticSeverity::Error
+                })
+            });
+            *diagnostics_report.borrow_mut() = report.diagnostics;
+            install_restore.set(report.install_restore);
+            output_disposition.set(merge_project_output_disposition(
+                output_disposition.get(),
+                report.output_disposition,
+            ));
+            closing_disposition.set(report.closing_audit);
+            report.result.map_err(|error| {
+                CompilerBackendFailureV1::new(
+                    if unsafe_recovery {
+                        CompilerBackendFailureKindV1::RecoveryRequired
+                    } else if rejected {
+                        CompilerBackendFailureKindV1::Rejected
+                    } else {
+                        CompilerBackendFailureKindV1::InvalidOutput
+                    },
+                    error,
+                )
+            })
+        };
+        let selected = run_compiler_backend_v1(
+            mode,
+            standalone_attempt
+                .as_mut()
+                .map(|runner| runner as &mut dyn CompilerBackendRunnerV1<_>),
+            &mut game_attempt,
+        );
+        drop(standalone_attempt);
+        let (selected_result, backend, fallback) = selected.into_parts();
+        if backend == CompilerBackendNameV1::Standalone {
+            if let Some(failure) = selected_result.as_ref().err() {
+                *standalone_backend_diagnostics.borrow_mut() = failure.diagnostics().to_vec();
+            }
+        }
+        let terminal_preflight = selected_result
+            .as_ref()
+            .err()
+            .is_some_and(|failure| failure.kind() == CompilerBackendFailureKindV1::Preflight);
+        selected_backend.set((!terminal_preflight).then_some(backend));
+        *fallback_reason.borrow_mut() = fallback;
+        selected_result.map_err(|failure| failure.to_string())
+    });
+
+    let mut install_restore_value = install_restore.get();
+    let mut output_disposition_value = output_disposition.get();
+    let mut closing_disposition_value = closing_disposition.get();
+    if let Some(mut unused_guard) = guard.into_inner() {
+        if let Some(audit) = closing_audit.into_inner() {
+            match audit() {
+                Ok(()) => {
+                    closing_disposition_value = ProjectCompilerClosingAuditDisposition::Passed
+                }
+                Err(error) => {
+                    closing_disposition_value = ProjectCompilerClosingAuditDisposition::Failed;
+                    let primary = result
+                        .err()
+                        .map(|error| error.to_string())
+                        .unwrap_or_else(|| "project compiler backend succeeded".to_owned());
+                    result = Err(CompileError::Other(format!(
+                        "{primary}; closing project audit failed while the install guard was held: {error}"
+                    )));
+                }
+            }
+        }
+        if let Err(error) = unused_guard.release() {
+            unused_guard.preserve_for_manual_recovery();
+            let primary = result
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "project compiler backend succeeded".to_owned());
+            result = Err(CompileError::Other(format!(
+                "{primary}; additionally failed to release the pre-held project compiler guard: {error}"
+            )));
+            install_restore_value = InstallRestoreDisposition::RecoveryRequiredRestoreFailed;
+            output_disposition_value = ProjectCompilerOutputDisposition::RecoveryRetained;
+        }
+    }
+    if matches!(
+        install_restore_value,
+        InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed
+            | InstallRestoreDisposition::RecoveryRequiredRestoreFailed
+    ) {
+        output_disposition_value = ProjectCompilerOutputDisposition::RecoveryRetained;
+    }
+    let fallback_reason = fallback_reason.into_inner();
+    let backend_diagnostics =
+        if game_calls.get() == 0 && standalone_calls.get() != 0 && fallback_reason.is_none() {
+            standalone_backend_diagnostics.into_inner()
+        } else {
+            Vec::new()
+        };
+
+    ProjectCompilerCheckReport {
+        outcome: match result {
+            Ok(()) => ProjectCompilerCheckOutcome::Checked,
+            Err(error) => ProjectCompilerCheckOutcome::Failed(error),
+        },
+        diagnostics: diagnostics_report.into_inner(),
+        backend_diagnostics,
+        install_restore: install_restore_value,
+        output_disposition: output_disposition_value,
+        closing_audit: closing_disposition_value,
+        runner_invocations: standalone_calls.get().saturating_add(game_calls.get()),
+        backend: selected_backend.get(),
+        fallback_reason,
+        standalone_attempted: standalone_calls.get() != 0,
+        game_attempted: game_calls.get() != 0,
+    }
 }
 
 fn check_project_modules_with_guard_and_runner<R, A>(
@@ -642,10 +3036,15 @@ where
         diagnostics: generated
             .as_mut()
             .and_then(|(diagnostics, _, _, _)| diagnostics.take()),
+        backend_diagnostics: Vec::new(),
         install_restore,
         output_disposition,
         closing_audit: closing_audit_disposition,
         runner_invocations: runner_invocations.get(),
+        backend: (runner_invocations.get() != 0).then_some(CompilerBackendNameV1::Game),
+        fallback_reason: None,
+        standalone_attempted: false,
+        game_attempted: runner_invocations.get() != 0,
     }
 }
 
@@ -676,6 +3075,241 @@ fn project_diagnostics_acceptance_error(
         );
     }
     None
+}
+
+#[derive(Debug)]
+struct ProjectGameInputPins {
+    _executable: Option<std::fs::File>,
+    shipping: std::fs::File,
+    _binds: std::fs::File,
+    _directory_pins: Vec<std::fs::File>,
+    target_paths: Option<crate::compiler_target::CompilerTargetOwnedPathsV1>,
+}
+
+impl ProjectGameInputPins {
+    fn from_compiler_target(target: ValidatedCompilerTargetInputsV1) -> Self {
+        let handles = target.into_pin_handles();
+        Self {
+            _executable: Some(handles.executable),
+            shipping: handles.shipping,
+            _binds: handles.binds,
+            _directory_pins: handles.directory_pins,
+            target_paths: Some(handles.paths),
+        }
+    }
+
+    fn try_clone_for_execution(&self) -> Result<Self, String> {
+        let clone = |file: &std::fs::File, label: &str| {
+            file.try_clone()
+                .map_err(|error| format!("duplicating qualified target {label} pin: {error}"))
+        };
+        Ok(Self {
+            _executable: self
+                ._executable
+                .as_ref()
+                .map(|file| clone(file, "executable"))
+                .transpose()?,
+            shipping: clone(&self.shipping, "Shipping cache")?,
+            _binds: clone(&self._binds, "Binds cache")?,
+            _directory_pins: self
+                ._directory_pins
+                .iter()
+                .map(|file| clone(file, "directory"))
+                .collect::<Result<Vec<_>, _>>()?,
+            target_paths: self.target_paths.clone(),
+        })
+    }
+
+    /// Windows parent-directory pins intentionally deny delete sharing so an attacker cannot swap
+    /// an already validated target path. The same share mode also blocks our own rename of the
+    /// sibling `AS_JITTED_CODE` directory. Keep all three exact target files open, release only the
+    /// directory handles for that rename, and require an identity-checked re-pin before staging or
+    /// launching anything.
+    fn release_target_directories_for_isolation(&mut self) -> bool {
+        if self.target_paths.is_none() {
+            return false;
+        }
+        self._directory_pins.clear();
+        true
+    }
+
+    fn repin_target_directories_after_isolation(&mut self) -> Result<(), String> {
+        let Some(paths) = &self.target_paths else {
+            return Ok(());
+        };
+        let executable = self._executable.as_ref().ok_or_else(|| {
+            "qualified target lost its executable pin during generation isolation".to_owned()
+        })?;
+        self._directory_pins = crate::compiler_target::repin_compiler_target_parent_chains_v1(
+            paths,
+            executable,
+            &self.shipping,
+            &self._binds,
+        )
+        .map_err(|error| {
+            format!("qualified target path identity changed during generation isolation: {error}")
+        })?;
+        Ok(())
+    }
+}
+
+fn pin_project_game_input_seals(
+    opts: &ProjectCompilerCheckOpts,
+) -> Result<ProjectGameInputPins, String> {
+    pin_game_input_seals(&opts.game_dir, &opts.base_cache, &opts.binds_cache)
+}
+
+fn pin_game_input_seals(
+    game_dir: &Path,
+    expected_shipping: &[u8],
+    expected_binds: &[u8],
+) -> Result<ProjectGameInputPins, String> {
+    let mut shipping = open_regular_file_no_follow_read(&vanilla_cache(game_dir))?;
+    let live_shipping = read_open_regular_file_bounded(
+        &mut shipping,
+        MAX_PROJECT_COMPILER_CHECK_BASE_BYTES as u64,
+        "live Shipping cache",
+    )?;
+    if live_shipping != expected_shipping {
+        return Err(
+            "live Shipping cache no longer matches the sealed project compiler snapshot".to_owned(),
+        );
+    }
+    let binds_path = vanilla_cache(game_dir)
+        .parent()
+        .expect("Shipping cache always has Script parent")
+        .join("Binds.Cache");
+    let mut binds = open_regular_file_no_follow_read(&binds_path)?;
+    let live_binds = read_open_regular_file_bounded(
+        &mut binds,
+        MAX_PROJECT_COMPILER_CHECK_BINDS_BYTES as u64,
+        "live Binds.Cache",
+    )?;
+    if live_binds != expected_binds {
+        return Err(
+            "live Binds.Cache no longer matches the sealed project compiler snapshot".to_owned(),
+        );
+    }
+    Ok(ProjectGameInputPins {
+        _executable: None,
+        shipping,
+        _binds: binds,
+        _directory_pins: Vec::new(),
+        target_paths: None,
+    })
+}
+
+fn merge_project_output_disposition(
+    left: ProjectCompilerOutputDisposition,
+    right: ProjectCompilerOutputDisposition,
+) -> ProjectCompilerOutputDisposition {
+    use ProjectCompilerOutputDisposition::{Discarded, NotCreated, RecoveryRetained};
+    match (left, right) {
+        (RecoveryRetained, _) | (_, RecoveryRetained) => RecoveryRetained,
+        (Discarded, _) | (_, Discarded) => Discarded,
+        (NotCreated, NotCreated) => NotCreated,
+    }
+}
+
+fn sanitize_project_backend_failure(
+    failure: CompilerBackendFailureV1,
+    private_roots: &[&Path],
+) -> CompilerBackendFailureV1 {
+    let mut detail = failure.detail().to_owned();
+    for root in private_roots {
+        let displayed = root.display().to_string();
+        if !displayed.is_empty() {
+            detail = detail.replace(&displayed, "<private compiler path>");
+        }
+    }
+    let truncated = detail.len() > MAX_PROJECT_BACKEND_EVIDENCE_DETAIL_BYTES;
+    let (mut detail, _) = bounded_probe_text(
+        &detail,
+        if truncated {
+            MAX_PROJECT_BACKEND_EVIDENCE_DETAIL_BYTES.saturating_sub(" [truncated]".len())
+        } else {
+            MAX_PROJECT_BACKEND_EVIDENCE_DETAIL_BYTES
+        },
+    );
+    if truncated {
+        detail.push_str(" [truncated]");
+    }
+    CompilerBackendFailureV1::with_diagnostics(
+        failure.kind(),
+        detail,
+        sanitize_project_backend_diagnostics(failure.diagnostics(), private_roots),
+    )
+}
+
+fn sanitize_project_backend_diagnostics(
+    diagnostics: &[CompilerBackendDiagnosticV1],
+    private_roots: &[&Path],
+) -> Vec<CompilerBackendDiagnosticV1> {
+    diagnostics
+        .iter()
+        .take(MAX_PROJECT_BACKEND_DIAGNOSTICS)
+        .map(|diagnostic| {
+            let mut message = diagnostic.message().to_owned();
+            for root in private_roots {
+                let displayed = root.display().to_string();
+                if !displayed.is_empty() {
+                    message = message.replace(&displayed, "<private compiler path>");
+                }
+            }
+            let (code, _) =
+                bounded_probe_text(diagnostic.code(), MAX_PROJECT_BACKEND_DIAGNOSTIC_CODE_BYTES);
+            let (message, _) =
+                bounded_probe_text(&message, MAX_PROJECT_BACKEND_DIAGNOSTIC_MESSAGE_BYTES);
+            CompilerBackendDiagnosticV1::new(
+                diagnostic.severity(),
+                code,
+                message,
+                safe_project_backend_diagnostic_source_path(
+                    diagnostic.source_path(),
+                    private_roots,
+                ),
+                diagnostic.line(),
+                diagnostic.column(),
+            )
+        })
+        .collect()
+}
+
+fn safe_project_backend_diagnostic_source_path(
+    source_path: Option<&str>,
+    private_roots: &[&Path],
+) -> Option<String> {
+    let source_path = source_path?;
+    let path = Path::new(source_path);
+    let relative = if path.is_absolute() {
+        let Some(relative) = private_roots
+            .iter()
+            .find_map(|root| path.strip_prefix(root).ok())
+        else {
+            return Some("<private compiler path>".to_owned());
+        };
+        relative
+    } else {
+        path
+    };
+    let mut components = Vec::new();
+    for component in relative.components() {
+        let std::path::Component::Normal(component) = component else {
+            return Some("<invalid compiler source path>".to_owned());
+        };
+        let Some(component) = component.to_str() else {
+            return Some("<invalid compiler source path>".to_owned());
+        };
+        if component.is_empty() || component.contains(['/', '\\', '\0']) {
+            return Some("<invalid compiler source path>".to_owned());
+        }
+        components.push(component);
+    }
+    if components.is_empty() {
+        Some("<invalid compiler source path>".to_owned())
+    } else {
+        Some(components.join("/"))
+    }
 }
 
 fn check_project_modules<R>(
@@ -751,6 +3385,529 @@ where
     Ok(())
 }
 
+#[derive(Debug)]
+struct PreparedFullGraphRequestV1 {
+    source_tree: PathBuf,
+    final_manifest: Vec<FullGraphSourceManifestEntryV1>,
+    final_identities: Vec<FullGraphFinalModuleV1>,
+    changes: Vec<FullGraphChangeManifestEntryV1>,
+    deleted_modules: Vec<FullGraphDeletedModuleV1>,
+    base_cache_sha256: Sha256Digest,
+    game_source_rebuild_preflight: Option<String>,
+}
+
+fn prepare_full_graph_request_v1(
+    opts: &FullGraphCompileOptsV1,
+) -> Result<PreparedFullGraphRequestV1, CompileError> {
+    validate_full_graph_compile_bounds_v1(opts)?;
+    validate_generated_cache(&opts.base_cache)
+        .map_err(|error| CompileError::Other(format!("invalid sealed Shipping cache: {error}")))?;
+    let native_api = crate::cache::binds::NativeApi::from_bytes(&opts.binds_cache)
+        .ok_or_else(|| CompileError::Other("sealed Binds.Cache is invalid".to_owned()))?;
+    let mut refs = RefResolver::build(&opts.base_cache)
+        .map_err(|error| CompileError::Other(format!("resolver: {error}")))?;
+    let base_modules = model::parse_modules(&opts.base_cache)
+        .map_err(|error| CompileError::Other(format!("parse: {error}")))?;
+    let prepared = emit_all::PreparedEmit::new(&base_modules, &mut refs, Some(native_api))
+        .map_err(|error| CompileError::Other(format!("preparing base modules: {error}")))?;
+    let base_manifest = emit_all::validated_module_identities(&base_modules).map_err(|error| {
+        CompileError::Other(format!("validating base module manifest: {error}"))
+    })?;
+
+    let fold = |value: &str| {
+        value
+            .chars()
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    let mut base_by_name = std::collections::BTreeMap::<String, usize>::new();
+    for (index, module) in base_manifest.iter().enumerate() {
+        if base_by_name
+            .insert(fold(&module.module_name), index)
+            .is_some()
+        {
+            return Err(CompileError::Other(
+                "sealed base cache contains case-fold-colliding module names".to_owned(),
+            ));
+        }
+    }
+
+    let mut changed_names = std::collections::BTreeMap::<String, usize>::new();
+    let mut add_sources = Vec::new();
+    let mut prepared_edits = std::collections::BTreeMap::<usize, (String, String)>::new();
+    let mut deleted_indices = std::collections::BTreeMap::<usize, FullGraphDeletedModuleV1>::new();
+    for (index, change) in opts.changes.iter().enumerate() {
+        let name_key = fold(&change.module_name);
+        if let Some(previous) = changed_names.insert(name_key, index) {
+            return Err(CompileError::Other(format!(
+                "full-graph changes {} and {} identify colliding modules {:?} and {:?}",
+                previous, index, opts.changes[previous].module_name, change.module_name
+            )));
+        }
+        match (change.operation, change.source.as_deref()) {
+            (FullGraphCompileOperationV1::Add, Some(source)) => {
+                let source = std::str::from_utf8(source).map_err(|error| {
+                    CompileError::Other(format!(
+                        "added module {:?} source is not valid UTF-8: {error}",
+                        change.module_name
+                    ))
+                })?;
+                add_sources.push(emit_all::CompileAddOverlay {
+                    module_name: &change.module_name,
+                    relative_path: &change.relative_path,
+                    source,
+                });
+            }
+            (FullGraphCompileOperationV1::Edit, Some(source)) => {
+                let source = std::str::from_utf8(source).map_err(|error| {
+                    CompileError::Other(format!(
+                        "edited module {:?} source is not valid UTF-8: {error}",
+                        change.module_name
+                    ))
+                })?;
+                let base_index = base_by_name
+                    .get(&fold(&change.module_name))
+                    .copied()
+                    .ok_or_else(|| {
+                        CompileError::Other(format!(
+                            "edit module {:?} is absent from the sealed base cache",
+                            change.module_name
+                        ))
+                    })?;
+                let base = &base_manifest[base_index];
+                if base.module_name != change.module_name {
+                    return Err(CompileError::Other(format!(
+                        "edit module {:?} does not exactly match base identity {:?}",
+                        change.module_name, base.module_name
+                    )));
+                }
+                let (source, relative_path) = prepared
+                    .prepare_compile_overlay(
+                        "edit",
+                        &change.module_name,
+                        &change.relative_path,
+                        source,
+                    )
+                    .map_err(|error| {
+                        CompileError::Other(format!("preparing full-graph edit: {error}"))
+                    })?;
+                prepared_edits.insert(base_index, (relative_path, source));
+            }
+            (FullGraphCompileOperationV1::Delete, None) => {
+                let base_index = base_by_name
+                    .get(&fold(&change.module_name))
+                    .copied()
+                    .ok_or_else(|| {
+                        CompileError::Other(format!(
+                            "delete module {:?} is absent from the sealed base cache",
+                            change.module_name
+                        ))
+                    })?;
+                let base = &base_manifest[base_index];
+                if base.module_name != change.module_name
+                    || base.relative_path != change.relative_path
+                {
+                    return Err(CompileError::Other(format!(
+                        "delete identity {:?}/{:?} does not exactly match base module {:?}/{:?}",
+                        change.module_name,
+                        change.relative_path,
+                        base.module_name,
+                        base.relative_path
+                    )));
+                }
+                deleted_indices.insert(
+                    base_index,
+                    FullGraphDeletedModuleV1 {
+                        module_name: base.module_name.clone(),
+                        relative_path: base.relative_path.clone(),
+                    },
+                );
+            }
+            (FullGraphCompileOperationV1::Add | FullGraphCompileOperationV1::Edit, None) => {
+                return Err(CompileError::Other(format!(
+                    "{:?} change for module {:?} requires sealed source bytes",
+                    change.operation, change.module_name
+                )));
+            }
+            (FullGraphCompileOperationV1::Delete, Some(_)) => {
+                return Err(CompileError::Other(format!(
+                    "Delete change for module {:?} must not contain source bytes",
+                    change.module_name
+                )));
+            }
+        }
+    }
+
+    // The native request-v2 backend carries unchanged Base modules directly from the sealed cache
+    // and consumes sources only for explicit Add/Edit changes. The game backend instead rebuilds
+    // this emitted source tree, whose compatibility emitter deliberately omits compiler-generated
+    // `__*` records. Preserve that distinction: preparation records a game-only blocker rather
+    // than rejecting an otherwise exact native Standalone request before backend selection.
+    let game_source_rebuild_preflight = validate_full_graph_generated_defaults_parity_v1(
+        &base_modules,
+        &base_manifest,
+        &prepared_edits,
+        &deleted_indices,
+    )
+    .err()
+    .map(|error| error.to_string());
+
+    // Batch Add preparation is intentionally separate: it is the single authority for namespace,
+    // Windows case-folding, and file/directory-ancestor collisions across all additions.
+    let prepared_adds = prepared
+        .prepare_compile_add_overlays(&add_sources)
+        .map_err(|error| CompileError::Other(format!("preparing full-graph additions: {error}")))?;
+
+    let add_by_name = prepared_adds
+        .iter()
+        .map(|module| (fold(&module.module_name), module))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut final_manifest = Vec::with_capacity(
+        base_manifest
+            .len()
+            .saturating_sub(deleted_indices.len())
+            .saturating_add(prepared_adds.len()),
+    );
+    for (index, base) in base_manifest.iter().enumerate() {
+        if deleted_indices.contains_key(&index) {
+            continue;
+        }
+        if let Some((_, source)) = prepared_edits.get(&index) {
+            let bytes = source.as_bytes();
+            final_manifest.push(FullGraphSourceManifestEntryV1 {
+                module_name: base.module_name.clone(),
+                relative_path: base.relative_path.clone(),
+                disposition: FullGraphSourceDispositionV1::Edited,
+                source_byte_len: Some(bytes.len() as u64),
+                source_sha256: Some(sha256_digest(bytes)),
+            });
+        } else {
+            final_manifest.push(FullGraphSourceManifestEntryV1 {
+                module_name: base.module_name.clone(),
+                relative_path: base.relative_path.clone(),
+                disposition: FullGraphSourceDispositionV1::Base,
+                source_byte_len: None,
+                source_sha256: None,
+            });
+        }
+    }
+    for change in opts
+        .changes
+        .iter()
+        .filter(|change| change.operation == FullGraphCompileOperationV1::Add)
+    {
+        let prepared_add = add_by_name
+            .get(&fold(&change.module_name))
+            .expect("every validated add has a prepared source");
+        let bytes = prepared_add.source.as_bytes();
+        final_manifest.push(FullGraphSourceManifestEntryV1 {
+            module_name: prepared_add.module_name.clone(),
+            relative_path: prepared_add.relative_path.clone(),
+            disposition: FullGraphSourceDispositionV1::Added,
+            source_byte_len: Some(bytes.len() as u64),
+            source_sha256: Some(sha256_digest(bytes)),
+        });
+    }
+    final_manifest.sort_by(|left, right| {
+        fold(&left.module_name)
+            .cmp(&fold(&right.module_name))
+            .then_with(|| fold(&left.relative_path).cmp(&fold(&right.relative_path)))
+            .then_with(|| left.module_name.cmp(&right.module_name))
+            .then_with(|| left.relative_path.cmp(&right.relative_path))
+    });
+    let final_identities = final_manifest
+        .iter()
+        .map(|entry| FullGraphFinalModuleV1 {
+            module_name: entry.module_name.clone(),
+            relative_path: entry.relative_path.clone(),
+        })
+        .collect::<Vec<_>>();
+    validate_declared_full_graph_manifest_v1(&opts.final_manifest, &final_identities)?;
+    let mut change_manifest = final_manifest
+        .iter()
+        .filter_map(|entry| {
+            let operation = match entry.disposition {
+                FullGraphSourceDispositionV1::Base => return None,
+                FullGraphSourceDispositionV1::Added => FullGraphCompileOperationV1::Add,
+                FullGraphSourceDispositionV1::Edited => FullGraphCompileOperationV1::Edit,
+            };
+            Some(FullGraphChangeManifestEntryV1 {
+                operation,
+                module_name: entry.module_name.clone(),
+                relative_path: entry.relative_path.clone(),
+                source_byte_len: entry.source_byte_len,
+                source_sha256: entry.source_sha256,
+            })
+        })
+        .collect::<Vec<_>>();
+    change_manifest.extend(
+        deleted_indices
+            .values()
+            .map(|entry| FullGraphChangeManifestEntryV1 {
+                operation: FullGraphCompileOperationV1::Delete,
+                module_name: entry.module_name.clone(),
+                relative_path: entry.relative_path.clone(),
+                source_byte_len: None,
+                source_sha256: None,
+            }),
+    );
+    change_manifest.sort_by(|left, right| {
+        fold(&left.module_name)
+            .cmp(&fold(&right.module_name))
+            .then_with(|| fold(&left.relative_path).cmp(&fold(&right.relative_path)))
+            .then_with(|| left.module_name.cmp(&right.module_name))
+            .then_with(|| left.relative_path.cmp(&right.relative_path))
+    });
+
+    // Only after all source, operation, and final-manifest preflight has succeeded may the private
+    // source tree be reset and repopulated.
+    // Re-resolve the path layout immediately before the destructive tree reset; the earlier outer
+    // preflight cannot authorize a work directory that was replaced by a junction in between.
+    preflight_full_graph_path_layout_v1(opts)?;
+    let source_tree = reset_compile_tree(&opts.work_dir).map_err(CompileError::Other)?;
+    prepared
+        .emit_tree(&source_tree)
+        .map_err(|error| CompileError::Other(format!("emit tree: {error}")))?;
+    for (base_index, (relative_path, source)) in &prepared_edits {
+        let expected = &base_manifest[*base_index];
+        if expected.relative_path != *relative_path {
+            return Err(CompileError::Other(
+                "prepared edit path changed after preflight".to_owned(),
+            ));
+        }
+        let path = source_tree.join(relative_path);
+        let mut file = open_compiled_artifact_existing(&path)
+            .map_err(|error| CompileError::Io(format!("opening full-graph edit: {error}")))?;
+        file.set_len(0)
+            .and_then(|_| file.seek(SeekFrom::Start(0)).map(|_| ()))
+            .and_then(|_| file.write_all(source.as_bytes()))
+            .and_then(|_| file.sync_all())
+            .map_err(io("writing full-graph edit"))?;
+    }
+    for deleted in deleted_indices.values() {
+        let path = source_tree.join(&deleted.relative_path);
+        let file = open_compiled_artifact_existing(&path)
+            .map_err(|error| CompileError::Io(format!("opening full-graph delete: {error}")))?;
+        file.set_len(0)
+            .and_then(|_| file.sync_all())
+            .map_err(io("neutralizing full-graph deleted source"))?;
+        drop(file);
+        std::fs::remove_file(&path).map_err(io("removing full-graph deleted source"))?;
+    }
+    for module in &prepared_adds {
+        let path = source_tree.join(&module.relative_path);
+        if let Some(parent) = path.parent() {
+            ensure_real_directory(parent).map_err(io("creating full-graph add parent"))?;
+        }
+        let mut file = open_compiled_artifact_create_new(&path)
+            .map_err(|error| CompileError::Io(format!("creating full-graph addition: {error}")))?;
+        file.write_all(module.source.as_bytes())
+            .and_then(|_| file.sync_all())
+            .map_err(io("writing full-graph addition"))?;
+    }
+
+    let mut deleted_modules = deleted_indices.into_values().collect::<Vec<_>>();
+    deleted_modules.sort_by(|left, right| {
+        fold(&left.module_name)
+            .cmp(&fold(&right.module_name))
+            .then_with(|| fold(&left.relative_path).cmp(&fold(&right.relative_path)))
+            .then_with(|| left.module_name.cmp(&right.module_name))
+            .then_with(|| left.relative_path.cmp(&right.relative_path))
+    });
+    Ok(PreparedFullGraphRequestV1 {
+        source_tree,
+        final_manifest,
+        final_identities,
+        changes: change_manifest,
+        deleted_modules,
+        base_cache_sha256: sha256_digest(&opts.base_cache),
+        game_source_rebuild_preflight,
+    })
+}
+
+fn validate_full_graph_generated_defaults_parity_v1(
+    base_modules: &[model::Module],
+    base_manifest: &[emit_all::ValidatedModuleIdentity],
+    edited_indices: &std::collections::BTreeMap<usize, (String, String)>,
+    deleted_indices: &std::collections::BTreeMap<usize, FullGraphDeletedModuleV1>,
+) -> Result<(), CompileError> {
+    if base_modules.len() != base_manifest.len() {
+        return Err(CompileError::Other(format!(
+            "full-graph generated-default inventory mismatch: parsed {} modules but validated {} identities",
+            base_modules.len(),
+            base_manifest.len()
+        )));
+    }
+    for (index, module) in base_modules.iter().enumerate() {
+        if edited_indices.contains_key(&index) || deleted_indices.contains_key(&index) {
+            continue;
+        }
+        let omitted = omitted_generated_methods_in_module(module)?;
+        if omitted.is_empty() {
+            continue;
+        }
+        let preview = omitted
+            .iter()
+            .take(4)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        let more = omitted.len().saturating_sub(4);
+        let suffix = (more != 0)
+            .then(|| format!(", and {more} more"))
+            .unwrap_or_default();
+        return Err(CompileError::Other(format!(
+            "refusing full-graph source rebuild: retained base module {:?} contains {} compiler-generated `__*` method(s) omitted by source emission ({preview}{suffix}); exact cache-wide generated-default carry into regenerated output is not yet proven",
+            module.name,
+            omitted.len()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_full_graph_compile_bounds_v1(
+    opts: &FullGraphCompileOptsV1,
+) -> Result<(), CompileError> {
+    if opts.changes.len() > MAX_FULL_GRAPH_COMPILE_CHANGES_V1 {
+        return Err(CompileError::Other(format!(
+            "full-graph change count {} exceeds {}",
+            opts.changes.len(),
+            MAX_FULL_GRAPH_COMPILE_CHANGES_V1
+        )));
+    }
+    if opts.final_manifest.is_empty() || opts.final_manifest.len() > MAX_FULL_GRAPH_FINAL_MODULES_V1
+    {
+        return Err(CompileError::Other(format!(
+            "full-graph final manifest must contain 1..={} modules (got {})",
+            MAX_FULL_GRAPH_FINAL_MODULES_V1,
+            opts.final_manifest.len()
+        )));
+    }
+    if opts.base_cache.len() > MAX_PROJECT_COMPILER_CHECK_BASE_BYTES {
+        return Err(CompileError::Other(format!(
+            "sealed Shipping cache has {} bytes; maximum is {}",
+            opts.base_cache.len(),
+            MAX_PROJECT_COMPILER_CHECK_BASE_BYTES
+        )));
+    }
+    if opts.binds_cache.is_empty()
+        || opts.binds_cache.len() > MAX_PROJECT_COMPILER_CHECK_BINDS_BYTES
+    {
+        return Err(CompileError::Other(format!(
+            "sealed Binds.Cache has {} bytes; expected 1..={} bytes",
+            opts.binds_cache.len(),
+            MAX_PROJECT_COMPILER_CHECK_BINDS_BYTES
+        )));
+    }
+    if !opts.output_path.is_absolute() {
+        return Err(CompileError::Other(
+            "full-graph output path must be absolute".to_owned(),
+        ));
+    }
+    let mut source_bytes = 0usize;
+    for change in &opts.changes {
+        if change.module_name.len() > MAX_PROJECT_COMPILER_CHECK_IDENTITY_BYTES
+            || change.relative_path.len() > MAX_PROJECT_COMPILER_CHECK_IDENTITY_BYTES
+        {
+            return Err(CompileError::Other(format!(
+                "full-graph module identity exceeds {} bytes",
+                MAX_PROJECT_COMPILER_CHECK_IDENTITY_BYTES
+            )));
+        }
+        if let Some(source) = &change.source {
+            source_bytes = source_bytes.checked_add(source.len()).ok_or_else(|| {
+                CompileError::Other("full-graph source byte count overflowed".to_owned())
+            })?;
+            if source_bytes > MAX_FULL_GRAPH_SOURCE_BYTES_V1 {
+                return Err(CompileError::Other(format!(
+                    "full-graph source bytes exceed {}",
+                    MAX_FULL_GRAPH_SOURCE_BYTES_V1
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_declared_full_graph_manifest_v1(
+    declared: &[FullGraphFinalModuleV1],
+    expected: &[FullGraphFinalModuleV1],
+) -> Result<(), CompileError> {
+    let fold = |value: &str| {
+        value
+            .chars()
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    let mut declared_by_name = std::collections::BTreeMap::<String, &FullGraphFinalModuleV1>::new();
+    for entry in declared {
+        if entry.module_name.is_empty()
+            || entry.module_name.len() > MAX_PROJECT_COMPILER_CHECK_IDENTITY_BYTES
+            || entry.relative_path.is_empty()
+            || entry.relative_path.len() > MAX_PROJECT_COMPILER_CHECK_IDENTITY_BYTES
+            || entry.module_name.chars().any(char::is_control)
+            || entry.relative_path.chars().any(char::is_control)
+        {
+            return Err(CompileError::Other(
+                "full-graph final manifest contains an invalid or oversized identity".to_owned(),
+            ));
+        }
+        if let Some(previous) = declared_by_name.insert(fold(&entry.module_name), entry) {
+            return Err(CompileError::Other(format!(
+                "full-graph final manifest contains colliding modules {:?} and {:?}",
+                previous.module_name, entry.module_name
+            )));
+        }
+    }
+    if declared_by_name.len() != expected.len() {
+        return Err(CompileError::Other(format!(
+            "full-graph final manifest contains {} modules; applying changes requires {}",
+            declared_by_name.len(),
+            expected.len()
+        )));
+    }
+    for expected in expected {
+        let Some(actual) = declared_by_name.get(&fold(&expected.module_name)) else {
+            return Err(CompileError::Other(format!(
+                "full-graph final manifest is missing module {:?}",
+                expected.module_name
+            )));
+        };
+        if actual.module_name != expected.module_name
+            || actual.relative_path != expected.relative_path
+        {
+            return Err(CompileError::Other(format!(
+                "full-graph final manifest entry {:?}/{:?} does not exactly match {:?}/{:?}",
+                actual.module_name,
+                actual.relative_path,
+                expected.module_name,
+                expected.relative_path
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn sort_full_graph_identities_v1(manifest: &mut [FullGraphFinalModuleV1]) {
+    let fold = |value: &str| {
+        value
+            .chars()
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    manifest.sort_by(|left, right| {
+        fold(&left.module_name)
+            .cmp(&fold(&right.module_name))
+            .then_with(|| fold(&left.relative_path).cmp(&fold(&right.relative_path)))
+            .then_with(|| left.module_name.cmp(&right.module_name))
+            .then_with(|| left.relative_path.cmp(&right.relative_path))
+    });
+}
+
+fn sha256_digest(bytes: &[u8]) -> Sha256Digest {
+    Sha256Digest::from_bytes(Sha256::digest(bytes).into())
+}
+
 fn validate_project_compiler_check_bounds(
     opts: &ProjectCompilerCheckOpts,
 ) -> Result<(), CompileError> {
@@ -813,6 +3970,37 @@ fn validate_project_regen_manifest(
     overlays: &[emit_all::PreparedCompileAddOverlay],
     regen: &[u8],
 ) -> Result<(), String> {
+    validate_project_regen_manifest_entries(
+        base,
+        overlays
+            .iter()
+            .map(|module| (module.module_name.as_str(), module.relative_path.as_str())),
+        regen,
+    )
+}
+
+fn validate_project_regen_manifest_for_opts(
+    opts: &ProjectCompilerCheckOpts,
+    regen: &[u8],
+) -> Result<(), String> {
+    let base_modules = model::parse_modules(&opts.base_cache)
+        .map_err(|error| format!("parsing sealed base module manifest: {error}"))?;
+    let base = emit_all::validated_module_identities(&base_modules)
+        .map_err(|error| format!("validating sealed base module manifest: {error}"))?;
+    validate_project_regen_manifest_entries(
+        &base,
+        opts.overlays
+            .iter()
+            .map(|module| (module.module_name.as_str(), module.rel_path.as_str())),
+        regen,
+    )
+}
+
+fn validate_project_regen_manifest_entries<'a>(
+    base: &[emit_all::ValidatedModuleIdentity],
+    overlays: impl IntoIterator<Item = (&'a str, &'a str)>,
+    regen: &[u8],
+) -> Result<(), String> {
     use std::collections::BTreeMap;
 
     let regen_modules = model::parse_modules(regen)
@@ -833,11 +4021,8 @@ fn validate_project_regen_manifest(
             (&module.module_name, &module.relative_path),
         );
     }
-    for module in overlays {
-        expected.insert(
-            fold(&module.module_name),
-            (&module.module_name, &module.relative_path),
-        );
+    for (module_name, relative_path) in overlays {
+        expected.insert(fold(module_name), (module_name, relative_path));
     }
     let actual = actual
         .iter()
@@ -883,6 +4068,67 @@ fn validate_project_regen_manifest(
     Ok(())
 }
 
+fn validate_full_graph_regen_manifest_v1(
+    expected: &[FullGraphFinalModuleV1],
+    regen: &[u8],
+) -> Result<(), String> {
+    use std::collections::BTreeMap;
+
+    let regen_modules = model::parse_modules(regen)
+        .map_err(|error| format!("parsing regenerated full-graph manifest: {error}"))?;
+    let actual = emit_all::validated_module_identities(&regen_modules)
+        .map_err(|error| format!("invalid regenerated full-graph manifest: {error}"))?;
+    let fold = |value: &str| {
+        value
+            .chars()
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    let expected = expected
+        .iter()
+        .map(|module| {
+            (
+                fold(&module.module_name),
+                (module.module_name.as_str(), module.relative_path.as_str()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let actual = actual
+        .iter()
+        .map(|module| {
+            (
+                fold(&module.module_name),
+                (module.module_name.as_str(), module.relative_path.as_str()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for (key, (expected_name, expected_path)) in &expected {
+        let Some((actual_name, actual_path)) = actual.get(key) else {
+            return Err(format!(
+                "regenerated full graph is missing expected module {expected_name:?} at {expected_path:?}"
+            ));
+        };
+        if actual_name != expected_name || actual_path != expected_path {
+            return Err(format!(
+                "regenerated full-graph identity {actual_name:?}/{actual_path:?} does not exactly match {expected_name:?}/{expected_path:?}"
+            ));
+        }
+    }
+    if let Some((_, (name, path))) = actual.iter().find(|(key, _)| !expected.contains_key(*key)) {
+        return Err(format!(
+            "regenerated full graph contains unexpected module {name:?} at {path:?}"
+        ));
+    }
+    if actual.len() != expected.len() {
+        return Err(format!(
+            "regenerated full-graph module count {} does not match expected {}",
+            actual.len(),
+            expected.len()
+        ));
+    }
+    Ok(())
+}
+
 /// Return the compiler-generated class methods that the source emitter deliberately omits.
 /// Replacing an existing module without carrying these records forward would silently erase CDO
 /// defaults (NPC/quest/dialog configuration among them), so `edit` must fail closed until the
@@ -904,6 +4150,12 @@ fn omitted_generated_methods(
         )));
     };
 
+    omitted_generated_methods_in_module(module)
+}
+
+fn omitted_generated_methods_in_module(
+    module: &model::Module,
+) -> Result<Vec<String>, CompileError> {
     // A generated method is identified by class + method name. Refuse malformed/ambiguous class
     // identities even though PreparedEmit normally rejects the surrounding edit first; this
     // helper must never turn ambiguity into an empty inventory if its call order changes later.
@@ -912,9 +4164,9 @@ fn omitted_generated_methods(
     for class in &module.classes {
         if !class_names.insert(class.name.as_str()) {
             return Err(CompileError::Other(format!(
-                "cannot inventory compiler-generated methods for edit module {module_name:?}: \
+                "cannot inventory compiler-generated methods for edit module {:?}: \
                  duplicate class identity {:?}",
-                class.name
+                module.name, class.name
             )));
         }
         let mut generated_names = std::collections::HashSet::new();
@@ -924,9 +4176,8 @@ fn omitted_generated_methods(
             }
             if !generated_names.insert(method.name.as_str()) {
                 return Err(CompileError::Other(format!(
-                    "cannot inventory compiler-generated methods for edit module \
-                     {module_name:?}: duplicate generated method identity {}::{}",
-                    class.name, method.name
+                    "cannot inventory compiler-generated methods for edit module {:?}: duplicate generated method identity {}::{}",
+                    module.name, class.name, method.name
                 )));
             }
             omitted.push(format!("{}::{}", class.name, method.name));
@@ -3100,7 +6351,7 @@ fn canonicalize_mini_guid(mini: &mut [u8], base: &[u8]) -> Result<(), String> {
 /// Recreate the fixed `work_dir/tree` child from scratch. Refuse links and containment surprises
 /// before recursive deletion, so a hostile/stale tree cannot redirect cleanup outside work_dir.
 fn reset_compile_tree(work_dir: &Path) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(work_dir)
+    ensure_real_directory(work_dir)
         .map_err(|e| format!("creating compile work dir {}: {e}", work_dir.display()))?;
     let work_real = work_dir
         .canonicalize()
@@ -3214,6 +6465,933 @@ fn write_compiled_artifact(path: PathBuf, bytes: &[u8]) -> Result<CompiledArtifa
         });
     }
     Ok(artifact)
+}
+
+#[derive(Debug)]
+struct FullGraphPublicationFailureV1 {
+    error: CompileError,
+    recovery_required: bool,
+}
+
+fn preflight_full_graph_path_layout_v1(opts: &FullGraphCompileOptsV1) -> Result<(), CompileError> {
+    if !opts.game_dir.is_absolute()
+        || !opts.work_dir.is_absolute()
+        || !opts.output_path.is_absolute()
+    {
+        return Err(CompileError::Other(
+            "full-graph game, work, and output paths must be absolute".to_owned(),
+        ));
+    }
+    let contains_dot_component = |path: &Path| {
+        path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
+    };
+    if contains_dot_component(&opts.work_dir) || contains_dot_component(&opts.output_path) {
+        return Err(CompileError::Other(
+            "full-graph work/output paths must not contain `.` or `..` components".to_owned(),
+        ));
+    }
+    let requested_output_parent = opts
+        .output_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| {
+            CompileError::Other("full-graph output has no parent directory".to_owned())
+        })?;
+    let game_root = opts
+        .game_dir
+        .canonicalize()
+        .map_err(|error| CompileError::Io(format!("resolving game root: {error}")))?;
+    let projected_work_root =
+        resolve_missing_path_via_existing_ancestor_v1(&opts.work_dir, "full-graph work directory")?;
+    let projected_output_parent = resolve_missing_path_via_existing_ancestor_v1(
+        requested_output_parent,
+        "full-graph output parent",
+    )?;
+
+    // Resolve the deepest existing ancestor before either directory helper may create anything.
+    // Windows runner temp paths can have a different canonical spelling from their requested
+    // spelling even without a reparse component visible to this process. Comparing only the raw
+    // request to the canonical game root would then detect containment only after creating the
+    // work directory inside the installation.
+    if path_is_within_v1(&projected_work_root, &game_root)
+        || path_is_within_v1(&game_root, &projected_work_root)
+    {
+        return Err(CompileError::Other(
+            "full-graph work directory must be strictly outside the game installation".to_owned(),
+        ));
+    }
+    if path_is_within_v1(&projected_output_parent, &game_root) {
+        return Err(CompileError::Other(
+            "full-graph output must be outside the game installation".to_owned(),
+        ));
+    }
+    if path_is_within_v1(&projected_work_root, &projected_output_parent)
+        || path_is_within_v1(&projected_output_parent, &projected_work_root)
+    {
+        return Err(CompileError::Other(
+            "full-graph work directory and output parent must be disjoint".to_owned(),
+        ));
+    }
+
+    ensure_real_directory(&opts.work_dir).map_err(|error| {
+        CompileError::Io(format!("preparing full-graph work directory: {error}"))
+    })?;
+    ensure_real_directory(requested_output_parent).map_err(|error| {
+        CompileError::Io(format!("preparing full-graph output parent: {error}"))
+    })?;
+    let work_root = opts.work_dir.canonicalize().map_err(|error| {
+        CompileError::Io(format!("resolving full-graph work directory: {error}"))
+    })?;
+    let output_parent = requested_output_parent.canonicalize().map_err(|error| {
+        CompileError::Io(format!("resolving full-graph output parent: {error}"))
+    })?;
+    if path_is_within_v1(&work_root, &game_root) || path_is_within_v1(&game_root, &work_root) {
+        return Err(CompileError::Other(
+            "resolved full-graph work directory overlaps the game installation".to_owned(),
+        ));
+    }
+    if path_is_within_v1(&output_parent, &game_root) {
+        return Err(CompileError::Other(
+            "resolved full-graph output parent is inside the game installation".to_owned(),
+        ));
+    }
+    if path_is_within_v1(&work_root, &output_parent)
+        || path_is_within_v1(&output_parent, &work_root)
+    {
+        return Err(CompileError::Other(
+            "resolved full-graph work directory and output parent overlap".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Resolve an absolute path without creating its missing suffix.
+///
+/// `Path::canonicalize` needs the whole path to exist. Full-graph work/output directories are
+/// intentionally allowed to be new, so walk to the deepest existing ancestor, canonicalize that
+/// ancestor, and append the missing components lexically. Existing aliases are therefore resolved
+/// before containment checks, while the caller can still create the path only after those checks.
+fn resolve_missing_path_via_existing_ancestor_v1(
+    path: &Path,
+    label: &str,
+) -> Result<PathBuf, CompileError> {
+    let mut cursor = path;
+    let mut missing = Vec::<std::ffi::OsString>::new();
+    loop {
+        match std::fs::symlink_metadata(cursor) {
+            Ok(_) => {
+                let mut resolved = cursor.canonicalize().map_err(|error| {
+                    CompileError::Io(format!("resolving existing {label} ancestor: {error}"))
+                })?;
+                for component in missing.iter().rev() {
+                    resolved.push(component);
+                }
+                return Ok(resolved);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let component = cursor.file_name().ok_or_else(|| {
+                    CompileError::Other(format!(
+                        "{label} has no existing ancestor that can be resolved"
+                    ))
+                })?;
+                missing.push(component.to_os_string());
+                let parent = cursor.parent().ok_or_else(|| {
+                    CompileError::Other(format!(
+                        "{label} has no existing ancestor that can be resolved"
+                    ))
+                })?;
+                if parent == cursor {
+                    return Err(CompileError::Other(format!(
+                        "{label} has no existing ancestor that can be resolved"
+                    )));
+                }
+                cursor = parent;
+            }
+            Err(error) => {
+                return Err(CompileError::Io(format!(
+                    "inspecting existing {label} ancestor: {error}"
+                )));
+            }
+        }
+    }
+}
+
+fn preflight_full_graph_publication_v1(opts: &FullGraphCompileOptsV1) -> Result<(), CompileError> {
+    let (parent, destination, pending) = full_graph_publication_paths_v1(&opts.output_path)?;
+    let game_root = opts
+        .game_dir
+        .canonicalize()
+        .map_err(|error| CompileError::Io(format!("resolving game root: {error}")))?;
+    if path_is_within_v1(&parent, &game_root) {
+        return Err(CompileError::Other(
+            "full-graph output must be outside the game installation".to_owned(),
+        ));
+    }
+    match std::fs::symlink_metadata(&destination) {
+        Ok(_) => {
+            return Err(CompileError::Io(format!(
+                "full-graph output already exists (no-clobber): {}",
+                destination.display()
+            )));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(CompileError::Io(format!(
+                "inspecting full-graph output destination: {error}"
+            )));
+        }
+    }
+    match std::fs::symlink_metadata(&pending) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => Err(CompileError::Other(format!(
+            "a retained full-graph publication is pending; run explicit publication recovery before retrying ({})",
+            pending.display()
+        ))),
+        Err(error) => Err(CompileError::Io(format!(
+            "inspecting pending full-graph publication: {error}"
+        ))),
+    }
+}
+
+fn full_graph_publication_paths_v1(
+    output_path: &Path,
+) -> Result<(PathBuf, PathBuf, PathBuf), CompileError> {
+    if !output_path.is_absolute() {
+        return Err(CompileError::Other(
+            "full-graph output path must be absolute".to_owned(),
+        ));
+    }
+    let file_name = output_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
+        .ok_or_else(|| {
+            CompileError::Other(
+                "full-graph output requires a non-empty Unicode file name without controls"
+                    .to_owned(),
+            )
+        })?;
+    let requested_parent = output_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| {
+            CompileError::Other("full-graph output has no parent directory".to_owned())
+        })?;
+    ensure_real_directory(requested_parent)
+        .map_err(|error| CompileError::Io(format!("preparing output parent: {error}")))?;
+    let parent = requested_parent
+        .canonicalize()
+        .map_err(|error| CompileError::Io(format!("resolving output parent: {error}")))?;
+    let destination = parent.join(file_name);
+    let mut hash = Sha256::new();
+    hash.update(b"gore-as-full-graph-pending-v1\0");
+    let pending_key = full_graph_pending_name_key_v1(file_name);
+    hash.update((pending_key.len() as u64).to_le_bytes());
+    hash.update(pending_key.as_bytes());
+    let pending_digest = Sha256Digest::from_bytes(hash.finalize().into());
+    let pending = parent.join(format!("{FULL_GRAPH_PENDING_PREFIX_V1}{pending_digest}"));
+    Ok((parent, destination, pending))
+}
+
+#[cfg(windows)]
+fn full_graph_pending_name_key_v1(file_name: &str) -> String {
+    file_name.chars().flat_map(char::to_lowercase).collect()
+}
+
+#[cfg(not(windows))]
+fn full_graph_pending_name_key_v1(file_name: &str) -> String {
+    file_name.to_owned()
+}
+
+#[cfg(windows)]
+fn path_is_within_v1(path: &Path, root: &Path) -> bool {
+    let fold = |path: &Path| {
+        let folded = path.to_string_lossy().replace('/', "\\").to_lowercase();
+        if let Some(unc) = folded.strip_prefix("\\\\?\\unc\\") {
+            format!("\\\\{unc}")
+        } else {
+            folded.strip_prefix("\\\\?\\").unwrap_or(&folded).to_owned()
+        }
+    };
+    let path = fold(path);
+    let root = fold(root).trim_end_matches('\\').to_owned();
+    path == root
+        || path
+            .strip_prefix(&root)
+            .is_some_and(|tail| tail.starts_with('\\'))
+}
+
+#[cfg(not(windows))]
+fn path_is_within_v1(path: &Path, root: &Path) -> bool {
+    path.starts_with(root)
+}
+
+fn publish_full_graph_artifact_v1(
+    opts: &FullGraphCompileOptsV1,
+    prepared: &PreparedFullGraphRequestV1,
+    bytes: &[u8],
+) -> Result<FullGraphCompileArtifactV1, FullGraphPublicationFailureV1> {
+    let (parent, destination, pending) = full_graph_publication_paths_v1(&opts.output_path)
+        .map_err(|error| FullGraphPublicationFailureV1 {
+            error,
+            recovery_required: false,
+        })?;
+    let game_root =
+        opts.game_dir
+            .canonicalize()
+            .map_err(|error| FullGraphPublicationFailureV1 {
+                error: CompileError::Io(format!("resolving game root before publication: {error}")),
+                recovery_required: false,
+            })?;
+    if path_is_within_v1(&parent, &game_root) {
+        return Err(FullGraphPublicationFailureV1 {
+            error: CompileError::Other(
+                "full-graph output must be outside the game installation".to_owned(),
+            ),
+            recovery_required: false,
+        });
+    }
+    if bytes.len() as u64 > MAX_PROJECT_COMPILER_CHECK_REGEN_BYTES {
+        return Err(FullGraphPublicationFailureV1 {
+            error: CompileError::Other(format!(
+                "full-graph output has {} bytes; maximum is {}",
+                bytes.len(),
+                MAX_PROJECT_COMPILER_CHECK_REGEN_BYTES
+            )),
+            recovery_required: false,
+        });
+    }
+    let file = open_full_graph_pending_create_new_v1(&pending).map_err(|error| {
+        FullGraphPublicationFailureV1 {
+            error: CompileError::Io(format!(
+                "creating deterministic full-graph pending output: {error}"
+            )),
+            recovery_required: false,
+        }
+    })?;
+    let mut pending_artifact = CompiledArtifact {
+        path: pending.clone(),
+        file,
+    };
+    if let Err(error) = pending_artifact
+        .file
+        .write_all(bytes)
+        .and_then(|_| pending_artifact.file.sync_all())
+    {
+        return Err(full_graph_pending_failure_v1(
+            pending_artifact,
+            format!("writing full-graph pending output: {error}"),
+        ));
+    }
+    let expected_sha256 = sha256_digest(bytes);
+    let exact = hash_compiled_artifact_handle(
+        match pending_artifact.file.try_clone() {
+            Ok(file) => file,
+            Err(error) => {
+                return Err(full_graph_pending_failure_v1(
+                    pending_artifact,
+                    format!("cloning full-graph pending handle: {error}"),
+                ));
+            }
+        },
+        MAX_PROJECT_COMPILER_CHECK_REGEN_BYTES,
+        "pending full-graph output",
+    );
+    match exact {
+        Ok((byte_len, sha256)) if byte_len == bytes.len() as u64 && sha256 == expected_sha256 => {}
+        Ok(_) => {
+            return Err(full_graph_pending_failure_v1(
+                pending_artifact,
+                "pending full-graph bytes changed before publication".to_owned(),
+            ));
+        }
+        Err(error) => {
+            return Err(full_graph_pending_failure_v1(pending_artifact, error));
+        }
+    }
+    if let Err(error) = validate_generated_cache(bytes)
+        .and_then(|_| validate_full_graph_regen_manifest_v1(&prepared.final_identities, bytes))
+    {
+        return Err(full_graph_pending_failure_v1(pending_artifact, error));
+    }
+    if let Err(error) = publish_full_graph_pending_no_clobber_v1(
+        &pending_artifact.file,
+        &parent,
+        destination.file_name().expect("destination file name"),
+        &pending,
+        &destination,
+    ) {
+        let collision = error.kind() == std::io::ErrorKind::AlreadyExists;
+        let detail = if collision {
+            format!(
+                "full-graph output already exists (no-clobber): {}",
+                destination.display()
+            )
+        } else {
+            format!("atomically publishing full-graph output: {error}")
+        };
+        return Err(full_graph_pending_failure_v1(pending_artifact, detail));
+    }
+    pending_artifact.path = destination.clone();
+    if let Err(error) = sync_full_graph_publication_parent_v1(&parent) {
+        return Err(FullGraphPublicationFailureV1 {
+            error: CompileError::ArtifactIo {
+                message: format!("syncing published full-graph output directory: {error}"),
+                artifact: Some(FailedCompiledArtifact {
+                    artifact: pending_artifact,
+                }),
+            },
+            recovery_required: true,
+        });
+    }
+    let module_count = prepared.final_identities.len() as u32;
+    Ok(FullGraphCompileArtifactV1 {
+        // Preserve the caller-visible absolute spelling. The exact retained handle, not a later
+        // pathname reopen, remains artifact authority; Windows canonical parent paths otherwise
+        // leak the internal `\\?\` spelling through this product API.
+        path: opts.output_path.clone(),
+        file: pending_artifact.file,
+        byte_len: bytes.len() as u64,
+        sha256: expected_sha256,
+        module_count,
+        base_cache_sha256: prepared.base_cache_sha256,
+        final_manifest: prepared.final_manifest.clone(),
+        changes: prepared.changes.clone(),
+        deleted_modules: prepared.deleted_modules.clone(),
+    })
+}
+
+fn full_graph_pending_failure_v1(
+    artifact: CompiledArtifact,
+    message: String,
+) -> FullGraphPublicationFailureV1 {
+    match neutralize_and_remove_full_graph_pending_v1(artifact) {
+        Ok(()) => FullGraphPublicationFailureV1 {
+            error: CompileError::Io(message),
+            recovery_required: false,
+        },
+        Err((cleanup, artifact)) => FullGraphPublicationFailureV1 {
+            error: CompileError::ArtifactIo {
+                message: format!(
+                    "{message}; exact pending-output cleanup failed and explicit recovery is required: {cleanup}"
+                ),
+                artifact: Some(FailedCompiledArtifact { artifact }),
+            },
+            recovery_required: true,
+        },
+    }
+}
+
+/// Recover only the deterministic private pending file for `output_path`.
+///
+/// The final destination is never opened, removed, replaced, or truncated. A linked/reparse,
+/// multiply-linked, or identity-raced pending object is retained and reported for manual review.
+pub fn recover_full_graph_publication_v1(output_path: &Path) -> Result<bool, CompileError> {
+    let (parent, _destination, pending) = full_graph_publication_paths_v1(output_path)?;
+    let file = match open_full_graph_pending_existing_v1(&pending) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(CompileError::Io(format!(
+                "opening pending full-graph publication for recovery: {error}"
+            )));
+        }
+    };
+    let artifact = CompiledArtifact {
+        path: pending,
+        file,
+    };
+    match neutralize_and_remove_full_graph_pending_v1(artifact) {
+        Ok(()) => {
+            sync_full_graph_publication_parent_v1(&parent).map_err(|error| {
+                CompileError::Io(format!("syncing recovered full-graph parent: {error}"))
+            })?;
+            Ok(true)
+        }
+        Err((error, artifact)) => Err(CompileError::ArtifactIo {
+            message: format!("recovering pending full-graph publication: {error}"),
+            artifact: Some(FailedCompiledArtifact { artifact }),
+        }),
+    }
+}
+
+fn neutralize_and_remove_full_graph_pending_v1(
+    artifact: CompiledArtifact,
+) -> Result<(), (String, CompiledArtifact)> {
+    if let Err(error) = validate_full_graph_pending_identity_v1(&artifact.file, &artifact.path) {
+        return Err((error, artifact));
+    }
+    if let Err(error) = artifact.neutralize() {
+        return Err((error, artifact));
+    }
+    if let Err(error) = remove_full_graph_pending_by_handle_v1(&artifact.file, &artifact.path) {
+        return Err((error, artifact));
+    }
+    drop(artifact);
+    Ok(())
+}
+
+fn hash_compiled_artifact_handle(
+    mut file: std::fs::File,
+    max: u64,
+    label: &str,
+) -> Result<(u64, Sha256Digest), String> {
+    let before = file
+        .metadata()
+        .map_err(|error| format!("inspecting {label}: {error}"))?;
+    if !before.is_file() || before.len() > max {
+        return Err(format!(
+            "{label} is not a bounded regular file ({} bytes; maximum {max})",
+            before.len()
+        ));
+    }
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| format!("seeking {label}: {error}"))?;
+    let mut hash = Sha256::new();
+    let mut byte_len = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("reading {label}: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        byte_len = byte_len
+            .checked_add(read as u64)
+            .filter(|length| *length <= max)
+            .ok_or_else(|| format!("{label} exceeded {max} bytes while reading"))?;
+        hash.update(&buffer[..read]);
+    }
+    let after = file
+        .metadata()
+        .map_err(|error| format!("rechecking {label}: {error}"))?;
+    if before.len() != byte_len || after.len() != byte_len {
+        return Err(format!("{label} length changed during validation"));
+    }
+    Ok((byte_len, Sha256Digest::from_bytes(hash.finalize().into())))
+}
+
+#[cfg(windows)]
+fn open_full_graph_pending_create_new_v1(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+    };
+
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .access_mode(GENERIC_READ | GENERIC_WRITE | DELETE)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options.open(path)?;
+    validate_full_graph_pending_file_v1(&file)?;
+    Ok(file)
+}
+
+#[cfg(windows)]
+fn open_full_graph_pending_existing_v1(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+    };
+
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .access_mode(GENERIC_READ | GENERIC_WRITE | DELETE)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options.open(path)?;
+    validate_full_graph_pending_file_v1(&file)?;
+    Ok(file)
+}
+
+#[cfg(windows)]
+fn validate_full_graph_pending_file_v1(file: &std::fs::File) -> std::io::Result<()> {
+    use std::os::windows::fs::MetadataExt as _;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(std::io::Error::other(
+            "full-graph pending output is not a regular non-reparse file",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_full_graph_pending_create_new_v1(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other(
+            "full-graph pending output is not a regular file",
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn open_full_graph_pending_existing_v1(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other(
+            "full-graph pending output is not a regular file",
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(not(any(windows, unix)))]
+fn open_full_graph_pending_create_new_v1(_path: &Path) -> std::io::Result<std::fs::File> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "retained full-graph publication is unsupported on this platform",
+    ))
+}
+
+#[cfg(not(any(windows, unix)))]
+fn open_full_graph_pending_existing_v1(_path: &Path) -> std::io::Result<std::fs::File> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "retained full-graph recovery is unsupported on this platform",
+    ))
+}
+
+#[cfg(windows)]
+fn publish_full_graph_pending_no_clobber_v1(
+    file: &std::fs::File,
+    parent: &Path,
+    destination_name: &std::ffi::OsStr,
+    _pending: &Path,
+    _destination: &Path,
+) -> std::io::Result<()> {
+    use std::mem::{offset_of, size_of};
+    use std::os::windows::ffi::OsStrExt as _;
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Foundation::{RtlNtStatusToDosError, HANDLE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_RENAME_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
+
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn NtSetInformationFile(
+            file_handle: HANDLE,
+            io_status_block: *mut IO_STATUS_BLOCK,
+            file_information: *const std::ffi::c_void,
+            length: u32,
+            file_information_class: i32,
+        ) -> i32;
+    }
+
+    let parent_file = std::fs::OpenOptions::new()
+        .read(true)
+        // Renaming a child requires delete sharing on every open parent-directory handle,
+        // including this one. RootDirectory still pins the exact directory object for the
+        // handle-relative no-clobber rename.
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(parent)?;
+    let parent_metadata = parent_file.metadata()?;
+    if !parent_metadata.is_dir()
+        || parent_metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    {
+        return Err(std::io::Error::other(
+            "full-graph publication parent is not a real directory",
+        ));
+    }
+    let name = destination_name.encode_wide().collect::<Vec<_>>();
+    let header_bytes = offset_of!(FILE_RENAME_INFO, FileName);
+    let byte_len = header_bytes
+        .checked_add(name.len().checked_mul(size_of::<u16>()).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "full-graph destination name is too long",
+            )
+        })?)
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "full-graph rename buffer overflow",
+            )
+        })?;
+    let mut storage = vec![0u64; byte_len.div_ceil(size_of::<u64>())];
+    let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+    unsafe {
+        (*info).Anonymous.ReplaceIfExists = false;
+        (*info).RootDirectory = parent_file.as_raw_handle();
+        (*info).FileNameLength = (name.len() * size_of::<u16>()) as u32;
+        std::ptr::copy_nonoverlapping(
+            name.as_ptr(),
+            storage
+                .as_mut_ptr()
+                .cast::<u8>()
+                .add(header_bytes)
+                .cast::<u16>(),
+            name.len(),
+        );
+        let mut io_status = IO_STATUS_BLOCK::default();
+        let status = NtSetInformationFile(
+            file.as_raw_handle(),
+            &mut io_status,
+            info.cast_const().cast(),
+            byte_len as u32,
+            10,
+        );
+        if status < 0 {
+            let error = std::io::Error::from_raw_os_error(RtlNtStatusToDosError(status) as i32);
+            return if matches!(error.raw_os_error(), Some(80 | 183)) {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::AlreadyExists,
+                    error,
+                ))
+            } else {
+                Err(error)
+            };
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn publish_full_graph_pending_no_clobber_v1(
+    file: &std::fs::File,
+    _parent: &Path,
+    _destination_name: &std::ffi::OsStr,
+    pending: &Path,
+    destination: &Path,
+) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    validate_full_graph_pending_identity_v1(file, pending).map_err(std::io::Error::other)?;
+    let pending = std::ffi::CString::new(pending.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "pending full-graph path contains NUL",
+        )
+    })?;
+    let destination_c =
+        std::ffi::CString::new(destination.as_os_str().as_bytes()).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "full-graph destination path contains NUL",
+            )
+        })?;
+    if unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            pending.as_ptr(),
+            libc::AT_FDCWD,
+            destination_c.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    } != 0
+    {
+        let error = std::io::Error::last_os_error();
+        return if error.raw_os_error() == Some(libc::EEXIST) {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                error,
+            ))
+        } else {
+            Err(error)
+        };
+    }
+    validate_full_graph_pending_identity_v1(file, destination).map_err(std::io::Error::other)
+}
+
+#[cfg(target_vendor = "apple")]
+fn publish_full_graph_pending_no_clobber_v1(
+    file: &std::fs::File,
+    _parent: &Path,
+    _destination_name: &std::ffi::OsStr,
+    pending: &Path,
+    destination: &Path,
+) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    validate_full_graph_pending_identity_v1(file, pending).map_err(std::io::Error::other)?;
+    let pending = std::ffi::CString::new(pending.as_os_str().as_bytes()).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "pending path contains NUL",
+        )
+    })?;
+    let destination_c =
+        std::ffi::CString::new(destination.as_os_str().as_bytes()).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "destination contains NUL")
+        })?;
+    if unsafe { libc::renameatx_np(pending.as_ptr(), destination_c.as_ptr(), libc::RENAME_EXCL) }
+        != 0
+    {
+        let error = std::io::Error::last_os_error();
+        return if error.raw_os_error() == Some(libc::EEXIST) {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                error,
+            ))
+        } else {
+            Err(error)
+        };
+    }
+    validate_full_graph_pending_identity_v1(file, destination).map_err(std::io::Error::other)
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_vendor = "apple")))]
+fn publish_full_graph_pending_no_clobber_v1(
+    _file: &std::fs::File,
+    _parent: &Path,
+    _destination_name: &std::ffi::OsStr,
+    _pending: &Path,
+    _destination: &Path,
+) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic no-clobber full-graph publication is unsupported on this platform",
+    ))
+}
+
+#[cfg(windows)]
+fn validate_full_graph_pending_identity_v1(
+    file: &std::fs::File,
+    _path: &Path,
+) -> Result<(), String> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_REPARSE_POINT,
+    };
+
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut information) } == 0 {
+        return Err(format!(
+            "reading pending full-graph identity: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || information.nNumberOfLinks != 1
+    {
+        return Err(
+            "pending full-graph output is reparse-backed or has an unexpected hard link".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_full_graph_pending_identity_v1(
+    file: &std::fs::File,
+    path: &Path,
+) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let held = file
+        .metadata()
+        .map_err(|error| format!("reading held pending-output identity: {error}"))?;
+    let named = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("reading named pending-output identity: {error}"))?;
+    if named.file_type().is_symlink()
+        || !named.is_file()
+        || held.nlink() != 1
+        || named.nlink() != 1
+        || held.dev() != named.dev()
+        || held.ino() != named.ino()
+    {
+        return Err("pending full-graph filesystem identity changed".to_owned());
+    }
+    Ok(())
+}
+
+#[cfg(not(any(windows, unix)))]
+fn validate_full_graph_pending_identity_v1(
+    _file: &std::fs::File,
+    _path: &Path,
+) -> Result<(), String> {
+    Err("pending full-graph identity validation is unsupported".to_owned())
+}
+
+#[cfg(windows)]
+fn remove_full_graph_pending_by_handle_v1(
+    file: &std::fs::File,
+    _path: &Path,
+) -> Result<(), String> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
+    };
+
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+    if unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle() as _,
+            FileDispositionInfo,
+            std::ptr::from_ref(&disposition).cast(),
+            std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(format!(
+            "deleting exact pending full-graph output by handle: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn remove_full_graph_pending_by_handle_v1(file: &std::fs::File, path: &Path) -> Result<(), String> {
+    validate_full_graph_pending_identity_v1(file, path)?;
+    std::fs::remove_file(path)
+        .map_err(|error| format!("removing exact pending full-graph output: {error}"))
+}
+
+#[cfg(not(any(windows, unix)))]
+fn remove_full_graph_pending_by_handle_v1(
+    _file: &std::fs::File,
+    _path: &Path,
+) -> Result<(), String> {
+    Err("pending full-graph removal is unsupported".to_owned())
+}
+
+#[cfg(unix)]
+fn sync_full_graph_publication_parent_v1(parent: &Path) -> std::io::Result<()> {
+    std::fs::File::open(parent)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_full_graph_publication_parent_v1(_parent: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -3920,6 +8098,7 @@ struct CompileTransaction {
     journal: RecoveryJournal,
     lock: CompileLock,
     mutation_guard: InstallMutationGuard,
+    project_input_pins: Option<ProjectGameInputPins>,
     rollback_needed: bool,
     /// A user-facing `.gore-bak` created immediately before install, removed unless install commits.
     ephemeral_deploy_backup: Option<PathBuf>,
@@ -3983,6 +8162,48 @@ impl CompileTransaction {
     where
         C: FnOnce() -> Result<bool, String>,
     {
+        Self::begin_with_mutation_guard_optional_project_pins_and_process_checker(
+            game_dir,
+            g1r,
+            script_dir,
+            mutation_guard,
+            None,
+            check_game_process,
+        )
+    }
+
+    fn begin_with_mutation_guard_project_pins_and_process_checker<C>(
+        game_dir: &Path,
+        g1r: &Path,
+        script_dir: &Path,
+        mutation_guard: InstallMutationGuard,
+        input_pins: ProjectGameInputPins,
+        check_game_process: C,
+    ) -> Result<Self, CompileTransactionBeginFailure>
+    where
+        C: FnOnce() -> Result<bool, String>,
+    {
+        Self::begin_with_mutation_guard_optional_project_pins_and_process_checker(
+            game_dir,
+            g1r,
+            script_dir,
+            mutation_guard,
+            Some(input_pins),
+            check_game_process,
+        )
+    }
+
+    fn begin_with_mutation_guard_optional_project_pins_and_process_checker<C>(
+        game_dir: &Path,
+        g1r: &Path,
+        script_dir: &Path,
+        mutation_guard: InstallMutationGuard,
+        mut project_input_pins: Option<ProjectGameInputPins>,
+        check_game_process: C,
+    ) -> Result<Self, CompileTransactionBeginFailure>
+    where
+        C: FnOnce() -> Result<bool, String>,
+    {
         let expected_lock = install_mutation_lock_path(game_dir);
         if !mutation_guard.active
             || mutation_guard.owner != "gore-as:compile"
@@ -4020,7 +8241,16 @@ impl CompileTransaction {
         };
         let shipping_cache = script_dir.join("PrecompiledScript_Shipping.Cache");
         let dev_cache = script_dir.join("PrecompiledScript.Cache");
-        let saved_shipping = match std::fs::read(&shipping_cache) {
+        let saved_shipping = match &mut project_input_pins {
+            Some(pins) => read_open_regular_file_bounded(
+                &mut pins.shipping,
+                MAX_PROJECT_COMPILER_CHECK_BASE_BYTES as u64,
+                "pinned live Shipping cache",
+            ),
+            None => std::fs::read(&shipping_cache)
+                .map_err(|error| format!("reading live shipping cache: {error}")),
+        };
+        let saved_shipping = match saved_shipping {
             Ok(bytes) => bytes,
             Err(error) => {
                 let mut errors = vec![format!(
@@ -4102,6 +8332,7 @@ impl CompileTransaction {
             journal,
             lock,
             mutation_guard,
+            project_input_pins,
             rollback_needed: true,
             ephemeral_deploy_backup: None,
         })
@@ -4111,10 +8342,21 @@ impl CompileTransaction {
         if self.isolation.is_none() {
             self.isolation = Some(GenerationIsolation::plan(&self.game_dir, &self.g1r)?);
         }
+        let target_directories_released = self
+            .project_input_pins
+            .as_mut()
+            .is_some_and(ProjectGameInputPins::release_target_directories_for_isolation);
         self.isolation
             .as_mut()
             .expect("generation isolation was planned above")
-            .activate()
+            .activate()?;
+        if target_directories_released {
+            self.project_input_pins
+                .as_mut()
+                .expect("qualified target pins remain owned by the transaction")
+                .repin_target_directories_after_isolation()?;
+        }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -4146,6 +8388,10 @@ impl CompileTransaction {
                 shipping_restored: true,
             };
         }
+        // Project compiler pins deny write/delete sharing until the generator has exited. Release
+        // them only at the start of confirmed-process restoration; unconfirmed paths leak the
+        // complete transaction and therefore keep both authoritative inputs pinned.
+        self.project_input_pins.take();
         let mut errors = Vec::new();
         if let Some(isolation) = &mut self.isolation {
             if let Err(e) = isolation.restore() {
@@ -4467,6 +8713,42 @@ fn game_run_regen_with_extended_diagnostics_report_with_guard(
     })
 }
 
+fn game_run_regen_with_extended_diagnostics_report_with_guard_and_pins(
+    game_dir: &Path,
+    src_dir: &Path,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    mutation_guard: InstallMutationGuard,
+    input_pins: ProjectGameInputPins,
+) -> Result<GameRunRegenExtendedReport, String> {
+    let diagnostic_report = std::cell::RefCell::new(None);
+    let generated = game_run_regen_with_install_report_with_guard_and_pins_and_after_restore(
+        game_dir,
+        src_dir,
+        mutation_guard,
+        input_pins,
+        |exe, g1r, cache| {
+            let generated = real_generate_with_timeout_and_diagnostics_report(
+                exe,
+                g1r,
+                cache,
+                Duration::from_secs(30 * 60),
+                diagnostics,
+            );
+            *diagnostic_report.borrow_mut() = Some(generated.diagnostics);
+            GeneratorRunResult {
+                result: generated.result,
+                process_exit: generated.process_exit,
+            }
+        },
+        |_, _| Ok(()),
+    )?;
+    Ok(GameRunRegenExtendedReport {
+        result: generated.result,
+        diagnostics: diagnostic_report.into_inner(),
+        install_restore: generated.install_restore,
+    })
+}
+
 fn run_project_compiler_with_guard<A>(
     game_dir: &Path,
     source_tree: &Path,
@@ -4476,6 +8758,78 @@ fn run_project_compiler_with_guard<A>(
 ) -> ProjectCompilerRunnerReport
 where
     A: FnOnce() -> Result<(), String>,
+{
+    run_project_compiler_with_optional_pins(
+        game_dir,
+        source_tree,
+        diagnostics_options,
+        mutation_guard,
+        None,
+        closing_audit,
+    )
+}
+
+fn run_project_compiler_with_guard_and_pins<A>(
+    game_dir: &Path,
+    source_tree: &Path,
+    diagnostics_options: &crate::diagnostics::DiagnosticsOptions,
+    mutation_guard: InstallMutationGuard,
+    input_pins: ProjectGameInputPins,
+    closing_audit: A,
+) -> ProjectCompilerRunnerReport
+where
+    A: FnOnce() -> Result<(), String>,
+{
+    run_project_compiler_with_optional_pins(
+        game_dir,
+        source_tree,
+        diagnostics_options,
+        mutation_guard,
+        Some(input_pins),
+        closing_audit,
+    )
+}
+
+fn run_project_compiler_with_optional_pins<A>(
+    game_dir: &Path,
+    source_tree: &Path,
+    diagnostics_options: &crate::diagnostics::DiagnosticsOptions,
+    mutation_guard: InstallMutationGuard,
+    input_pins: Option<ProjectGameInputPins>,
+    closing_audit: A,
+) -> ProjectCompilerRunnerReport
+where
+    A: FnOnce() -> Result<(), String>,
+{
+    run_project_compiler_with_optional_pins_and_generator(
+        game_dir,
+        source_tree,
+        mutation_guard,
+        input_pins,
+        closing_audit,
+        |exe, g1r, cache| {
+            real_generate_with_timeout_and_diagnostics_report(
+                exe,
+                g1r,
+                cache,
+                Duration::from_secs(30 * 60),
+                diagnostics_options,
+            )
+        },
+    )
+}
+
+fn run_project_compiler_with_optional_pins_and_generator<A, G>(
+    game_dir: &Path,
+    source_tree: &Path,
+    mutation_guard: InstallMutationGuard,
+    input_pins: Option<ProjectGameInputPins>,
+    closing_audit: A,
+    generator: G,
+) -> ProjectCompilerRunnerReport
+where
+    A: FnOnce() -> Result<(), String>,
+    G: FnOnce(&Path, &Path, &Path) -> GeneratorDiagnosticsResult<Vec<u8>>,
 {
     let expected_copy = source_tree.join("regen.cache");
     let diagnostic_report = std::cell::RefCell::new(None);
@@ -4487,40 +8841,30 @@ where
     let closing_audit = std::cell::RefCell::new(Some(closing_audit));
     let callback_failure = std::cell::RefCell::new(None);
 
-    let generated = game_run_regen_with_install_report_with_guard_and_after_restore(
-        game_dir,
-        source_tree,
-        mutation_guard,
-        |exe, g1r, cache| {
-            let generated = real_generate_with_timeout_and_diagnostics_report(
-                exe,
-                g1r,
-                cache,
-                Duration::from_secs(30 * 60),
-                diagnostics_options,
-            );
-            *diagnostic_private_paths.borrow_mut() = generated.private_paths;
-            *diagnostic_report.borrow_mut() = Some(generated.diagnostics);
-            GeneratorRunResult {
-                result: generated.result,
-                process_exit: generated.process_exit,
-            }
-        },
-        |path_result, retained_copy| {
-            let (converted, disposition) = match path_result {
-                Ok(path) => match retained_copy {
-                    Some(artifact) => consume_project_regen_artifact(source_tree, path, artifact),
-                    None => (
-                        Err("project compiler lost the retained private output handle".to_owned()),
-                        ProjectCompilerOutputDisposition::RecoveryRetained,
-                    ),
-                },
-                Err(error) => {
-                    let (cleanup, disposition) = match retained_copy {
-                        Some(artifact) => discard_project_regen_artifact(&expected_copy, artifact),
-                        None => discard_project_regen_copy(&expected_copy),
-                    };
-                    (
+    let generate = |exe: &Path, g1r: &Path, cache: &Path| {
+        let generated = generator(exe, g1r, cache);
+        *diagnostic_private_paths.borrow_mut() = generated.private_paths;
+        *diagnostic_report.borrow_mut() = Some(generated.diagnostics);
+        GeneratorRunResult {
+            result: generated.result,
+            process_exit: generated.process_exit,
+        }
+    };
+    let after_restore = |path_result: &Result<PathBuf, String>, retained_copy| {
+        let (converted, disposition) = match path_result {
+            Ok(path) => match retained_copy {
+                Some(artifact) => consume_project_regen_artifact(source_tree, path, artifact),
+                None => (
+                    Err("project compiler lost the retained private output handle".to_owned()),
+                    ProjectCompilerOutputDisposition::RecoveryRetained,
+                ),
+            },
+            Err(error) => {
+                let (cleanup, disposition) = match retained_copy {
+                    Some(artifact) => discard_project_regen_artifact(&expected_copy, artifact),
+                    None => discard_project_regen_copy(&expected_copy),
+                };
+                (
                         Err(match cleanup {
                             Ok(_) => error.clone(),
                             Err(cleanup) => format!(
@@ -4529,44 +8873,59 @@ where
                         }),
                         disposition,
                     )
-                }
-            };
-            output_disposition.set(disposition);
-            let conversion_failure = converted.as_ref().err().cloned();
-            *consumed_result.borrow_mut() = Some(converted);
+            }
+        };
+        output_disposition.set(disposition);
+        let conversion_failure = converted.as_ref().err().cloned();
+        *consumed_result.borrow_mut() = Some(converted);
 
-            let mut failures = Vec::new();
-            if path_result.is_ok()
-                || disposition == ProjectCompilerOutputDisposition::RecoveryRetained
-            {
-                if let Some(failure) = conversion_failure {
-                    failures.push(failure);
-                }
+        let mut failures = Vec::new();
+        if path_result.is_ok() || disposition == ProjectCompilerOutputDisposition::RecoveryRetained
+        {
+            if let Some(failure) = conversion_failure {
+                failures.push(failure);
             }
-            let audit = closing_audit
-                .borrow_mut()
-                .take()
-                .ok_or_else(|| "closing project audit was consumed more than once".to_owned())?;
-            match audit() {
-                Ok(()) => {
-                    closing_audit_disposition.set(ProjectCompilerClosingAuditDisposition::Passed)
-                }
-                Err(error) => {
-                    closing_audit_disposition.set(ProjectCompilerClosingAuditDisposition::Failed);
-                    failures.push(format!(
-                        "closing project audit failed while the install guard was held: {error}"
-                    ));
-                }
+        }
+        let audit = closing_audit
+            .borrow_mut()
+            .take()
+            .ok_or_else(|| "closing project audit was consumed more than once".to_owned())?;
+        match audit() {
+            Ok(()) => closing_audit_disposition.set(ProjectCompilerClosingAuditDisposition::Passed),
+            Err(error) => {
+                closing_audit_disposition.set(ProjectCompilerClosingAuditDisposition::Failed);
+                failures.push(format!(
+                    "closing project audit failed while the install guard was held: {error}"
+                ));
             }
-            if failures.is_empty() {
-                Ok(())
-            } else {
-                let failure = failures.join("; ");
-                *callback_failure.borrow_mut() = Some(failure.clone());
-                Err(failure)
-            }
-        },
-    );
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            let failure = failures.join("; ");
+            *callback_failure.borrow_mut() = Some(failure.clone());
+            Err(failure)
+        }
+    };
+    let generated = match input_pins {
+        Some(input_pins) => {
+            game_run_regen_with_install_report_with_guard_and_pins_and_after_restore(
+                game_dir,
+                source_tree,
+                mutation_guard,
+                input_pins,
+                generate,
+                after_restore,
+            )
+        }
+        None => game_run_regen_with_install_report_with_guard_and_after_restore(
+            game_dir,
+            source_tree,
+            mutation_guard,
+            generate,
+            after_restore,
+        ),
+    };
 
     let (common_result, install_restore) = match generated {
         Ok(report) => (report.result, report.install_restore),
@@ -4963,6 +9322,50 @@ where
     G: FnOnce(&Path, &Path, &Path) -> GeneratorRunResult<Vec<u8>>,
     A: FnOnce(&Result<PathBuf, String>, Option<CompiledArtifact>) -> Result<(), String>,
 {
+    game_run_regen_with_install_report_with_guard_optional_pins_and_after_restore(
+        game_dir,
+        src_dir,
+        mutation_guard,
+        None,
+        generate,
+        after_restore,
+    )
+}
+
+fn game_run_regen_with_install_report_with_guard_and_pins_and_after_restore<G, A>(
+    game_dir: &Path,
+    src_dir: &Path,
+    mutation_guard: InstallMutationGuard,
+    input_pins: ProjectGameInputPins,
+    generate: G,
+    after_restore: A,
+) -> Result<GameRunInstallReport, String>
+where
+    G: FnOnce(&Path, &Path, &Path) -> GeneratorRunResult<Vec<u8>>,
+    A: FnOnce(&Result<PathBuf, String>, Option<CompiledArtifact>) -> Result<(), String>,
+{
+    game_run_regen_with_install_report_with_guard_optional_pins_and_after_restore(
+        game_dir,
+        src_dir,
+        mutation_guard,
+        Some(input_pins),
+        generate,
+        after_restore,
+    )
+}
+
+fn game_run_regen_with_install_report_with_guard_optional_pins_and_after_restore<G, A>(
+    game_dir: &Path,
+    src_dir: &Path,
+    mutation_guard: InstallMutationGuard,
+    mut input_pins: Option<ProjectGameInputPins>,
+    generate: G,
+    after_restore: A,
+) -> Result<GameRunInstallReport, String>
+where
+    G: FnOnce(&Path, &Path, &Path) -> GeneratorRunResult<Vec<u8>>,
+    A: FnOnce(&Result<PathBuf, String>, Option<CompiledArtifact>) -> Result<(), String>,
+{
     let mutation_guard = std::cell::RefCell::new(Some(mutation_guard));
     let after_restore = std::cell::RefCell::new(Some(after_restore));
     let begin_recovery_required = std::cell::Cell::new(false);
@@ -4974,13 +9377,26 @@ where
                 let guard = mutation_guard.borrow_mut().take().ok_or_else(|| {
                     "pre-held install-mutation guard was consumed more than once".to_owned()
                 })?;
-                match CompileTransaction::begin_with_mutation_guard_and_process_checker(
+                let transaction = match input_pins.take() {
+                Some(pins) => {
+                    CompileTransaction::begin_with_mutation_guard_project_pins_and_process_checker(
+                        game_dir,
+                        g1r,
+                        script_dir,
+                        guard,
+                        pins,
+                        shipping_game_process_running,
+                    )
+                }
+                None => CompileTransaction::begin_with_mutation_guard_and_process_checker(
                     game_dir,
                     g1r,
                     script_dir,
                     guard,
                     shipping_game_process_running,
-                ) {
+                ),
+            };
+                match transaction {
                     Ok(transaction) => Ok(transaction),
                     Err(failure) => {
                         begin_recovery_required.set(failure.recovery_required);
@@ -5582,6 +9998,9 @@ const GENERATOR_ARGS: &[&str] = &[
     "-as-generate-precompiled-data",
     "-as-skip-threaded-initialize",
     "-as-exit-on-error",
+    "-windowed",
+    "-ResX=1280",
+    "-ResY=720",
 ];
 
 fn run_normal_generator_report(
@@ -6058,6 +10477,97 @@ fn real_generate_with_timeout_and_diagnostics_report(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn real_generate_with_frontend_capture_and_diagnostics_report(
+    exe: &Path,
+    g1r: &Path,
+    cache: &Path,
+    timeout: Duration,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    capture_controller: &Path,
+    capture_bridge: &Path,
+    capture_path: &Path,
+) -> GeneratorDiagnosticsResult<Vec<u8>> {
+    let fail_before_start = |detail: String| GeneratorDiagnosticsResult {
+        result: Err(detail),
+        diagnostics: crate::diagnostics::CompilerDiagnosticsReport::empty(
+            crate::diagnostics::DiagnosticsCaptureDisposition::CaptureInvalid,
+        ),
+        process_exit: GeneratorProcessExitDisposition::NotStarted,
+        private_paths: Vec::new(),
+    };
+    if diagnostics.disabled {
+        return fail_before_start(
+            "frontend qualification requires same-run structured diagnostics".to_owned(),
+        );
+    }
+    if capture_path.exists() {
+        return fail_before_start(
+            "frontend qualification capture output must be a new file".to_owned(),
+        );
+    }
+    let prep = match crate::diagnostics::prepare_hook(exe, diagnostics) {
+        Ok(prep) => prep,
+        Err(error) => {
+            return fail_before_start(format!(
+                "preparing same-run frontend diagnostics helper: {error}"
+            ));
+        }
+    };
+    let artifacts = match DiagnosticArtifacts::create() {
+        Ok(artifacts) => artifacts,
+        Err(error) => {
+            return fail_before_start(format!(
+                "preparing same-run frontend diagnostic outputs: {error}"
+            ));
+        }
+    };
+    let timeout_seconds = timeout.as_secs().clamp(30, 21_600).to_string();
+    let mut controller = match std::process::Command::new(capture_controller)
+        .arg("--capture-windowed-with-diagnostics")
+        .arg(exe)
+        .arg(capture_bridge)
+        .arg(&prep.hook_dll)
+        .arg(&artifacts.capture)
+        .arg(&artifacts.status)
+        .arg(capture_path)
+        .arg(timeout_seconds)
+        .current_dir(g1r)
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            return fail_before_start(format!(
+                "launching same-run frontend capture controller: {error}"
+            ));
+        }
+    };
+    let generated = finish_generator_child_report(&mut controller, cache, timeout);
+    if generated.process_exit == GeneratorProcessExitDisposition::Unconfirmed {
+        return match preserve_unconfirmed_diagnostic_attempt(
+            generated.result.unwrap_err(),
+            artifacts,
+            prep,
+        ) {
+            DiagnosticAttempt::Fatal(report) => report,
+            _ => unreachable!("unconfirmed diagnostic preservation is always fatal"),
+        };
+    }
+    let mut report = append_captured_diagnostics(
+        generated,
+        &artifacts,
+        crate::diagnostics::DiagnosticsCaptureDisposition::Captured,
+    );
+    let capture_is_sealed = std::fs::metadata(capture_path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 64);
+    if report.result.is_ok() && !capture_is_sealed {
+        report.result = Err(
+            "same-run frontend controller produced a cache without a sealed capture".to_owned(),
+        );
+    }
+    report
+}
+
 /// Read and structurally validate the generator output. The shipping game build used by G1R exits
 /// with status 1 after a successful `-as-generate-precompiled-data` run, so process status alone is
 /// not an acceptance signal. Conversely, a merely present/non-empty file is unsafe after an error:
@@ -6097,6 +10607,14 @@ fn read_regular_file_bounded_no_follow(
     label: &str,
 ) -> Result<Vec<u8>, String> {
     let mut file = open_regular_file_no_follow_read(path)?;
+    read_open_regular_file_bounded(&mut file, max_bytes, label)
+}
+
+fn read_open_regular_file_bounded(
+    file: &mut std::fs::File,
+    max_bytes: u64,
+    label: &str,
+) -> Result<Vec<u8>, String> {
     let length = file
         .metadata()
         .map_err(|error| format!("inspecting {label}: {error}"))?
@@ -6112,12 +10630,22 @@ fn read_regular_file_bounded_no_follow(
         .checked_add(1)
         .ok_or_else(|| format!("{label} read limit overflowed"))?;
     let mut bytes = Vec::with_capacity(capacity);
-    Read::by_ref(&mut file)
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| format!("seeking {label}: {error}"))?;
+    Read::by_ref(file)
         .take(read_limit)
         .read_to_end(&mut bytes)
         .map_err(|error| format!("reading {label}: {error}"))?;
     if bytes.len() as u64 > max_bytes {
         return Err(format!("{label} exceeded {max_bytes} bytes while reading"));
+    }
+    if file
+        .metadata()
+        .map_err(|error| format!("rechecking {label}: {error}"))?
+        .len()
+        != length
+    {
+        return Err(format!("{label} changed while being read"));
     }
     Ok(bytes)
 }
@@ -6597,6 +11125,55 @@ mod tests {
         .to_string();
         assert!(error.contains("UQuestFixture::__InitDefaults"), "{error}");
         assert!(error.contains("strict base-keyspace remap"), "{error}");
+
+        let manifest = vec![emit_all::ValidatedModuleIdentity {
+            module_name: "QuestModule".into(),
+            relative_path: "QuestModule.as".into(),
+        }];
+        let retained_error = validate_full_graph_generated_defaults_parity_v1(
+            &modules,
+            &manifest,
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new(),
+        )
+        .expect_err("full graph must not silently erase retained generated defaults")
+        .to_string();
+        assert!(
+            retained_error.contains("full-graph source rebuild"),
+            "{retained_error}"
+        );
+        assert!(
+            retained_error.contains("UQuestFixture::__InitDefaults"),
+            "{retained_error}"
+        );
+        let authored_edit = std::collections::BTreeMap::from([(
+            0,
+            (
+                "QuestModule.as".to_owned(),
+                "class UQuestFixture {}".to_owned(),
+            ),
+        )]);
+        validate_full_graph_generated_defaults_parity_v1(
+            &modules,
+            &manifest,
+            &authored_edit,
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        let deleted = std::collections::BTreeMap::from([(
+            0,
+            FullGraphDeletedModuleV1 {
+                module_name: "QuestModule".into(),
+                relative_path: "QuestModule.as".into(),
+            },
+        )]);
+        validate_full_graph_generated_defaults_parity_v1(
+            &modules,
+            &manifest,
+            &std::collections::BTreeMap::new(),
+            &deleted,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -7299,9 +11876,7 @@ mod tests {
             install_mutation_init_path(&game, "gore-as:compile", full_compile_id);
         std::fs::write(
             &full_compile_init,
-            format!(
-                "version=1\nowner=gore-as:compile\npid=123\nguard_id={full_compile_id}\n"
-            ),
+            format!("version=1\nowner=gore-as:compile\npid=123\nguard_id={full_compile_id}\n"),
         )
         .unwrap();
         match InstallMutationGuard::take_over_abandoned_manager(&game) {
@@ -7829,6 +12404,601 @@ mod tests {
         }
     }
 
+    struct TestFullGraphRunner {
+        output_path: PathBuf,
+        output_bytes: Vec<u8>,
+        expected_present: Vec<(String, Vec<u8>)>,
+        expected_absent: Vec<String>,
+        create_raced_destination: Option<(PathBuf, Vec<u8>)>,
+        calls: std::rc::Rc<std::cell::Cell<u8>>,
+    }
+
+    impl StandaloneCompilerRunnerV1 for TestFullGraphRunner {
+        fn run_regen(
+            &mut self,
+            _inputs: StandaloneCompilerInputsV1<'_>,
+        ) -> Result<StandaloneCompilerOutputV1, CompilerBackendFailureV1> {
+            Err(CompilerBackendFailureV1::new(
+                CompilerBackendFailureKindV1::Internal,
+                "test full-graph runner entered the legacy regen path",
+            ))
+        }
+
+        fn run_full_graph(
+            &mut self,
+            inputs: StandaloneFullGraphCompilerInputsV1<'_>,
+        ) -> Result<StandaloneCompilerOutputV1, CompilerBackendFailureV1> {
+            self.calls.set(self.calls.get().saturating_add(1));
+            assert_eq!(inputs.changes.len(), 3);
+            assert_eq!(
+                inputs
+                    .changes
+                    .iter()
+                    .filter(|change| change.operation == FullGraphCompileOperationV1::Delete)
+                    .count(),
+                1
+            );
+            assert_eq!(inputs.final_manifest.len(), 3);
+            for (path, expected) in &self.expected_present {
+                assert_eq!(
+                    std::fs::read(inputs.source_tree.join(path)).unwrap(),
+                    *expected,
+                    "unexpected prepared source at {path}"
+                );
+            }
+            for path in &self.expected_absent {
+                assert!(
+                    !inputs.source_tree.join(path).exists(),
+                    "deleted source remained at {path}"
+                );
+            }
+            if let Some((destination, bytes)) = &self.create_raced_destination {
+                std::fs::write(destination, bytes).unwrap();
+            }
+            std::fs::write(&self.output_path, &self.output_bytes).unwrap();
+            let cleanup = self.output_path.clone();
+            Ok(StandaloneCompilerOutputV1::with_cleanup(
+                self.output_path.clone(),
+                move || std::fs::remove_file(cleanup).map_err(|error| error.to_string()),
+            ))
+        }
+    }
+
+    fn full_graph_opts(root: &Path) -> FullGraphCompileOptsV1 {
+        FullGraphCompileOptsV1 {
+            game_dir: root.join("game"),
+            work_dir: root.join("work"),
+            output_path: root.join("output").join("published.cache"),
+            changes: vec![
+                FullGraphCompileChangeV1 {
+                    operation: FullGraphCompileOperationV1::Delete,
+                    module_name: "DeleteMe".to_owned(),
+                    relative_path: "DeleteMe.as".to_owned(),
+                    source: None,
+                },
+                FullGraphCompileChangeV1 {
+                    operation: FullGraphCompileOperationV1::Add,
+                    module_name: "Added".to_owned(),
+                    relative_path: "Added.as".to_owned(),
+                    source: Some(b"void AddedFn() {}\n".to_vec()),
+                },
+                FullGraphCompileChangeV1 {
+                    operation: FullGraphCompileOperationV1::Edit,
+                    module_name: "EditMe".to_owned(),
+                    relative_path: "EditMe.as".to_owned(),
+                    source: Some(b"void EditedFn() {}\n".to_vec()),
+                },
+            ],
+            final_manifest: vec![
+                FullGraphFinalModuleV1 {
+                    module_name: "Keep".to_owned(),
+                    relative_path: "Keep.as".to_owned(),
+                },
+                FullGraphFinalModuleV1 {
+                    module_name: "EditMe".to_owned(),
+                    relative_path: "EditMe.as".to_owned(),
+                },
+                FullGraphFinalModuleV1 {
+                    module_name: "Added".to_owned(),
+                    relative_path: "Added.as".to_owned(),
+                },
+            ],
+            base_cache: cache_with_empty_modules(&[
+                ("Keep", "Keep.as"),
+                ("EditMe", "EditMe.as"),
+                ("DeleteMe", "DeleteMe.as"),
+            ]),
+            binds_cache: minimal_binds_cache(),
+        }
+    }
+
+    fn full_graph_test_runner(
+        root: &Path,
+        output_bytes: Vec<u8>,
+        calls: std::rc::Rc<std::cell::Cell<u8>>,
+    ) -> TestFullGraphRunner {
+        TestFullGraphRunner {
+            output_path: root.join("private-runner.cache"),
+            output_bytes,
+            expected_present: vec![
+                ("Added.as".to_owned(), b"void AddedFn() {}\n".to_vec()),
+                ("EditMe.as".to_owned(), b"void EditedFn() {}\n".to_vec()),
+            ],
+            expected_absent: vec!["DeleteMe.as".to_owned()],
+            create_raced_destination: None,
+            calls,
+        }
+    }
+
+    #[test]
+    fn full_graph_retains_validated_add_edit_delete_output_and_canonical_evidence() {
+        let root = unique_test_root("full-graph-retained");
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        let opts = full_graph_opts(&root);
+        let expected_output = cache_with_empty_modules(&[
+            ("Keep", "Keep.as"),
+            ("EditMe", "EditMe.as"),
+            ("Added", "Added.as"),
+        ]);
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut runner = full_graph_test_runner(&root, expected_output.clone(), calls.clone());
+        let audit_calls = std::cell::Cell::new(0u8);
+        let report = compile_full_graph_standalone_v1(&opts, &mut runner, || {
+            audit_calls.set(audit_calls.get().saturating_add(1));
+            assert!(!install_mutation_lock_path(&opts.game_dir).exists());
+            Ok(())
+        });
+
+        assert_eq!(calls.get(), 1);
+        assert_eq!(audit_calls.get(), 1);
+        assert_eq!(report.runner_invocations(), 1);
+        assert_eq!(
+            report.backend_name(),
+            Some(CompilerBackendNameV1::Standalone)
+        );
+        assert_eq!(
+            report.publication_disposition(),
+            FullGraphPublicationDispositionV1::Published
+        );
+        assert_eq!(
+            report.closing_audit_disposition(),
+            ProjectCompilerClosingAuditDisposition::Passed
+        );
+        assert!(!report.game_attempted());
+        assert!(!report.recovery_required());
+        let FullGraphCompileOutcomeV1::Compiled(artifact) = report.outcome else {
+            panic!("full-graph compile did not retain its artifact")
+        };
+        assert_eq!(artifact.path(), opts.output_path);
+        assert_eq!(artifact.byte_len(), expected_output.len() as u64);
+        assert_eq!(artifact.sha256(), sha256_digest(&expected_output));
+        assert_eq!(artifact.module_count(), 3);
+        assert_eq!(
+            artifact.base_cache_sha256(),
+            sha256_digest(&opts.base_cache)
+        );
+        assert_eq!(
+            artifact
+                .final_manifest()
+                .iter()
+                .map(|entry| (entry.module_name.as_str(), entry.disposition))
+                .collect::<Vec<_>>(),
+            [
+                ("Added", FullGraphSourceDispositionV1::Added),
+                ("EditMe", FullGraphSourceDispositionV1::Edited),
+                ("Keep", FullGraphSourceDispositionV1::Base),
+            ]
+        );
+        assert_eq!(artifact.changes().len(), 3);
+        assert_eq!(artifact.deleted_modules().len(), 1);
+        assert_eq!(artifact.deleted_modules()[0].module_name, "DeleteMe");
+        artifact.validate_retained_artifact().unwrap();
+        assert_eq!(std::fs::read(artifact.path()).unwrap(), expected_output);
+        let published = artifact.path().to_path_buf();
+        drop(artifact);
+        std::fs::remove_file(published).unwrap();
+        assert!(!install_mutation_lock_path(&opts.game_dir).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn full_graph_report_keeps_install_and_output_recovery_independent() {
+        let simultaneous = FullGraphCompileReportV1 {
+            outcome: FullGraphCompileOutcomeV1::Failed(CompileError::Other(
+                "install and output both require recovery".to_owned(),
+            )),
+            diagnostics: None,
+            backend_diagnostics: Vec::new(),
+            install_restore: InstallRestoreDisposition::RecoveryRequiredRestoreFailed,
+            publication: FullGraphPublicationDispositionV1::RecoveryRequired,
+            closing_audit: ProjectCompilerClosingAuditDisposition::Passed,
+            runner_invocations: 1,
+            backend: Some(CompilerBackendNameV1::Game),
+            fallback_reason: None,
+            standalone_attempted: false,
+            game_attempted: true,
+            output_recovery_required: true,
+            target_pins: None,
+        };
+        assert!(simultaneous.recovery_required());
+        assert!(simultaneous.output_recovery_required());
+        assert_eq!(
+            simultaneous.publication_disposition(),
+            FullGraphPublicationDispositionV1::RecoveryRequired
+        );
+
+        let install_only = FullGraphCompileReportV1 {
+            outcome: FullGraphCompileOutcomeV1::Failed(CompileError::Other(
+                "only install recovery remains".to_owned(),
+            )),
+            diagnostics: None,
+            backend_diagnostics: Vec::new(),
+            install_restore: InstallRestoreDisposition::RecoveryRequiredRestoreFailed,
+            publication: FullGraphPublicationDispositionV1::NotPublished,
+            closing_audit: ProjectCompilerClosingAuditDisposition::Passed,
+            runner_invocations: 1,
+            backend: Some(CompilerBackendNameV1::Game),
+            fallback_reason: None,
+            standalone_attempted: false,
+            game_attempted: true,
+            output_recovery_required: false,
+            target_pins: None,
+        };
+        assert!(install_only.recovery_required());
+        assert!(!install_only.output_recovery_required());
+        assert_eq!(
+            install_only.publication_disposition(),
+            FullGraphPublicationDispositionV1::NotPublished
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn module_report_keeps_target_pins_through_response_construction() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        let root = unique_test_root("module-response-target-pin");
+        std::fs::create_dir_all(&root).unwrap();
+        let target = root.join("target.bin");
+        std::fs::write(&target, b"sealed").unwrap();
+        let open_pin = || {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ)
+                .open(&target)
+                .unwrap()
+        };
+        let report = CompileModuleReport {
+            outcome: CompileModuleReportOutcome::Failed(CompileError::Other("probe".to_owned())),
+            diagnostics: None,
+            backend_diagnostics: Vec::new(),
+            install_restore: InstallRestoreDisposition::NotStarted,
+            backend: Some(CompilerBackendNameV1::Standalone),
+            fallback_reason: None,
+            standalone_attempted: true,
+            game_attempted: false,
+            output_recovery_required: false,
+            target_pins: Some(ProjectGameInputPins {
+                _executable: Some(open_pin()),
+                shipping: open_pin(),
+                _binds: open_pin(),
+                _directory_pins: Vec::new(),
+                target_paths: None,
+            }),
+        };
+
+        let response = report.finish_while_target_pinned(|_| {
+            assert!(std::fs::OpenOptions::new()
+                .write(true)
+                .open(&target)
+                .is_err());
+            "response"
+        });
+
+        assert_eq!(response, "response");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&target)
+            .unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn full_graph_offline_identity_helpers_match_canonical_base_and_donor_naming() {
+        let base = cache_with_empty_modules(&[
+            ("Nested.Module", "Nested/Module.as"),
+            ("Alpha", "Alpha.as"),
+        ]);
+        assert_eq!(
+            base_full_graph_manifest_v1(&base).unwrap(),
+            [
+                FullGraphFinalModuleV1 {
+                    module_name: "Alpha".into(),
+                    relative_path: "Alpha.as".into(),
+                },
+                FullGraphFinalModuleV1 {
+                    module_name: "Nested.Module".into(),
+                    relative_path: "Nested/Module.as".into(),
+                },
+            ]
+        );
+        assert_eq!(
+            module_name_from_relative_path_v1("Folder/Foo.as").unwrap(),
+            ("Folder.Foo".into(), "Folder/Foo.as".into())
+        );
+        assert_eq!(
+            module_name_from_relative_path_v1("Folder.as/Foo.AS")
+                .unwrap()
+                .0,
+            "Folder.Foo"
+        );
+        assert!(module_name_from_relative_path_v1("../Foo.as").is_err());
+        assert!(module_name_from_relative_path_v1("Foo.txt").is_err());
+    }
+
+    #[test]
+    fn full_graph_game_capable_mode_requires_guard_before_any_backend_attempt() {
+        let root = unique_test_root("full-graph-missing-game-guard");
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        let opts = full_graph_opts(&root);
+        let audits = std::cell::Cell::new(0u8);
+        let report = compile_full_graph_with_backend_v1_with_guard_and_optional_target(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::Game,
+            None,
+            None,
+            || {
+                audits.set(audits.get().saturating_add(1));
+                Ok(())
+            },
+            None,
+        );
+        let FullGraphCompileOutcomeV1::Failed(ref error) = report.outcome else {
+            panic!("game-capable compile ran without its install guard")
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("pre-held install mutation guard"),
+            "{error}"
+        );
+        assert_eq!(audits.get(), 1);
+        assert_eq!(report.runner_invocations(), 0);
+        assert!(!report.standalone_attempted());
+        assert!(!report.game_attempted());
+        assert!(!install_mutation_lock_path(&opts.game_dir).exists());
+        assert!(!opts.output_path.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn full_graph_work_directory_inside_game_is_refused_before_staging_or_runner() {
+        let root = unique_test_root("full-graph-work-inside-game");
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        let mut opts = full_graph_opts(&root);
+        opts.work_dir = opts.game_dir.join("compiler-work-must-not-exist");
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let output = cache_with_empty_modules(&[
+            ("Keep", "Keep.as"),
+            ("EditMe", "EditMe.as"),
+            ("Added", "Added.as"),
+        ]);
+        let mut runner = full_graph_test_runner(&root, output, calls.clone());
+        let report = compile_full_graph_standalone_v1(&opts, &mut runner, || Ok(()));
+        let FullGraphCompileOutcomeV1::Failed(ref error) = report.outcome else {
+            panic!("work directory inside the game was accepted")
+        };
+        assert!(
+            error.to_string().contains("outside the game installation"),
+            "{error}"
+        );
+        assert_eq!(calls.get(), 0);
+        assert_eq!(report.runner_invocations(), 0);
+        assert!(!opts.work_dir.exists());
+        assert!(!opts.output_path.parent().unwrap().exists());
+        assert!(!install_mutation_lock_path(&opts.game_dir).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn full_graph_delete_uses_only_explicit_game_fallback_and_keeps_reason() {
+        let root = unique_test_root("full-graph-explicit-game-fallback");
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        let opts = full_graph_opts(&root);
+        let script = g1r_dir(&opts.game_dir).join("Script");
+        std::fs::create_dir_all(&script).unwrap();
+        std::fs::write(
+            script.join("PrecompiledScript_Shipping.Cache"),
+            &opts.base_cache,
+        )
+        .unwrap();
+        std::fs::write(script.join("Binds.Cache"), &opts.binds_cache).unwrap();
+        let legacy_calls = std::cell::Cell::new(0u8);
+        let mut legacy_standalone = |_inputs: StandaloneCompilerInputsV1<'_>| {
+            legacy_calls.set(legacy_calls.get().saturating_add(1));
+            Err(CompilerBackendFailureV1::new(
+                CompilerBackendFailureKindV1::Internal,
+                "legacy runner must not receive a Delete request",
+            ))
+        };
+        let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
+        let report = compile_full_graph_with_backend_v1_with_guard(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::StandaloneThenGame,
+            Some(&mut legacy_standalone),
+            guard,
+            || Ok(()),
+        );
+        let FullGraphCompileOutcomeV1::Failed(ref error) = report.outcome else {
+            panic!("fake install without a game executable unexpectedly compiled")
+        };
+        assert!(error.to_string().contains("game exe not found"), "{error}");
+        assert_eq!(legacy_calls.get(), 0);
+        assert!(report.standalone_attempted());
+        assert!(report.game_attempted());
+        assert_eq!(report.runner_invocations(), 2);
+        let fallback = report
+            .fallback_reason()
+            .expect("explicit fallback must retain the standalone refusal");
+        assert_eq!(fallback.failed_backend(), CompilerBackendNameV1::Standalone);
+        assert_eq!(
+            fallback.failure_kind(),
+            CompilerBackendFailureKindV1::Unavailable
+        );
+        assert!(fallback.detail().contains("Delete semantics"));
+        assert!(!install_mutation_lock_path(&opts.game_dir).exists());
+        assert!(!opts.output_path.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn full_graph_final_manifest_and_no_clobber_race_fail_before_usable_publication() {
+        let invalid_root = unique_test_root("full-graph-manifest-preflight");
+        std::fs::create_dir_all(invalid_root.join("game")).unwrap();
+        let mut invalid = full_graph_opts(&invalid_root);
+        invalid.final_manifest.pop();
+        let calls = std::cell::Cell::new(0u8);
+        let mut should_not_run = |_inputs: StandaloneCompilerInputsV1<'_>| {
+            calls.set(calls.get().saturating_add(1));
+            Err(CompilerBackendFailureV1::new(
+                CompilerBackendFailureKindV1::Internal,
+                "invalid final manifest reached the runner",
+            ))
+        };
+        let report = compile_full_graph_standalone_v1(&invalid, &mut should_not_run, || Ok(()));
+        let FullGraphCompileOutcomeV1::Failed(ref error) = report.outcome else {
+            panic!("incomplete final manifest unexpectedly compiled")
+        };
+        assert!(error.to_string().contains("final manifest"), "{error}");
+        assert_eq!(calls.get(), 0);
+        assert_eq!(report.runner_invocations(), 0);
+        assert_eq!(
+            report.publication_disposition(),
+            FullGraphPublicationDispositionV1::NotPublished
+        );
+        assert!(!invalid.output_path.exists());
+        assert!(!install_mutation_lock_path(&invalid.game_dir).exists());
+        std::fs::remove_dir_all(invalid_root).unwrap();
+
+        let race_root = unique_test_root("full-graph-no-clobber-race");
+        std::fs::create_dir_all(race_root.join("game")).unwrap();
+        let raced = full_graph_opts(&race_root);
+        let expected_output = cache_with_empty_modules(&[
+            ("Keep", "Keep.as"),
+            ("EditMe", "EditMe.as"),
+            ("Added", "Added.as"),
+        ]);
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut runner = full_graph_test_runner(&race_root, expected_output, calls.clone());
+        runner.create_raced_destination =
+            Some((raced.output_path.clone(), b"raced-owner".to_vec()));
+        let report = compile_full_graph_standalone_v1(&raced, &mut runner, || Ok(()));
+        let FullGraphCompileOutcomeV1::Failed(ref error) = report.outcome else {
+            panic!("raced destination was clobbered")
+        };
+        assert!(error.to_string().contains("no-clobber"), "{error}");
+        assert_eq!(calls.get(), 1);
+        assert_eq!(std::fs::read(&raced.output_path).unwrap(), b"raced-owner");
+        assert_eq!(
+            report.publication_disposition(),
+            FullGraphPublicationDispositionV1::NotPublished
+        );
+        let (_, _, pending) = full_graph_publication_paths_v1(&raced.output_path).unwrap();
+        assert!(!pending.exists());
+        std::fs::remove_file(&raced.output_path).unwrap();
+        std::fs::remove_dir_all(race_root).unwrap();
+    }
+
+    #[test]
+    fn full_graph_recovery_removes_only_exact_pending_output() {
+        let root = unique_test_root("full-graph-recovery");
+        std::fs::create_dir_all(&root).unwrap();
+        let output = root.join("result.cache");
+        std::fs::write(&output, b"existing-final").unwrap();
+        let (_, _, pending) = full_graph_publication_paths_v1(&output).unwrap();
+        std::fs::write(&pending, b"interrupted-private-stage").unwrap();
+
+        assert!(recover_full_graph_publication_v1(&output).unwrap());
+        assert!(!pending.exists());
+        assert_eq!(std::fs::read(&output).unwrap(), b"existing-final");
+        assert!(!recover_full_graph_publication_v1(&output).unwrap());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn full_graph_bound_accepts_the_real_graph_size_plus_one_in_one_runner_call() {
+        const MODULES: usize = 7_309;
+        let root = unique_test_root("full-graph-real-size-plus-one");
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        let owned = (0..MODULES)
+            .map(|index| (format!("Module{index:05}"), format!("Module{index:05}.as")))
+            .collect::<Vec<_>>();
+        let borrowed = owned
+            .iter()
+            .map(|(name, path)| (name.as_str(), path.as_str()))
+            .collect::<Vec<_>>();
+        let base_cache = cache_with_empty_modules(&borrowed);
+        let final_manifest = owned
+            .iter()
+            .map(|(module_name, relative_path)| FullGraphFinalModuleV1 {
+                module_name: module_name.clone(),
+                relative_path: relative_path.clone(),
+            })
+            .collect::<Vec<_>>();
+        let opts = FullGraphCompileOptsV1 {
+            game_dir: root.join("game"),
+            work_dir: root.join("work"),
+            output_path: root.join("output").join("large.cache"),
+            changes: vec![FullGraphCompileChangeV1 {
+                operation: FullGraphCompileOperationV1::Edit,
+                module_name: owned[0].0.clone(),
+                relative_path: owned[0].1.clone(),
+                source: Some(b"void Recompiled() {}\n".to_vec()),
+            }],
+            final_manifest,
+            base_cache: base_cache.clone(),
+            binds_cache: minimal_binds_cache(),
+        };
+        let private = root.join("large-private.cache");
+        let cleanup = private.clone();
+        let calls = std::cell::Cell::new(0u8);
+        let mut runner = |inputs: StandaloneCompilerInputsV1<'_>| {
+            calls.set(calls.get().saturating_add(1));
+            assert_eq!(inputs.overlays.len(), 1);
+            assert!(inputs.source_tree.join("Module07308.as").is_file());
+            std::fs::write(&private, &base_cache).unwrap();
+            let cleanup = cleanup.clone();
+            Ok(StandaloneCompilerOutputV1::with_cleanup(
+                private.clone(),
+                move || std::fs::remove_file(cleanup).map_err(|error| error.to_string()),
+            ))
+        };
+        let report = compile_full_graph_standalone_v1(&opts, &mut runner, || Ok(()));
+        assert_eq!(calls.get(), 1);
+        let FullGraphCompileOutcomeV1::Compiled(artifact) = report.outcome else {
+            panic!("7,309-module graph did not compile")
+        };
+        assert_eq!(artifact.module_count(), MODULES as u32);
+        let published = artifact.path().to_path_buf();
+        drop(artifact);
+        std::fs::remove_file(published).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn install_project_game_inputs(opts: &ProjectCompilerCheckOpts) {
+        let script = g1r_dir(&opts.game_dir).join("Script");
+        std::fs::create_dir_all(&script).unwrap();
+        std::fs::write(
+            script.join("PrecompiledScript_Shipping.Cache"),
+            &opts.base_cache,
+        )
+        .unwrap();
+        std::fs::write(script.join("Binds.Cache"), &opts.binds_cache).unwrap();
+    }
+
     fn accepted_project_diagnostics() -> crate::diagnostics::CompilerDiagnosticsReport {
         crate::diagnostics::CompilerDiagnosticsReport::empty(
             crate::diagnostics::DiagnosticsCaptureDisposition::UnavailableFallback,
@@ -7903,6 +13073,573 @@ mod tests {
         );
         assert!(!install_mutation_lock_path(&opts.game_dir).exists());
         assert!(!opts.work_dir.join("tree/regen.cache").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_backend_strict_standalone_compiles_one_shared_graph_without_game() {
+        let root = unique_test_root("project-backend-standalone");
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        let opts = project_check_opts(
+            &root,
+            &[
+                ("Project.A", "Project/A.as", "void FromA() { FromB(); }\n"),
+                ("Project.B", "Project/B.as", "void FromB() { FromA(); }\n"),
+            ],
+        );
+        let expected_base = opts.base_cache.clone();
+        let expected_binds = opts.binds_cache.clone();
+        let output_path = root.join("standalone-project.cache");
+        let output_for_cleanup = output_path.clone();
+        let standalone_calls = std::cell::Cell::new(0u8);
+        let mut standalone = |inputs: StandaloneCompilerInputsV1<'_>| {
+            standalone_calls.set(standalone_calls.get() + 1);
+            assert_eq!(inputs.overlays.len(), 2);
+            assert_eq!(inputs.base_cache.unwrap(), expected_base);
+            assert_eq!(inputs.binds_cache.unwrap(), expected_binds);
+            assert_eq!(
+                std::fs::read_to_string(inputs.source_tree.join("Project/A.as")).unwrap(),
+                "void FromA() { FromB(); }\n"
+            );
+            std::fs::write(
+                &output_path,
+                cache_with_empty_modules(&[
+                    ("Base", "Base.as"),
+                    ("Project.A", "Project/A.as"),
+                    ("Project.B", "Project/B.as"),
+                ]),
+            )
+            .unwrap();
+            let cleanup = output_for_cleanup.clone();
+            Ok(StandaloneCompilerOutputV1::with_cleanup_and_diagnostics(
+                output_path.clone(),
+                vec![CompilerBackendDiagnosticV1::new(
+                    CompilerBackendDiagnosticSeverityV1::Warning,
+                    "GORE_AS_PROJECT_WARNING".to_owned(),
+                    "project warning".to_owned(),
+                    Some("Project/A.as".to_owned()),
+                    Some(1),
+                    Some(2),
+                )],
+                move || {
+                    std::fs::remove_file(&cleanup)
+                        .map_err(|error| format!("removing test output: {error}"))
+                },
+            ))
+        };
+        let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
+        let audit_calls = std::cell::Cell::new(0u8);
+        let report = check_project_modules_with_backend_v1_with_guard_and_runner(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::Standalone,
+            Some(&mut standalone),
+            guard,
+            || {
+                audit_calls.set(audit_calls.get() + 1);
+                Ok(())
+            },
+            |_, _, _, _, _, _| panic!("strict standalone must never enter the game backend"),
+        );
+
+        assert!(matches!(
+            report.outcome,
+            ProjectCompilerCheckOutcome::Checked
+        ));
+        assert_eq!(standalone_calls.get(), 1);
+        assert_eq!(audit_calls.get(), 1);
+        assert_eq!(report.runner_invocations(), 1);
+        assert_eq!(
+            report.backend_name(),
+            Some(CompilerBackendNameV1::Standalone)
+        );
+        assert!(report.standalone_attempted());
+        assert!(!report.game_attempted());
+        assert!(report.fallback_reason().is_none());
+        assert_eq!(report.backend_diagnostics().len(), 1);
+        assert_eq!(
+            report.backend_diagnostics()[0].code(),
+            "GORE_AS_PROJECT_WARNING"
+        );
+        assert_eq!(
+            report.install_restore_disposition(),
+            InstallRestoreDisposition::NotStarted
+        );
+        assert_eq!(
+            report.output_disposition(),
+            ProjectCompilerOutputDisposition::Discarded
+        );
+        assert!(!output_path.exists());
+        assert!(!install_mutation_lock_path(&opts.game_dir).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_backend_fallback_reuses_tree_and_reports_invalid_standalone_output() {
+        let root = unique_test_root("project-backend-fallback");
+        std::fs::create_dir_all(root.join("game")).unwrap();
+        let opts = project_check_opts(
+            &root,
+            &[(
+                "Project.A",
+                "Project/A.as",
+                "void SharedProjectSource() {}\n",
+            )],
+        );
+        install_project_game_inputs(&opts);
+        let bad_output = root.join("bad-standalone-project.cache");
+        let bad_output_cleanup = bad_output.clone();
+        let shared_tree = std::cell::RefCell::new(None::<PathBuf>);
+        let mut standalone = |inputs: StandaloneCompilerInputsV1<'_>| {
+            *shared_tree.borrow_mut() = Some(inputs.source_tree.to_path_buf());
+            std::fs::write(&bad_output, b"not a cache").unwrap();
+            let cleanup = bad_output_cleanup.clone();
+            Ok(StandaloneCompilerOutputV1::with_cleanup(
+                bad_output.clone(),
+                move || {
+                    std::fs::remove_file(&cleanup)
+                        .map_err(|error| format!("removing bad test output: {error}"))
+                },
+            ))
+        };
+        let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
+        let report = check_project_modules_with_backend_v1_with_guard_and_runner(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::StandaloneThenGame,
+            Some(&mut standalone),
+            guard,
+            || Ok(()),
+            |game_dir, tree, _, mut guard, _input_pins, audit| {
+                assert_eq!(shared_tree.borrow().as_deref(), Some(tree));
+                #[cfg(windows)]
+                {
+                    assert!(
+                        std::fs::write(vanilla_cache(game_dir), b"raced shipping replacement")
+                            .is_err(),
+                        "pinned Shipping handle must deny writes through the game attempt"
+                    );
+                    assert!(
+                        std::fs::write(
+                            vanilla_cache(game_dir)
+                                .parent()
+                                .unwrap()
+                                .join("Binds.Cache"),
+                            b"raced binds replacement",
+                        )
+                        .is_err(),
+                        "pinned Binds handle must deny writes through the game attempt"
+                    );
+                }
+                audit().unwrap();
+                guard.release().unwrap();
+                checked_project_runner_report(cache_with_empty_modules(&[
+                    ("Base", "Base.as"),
+                    ("Project.A", "Project/A.as"),
+                ]))
+            },
+        );
+
+        assert!(matches!(
+            report.outcome,
+            ProjectCompilerCheckOutcome::Checked
+        ));
+        assert_eq!(report.runner_invocations(), 2);
+        assert_eq!(report.backend_name(), Some(CompilerBackendNameV1::Game));
+        assert!(report.standalone_attempted());
+        assert!(report.game_attempted());
+        let fallback = report.fallback_reason().unwrap();
+        assert_eq!(fallback.failed_backend(), CompilerBackendNameV1::Standalone);
+        assert_eq!(
+            fallback.failure_kind(),
+            CompilerBackendFailureKindV1::InvalidOutput
+        );
+        assert_eq!(
+            report.install_restore_disposition(),
+            InstallRestoreDisposition::RestoredExact
+        );
+        assert!(!bad_output.exists());
+        assert!(!install_mutation_lock_path(&opts.game_dir).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_backend_refuses_mutated_tree_before_game_fallback() {
+        let root = unique_test_root("project-backend-tree-drift");
+        let opts = project_check_opts(
+            &root,
+            &[("Project.A", "Project/A.as", "void Original() {}\n")],
+        );
+        install_project_game_inputs(&opts);
+        let game_calls = std::cell::Cell::new(0u8);
+        let mut standalone = |inputs: StandaloneCompilerInputsV1<'_>| {
+            let source = inputs.source_tree.join("Project/A.as");
+            #[cfg(windows)]
+            assert!(
+                std::fs::write(&source, b"void Mutated() {}\n").is_err(),
+                "the pinned source handle must deny writes during the attempt"
+            );
+            #[cfg(not(windows))]
+            std::fs::write(&source, b"void Mutated() {}\n").unwrap();
+            std::fs::write(
+                inputs.source_tree.join("Project/Injected.as"),
+                b"void Injected() {}\n",
+            )
+            .unwrap();
+            Err(CompilerBackendFailureV1::new(
+                CompilerBackendFailureKindV1::InvalidOutput,
+                "forced fallback after source mutation",
+            ))
+        };
+        let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
+        let report = check_project_modules_with_backend_v1_with_guard_and_runner(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::StandaloneThenGame,
+            Some(&mut standalone),
+            guard,
+            || Ok(()),
+            |_, _, _, _, _, _| {
+                game_calls.set(game_calls.get() + 1);
+                panic!("source drift must prevent the game runner")
+            },
+        );
+
+        let ProjectCompilerCheckOutcome::Failed(ref error) = report.outcome else {
+            panic!("mutated source tree unexpectedly reached the game compiler")
+        };
+        assert!(error.to_string().contains("source seal"), "{error}");
+        assert_eq!(game_calls.get(), 0);
+        assert_eq!(report.runner_invocations(), 1);
+        assert!(report.standalone_attempted());
+        assert!(!report.game_attempted());
+        assert_eq!(report.backend_name(), None);
+        assert!(!install_mutation_lock_path(&opts.game_dir).exists());
+        #[cfg(windows)]
+        assert!(
+            !std::fs::metadata(opts.work_dir.join("tree/Project/A.as"))
+                .unwrap()
+                .permissions()
+                .readonly(),
+            "the original source object's writable state must be restored by handle"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_backend_refuses_live_base_or_binds_drift_before_game_fallback() {
+        for target in ["shipping", "binds"] {
+            let root = unique_test_root(&format!("project-backend-{target}-drift"));
+            let opts = project_check_opts(
+                &root,
+                &[("Project.A", "Project/A.as", "void Original() {}\n")],
+            );
+            install_project_game_inputs(&opts);
+            let game_calls = std::cell::Cell::new(0u8);
+            let game_dir = opts.game_dir.clone();
+            let mut standalone = move |_inputs: StandaloneCompilerInputsV1<'_>| {
+                let path = if target == "shipping" {
+                    vanilla_cache(&game_dir)
+                } else {
+                    vanilla_cache(&game_dir)
+                        .parent()
+                        .unwrap()
+                        .join("Binds.Cache")
+                };
+                std::fs::write(path, b"drifted").unwrap();
+                Err(CompilerBackendFailureV1::new(
+                    CompilerBackendFailureKindV1::InvalidOutput,
+                    "forced fallback after live-input mutation",
+                ))
+            };
+            let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
+            let report = check_project_modules_with_backend_v1_with_guard_and_runner(
+                &opts,
+                &crate::diagnostics::DiagnosticsOptions::default(),
+                CompilerBackendModeV1::StandaloneThenGame,
+                Some(&mut standalone),
+                guard,
+                || Ok(()),
+                |_, _, _, _, _, _| {
+                    game_calls.set(game_calls.get() + 1);
+                    panic!("live-input drift must prevent the game runner")
+                },
+            );
+
+            let ProjectCompilerCheckOutcome::Failed(ref error) = report.outcome else {
+                panic!("drifted {target} unexpectedly reached the game compiler")
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("sealed project compiler snapshot"),
+                "target={target}: {error}"
+            );
+            assert_eq!(game_calls.get(), 0);
+            assert_eq!(report.runner_invocations(), 1);
+            assert!(!report.game_attempted());
+            assert_eq!(report.backend_name(), None);
+            assert!(!install_mutation_lock_path(&opts.game_dir).exists());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn project_backend_cleanup_failure_is_terminal_without_game_fallback() {
+        let root = unique_test_root("project-backend-cleanup-failure");
+        let opts = project_check_opts(
+            &root,
+            &[("Project.A", "Project/A.as", "void Original() {}\n")],
+        );
+        install_project_game_inputs(&opts);
+        let output = root.join("standalone.cache");
+        let output_for_runner = output.clone();
+        let mut standalone = move |_inputs: StandaloneCompilerInputsV1<'_>| {
+            std::fs::write(&output_for_runner, b"invalid").unwrap();
+            Ok(StandaloneCompilerOutputV1::with_cleanup(
+                output_for_runner.clone(),
+                || Err("intentional cleanup failure".to_owned()),
+            ))
+        };
+        let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
+        let report = check_project_modules_with_backend_v1_with_guard_and_runner(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::StandaloneThenGame,
+            Some(&mut standalone),
+            guard,
+            || Ok(()),
+            |_, _, _, _, _, _| panic!("cleanup uncertainty must be terminal"),
+        );
+
+        assert!(matches!(
+            report.outcome,
+            ProjectCompilerCheckOutcome::Failed(_)
+        ));
+        assert_eq!(report.runner_invocations(), 1);
+        assert_eq!(
+            report.backend_name(),
+            Some(CompilerBackendNameV1::Standalone)
+        );
+        assert!(report.fallback_reason().is_none());
+        assert!(!report.game_attempted());
+        assert_eq!(
+            report.output_disposition(),
+            ProjectCompilerOutputDisposition::RecoveryRetained
+        );
+        std::fs::remove_file(&output).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_backend_reports_closing_audit_failure_after_standalone_success() {
+        let root = unique_test_root("project-backend-standalone-audit-failure");
+        let opts = project_check_opts(
+            &root,
+            &[("Project.A", "Project/A.as", "void Original() {}\n")],
+        );
+        install_project_game_inputs(&opts);
+        let output = root.join("standalone.cache");
+        let output_for_cleanup = output.clone();
+        let mut standalone = |_inputs: StandaloneCompilerInputsV1<'_>| {
+            std::fs::write(
+                &output,
+                cache_with_empty_modules(&[("Base", "Base.as"), ("Project.A", "Project/A.as")]),
+            )
+            .unwrap();
+            let cleanup = output_for_cleanup.clone();
+            Ok(StandaloneCompilerOutputV1::with_cleanup(
+                output.clone(),
+                move || std::fs::remove_file(cleanup).map_err(|error| error.to_string()),
+            ))
+        };
+        let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
+        let report = check_project_modules_with_backend_v1_with_guard_and_runner(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::Standalone,
+            Some(&mut standalone),
+            guard,
+            || Err("intentional audit failure".to_owned()),
+            |_, _, _, _, _, _| panic!("strict standalone must not use game"),
+        );
+
+        let ProjectCompilerCheckOutcome::Failed(ref error) = report.outcome else {
+            panic!("failed closing audit unexpectedly produced success evidence")
+        };
+        assert!(error.to_string().contains("closing project audit failed"));
+        assert_eq!(
+            report.closing_audit_disposition(),
+            ProjectCompilerClosingAuditDisposition::Failed
+        );
+        assert_eq!(
+            report.output_disposition(),
+            ProjectCompilerOutputDisposition::Discarded
+        );
+        assert!(!install_mutation_lock_path(&opts.game_dir).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_backend_keeps_discarded_when_fallback_game_creates_no_output() {
+        let root = unique_test_root("project-backend-game-not-created");
+        let opts = project_check_opts(
+            &root,
+            &[("Project.A", "Project/A.as", "void Original() {}\n")],
+        );
+        install_project_game_inputs(&opts);
+        let output = root.join("standalone-invalid.cache");
+        let output_for_cleanup = output.clone();
+        let mut standalone = |_inputs: StandaloneCompilerInputsV1<'_>| {
+            std::fs::write(&output, b"invalid").unwrap();
+            let cleanup = output_for_cleanup.clone();
+            Ok(StandaloneCompilerOutputV1::with_cleanup(
+                output.clone(),
+                move || std::fs::remove_file(cleanup).map_err(|error| error.to_string()),
+            ))
+        };
+        let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
+        let report = check_project_modules_with_backend_v1_with_guard_and_runner(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::StandaloneThenGame,
+            Some(&mut standalone),
+            guard,
+            || Ok(()),
+            |_, _, _, mut guard, _input_pins, audit| {
+                audit().unwrap();
+                guard.release().unwrap();
+                ProjectCompilerRunnerReport {
+                    result: Err("game failed before creating output".to_owned()),
+                    diagnostics: None,
+                    install_restore: InstallRestoreDisposition::RestoredExact,
+                    output_disposition: ProjectCompilerOutputDisposition::NotCreated,
+                    closing_audit: ProjectCompilerClosingAuditDisposition::Passed,
+                }
+            },
+        );
+
+        assert!(matches!(
+            report.outcome,
+            ProjectCompilerCheckOutcome::Failed(_)
+        ));
+        assert_eq!(
+            report.output_disposition(),
+            ProjectCompilerOutputDisposition::Discarded
+        );
+        assert_eq!(report.runner_invocations(), 2);
+        assert!(report.game_attempted());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_backend_missing_strict_runner_reports_zero_attempts() {
+        let root = unique_test_root("project-backend-missing-runner");
+        let opts = project_check_opts(
+            &root,
+            &[("Project.A", "Project/A.as", "void Original() {}\n")],
+        );
+        install_project_game_inputs(&opts);
+        let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
+        let report = check_project_modules_with_backend_v1_with_guard_and_runner(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::Standalone,
+            None,
+            guard,
+            || Ok(()),
+            |_, _, _, _, _, _| panic!("missing strict standalone must not use game"),
+        );
+
+        assert!(matches!(
+            report.outcome,
+            ProjectCompilerCheckOutcome::Failed(_)
+        ));
+        assert_eq!(report.runner_invocations(), 0);
+        assert!(!report.standalone_attempted());
+        assert!(!report.game_attempted());
+        assert_eq!(
+            report.backend_name(),
+            Some(CompilerBackendNameV1::Standalone)
+        );
+        assert!(report.fallback_reason().is_none());
+        assert!(!install_mutation_lock_path(&opts.game_dir).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_backend_bounds_and_redacts_fallback_detail() {
+        let root = unique_test_root("project-backend-fallback-redaction");
+        let opts = project_check_opts(
+            &root,
+            &[("Project.A", "Project/A.as", "void Original() {}\n")],
+        );
+        install_project_game_inputs(&opts);
+        let mut standalone = |inputs: StandaloneCompilerInputsV1<'_>| {
+            Err(CompilerBackendFailureV1::new(
+                CompilerBackendFailureKindV1::InvalidOutput,
+                format!(
+                    "private={} {}",
+                    inputs.source_tree.display(),
+                    "x".repeat(MAX_PROJECT_BACKEND_EVIDENCE_DETAIL_BYTES * 2)
+                ),
+            )
+            .with_backend_diagnostics(vec![CompilerBackendDiagnosticV1::new(
+                CompilerBackendDiagnosticSeverityV1::Error,
+                format!(
+                    "GORE_AS_FALLBACK_TEST{}",
+                    "C".repeat(MAX_PROJECT_BACKEND_DIAGNOSTIC_CODE_BYTES * 2)
+                ),
+                format!(
+                    "fallback diagnostic private={} {}",
+                    inputs.source_tree.display(),
+                    "m".repeat(MAX_PROJECT_BACKEND_DIAGNOSTIC_MESSAGE_BYTES * 2)
+                ),
+                Some(
+                    inputs
+                        .source_tree
+                        .join("Project/A.as")
+                        .display()
+                        .to_string(),
+                ),
+                None,
+                None,
+            )]))
+        };
+        let guard = InstallMutationGuard::acquire(&opts.game_dir, "gore-as:compile").unwrap();
+        let report = check_project_modules_with_backend_v1_with_guard_and_runner(
+            &opts,
+            &crate::diagnostics::DiagnosticsOptions::default(),
+            CompilerBackendModeV1::StandaloneThenGame,
+            Some(&mut standalone),
+            guard,
+            || Ok(()),
+            |_, _, _, mut guard, _input_pins, audit| {
+                audit().unwrap();
+                guard.release().unwrap();
+                checked_project_runner_report(cache_with_empty_modules(&[
+                    ("Base", "Base.as"),
+                    ("Project.A", "Project/A.as"),
+                ]))
+            },
+        );
+
+        assert!(matches!(
+            report.outcome,
+            ProjectCompilerCheckOutcome::Checked
+        ));
+        let detail = report.fallback_reason().unwrap().detail();
+        assert!(detail.len() <= MAX_PROJECT_BACKEND_EVIDENCE_DETAIL_BYTES);
+        assert!(detail.contains("<private compiler path>"));
+        assert!(detail.ends_with("[truncated]"));
+        assert!(!detail.contains(&root.display().to_string()));
+        let diagnostic = &report.fallback_reason().unwrap().diagnostics()[0];
+        assert!(diagnostic.code().len() <= MAX_PROJECT_BACKEND_DIAGNOSTIC_CODE_BYTES);
+        assert!(diagnostic.message().len() <= MAX_PROJECT_BACKEND_DIAGNOSTIC_MESSAGE_BYTES);
+        assert!(diagnostic.message().contains("<private compiler path>"));
+        assert!(!diagnostic.message().contains(&root.display().to_string()));
+        assert_eq!(diagnostic.source_path(), Some("Project/A.as"));
+        assert!(report.backend_diagnostics().is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -9951,6 +15688,10 @@ mod tests {
             success.install_restore_disposition(),
             InstallRestoreDisposition::RestoredExact
         );
+        assert_eq!(success.backend_name(), Some(CompilerBackendNameV1::Game));
+        assert!(!success.standalone_attempted());
+        assert!(success.game_attempted());
+        assert!(success.fallback_reason().is_none());
         // A successful output intentionally pins its exact artifact until the caller consumes it.
         drop(success);
 
@@ -10017,6 +15758,26 @@ mod tests {
             "the report must be stored before its inner compiler error is returned"
         );
 
+        let failed_before_metadata =
+            compile_module_report_with(&opts, |_, _| Err("transaction setup failed".to_owned()));
+        assert!(matches!(
+            &failed_before_metadata.outcome,
+            CompileModuleReportOutcome::Failed(CompileError::Regen(_))
+        ));
+        assert_eq!(
+            failed_before_metadata.install_restore_disposition(),
+            InstallRestoreDisposition::NotStarted
+        );
+        assert_eq!(
+            failed_before_metadata.backend_name(),
+            Some(CompilerBackendNameV1::Game)
+        );
+        assert!(!failed_before_metadata.standalone_attempted());
+        assert!(
+            failed_before_metadata.game_attempted(),
+            "runner entry is evidence even when restoration metadata was never produced"
+        );
+
         let mut invalid_opts = opts;
         invalid_opts.op = "invalid".to_owned();
         let not_run = compile_module_report_with(&invalid_opts, |_, _| {
@@ -10031,8 +15792,354 @@ mod tests {
             not_run.install_restore_disposition(),
             InstallRestoreDisposition::NotStarted
         );
+        assert_eq!(not_run.backend_name(), None);
+        assert!(not_run.fallback_reason().is_none());
+        assert!(!not_run.standalone_attempted());
+        assert!(!not_run.game_attempted());
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compile_module_backend_v1_uses_injected_standalone_without_game() {
+        let root = unique_test_root("backend-v1-standalone");
+        std::fs::create_dir_all(&root).unwrap();
+        let opts = CompileOpts {
+            game_dir: root.join("game"),
+            op: "add".to_owned(),
+            module_name: "NewModule".to_owned(),
+            rel_path: "NewModule.as".to_owned(),
+            as_path: root.join("must-not-be-opened.as"),
+            source_override: Some(b"// standalone source\n".to_vec()),
+            work_dir: root.join("work"),
+            allow_new_symbols: true,
+            base_override: Some(cache_with_empty_modules(&[("Base", "Base.as")])),
+            binds_override: None,
+        };
+        let generated =
+            cache_with_empty_modules(&[("Base", "Base.as"), ("NewModule", "NewModule.as")]);
+        let mut standalone = |_: StandaloneCompilerInputsV1<'_>| {
+            let path = root.join("standalone.cache");
+            std::fs::write(&path, &generated).unwrap();
+            let cleanup = path.clone();
+            Ok(StandaloneCompilerOutputV1::with_cleanup_and_diagnostics(
+                path,
+                vec![CompilerBackendDiagnosticV1::new(
+                    CompilerBackendDiagnosticSeverityV1::Warning,
+                    "GORE_AS_MODULE_WARNING".to_owned(),
+                    "module warning".to_owned(),
+                    Some("NewModule.as".to_owned()),
+                    Some(2),
+                    Some(4),
+                )],
+                move || std::fs::remove_file(cleanup).map_err(|error| error.to_string()),
+            ))
+        };
+
+        let report = compile_module_report_with_backend_runner_v1(
+            &opts,
+            CompilerBackendModeV1::Standalone,
+            Some(&mut standalone),
+            |_, _| panic!("strict standalone mode must not enter the game backend"),
+        );
+        assert!(matches!(
+            report.outcome,
+            CompileModuleReportOutcome::Compiled(_)
+        ));
+        assert_eq!(
+            report.backend_name(),
+            Some(CompilerBackendNameV1::Standalone)
+        );
+        assert!(report.fallback_reason().is_none());
+        assert_eq!(report.backend_diagnostics().len(), 1);
+        assert_eq!(
+            report.backend_diagnostics()[0].code(),
+            "GORE_AS_MODULE_WARNING"
+        );
+        assert_eq!(
+            report.install_restore_disposition(),
+            InstallRestoreDisposition::NotStarted
+        );
+
+        drop(report);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compile_module_backend_v1_reports_owned_scratch_cleanup_failure() {
+        let root = unique_test_root("backend-v1-cleanup-recovery");
+        std::fs::create_dir_all(&root).unwrap();
+        let opts = CompileOpts {
+            game_dir: root.join("game"),
+            op: "add".to_owned(),
+            module_name: "NewModule".to_owned(),
+            rel_path: "NewModule.as".to_owned(),
+            as_path: root.join("must-not-be-opened.as"),
+            source_override: Some(b"// standalone source\n".to_vec()),
+            work_dir: root.join("work"),
+            allow_new_symbols: true,
+            base_override: Some(cache_with_empty_modules(&[("Base", "Base.as")])),
+            binds_override: None,
+        };
+        let generated =
+            cache_with_empty_modules(&[("Base", "Base.as"), ("NewModule", "NewModule.as")]);
+        let private_output = root.join("retained-standalone.cache");
+        let mut standalone = |_: StandaloneCompilerInputsV1<'_>| {
+            std::fs::write(&private_output, &generated).unwrap();
+            Ok(StandaloneCompilerOutputV1::with_cleanup(
+                private_output.clone(),
+                || Err("scratch tree is still held".to_owned()),
+            ))
+        };
+        let game_calls = std::cell::Cell::new(0u8);
+
+        let report = compile_module_report_with_backend_runner_v1(
+            &opts,
+            CompilerBackendModeV1::StandaloneThenGame,
+            Some(&mut standalone),
+            |_, _| {
+                game_calls.set(game_calls.get().saturating_add(1));
+                panic!("private-output recovery must be terminal")
+            },
+        );
+
+        let CompileModuleReportOutcome::Failed(error) = &report.outcome else {
+            panic!("scratch cleanup failure was reported as success")
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("standalone module output disposal failed"),
+            "unexpected recovery detail: {error}"
+        );
+        assert_eq!(
+            report.backend_name(),
+            Some(CompilerBackendNameV1::Standalone)
+        );
+        assert!(report.standalone_attempted());
+        assert!(!report.game_attempted());
+        assert_eq!(game_calls.get(), 0);
+        assert!(report.output_recovery_required());
+        assert!(report.recovery_required());
+        assert_eq!(
+            report.install_restore_disposition(),
+            InstallRestoreDisposition::NotStarted
+        );
+        assert!(private_output.exists());
+
+        drop(report);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn guard_aware_backend_v1_releases_unused_guard_after_standalone_success() {
+        let root = unique_test_root("backend-v1-standalone-guard");
+        let (game, _) = fake_install(&root);
+        let guard = InstallMutationGuard::acquire(&game, "gore-as:compile").unwrap();
+        let guard_path = guard.path().to_path_buf();
+        let opts = CompileOpts {
+            game_dir: game,
+            op: "add".to_owned(),
+            module_name: "NewModule".to_owned(),
+            rel_path: "NewModule.as".to_owned(),
+            as_path: root.join("must-not-be-opened.as"),
+            source_override: Some(b"// standalone source\n".to_vec()),
+            work_dir: root.join("work"),
+            allow_new_symbols: true,
+            base_override: Some(cache_with_empty_modules(&[("Base", "Base.as")])),
+            binds_override: None,
+        };
+        let generated =
+            cache_with_empty_modules(&[("Base", "Base.as"), ("NewModule", "NewModule.as")]);
+        let mut standalone = |_: StandaloneCompilerInputsV1<'_>| {
+            let path = root.join("standalone-guard.cache");
+            std::fs::write(&path, &generated).unwrap();
+            Ok(StandaloneCompilerOutputV1::detached(path))
+        };
+
+        let report = compile_module_with_backend_v1_with_guard(
+            &opts,
+            &Default::default(),
+            CompilerBackendModeV1::Standalone,
+            Some(&mut standalone),
+            guard,
+        );
+        assert!(matches!(
+            report.outcome,
+            CompileModuleReportOutcome::Compiled(_)
+        ));
+        assert_eq!(
+            report.backend_name(),
+            Some(CompilerBackendNameV1::Standalone)
+        );
+        assert_eq!(
+            report.install_restore_disposition(),
+            InstallRestoreDisposition::NotStarted
+        );
+        assert!(!guard_path.exists());
+
+        drop(report);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compile_module_backend_v1_exposes_explicit_game_fallback() {
+        let root = unique_test_root("backend-v1-fallback");
+        std::fs::create_dir_all(&root).unwrap();
+        let opts = CompileOpts {
+            game_dir: root.join("game"),
+            op: "add".to_owned(),
+            module_name: "NewModule".to_owned(),
+            rel_path: "NewModule.as".to_owned(),
+            as_path: root.join("must-not-be-opened.as"),
+            source_override: Some(b"// fallback source\n".to_vec()),
+            work_dir: root.join("work"),
+            allow_new_symbols: true,
+            base_override: Some(cache_with_empty_modules(&[("Base", "Base.as")])),
+            binds_override: None,
+        };
+        let generated =
+            cache_with_empty_modules(&[("Base", "Base.as"), ("NewModule", "NewModule.as")]);
+        let mut standalone = |_: StandaloneCompilerInputsV1<'_>| {
+            Err(CompilerBackendFailureV1::new(
+                CompilerBackendFailureKindV1::Unsupported,
+                "unsupported test construct",
+            ))
+        };
+
+        let report = compile_module_report_with_backend_runner_v1(
+            &opts,
+            CompilerBackendModeV1::StandaloneThenGame,
+            Some(&mut standalone),
+            |_, _| {
+                let path = root.join("game.cache");
+                std::fs::write(&path, &generated).unwrap();
+                Ok(GameRunRegenExtendedReport {
+                    result: Ok(path),
+                    diagnostics: Some(crate::diagnostics::CompilerDiagnosticsReport::empty(
+                        crate::diagnostics::DiagnosticsCaptureDisposition::Disabled,
+                    )),
+                    install_restore: InstallRestoreDisposition::RestoredExact,
+                })
+            },
+        );
+        assert!(matches!(
+            report.outcome,
+            CompileModuleReportOutcome::Compiled(_)
+        ));
+        assert_eq!(report.backend_name(), Some(CompilerBackendNameV1::Game));
+        let fallback = report.fallback_reason().unwrap();
+        assert_eq!(fallback.failed_backend(), CompilerBackendNameV1::Standalone);
+        assert_eq!(
+            fallback.failure_kind(),
+            CompilerBackendFailureKindV1::Unsupported
+        );
+        assert_eq!(fallback.detail(), "unsupported test construct");
+        assert_eq!(
+            report.install_restore_disposition(),
+            InstallRestoreDisposition::RestoredExact
+        );
+
+        drop(report);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compile_module_backend_v1_falls_back_after_full_cache_validation() {
+        let root = unique_test_root("backend-v1-invalid-output");
+        std::fs::create_dir_all(&root).unwrap();
+        let opts = CompileOpts {
+            game_dir: root.join("game"),
+            op: "add".to_owned(),
+            module_name: "NewModule".to_owned(),
+            rel_path: "NewModule.as".to_owned(),
+            as_path: root.join("must-not-be-opened.as"),
+            source_override: Some(b"// invalid standalone output\n".to_vec()),
+            work_dir: root.join("work"),
+            allow_new_symbols: true,
+            base_override: Some(cache_with_empty_modules(&[("Base", "Base.as")])),
+            binds_override: None,
+        };
+        let generated =
+            cache_with_empty_modules(&[("Base", "Base.as"), ("NewModule", "NewModule.as")]);
+        let mut standalone = |_: StandaloneCompilerInputsV1<'_>| {
+            let path = root.join("invalid-standalone.cache");
+            std::fs::write(&path, b"not a precompiled cache").unwrap();
+            Ok(StandaloneCompilerOutputV1::detached(path))
+        };
+
+        let report = compile_module_report_with_backend_runner_v1(
+            &opts,
+            CompilerBackendModeV1::StandaloneThenGame,
+            Some(&mut standalone),
+            |_, _| {
+                let path = root.join("valid-game.cache");
+                std::fs::write(&path, &generated).unwrap();
+                Ok(GameRunRegenExtendedReport {
+                    result: Ok(path),
+                    diagnostics: Some(crate::diagnostics::CompilerDiagnosticsReport::empty(
+                        crate::diagnostics::DiagnosticsCaptureDisposition::Disabled,
+                    )),
+                    install_restore: InstallRestoreDisposition::RestoredExact,
+                })
+            },
+        );
+
+        assert!(matches!(
+            report.outcome,
+            CompileModuleReportOutcome::Compiled(_)
+        ));
+        assert_eq!(report.backend_name(), Some(CompilerBackendNameV1::Game));
+        let fallback = report.fallback_reason().unwrap();
+        assert_eq!(
+            fallback.failure_kind(),
+            CompilerBackendFailureKindV1::InvalidOutput
+        );
+        assert!(
+            fallback.detail().contains("generated cache"),
+            "unexpected validation detail: {}",
+            fallback.detail()
+        );
+
+        drop(report);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compile_module_backend_v1_does_not_fallback_on_shared_preflight() {
+        let root = unique_test_root("backend-v1-preflight");
+        let opts = CompileOpts {
+            game_dir: root.join("game"),
+            op: "invalid".to_owned(),
+            module_name: "NewModule".to_owned(),
+            rel_path: "NewModule.as".to_owned(),
+            as_path: root.join("must-not-be-opened.as"),
+            source_override: Some(b"// rejected before any backend\n".to_vec()),
+            work_dir: root.join("work"),
+            allow_new_symbols: true,
+            base_override: Some(cache_with_empty_modules(&[("Base", "Base.as")])),
+            binds_override: None,
+        };
+        let mut standalone = |_: StandaloneCompilerInputsV1<'_>| {
+            panic!("shared preflight must not enter the standalone runner")
+        };
+
+        let report = compile_module_report_with_backend_runner_v1(
+            &opts,
+            CompilerBackendModeV1::StandaloneThenGame,
+            Some(&mut standalone),
+            |_, _| panic!("shared preflight must not enter the game runner"),
+        );
+        assert!(matches!(
+            report.outcome,
+            CompileModuleReportOutcome::Failed(CompileError::Other(_))
+        ));
+        assert_eq!(report.backend_name(), None);
+        assert!(report.fallback_reason().is_none());
+        assert_eq!(
+            report.install_restore_disposition(),
+            InstallRestoreDisposition::NotStarted
+        );
     }
 
     #[test]

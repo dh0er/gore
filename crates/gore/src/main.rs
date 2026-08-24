@@ -884,7 +884,9 @@ mod as_cli_tests {
         ]));
     }
 
-    fn parse_compile_module(extra: &[&str]) -> (String, String, bool) {
+    fn parse_compile_module(
+        extra: &[&str],
+    ) -> (String, String, bool, cmd::as_cache::AsCompilerBackendV1) {
         let mut args = vec![
             "gore",
             "as",
@@ -910,22 +912,119 @@ mod as_cli_tests {
                     op,
                     module,
                     allow_new_symbols,
+                    compiler,
                     ..
                 },
         } = cli.command
         else {
             panic!("expected as compile-module command");
         };
-        (op, module, allow_new_symbols)
+        (op, module, allow_new_symbols, compiler.backend)
     }
 
     #[test]
-    fn as_compile_module_exposes_complete_pipeline_with_strict_default() {
+    fn as_compile_module_defaults_to_standalone_with_visible_game_fallback() {
         assert_eq!(
             parse_compile_module(&[]),
-            ("add".into(), "GoreMods.Example".into(), false)
+            (
+                "add".into(),
+                "GoreMods.Example".into(),
+                false,
+                cmd::as_cache::AsCompilerBackendV1::StandaloneThenGame,
+            )
         );
         assert!(parse_compile_module(&["--allow-new-symbols"]).2);
+        assert_eq!(
+            parse_compile_module(&["--backend", "standalone"]).3,
+            cmd::as_cache::AsCompilerBackendV1::Standalone
+        );
+        assert_eq!(
+            parse_compile_module(&["--backend", "game"]).3,
+            cmd::as_cache::AsCompilerBackendV1::Game
+        );
+    }
+
+    #[test]
+    fn as_compile_module_product_receipt_needs_no_manual_package_paths() {
+        let args = [
+            "gore",
+            "as",
+            "compile-module",
+            "--op",
+            "add",
+            "--module",
+            "M",
+            "--rel-path",
+            "M.as",
+            "--source",
+            "M.as",
+            "--work-dir",
+            "work",
+            "--out",
+            "M.cache",
+            "--generation-receipt",
+            "module.receipt.json",
+        ];
+        let cli = Cli::try_parse_from(args).unwrap();
+        let Commands::As {
+            cmd: cmd::as_cache::AsCmd::CompileModule { compiler, .. },
+        } = cli.command
+        else {
+            panic!("expected as compile-module command");
+        };
+        assert_eq!(
+            compiler.generation_receipt,
+            Some(PathBuf::from("module.receipt.json"))
+        );
+        assert!(compiler.standalone_sidecar.is_none());
+        assert!(compiler.compiler_profile_manifest.is_none());
+    }
+
+    #[test]
+    fn as_compile_module_keeps_manual_packages_in_a_complete_development_override() {
+        let base = [
+            "gore",
+            "as",
+            "compile-module",
+            "--op",
+            "add",
+            "--module",
+            "M",
+            "--rel-path",
+            "M.as",
+            "--source",
+            "M.as",
+            "--work-dir",
+            "work",
+            "--out",
+            "M.cache",
+        ];
+        let mut incomplete = base.to_vec();
+        incomplete.extend_from_slice(&["--development-standalone-sidecar", "sidecar.exe"]);
+        assert!(Cli::try_parse_from(incomplete).is_err());
+
+        let mut complete = base.to_vec();
+        complete.extend_from_slice(&[
+            "--backend",
+            "standalone",
+            "--development-standalone-sidecar",
+            "sidecar.exe",
+            "--development-standalone-sidecar-sha256",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--development-compiler-profile-manifest",
+            "profile.json",
+            "--development-compiler-profile-root",
+            "profile-root",
+            "--development-standalone-scratch-root",
+            "scratch",
+        ]);
+        assert!(Cli::try_parse_from(complete.clone()).is_ok());
+        complete.extend_from_slice(&["--generation-receipt", "receipt.json"]);
+        assert!(Cli::try_parse_from(complete).is_err());
+
+        let mut legacy_product_flags = base.to_vec();
+        legacy_product_flags.extend_from_slice(&["--standalone-sidecar", "sidecar.exe"]);
+        assert!(Cli::try_parse_from(legacy_product_flags).is_err());
     }
 
     #[test]
@@ -957,6 +1056,10 @@ mod as_cli_tests {
             "as",
             "compile",
             "scripts",
+            "--out",
+            "compiled.cache",
+            "--work-dir",
+            "compiler-work",
             "--diagnostics-hook",
             "custom.dll",
             "--diagnostics-inject-delay-ms",
@@ -983,6 +1086,11 @@ mod as_cli_tests {
             "gore",
             "as",
             "compile",
+            "scripts",
+            "--out",
+            "compiled.cache",
+            "--work-dir",
+            "compiler-work",
             "--no-diagnostics",
             "--diagnostics-hook",
             "custom.dll",
@@ -992,10 +1100,99 @@ mod as_cli_tests {
             "gore",
             "as",
             "compile",
+            "scripts",
+            "--out",
+            "compiled.cache",
+            "--work-dir",
+            "compiler-work",
             "--diagnostics-inject-delay-ms",
             "30001",
         ])
         .is_err());
+    }
+
+    #[test]
+    fn as_compile_requires_complete_source_output_and_workspace_and_exposes_product_backend() {
+        let cli = Cli::try_parse_from([
+            "gore",
+            "as",
+            "compile",
+            "scripts",
+            "--out",
+            "compiled.cache",
+            "--work-dir",
+            "compiler-work",
+            "--backend",
+            "standalone-then-game",
+            "--generation-receipt",
+            "compiled.receipt.json",
+        ])
+        .unwrap();
+        let Commands::As {
+            cmd:
+                cmd::as_cache::AsCmd::Compile {
+                    src,
+                    out,
+                    work_dir,
+                    compiler,
+                    ..
+                },
+        } = cli.command
+        else {
+            panic!("expected as compile command");
+        };
+        assert_eq!(src, PathBuf::from("scripts"));
+        assert_eq!(out, PathBuf::from("compiled.cache"));
+        assert_eq!(work_dir, PathBuf::from("compiler-work"));
+        assert_eq!(
+            compiler.backend,
+            cmd::as_cache::AsCompilerBackendV1::StandaloneThenGame
+        );
+        assert_eq!(
+            compiler.generation_receipt,
+            Some(PathBuf::from("compiled.receipt.json"))
+        );
+
+        for args in [
+            vec!["gore", "as", "compile", "scripts", "--work-dir", "work"],
+            vec!["gore", "as", "compile", "scripts", "--out", "out.cache"],
+            vec![
+                "gore",
+                "as",
+                "compile",
+                "--out",
+                "out.cache",
+                "--work-dir",
+                "work",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+    }
+
+    #[test]
+    fn as_compile_defaults_to_standalone_with_visible_game_fallback() {
+        let cli = Cli::try_parse_from([
+            "gore",
+            "as",
+            "compile",
+            "scripts",
+            "--out",
+            "compiled.cache",
+            "--work-dir",
+            "compiler-work",
+        ])
+        .unwrap();
+        let Commands::As {
+            cmd: cmd::as_cache::AsCmd::Compile { compiler, .. },
+        } = cli.command
+        else {
+            panic!("expected as compile command");
+        };
+        assert_eq!(
+            compiler.backend,
+            cmd::as_cache::AsCompilerBackendV1::StandaloneThenGame
+        );
     }
 
     #[test]

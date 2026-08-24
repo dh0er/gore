@@ -1126,6 +1126,14 @@ mod tests {
         opts
     }
 
+    fn compile_args() -> Value {
+        json!({
+            "src": "scripts",
+            "out": "compiled.Cache",
+            "work_dir": "compiler-work",
+        })
+    }
+
     fn build_with(
         tool: &str,
         sub: &str,
@@ -1798,6 +1806,9 @@ mod tests {
         // The argv builder omits a false switch, so the command line clap sees carries only
         // `--diagnostics-hook` — a call this check used to refuse and the CLI would have accepted.
         let with_false = json!({
+            "src": "scripts",
+            "out": "compiled.Cache",
+            "work_dir": "compiler-work",
             "game": "G",
             "no_diagnostics": false,
             "diagnostics_hook": "hook.dll",
@@ -1805,6 +1816,9 @@ mod tests {
         assert!(build_with("gore_as", "compile", with_false, &permissive()).is_ok());
 
         let with_true = json!({
+            "src": "scripts",
+            "out": "compiled.Cache",
+            "work_dir": "compiler-work",
             "game": "G",
             "no_diagnostics": true,
             "diagnostics_hook": "hook.dll",
@@ -1849,7 +1863,14 @@ mod tests {
         // Compiling drives the game to regenerate its cache and then stages the result, so it is
         // both. Naming only the launch would send someone off to restart with a flag set that
         // still does not cover the call.
-        let call = || json!({ "game": "G", "out": "fresh.Cache" });
+        let call = || {
+            json!({
+                "src": "scripts",
+                "out": "fresh.Cache",
+                "work_dir": "compiler-work",
+                "game": "G",
+            })
+        };
         let raised = question("gore_as", "compile", call(), &options()).expect("must be asked");
         assert_eq!(raised.needs, Needs { write: true, game_launch: true });
         assert_eq!(raised.needs.flags(), "--allow-game-launch --allow-write");
@@ -1876,8 +1897,8 @@ mod tests {
         std::fs::write(&occupied, b"{}").expect("write fixture");
 
         let arms = [
-            // launches the game, and stages the result
-            ("gore_as", "compile", json!({})),
+            // may launch the game and publishes a new result
+            ("gore_as", "compile", compile_args()),
             // rewrites its input in place
             ("gore_loc", "import", json!({ "lcache": "a.lcache", "edits": "e.json" })),
             // changes the installation outright
@@ -2146,29 +2167,36 @@ mod tests {
     }
 
     #[test]
-    fn a_game_launching_command_that_also_rewrites_in_place_asks_about_both() {
-        // `as compile` without `out` installs the fresh cache over the game's own. One question
-        // covers both, and it stays outstanding until *both* flags pre-approve it.
-        let raised = question("gore_as", "compile", json!({}), &options()).expect("must ask");
-        assert_eq!(raised.needs, Needs { write: true, game_launch: true });
+    fn a_game_launching_compile_asks_about_both_permissions() {
+        // The MCP boundary conservatively covers the explicit game/fallback policies. One
+        // question covers both launch and generated-output writes, and it stays outstanding until
+        // both flags pre-approve it.
+        let raised = question("gore_as", "compile", compile_args(), &options()).expect("must ask");
+        assert_eq!(
+            raised.needs,
+            Needs {
+                write: true,
+                game_launch: true
+            }
+        );
 
         let mut launch_only = options();
         launch_only.allow_game_launch = true;
         assert!(
-            question("gore_as", "compile", json!({}), &launch_only).is_some(),
+            question("gore_as", "compile", compile_args(), &launch_only).is_some(),
             "the write half is still unapproved"
         );
 
         let mut write_only = options();
         write_only.allow_write = true;
         assert!(
-            question("gore_as", "compile", json!({}), &write_only).is_some(),
+            question("gore_as", "compile", compile_args(), &write_only).is_some(),
             "the launch half is still unapproved"
         );
 
         let mut both = launch_only.clone();
         both.allow_write = true;
-        assert!(question("gore_as", "compile", json!({}), &both).is_none());
+        assert!(question("gore_as", "compile", compile_args(), &both).is_none());
     }
 
     #[test]

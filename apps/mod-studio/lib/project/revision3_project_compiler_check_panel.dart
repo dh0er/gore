@@ -15,6 +15,7 @@ import 'revision3_test_release_workspace.dart';
 typedef Revision3ProjectCompilerChecker =
     Future<ManagedRevision3ProjectCompilerCheckReceipt> Function({
       required String gameRoot,
+      required ScriptCompilerBackendMode compilerBackend,
     });
 
 @immutable
@@ -288,13 +289,19 @@ final class Revision3ProjectCompilerCheckController extends ChangeNotifier {
         result.closingAudit.game ==
             AuthoringRevision3ProjectCompilerClosingAuditStatus.notRun ||
         compiler.runCount == 0 ||
-        compiler.installRestore == ScriptCompileInstallRestore.notStarted ||
         (diagnostics == null &&
             compiler.outputDisposition ==
                 AuthoringRevision3ProjectCompilerOutputDisposition.notCreated);
+    final attemptedRestoreIsSafe = switch (compiler.backend) {
+      null =>
+        compiler.installRestore == ScriptCompileInstallRestore.restoredExact,
+      final backend when backend.gameAttempted =>
+        compiler.installRestore == ScriptCompileInstallRestore.restoredExact,
+      _ => compiler.installRestore == ScriptCompileInstallRestore.notStarted,
+    };
     final cleanCompilerRejection =
-        compiler.runCount == 1 &&
-        compiler.installRestore == ScriptCompileInstallRestore.restoredExact &&
+        compiler.runCount > 0 &&
+        attemptedRestoreIsSafe &&
         compiler.failure?.code == 'COMPILER_REGEN_FAILED' &&
         diagnostics != null &&
         (diagnostics.capture == ScriptCompileCaptureDisposition.captured ||
@@ -358,7 +365,7 @@ Future<void> showRevision3ProjectCompilerCheckDialog(
   ),
 );
 
-class Revision3ProjectCompilerCheckDialog extends ConsumerWidget {
+class Revision3ProjectCompilerCheckDialog extends ConsumerStatefulWidget {
   const Revision3ProjectCompilerCheckDialog({
     required this.controller,
     required this.checkpoint,
@@ -373,13 +380,24 @@ class Revision3ProjectCompilerCheckDialog extends ConsumerWidget {
   final Revision3ProjectCompilerChecker check;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) => AnimatedBuilder(
-    animation: controller,
+  ConsumerState<Revision3ProjectCompilerCheckDialog> createState() =>
+      _Revision3ProjectCompilerCheckDialogState();
+}
+
+class _Revision3ProjectCompilerCheckDialogState
+    extends ConsumerState<Revision3ProjectCompilerCheckDialog> {
+  ScriptCompilerBackendMode _backend = ScriptCompilerBackendMode.productDefault;
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: widget.controller,
     builder: (context, _) {
       final l10n = AppLocalizations.of(context);
-      final snapshot = controller.snapshot;
+      final snapshot = widget.controller.snapshot;
       final safety = ref.watch(scriptCompileInstallSafetyProvider);
       final running = snapshot.isRunning;
+      final requiresGameSafety =
+          _backend != ScriptCompilerBackendMode.standalone;
       return PopScope(
         canPop: !running,
         child: AlertDialog(
@@ -392,7 +410,44 @@ class Revision3ProjectCompilerCheckDialog extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(l10n.managedProjectCompilerDialogIntroduction),
-                  if (safety.showBlockingBanner) ...[
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<ScriptCompilerBackendMode>(
+                    key: const Key('revision3-project-compiler-backend'),
+                    initialValue: _backend,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Compiler backend',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: [
+                      for (final backend in ScriptCompilerBackendMode.values)
+                        DropdownMenuItem(
+                          value: backend,
+                          child: Text(backend.label),
+                        ),
+                    ],
+                    onChanged: running
+                        ? null
+                        : (backend) {
+                            if (backend == null) return;
+                            setState(() => _backend = backend);
+                          },
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    switch (_backend) {
+                      ScriptCompilerBackendMode.standaloneThenGame =>
+                        'Mod Studio tries the qualified standalone compiler first. If it cannot produce an accepted result, the reason stays visible and the game compiler is used as fallback.',
+                      ScriptCompilerBackendMode.game =>
+                        'This route uses the game compiler and requires an exact, safe installation.',
+                      ScriptCompilerBackendMode.standalone =>
+                        'This route never starts the game and never mutates the installation. It fails closed unless a qualified standalone package is available.',
+                    },
+                    key: const Key(
+                      'revision3-project-compiler-backend-description',
+                    ),
+                  ),
+                  if (requiresGameSafety && safety.showBlockingBanner) ...[
                     const SizedBox(height: 12),
                     _MessageCard(
                       key: const Key(
@@ -423,7 +478,7 @@ class Revision3ProjectCompilerCheckDialog extends ConsumerWidget {
             ),
             FilledButton.icon(
               key: const Key('revision3-project-compiler-run'),
-              onPressed: running || !controller.canRun
+              onPressed: running || !widget.controller.canRun
                   ? null
                   : () => unawaited(_run(ref)),
               icon: running
@@ -447,25 +502,33 @@ class Revision3ProjectCompilerCheckDialog extends ConsumerWidget {
   );
 
   Future<void> _run(WidgetRef ref) {
-    final attemptedGameRoot = gameRoot;
+    final attemptedGameRoot = widget.gameRoot;
     if (attemptedGameRoot == null || attemptedGameRoot.isEmpty) {
       return Future<void>.value();
     }
+    final attemptedBackend = _backend;
+    final requiresGameSafety =
+        attemptedBackend != ScriptCompilerBackendMode.standalone;
     final safetyController = ref.read(
       scriptCompileInstallSafetyProvider.notifier,
     );
-    return controller.run(
-      checkpoint: checkpoint,
+    return widget.controller.run(
+      checkpoint: widget.checkpoint,
       operation: () async {
-        final checked = await safetyController.refresh();
-        if (!_sameRoot(checked.gameRoot, attemptedGameRoot) ||
-            !checked.liveMutationAllowed) {
-          throw const Revision3ProjectCompilerSafetyBlockedException();
+        if (requiresGameSafety) {
+          final checked = await safetyController.refresh();
+          if (!_sameRoot(checked.gameRoot, attemptedGameRoot) ||
+              !checked.liveMutationAllowed) {
+            throw const Revision3ProjectCompilerSafetyBlockedException();
+          }
         }
         ManagedRevision3ProjectCompilerCheckReceipt? receipt;
         try {
-          receipt = await check(gameRoot: attemptedGameRoot);
-          if (receipt.recoveryRequired) {
+          receipt = await widget.check(
+            gameRoot: attemptedGameRoot,
+            compilerBackend: attemptedBackend,
+          );
+          if (requiresGameSafety && receipt.gameInstallRecoveryRequired) {
             final compiler = receipt.result.compiler;
             final failure = compiler.failure!;
             safetyController.recordManagedRecovery(
@@ -477,7 +540,8 @@ class Revision3ProjectCompilerCheckDialog extends ConsumerWidget {
           }
           return receipt;
         } finally {
-          if (receipt?.recoveryRequired != true &&
+          if (requiresGameSafety &&
+              receipt?.gameInstallRecoveryRequired != true &&
               _sameRoot(safetyController.current.gameRoot, attemptedGameRoot)) {
             await safetyController.refresh();
           }
@@ -525,6 +589,7 @@ class _OutcomeView extends StatelessWidget {
     };
     final diagnostics = snapshot.diagnostics;
     final failure = snapshot.failure;
+    final backend = snapshot.receipt?.result.compiler.backend;
     final failureDetail = failure?.message ?? snapshot.transportFailureDetail;
     return Semantics(
       container: true,
@@ -539,6 +604,13 @@ class _OutcomeView extends StatelessWidget {
             title: visual.$3,
             message: snapshot.localizedDetail(l10n),
           ),
+          if (backend != null) ...[
+            const SizedBox(height: 12),
+            SelectableText(
+              _compilerBackendSummary(backend),
+              key: const Key('revision3-project-compiler-backend-result'),
+            ),
+          ],
           if (failureDetail != null) ...[
             const SizedBox(height: 12),
             Text(
@@ -671,6 +743,20 @@ String _localizedCapture(
   ScriptCompileCaptureDisposition.disabled =>
     l10n.managedProjectCompilerCaptureDisabled,
 };
+
+String _compilerBackendSummary(ScriptCompilerBackendEvidence evidence) {
+  final result = switch (evidence.resultBackend) {
+    ScriptCompilerBackendName.game => 'Game compiler',
+    ScriptCompilerBackendName.standalone => 'Standalone compiler',
+    null => 'No compiler backend ran',
+  };
+  final fallback = evidence.fallbackReason;
+  if (fallback == null) {
+    return 'Requested: ${evidence.requestedMode.label}. Result: $result.';
+  }
+  return 'Requested: ${evidence.requestedMode.label}. Result: $result. '
+      'Standalone fallback: ${fallback.detail}';
+}
 
 Revision3ProjectCompilerOutcome _outcomeForError(Object error) =>
     switch (error) {

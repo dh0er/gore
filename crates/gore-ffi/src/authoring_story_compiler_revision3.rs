@@ -9,8 +9,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use gore_as::compile::{
-    acquire_compile_install_mutation, compile_module_with_diagnostics_report_with_guard,
-    CompileModuleReportOutcome, CompileOpts, InstallMutationGuard,
+    acquire_compile_install_mutation, compile_module_with_backend_v1,
+    compile_module_with_backend_v1_with_guard_and_target,
+    compile_module_with_diagnostics_report_with_guard, CompileModuleReportOutcome, CompileOpts,
+    CompilerBackendModeV1, CompilerBackendNameV1, InstallMutationGuard,
 };
 use gore_as::diagnostics::DiagnosticsOptions;
 use gore_authoring::{
@@ -32,11 +34,18 @@ use crate::authoring_story_quest_inspection_revision3::{
 use crate::err;
 use crate::script_compile_report::{
     discard_owned_compiled_mini, discard_owned_failed_compiled_mini, install_guard_failure,
-    report_response, OwnedCompileStaging,
+    report_response, report_response_with_policy, OwnedCompileStaging,
+};
+use crate::standalone_compiler_package::{
+    backend_evidence, backend_evidence_with_package, bundle_absent_fallback_reason,
+    package_unavailable_fallback_reason, resolve_product_standalone_compiler_for_game_v1,
+    CompilerBackendWireV2, ResolvedProductStandaloneCompilerV1, BUNDLE_ABSENT_DETAIL,
 };
 
 pub(super) const QUEST_COMMAND: &str = "authoring_store_check_revision3_quest_compiler_v1";
 pub(super) const NPC_COMMAND: &str = "authoring_store_check_revision3_npc_compiler_v1";
+pub(super) const QUEST_COMMAND_V2: &str = "authoring_store_check_revision3_quest_compiler_v2";
+pub(super) const NPC_COMMAND_V2: &str = "authoring_store_check_revision3_npc_compiler_v2";
 
 const MAX_PATH_BYTES: usize = 32 * 1024;
 const MAX_HEAD_JSON_BYTES: usize = 64 * 1024;
@@ -66,6 +75,26 @@ struct QuestWirePayload {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NpcWirePayload {
+    expected_head_json: String,
+    game_root: String,
+    npc_id: String,
+    root: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QuestWirePayloadV2 {
+    compiler_backend: CompilerBackendWireV2,
+    expected_head_json: String,
+    game_root: String,
+    quest_id: String,
+    root: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NpcWirePayloadV2 {
+    compiler_backend: CompilerBackendWireV2,
     expected_head_json: String,
     game_root: String,
     npc_id: String,
@@ -171,7 +200,713 @@ pub(super) fn check_revision3_npc_compiler_v1_raw(input: &str) -> Value {
     check_revision3_npc_compiler_v1_inner(input).unwrap_or_else(Failure::response)
 }
 
+pub(super) fn check_revision3_quest_compiler_v2_raw(input: &str) -> Value {
+    check_revision3_quest_compiler_v2_inner(input).unwrap_or_else(Failure::response)
+}
+
+pub(super) fn check_revision3_npc_compiler_v2_raw(input: &str) -> Value {
+    check_revision3_npc_compiler_v2_inner(input).unwrap_or_else(Failure::response)
+}
+
+fn check_revision3_quest_compiler_v2_inner(input: &str) -> Result<Value, Failure> {
+    let payload: QuestWirePayloadV2 = parse_exact_wire(input, QUEST_COMMAND_V2)?;
+    let requested = payload.compiler_backend;
+    let v1 = quest_v1_wire(&payload);
+    if requested == CompilerBackendWireV2::Game {
+        let (response, game_attempted) = check_revision3_quest_compiler_v1_with_attempt(&v1)?;
+        return Ok(attach_managed_backend_evidence(
+            response,
+            requested,
+            game_attempted,
+        ));
+    }
+    let resolution =
+        match resolve_product_standalone_compiler_for_game_v1(Path::new(&payload.game_root)) {
+            Ok(resolution) => resolution,
+            Err(message) if requested == CompilerBackendWireV2::Standalone => {
+                let selection = open_quest_selection_v2(&payload)?;
+                return strict_standalone_preflight_response(
+                    selection,
+                    requested,
+                    "AUTHORING_REVISION3_STANDALONE_PACKAGE_LOCATION",
+                    &message,
+                    None,
+                );
+            }
+            Err(message) => {
+                let (response, game_attempted) =
+                    check_revision3_quest_compiler_v1_with_attempt(&v1)?;
+                return Ok(attach_managed_backend_evidence_with_fallback(
+                    response,
+                    requested,
+                    game_attempted,
+                    Some(json!({
+                        "failed_backend": CompilerBackendNameV1::Standalone.as_str(),
+                        "failure_kind": "unavailable",
+                        "detail": message,
+                    })),
+                ));
+            }
+        };
+    match resolution {
+        ResolvedProductStandaloneCompilerV1::BundleAbsent => {
+            if requested == CompilerBackendWireV2::Standalone {
+                let selection = open_quest_selection_v2(&payload)?;
+                strict_standalone_preflight_response(
+                    selection,
+                    requested,
+                    "AUTHORING_REVISION3_STANDALONE_BUNDLE_ABSENT",
+                    BUNDLE_ABSENT_DETAIL,
+                    None,
+                )
+            } else {
+                let (response, game_attempted) =
+                    check_revision3_quest_compiler_v1_with_attempt(&v1)?;
+                Ok(attach_managed_backend_evidence_with_fallback(
+                    response,
+                    requested,
+                    game_attempted,
+                    Some(bundle_absent_fallback_reason()),
+                ))
+            }
+        }
+        ResolvedProductStandaloneCompilerV1::Unavailable(reason) => {
+            if requested == CompilerBackendWireV2::Standalone {
+                let selection = open_quest_selection_v2(&payload)?;
+                strict_standalone_preflight_response(
+                    selection,
+                    requested,
+                    "AUTHORING_REVISION3_STANDALONE_PACKAGE_UNAVAILABLE",
+                    &format!("{:?}: {}", reason.kind(), reason.detail()),
+                    None,
+                )
+            } else {
+                let fallback = package_unavailable_fallback_reason(&reason);
+                let (response, game_attempted) =
+                    check_revision3_quest_compiler_v1_with_attempt(&v1)?;
+                Ok(attach_managed_backend_evidence_with_fallback(
+                    response,
+                    requested,
+                    game_attempted,
+                    Some(fallback),
+                ))
+            }
+        }
+        ResolvedProductStandaloneCompilerV1::Available(package) => {
+            let selection = open_quest_selection_v2(&payload)?;
+            run_product_managed_check(
+                selection,
+                Path::new(&payload.game_root),
+                requested,
+                package,
+                || {
+                    derive_quest_module(
+                        &payload.expected_head_json,
+                        &payload.game_root,
+                        &payload.quest_id,
+                        &payload.root,
+                    )
+                },
+            )
+        }
+    }
+}
+
+fn check_revision3_npc_compiler_v2_inner(input: &str) -> Result<Value, Failure> {
+    let payload: NpcWirePayloadV2 = parse_exact_wire(input, NPC_COMMAND_V2)?;
+    let requested = payload.compiler_backend;
+    let v1 = npc_v1_wire(&payload);
+    if requested == CompilerBackendWireV2::Game {
+        let (response, game_attempted) = check_revision3_npc_compiler_v1_with_attempt(&v1)?;
+        return Ok(attach_managed_backend_evidence(
+            response,
+            requested,
+            game_attempted,
+        ));
+    }
+    let resolution =
+        match resolve_product_standalone_compiler_for_game_v1(Path::new(&payload.game_root)) {
+            Ok(resolution) => resolution,
+            Err(message) if requested == CompilerBackendWireV2::Standalone => {
+                let selection = open_npc_selection_v2(&payload)?;
+                return strict_standalone_preflight_response(
+                    selection,
+                    requested,
+                    "AUTHORING_REVISION3_STANDALONE_PACKAGE_LOCATION",
+                    &message,
+                    None,
+                );
+            }
+            Err(message) => {
+                let (response, game_attempted) = check_revision3_npc_compiler_v1_with_attempt(&v1)?;
+                return Ok(attach_managed_backend_evidence_with_fallback(
+                    response,
+                    requested,
+                    game_attempted,
+                    Some(json!({
+                        "failed_backend": CompilerBackendNameV1::Standalone.as_str(),
+                        "failure_kind": "unavailable",
+                        "detail": message,
+                    })),
+                ));
+            }
+        };
+    match resolution {
+        ResolvedProductStandaloneCompilerV1::BundleAbsent => {
+            if requested == CompilerBackendWireV2::Standalone {
+                let selection = open_npc_selection_v2(&payload)?;
+                strict_standalone_preflight_response(
+                    selection,
+                    requested,
+                    "AUTHORING_REVISION3_STANDALONE_BUNDLE_ABSENT",
+                    BUNDLE_ABSENT_DETAIL,
+                    None,
+                )
+            } else {
+                let (response, game_attempted) = check_revision3_npc_compiler_v1_with_attempt(&v1)?;
+                Ok(attach_managed_backend_evidence_with_fallback(
+                    response,
+                    requested,
+                    game_attempted,
+                    Some(bundle_absent_fallback_reason()),
+                ))
+            }
+        }
+        ResolvedProductStandaloneCompilerV1::Unavailable(reason) => {
+            if requested == CompilerBackendWireV2::Standalone {
+                let selection = open_npc_selection_v2(&payload)?;
+                strict_standalone_preflight_response(
+                    selection,
+                    requested,
+                    "AUTHORING_REVISION3_STANDALONE_PACKAGE_UNAVAILABLE",
+                    &format!("{:?}: {}", reason.kind(), reason.detail()),
+                    None,
+                )
+            } else {
+                let fallback = package_unavailable_fallback_reason(&reason);
+                let (response, game_attempted) = check_revision3_npc_compiler_v1_with_attempt(&v1)?;
+                Ok(attach_managed_backend_evidence_with_fallback(
+                    response,
+                    requested,
+                    game_attempted,
+                    Some(fallback),
+                ))
+            }
+        }
+        ResolvedProductStandaloneCompilerV1::Available(package) => {
+            let selection = open_npc_selection_v2(&payload)?;
+            run_product_managed_check(
+                selection,
+                Path::new(&payload.game_root),
+                requested,
+                package,
+                || derive_npc_module(&payload.expected_head_json, &payload.npc_id, &payload.root),
+            )
+        }
+    }
+}
+
+fn strict_standalone_preflight_response(
+    selection: InitialSelection,
+    requested: CompilerBackendWireV2,
+    code: &'static str,
+    detail: &str,
+    package: Option<
+        &gore_as::standalone_package_resolver::ProductStandaloneCompilerPackageIdentityV1,
+    >,
+) -> Result<Value, Failure> {
+    let derived = DerivedModule {
+        generated: selection.persisted_module.clone(),
+    };
+    let mut compiler = preflight_compiler_evidence(code, detail, false);
+    compiler["compiler_backend"] =
+        backend_evidence_with_package(requested, None, false, false, package, None);
+    managed_response(&selection, &derived, compiler, false)
+}
+
+fn attach_managed_backend_evidence(
+    response: Value,
+    requested: CompilerBackendWireV2,
+    game_attempted: bool,
+) -> Value {
+    let fallback = (requested == CompilerBackendWireV2::StandaloneThenGame)
+        .then(bundle_absent_fallback_reason);
+    attach_managed_backend_evidence_with_fallback(response, requested, game_attempted, fallback)
+}
+
+fn attach_managed_backend_evidence_with_fallback(
+    mut response: Value,
+    requested: CompilerBackendWireV2,
+    game_attempted: bool,
+    fallback: Option<Value>,
+) -> Value {
+    let (result_backend, fallback) = match requested {
+        CompilerBackendWireV2::Game => {
+            (game_attempted.then_some(CompilerBackendNameV1::Game), None)
+        }
+        CompilerBackendWireV2::StandaloneThenGame => (
+            game_attempted.then_some(CompilerBackendNameV1::Game),
+            fallback,
+        ),
+        CompilerBackendWireV2::Standalone => (None, None),
+    };
+    if response.get("compiler").is_some() {
+        response["compiler"]["compiler_backend"] =
+            backend_evidence(requested, result_backend, false, game_attempted, fallback);
+    }
+    response
+}
+
+fn quest_v1_wire(payload: &QuestWirePayloadV2) -> String {
+    json!({
+        "command": QUEST_COMMAND,
+        "payload": {
+            "expected_head_json": payload.expected_head_json,
+            "game_root": payload.game_root,
+            "quest_id": payload.quest_id,
+            "root": payload.root,
+        }
+    })
+    .to_string()
+}
+
+fn npc_v1_wire(payload: &NpcWirePayloadV2) -> String {
+    json!({
+        "command": NPC_COMMAND,
+        "payload": {
+            "expected_head_json": payload.expected_head_json,
+            "game_root": payload.game_root,
+            "npc_id": payload.npc_id,
+            "root": payload.root,
+        }
+    })
+    .to_string()
+}
+
+fn open_quest_selection_v2(payload: &QuestWirePayloadV2) -> Result<InitialSelection, Failure> {
+    let expected_head = parse_canonical_head(&payload.expected_head_json)?;
+    let entity_id = parse_entity_id(&payload.quest_id)?;
+    validate_paths(&payload.root, &payload.game_root)?;
+    open_initial_selection(
+        &payload.root,
+        expected_head,
+        payload.expected_head_json.clone(),
+        ManagedEntityKind::Quest,
+        entity_id,
+    )
+}
+
+fn open_npc_selection_v2(payload: &NpcWirePayloadV2) -> Result<InitialSelection, Failure> {
+    let expected_head = parse_canonical_head(&payload.expected_head_json)?;
+    let entity_id = parse_entity_id(&payload.npc_id)?;
+    validate_paths(&payload.root, &payload.game_root)?;
+    open_initial_selection(
+        &payload.root,
+        expected_head,
+        payload.expected_head_json.clone(),
+        ManagedEntityKind::Npc,
+        entity_id,
+    )
+}
+
+fn derive_quest_module(
+    expected_head_json: &str,
+    game_root: &str,
+    quest_id: &str,
+    root: &str,
+) -> Result<DerivedModule, Failure> {
+    let request = json!({
+        "command": crate::authoring_story_quest_inspection_revision3::COMMAND,
+        "payload": {
+            "expected_head_json": expected_head_json,
+            "game_root": game_root,
+            "quest_id": quest_id,
+            "root": root,
+        }
+    })
+    .to_string();
+    let response =
+        crate::authoring_story_quest_inspection_revision3::inspect_revision3_quest_source_v1_raw(
+            &request,
+        );
+    let plan_json = inspection_plan_json(response, "Quest")?;
+    let plan = Revision3QuestSourceInspectionPlanV3::from_json(&plan_json).map_err(|_| {
+        Failure::new(
+            "AUTHORING_REVISION3_COMPILER_INVARIANT",
+            "native Quest inspection returned an invalid sealed plan",
+        )
+    })?;
+    Ok(DerivedModule {
+        generated: plan.module.generated,
+    })
+}
+
+fn derive_npc_module(
+    expected_head_json: &str,
+    npc_id: &str,
+    root: &str,
+) -> Result<DerivedModule, Failure> {
+    let request = json!({
+        "command": crate::authoring_story_npc_inspection_revision3::COMMAND,
+        "payload": {
+            "expected_head_json": expected_head_json,
+            "npc_id": npc_id,
+            "root": root,
+        }
+    })
+    .to_string();
+    let response =
+        crate::authoring_story_npc_inspection_revision3::inspect_revision3_npc_source_v1_raw(
+            &request,
+        );
+    let plan_json = inspection_plan_json(response, "NPC")?;
+    let plan = Revision3NpcSourceInspectionPlanV1::from_json(&plan_json).map_err(|_| {
+        Failure::new(
+            "AUTHORING_REVISION3_COMPILER_INVARIANT",
+            "native NPC inspection returned an invalid sealed plan",
+        )
+    })?;
+    Ok(DerivedModule {
+        generated: plan.module().generated().clone(),
+    })
+}
+
+fn run_product_managed_check<D>(
+    selection: InitialSelection,
+    game_root: &Path,
+    requested: CompilerBackendWireV2,
+    package: gore_as::standalone_package_resolver::AvailableProductStandaloneCompilerPackageV1,
+    derive: D,
+) -> Result<Value, Failure>
+where
+    D: FnOnce() -> Result<DerivedModule, Failure>,
+{
+    debug_assert!(requested != CompilerBackendWireV2::Game);
+    let initial_derived = DerivedModule {
+        generated: selection.persisted_module.clone(),
+    };
+    let mut guard = if requested == CompilerBackendWireV2::StandaloneThenGame {
+        match acquire_compile_install_mutation(game_root) {
+            Ok(guard) => Some(guard),
+            Err(message) => {
+                let mut compiler =
+                    compiler_evidence(install_guard_failure(game_root, message), true);
+                compiler["compiler_backend"] = backend_evidence_with_package(
+                    requested,
+                    None,
+                    false,
+                    false,
+                    Some(package.identity()),
+                    None,
+                );
+                return managed_response(&selection, &initial_derived, compiler, false);
+            }
+        }
+    } else {
+        None
+    };
+
+    let derived = match derive() {
+        Ok(module) => module,
+        Err(failure) => {
+            return product_preflight_failure(
+                selection,
+                guard.take(),
+                &initial_derived,
+                requested,
+                package.identity(),
+                failure,
+            );
+        }
+    };
+    if let Err(failure) = validate_derived_module(&selection, &derived) {
+        return product_preflight_failure(
+            selection,
+            guard.take(),
+            &initial_derived,
+            requested,
+            package.identity(),
+            failure,
+        );
+    }
+
+    let (catalog, shipping, binds) = match build_fresh_game_inputs(game_root) {
+        Ok(inputs) => inputs,
+        Err(failure) => {
+            return product_preflight_failure(
+                selection,
+                guard.take(),
+                &derived,
+                requested,
+                package.identity(),
+                Failure::new(map_game_input_code(failure.code), failure.message),
+            );
+        }
+    };
+    let inputs = FreshGameInputs {
+        catalog,
+        shipping,
+        binds,
+    };
+    if let Err(failure) = validate_game_target(&selection.project, &inputs.catalog) {
+        return product_preflight_failure(
+            selection,
+            guard.take(),
+            &derived,
+            requested,
+            package.identity(),
+            failure,
+        );
+    }
+    if inputs.shipping.as_slice() != package.target_inputs().shipping_cache()
+        || inputs.binds.as_slice() != package.target_inputs().binds_cache()
+    {
+        return product_preflight_failure(
+            selection,
+            guard.take(),
+            &derived,
+            requested,
+            package.identity(),
+            Failure::new(
+                "AUTHORING_REVISION3_COMPILER_GAME_MISMATCH",
+                "managed inspection inputs do not match the authenticated standalone target",
+            ),
+        );
+    }
+
+    let private_workspace = match tempfile::Builder::new()
+        .prefix("gore-managed-compiler-")
+        .tempdir()
+    {
+        Ok(workspace) => workspace,
+        Err(_) => {
+            return product_preflight_failure(
+                selection,
+                guard.take(),
+                &derived,
+                requested,
+                package.identity(),
+                Failure::new(
+                    "AUTHORING_REVISION3_COMPILER_STAGING_UNAVAILABLE",
+                    "native-private compiler workspace could not be allocated",
+                ),
+            );
+        }
+    };
+    let staging = match OwnedCompileStaging::create(private_workspace.path(), game_root) {
+        Ok(staging) => staging,
+        Err(_) => {
+            return product_preflight_failure(
+                selection,
+                guard.take(),
+                &derived,
+                requested,
+                package.identity(),
+                Failure::new(
+                    "AUTHORING_REVISION3_COMPILER_STAGING_UNAVAILABLE",
+                    "native-private compiler staging could not be created",
+                ),
+            );
+        }
+    };
+    if staging.verify_owned().is_err() {
+        return product_preflight_failure(
+            selection,
+            guard.take(),
+            &derived,
+            requested,
+            package.identity(),
+            Failure::new(
+                "AUTHORING_REVISION3_COMPILER_STAGING_CHANGED",
+                "native-private compiler staging ownership could not be verified",
+            ),
+        );
+    }
+
+    let config = gore_as::standalone_sidecar::StandaloneSidecarConfigV1::new(
+        package.sidecar_path().to_path_buf(),
+        package.sidecar_seal(),
+        package.profile_manifest_path().to_path_buf(),
+        package.profile_root().to_path_buf(),
+        staging.path().to_path_buf(),
+    );
+    let mut runner_unavailable = None;
+    let mut runner = match gore_as::standalone_sidecar::StandaloneSidecarRunnerV1::new(config) {
+        Ok(runner) => Some(runner),
+        Err(failure) if requested == CompilerBackendWireV2::Standalone => {
+            let mut detail = Value::String(failure.to_string());
+            redact_private_paths(
+                &mut detail,
+                &[
+                    private_workspace.path(),
+                    staging.path(),
+                    package.sidecar_path(),
+                    package.profile_manifest_path(),
+                    package.profile_root(),
+                ],
+            );
+            return product_preflight_failure(
+                selection,
+                None,
+                &derived,
+                requested,
+                package.identity(),
+                Failure::new(
+                    "AUTHORING_REVISION3_STANDALONE_RUNNER_UNAVAILABLE",
+                    detail
+                        .as_str()
+                        .unwrap_or("standalone runner initialization failed"),
+                ),
+            );
+        }
+        Err(failure) => {
+            runner_unavailable = Some(json!({
+                "failed_backend": CompilerBackendNameV1::Standalone.as_str(),
+                "failure_kind": failure.kind().as_str(),
+                "detail": failure.detail(),
+            }));
+            None
+        }
+    };
+    let (authority, target) = package.into_execution_parts();
+    let opts = CompileOpts {
+        game_dir: game_root.to_path_buf(),
+        op: "add".to_owned(),
+        module_name: derived.generated.module_namespace.clone(),
+        rel_path: derived.generated.module_relative_path.clone(),
+        as_path: staging.path().join(".gore-managed-source.as"),
+        source_override: Some(derived.generated.source.as_bytes().to_vec()),
+        work_dir: staging.path().to_path_buf(),
+        allow_new_symbols: true,
+        base_override: Some(target.shipping_cache().to_vec()),
+        binds_override: Some(target.binds_cache().to_vec()),
+    };
+    let diagnostics = DiagnosticsOptions {
+        disabled: false,
+        hook_dll: None,
+        inject_delay: Duration::from_secs(2),
+    };
+    let mut strict_target = Some(target);
+    let report = if requested == CompilerBackendWireV2::Standalone {
+        compile_module_with_backend_v1(
+            &opts,
+            &diagnostics,
+            CompilerBackendModeV1::Standalone,
+            runner.as_mut().map(|runner| runner as _),
+        )
+    } else {
+        compile_module_with_backend_v1_with_guard_and_target(
+            &opts,
+            &diagnostics,
+            CompilerBackendModeV1::StandaloneThenGame,
+            runner.as_mut().map(|runner| runner as _),
+            guard
+                .take()
+                .expect("standalone-then-game acquired its guard above"),
+            strict_target
+                .take()
+                .expect("the authenticated target is transferred once"),
+        )
+    };
+
+    report.finish_while_target_pinned(|mut report| {
+        finish_while_target_pinned(strict_target, || {
+            let result_backend = report.backend_name();
+            let standalone_attempted = report.standalone_attempted();
+            let game_attempted = report.game_attempted();
+            let mut fallback = runner_unavailable.or_else(|| {
+                report.fallback_reason().map(|reason| {
+                    json!({
+                        "failed_backend": reason.failed_backend().as_str(),
+                        "failure_kind": reason.failure_kind().as_str(),
+                        "detail": reason.detail(),
+                    })
+                })
+            });
+            if let Some(fallback) = fallback.as_mut() {
+                redact_private_paths(
+                    fallback,
+                    &[
+                        private_workspace.path(),
+                        staging.path(),
+                        authority.sidecar_path(),
+                        authority.profile_manifest_path(),
+                        authority.profile_root(),
+                    ],
+                );
+            }
+            let standalone_selected = result_backend == Some(CompilerBackendNameV1::Standalone);
+            let (output_discarded, output_rejection) = discard_managed_output(
+                &staging,
+                &mut report.outcome,
+                &derived.generated.module_namespace,
+            );
+            let script = report_response_with_policy(report, output_rejection, standalone_selected);
+            let mut compiler = compiler_evidence_with_private_paths(
+                script,
+                output_discarded,
+                &[private_workspace.path(), staging.path()],
+            );
+            compiler["compiler_backend"] = backend_evidence_with_package(
+                requested,
+                result_backend,
+                standalone_attempted,
+                game_attempted,
+                Some(authority.identity()),
+                fallback,
+            );
+            let closing = close_revalidation(&selection, game_root, &inputs);
+            managed_response(&selection, &derived, compiler, closing.is_exact())
+        })
+    })
+}
+
+fn finish_while_target_pinned<T, R>(target: Option<T>, finish: impl FnOnce() -> R) -> R {
+    let response = finish();
+    drop(target);
+    response
+}
+
+fn product_preflight_failure(
+    selection: InitialSelection,
+    guard: Option<InstallMutationGuard>,
+    derived: &DerivedModule,
+    requested: CompilerBackendWireV2,
+    package: &gore_as::standalone_package_resolver::ProductStandaloneCompilerPackageIdentityV1,
+    failure: Failure,
+) -> Result<Value, Failure> {
+    let recovery = failure.code.contains("RECOVERY_REQUIRED");
+    let mut response = match guard {
+        Some(guard) if recovery => release_existing_recovery(selection, guard, derived, failure)?,
+        Some(guard) => release_after_preflight(selection, guard, derived, failure)?,
+        None => managed_response(
+            &selection,
+            derived,
+            preflight_compiler_evidence(failure.code, failure.message, recovery),
+            false,
+        )?,
+    };
+    if response.get("compiler").is_some() {
+        response["compiler"]["compiler_backend"] =
+            backend_evidence_with_package(requested, None, false, false, Some(package), None);
+    }
+    Ok(response)
+}
+
 fn check_revision3_quest_compiler_v1_inner(input: &str) -> Result<Value, Failure> {
+    check_revision3_quest_compiler_v1_with_attempt(input).map(|(response, _)| response)
+}
+
+fn check_revision3_quest_compiler_v1_with_attempt(input: &str) -> Result<(Value, bool), Failure> {
+    let mut game_attempted = false;
+    let response = check_revision3_quest_compiler_v1_recording_attempt(input, &mut game_attempted)?;
+    Ok((response, game_attempted))
+}
+
+fn check_revision3_quest_compiler_v1_recording_attempt(
+    input: &str,
+    game_attempted: &mut bool,
+) -> Result<Value, Failure> {
     let payload: QuestWirePayload = parse_exact_wire(input, QUEST_COMMAND)?;
     let expected_head = parse_canonical_head(&payload.expected_head_json)?;
     let entity_id = parse_entity_id(&payload.quest_id)?;
@@ -183,44 +918,62 @@ fn check_revision3_quest_compiler_v1_inner(input: &str) -> Result<Value, Failure
         ManagedEntityKind::Quest,
         entity_id,
     )?;
-    run_managed_check(selection, Path::new(&payload.game_root), |guard| {
-        let request = json!({
-            "command": crate::authoring_story_quest_inspection_revision3::COMMAND,
-            "payload": {
-                "expected_head_json": payload.expected_head_json,
-                "game_root": payload.game_root,
-                "quest_id": payload.quest_id,
-                "root": payload.root,
+    run_managed_check(
+        selection,
+        Path::new(&payload.game_root),
+        game_attempted,
+        |guard| {
+            let request = json!({
+                "command": crate::authoring_story_quest_inspection_revision3::COMMAND,
+                "payload": {
+                    "expected_head_json": payload.expected_head_json,
+                    "game_root": payload.game_root,
+                    "quest_id": payload.quest_id,
+                    "root": payload.root,
+                }
+            })
+            .to_string();
+            let response = crate::authoring_story_quest_inspection_revision3::inspect_revision3_quest_source_v1_raw(&request);
+            let plan_json = match inspection_plan_json(response, "Quest") {
+                Ok(plan_json) => plan_json,
+                Err(failure) => return GuardedDerivation::Failed { guard, failure },
+            };
+            let plan = match Revision3QuestSourceInspectionPlanV3::from_json(&plan_json) {
+                Ok(plan) => plan,
+                Err(_) => {
+                    return GuardedDerivation::Failed {
+                        guard,
+                        failure: Failure::new(
+                            "AUTHORING_REVISION3_COMPILER_INVARIANT",
+                            "native Quest inspection returned an invalid sealed plan",
+                        ),
+                    };
+                }
+            };
+            GuardedDerivation::Ready {
+                guard,
+                module: DerivedModule {
+                    generated: plan.module.generated,
+                },
             }
-        })
-        .to_string();
-        let response = crate::authoring_story_quest_inspection_revision3::inspect_revision3_quest_source_v1_raw(&request);
-        let plan_json = match inspection_plan_json(response, "Quest") {
-            Ok(plan_json) => plan_json,
-            Err(failure) => return GuardedDerivation::Failed { guard, failure },
-        };
-        let plan = match Revision3QuestSourceInspectionPlanV3::from_json(&plan_json) {
-            Ok(plan) => plan,
-            Err(_) => {
-                return GuardedDerivation::Failed {
-                    guard,
-                    failure: Failure::new(
-                        "AUTHORING_REVISION3_COMPILER_INVARIANT",
-                        "native Quest inspection returned an invalid sealed plan",
-                    ),
-                };
-            }
-        };
-        GuardedDerivation::Ready {
-            guard,
-            module: DerivedModule {
-                generated: plan.module.generated,
-            },
-        }
-    })
+        },
+    )
 }
 
 fn check_revision3_npc_compiler_v1_inner(input: &str) -> Result<Value, Failure> {
+    check_revision3_npc_compiler_v1_with_attempt(input).map(|(response, _)| response)
+}
+
+fn check_revision3_npc_compiler_v1_with_attempt(input: &str) -> Result<(Value, bool), Failure> {
+    let mut game_attempted = false;
+    let response = check_revision3_npc_compiler_v1_recording_attempt(input, &mut game_attempted)?;
+    Ok((response, game_attempted))
+}
+
+fn check_revision3_npc_compiler_v1_recording_attempt(
+    input: &str,
+    game_attempted: &mut bool,
+) -> Result<Value, Failure> {
     let payload: NpcWirePayload = parse_exact_wire(input, NPC_COMMAND)?;
     let expected_head = parse_canonical_head(&payload.expected_head_json)?;
     let entity_id = parse_entity_id(&payload.npc_id)?;
@@ -232,48 +985,54 @@ fn check_revision3_npc_compiler_v1_inner(input: &str) -> Result<Value, Failure> 
         ManagedEntityKind::Npc,
         entity_id,
     )?;
-    run_managed_check(selection, Path::new(&payload.game_root), |guard| {
-        let request = json!({
-            "command": crate::authoring_story_npc_inspection_revision3::COMMAND,
-            "payload": {
-                "expected_head_json": payload.expected_head_json,
-                "npc_id": payload.npc_id,
-                "root": payload.root,
-            }
-        })
-        .to_string();
-        let response =
+    run_managed_check(
+        selection,
+        Path::new(&payload.game_root),
+        game_attempted,
+        |guard| {
+            let request = json!({
+                "command": crate::authoring_story_npc_inspection_revision3::COMMAND,
+                "payload": {
+                    "expected_head_json": payload.expected_head_json,
+                    "npc_id": payload.npc_id,
+                    "root": payload.root,
+                }
+            })
+            .to_string();
+            let response =
             crate::authoring_story_npc_inspection_revision3::inspect_revision3_npc_source_v1_raw(
                 &request,
             );
-        let plan_json = match inspection_plan_json(response, "NPC") {
-            Ok(plan_json) => plan_json,
-            Err(failure) => return GuardedDerivation::Failed { guard, failure },
-        };
-        let plan = match Revision3NpcSourceInspectionPlanV1::from_json(&plan_json) {
-            Ok(plan) => plan,
-            Err(_) => {
-                return GuardedDerivation::Failed {
-                    guard,
-                    failure: Failure::new(
-                        "AUTHORING_REVISION3_COMPILER_INVARIANT",
-                        "native NPC inspection returned an invalid sealed plan",
-                    ),
-                };
+            let plan_json = match inspection_plan_json(response, "NPC") {
+                Ok(plan_json) => plan_json,
+                Err(failure) => return GuardedDerivation::Failed { guard, failure },
+            };
+            let plan = match Revision3NpcSourceInspectionPlanV1::from_json(&plan_json) {
+                Ok(plan) => plan,
+                Err(_) => {
+                    return GuardedDerivation::Failed {
+                        guard,
+                        failure: Failure::new(
+                            "AUTHORING_REVISION3_COMPILER_INVARIANT",
+                            "native NPC inspection returned an invalid sealed plan",
+                        ),
+                    };
+                }
+            };
+            GuardedDerivation::Ready {
+                guard,
+                module: DerivedModule {
+                    generated: plan.module().generated().clone(),
+                },
             }
-        };
-        GuardedDerivation::Ready {
-            guard,
-            module: DerivedModule {
-                generated: plan.module().generated().clone(),
-            },
-        }
-    })
+        },
+    )
 }
 
 fn run_managed_check<D>(
     selection: InitialSelection,
     game_root: &Path,
+    game_attempted: &mut bool,
     derive: D,
 ) -> Result<Value, Failure>
 where
@@ -396,6 +1155,7 @@ where
         },
         guard,
     );
+    *game_attempted = report.game_attempted();
     let (output_discarded, output_rejection) = discard_managed_output(
         &staging,
         &mut report.outcome,
@@ -1161,6 +1921,10 @@ mod tests {
         json!({"command": NPC_COMMAND, "payload": payload}).to_string()
     }
 
+    fn npc_wire_v2(payload: Value) -> String {
+        json!({"command": NPC_COMMAND_V2, "payload": payload}).to_string()
+    }
+
     fn valid_npc_shape() -> Value {
         json!({
             "expected_head_json": "{}",
@@ -1221,6 +1985,121 @@ mod tests {
         assert_eq!(
             check_revision3_quest_compiler_v1_raw(&forged_quest)["error"]["code"],
             "AUTHORING_REVISION3_COMPILER_REQUEST_INVALID"
+        );
+    }
+
+    #[test]
+    fn v2_npc_strict_standalone_is_store_bound_and_fails_before_game_ownership() {
+        let project = npc_project(7);
+        let (temp, head_json) = published_store(&project);
+        let game = temp.path().join("missing-game");
+        let payload = json!({
+            "compiler_backend": "standalone",
+            "expected_head_json": head_json,
+            "game_root": game.display().to_string(),
+            "npc_id": EntityId::from_bytes([NPC_BYTE; 16]).to_string(),
+            "root": temp.path().display().to_string(),
+        });
+
+        let response = crate::dispatch(&npc_wire_v2(payload));
+
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["compiler"]["outcome"], "failed");
+        assert_eq!(
+            response["compiler"]["compile_error"]["code"],
+            "AUTHORING_REVISION3_STANDALONE_BUNDLE_ABSENT"
+        );
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["requested_mode"],
+            "standalone"
+        );
+        assert!(response["compiler"]["compiler_backend"]["result_backend"].is_null());
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["standalone_attempted"],
+            false
+        );
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["game_attempted"],
+            false
+        );
+        assert!(response["compiler"]["compiler_backend"]["qualified_package"].is_null());
+        assert_eq!(response["exact_current"], false);
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+    }
+
+    #[test]
+    fn v2_npc_wire_accepts_only_backend_policy_not_package_authority() {
+        let mut payload = valid_npc_shape();
+        payload["compiler_backend"] = json!("standalone");
+        payload["compiler_profile_root"] = json!("C:/caller/profile");
+        let response = check_revision3_npc_compiler_v2_raw(&npc_wire_v2(payload));
+        assert_eq!(
+            response["error"]["code"],
+            "AUTHORING_REVISION3_COMPILER_REQUEST_INVALID"
+        );
+
+        let forged_quest = json!({
+            "command": QUEST_COMMAND_V2,
+            "payload": {
+                "compiler_backend": "standalone",
+                "expected_head_json": "{}",
+                "game_root": "C:/missing-game",
+                "quest_id": EntityId::from_bytes([0x71; 16]),
+                "root": "C:/missing-store",
+                "sidecar_sha256": "forged",
+            }
+        })
+        .to_string();
+        assert_eq!(
+            check_revision3_quest_compiler_v2_raw(&forged_quest)["error"]["code"],
+            "AUTHORING_REVISION3_COMPILER_REQUEST_INVALID"
+        );
+    }
+
+    #[test]
+    fn v2_managed_fallback_evidence_preserves_bundle_absence() {
+        let response = attach_managed_backend_evidence(
+            json!({"ok": true, "compiler": {"outcome": "failed"}}),
+            CompilerBackendWireV2::StandaloneThenGame,
+            false,
+        );
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["requested_mode"],
+            "standalone_then_game"
+        );
+        assert!(response["compiler"]["compiler_backend"]["result_backend"].is_null());
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["standalone_attempted"],
+            false
+        );
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["game_attempted"],
+            false
+        );
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["fallback_reason"]["failure_kind"],
+            "unavailable"
+        );
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["fallback_reason"]["detail"],
+            BUNDLE_ABSENT_DETAIL
+        );
+
+        let attempted = attach_managed_backend_evidence(
+            json!({
+                "ok": true,
+                "compiler": {"outcome": "failed", "install_restore": "not_started"}
+            }),
+            CompilerBackendWireV2::Game,
+            true,
+        );
+        assert_eq!(
+            attempted["compiler"]["compiler_backend"]["result_backend"],
+            "game"
+        );
+        assert_eq!(
+            attempted["compiler"]["compiler_backend"]["game_attempted"],
+            true
         );
     }
 
@@ -1313,6 +2192,7 @@ mod tests {
         assert_eq!(response["entity"]["kind"], "npc_draft");
         assert_eq!(response["entity"]["revision"], 2);
         assert_eq!(response["module"]["revision"], 3);
+        assert!(response["compiler"].get("compiler_backend").is_none());
         assert_eq!(
             response["module"]["namespace"],
             "GoreMods.Npcs.ManagedCompilerCheck"

@@ -1,0 +1,78 @@
+manifest_version = 1
+component = "gore-as-standalone-compiler"
+component_license = "MIT"
+project_license_file = "../../../../LICENSE"
+status = "pinned-core-with-protocol-v1-cache-publication"
+
+[current_tree]
+contains_unreal_engine_source = false
+links_unreal_engine = false
+loads_unreal_engine = false
+contains_game_binaries = false
+links_game_dll = false
+loads_game_dll = false
+contains_g1r_profile_data = false
+contains_unreangel_source = true
+contains_reverse_derived_precompiled_schema = true
+vendored_unreangel_source_files = 64
+vendored_files_modified = true
+vendored_files_modified_count = 2
+inventory_sha256_canonicalization = "replace CRLF with LF; preserve all other bytes"
+
+[[current_tree.downstream_patch]]
+vendored_path = "vendor/unreangel/source/as_builder.cpp"
+upstream_sha256 = "f07bffdeb4e1b4048b7af314db7adfcbbb8a189a3868e431780d3320d795e36d"
+vendored_sha256 = "1800bbe95b5f11b026a409e2b000346442f0ea33fca3c126742368e428ac37c7"
+rationale = "match the captured half-open editor-only code range"
+
+[[current_tree.downstream_patch]]
+vendored_path = "vendor/unreangel/source/as_scriptengine.cpp"
+upstream_sha256 = "39c361b401692af4a209b649953adc5e77ab5c977510eb5a1341a10dd7e4acaf"
+vendored_sha256 = "2e280058afe0adb8e041b703e96d2632225f6292762fb8af3ec081fe3f9f3820"
+rationale = "expose the captured automatic-imports engine property to the standalone frontend"
+
+[[planned_upstream]]
+name = "UNREANGEL"
+repository = "https://github.com/WillGordon9999/UNREANGEL"
+reviewed_revision = "247954da5326ecc29724067da7b5880c352fe4ff"
+imported = true
+imported_source_files = 64
+vendored_root = "vendor/unreangel"
+licenses = ["zlib (AngelScript core)", "MIT (Hazelight Unreal plugin)"]
+license_file_at_revision = "LICENSE.md"
+vendored_license_file = "vendor/unreangel/UNREANGEL-LICENSE.md"
+inventory = "SOURCE_INVENTORY.tsv"
+
+[[planned_upstream]]
+name = "AngelScript"
+repository = "https://www.angelcode.com/angelscript/"
+version_observed_in_unreangel = "2.33.0 WIP, Unreal-modified"
+imported = true
+license = "zlib"
+copyright = "Andreas Jonsson, 2003-2018 (as declared by UNREANGEL)"
+
+[[planned_upstream]]
+name = "xxHash"
+repository = "https://github.com/Cyan4973/xxHash"
+version_observed_in_unreangel = "2012-2016 embedded source"
+imported = false
+license = "BSD-2-Clause"
+copyright = "Yann Collet, 2012-2016"
+notice_location_at_revision = [
+    "Angelscript/Source/AngelscriptCode/Private/Hash/xxhash.h",
+    "Angelscript/Source/AngelscriptCode/Private/Hash/xxhash.inl",
+]
+notice_retention_required_on_import = true
+
+# The current processed-code hash is a local bounded implementation of the
+# published XXH64 algorithm, verified against the pinned donor for exact
+# UTF-16LE inputs. No xxHash source file is present in the vendored tree.
+
+[review_policy]
+require_exact_source_revision = true
+require_inventory_update_for_each_import = true
+require_sha256_for_each_import = true
+require_license_notice_preservation = true
+allow_unreal_engine_source = false
+allow_game_binary_or_dll = false
+allow_unreviewed_bulk_vendoring = false

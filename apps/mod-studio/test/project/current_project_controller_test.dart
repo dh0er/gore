@@ -29,6 +29,7 @@ import 'package:gore_mod/project/revision3_voice_take_preview_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_removal_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_status_authoring.dart';
+import 'package:gore_mod/scripts/domain/script_compile_report.dart';
 import 'package:path/path.dart' as p;
 
 import '../support/revision3_dataasset_fixture.dart';
@@ -10489,6 +10490,7 @@ Future<ManagedRevision3CompilerCheckReceipt> _checkControllerManagedCompiler(
   expectedModuleId: expectedModuleId ?? revision3QuestOutlineModuleId,
   expectedModuleRevision: expectedModuleRevision ?? fixture.moduleRevision,
   gameRoot: r'C:\Games\Gothic Remake',
+  compilerBackend: ScriptCompilerBackendMode.game,
 );
 
 Future<ManagedRevision3ProjectCompilerCheckReceipt>
@@ -10506,6 +10508,7 @@ _checkControllerProjectCompiler(
   expectedProjectRevision: expectedProjectRevision ?? visible.projectRevision,
   expectedHead: expectedHead ?? visible.head,
   gameRoot: gameRoot,
+  compilerBackend: ScriptCompilerBackendMode.game,
 );
 
 AuthoringRevision3ProjectCompilerCheckResult
@@ -10590,7 +10593,7 @@ _controllerProjectCompilerCheckResult({
             'compiler_diagnostics': null,
             'install_restore': 'not_started',
             'recovery_required': true,
-            'output_disposition': 'recovery_retained',
+            'output_disposition': 'not_created',
           }
         : <String, Object?>{
             'outcome': 'compiled_evidence_only',

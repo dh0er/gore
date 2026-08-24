@@ -12012,7 +12012,7 @@ AuthoringRevision3ProjectCompilerCheckResult _projectCompilerCheckResult({
           'compiler_diagnostics': null,
           'install_restore': 'not_started',
           'recovery_required': true,
-          'output_disposition': 'recovery_retained',
+          'output_disposition': 'not_created',
         }
       : outcome == 'failed'
       ? <String, Object?>{

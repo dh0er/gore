@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use clap::Subcommand;
+use clap::{Args, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -13,6 +13,132 @@ use gore_as::cache::default_evidence::{
 use gore_as::cache::header::CacheHeader;
 use gore_as::cache::scan::scan_strings;
 use gore_as::cache::walk_modules::{module_count, module_region_end};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum AsCompilerBackendV1 {
+    Standalone,
+    Game,
+    StandaloneThenGame,
+}
+
+impl From<AsCompilerBackendV1> for gore_as::compile::CompilerBackendModeV1 {
+    fn from(value: AsCompilerBackendV1) -> Self {
+        match value {
+            AsCompilerBackendV1::Standalone => Self::Standalone,
+            AsCompilerBackendV1::Game => Self::Game,
+            AsCompilerBackendV1::StandaloneThenGame => Self::StandaloneThenGame,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AsCompilerBackendArgsV1 {
+    /// Compiler policy. The qualified standalone compiler runs first by default; the game
+    /// compiler remains the explicit, visible fallback.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = AsCompilerBackendV1::StandaloneThenGame
+    )]
+    pub backend: AsCompilerBackendV1,
+    /// Development-only standalone sidecar override. Normal product use resolves the embedded,
+    /// catalog-authenticated package beside the GORE executable.
+    #[arg(
+        long = "development-standalone-sidecar",
+        value_name = "EXE",
+        requires_all = [
+            "standalone_sidecar_sha256",
+            "compiler_profile_manifest",
+            "compiler_profile_root",
+            "standalone_scratch_root"
+        ],
+        conflicts_with = "generation_receipt"
+    )]
+    pub standalone_sidecar: Option<PathBuf>,
+    /// Development-only SHA-256 for the exact override executable.
+    #[arg(
+        long = "development-standalone-sidecar-sha256",
+        value_name = "HEX",
+        requires_all = [
+            "standalone_sidecar",
+            "compiler_profile_manifest",
+            "compiler_profile_root",
+            "standalone_scratch_root"
+        ],
+        conflicts_with = "generation_receipt"
+    )]
+    pub standalone_sidecar_sha256: Option<String>,
+    /// Development-only typed compiler-profile manifest.
+    #[arg(
+        long = "development-compiler-profile-manifest",
+        value_name = "PROFILE.json",
+        requires_all = [
+            "standalone_sidecar",
+            "standalone_sidecar_sha256",
+            "compiler_profile_root",
+            "standalone_scratch_root"
+        ],
+        conflicts_with = "generation_receipt"
+    )]
+    pub compiler_profile_manifest: Option<PathBuf>,
+    /// Development-only root containing every sealed compiler-profile payload.
+    #[arg(
+        long = "development-compiler-profile-root",
+        value_name = "DIR",
+        requires_all = [
+            "standalone_sidecar",
+            "standalone_sidecar_sha256",
+            "compiler_profile_manifest",
+            "standalone_scratch_root"
+        ],
+        conflicts_with = "generation_receipt"
+    )]
+    pub compiler_profile_root: Option<PathBuf>,
+    /// Development-only existing private scratch root used by the override sidecar.
+    #[arg(
+        long = "development-standalone-scratch-root",
+        value_name = "DIR",
+        requires_all = [
+            "standalone_sidecar",
+            "standalone_sidecar_sha256",
+            "compiler_profile_manifest",
+            "compiler_profile_root"
+        ],
+        conflicts_with = "generation_receipt"
+    )]
+    pub standalone_scratch_root: Option<PathBuf>,
+    /// Publish a local V1 no-clobber receipt after automatic product-package authentication. The
+    /// V1 receipt does not itself carry the product catalog identity; development overrides
+    /// deliberately cannot request it.
+    #[arg(long, value_name = "RECEIPT.json")]
+    pub generation_receipt: Option<PathBuf>,
+}
+
+impl AsCompilerBackendArgsV1 {
+    fn has_development_override(&self) -> bool {
+        self.standalone_sidecar.is_some()
+            || self.standalone_sidecar_sha256.is_some()
+            || self.compiler_profile_manifest.is_some()
+            || self.compiler_profile_root.is_some()
+            || self.standalone_scratch_root.is_some()
+    }
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AsProductCompilerBackendArgsV1 {
+    /// Compiler policy. The qualified standalone compiler runs first by default; the game
+    /// compiler remains the explicit, visible fallback.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = AsCompilerBackendV1::StandaloneThenGame
+    )]
+    pub backend: AsCompilerBackendV1,
+    /// Publish a product-authoritative full-graph receipt. This is available only when the exact
+    /// installed target matches one profile in GORE's embedded compiler-package catalog.
+    #[arg(long, value_name = "RECEIPT.json")]
+    pub generation_receipt: Option<PathBuf>,
+}
 
 #[derive(Subcommand)]
 pub enum AsCmd {
@@ -142,26 +268,23 @@ pub enum AsCmd {
         #[arg(long)]
         game: Option<PathBuf>,
     },
-    /// Compile AngelScript into a precompiled cache by driving the game's own
-    /// `-as-generate-precompiled-data` flag. With no SRC, recompiles the loose `.as` already under
-    /// `<game>/G1R/Script/`; with SRC, stages that tree first. With `-o`, writes the cache there and
-    /// leaves the install untouched; without `-o`, installs the fresh cache in place (backing the
-    /// previous one up to `*.gore-bak`). All the backup / stage / restore file handling is internal.
+    /// Compile one complete AngelScript source tree into a new full precompiled cache. The final
+    /// output is always outside the game installation and is never installed implicitly.
     Compile {
-        /// Source `.as` tree (a directory) to compile. Omit to recompile the loose `.as` already
-        /// installed under `<game>/G1R/Script/`.
-        src: Option<PathBuf>,
-        /// Write the compiled cache here and leave the game install untouched. Omit to install the
-        /// fresh cache in place under `Script/`.
+        /// Complete authoritative `.as` source tree. Missing base modules are explicit deletes.
+        src: PathBuf,
+        /// Publish the complete cache here with atomic no-clobber semantics. Must be outside the
+        /// game installation.
         #[arg(short, long)]
-        out: Option<PathBuf>,
+        out: PathBuf,
+        /// Existing private workspace outside the game installation. GORE recreates only its
+        /// fixed `tree` child and uses this root for isolated standalone scratch directories.
+        #[arg(long, value_name = "DIR")]
+        work_dir: PathBuf,
         /// Game install root (the folder containing `G1R/`). Falls back to the configured game
         /// path, then Steam auto-detect.
         #[arg(long)]
         game: Option<PathBuf>,
-        /// When installing in place, do NOT back up the previous cache.
-        #[arg(long)]
-        no_backup: bool,
         /// Disable the optional runtime compiler-diagnostic hook and use the normal generator.
         #[arg(long, conflicts_with = "diagnostics_hook")]
         no_diagnostics: bool,
@@ -177,10 +300,14 @@ pub enum AsCmd {
             value_parser = clap::value_parser!(u64).range(0..=30_000)
         )]
         diagnostics_inject_delay_ms: u64,
+        /// Product-owned compiler selection. Standalone package paths and hashes are never
+        /// accepted from this command line.
+        #[command(flatten)]
+        compiler: AsProductCompilerBackendArgsV1,
     },
     /// Compile one authored module into a deployable 1-module mini-cache. This wraps the complete
-    /// Studio pipeline: emit the pristine source tree, overlay one `.as` file, drive the game
-    /// compiler, extract the resulting module, and remap it back to the pristine cache.
+    /// Studio pipeline: emit the pristine source tree, overlay one `.as` file, compile standalone
+    /// first with a visible game fallback, extract the module, and remap it to the pristine cache.
     CompileModule {
         /// `add` for a new module or `edit` for an existing module.
         #[arg(long, value_parser = ["add", "edit"])]
@@ -194,7 +321,8 @@ pub enum AsCmd {
         /// Authored `.as` source file to overlay.
         #[arg(long)]
         source: PathBuf,
-        /// Persistent compiler workspace used for the emitted tree and intermediate regen cache.
+        /// Existing persistent compiler workspace outside the game installation, used for the
+        /// emitted tree and intermediate compiler cache.
         #[arg(long)]
         work_dir: PathBuf,
         /// Explicitly retain minimal rows for classes/functions/names absent from the pristine
@@ -222,6 +350,11 @@ pub enum AsCmd {
             value_parser = clap::value_parser!(u64).range(0..=30_000)
         )]
         diagnostics_inject_delay_ms: u64,
+        /// Product compiler policy plus an optional local V1 receipt. GORE resolves the catalogued
+        /// standalone package automatically; manual package paths are available only through
+        /// explicitly named development override flags.
+        #[command(flatten)]
+        compiler: AsCompilerBackendArgsV1,
     },
     /// Replace an existing module using a mini-cache bound to this exact base generation.
     Replace {
@@ -1134,9 +1267,8 @@ fn load_default_mutation_evidence(cache_file: &Path, cache: &[u8]) -> DefaultMut
             },
         ),
         (None, _) => {
-            let generation_id = NativeEvidenceStatus::generation_id_for_profile_id(
-                matches[0].1.profile_id(),
-            );
+            let generation_id =
+                NativeEvidenceStatus::generation_id_for_profile_id(matches[0].1.profile_id());
             let matched = matches.into_iter().map(|(path, ..)| path).collect();
             (
                 None,
@@ -1272,9 +1404,11 @@ fn default_evidence_json(status: &NativeEvidenceStatus) -> DefaultEvidenceJson {
             generation_id: (*generation_id).to_owned(),
             matched: matched.clone(),
         },
-        NativeEvidenceStatus::BindsUnavailable { reason } => DefaultEvidenceJson::BindsUnavailable {
-            reason: reason.clone(),
-        },
+        NativeEvidenceStatus::BindsUnavailable { reason } => {
+            DefaultEvidenceJson::BindsUnavailable {
+                reason: reason.clone(),
+            }
+        }
         NativeEvidenceStatus::SealDrift {
             generation_id,
             drift,
@@ -1652,6 +1786,684 @@ fn guarded_pristine_script_cache(
             }
         }
     }
+}
+
+fn compiler_binds_path(game: &Path) -> PathBuf {
+    let g1r = if game.file_name().is_some_and(|name| name == "G1R") {
+        game.to_path_buf()
+    } else {
+        game.join("G1R")
+    };
+    g1r.join("Script").join("Binds.Cache")
+}
+
+fn compiler_executable_path(game: &Path) -> PathBuf {
+    let g1r = if game.file_name().is_some_and(|name| name == "G1R") {
+        game.to_path_buf()
+    } else {
+        game.join("G1R")
+    };
+    g1r.join("Binaries")
+        .join("Win64")
+        .join("G1R-Win64-Shipping.exe")
+}
+
+fn compiler_shipping_path(game: &Path) -> PathBuf {
+    let g1r = if game.file_name().is_some_and(|name| name == "G1R") {
+        game.to_path_buf()
+    } else {
+        game.join("G1R")
+    };
+    g1r.join("Script").join("PrecompiledScript_Shipping.Cache")
+}
+
+enum ProductStandaloneRunnerV1 {
+    Available(gore_as::standalone_sidecar::StandaloneSidecarRunnerV1),
+    Unavailable { detail: String },
+}
+
+impl gore_as::compile::StandaloneCompilerRunnerV1 for ProductStandaloneRunnerV1 {
+    fn run_regen(
+        &mut self,
+        inputs: gore_as::compile::StandaloneCompilerInputsV1<'_>,
+    ) -> Result<
+        gore_as::compile::StandaloneCompilerOutputV1,
+        gore_as::compile::CompilerBackendFailureV1,
+    > {
+        match self {
+            Self::Available(runner) => runner.run_regen(inputs),
+            Self::Unavailable { detail } => Err(
+                gore_as::compile::CompilerBackendFailureV1::unavailable(detail.clone()),
+            ),
+        }
+    }
+
+    fn run_full_graph(
+        &mut self,
+        inputs: gore_as::compile::StandaloneFullGraphCompilerInputsV1<'_>,
+    ) -> Result<
+        gore_as::compile::StandaloneCompilerOutputV1,
+        gore_as::compile::CompilerBackendFailureV1,
+    > {
+        match self {
+            Self::Available(runner) => runner.run_full_graph(inputs),
+            Self::Unavailable { detail } => Err(
+                gore_as::compile::CompilerBackendFailureV1::unavailable(detail.clone()),
+            ),
+        }
+    }
+}
+
+enum CompileModuleStandaloneRunnerV1 {
+    Product(ProductStandaloneRunnerV1),
+    Development(gore_as::standalone_sidecar::StandaloneSidecarRunnerV1),
+}
+
+impl gore_as::compile::StandaloneCompilerRunnerV1 for CompileModuleStandaloneRunnerV1 {
+    fn run_regen(
+        &mut self,
+        inputs: gore_as::compile::StandaloneCompilerInputsV1<'_>,
+    ) -> Result<
+        gore_as::compile::StandaloneCompilerOutputV1,
+        gore_as::compile::CompilerBackendFailureV1,
+    > {
+        match self {
+            Self::Product(runner) => runner.run_regen(inputs),
+            Self::Development(runner) => runner.run_regen(inputs),
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_full_graph_command(
+    src: PathBuf,
+    out: PathBuf,
+    work_dir: PathBuf,
+    game: Option<PathBuf>,
+    no_diagnostics: bool,
+    diagnostics_hook: Option<PathBuf>,
+    diagnostics_inject_delay_ms: u64,
+    compiler: AsProductCompilerBackendArgsV1,
+) -> Result<()> {
+    use gore_as::compile::{
+        CompilerBackendModeV1, CompilerBackendNameV1, FullGraphCompileOptsV1,
+        FullGraphCompileOutcomeV1, FullGraphPublicationDispositionV1, InstallRestoreDisposition,
+        ProjectCompilerClosingAuditDisposition, StandaloneCompilerRunnerV1,
+    };
+    use gore_as::standalone_package_resolver::ProductStandaloneCompilerPackageResolutionV1;
+
+    let game = gore_loc::config::game_root(game).context("resolving game path")?;
+    let src = absolute_cli_path(src, "complete AngelScript source root")?;
+    let out = absolute_cli_path(out, "full-graph output")?;
+    let work_dir = absolute_cli_path(work_dir, "full-graph workspace")?;
+    validate_compiler_work_dir(&work_dir, &game)?;
+    if out == work_dir || out.starts_with(&work_dir) {
+        bail!("full-graph output must not be inside the compiler workspace");
+    }
+    let receipt_path = compiler
+        .generation_receipt
+        .map(|path| absolute_cli_path(path, "generation receipt"))
+        .transpose()?;
+    if receipt_path.as_ref().is_some_and(|path| path == &out) {
+        bail!("generation receipt path must differ from the compiled cache path");
+    }
+    if let Some(path) = receipt_path.as_ref() {
+        validate_auxiliary_output_path(path, &game, "generation receipt")?;
+    }
+
+    let executable_path = compiler_executable_path(&game);
+    let shipping_path = compiler_shipping_path(&game);
+    let binds_path = compiler_binds_path(&game);
+    let host_module = std::env::current_exe().context("resolving the GORE host executable")?;
+    let resolution = gore_as::standalone_package_resolver::resolve_embedded_product_standalone_compiler_package_for_inputs_v1(
+        &host_module,
+        gore_as::compiler_target::CompilerTargetInputPathsV1 {
+            executable: &executable_path,
+            shipping_cache: &shipping_path,
+            binds_cache: &binds_path,
+        },
+    );
+
+    let requested_mode: CompilerBackendModeV1 = compiler.backend.into();
+    let mut standalone_runner: Option<ProductStandaloneRunnerV1> = None;
+    let mut receipt_authority = None;
+    let mut target = None;
+    let mut package_unavailable = None;
+    match resolution {
+        ProductStandaloneCompilerPackageResolutionV1::Available(available) => {
+            let runner_config = (requested_mode != CompilerBackendModeV1::Game).then(|| {
+                gore_as::standalone_sidecar::StandaloneSidecarConfigV1::new(
+                    available.sidecar_path().to_path_buf(),
+                    available.sidecar_seal(),
+                    available.profile_manifest_path().to_path_buf(),
+                    available.profile_root().to_path_buf(),
+                    work_dir.clone(),
+                )
+            });
+            let (authority, target_inputs) = available.into_execution_parts();
+            receipt_authority = Some(authority);
+            target = Some(target_inputs);
+            if let Some(config) = runner_config {
+                match gore_as::standalone_sidecar::StandaloneSidecarRunnerV1::new(config) {
+                    Ok(runner) => {
+                        standalone_runner = Some(ProductStandaloneRunnerV1::Available(runner))
+                    }
+                    Err(error) => {
+                        let detail = format!(
+                            "product-authenticated standalone compiler initialization failed \
+                             before execution ({})",
+                            error.kind().as_str()
+                        );
+                        package_unavailable = Some(detail.clone());
+                        if requested_mode == CompilerBackendModeV1::StandaloneThenGame {
+                            standalone_runner =
+                                Some(ProductStandaloneRunnerV1::Unavailable { detail });
+                        }
+                    }
+                }
+            }
+        }
+        ProductStandaloneCompilerPackageResolutionV1::BundleAbsent => {
+            package_unavailable = Some("embedded standalone compiler bundle is absent".to_owned());
+        }
+        ProductStandaloneCompilerPackageResolutionV1::Unavailable(reason) => {
+            package_unavailable = Some(format!("{:?}: {}", reason.kind(), reason.detail()));
+        }
+    }
+    if requested_mode == CompilerBackendModeV1::Standalone && standalone_runner.is_none() {
+        bail!(
+            "standalone compiler unavailable: {}",
+            package_unavailable
+                .as_deref()
+                .unwrap_or("no product-authenticated package matched the installed target")
+        );
+    }
+    if receipt_path.is_some() && receipt_authority.is_none() {
+        bail!(
+            "a product-authoritative generation receipt is unavailable: {}",
+            package_unavailable
+                .as_deref()
+                .unwrap_or("no product-authenticated package matched the installed target")
+        );
+    }
+    if requested_mode == CompilerBackendModeV1::StandaloneThenGame {
+        if let Some(reason) = package_unavailable.as_deref() {
+            eprintln!(
+                "standalone package unavailable; explicit game fallback remains enabled: {reason}"
+            );
+        }
+    }
+
+    let mut guard = None;
+    let (base_cache, binds_cache) = if let Some(target) = target.as_ref() {
+        (
+            target.shipping_cache().to_vec(),
+            target.binds_cache().to_vec(),
+        )
+    } else if requested_mode == CompilerBackendModeV1::Standalone {
+        unreachable!("strict standalone availability was checked above")
+    } else {
+        let (base, acquired) = guarded_pristine_script_cache(&game)?;
+        guard = Some(acquired);
+        let binds =
+            match read_regular_bounded(&binds_path, DEFAULT_BINDS_MAX_BYTES, "AS_FULL_GRAPH_BINDS")
+            {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    return Err(release_compile_guard_after_error(
+                        guard.take().expect("guard was acquired above"),
+                        error,
+                    ));
+                }
+            };
+        (base, binds)
+    };
+    if requested_mode != CompilerBackendModeV1::Standalone && guard.is_none() {
+        guard = Some(
+            acquire_compile_guard(&game)
+                .map_err(anyhow::Error::msg)
+                .context("acquiring the full-graph install-mutation guard")?,
+        );
+    }
+
+    let plan = match gore_as::full_graph_plan::plan_complete_source_tree_v1(&base_cache, &src) {
+        Ok(plan) => plan,
+        Err(error) => {
+            let error = anyhow::Error::new(error).context("planning the complete source graph");
+            return match guard.take() {
+                Some(guard) => Err(release_compile_guard_after_error(guard, error)),
+                None => Err(error),
+            };
+        }
+    };
+    let (changes, final_manifest) = plan.into_parts();
+    let opts = FullGraphCompileOptsV1 {
+        game_dir: game.clone(),
+        work_dir: work_dir.clone(),
+        output_path: out.clone(),
+        changes,
+        final_manifest,
+        base_cache,
+        binds_cache,
+    };
+    let diagnostics = gore_as::diagnostics::DiagnosticsOptions {
+        disabled: no_diagnostics,
+        hook_dll: diagnostics_hook,
+        inject_delay: std::time::Duration::from_millis(diagnostics_inject_delay_ms),
+    };
+    let audit_game = game.clone();
+    let audit_base = opts.base_cache.clone();
+    let audit_binds = opts.binds_cache.clone();
+    let closing_audit = move || audit_full_graph_inputs(&audit_game, &audit_base, &audit_binds);
+    let report = match requested_mode {
+        CompilerBackendModeV1::Standalone => {
+            gore_as::compile::compile_full_graph_standalone_v1_with_target(
+                &opts,
+                standalone_runner
+                    .as_mut()
+                    .expect("strict standalone runner was checked")
+                    as &mut dyn StandaloneCompilerRunnerV1,
+                closing_audit,
+                target
+                    .take()
+                    .expect("product standalone runner has a target proof"),
+            )
+        }
+        CompilerBackendModeV1::Game | CompilerBackendModeV1::StandaloneThenGame => {
+            let guard = guard.take().expect("game-capable mode acquired a guard");
+            match target.take() {
+                Some(target) => {
+                    gore_as::compile::compile_full_graph_with_backend_v1_with_guard_and_target(
+                        &opts,
+                        &diagnostics,
+                        requested_mode,
+                        standalone_runner
+                            .as_mut()
+                            .map(|runner| runner as &mut dyn StandaloneCompilerRunnerV1),
+                        guard,
+                        closing_audit,
+                        target,
+                    )
+                }
+                None => gore_as::compile::compile_full_graph_with_backend_v1_with_guard(
+                    &opts,
+                    &diagnostics,
+                    requested_mode,
+                    standalone_runner
+                        .as_mut()
+                        .map(|runner| runner as &mut dyn StandaloneCompilerRunnerV1),
+                    guard,
+                    closing_audit,
+                ),
+            }
+        }
+    };
+
+    let used_backend = report.backend_name();
+    let fallback_reason = report.fallback_reason().cloned();
+    let restore = report.install_restore_disposition();
+    let closing = report.closing_audit_disposition();
+    let publication = report.publication_disposition();
+    let recovery_required = report.recovery_required();
+    let artifact = match report.outcome {
+        FullGraphCompileOutcomeV1::Compiled(artifact)
+            if !recovery_required
+                && publication == FullGraphPublicationDispositionV1::Published
+                && closing == ProjectCompilerClosingAuditDisposition::Passed
+                && matches!(
+                    (used_backend, restore),
+                    (
+                        Some(CompilerBackendNameV1::Standalone),
+                        InstallRestoreDisposition::NotStarted
+                    ) | (
+                        Some(CompilerBackendNameV1::Game),
+                        InstallRestoreDisposition::RestoredExact
+                    )
+                ) =>
+        {
+            artifact
+        }
+        FullGraphCompileOutcomeV1::Compiled(artifact) => {
+            let cleanup = artifact.neutralize().err();
+            bail!(
+                "COMPILE_RECOVERY_REQUIRED: full-graph output was produced without exact backend, restoration, audit and publication proof{}",
+                cleanup
+                    .map(|error| format!("; exact retained-output neutralization failed: {error}"))
+                    .unwrap_or_default()
+            );
+        }
+        FullGraphCompileOutcomeV1::Failed(error) if recovery_required => {
+            bail!("COMPILE_RECOVERY_REQUIRED: {error}");
+        }
+        FullGraphCompileOutcomeV1::Failed(error) => {
+            return Err(anyhow::Error::new(error)).context("compiling the complete source graph");
+        }
+    };
+    let used_backend = used_backend.context(
+        "full-graph compiler succeeded without identifying the backend that produced the cache",
+    )?;
+
+    if let Some(receipt_path) = receipt_path.as_ref() {
+        let authority = receipt_authority
+            .as_ref()
+            .expect("receipt availability was checked before compilation");
+        let backend =
+            gore_as::generation_receipt::ReceiptBackendSelectionV1::from_compile_selection(
+                requested_mode,
+                used_backend,
+                fallback_reason.as_ref(),
+            )
+            .map_err(anyhow::Error::msg)
+            .context("sealing the full-graph backend selection")?;
+        let receipt =
+            match gore_as::generation_receipt_v2::GenerationReceiptV2::build_for_full_graph_artifact(
+                authority,
+                &opts.base_cache,
+                &opts.binds_cache,
+                &artifact,
+                backend,
+            ) {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    return fail_after_full_graph_receipt_error(
+                        &artifact,
+                        format!("building {}: {error}", receipt_path.display()),
+                    );
+                }
+            };
+        if let Err(error) =
+            gore_as::generation_receipt_v2::publish_generation_receipt_v2(receipt_path, &receipt)
+        {
+            return fail_after_full_graph_receipt_error(
+                &artifact,
+                format!("publishing {}: {error}", receipt_path.display()),
+            );
+        }
+        println!("generation receipt -> {}", receipt_path.display());
+    }
+
+    if let Some(fallback) = fallback_reason {
+        println!(
+            "compiler fallback: {} {}: {}",
+            fallback.failed_backend(),
+            fallback.failure_kind().as_str(),
+            fallback.detail()
+        );
+    }
+    println!(
+        "compiled complete graph with {} -> {} ({} modules, {} bytes, sha256 {})",
+        used_backend,
+        artifact.path().display(),
+        artifact.module_count(),
+        artifact.byte_len(),
+        artifact.sha256()
+    );
+    Ok(())
+}
+
+fn fail_after_full_graph_receipt_error<T>(
+    artifact: &gore_as::compile::FullGraphCompileArtifactV1,
+    primary: String,
+) -> Result<T> {
+    match artifact.neutralize() {
+        Ok(()) => bail!(
+            "GENERATION_RECEIPT_PUBLICATION_FAILED_OUTPUT_NEUTRALIZED: {primary}; the exact retained cache at {} was reduced to zero bytes and must be removed before retrying",
+            artifact.path().display()
+        ),
+        Err(cleanup) => bail!(
+            "GENERATION_RECEIPT_RECOVERY_REQUIRED: {primary}; failed to neutralize the retained cache at {}: {cleanup}",
+            artifact.path().display()
+        ),
+    }
+}
+
+fn absolute_cli_path(path: PathBuf, label: &'static str) -> Result<PathBuf> {
+    std::path::absolute(&path).with_context(|| {
+        format!(
+            "resolving absolute lexical path for {label}: {}",
+            path.display()
+        )
+    })
+}
+
+fn validate_compiler_work_dir(work_dir: &Path, game: &Path) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(work_dir).with_context(|| {
+        format!(
+            "reading compiler workspace metadata for {}",
+            work_dir.display()
+        )
+    })?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() || metadata_is_reparse_cli(&metadata)
+    {
+        bail!(
+            "compiler workspace must be an existing real, non-reparse directory: {}",
+            work_dir.display()
+        );
+    }
+    let work_real = work_dir
+        .canonicalize()
+        .with_context(|| format!("resolving compiler workspace {}", work_dir.display()))?;
+    let game_real = game
+        .canonicalize()
+        .with_context(|| format!("resolving game root {}", game.display()))?;
+    if path_is_within_cli(&work_real, &game_real) {
+        bail!("compiler workspace must be outside the game installation");
+    }
+    Ok(())
+}
+
+fn validate_auxiliary_output_path(path: &Path, game: &Path, label: &'static str) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) => bail!(
+            "{label} destination already exists (no-clobber): {}",
+            path.display()
+        ),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("inspecting {label} destination {}", path.display()));
+        }
+    }
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .with_context(|| format!("{label} path has no parent directory"))?;
+    let metadata = std::fs::symlink_metadata(parent)
+        .with_context(|| format!("reading {label} parent metadata for {}", parent.display()))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() || metadata_is_reparse_cli(&metadata)
+    {
+        bail!("{label} parent must be an existing real, non-reparse directory");
+    }
+    let parent_real = parent
+        .canonicalize()
+        .with_context(|| format!("resolving {label} parent {}", parent.display()))?;
+    let game_real = game
+        .canonicalize()
+        .with_context(|| format!("resolving game root {}", game.display()))?;
+    if path_is_within_cli(&parent_real, &game_real) {
+        bail!("{label} must be outside the game installation");
+    }
+    Ok(())
+}
+
+fn audit_full_graph_inputs(
+    game: &Path,
+    base: &[u8],
+    binds: &[u8],
+) -> std::result::Result<(), String> {
+    let current_base = gore_mod::pristine_script_cache(game)
+        .map_err(|error| format!("reopening the pristine Shipping cache: {error}"))?;
+    if current_base != base {
+        return Err("the pristine Shipping cache changed during compilation".to_owned());
+    }
+    let current_binds = read_regular_bounded(
+        &compiler_binds_path(game),
+        DEFAULT_BINDS_MAX_BYTES,
+        "AS_FULL_GRAPH_CLOSING_BINDS",
+    )
+    .map_err(|error| error.to_string())?;
+    if current_binds != binds {
+        return Err("Binds.Cache changed during compilation".to_owned());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn metadata_is_reparse_cli(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    metadata.file_attributes() & 0x400 != 0
+}
+
+#[cfg(not(windows))]
+fn metadata_is_reparse_cli(_: &std::fs::Metadata) -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn path_is_within_cli(path: &Path, root: &Path) -> bool {
+    let fold = |value: &Path| value.to_string_lossy().replace('/', "\\").to_lowercase();
+    let path = fold(path);
+    let root = fold(root).trim_end_matches('\\').to_owned();
+    path == root
+        || path
+            .strip_prefix(&root)
+            .is_some_and(|tail| tail.starts_with('\\'))
+}
+
+#[cfg(not(windows))]
+fn path_is_within_cli(path: &Path, root: &Path) -> bool {
+    path.starts_with(root)
+}
+
+struct TargetPinnedStandaloneRunnerV1<
+    R = gore_as::standalone_sidecar::StandaloneSidecarRunnerV1,
+    T = gore_as::compiler_target::ValidatedCompilerTargetInputsV1,
+> {
+    runner: R,
+    _target: T,
+}
+
+impl<R, T> gore_as::compile::StandaloneCompilerRunnerV1 for TargetPinnedStandaloneRunnerV1<R, T>
+where
+    R: gore_as::compile::StandaloneCompilerRunnerV1,
+{
+    fn run_regen(
+        &mut self,
+        inputs: gore_as::compile::StandaloneCompilerInputsV1<'_>,
+    ) -> Result<
+        gore_as::compile::StandaloneCompilerOutputV1,
+        gore_as::compile::CompilerBackendFailureV1,
+    > {
+        gore_as::compile::StandaloneCompilerRunnerV1::run_regen(&mut self.runner, inputs)
+    }
+}
+
+fn release_compile_guard_after_error(
+    mut guard: gore_as::compile::InstallMutationGuard,
+    primary: anyhow::Error,
+) -> anyhow::Error {
+    match guard.release() {
+        Ok(()) => primary,
+        Err(release) => {
+            guard.preserve_for_manual_recovery();
+            anyhow::anyhow!(
+                "COMPILE_RECOVERY_REQUIRED: {primary}; additionally failed to release the \
+                 pre-held install-mutation guard: {release}"
+            )
+        }
+    }
+}
+
+fn prepare_development_standalone_runner(
+    compiler: &AsCompilerBackendArgsV1,
+) -> Result<Option<gore_as::standalone_sidecar::StandaloneSidecarRunnerV1>> {
+    use gore_as::standalone_sidecar::{
+        SidecarExecutableSealV1, StandaloneSidecarConfigV1, StandaloneSidecarRunnerV1,
+    };
+
+    let configured = [
+        compiler.standalone_sidecar.is_some(),
+        compiler.standalone_sidecar_sha256.is_some(),
+        compiler.standalone_scratch_root.is_some(),
+    ];
+    if compiler.backend == AsCompilerBackendV1::Game {
+        if configured.into_iter().any(|present| present) {
+            bail!(
+                "development standalone override arguments require --backend standalone or \
+                 --backend standalone-then-game"
+            );
+        }
+        return Ok(None);
+    }
+    let sidecar = compiler
+        .standalone_sidecar
+        .as_deref()
+        .context("development override requires --development-standalone-sidecar")?
+        .canonicalize()
+        .context("resolving development standalone sidecar executable")?;
+    let expected_sha256 = compiler
+        .standalone_sidecar_sha256
+        .as_deref()
+        .context("development override requires --development-standalone-sidecar-sha256")?;
+    let expected_sha256 =
+        gore_as::compiler_profile::manifest::Sha256Digest::from_hex(expected_sha256)
+            .map_err(anyhow::Error::msg)
+            .context("parsing --development-standalone-sidecar-sha256")?;
+    let profile_manifest = compiler
+        .compiler_profile_manifest
+        .as_deref()
+        .context("development override requires --development-compiler-profile-manifest")?
+        .canonicalize()
+        .context("resolving development compiler profile manifest")?;
+    let profile_root = compiler
+        .compiler_profile_root
+        .as_deref()
+        .context("development override requires --development-compiler-profile-root")?
+        .canonicalize()
+        .context("resolving development compiler profile root")?;
+    let scratch_root = compiler
+        .standalone_scratch_root
+        .as_deref()
+        .context("development override requires --development-standalone-scratch-root")?
+        .canonicalize()
+        .context("resolving development standalone scratch root")?;
+    let sidecar_len = std::fs::metadata(&sidecar)
+        .with_context(|| format!("inspecting {}", sidecar.display()))?
+        .len();
+    let config = StandaloneSidecarConfigV1::new(
+        sidecar,
+        SidecarExecutableSealV1 {
+            byte_len: sidecar_len,
+            sha256: expected_sha256,
+        },
+        profile_manifest,
+        profile_root,
+        scratch_root,
+    );
+    StandaloneSidecarRunnerV1::new(config)
+        .map(Some)
+        .map_err(anyhow::Error::msg)
+        .context("initializing development standalone compiler override")
+}
+
+fn validate_profile_inputs_before_compile(
+    profile: &gore_as::compiler_profile::manifest::CompilerProfileV1,
+    base: &[u8],
+    binds: &[u8],
+) -> Result<()> {
+    let base = gore_as::generation_receipt::ArtifactSealV1::from_bytes(base);
+    let binds = gore_as::generation_receipt::ArtifactSealV1::from_bytes(binds);
+    if base.byte_len != profile.oracle.shipping_cache.byte_len
+        || base.sha256 != profile.oracle.shipping_cache.sha256
+    {
+        bail!("qualified compiler profile does not match the selected pristine Shipping cache");
+    }
+    if binds.byte_len != profile.oracle.binds_cache.byte_len
+        || binds.sha256 != profile.oracle.binds_cache.sha256
+    {
+        bail!("qualified compiler profile does not match the selected Binds.Cache");
+    }
+    Ok(())
 }
 
 pub fn run(cmd: AsCmd) -> Result<()> {
@@ -2163,6 +2975,21 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     _ => "not checked (signature not unique)",
                 }
             );
+            println!(
+                "manager diagnostic signature matches: {}",
+                probe.manager_match_count
+            );
+            for rva in &probe.manager_matched_rvas {
+                println!("manager diagnostic RVA: 0x{rva:x}");
+            }
+            println!(
+                "manager diagnostic structure: {}",
+                match (probe.manager_match_count, probe.manager_shape_verified) {
+                    (1, true) => "verified",
+                    (1, false) => "mismatch",
+                    _ => "not checked (signature not unique)",
+                }
+            );
             if probe.match_count != 1 {
                 anyhow::bail!(
                     "diagnostics hook unavailable: signature matched {} times in {} (need exactly 1; normal `gore as compile` will fall back)",
@@ -2176,35 +3003,41 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     exe.display()
                 );
             }
+            if probe.manager_match_count != 1 {
+                anyhow::bail!(
+                    "diagnostics hook unavailable: manager diagnostic signature matched {} times in {} (need exactly 1; normal `gore as compile` will fall back)",
+                    probe.manager_match_count,
+                    exe.display()
+                );
+            }
+            if !probe.manager_shape_verified {
+                anyhow::bail!(
+                    "diagnostics hook unavailable: the unique manager diagnostic signature in {} did not match the verified FString/FDiagnostic structure (normal `gore as compile` will fall back)",
+                    exe.display()
+                );
+            }
             println!("diagnostics hook compatible");
         }
         AsCmd::Compile {
             src,
             out,
+            work_dir,
             game,
-            no_backup,
             no_diagnostics,
             diagnostics_hook,
             diagnostics_inject_delay_ms,
+            compiler,
         } => {
-            let game = gore_loc::config::game_root(game).context("resolving game path")?;
-            let opts = gore_as::compile::PrecompileOpts {
-                game_dir: game,
+            compile_full_graph_command(
                 src,
                 out,
-                backup: !no_backup,
-            };
-            let diagnostics = gore_as::diagnostics::DiagnosticsOptions {
-                disabled: no_diagnostics,
-                hook_dll: diagnostics_hook,
-                inject_delay: std::time::Duration::from_millis(diagnostics_inject_delay_ms),
-            };
-            let cache = gore_as::compile::precompile_with_diagnostics(&opts, &diagnostics)
-                .map_err(anyhow::Error::msg)?;
-            match std::fs::metadata(&cache) {
-                Ok(m) => println!("compiled -> {} ({} bytes)", cache.display(), m.len()),
-                Err(_) => println!("game ran, but no cache found at {}", cache.display()),
-            }
+                work_dir,
+                game,
+                no_diagnostics,
+                diagnostics_hook,
+                diagnostics_inject_delay_ms,
+                compiler,
+            )?;
         }
         AsCmd::CompileModule {
             op,
@@ -2218,48 +3051,281 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             no_diagnostics,
             diagnostics_hook,
             diagnostics_inject_delay_ms,
+            compiler,
         } => {
             let game = gore_loc::config::game_root(game).context("resolving game path")?;
-            let (base_override, guard) = guarded_pristine_script_cache(&game)?;
+            let work_dir = work_dir
+                .canonicalize()
+                .with_context(|| format!("resolving compiler workspace {}", work_dir.display()))?;
+            validate_compiler_work_dir(&work_dir, &game)?;
+            let source_bytes = read_regular_bounded(
+                &source,
+                gore_as::generation_receipt::MAX_GENERATION_SOURCE_FILE_BYTES_V1 as u64,
+                "AS_COMPILE_SOURCE",
+            )?;
+            let requested_mode: gore_as::compile::CompilerBackendModeV1 = compiler.backend.into();
+            let executable_path = compiler_executable_path(&game);
+            let shipping_path = compiler_shipping_path(&game);
+            let binds_path = compiler_binds_path(&game);
+            let target_paths = gore_as::compiler_target::CompilerTargetInputPathsV1 {
+                executable: &executable_path,
+                shipping_cache: &shipping_path,
+                binds_cache: &binds_path,
+            };
+            let mut standalone_runner = None;
+            let mut standalone_target = None;
+            let mut product_authority = None;
+            let mut package_unavailable = None;
+            let execution_profile = if compiler.has_development_override() {
+                if compiler.backend == AsCompilerBackendV1::Game {
+                    bail!(
+                        "development standalone overrides cannot be combined with --backend game"
+                    );
+                }
+                let runner = prepare_development_standalone_runner(&compiler)?
+                    .expect("a complete development override constructs one runner");
+                let profile = runner.profile().clone();
+                standalone_target = Some(
+                    gore_as::compiler_target::ValidatedCompilerTargetInputsV1::load(
+                        runner.profile_package(),
+                        target_paths,
+                    )
+                    .map_err(anyhow::Error::new)
+                    .context("validating the exact development compiler target")?,
+                );
+                standalone_runner = Some(CompileModuleStandaloneRunnerV1::Development(runner));
+                Some(profile)
+            } else {
+                use gore_as::standalone_package_resolver::ProductStandaloneCompilerPackageResolutionV1;
+
+                let host_module =
+                    std::env::current_exe().context("resolving the GORE host executable")?;
+                let resolution = gore_as::standalone_package_resolver::resolve_embedded_product_standalone_compiler_package_for_inputs_v1(
+                    &host_module,
+                    target_paths,
+                );
+                let mut profile = None;
+                match resolution {
+                    ProductStandaloneCompilerPackageResolutionV1::Available(available) => {
+                        let runner_config = (requested_mode
+                            != gore_as::compile::CompilerBackendModeV1::Game)
+                            .then(|| {
+                                gore_as::standalone_sidecar::StandaloneSidecarConfigV1::new(
+                                    available.sidecar_path().to_path_buf(),
+                                    available.sidecar_seal(),
+                                    available.profile_manifest_path().to_path_buf(),
+                                    available.profile_root().to_path_buf(),
+                                    work_dir.clone(),
+                                )
+                            });
+                        let (authority, target) = available.into_execution_parts();
+                        profile = Some(authority.profile_package().profile().clone());
+                        if let Some(config) = runner_config {
+                            match gore_as::standalone_sidecar::StandaloneSidecarRunnerV1::new(
+                                config,
+                            ) {
+                                Ok(runner) => {
+                                    standalone_runner =
+                                        Some(CompileModuleStandaloneRunnerV1::Product(
+                                            ProductStandaloneRunnerV1::Available(runner),
+                                        ));
+                                }
+                                Err(error) => {
+                                    let detail = format!(
+                                        "product-authenticated standalone compiler initialization \
+                                         failed before execution ({})",
+                                        error.kind().as_str()
+                                    );
+                                    package_unavailable = Some(detail.clone());
+                                    if requested_mode
+                                        == gore_as::compile::CompilerBackendModeV1::StandaloneThenGame
+                                    {
+                                        standalone_runner = Some(
+                                            CompileModuleStandaloneRunnerV1::Product(
+                                                ProductStandaloneRunnerV1::Unavailable { detail },
+                                            ),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        product_authority = Some(authority);
+                        standalone_target = Some(target);
+                    }
+                    ProductStandaloneCompilerPackageResolutionV1::BundleAbsent => {
+                        package_unavailable =
+                            Some("embedded standalone compiler bundle is absent".to_owned());
+                    }
+                    ProductStandaloneCompilerPackageResolutionV1::Unavailable(reason) => {
+                        package_unavailable =
+                            Some(format!("{:?}: {}", reason.kind(), reason.detail()));
+                    }
+                }
+                if requested_mode == gore_as::compile::CompilerBackendModeV1::Standalone
+                    && standalone_runner.is_none()
+                {
+                    bail!(
+                        "standalone compiler unavailable: {}",
+                        package_unavailable.as_deref().unwrap_or(
+                            "no product-authenticated package matched the installed target"
+                        )
+                    );
+                }
+                if compiler.generation_receipt.is_some() && product_authority.is_none() {
+                    bail!(
+                        "a generation receipt cannot be built because the product compiler package \
+                         is unavailable: {}",
+                        package_unavailable.as_deref().unwrap_or(
+                            "no product-authenticated package matched the installed target"
+                        )
+                    );
+                }
+                if requested_mode == gore_as::compile::CompilerBackendModeV1::StandaloneThenGame {
+                    if let Some(reason) = package_unavailable.as_deref() {
+                        eprintln!(
+                            "standalone compiler unavailable; using the visible game fallback: \
+                             {reason}"
+                        );
+                        if standalone_runner.is_none() {
+                            standalone_runner = Some(CompileModuleStandaloneRunnerV1::Product(
+                                ProductStandaloneRunnerV1::Unavailable {
+                                    detail: reason.to_owned(),
+                                },
+                            ));
+                        }
+                    }
+                }
+                profile
+            };
+
+            let (base_override, guard) = if let Some(target) = standalone_target.as_ref() {
+                let guard = if requested_mode == gore_as::compile::CompilerBackendModeV1::Standalone
+                {
+                    None
+                } else {
+                    Some(
+                        acquire_compile_guard(&game)
+                            .map_err(anyhow::Error::msg)
+                            .context("acquiring the compile install-mutation guard")?,
+                    )
+                };
+                (target.shipping_cache().to_vec(), guard)
+            } else if requested_mode == gore_as::compile::CompilerBackendModeV1::Standalone {
+                unreachable!("strict standalone availability was checked above")
+            } else {
+                let (base, guard) = guarded_pristine_script_cache(&game)?;
+                (base, Some(guard))
+            };
+            let binds_override = standalone_target
+                .as_ref()
+                .map(|target| target.binds_cache().to_vec());
+            if let Some(profile) = execution_profile.as_ref() {
+                if let Err(error) = validate_profile_inputs_before_compile(
+                    profile,
+                    &base_override,
+                    binds_override
+                        .as_deref()
+                        .expect("profile-bound compile has Binds snapshot"),
+                ) {
+                    return match guard {
+                        Some(guard) => Err(release_compile_guard_after_error(guard, error)),
+                        None => Err(error),
+                    };
+                }
+            }
             let opts = gore_as::compile::CompileOpts {
                 game_dir: game,
                 op,
                 module_name: module,
                 rel_path,
                 as_path: source,
-                source_override: None,
+                source_override: Some(source_bytes.clone()),
                 work_dir,
                 allow_new_symbols,
-                base_override: Some(base_override),
-                binds_override: None,
+                base_override: Some(base_override.clone()),
+                binds_override: binds_override.clone(),
             };
             let diagnostics = gore_as::diagnostics::DiagnosticsOptions {
                 disabled: no_diagnostics,
                 hook_dll: diagnostics_hook,
                 inject_delay: std::time::Duration::from_millis(diagnostics_inject_delay_ms),
             };
-            let report = gore_as::compile::compile_module_with_diagnostics_report_with_guard(
-                &opts,
-                &diagnostics,
-                guard,
-            );
+            let mut standalone = standalone_runner;
+            let mut pinned_standalone = None;
+            let report = match (guard, standalone_target) {
+                (Some(guard), Some(target)) => {
+                    gore_as::compile::compile_module_with_backend_v1_with_guard_and_target(
+                        &opts,
+                        &diagnostics,
+                        requested_mode,
+                        standalone.as_mut().map(|runner| {
+                            runner as &mut dyn gore_as::compile::StandaloneCompilerRunnerV1
+                        }),
+                        guard,
+                        target,
+                    )
+                }
+                (Some(guard), None) => gore_as::compile::compile_module_with_backend_v1_with_guard(
+                    &opts,
+                    &diagnostics,
+                    requested_mode,
+                    standalone.as_mut().map(|runner| {
+                        runner as &mut dyn gore_as::compile::StandaloneCompilerRunnerV1
+                    }),
+                    guard,
+                ),
+                (None, Some(target)) => {
+                    pinned_standalone =
+                        standalone
+                            .take()
+                            .map(|runner| TargetPinnedStandaloneRunnerV1 {
+                                runner,
+                                _target: target,
+                            });
+                    gore_as::compile::compile_module_with_backend_v1(
+                        &opts,
+                        &diagnostics,
+                        requested_mode,
+                        pinned_standalone.as_mut().map(|runner| {
+                            runner as &mut dyn gore_as::compile::StandaloneCompilerRunnerV1
+                        }),
+                    )
+                }
+                (None, None) => gore_as::compile::compile_module_with_backend_v1(
+                    &opts,
+                    &diagnostics,
+                    requested_mode,
+                    standalone.as_mut().map(|runner| {
+                        runner as &mut dyn gore_as::compile::StandaloneCompilerRunnerV1
+                    }),
+                ),
+            };
             let restore = report.install_restore_disposition();
+            let recovery_required = report.recovery_required();
+            let used_backend = report.backend_name();
+            let fallback_reason = report.fallback_reason().cloned();
             let compiled = match report.outcome {
                 gore_as::compile::CompileModuleReportOutcome::Compiled(output)
-                    if restore == gore_as::compile::InstallRestoreDisposition::RestoredExact =>
+                    if !recovery_required
+                        && matches!(
+                            (used_backend, restore),
+                            (
+                                Some(gore_as::compile::CompilerBackendNameV1::Standalone),
+                                gore_as::compile::InstallRestoreDisposition::NotStarted
+                            ) | (
+                                Some(gore_as::compile::CompilerBackendNameV1::Game),
+                                gore_as::compile::InstallRestoreDisposition::RestoredExact
+                            )
+                        ) =>
                 {
                     output
                 }
                 gore_as::compile::CompileModuleReportOutcome::Compiled(_) => bail!(
                     "COMPILE_RECOVERY_REQUIRED: compiler output was produced without proving an \
-                     exact game-install restore"
+                     exact backend/install disposition"
                 ),
                 gore_as::compile::CompileModuleReportOutcome::Failed(error)
-                    if matches!(
-                        restore,
-                        gore_as::compile::InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed
-                            | gore_as::compile::InstallRestoreDisposition::RecoveryRequiredRestoreFailed
-                    ) =>
+                    if recovery_required =>
                 {
                     bail!("COMPILE_RECOVERY_REQUIRED: {error}")
                 }
@@ -2267,23 +3333,114 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     return Err(anyhow::Error::new(error)).context("compiling module");
                 }
             };
-            let mini = std::fs::read(&compiled.mini_path).with_context(|| {
-                format!(
-                    "reading compiled mini-cache {}",
-                    compiled.mini_path.display()
+            let used_backend = used_backend.context(
+                "compiler succeeded without reporting the backend that produced its output",
+            )?;
+            let backend_receipt =
+                gore_as::generation_receipt::ReceiptBackendSelectionV1::from_compile_selection(
+                    requested_mode,
+                    used_backend,
+                    fallback_reason.as_ref(),
                 )
-            })?;
+                .map_err(anyhow::Error::msg)?;
+            let sources = [gore_as::generation_receipt::GenerationSourceFileV1 {
+                relative_path: &opts.rel_path,
+                bytes: &source_bytes,
+            }];
+            let receipt_package = product_authority
+                .as_ref()
+                .map(|authority| authority.profile_package());
+            let generation_receipt = match (
+                compiler.generation_receipt.as_ref(),
+                receipt_package,
+                binds_override.as_deref(),
+            ) {
+                (Some(_), Some(package), Some(binds)) => Some(
+                    gore_as::generation_receipt::GenerationReceiptV1::build_for_compile_output(
+                        package,
+                        &sources,
+                        &base_override,
+                        binds,
+                        &compiled,
+                        backend_receipt,
+                    )
+                    .map_err(anyhow::Error::msg)
+                    .context("building qualified generation receipt")?,
+                ),
+                (None, _, _) => None,
+                _ => {
+                    bail!(
+                        "generation receipt is missing its qualified profile package or Binds input"
+                    )
+                }
+            };
+            let mini = gore_as::generation_receipt::read_compile_output_bytes_v1(&compiled)
+                .map_err(anyhow::Error::msg)
+                .context("reading the exact retained compiled mini-cache")?;
             if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("creating {}", parent.display()))?;
             }
-            std::fs::write(&out, &mini).with_context(|| format!("writing {}", out.display()))?;
+            if generation_receipt.is_some()
+                || used_backend == gore_as::compile::CompilerBackendNameV1::Standalone
+            {
+                gore_as::generation_receipt::publish_generation_output_v1(&out, &mini)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| {
+                        format!(
+                            "atomically publishing no-clobber compiler output {}",
+                            out.display()
+                        )
+                    })?;
+            } else {
+                std::fs::write(&out, &mini)
+                    .with_context(|| format!("writing {}", out.display()))?;
+            }
+            if let (Some(path), Some(receipt)) = (
+                compiler.generation_receipt.as_ref(),
+                generation_receipt.as_ref(),
+            ) {
+                if let Some(parent) = path
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                {
+                    std::fs::create_dir_all(parent)
+                        .with_context(|| format!("creating {}", parent.display()))?;
+                }
+                if let Err(error) =
+                    gore_as::generation_receipt::publish_generation_receipt_v1(path, receipt)
+                {
+                    match gore_as::generation_receipt::rollback_generation_output_v1(&out, &mini) {
+                        Ok(()) => bail!(
+                            "GENERATION_RECEIPT_PUBLICATION_FAILED_OUTPUT_REMOVED: publishing {}: \
+                             {error}; removed the no-clobber output {} so no unqualified artifact \
+                             remains",
+                            path.display(),
+                            out.display()
+                        ),
+                        Err(cleanup) => bail!(
+                            "GENERATION_RECEIPT_RECOVERY_REQUIRED: publishing {}: {error}; failed \
+                             to remove the now-unqualified output {}: {cleanup}",
+                            path.display(),
+                            out.display()
+                        ),
+                    }
+                }
+            }
+            // Strict standalone has no install guard to carry these no-delete handles for it.
+            // Release the target only after retained-output validation and both output/receipt
+            // publication steps have finished; every early return drops this wrapper as well.
+            drop(pinned_standalone);
             println!(
-                "compiled module {:?} -> {} ({} bytes)",
+                "compiled module {:?} with {} -> {} ({} bytes)",
                 compiled.module_name,
+                used_backend,
                 out.display(),
                 mini.len()
             );
+            if let Some(path) = compiler.generation_receipt {
+                println!("generation receipt -> {}", path.display());
+            }
         }
         AsCmd::Replace {
             base,
@@ -2559,7 +3716,11 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             }
 
             if fail_on_semantic && report.any_semantic() {
-                anyhow::bail!("{n_sem} SEMANTIC-DIFF function(s) found (--fail-on-semantic)");
+                anyhow::bail!(
+                    "{n_sem} SEMANTIC-DIFF function(s) and {} unaligned module/function(s) found \
+                     (--fail-on-semantic)",
+                    report.alignment_loss_count()
+                );
             }
         }
     }
@@ -2938,10 +4099,14 @@ fn derive_class_profiles(
         for (script_class, path) in class_paths {
             let id = match schemas.resolve_class(path) {
                 Ok(id) => id,
-                Err(gore_asset::SchemaError::SchemaNotFound { .. }
-                | gore_asset::SchemaError::NotAClass(_)) => continue,
+                Err(
+                    gore_asset::SchemaError::SchemaNotFound { .. }
+                    | gore_asset::SchemaError::NotAClass(_),
+                ) => continue,
                 Err(error) => {
-                    return Err(format!("Binds class bridge: {script_class} -> {path}: {error}"));
+                    return Err(format!(
+                        "Binds class bridge: {script_class} -> {path}: {error}"
+                    ));
                 }
             };
             let canonical_path = schemas
@@ -3207,7 +4372,9 @@ fn stale_usmap_row(
     usmap_sha256: &[u8; 32],
     executable_seal: &gore_generation::FileSeal,
 ) -> Option<&'static gore_generation::GenerationRow> {
-    let mut carrying = gore_generation::rows().iter().filter(|row| row.usmap.sha256 == *usmap_sha256);
+    let mut carrying = gore_generation::rows()
+        .iter()
+        .filter(|row| row.usmap.sha256 == *usmap_sha256);
     let first = carrying.next()?;
     if first.executable == *executable_seal {
         return None;
@@ -3315,7 +4482,10 @@ fn run_qualify(
     });
     let proposed_label = label.unwrap_or_else(|| match audited {
         Some(row) => row.label.to_owned(),
-        None => format!("Unqualified build, script cache GUID {}", hex16(&script_cache_guid)),
+        None => format!(
+            "Unqualified build, script cache GUID {}",
+            hex16(&script_cache_guid)
+        ),
     });
 
     let executable_bytes = read_regular_bounded(
@@ -3459,7 +4629,10 @@ fn run_qualify(
         .map(|profile| profile.usmap_tag_map_declarations);
 
     let native = load_native_api(&paths.shipping_cache);
-    let ancestry = match (sealed.and_then(|candidate| candidate.schemas.as_ref()), &native) {
+    let ancestry = match (
+        sealed.and_then(|candidate| candidate.schemas.as_ref()),
+        &native,
+    ) {
         (Some(schemas), Some(native)) => {
             gore_as::cache::default_ancestry::DefaultNativeAncestry::from_schema_db(
                 native, &cache, schemas,
@@ -3510,7 +4683,13 @@ fn run_qualify(
     // same two functions the runtime gate runs. A qualification that spelled either of them any
     // other way would mint a row nothing on the mutation path could ever match, and the failure
     // would surface as a build the table admits and the tool refuses.
-    let published = match (&fingerprint, &binds_profile, &class_profile, bridge, sealed_seal) {
+    let published = match (
+        &fingerprint,
+        &binds_profile,
+        &class_profile,
+        bridge,
+        sealed_seal,
+    ) {
         (Some(fingerprint), Some(binds), Some(class_profile), Some(bridge), Some(usmap)) => {
             let components = gore_generation::qualify::observed_profile_components(
                 script_cache_guid,
@@ -3575,7 +4754,8 @@ fn run_qualify(
             catalog_seal_kind: "compiled curated V1 catalog payload".to_owned(),
         },
     };
-    let curated_seals = gore_story_catalog::compile_curated_seals(&generation, &naming.record_set_id);
+    let curated_seals =
+        gore_story_catalog::compile_curated_seals(&generation, &naming.record_set_id);
     if let Err(error) = &curated_seals {
         for field in ["record_set_seal", "catalog_payload_seal"] {
             note(
@@ -3828,7 +5008,8 @@ fn run_qualify(
     // them is to decompile each one out of THIS cache and compare.
     let curated_catalog = match &catalog {
         Some(path) => {
-            let bytes = read_regular_bounded(path, QUALIFY_CATALOG_MAX_BYTES, "AS_QUALIFY_CATALOG")?;
+            let bytes =
+                read_regular_bounded(path, QUALIFY_CATALOG_MAX_BYTES, "AS_QUALIFY_CATALOG")?;
             Some((
                 gore_story_catalog::StoryCatalogFile::from_json(&bytes)
                     .map_err(|error| anyhow::anyhow!("AS_QUALIFY_CATALOG: {error}"))?,
@@ -3844,7 +5025,12 @@ fn run_qualify(
             gore_story_catalog::GenerationInputLimits::default(),
         )
         .ok()
-        .map(|catalog| (catalog, "the installation's own audited story catalog".to_owned())),
+        .map(|catalog| {
+            (
+                catalog,
+                "the installation's own audited story catalog".to_owned(),
+            )
+        }),
     };
     let mut curated = QualifyCuratedJson {
         source: "none — this build is not audited and no --catalog was passed, so the curated \
@@ -3909,43 +5095,175 @@ fn run_qualify(
     let hex_or = |value: &Option<[u8; 32]>| value.as_ref().map(|bytes| hex(bytes));
     let seal_text = |seal: &Option<gore_generation::FileSeal>| seal.as_ref().map(qualify_seal_text);
     let fields = vec![
-        QualifyFieldJson { field: "id", value: Some(draft.id.clone()), derived_by: Some("--id, or the script-cache GUID prefix") },
-        QualifyFieldJson { field: "label", value: Some(draft.label.clone()), derived_by: Some("--label") },
-        QualifyFieldJson { field: "edition", value: Some(draft.edition.clone()), derived_by: Some("gore_story_catalog::capture_generation") },
-        QualifyFieldJson { field: "executable", value: seal_text(&draft.executable), derived_by: Some("gore_story_catalog::capture_generation") },
-        QualifyFieldJson { field: "shipping_cache", value: seal_text(&draft.shipping_cache), derived_by: Some("gore_story_catalog::capture_generation") },
-        QualifyFieldJson { field: "binds_cache", value: seal_text(&draft.binds_cache), derived_by: Some("gore_story_catalog::capture_generation") },
-        QualifyFieldJson { field: "usmap", value: seal_text(&draft.usmap), derived_by: Some("gore as qualify, USMAP selection") },
-        QualifyFieldJson { field: "script_cache_guid", value: draft.script_cache_guid.as_ref().map(hex16), derived_by: Some("gore_as::cache::header::CacheHeader::parse") },
-        QualifyFieldJson { field: "script_cache_mutation_stable_sha256", value: hex_or(&draft.script_cache_mutation_stable_sha256), derived_by: Some("gore_as::cache::default_fingerprint (crate-private)") },
-        QualifyFieldJson { field: "scalar_default_operand_count", value: draft.scalar_default_operand_count.map(|value| value.to_string()), derived_by: Some("gore_as::cache::default_patch::default_sites") },
-        QualifyFieldJson { field: "gameplay_tag_float32_operand_count", value: draft.gameplay_tag_float32_operand_count.map(|value| value.to_string()), derived_by: Some("gore_as::cache::default_fingerprint (crate-private)") },
-        QualifyFieldJson { field: "binds_field_map_sha256", value: hex_or(&draft.binds_field_map_sha256), derived_by: Some("gore_as::cache::binds (crate-private)") },
-        QualifyFieldJson { field: "binds_class_path_map_sha256", value: hex_or(&draft.binds_class_path_map_sha256), derived_by: Some("gore_as::cache::binds (crate-private)") },
-        QualifyFieldJson { field: "usmap_class_graph_sha256", value: hex_or(&draft.usmap_class_graph_sha256), derived_by: Some("gore_generation::qualify::canonical_rows_sha256 over gore_asset::SchemaDb::exact_class_super_schema_id") },
-        QualifyFieldJson { field: "resolved_class_profile_sha256", value: hex_or(&draft.resolved_class_profile_sha256), derived_by: Some("gore_as::cache::default_ancestry (crate-private)") },
-        QualifyFieldJson { field: "gameplay_tag_float32_map_profile_sha256", value: hex_or(&draft.gameplay_tag_float32_map_profile_sha256), derived_by: Some("DefaultNativeAncestry::gameplay_tag_float32_map_profile_sha256") },
-        QualifyFieldJson { field: "native_ancestry_profile_id", value: draft.native_ancestry_profile_id.clone(), derived_by: Some("DefaultNativeAncestry::from_schema_db, which re-derives it through gore_generation::derived_profile_sha256 before returning") },
-        QualifyFieldJson { field: "gameplay_tag_float32_map_proof_id", value: draft.gameplay_tag_float32_map_proof_id.clone(), derived_by: Some("DefaultNativeAncestry::gameplay_tag_float32_map_proof_id") },
-        QualifyFieldJson { field: "record_set_id", value: Some(draft.record_set_id.clone()), derived_by: None },
-        QualifyFieldJson { field: "record_set_seal", value: seal_text(&draft.record_set_seal), derived_by: Some("gore_story_catalog (crate-private canonical record bytes)") },
-        QualifyFieldJson { field: "catalog_payload_seal", value: seal_text(&draft.catalog_payload_seal), derived_by: Some("gore_story_catalog (crate-private canonical payload bytes)") },
-        QualifyFieldJson { field: "catalog_label", value: Some(draft.catalog_label.clone()), derived_by: None },
-        QualifyFieldJson { field: "record_seal_kind", value: Some(draft.record_seal_kind.clone()), derived_by: None },
-        QualifyFieldJson { field: "catalog_seal_kind", value: Some(draft.catalog_seal_kind.clone()), derived_by: None },
-        QualifyFieldJson { field: "audited_item_generation", value: Some(draft.audited_item_generation.clone()), derived_by: None },
+        QualifyFieldJson {
+            field: "id",
+            value: Some(draft.id.clone()),
+            derived_by: Some("--id, or the script-cache GUID prefix"),
+        },
+        QualifyFieldJson {
+            field: "label",
+            value: Some(draft.label.clone()),
+            derived_by: Some("--label"),
+        },
+        QualifyFieldJson {
+            field: "edition",
+            value: Some(draft.edition.clone()),
+            derived_by: Some("gore_story_catalog::capture_generation"),
+        },
+        QualifyFieldJson {
+            field: "executable",
+            value: seal_text(&draft.executable),
+            derived_by: Some("gore_story_catalog::capture_generation"),
+        },
+        QualifyFieldJson {
+            field: "shipping_cache",
+            value: seal_text(&draft.shipping_cache),
+            derived_by: Some("gore_story_catalog::capture_generation"),
+        },
+        QualifyFieldJson {
+            field: "binds_cache",
+            value: seal_text(&draft.binds_cache),
+            derived_by: Some("gore_story_catalog::capture_generation"),
+        },
+        QualifyFieldJson {
+            field: "usmap",
+            value: seal_text(&draft.usmap),
+            derived_by: Some("gore as qualify, USMAP selection"),
+        },
+        QualifyFieldJson {
+            field: "script_cache_guid",
+            value: draft.script_cache_guid.as_ref().map(hex16),
+            derived_by: Some("gore_as::cache::header::CacheHeader::parse"),
+        },
+        QualifyFieldJson {
+            field: "script_cache_mutation_stable_sha256",
+            value: hex_or(&draft.script_cache_mutation_stable_sha256),
+            derived_by: Some("gore_as::cache::default_fingerprint (crate-private)"),
+        },
+        QualifyFieldJson {
+            field: "scalar_default_operand_count",
+            value: draft
+                .scalar_default_operand_count
+                .map(|value| value.to_string()),
+            derived_by: Some("gore_as::cache::default_patch::default_sites"),
+        },
+        QualifyFieldJson {
+            field: "gameplay_tag_float32_operand_count",
+            value: draft
+                .gameplay_tag_float32_operand_count
+                .map(|value| value.to_string()),
+            derived_by: Some("gore_as::cache::default_fingerprint (crate-private)"),
+        },
+        QualifyFieldJson {
+            field: "binds_field_map_sha256",
+            value: hex_or(&draft.binds_field_map_sha256),
+            derived_by: Some("gore_as::cache::binds (crate-private)"),
+        },
+        QualifyFieldJson {
+            field: "binds_class_path_map_sha256",
+            value: hex_or(&draft.binds_class_path_map_sha256),
+            derived_by: Some("gore_as::cache::binds (crate-private)"),
+        },
+        QualifyFieldJson {
+            field: "usmap_class_graph_sha256",
+            value: hex_or(&draft.usmap_class_graph_sha256),
+            derived_by: Some(
+                "gore_generation::qualify::canonical_rows_sha256 over gore_asset::SchemaDb::exact_class_super_schema_id",
+            ),
+        },
+        QualifyFieldJson {
+            field: "resolved_class_profile_sha256",
+            value: hex_or(&draft.resolved_class_profile_sha256),
+            derived_by: Some("gore_as::cache::default_ancestry (crate-private)"),
+        },
+        QualifyFieldJson {
+            field: "gameplay_tag_float32_map_profile_sha256",
+            value: hex_or(&draft.gameplay_tag_float32_map_profile_sha256),
+            derived_by: Some("DefaultNativeAncestry::gameplay_tag_float32_map_profile_sha256"),
+        },
+        QualifyFieldJson {
+            field: "native_ancestry_profile_id",
+            value: draft.native_ancestry_profile_id.clone(),
+            derived_by: Some(
+                "DefaultNativeAncestry::from_schema_db, which re-derives it through gore_generation::derived_profile_sha256 before returning",
+            ),
+        },
+        QualifyFieldJson {
+            field: "gameplay_tag_float32_map_proof_id",
+            value: draft.gameplay_tag_float32_map_proof_id.clone(),
+            derived_by: Some("DefaultNativeAncestry::gameplay_tag_float32_map_proof_id"),
+        },
+        QualifyFieldJson {
+            field: "record_set_id",
+            value: Some(draft.record_set_id.clone()),
+            derived_by: None,
+        },
+        QualifyFieldJson {
+            field: "record_set_seal",
+            value: seal_text(&draft.record_set_seal),
+            derived_by: Some("gore_story_catalog (crate-private canonical record bytes)"),
+        },
+        QualifyFieldJson {
+            field: "catalog_payload_seal",
+            value: seal_text(&draft.catalog_payload_seal),
+            derived_by: Some("gore_story_catalog (crate-private canonical payload bytes)"),
+        },
+        QualifyFieldJson {
+            field: "catalog_label",
+            value: Some(draft.catalog_label.clone()),
+            derived_by: None,
+        },
+        QualifyFieldJson {
+            field: "record_seal_kind",
+            value: Some(draft.record_seal_kind.clone()),
+            derived_by: None,
+        },
+        QualifyFieldJson {
+            field: "catalog_seal_kind",
+            value: Some(draft.catalog_seal_kind.clone()),
+            derived_by: None,
+        },
+        QualifyFieldJson {
+            field: "audited_item_generation",
+            value: Some(draft.audited_item_generation.clone()),
+            derived_by: None,
+        },
     ];
 
     let mut witnesses = std::collections::BTreeMap::new();
     for (key, witness) in [
-        ("native_ancestry_profile_id", "gore as qualify (gore_as::cache::default_ancestry::DefaultNativeAncestry::from_schema_db)"),
-        ("gameplay_tag_float32_map_proof_id", "gore as qualify (DefaultNativeAncestry::gameplay_tag_float32_map_proof_id)"),
-        ("scalar_default_operand_count", "gore as qualify (gore_as::cache::default_patch::default_sites)"),
-        ("gameplay_tag_float32_operand_count", "gore as qualify (not derivable: gore_as::cache::default_fingerprint is crate-private)"),
-        ("class_count", "gore as qualify (DefaultNativeAncestry::class_count)"),
-        ("gameplay_tag_float32_map_field_count", "gore as qualify (gore_asset::SchemaDb::exact_declared_property_shape over every class the sealed dump declares)"),
-        ("unresolved_fields_with_ancestry", "gore as qualify (gore_as::cache::default_patch::default_sites)"),
-        ("direct_windows", "gore as qualify (gore_as::cache::default_patch::default_sites)"),
+        (
+            "native_ancestry_profile_id",
+            "gore as qualify (gore_as::cache::default_ancestry::DefaultNativeAncestry::from_schema_db)",
+        ),
+        (
+            "gameplay_tag_float32_map_proof_id",
+            "gore as qualify (DefaultNativeAncestry::gameplay_tag_float32_map_proof_id)",
+        ),
+        (
+            "scalar_default_operand_count",
+            "gore as qualify (gore_as::cache::default_patch::default_sites)",
+        ),
+        (
+            "gameplay_tag_float32_operand_count",
+            "gore as qualify (not derivable: gore_as::cache::default_fingerprint is crate-private)",
+        ),
+        (
+            "class_count",
+            "gore as qualify (DefaultNativeAncestry::class_count)",
+        ),
+        (
+            "gameplay_tag_float32_map_field_count",
+            "gore as qualify (gore_asset::SchemaDb::exact_declared_property_shape over every class the sealed dump declares)",
+        ),
+        (
+            "unresolved_fields_with_ancestry",
+            "gore as qualify (gore_as::cache::default_patch::default_sites)",
+        ),
+        (
+            "direct_windows",
+            "gore as qualify (gore_as::cache::default_patch::default_sites)",
+        ),
     ] {
         witnesses.insert(key, witness.to_owned());
     }
@@ -3977,7 +5295,9 @@ fn run_qualify(
         native_ancestry_profile_id: draft.native_ancestry_profile_id.clone(),
         gameplay_tag_float32_map_proof_id: draft.gameplay_tag_float32_map_proof_id.clone(),
         scalar_default_operand_count: draft.scalar_default_operand_count.map(|v| v as u64),
-        gameplay_tag_float32_operand_count: draft.gameplay_tag_float32_operand_count.map(|v| v as u64),
+        gameplay_tag_float32_operand_count: draft
+            .gameplay_tag_float32_operand_count
+            .map(|v| v as u64),
         class_count: ancestry.as_ref().map(|a| a.class_count() as u64),
         gameplay_tag_float32_map_field_count: usmap_tag_map_declarations.map(|v| v as u64),
         unresolved_fields_with_ancestry: ancestry
@@ -4167,10 +5487,7 @@ fn print_qualify_report(document: &QualifyJson) {
     ] {
         println!("  {name}  {:>12} bytes  {}", file.byte_len, file.sha256);
     }
-    println!(
-        "  script cache GUID  {}",
-        document.inputs.script_cache_guid
-    );
+    println!("  script cache GUID  {}", document.inputs.script_cache_guid);
     println!("USMAP");
     match &document.usmap_selection.sealed {
         Some(file) => println!(
@@ -4220,7 +5537,11 @@ fn print_qualify_report(document: &QualifyJson) {
     for module in &document.curated_records.modules {
         println!(
             "  {}  {}  {}",
-            if module.reproduces { "ok      " } else { "DIVERGED" },
+            if module.reproduces {
+                "ok      "
+            } else {
+                "DIVERGED"
+            },
             module.module,
             match (&module.observed_byte_len, &module.observed_sha256) {
                 (Some(len), Some(sha)) => format!("{len} bytes / {sha}"),
@@ -4270,6 +5591,81 @@ fn qualify_count(
 mod default_cli_tests {
     use super::*;
 
+    struct SuccessfulStandaloneRunner;
+
+    impl gore_as::compile::StandaloneCompilerRunnerV1 for SuccessfulStandaloneRunner {
+        fn run_regen(
+            &mut self,
+            _inputs: gore_as::compile::StandaloneCompilerInputsV1<'_>,
+        ) -> Result<
+            gore_as::compile::StandaloneCompilerOutputV1,
+            gore_as::compile::CompilerBackendFailureV1,
+        > {
+            Ok(gore_as::compile::StandaloneCompilerOutputV1::detached(
+                PathBuf::from("retained-test-output.Cache"),
+            ))
+        }
+    }
+
+    struct TargetDropWitness(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for TargetDropWitness {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn product_runner_initialization_failure_is_a_structured_full_graph_unavailability() {
+        let mut runner = ProductStandaloneRunnerV1::Unavailable {
+            detail: "catalog-authenticated sidecar initialization failed".into(),
+        };
+        let error = gore_as::compile::StandaloneCompilerRunnerV1::run_full_graph(
+            &mut runner,
+            gore_as::compile::StandaloneFullGraphCompilerInputsV1 {
+                source_tree: Path::new("."),
+                changes: &[],
+                final_manifest: &[],
+                base_cache: &[],
+                binds_cache: &[],
+            },
+        )
+        .expect_err("fallback must receive the package initialization failure");
+        assert_eq!(
+            error.kind(),
+            gore_as::compile::CompilerBackendFailureKindV1::Unavailable
+        );
+        assert_eq!(
+            error.detail(),
+            "catalog-authenticated sidecar initialization failed"
+        );
+    }
+
+    #[test]
+    fn strict_standalone_wrapper_retains_target_after_sidecar_return() {
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut runner = TargetPinnedStandaloneRunnerV1 {
+            runner: SuccessfulStandaloneRunner,
+            _target: TargetDropWitness(dropped.clone()),
+        };
+        let output = gore_as::compile::StandaloneCompilerRunnerV1::run_regen(
+            &mut runner,
+            gore_as::compile::StandaloneCompilerInputsV1 {
+                source_tree: Path::new("."),
+                overlays: &[],
+                base_cache: None,
+                binds_cache: None,
+            },
+        )
+        .unwrap();
+
+        assert!(!dropped.load(std::sync::atomic::Ordering::SeqCst));
+        drop(output);
+        assert!(!dropped.load(std::sync::atomic::Ordering::SeqCst));
+        drop(runner);
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
     #[test]
     fn a_dump_two_generations_share_is_stale_for_neither_of_them() {
         // The guard asked the *first* row carrying the seal, and two audited rows deliberately
@@ -4301,7 +5697,10 @@ mod default_cli_tests {
         }
 
         // And a dump really is stale for an executable no row pairs it with.
-        let foreign = gore_generation::FileSeal { byte_len: 1, sha256: [0x5a; 32] };
+        let foreign = gore_generation::FileSeal {
+            byte_len: 1,
+            sha256: [0x5a; 32],
+        };
         let flagged = stale_usmap_row(&sharing[0].usmap.sha256, &foreign)
             .expect("an executable no row carries must not pass");
         assert_eq!(flagged.usmap.sha256, sharing[0].usmap.sha256);
@@ -4466,10 +5865,13 @@ mod default_cli_tests {
 
         let mut hotfix: serde_json::Value = serde_json::from_str(VALID_TAG_MAP).unwrap();
         hotfix["ancestry_profile"] = serde_json::Value::String(
-            gore_generation::ROW_G1R_24169431.native_ancestry_profile_id.into(),
+            gore_generation::ROW_G1R_24169431
+                .native_ancestry_profile_id
+                .into(),
         );
         hotfix["map_proof_id"] = serde_json::Value::String(
-            gore_generation::ROW_G1R_24169431.gameplay_tag_float32_map_proof_id
+            gore_generation::ROW_G1R_24169431
+                .gameplay_tag_float32_map_proof_id
                 .into(),
         );
         serde_json::from_value::<TagMapSelectorJson>(hotfix.clone())

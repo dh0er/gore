@@ -158,7 +158,7 @@ final class ScriptCompileInstallSafetyController
     ScriptCompileReport report, {
     required String gameRoot,
   }) {
-    if (!report.recoveryRequired) return;
+    if (!report.gameInstallRecoveryRequired) return;
     final evidence = ScriptCompileRecoveryEvidence.fromReport(report);
     _recordRecoveryForRoot(gameRoot, evidence);
   }

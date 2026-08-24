@@ -7,17 +7,27 @@
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gore_as::compile::{
-    acquire_compile_install_mutation, check_project_modules_with_diagnostics_report_with_guard,
-    InstallMutationGuard, InstallRestoreDisposition, ProjectCompileOverlay,
-    ProjectCompilerCheckOpts, ProjectCompilerCheckOutcome, ProjectCompilerCheckReport,
+    acquire_compile_install_mutation, base_full_graph_manifest_v1,
+    check_project_modules_with_diagnostics_report_with_guard,
+    compile_full_graph_standalone_v1_with_target, compile_full_graph_with_backend_v1_with_guard,
+    compile_full_graph_with_backend_v1_with_guard_and_target, CompilerBackendModeV1,
+    CompilerBackendNameV1, FullGraphCompileChangeV1, FullGraphCompileOperationV1,
+    FullGraphCompileOptsV1, FullGraphCompileOutcomeV1, FullGraphCompileReportV1,
+    FullGraphFinalModuleV1, FullGraphPublicationDispositionV1, InstallMutationGuard,
+    InstallRestoreDisposition, ProjectCompileOverlay, ProjectCompilerCheckOpts,
+    ProjectCompilerCheckOutcome, ProjectCompilerCheckReport,
     ProjectCompilerClosingAuditDisposition, ProjectCompilerOutputDisposition,
+    MAX_FULL_GRAPH_COMPILE_CHANGES_V1, MAX_FULL_GRAPH_FINAL_MODULES_V1,
     MAX_PROJECT_COMPILER_CHECK_MODULES,
 };
+use gore_as::compiler_backend::{CompilerBackendDiagnosticSeverityV1, CompilerBackendFailureV1};
 use gore_as::diagnostics::DiagnosticsOptions;
+use gore_as::standalone_package_resolver::ProductStandaloneCompilerPackageIdentityV1;
+use gore_as::standalone_sidecar::{StandaloneSidecarConfigV1, StandaloneSidecarRunnerV1};
 use gore_authoring::{
     AssetVerification, ContentSeal, EntityId, ProjectRevision3, Revision3EntityKind,
     Revision3EntityPayload, Revision3OriginRef, Revision3ScriptModule, Revision3TypedRef,
@@ -44,8 +54,14 @@ use crate::err;
 use crate::script_compile_report::{
     compile_error_parts, diagnostics_rejection, diagnostics_report_json, install_restore_label,
 };
+use crate::standalone_compiler_package::{
+    backend_evidence, backend_evidence_with_package, bundle_absent_fallback_reason,
+    package_unavailable_fallback_reason, resolve_product_standalone_compiler_for_game_v1,
+    CompilerBackendWireV2, ResolvedProductStandaloneCompilerV1, BUNDLE_ABSENT_DETAIL,
+};
 
 pub(super) const COMMAND: &str = "authoring_store_check_revision3_project_compiler_v1";
+pub(super) const COMMAND_V2: &str = "authoring_store_check_revision3_project_compiler_v2";
 
 const MAX_PATH_BYTES: usize = 32 * 1024;
 const MAX_HEAD_JSON_BYTES: usize = 64 * 1024;
@@ -63,6 +79,15 @@ struct ExactWireRequest<P> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProjectCompilerWirePayload {
+    expected_head_json: String,
+    game_root: String,
+    root: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectCompilerWirePayloadV2 {
+    compiler_backend: CompilerBackendWireV2,
     expected_head_json: String,
     game_root: String,
     root: String,
@@ -206,6 +231,755 @@ pub(super) fn check_revision3_project_compiler_v1_raw(input: &str) -> Value {
     check_revision3_project_compiler_v1_inner(input).unwrap_or_else(Failure::response)
 }
 
+pub(super) fn check_revision3_project_compiler_v2_raw(input: &str) -> Value {
+    check_revision3_project_compiler_v2_inner(input).unwrap_or_else(Failure::response)
+}
+
+fn check_revision3_project_compiler_v2_inner(input: &str) -> Result<Value, Failure> {
+    let payload: ProjectCompilerWirePayloadV2 = parse_exact_wire_for(input, COMMAND_V2)?;
+    let requested = payload.compiler_backend;
+    validate_path(&payload.root)?;
+    validate_path(&payload.game_root)?;
+    let expected_head = parse_canonical_head(&payload.expected_head_json)?;
+    let selection =
+        open_initial_selection(&payload.root, expected_head, payload.expected_head_json)?;
+    let mut graph = close_module_graph(&selection.project)?;
+    let game_root = PathBuf::from(&payload.game_root);
+
+    // Package qualification is deliberately completed before game-capable modes acquire the
+    // install-mutation guard. In particular, an absent product bundle cannot create an install
+    // lock. A qualified target remains pinned from here through both explicit fallback attempts.
+    let mut available_package = None;
+    let mut unavailable_fallback = None;
+    if requested != CompilerBackendWireV2::Game {
+        match resolve_product_standalone_compiler_for_game_v1(&game_root) {
+            Ok(ResolvedProductStandaloneCompilerV1::Available(package)) => {
+                available_package = Some(package);
+            }
+            Ok(ResolvedProductStandaloneCompilerV1::BundleAbsent) => {
+                if requested == CompilerBackendWireV2::Standalone {
+                    return unavailable_standalone_project_response(
+                        &selection,
+                        &mut graph,
+                        requested,
+                        "AUTHORING_REVISION3_PROJECT_STANDALONE_BUNDLE_ABSENT",
+                        BUNDLE_ABSENT_DETAIL,
+                    );
+                }
+                unavailable_fallback = Some(bundle_absent_fallback_reason());
+            }
+            Ok(ResolvedProductStandaloneCompilerV1::Unavailable(reason)) => {
+                if requested == CompilerBackendWireV2::Standalone {
+                    return unavailable_standalone_project_response(
+                        &selection,
+                        &mut graph,
+                        requested,
+                        "AUTHORING_REVISION3_PROJECT_STANDALONE_PACKAGE_UNAVAILABLE",
+                        format!("{:?}: {}", reason.kind(), reason.detail()),
+                    );
+                }
+                unavailable_fallback = Some(package_unavailable_fallback_reason(&reason));
+            }
+            Err(message) => {
+                if requested == CompilerBackendWireV2::Standalone {
+                    return unavailable_standalone_project_response(
+                        &selection,
+                        &mut graph,
+                        requested,
+                        "AUTHORING_REVISION3_PROJECT_STANDALONE_PACKAGE_LOCATION",
+                        message,
+                    );
+                }
+                unavailable_fallback = Some(json!({
+                    "failed_backend": CompilerBackendNameV1::Standalone.as_str(),
+                    "failure_kind": "unavailable",
+                    "detail": message,
+                }));
+            }
+        }
+    }
+
+    let mut guard = if requested == CompilerBackendWireV2::Standalone {
+        None
+    } else {
+        Some(
+            acquire_compile_install_mutation(&game_root).map_err(|message| {
+                Failure::new(
+                    "AUTHORING_REVISION3_PROJECT_COMPILER_INSTALL_UNAVAILABLE",
+                    message,
+                )
+            })?,
+        )
+    };
+    let (catalog, shipping, binds) = match build_fresh_game_inputs(&game_root) {
+        Ok(inputs) => inputs,
+        Err(failure) => {
+            return fail_v2_preflight_with_optional_guard(
+                guard.take(),
+                Failure::new(map_game_input_code(failure.code), failure.message),
+            );
+        }
+    };
+    let inputs = FreshGameInputs {
+        catalog,
+        shipping,
+        binds,
+    };
+    if let Some(package) = available_package.as_ref() {
+        if package.target_inputs().shipping_cache() != inputs.shipping
+            || package.target_inputs().binds_cache() != inputs.binds
+        {
+            return fail_v2_preflight_with_optional_guard(
+                guard.take(),
+                Failure::new(
+                    "AUTHORING_REVISION3_PROJECT_COMPILER_GAME_DRIFT",
+                    "the product-qualified compiler target differs from the exact Story game snapshot",
+                ),
+            );
+        }
+    }
+    if let Err(failure) = validate_game_target(&selection.project, &inputs.catalog) {
+        return fail_v2_preflight_with_optional_guard(guard.take(), failure);
+    }
+    if graph.quest_count != 0 {
+        let base_inventory =
+            match build_base_game_inventory(&inputs.catalog, &inputs.shipping, &inputs.binds) {
+                Ok(inventory) => inventory,
+                Err(error) => {
+                    return fail_v2_preflight_with_optional_guard(
+                        guard.take(),
+                        Failure::new(
+                            "AUTHORING_REVISION3_PROJECT_COMPILER_GAME_INPUT_INVALID",
+                            format!("sealed game Script inputs could not be inventoried: {error}"),
+                        ),
+                    );
+                }
+            };
+        if let Err(failure) =
+            regenerate_quest_modules(&selection, &mut graph, &inputs.catalog, &base_inventory)
+        {
+            return fail_v2_preflight_with_optional_guard(guard.take(), failure);
+        }
+    }
+    if let Err(failure) = validate_generated_modules(&selection.project, &graph) {
+        return fail_v2_preflight_with_optional_guard(guard.take(), failure);
+    }
+    if let Err(failure) = sort_and_validate_compile_identities(&mut graph) {
+        return fail_v2_preflight_with_optional_guard(guard.take(), failure);
+    }
+    let manifest = match seal_module_manifest(&selection, &graph) {
+        Ok(manifest) => manifest,
+        Err(failure) => return fail_v2_preflight_with_optional_guard(guard.take(), failure),
+    };
+    let game_inputs = match game_input_evidence(&inputs.catalog) {
+        Ok(evidence) => evidence,
+        Err(failure) => return fail_v2_preflight_with_optional_guard(guard.take(), failure),
+    };
+
+    if graph.modules.is_empty() {
+        let closing = close_revalidation(&selection, &game_root, &inputs.catalog, &inputs.shipping);
+        let package_identity = available_package.as_ref().map(|package| package.identity());
+        let mut compiler = if let Some(mut held) = guard.take() {
+            match held.release() {
+                Ok(()) if closing.is_exact() => empty_compiler_evidence(),
+                Ok(()) => return Err(map_closing_failure(closing)),
+                Err(error) => {
+                    held.preserve_for_manual_recovery();
+                    compiler_failure_evidence(
+                        "COMPILE_INSTALL_GUARD_RELEASE_FAILED",
+                        error,
+                        Value::Null,
+                        "not_started",
+                        true,
+                        0,
+                        "not_created",
+                    )
+                }
+            }
+        } else if closing.is_exact() {
+            empty_compiler_evidence()
+        } else {
+            return Err(map_closing_failure(closing));
+        };
+        compiler["compiler_backend"] = backend_evidence_with_package(
+            requested,
+            None,
+            false,
+            false,
+            package_identity,
+            unavailable_fallback.take(),
+        );
+        return project_response(&selection, &graph, manifest, game_inputs, compiler, closing);
+    }
+
+    let private_workspace = match FullGraphPrivateWorkspaceV2::create() {
+        Ok(workspace) => workspace,
+        Err(failure) => {
+            return fail_v2_preflight_with_optional_guard(guard.take(), failure);
+        }
+    };
+    let (changes, final_manifest) = match project_full_graph_plan_v2(&graph, &inputs.shipping) {
+        Ok(plan) => plan,
+        Err(failure) => {
+            return fail_v2_preflight_with_optional_guard(guard.take(), failure);
+        }
+    };
+
+    let mut standalone_runner = None;
+    let mut authority = None;
+    let mut target = None;
+    let mut runner_unavailable = None;
+    if let Some(package) = available_package.take() {
+        let config = StandaloneSidecarConfigV1::new(
+            package.sidecar_path().to_path_buf(),
+            package.sidecar_seal(),
+            package.profile_manifest_path().to_path_buf(),
+            package.profile_root().to_path_buf(),
+            private_workspace.scratch_dir.clone(),
+        );
+        let runner = StandaloneSidecarRunnerV1::new(config);
+        let (package_authority, target_inputs) = package.into_execution_parts();
+        authority = Some(package_authority);
+        target = Some(target_inputs);
+        match runner {
+            Ok(runner) => standalone_runner = Some(runner),
+            Err(failure) => runner_unavailable = Some(failure),
+        }
+    }
+
+    if requested == CompilerBackendWireV2::Standalone && standalone_runner.is_none() {
+        debug_assert!(guard.is_none());
+        let failure = runner_unavailable
+            .as_ref()
+            .expect("strict standalone reached execution only with a qualified package");
+        let closing = close_revalidation(&selection, &game_root, &inputs.catalog, &inputs.shipping);
+        if !closing.is_exact() {
+            return Err(map_closing_failure(closing));
+        }
+        let mut failure_detail = Value::String(failure.to_string());
+        let mut private_paths = vec![
+            private_workspace.root.path(),
+            private_workspace.work_dir.as_path(),
+            private_workspace.output_path.as_path(),
+            private_workspace.scratch_dir.as_path(),
+        ];
+        if let Some(authority) = authority.as_ref() {
+            private_paths.push(authority.sidecar_path());
+            private_paths.push(authority.profile_manifest_path());
+            private_paths.push(authority.profile_root());
+        }
+        redact_private_paths(&mut failure_detail, &private_paths);
+        let mut compiler = compiler_failure_evidence(
+            "AUTHORING_REVISION3_PROJECT_STANDALONE_RUNNER_UNAVAILABLE",
+            failure_detail
+                .as_str()
+                .unwrap_or("standalone runner initialization failed"),
+            Value::Null,
+            "not_started",
+            false,
+            0,
+            "not_created",
+        );
+        compiler["compiler_backend"] = backend_evidence_with_package(
+            requested,
+            None,
+            false,
+            false,
+            authority.as_ref().map(|authority| authority.identity()),
+            None,
+        );
+        return project_response(&selection, &graph, manifest, game_inputs, compiler, closing);
+    }
+
+    if let Some(failure) = runner_unavailable.as_ref() {
+        unavailable_fallback = Some(fallback_reason_from_backend_failure(failure));
+    }
+    let compiler_opts = FullGraphCompileOptsV1 {
+        game_dir: game_root.clone(),
+        work_dir: private_workspace.work_dir.clone(),
+        output_path: private_workspace.output_path.clone(),
+        changes,
+        final_manifest,
+        base_cache: inputs.shipping,
+        binds_cache: inputs.binds,
+    };
+    let closing = Cell::new(ClosingRevalidation::NOT_RUN);
+    let audit = || {
+        let audited = close_revalidation(
+            &selection,
+            &game_root,
+            &inputs.catalog,
+            &compiler_opts.base_cache,
+        );
+        closing.set(audited);
+        audited
+            .is_exact()
+            .then_some(())
+            .ok_or_else(|| "exact-current Store/game closing audit failed".to_owned())
+    };
+    let report = match requested {
+        CompilerBackendWireV2::Standalone => compile_full_graph_standalone_v1_with_target(
+            &compiler_opts,
+            standalone_runner
+                .as_mut()
+                .expect("strict standalone runner availability was checked"),
+            audit,
+            target
+                .take()
+                .expect("qualified standalone execution retains exact target inputs"),
+        ),
+        CompilerBackendWireV2::StandaloneThenGame if standalone_runner.is_some() => {
+            compile_full_graph_with_backend_v1_with_guard_and_target(
+                &compiler_opts,
+                &project_diagnostics_options(),
+                CompilerBackendModeV1::StandaloneThenGame,
+                standalone_runner
+                    .as_mut()
+                    .map(|runner| runner as &mut dyn gore_as::compile::StandaloneCompilerRunnerV1),
+                guard
+                    .take()
+                    .expect("game-capable full-graph execution holds one install guard"),
+                audit,
+                target
+                    .take()
+                    .expect("qualified fallback execution retains exact target inputs"),
+            )
+        }
+        CompilerBackendWireV2::StandaloneThenGame => {
+            let held = guard
+                .take()
+                .expect("game fallback holds one install-mutation guard");
+            match target.take() {
+                Some(target) => compile_full_graph_with_backend_v1_with_guard_and_target(
+                    &compiler_opts,
+                    &project_diagnostics_options(),
+                    CompilerBackendModeV1::Game,
+                    None,
+                    held,
+                    audit,
+                    target,
+                ),
+                None => compile_full_graph_with_backend_v1_with_guard(
+                    &compiler_opts,
+                    &project_diagnostics_options(),
+                    CompilerBackendModeV1::Game,
+                    None,
+                    held,
+                    audit,
+                ),
+            }
+        }
+        CompilerBackendWireV2::Game => compile_full_graph_with_backend_v1_with_guard(
+            &compiler_opts,
+            &project_diagnostics_options(),
+            CompilerBackendModeV1::Game,
+            None,
+            guard
+                .take()
+                .expect("game full-graph execution holds one install-mutation guard"),
+            audit,
+        ),
+    };
+    let closing = closing.get();
+    report.finish_while_target_pinned(|report| {
+        let mut compiler_backend = full_graph_backend_evidence_v2(
+            &report,
+            requested,
+            authority.as_ref().map(|authority| authority.identity()),
+            unavailable_fallback,
+        );
+        let mut private_paths = vec![
+            private_workspace.root.path(),
+            private_workspace.work_dir.as_path(),
+            private_workspace.output_path.as_path(),
+            private_workspace.scratch_dir.as_path(),
+            game_root.as_path(),
+            Path::new(&payload.root),
+        ];
+        if let Some(authority) = authority.as_ref() {
+            private_paths.push(authority.sidecar_path());
+            private_paths.push(authority.profile_manifest_path());
+            private_paths.push(authority.profile_root());
+        }
+        redact_private_paths(&mut compiler_backend, &private_paths);
+        let mut compiler = full_graph_compiler_evidence_v2(report, &private_paths);
+        compiler["compiler_backend"] = compiler_backend;
+        project_response(&selection, &graph, manifest, game_inputs, compiler, closing)
+    })
+}
+
+struct FullGraphPrivateWorkspaceV2 {
+    root: tempfile::TempDir,
+    work_dir: PathBuf,
+    output_path: PathBuf,
+    scratch_dir: PathBuf,
+}
+
+impl FullGraphPrivateWorkspaceV2 {
+    fn create() -> Result<Self, Failure> {
+        let root = tempfile::Builder::new()
+            .prefix("gore-r3-full-graph-")
+            .tempdir()
+            .map_err(|_| {
+                Failure::new(
+                    "AUTHORING_REVISION3_PROJECT_COMPILER_STAGING_UNAVAILABLE",
+                    "native-private full-graph compiler workspace could not be allocated",
+                )
+            })?;
+        let work_dir = root.path().join("work");
+        let output_dir = root.path().join("output");
+        let scratch_dir = root.path().join("sidecar-scratch");
+        for directory in [&work_dir, &output_dir, &scratch_dir] {
+            std::fs::create_dir(directory).map_err(|_| {
+                Failure::new(
+                    "AUTHORING_REVISION3_PROJECT_COMPILER_STAGING_UNAVAILABLE",
+                    "native-private full-graph compiler directories could not be created",
+                )
+            })?;
+        }
+        Ok(Self {
+            output_path: output_dir.join("compiled.cache"),
+            root,
+            work_dir,
+            scratch_dir,
+        })
+    }
+}
+
+fn project_diagnostics_options() -> DiagnosticsOptions {
+    DiagnosticsOptions {
+        disabled: false,
+        hook_dll: None,
+        inject_delay: Duration::from_secs(2),
+    }
+}
+
+fn fail_v2_preflight_with_optional_guard(
+    guard: Option<InstallMutationGuard>,
+    failure: Failure,
+) -> Result<Value, Failure> {
+    match guard {
+        Some(guard) => release_guard_failure(guard, failure),
+        None => Err(failure),
+    }
+}
+
+fn unavailable_standalone_project_response(
+    selection: &InitialSelection,
+    graph: &mut ClosedModuleGraph,
+    requested: CompilerBackendWireV2,
+    code: &'static str,
+    message: impl Into<String>,
+) -> Result<Value, Failure> {
+    // Package absence is established before game-input authority exists. Coverage still binds the
+    // exact persisted closed graph, but does not pretend that Quest source was natively regenerated.
+    for module in &mut graph.modules {
+        module.generated = Some(module.persisted.clone());
+    }
+    sort_and_validate_compile_identities(graph)?;
+    let manifest = seal_module_manifest(selection, graph)?;
+    let mut compiler = compiler_failure_evidence(
+        code,
+        message,
+        Value::Null,
+        "not_started",
+        false,
+        0,
+        "not_created",
+    );
+    compiler["compiler_backend"] = backend_evidence(requested, None, false, false, None);
+    project_response(
+        selection,
+        graph,
+        manifest,
+        Value::Null,
+        compiler,
+        ClosingRevalidation::NOT_RUN,
+    )
+}
+
+fn project_full_graph_plan_v2(
+    graph: &ClosedModuleGraph,
+    base_cache: &[u8],
+) -> Result<(Vec<FullGraphCompileChangeV1>, Vec<FullGraphFinalModuleV1>), Failure> {
+    let base = base_full_graph_manifest_v1(base_cache).map_err(|error| {
+        Failure::new(
+            "AUTHORING_REVISION3_PROJECT_COMPILER_GAME_INPUT_INVALID",
+            format!("sealed Shipping cache has no valid full-graph manifest: {error}"),
+        )
+    })?;
+    project_full_graph_plan_from_manifest_v2(graph, base)
+}
+
+fn project_full_graph_plan_from_manifest_v2(
+    graph: &ClosedModuleGraph,
+    mut final_manifest: Vec<FullGraphFinalModuleV1>,
+) -> Result<(Vec<FullGraphCompileChangeV1>, Vec<FullGraphFinalModuleV1>), Failure> {
+    let final_count = final_manifest
+        .len()
+        .checked_add(graph.modules.len())
+        .ok_or_else(limit_failure)?;
+    if graph.modules.len() > MAX_FULL_GRAPH_COMPILE_CHANGES_V1
+        || final_count > MAX_FULL_GRAPH_FINAL_MODULES_V1
+    {
+        return Err(limit_failure());
+    }
+    let fold = |value: &str| {
+        value
+            .chars()
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    let mut names = BTreeSet::new();
+    let mut paths = BTreeSet::new();
+    for module in &final_manifest {
+        if !names.insert(fold(&module.module_name)) || !paths.insert(fold(&module.relative_path)) {
+            return Err(Failure::new(
+                "AUTHORING_REVISION3_PROJECT_COMPILER_GAME_INPUT_INVALID",
+                "the sealed base cache contains colliding module identities",
+            ));
+        }
+    }
+    let mut changes = Vec::with_capacity(graph.modules.len());
+    for claim in &graph.modules {
+        let module = claim.generated.as_ref().ok_or_else(invariant_failure)?;
+        if !names.insert(fold(&module.module_namespace))
+            || !paths.insert(fold(&module.module_relative_path))
+        {
+            return Err(graph_failure(
+                "a managed ScriptModule collides with the sealed base graph",
+            ));
+        }
+        changes.push(FullGraphCompileChangeV1 {
+            operation: FullGraphCompileOperationV1::Add,
+            module_name: module.module_namespace.clone(),
+            relative_path: module.module_relative_path.clone(),
+            source: Some(module.source.as_bytes().to_vec()),
+        });
+        final_manifest.push(FullGraphFinalModuleV1 {
+            module_name: module.module_namespace.clone(),
+            relative_path: module.module_relative_path.clone(),
+        });
+    }
+    let compare_identity =
+        |left_name: &str, left_path: &str, right_name: &str, right_path: &str| {
+            fold(left_name)
+                .cmp(&fold(right_name))
+                .then_with(|| fold(left_path).cmp(&fold(right_path)))
+                .then_with(|| left_name.cmp(right_name))
+                .then_with(|| left_path.cmp(right_path))
+        };
+    changes.sort_by(|left, right| {
+        compare_identity(
+            &left.module_name,
+            &left.relative_path,
+            &right.module_name,
+            &right.relative_path,
+        )
+    });
+    final_manifest.sort_by(|left, right| {
+        compare_identity(
+            &left.module_name,
+            &left.relative_path,
+            &right.module_name,
+            &right.relative_path,
+        )
+    });
+    Ok((changes, final_manifest))
+}
+
+fn fallback_reason_from_backend_failure(failure: &CompilerBackendFailureV1) -> Value {
+    json!({
+        "failed_backend": CompilerBackendNameV1::Standalone.as_str(),
+        "failure_kind": failure.kind().as_str(),
+        "detail": failure.detail(),
+    })
+}
+
+fn full_graph_backend_evidence_v2(
+    report: &FullGraphCompileReportV1,
+    requested: CompilerBackendWireV2,
+    package: Option<&ProductStandaloneCompilerPackageIdentityV1>,
+    unavailable_fallback: Option<Value>,
+) -> Value {
+    let fallback = report
+        .fallback_reason()
+        .map(|reason| {
+            json!({
+                "failed_backend": reason.failed_backend().as_str(),
+                "failure_kind": reason.failure_kind().as_str(),
+                "detail": reason.detail(),
+            })
+        })
+        .or(unavailable_fallback);
+    backend_evidence_with_package(
+        requested,
+        report.backend_name(),
+        report.standalone_attempted(),
+        report.game_attempted(),
+        package,
+        fallback,
+    )
+}
+
+fn full_graph_backend_diagnostics_json_v2(
+    diagnostics: &[gore_as::compiler_backend::CompilerBackendDiagnosticV1],
+) -> Value {
+    let messages = diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let severity = match diagnostic.severity() {
+                CompilerBackendDiagnosticSeverityV1::Info => "note",
+                CompilerBackendDiagnosticSeverityV1::Warning => "warning",
+                CompilerBackendDiagnosticSeverityV1::Error => "error",
+            };
+            json!({
+                "file": diagnostic.source_path().unwrap_or(""),
+                "line": diagnostic.line().unwrap_or(0),
+                "column": diagnostic.column().unwrap_or(0),
+                "severity": severity,
+                "message": format!("{}: {}", diagnostic.code(), diagnostic.message()),
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "capture": "captured",
+        "messages": messages,
+        "omitted": 0,
+    })
+}
+
+fn full_graph_compiler_evidence_v2(report: FullGraphCompileReportV1, paths: &[&Path]) -> Value {
+    let run_count = report.runner_invocations();
+    let backend = report.backend_name();
+    let standalone_attempted = report.standalone_attempted();
+    let game_attempted = report.game_attempted();
+    let restore = report.install_restore_disposition();
+    let closing_audit = report.closing_audit_disposition();
+    let publication = report.publication_disposition();
+    let output_recovery_required = report.output_recovery_required();
+    let report_recovery = report.recovery_required();
+    let diagnostics_rejected = match backend {
+        Some(CompilerBackendNameV1::Standalone) => report
+            .backend_diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.severity() == CompilerBackendDiagnosticSeverityV1::Error)
+            .then_some((
+                "COMPILE_DIAGNOSTICS_REPORTED_ERROR",
+                "the standalone compiler reported an error; full-graph output was discarded",
+            )),
+        Some(CompilerBackendNameV1::Game) => diagnostics_rejection(report.diagnostics()),
+        None => None,
+    };
+    let diagnostics = if run_count == 0 {
+        Value::Null
+    } else if backend == Some(CompilerBackendNameV1::Standalone) {
+        full_graph_backend_diagnostics_json_v2(report.backend_diagnostics())
+    } else {
+        report
+            .diagnostics()
+            .map(diagnostics_report_json)
+            .unwrap_or(Value::Null)
+    };
+    let attempt_count = u8::from(standalone_attempted).saturating_add(u8::from(game_attempted));
+    let backend_contract = match backend {
+        Some(CompilerBackendNameV1::Standalone) => {
+            standalone_attempted
+                && !game_attempted
+                && restore == InstallRestoreDisposition::NotStarted
+        }
+        Some(CompilerBackendNameV1::Game) => {
+            game_attempted && restore == InstallRestoreDisposition::RestoredExact
+        }
+        None => false,
+    };
+    let report_invariant = run_count == 0
+        || run_count != attempt_count
+        || run_count > 2
+        || !backend_contract
+        || closing_audit != ProjectCompilerClosingAuditDisposition::Passed
+        || publication != FullGraphPublicationDispositionV1::Published
+        || report_recovery;
+
+    let (outcome, compile_error, recovery_required, output_disposition) = match report.outcome {
+        FullGraphCompileOutcomeV1::Compiled(artifact) => {
+            let validation = artifact.validate_retained_artifact();
+            let neutralization = artifact.neutralize();
+            let output_recovery = neutralization.is_err();
+            let recovery = report_recovery || output_recovery;
+            if validation.is_ok()
+                && neutralization.is_ok()
+                && !report_invariant
+                && diagnostics_rejected.is_none()
+            {
+                ("compiled_evidence_only", Value::Null, false, "discarded")
+            } else {
+                let (code, message) = if let Err(error) = neutralization {
+                    (
+                        "COMPILE_OUTPUT_NEUTRALIZATION_FAILED",
+                        format!(
+                            "exact retained full-graph output could not be neutralized: {error}"
+                        ),
+                    )
+                } else if let Err(error) = validation {
+                    (
+                        "COMPILE_OUTPUT_VALIDATION_FAILED",
+                        format!("retained full-graph output failed exact validation: {error}"),
+                    )
+                } else if let Some((code, message)) = diagnostics_rejected {
+                    (code, message.to_owned())
+                } else {
+                    (
+                        "COMPILE_REPORT_INVARIANT",
+                        "full-graph compiler did not prove exact backend, audit, restoration, publication, and output disposal".to_owned(),
+                    )
+                };
+                (
+                    "failed",
+                    json!({"code": code, "message": message}),
+                    recovery,
+                    if output_recovery {
+                        "recovery_retained"
+                    } else {
+                        "discarded"
+                    },
+                )
+            }
+        }
+        FullGraphCompileOutcomeV1::Failed(error) => {
+            let (code, message) = compile_error_parts(error);
+            (
+                "failed",
+                json!({
+                    "code": code,
+                    "message": truncate_utf8(message, MAX_ERROR_MESSAGE_BYTES),
+                }),
+                report_recovery,
+                failed_full_graph_output_disposition_v2(output_recovery_required),
+            )
+        }
+    };
+    let mut evidence = json!({
+        "outcome": outcome,
+        "run_count": run_count,
+        "compile_error": compile_error,
+        "compiler_diagnostics": diagnostics,
+        "install_restore": install_restore_label(restore),
+        "recovery_required": recovery_required,
+        "output_disposition": output_disposition,
+    });
+    redact_private_paths(&mut evidence, paths);
+    evidence
+}
+
+fn failed_full_graph_output_disposition_v2(output_recovery_required: bool) -> &'static str {
+    if output_recovery_required {
+        "recovery_retained"
+    } else {
+        "not_created"
+    }
+}
+
 fn check_revision3_project_compiler_v1_inner(input: &str) -> Result<Value, Failure> {
     let payload: ProjectCompilerWirePayload = parse_exact_wire(input)?;
     validate_path(&payload.root)?;
@@ -302,7 +1076,7 @@ fn run_guarded_check(
                     "not_started",
                     true,
                     0,
-                    "recovery_retained",
+                    "not_created",
                 )
             }
         };
@@ -992,6 +1766,13 @@ where
 }
 
 fn parse_exact_wire<P: DeserializeOwned>(input: &str) -> Result<P, Failure> {
+    parse_exact_wire_for(input, COMMAND)
+}
+
+fn parse_exact_wire_for<P: DeserializeOwned>(
+    input: &str,
+    expected_command: &str,
+) -> Result<P, Failure> {
     if input.is_empty() || input.len() > MAX_WIRE_BYTES {
         return Err(Failure::new(
             "AUTHORING_REVISION3_PROJECT_COMPILER_INPUT_LIMIT",
@@ -1000,7 +1781,7 @@ fn parse_exact_wire<P: DeserializeOwned>(input: &str) -> Result<P, Failure> {
     }
     let request: ExactWireRequest<P> =
         serde_json::from_str(input).map_err(|_| invalid_request())?;
-    if request.command != COMMAND {
+    if request.command != expected_command {
         return Err(invalid_request());
     }
     Ok(request.payload)
@@ -1429,6 +2210,10 @@ mod tests {
         json!({"command": COMMAND, "payload": payload}).to_string()
     }
 
+    fn wire_v2(payload: Value) -> String {
+        json!({"command": COMMAND_V2, "payload": payload}).to_string()
+    }
+
     fn valid_shape() -> Value {
         json!({
             "expected_head_json": serde_json::to_string(&WorkingHead {
@@ -1485,6 +2270,120 @@ mod tests {
             check_revision3_project_compiler_v1_raw(&duplicate_command)["error"]["code"],
             "AUTHORING_REVISION3_PROJECT_COMPILER_REQUEST_INVALID"
         );
+    }
+
+    #[test]
+    fn v2_strict_standalone_is_store_bound_and_never_acquires_game_ownership() {
+        let project = npc_project(7);
+        let (temp, head_json) = published_store(&project);
+        let game = temp.path().join("missing-game");
+        let response = crate::dispatch(&wire_v2(json!({
+            "compiler_backend": "standalone",
+            "expected_head_json": head_json,
+            "game_root": game.display().to_string(),
+            "root": temp.path().display().to_string(),
+        })));
+
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["exact_current"], false);
+        assert!(response["game_inputs"].is_null());
+        assert_eq!(response["closing_audit"]["store"], "not_run");
+        assert_eq!(response["closing_audit"]["game"], "not_run");
+        assert_eq!(response["compiler"]["outcome"], "failed");
+        assert_eq!(
+            response["compiler"]["compile_error"]["code"],
+            "AUTHORING_REVISION3_PROJECT_STANDALONE_BUNDLE_ABSENT"
+        );
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["requested_mode"],
+            "standalone"
+        );
+        assert!(response["compiler"]["compiler_backend"]["result_backend"].is_null());
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["standalone_attempted"],
+            false
+        );
+        assert_eq!(
+            response["compiler"]["compiler_backend"]["game_attempted"],
+            false
+        );
+        assert!(response["compiler"]["compiler_backend"]["qualified_package"].is_null());
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+    }
+
+    #[test]
+    fn v2_wire_accepts_only_backend_policy_not_package_authority() {
+        let mut payload = valid_shape();
+        payload["compiler_backend"] = json!("standalone");
+        payload["sidecar_path"] = json!("C:/caller/sidecar.exe");
+        assert_eq!(
+            check_revision3_project_compiler_v2_raw(&wire_v2(payload))["error"]["code"],
+            "AUTHORING_REVISION3_PROJECT_COMPILER_REQUEST_INVALID"
+        );
+
+        let mut invalid_mode = valid_shape();
+        invalid_mode["compiler_backend"] = json!("standalone-then-game");
+        assert_eq!(
+            check_revision3_project_compiler_v2_raw(&wire_v2(invalid_mode))["error"]["code"],
+            "AUTHORING_REVISION3_PROJECT_COMPILER_REQUEST_INVALID"
+        );
+    }
+
+    #[test]
+    fn v2_project_fallback_evidence_preserves_bundle_absence() {
+        let backend = backend_evidence_with_package(
+            CompilerBackendWireV2::StandaloneThenGame,
+            None,
+            false,
+            false,
+            None,
+            Some(bundle_absent_fallback_reason()),
+        );
+        assert_eq!(backend["requested_mode"], "standalone_then_game");
+        assert!(backend["result_backend"].is_null());
+        assert_eq!(backend["standalone_attempted"], false);
+        assert_eq!(backend["game_attempted"], false);
+        assert_eq!(backend["fallback_reason"]["failure_kind"], "unavailable");
+        assert_eq!(backend["fallback_reason"]["detail"], BUNDLE_ABSENT_DETAIL);
+    }
+
+    #[test]
+    fn v2_strict_bundle_absence_closes_quest_coverage_without_game_or_guard() {
+        let (project, _) = quest_project(8);
+        let temp = TempDir::new().unwrap();
+        let canonical_project_json = project.to_canonical_json().unwrap();
+        let project_seal = seal_bytes(canonical_project_json.as_bytes());
+        let expected_head = WorkingHead {
+            store_format: WorkingStoreFormat,
+            snapshot: project_seal.clone(),
+        };
+        let selection = InitialSelection {
+            store: WorkingProjectStore::at(temp.path(), ffi_store_limits()).unwrap(),
+            expected_head_json: serde_json::to_string(&expected_head).unwrap(),
+            expected_head,
+            project,
+            canonical_project_json,
+            project_seal,
+        };
+        let mut graph = close_module_graph(&selection.project).unwrap();
+        let game = temp.path().join("missing-game");
+        let response = unavailable_standalone_project_response(
+            &selection,
+            &mut graph,
+            CompilerBackendWireV2::Standalone,
+            "AUTHORING_REVISION3_PROJECT_STANDALONE_BUNDLE_ABSENT",
+            BUNDLE_ABSENT_DETAIL,
+        )
+        .unwrap();
+
+        assert_eq!(response["ok"], true, "{response}");
+        assert_eq!(response["coverage"]["script_module_count"], 1);
+        assert_eq!(response["coverage"]["quest_module_count"], 1);
+        assert_eq!(
+            response["compiler"]["compile_error"]["code"],
+            "AUTHORING_REVISION3_PROJECT_STANDALONE_BUNDLE_ABSENT"
+        );
+        assert!(!game.join(".gore-install-mutation.lock").exists());
     }
 
     #[test]
@@ -1644,6 +2543,98 @@ mod tests {
         );
         assert!(overlays.iter().all(|overlay| !overlay.source.is_empty()));
         assert!(seal_module_manifest(&selection, &graph).unwrap().byte_len > 0);
+    }
+
+    #[test]
+    fn v2_full_graph_plan_is_one_canonical_base_plus_managed_add_graph() {
+        let (project, quest_generated) = mixed_story_project(4);
+        let mut graph = close_module_graph(&project).unwrap();
+        graph
+            .modules
+            .iter_mut()
+            .find(|module| module.owner_kind == ManagedOwnerKind::QuestDraft)
+            .unwrap()
+            .generated = Some(quest_generated);
+        validate_generated_modules(&project, &graph).unwrap();
+        sort_and_validate_compile_identities(&mut graph).unwrap();
+
+        let base = vec![
+            FullGraphFinalModuleV1 {
+                module_name: "Zeta.Base".to_owned(),
+                relative_path: "Zeta/Base.as".to_owned(),
+            },
+            FullGraphFinalModuleV1 {
+                module_name: "Alpha.Base".to_owned(),
+                relative_path: "Alpha/Base.as".to_owned(),
+            },
+        ];
+        let (changes, final_manifest) =
+            project_full_graph_plan_from_manifest_v2(&graph, base).unwrap();
+
+        assert_eq!(changes.len(), 2);
+        assert!(changes.iter().all(|change| {
+            change.operation == FullGraphCompileOperationV1::Add
+                && change
+                    .source
+                    .as_ref()
+                    .is_some_and(|source| !source.is_empty())
+        }));
+        assert_eq!(
+            changes
+                .iter()
+                .map(|change| change.module_name.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "GoreMods.Npcs.ProjectCompilerCheck",
+                "GoreMods.Quests.ProjectCompilerCheck",
+            ]
+        );
+        assert_eq!(
+            final_manifest
+                .iter()
+                .map(|module| module.module_name.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "Alpha.Base",
+                "GoreMods.Npcs.ProjectCompilerCheck",
+                "GoreMods.Quests.ProjectCompilerCheck",
+                "Zeta.Base",
+            ]
+        );
+    }
+
+    #[test]
+    fn v2_full_graph_plan_rejects_base_collisions_before_any_runner() {
+        let project = npc_project(5);
+        let mut graph = close_module_graph(&project).unwrap();
+        validate_generated_modules(&project, &graph).unwrap();
+        sort_and_validate_compile_identities(&mut graph).unwrap();
+        let generated = graph.modules[0].generated.as_ref().unwrap();
+        let base = vec![FullGraphFinalModuleV1 {
+            module_name: generated.module_namespace.to_ascii_uppercase(),
+            relative_path: "Base/DoesNotMatter.as".to_owned(),
+        }];
+
+        assert_eq!(
+            project_full_graph_plan_from_manifest_v2(&graph, base)
+                .unwrap_err()
+                .code,
+            "AUTHORING_REVISION3_PROJECT_COMPILER_MODULE_GRAPH_INVALID"
+        );
+    }
+
+    #[test]
+    fn v2_private_full_graph_workspace_separates_work_output_and_sidecar_scratch() {
+        let workspace = FullGraphPrivateWorkspaceV2::create().unwrap();
+        assert!(workspace.work_dir.is_dir());
+        assert!(workspace.scratch_dir.is_dir());
+        assert!(workspace.output_path.parent().unwrap().is_dir());
+        assert!(!workspace.output_path.exists());
+        assert!(!workspace.output_path.starts_with(&workspace.work_dir));
+        assert!(!workspace
+            .work_dir
+            .starts_with(workspace.output_path.parent().unwrap()));
+        assert_ne!(workspace.scratch_dir, workspace.work_dir);
     }
 
     #[test]
@@ -1833,7 +2824,7 @@ mod tests {
     }
 
     #[test]
-    fn closing_exactness_is_orthogonal_to_private_recovery() {
+    fn closing_exactness_is_orthogonal_to_install_recovery_without_output() {
         let project = empty_project(9);
         let (temp, head_json) = published_store(&project);
         let selection = open_initial_selection(
@@ -1856,12 +2847,12 @@ mod tests {
             }),
             compiler_failure_evidence(
                 "COMPILE_INSTALL_RECOVERY_REQUIRED",
-                "private compiler recovery remains",
+                "install recovery remains",
                 Value::Null,
                 "not_started",
                 true,
                 0,
-                "recovery_retained",
+                "not_created",
             ),
             closing_from_parts(Some(true), Some(true)),
         )
@@ -1869,8 +2860,21 @@ mod tests {
 
         assert_eq!(response["exact_current"], true);
         assert_eq!(response["compiler"]["recovery_required"], true);
+        assert_eq!(response["compiler"]["output_disposition"], "not_created");
         assert_eq!(response["closing_audit"]["store"], "exact");
         assert_eq!(response["closing_audit"]["game"], "exact");
+    }
+
+    #[test]
+    fn v2_failed_output_disposition_separates_install_and_output_recovery() {
+        assert_eq!(
+            failed_full_graph_output_disposition_v2(true),
+            "recovery_retained"
+        );
+        assert_eq!(
+            failed_full_graph_output_disposition_v2(false),
+            "not_created"
+        );
     }
 
     #[test]
@@ -1967,7 +2971,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires a supported closed Gothic 1 Remake installation and compiler runtime"]
-    fn supported_game_checks_one_npc_in_exactly_one_shared_compiler_run() {
+    fn supported_game_checks_v1_and_v2_in_exactly_one_shared_compiler_run_each() {
         let game_root = std::env::var("GORE_GAME_ROOT")
             .expect("set GORE_GAME_ROOT to the selected game installation");
         let (catalog, _, _) = build_fresh_game_inputs(Path::new(&game_root)).unwrap();
@@ -2017,5 +3021,34 @@ mod tests {
         assert_eq!(response["compiler"]["outcome"], "compiled_evidence_only");
         assert_eq!(response["compiler"]["run_count"], 1);
         assert_eq!(response["compiler"]["output_disposition"], "discarded");
+
+        let response_v2 = check_revision3_project_compiler_v2_raw(&wire_v2(json!({
+            "compiler_backend": "game",
+            "expected_head_json": head_json,
+            "game_root": game_root,
+            "root": store.path().to_str().unwrap(),
+        })));
+        assert_eq!(response_v2["ok"], true, "{response_v2}");
+        assert_eq!(response_v2["exact_current"], true);
+        assert_eq!(response_v2["coverage"]["script_module_count"], 1);
+        assert_eq!(response_v2["compiler"]["outcome"], "compiled_evidence_only");
+        assert_eq!(response_v2["compiler"]["run_count"], 1);
+        assert_eq!(response_v2["compiler"]["output_disposition"], "discarded");
+        assert_eq!(
+            response_v2["compiler"]["compiler_backend"]["requested_mode"],
+            "game"
+        );
+        assert_eq!(
+            response_v2["compiler"]["compiler_backend"]["result_backend"],
+            "game"
+        );
+        assert_eq!(
+            response_v2["compiler"]["compiler_backend"]["game_attempted"],
+            true
+        );
+        assert_eq!(
+            response_v2["compiler"]["compiler_backend"]["standalone_attempted"],
+            false
+        );
     }
 }

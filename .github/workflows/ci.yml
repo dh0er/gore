@@ -73,3 +73,12 @@ jobs:
           python scripts/check_plugin.py
           python scripts/check_release_workflow.py
           python -m unittest discover -s scripts -p "test_*.py" -v
+
+      # Keep the distributable compiler sidecar and the dormant capture tooling in separate
+      # source-CMake build/test trees. This is offline and runs only synthetic native tests; it
+      # neither signs nor launches/injects into the game.
+      - name: Standalone compiler native source gates
+        working-directory: .
+        run: >-
+          python scripts/standalone_compiler_bundle.py build-native
+          --build-root ${{ runner.temp }}\gore-as-native-gates

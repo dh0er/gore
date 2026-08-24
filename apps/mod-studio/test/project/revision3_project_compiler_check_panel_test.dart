@@ -24,6 +24,8 @@ enum _ReceiptKind {
   compiled,
   empty,
   rejected,
+  standaloneRejected,
+  twoRunFallbackRejected,
   fallbackRejected,
   preflight,
   preflightAfterRunner,
@@ -70,6 +72,31 @@ void main() {
     expect(rejected.checkState, Revision3TestReleaseCheckState.needsAttention);
     expect(rejected.receipt?.result.compiler.runCount, 1);
     expect(rejected.failure?.message, 'Unexpected token in project script.');
+    final standaloneRejected = await run(_ReceiptKind.standaloneRejected);
+    expect(
+      standaloneRejected.outcome,
+      Revision3ProjectCompilerOutcome.rejected,
+    );
+    expect(
+      standaloneRejected.checkState,
+      Revision3TestReleaseCheckState.needsAttention,
+    );
+    expect(
+      standaloneRejected.receipt?.result.compiler.installRestore,
+      ScriptCompileInstallRestore.notStarted,
+    );
+    final twoRunFallbackRejected = await run(
+      _ReceiptKind.twoRunFallbackRejected,
+    );
+    expect(
+      twoRunFallbackRejected.outcome,
+      Revision3ProjectCompilerOutcome.rejected,
+    );
+    expect(
+      twoRunFallbackRejected.checkState,
+      Revision3TestReleaseCheckState.needsAttention,
+    );
+    expect(twoRunFallbackRejected.receipt?.result.compiler.runCount, 2);
     final preflight = await run(_ReceiptKind.preflight);
     expect(preflight.outcome, Revision3ProjectCompilerOutcome.preflightBlocked);
     final preflightAfterRunner = await run(_ReceiptKind.preflightAfterRunner);
@@ -136,6 +163,8 @@ void main() {
       compiled,
       empty,
       rejected,
+      standaloneRejected,
+      twoRunFallbackRejected,
       preflight,
       preflightAfterRunner,
       runnerSetupFailure,
@@ -338,6 +367,7 @@ void main() {
       addTearDown(controller.dispose);
       final safety = _safety();
       String? checkedRoot;
+      ScriptCompilerBackendMode? checkedBackend;
       var checkCalls = 0;
 
       await _pumpDialog(
@@ -346,9 +376,10 @@ void main() {
         controller: controller,
         safety: safety,
         textScale: 2,
-        check: ({required gameRoot}) async {
+        check: ({required gameRoot, required compilerBackend}) async {
           checkCalls++;
           checkedRoot = gameRoot;
+          checkedBackend = compilerBackend;
           return _receipt(checkpoint, _ReceiptKind.fallbackRejected);
         },
       );
@@ -361,6 +392,7 @@ void main() {
       );
       expect(checkCalls, 1);
       expect(checkedRoot, _gameRoot);
+      expect(checkedBackend, ScriptCompilerBackendMode.productDefault);
       expect(
         find.text('Unexpected token in project script.'),
         findsNWidgets(2),
@@ -404,12 +436,13 @@ void main() {
         checkpoint: checkpoint,
         controller: controller,
         safety: safety,
-        check: ({required gameRoot}) async => throw const ModFfiException(
-          command: 'authoring_store_check_revision3_project_compiler_v1',
-          code:
-              'AUTHORING_REVISION3_PROJECT_COMPILER_CLOSING_GAME_AUDIT_FAILED',
-          message: 'closing audit failed',
-        ),
+        check: ({required gameRoot, required compilerBackend}) async =>
+            throw const ModFfiException(
+              command: 'authoring_store_check_revision3_project_compiler_v1',
+              code:
+                  'AUTHORING_REVISION3_PROJECT_COMPILER_CLOSING_GAME_AUDIT_FAILED',
+              message: 'closing audit failed',
+            ),
       );
 
       await tester.tap(find.byKey(const Key('revision3-project-compiler-run')));
@@ -438,7 +471,7 @@ void main() {
     },
   );
 
-  testWidgets('recovery is retained in the shared install safety gate', (
+  testWidgets('private output recovery does not block the game installation', (
     tester,
   ) async {
     final checkpoint = _checkpoint(7);
@@ -450,7 +483,7 @@ void main() {
       checkpoint: checkpoint,
       controller: controller,
       safety: safety,
-      check: ({required gameRoot}) async =>
+      check: ({required gameRoot, required compilerBackend}) async =>
           _receipt(checkpoint, _ReceiptKind.outputRecovery),
     );
 
@@ -461,15 +494,79 @@ void main() {
       controller.snapshot.outcome,
       Revision3ProjectCompilerOutcome.recoveryRequired,
     );
+    expect(safety.current.recoveryRequired, isFalse);
+    expect(safety.current.liveMutationAllowed, isTrue);
+    expect(safety.current.recoveryEvidence, isNull);
+  });
+
+  testWidgets('install recovery is retained in the shared safety gate', (
+    tester,
+  ) async {
+    final checkpoint = _checkpoint(7);
+    final controller = _controller(checkpoint: checkpoint);
+    addTearDown(controller.dispose);
+    final safety = _safety();
+    await _pumpDialog(
+      tester,
+      checkpoint: checkpoint,
+      controller: controller,
+      safety: safety,
+      check: ({required gameRoot, required compilerBackend}) async =>
+          _receipt(checkpoint, _ReceiptKind.recovery),
+    );
+
+    await tester.tap(find.byKey(const Key('revision3-project-compiler-run')));
+    await tester.pumpAndSettle();
+
     expect(safety.current.recoveryRequired, isTrue);
     expect(safety.current.liveMutationAllowed, isFalse);
     expect(
-      safety.current.recoveryEvidence?.installRestore,
-      ScriptCompileInstallRestore.restoredExact,
-    );
-    expect(
       safety.current.recoveryEvidence?.code,
-      'COMPILE_OUTPUT_RECOVERY_REQUIRED',
+      'COMPILE_INSTALL_RECOVERY_REQUIRED',
+    );
+  });
+
+  testWidgets('strict standalone bypasses the live-install safety gate', (
+    tester,
+  ) async {
+    final checkpoint = _checkpoint(7);
+    final controller = _controller(checkpoint: checkpoint);
+    addTearDown(controller.dispose);
+    var safetyLoads = 0;
+    final safety = ScriptCompileInstallSafetyController(
+      (_) async {
+        safetyLoads++;
+        throw StateError('standalone must not inspect live mutation safety');
+      },
+      gameRoot: _gameRoot,
+      autoRefresh: false,
+    );
+    ScriptCompilerBackendMode? requestedBackend;
+    await _pumpDialog(
+      tester,
+      checkpoint: checkpoint,
+      controller: controller,
+      safety: safety,
+      check: ({required gameRoot, required compilerBackend}) async {
+        requestedBackend = compilerBackend;
+        return _receipt(checkpoint, _ReceiptKind.compiled);
+      },
+    );
+
+    await tester.tap(
+      find.byKey(const Key('revision3-project-compiler-backend')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Standalone compiler').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('revision3-project-compiler-run')));
+    await tester.pumpAndSettle();
+
+    expect(requestedBackend, ScriptCompilerBackendMode.standalone);
+    expect(safetyLoads, 0);
+    expect(
+      find.byKey(const Key('revision3-project-compiler-safety-message')),
+      findsNothing,
     );
   });
 
@@ -595,9 +692,12 @@ ManagedRevision3ProjectCompilerCheckReceipt _receipt(
       'recovery_required': false,
       'output_disposition': 'not_created',
     },
-    _ReceiptKind.rejected || _ReceiptKind.fallbackRejected => <String, Object?>{
+    _ReceiptKind.rejected ||
+    _ReceiptKind.standaloneRejected ||
+    _ReceiptKind.twoRunFallbackRejected ||
+    _ReceiptKind.fallbackRejected => <String, Object?>{
       'outcome': 'failed',
-      'run_count': 1,
+      'run_count': kind == _ReceiptKind.twoRunFallbackRejected ? 2 : 1,
       'compile_error': <String, Object?>{
         'code': 'COMPILER_REGEN_FAILED',
         'message': 'Unexpected token in project script.',
@@ -617,7 +717,9 @@ ManagedRevision3ProjectCompilerCheckReceipt _receipt(
         ],
         'omitted': kind == _ReceiptKind.fallbackRejected ? 4 : 0,
       },
-      'install_restore': 'restored_exact',
+      'install_restore': kind == _ReceiptKind.standaloneRejected
+          ? 'not_started'
+          : 'restored_exact',
       'recovery_required': false,
       'output_disposition': 'discarded',
     },
@@ -656,7 +758,7 @@ ManagedRevision3ProjectCompilerCheckReceipt _receipt(
       'compiler_diagnostics': null,
       'install_restore': 'not_started',
       'recovery_required': true,
-      'output_disposition': 'recovery_retained',
+      'output_disposition': 'not_created',
     },
     _ReceiptKind.outputRecovery => <String, Object?>{
       'outcome': 'failed',
@@ -675,6 +777,39 @@ ManagedRevision3ProjectCompilerCheckReceipt _receipt(
       'output_disposition': 'recovery_retained',
     },
   };
+  final backendMode = switch (kind) {
+    _ReceiptKind.standaloneRejected => ScriptCompilerBackendMode.standalone,
+    _ReceiptKind.twoRunFallbackRejected =>
+      ScriptCompilerBackendMode.standaloneThenGame,
+    _ => null,
+  };
+  if (backendMode != null) {
+    compiler['compiler_backend'] = switch (backendMode) {
+      ScriptCompilerBackendMode.standalone => <String, Object?>{
+        'requested_mode': 'standalone',
+        'result_backend': null,
+        'standalone_attempted': true,
+        'game_attempted': false,
+        'qualified_package': _qualifiedPackage(),
+        'fallback_reason': null,
+      },
+      ScriptCompilerBackendMode.standaloneThenGame => <String, Object?>{
+        'requested_mode': 'standalone_then_game',
+        'result_backend': null,
+        'standalone_attempted': true,
+        'game_attempted': true,
+        'qualified_package': _qualifiedPackage(),
+        'fallback_reason': <String, Object?>{
+          'failed_backend': 'standalone',
+          'failure_kind': 'rejected',
+          'detail': 'standalone rejected the sealed graph',
+        },
+      },
+      ScriptCompilerBackendMode.game => throw StateError(
+        'the fixture does not request an explicit game backend',
+      ),
+    };
+  }
   final result = AuthoringRevision3ProjectCompilerCheckResult.fromJson(
     <String, Object?>{
       'ok': true,
@@ -713,6 +848,7 @@ ManagedRevision3ProjectCompilerCheckReceipt _receipt(
       'publication_status': 'not_supported',
     },
     expectedHead: head,
+    expectedBackend: backendMode,
   );
   return ManagedRevision3ProjectCompilerCheckReceipt(
     result: result,
@@ -723,6 +859,32 @@ ManagedRevision3ProjectCompilerCheckReceipt _receipt(
 Map<String, Object?> _seal(String digit, int bytes) => <String, Object?>{
   'byte_len': bytes,
   'sha256': List<String>.filled(64, digit).join(),
+};
+
+Map<String, Object?> _qualifiedPackage() => <String, Object?>{
+  'catalog_sha256': List<String>.filled(64, '1').join(),
+  'sidecar_byte_len': 1966592,
+  'sidecar_sha256': List<String>.filled(64, '2').join(),
+  'request_version': 2,
+  'response_version': 1,
+  'manifest_byte_len': 4096,
+  'manifest_sha256': List<String>.filled(64, '3').join(),
+  'profile_sha256': List<String>.filled(64, '4').join(),
+  'target': <String, Object?>{
+    'target': <String, Object?>{
+      'steam_app_id': 1297900,
+      'steam_build_id': 24539464,
+      'depot_id': 1297901,
+      'depot_manifest_gid': 1585071322101748861,
+      'platform': 'windows',
+      'architecture': 'x86_64',
+      'build_configuration': 'shipping',
+    },
+    'pe_codeview': <String, Object?>{
+      'guid': 'be78fe0a-46ac-6643-9685-97e85c7e5b3f',
+      'age': 1,
+    },
+  },
 };
 
 ScriptCompileInstallSafetyController _safety() =>

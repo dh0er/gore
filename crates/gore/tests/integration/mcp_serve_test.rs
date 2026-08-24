@@ -531,7 +531,17 @@ fn a_game_launching_command_is_refused_without_its_own_flag() {
         "jsonrpc": "2.0",
         "id": 15,
         "method": "tools/call",
-        "params": { "name": "gore_as", "arguments": { "subcommand": "compile" } },
+        "params": {
+            "name": "gore_as",
+            "arguments": {
+                "subcommand": "compile",
+                "args": {
+                    "src": "scripts",
+                    "out": "compiled.cache",
+                    "work_dir": "compiler-work"
+                }
+            }
+        },
     }));
     let result = server.recv()["result"].clone();
 

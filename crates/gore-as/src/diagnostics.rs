@@ -1,18 +1,20 @@
 //! Optional, fail-closed capture of the shipping game's AngelScript diagnostics.
 //!
-//! The game remains the compiler. This module only preflights a version-tolerant masked byte
-//! signature plus a sparse callback-body fingerprint in the selected executable, temporarily
-//! injects a small capture DLL early in the compiler process, and parses the bounded text stream it
-//! produces. A missing helper, unsupported platform, zero/multiple signature matches, structural
-//! mismatch, or a confirmed injection failure is an availability problem, not a compile failure:
-//! callers transparently launch the normal generator instead.
+//! The game remains the compiler. This module preflights version-tolerant masked byte signatures
+//! plus sparse body fingerprints for both diagnostic paths in the selected executable: the normal
+//! AngelScript message callback and `FAngelscriptManager::ScriptCompileError`, which receives
+//! ClassGenerator/Unreal-reflection diagnostics directly. It then temporarily injects a small
+//! capture DLL early in the compiler process and parses the bounded text stream it produces. A
+//! missing helper, unsupported platform, zero/multiple signature matches, structural mismatch, or
+//! a confirmed injection failure is an availability problem, not a compile failure: callers
+//! transparently launch the normal generator instead.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// Signature of `LogAngelscriptError(asSMessageInfo*, void*)`, the per-message callback registered
-/// by the UE-AngelScript fork. It was observed at RVA `0x467f5b0` in the 2026-07-10 hotfix (the
-/// prior build used `0x467e200`), but no fixed RVA is used. Wildcards cover RIP-relative
+/// by the UE-AngelScript fork. It was observed at RVA `0x4685ff0` in BuildID 24539464 (1.0.2 used
+/// `0x467e200`), but no fixed RVA is used. Wildcards cover RIP-relative
 /// addresses/operands that vary by build. Both the offline preflight and helper DLL use this exact
 /// AOB, require one raw match, and then independently verify [`CALLBACK_SHAPE`].
 const LOG_ANGELSCRIPT_ERROR_AOB: &[Option<u8>] = &[
@@ -129,6 +131,121 @@ const CALLBACK_SHAPE: &[ShapeClause] = &[
     },
 ];
 
+/// `FAngelscriptManager::ScriptCompileError(const FString&, const FDiagnostic&)`. The same entry
+/// bytes are unique in every archived G1R release from 1.0.0 through the BuildID-24539464 target;
+/// the target RVA is `0x4689e80`, but discovery never uses a fixed address. Unlike the ordinary
+/// callback, this boundary receives ClassGenerator diagnostics that are inserted directly into the
+/// manager's diagnostic map and therefore never pass through `LogAngelscriptError`.
+const SCRIPT_COMPILE_ERROR_AOB: &[Option<u8>] = &[
+    Some(0x48),
+    Some(0x89),
+    Some(0x5c),
+    Some(0x24),
+    Some(0x08),
+    Some(0x48),
+    Some(0x89),
+    Some(0x74),
+    Some(0x24),
+    Some(0x10),
+    Some(0x57),
+    Some(0x48),
+    Some(0x83),
+    Some(0xec),
+    Some(0x20),
+    Some(0xc6),
+    Some(0x81),
+    Some(0x58),
+    Some(0x04),
+    Some(0x00),
+    Some(0x00),
+    Some(0x01),
+    Some(0x48),
+    Some(0x8d),
+    Some(0x99),
+    Some(0xb8),
+    Some(0x03),
+    Some(0x00),
+    Some(0x00),
+    Some(0x8b),
+    Some(0x42),
+    Some(0x08),
+];
+
+/// Sparse instructions proving the Windows/x64 arguments and the exact layouts consumed by the
+/// native detour: `FString={data,Num,Max}` and
+/// `FDiagnostic={FString Message,int32 Row,int32 Column,bool bIsError,bool bIsInfo}`.
+const MANAGER_DIAGNOSTIC_SHAPE_SPAN: usize = 0xb0;
+const MANAGER_DIAGNOSTIC_SHAPE: &[ShapeClause] = &[
+    ShapeClause {
+        // Filename FString Num, followed by retaining FDiagnostic* (r8) and filename* (rdx).
+        offset: 0x1d,
+        pattern: &[
+            Some(0x8b),
+            Some(0x42),
+            Some(0x08),
+            Some(0x49),
+            Some(0x8b),
+            Some(0xf8),
+            Some(0x48),
+            Some(0x8b),
+            Some(0xf2),
+        ],
+    },
+    ShapeClause {
+        // Filename FString data pointer.
+        offset: 0x2a,
+        pattern: &[Some(0x48), Some(0x8b), Some(0x12)],
+    },
+    ShapeClause {
+        // Copy the FString at FDiagnostic offset zero (Message).
+        offset: 0x83,
+        pattern: &[Some(0x48), Some(0x8b), Some(0xd7)],
+    },
+    ShapeClause {
+        // Row and Column at +0x10/+0x14. One stack-restoration displacement is immaterial.
+        offset: 0x91,
+        pattern: &[
+            Some(0x8b),
+            Some(0x47),
+            Some(0x10),
+            Some(0x48),
+            Some(0x8b),
+            Some(0x74),
+            Some(0x24),
+            None,
+            Some(0x89),
+            Some(0x43),
+            Some(0x10),
+            Some(0x8b),
+            Some(0x47),
+            Some(0x14),
+            Some(0x89),
+            Some(0x43),
+            Some(0x14),
+        ],
+    },
+    ShapeClause {
+        // bIsError and bIsInfo at +0x18/+0x19.
+        offset: 0xa2,
+        pattern: &[
+            Some(0x0f),
+            Some(0xb6),
+            Some(0x47),
+            Some(0x18),
+            Some(0x88),
+            Some(0x43),
+            Some(0x18),
+            Some(0x0f),
+            Some(0xb6),
+            Some(0x47),
+            Some(0x19),
+            Some(0x88),
+            Some(0x43),
+            Some(0x19),
+        ],
+    },
+];
+
 fn masked_bytes_match(bytes: &[u8], pattern: &[Option<u8>]) -> bool {
     bytes.len() == pattern.len()
         && pattern
@@ -140,6 +257,17 @@ fn masked_bytes_match(bytes: &[u8], pattern: &[Option<u8>]) -> bool {
 fn callback_shape_matches(bytes: &[u8]) -> bool {
     bytes.len() >= CALLBACK_SHAPE_SPAN
         && CALLBACK_SHAPE.iter().all(|clause| {
+            clause
+                .offset
+                .checked_add(clause.pattern.len())
+                .and_then(|end| bytes.get(clause.offset..end))
+                .is_some_and(|actual| masked_bytes_match(actual, clause.pattern))
+        })
+}
+
+fn manager_diagnostic_shape_matches(bytes: &[u8]) -> bool {
+    bytes.len() >= MANAGER_DIAGNOSTIC_SHAPE_SPAN
+        && MANAGER_DIAGNOSTIC_SHAPE.iter().all(|clause| {
             clause
                 .offset
                 .checked_add(clause.pattern.len())
@@ -166,7 +294,7 @@ pub const MAX_INJECT_DELAY: std::time::Duration = std::time::Duration::from_secs
 pub(crate) const CAPTURE_TRUNCATED_TOKEN: &str = "[GORE] diagnostics capture truncated at 8 MiB";
 const MAX_STATUS_BYTES: u64 = 4096;
 const BUNDLED_HOOK_SHA256: &str =
-    "17e0ad3033c31add311e3c25ba63615e481c83dcf8e96e83d9b3ac088e55c01c";
+    "3d9852ed4a077c0b987a290fd1b349a92af394feef297a33165464b2e4c2e39d";
 
 #[derive(Clone, Debug)]
 pub struct DiagnosticsOptions {
@@ -368,6 +496,20 @@ pub(crate) fn prepare_hook(
             exe.display()
         ));
     }
+    if scan.manager_raw_rvas.len() != 1 {
+        return Err(format!(
+            "ScriptCompileError signature matched {} times in {} (need exactly 1)",
+            scan.manager_raw_rvas.len(),
+            exe.display()
+        ));
+    }
+    if !scan.manager_shape_verified {
+        return Err(format!(
+            "ScriptCompileError signature uniquely matched RVA 0x{:x} in {}, but its structure did not match the verified FString/FDiagnostic layout",
+            scan.manager_raw_rvas[0],
+            exe.display()
+        ));
+    }
     // Discover/materialize only after compatibility is proven. Construct the RAII owner
     // immediately so every later metadata/canonicalization error removes an embedded temp DLL.
     let (hook, owned_dir, verify_bundled_hash) = discover_hook(options)?;
@@ -481,6 +623,12 @@ pub struct ExecutableProbe {
     /// True only when there is exactly one raw match and its sparse callback-body fingerprint is
     /// wholly inside the raw-backed `.text` range and matches every required clause.
     pub callback_shape_verified: bool,
+    /// Raw `FAngelscriptManager::ScriptCompileError` entry-signature count.
+    pub manager_match_count: usize,
+    pub manager_matched_rvas: Vec<u64>,
+    /// True only when the unique manager entry proves every FString/FDiagnostic field consumed by
+    /// the detour.
+    pub manager_shape_verified: bool,
 }
 
 /// Offline compatibility report for a selected executable. Hash, count and RVAs make a hotfix or
@@ -518,6 +666,9 @@ fn probe_open_executable(mut file: std::fs::File, exe: &Path) -> Result<Executab
         match_count: scan.raw_rvas.len(),
         matched_rvas: scan.raw_rvas,
         callback_shape_verified: scan.callback_shape_verified,
+        manager_match_count: scan.manager_raw_rvas.len(),
+        manager_matched_rvas: scan.manager_raw_rvas,
+        manager_shape_verified: scan.manager_shape_verified,
     })
 }
 
@@ -618,6 +769,8 @@ struct PeTextRange {
 struct CallbackScan {
     raw_rvas: Vec<u64>,
     callback_shape_verified: bool,
+    manager_raw_rvas: Vec<u64>,
+    manager_shape_verified: bool,
 }
 
 fn scan_callback_executable(exe: &Path) -> Result<CallbackScan, String> {
@@ -635,26 +788,53 @@ fn scan_callback_in_open_pe_text(
     // Raw uniqueness remains authoritative. Never turn two entry-signature matches into one by
     // filtering candidates through the structural fingerprint.
     let callback_shape_verified = if raw_rvas.len() == 1 {
-        callback_shape_matches_in_text_range(file, exe, text, raw_rvas[0])?
+        shape_matches_in_text_range(
+            file,
+            exe,
+            text,
+            raw_rvas[0],
+            CALLBACK_SHAPE_SPAN,
+            callback_shape_matches,
+            "callback",
+        )?
+    } else {
+        false
+    };
+    let manager_raw_rvas = aob_rvas_in_text_range(file, exe, text, SCRIPT_COMPILE_ERROR_AOB)?;
+    let manager_shape_verified = if manager_raw_rvas.len() == 1 {
+        shape_matches_in_text_range(
+            file,
+            exe,
+            text,
+            manager_raw_rvas[0],
+            MANAGER_DIAGNOSTIC_SHAPE_SPAN,
+            manager_diagnostic_shape_matches,
+            "manager diagnostic",
+        )?
     } else {
         false
     };
     Ok(CallbackScan {
         raw_rvas,
         callback_shape_verified,
+        manager_raw_rvas,
+        manager_shape_verified,
     })
 }
 
-fn callback_shape_matches_in_text_range(
+fn shape_matches_in_text_range(
     file: &mut std::fs::File,
     exe: &Path,
     text: PeTextRange,
     candidate_rva: u64,
+    shape_span: usize,
+    matches: fn(&[u8]) -> bool,
+    label: &str,
 ) -> Result<bool, String> {
     let Some(section_offset) = candidate_rva.checked_sub(text.virtual_address) else {
         return Ok(false);
     };
-    let Some(shape_end) = section_offset.checked_add(CALLBACK_SHAPE_SPAN as u64) else {
+    let Some(shape_end) = section_offset.checked_add(shape_span as u64) else {
         return Ok(false);
     };
     if shape_end > text.scan_size {
@@ -663,21 +843,21 @@ fn callback_shape_matches_in_text_range(
     let raw = text
         .raw_offset
         .checked_add(section_offset)
-        .ok_or_else(|| "callback shape file offset overflow".to_string())?;
+        .ok_or_else(|| format!("{label} shape file offset overflow"))?;
     file.seek(SeekFrom::Start(raw)).map_err(|e| {
         format!(
-            "seeking to callback structure at RVA 0x{candidate_rva:x} in {}: {e}",
+            "seeking to {label} structure at RVA 0x{candidate_rva:x} in {}: {e}",
             exe.display()
         )
     })?;
-    let mut bytes = vec![0u8; CALLBACK_SHAPE_SPAN];
+    let mut bytes = vec![0u8; shape_span];
     file.read_exact(&mut bytes).map_err(|e| {
         format!(
-            "reading callback structure at RVA 0x{candidate_rva:x} in {}: {e}",
+            "reading {label} structure at RVA 0x{candidate_rva:x} in {}: {e}",
             exe.display()
         )
     })?;
-    Ok(callback_shape_matches(&bytes))
+    Ok(matches(&bytes))
 }
 
 fn pe_text_range(file: &mut std::fs::File, exe: &Path) -> Result<PeTextRange, String> {
@@ -1129,7 +1309,7 @@ mod windows {
     use std::ptr;
     use std::time::{Duration, Instant};
     use windows_sys::Win32::Foundation::{
-        CloseHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
+        CloseHandle, ERROR_BAD_LENGTH, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
     };
     use windows_sys::Win32::System::Diagnostics::Debug::WriteProcessMemory;
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
@@ -1180,12 +1360,31 @@ mod windows {
     }
 
     fn remote_module_base(pid: u32, wanted: &str) -> Result<usize, String> {
-        let snapshot =
-            unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid) };
+        // Microsoft documents ERROR_BAD_LENGTH as a transient module-snapshot race and requires
+        // callers to retry. Keep the retry bounded so a corrupted/hostile target still fails
+        // closed instead of hanging the compiler transaction indefinitely.
+        const MODULE_SNAPSHOT_ATTEMPTS: usize = 32;
+        let mut snapshot = INVALID_HANDLE_VALUE;
+        let mut snapshot_error = None;
+        for attempt in 0..MODULE_SNAPSHOT_ATTEMPTS {
+            snapshot =
+                unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid) };
+            if snapshot != INVALID_HANDLE_VALUE {
+                break;
+            }
+            let error = std::io::Error::last_os_error();
+            let retryable = error.raw_os_error() == Some(ERROR_BAD_LENGTH as i32);
+            snapshot_error = Some(error);
+            if !retryable || attempt + 1 == MODULE_SNAPSHOT_ATTEMPTS {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
         if snapshot == INVALID_HANDLE_VALUE {
             return Err(format!(
-                "CreateToolhelp32Snapshot({pid}) failed: {}",
-                std::io::Error::last_os_error()
+                "CreateToolhelp32Snapshot({pid}) failed after at most \
+                 {MODULE_SNAPSHOT_ATTEMPTS} attempts: {}",
+                snapshot_error.unwrap_or_else(std::io::Error::last_os_error)
             ));
         }
         let snapshot = Snapshot(snapshot);
@@ -1500,6 +1699,31 @@ mod tests {
         text
     }
 
+    fn valid_manager_diagnostic_text() -> Vec<u8> {
+        let mut text = vec![0x90; MANAGER_DIAGNOSTIC_SHAPE_SPAN];
+        for (offset, byte) in SCRIPT_COMPILE_ERROR_AOB.iter().enumerate() {
+            if let Some(byte) = byte {
+                text[offset] = *byte;
+            }
+        }
+        for clause in MANAGER_DIAGNOSTIC_SHAPE {
+            for (relative, byte) in clause.pattern.iter().enumerate() {
+                if let Some(byte) = byte {
+                    text[clause.offset + relative] = *byte;
+                }
+            }
+        }
+        text
+    }
+
+    fn valid_diagnostics_text() -> (Vec<u8>, u64) {
+        let mut text = valid_callback_text();
+        text.extend_from_slice(&[0x90; 16]);
+        let manager_rva = 0x1000 + text.len() as u64;
+        text.extend_from_slice(&valid_manager_diagnostic_text());
+        (text, manager_rva)
+    }
+
     #[test]
     fn masked_aob_counts_zero_one_and_ambiguous() {
         let pattern = [Some(0xaa), None, Some(0xcc)];
@@ -1549,7 +1773,46 @@ mod tests {
     }
 
     #[test]
-    fn native_helper_source_carries_the_same_callback_shape_fingerprint() {
+    fn sparse_manager_shape_checks_every_consumed_diagnostic_field() {
+        let valid = valid_manager_diagnostic_text();
+        assert!(manager_diagnostic_shape_matches(&valid));
+
+        for clause in MANAGER_DIAGNOSTIC_SHAPE {
+            let required = clause
+                .pattern
+                .iter()
+                .position(Option::is_some)
+                .expect("every shape clause has a required byte");
+            let mut damaged = valid.clone();
+            damaged[clause.offset + required] ^= 0xff;
+            assert!(
+                !manager_diagnostic_shape_matches(&damaged),
+                "accepted damaged manager clause at offset 0x{:x}",
+                clause.offset
+            );
+
+            for wildcard in clause
+                .pattern
+                .iter()
+                .enumerate()
+                .filter_map(|(i, byte)| byte.is_none().then_some(i))
+            {
+                let mut varied = valid.clone();
+                varied[clause.offset + wildcard] ^= 0xff;
+                assert!(
+                    manager_diagnostic_shape_matches(&varied),
+                    "rejected masked manager byte at 0x{:x}",
+                    clause.offset + wildcard
+                );
+            }
+        }
+        assert!(!manager_diagnostic_shape_matches(
+            &valid[..MANAGER_DIAGNOSTIC_SHAPE_SPAN - 1]
+        ));
+    }
+
+    #[test]
+    fn native_helper_source_carries_both_shape_fingerprints() {
         let native = include_str!("../native/diagnostics-hook/ashook.cpp");
         for clause in [
             "kCallbackShapeSpan = 0x244",
@@ -1559,6 +1822,12 @@ mod tests {
             "{0x09a, \"48 8B 17\"}",
             "{0x119, \"44 39 6F 0C 75 ?? 44 39 6F 08 75 ?? 48 8B 57 18\"}",
             "{0x233, \"8B 47 08 89 44 24 ?? 8B 47 0C 89 44 24 ?? 8B 47 10\"}",
+            "kManagerDiagnosticShapeSpan = 0xb0",
+            "{0x01d, \"8B 42 08 49 8B F8 48 8B F2\"}",
+            "{0x02a, \"48 8B 12\"}",
+            "{0x083, \"48 8B D7\"}",
+            "{0x091, \"8B 47 10 48 8B 74 24 ?? 89 43 10 8B 47 14 89 43 14\"}",
+            "{0x0a2, \"0F B6 47 18 88 43 18 0F B6 47 19 88 43 19\"}",
         ] {
             assert!(
                 native.contains(clause),
@@ -1659,13 +1928,17 @@ mod tests {
             "gore-as-structured-probe-{}.exe",
             std::process::id()
         ));
-        std::fs::write(&exe, fake_pe(&valid_callback_text())).unwrap();
+        let (text, manager_rva) = valid_diagnostics_text();
+        std::fs::write(&exe, fake_pe(&text)).unwrap();
         let probe = probe_executable(&exe).unwrap();
         assert_eq!(probe.sha256.len(), 64);
         assert!(probe.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()));
         assert_eq!(probe.match_count, 1);
         assert_eq!(probe.matched_rvas, vec![0x1000]);
         assert!(probe.callback_shape_verified);
+        assert_eq!(probe.manager_match_count, 1);
+        assert_eq!(probe.manager_matched_rvas, vec![manager_rva]);
+        assert!(probe.manager_shape_verified);
         std::fs::remove_file(exe).unwrap();
     }
 
@@ -1694,6 +1967,18 @@ mod tests {
             assert!(
                 probe.callback_shape_verified,
                 "real callback structure must be verified: {}",
+                exe.display()
+            );
+            assert_eq!(
+                probe.manager_match_count,
+                1,
+                "real manager diagnostic AOB must be unique: {}",
+                exe.display()
+            );
+            assert_eq!(probe.manager_matched_rvas.len(), 1);
+            assert!(
+                probe.manager_shape_verified,
+                "real manager diagnostic structure must be verified: {}",
                 exe.display()
             );
         }
@@ -1792,7 +2077,8 @@ mod tests {
         let _serial = HOOK_TEMP_TEST_LOCK.lock().unwrap();
         let exe =
             std::env::temp_dir().join(format!("gore-as-hook-match-{}.exe", std::process::id()));
-        std::fs::write(&exe, fake_pe(&valid_callback_text())).unwrap();
+        let (text, _) = valid_diagnostics_text();
+        std::fs::write(&exe, fake_pe(&text)).unwrap();
         let prep = prepare_hook(&exe, &DiagnosticsOptions::default()).unwrap();
         let dll = prep.hook_dll.clone();
         let dir = dll.parent().unwrap().to_path_buf();

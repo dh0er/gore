@@ -817,9 +817,12 @@ fn preflight_class(
     if cursor.read_bool()? {
         budget.string(cursor, false)?;
         budget.string(cursor, false)?;
-        cursor.skip(8 * 4)?;
+        for _ in 0..7 {
+            cursor.read_bool()?;
+        }
+        budget.string(cursor, false)?; // ConfigName
         budget.string(cursor, false)?;
-        cursor.skip(4)?;
+        cursor.read_bool()?;
         budget.string_array(cursor, "Class.MetaSpec")?;
         budget.string_array(cursor, "Class.MetaValues")?;
         budget.string(cursor, false)?;
@@ -849,7 +852,8 @@ fn preflight_global(
     if !cursor.read_bool()? {
         if cursor.read_bool()? {
             cursor.skip(8)?;
-        } else if cursor.read_bool()? {
+        } else {
+            cursor.read_bool()?; // bHasInitFunction
             preflight_function(cursor, budget, module_bytecode)?;
         }
     }

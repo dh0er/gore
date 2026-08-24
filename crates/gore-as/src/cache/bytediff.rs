@@ -2111,6 +2111,16 @@ impl Report {
     }
     pub fn any_semantic(&self) -> bool {
         self.diffs.iter().any(|d| d.verdict == Verdict::Semantic)
+            || self.alignment_loss_count() != 0
+    }
+
+    /// Modules/functions which could not be aligned are semantic unknowns, never benign absence.
+    /// A release gate must fail even when every remaining aligned function compares cleanly.
+    pub fn alignment_loss_count(&self) -> usize {
+        self.only_in_vanilla_modules.len()
+            + self.only_in_regen_modules.len()
+            + self.only_in_vanilla_funcs.len()
+            + self.only_in_regen_funcs.len()
     }
 }
 
@@ -3313,6 +3323,15 @@ mod tests {
         let v = std::fs::read(format!("{base}/cache_A.Cache")).ok()?;
         let r = std::fs::read(format!("{base}/regen_batch47.Cache")).ok()?;
         Some((v, r))
+    }
+
+    #[test]
+    fn alignment_loss_is_a_semantic_release_failure() {
+        let mut report = Report::default();
+        assert!(!report.any_semantic());
+        report.only_in_regen_funcs.push("M::Added()".to_owned());
+        assert_eq!(report.alignment_loss_count(), 1);
+        assert!(report.any_semantic());
     }
 
     /// CURATED REAL-BUG REGRESSION (batch-48): the four functions that MUST stay SEMANTIC after

@@ -227,6 +227,7 @@ final class AuthoringRevision3ManagedCompilerEvidence {
     required this.installRestore,
     required this.recoveryRequired,
     required this.outputDiscarded,
+    required this.backend,
   });
 
   final AuthoringRevision3ManagedCompilerOutcome outcome;
@@ -235,23 +236,36 @@ final class AuthoringRevision3ManagedCompilerEvidence {
   final ScriptCompileInstallRestore installRestore;
   final bool recoveryRequired;
   final bool outputDiscarded;
+  final ScriptCompilerBackendEvidence? backend;
 
   bool get compiledEvidenceOnly =>
       outcome == AuthoringRevision3ManagedCompilerOutcome.compiledEvidenceOnly;
 
-  factory AuthoringRevision3ManagedCompilerEvidence._fromJson(Object? value) {
+  bool get gameInstallRecoveryRequired =>
+      scriptCompileRequiresGameInstallRecovery(
+        recoveryRequired: recoveryRequired,
+        installRestore: installRestore,
+        failure: failure,
+      );
+
+  factory AuthoringRevision3ManagedCompilerEvidence._fromJson(
+    Object? value, {
+    ScriptCompilerBackendMode? expectedBackend,
+  }) {
     final json = _authoringRequiredObject(
       value,
       'revision-3 managed compiler evidence',
     );
-    _authoringExactFields(json, const <String>{
+    final fields = <String>{
       'outcome',
       'compile_error',
       'compiler_diagnostics',
       'install_restore',
       'recovery_required',
       'output_discarded',
-    }, 'revision-3 managed compiler evidence');
+    };
+    if (expectedBackend != null) fields.add('compiler_backend');
+    _authoringExactFields(json, fields, 'revision-3 managed compiler evidence');
     final outcome = switch (json['outcome']) {
       'compiled_evidence_only' =>
         AuthoringRevision3ManagedCompilerOutcome.compiledEvidenceOnly,
@@ -284,6 +298,12 @@ final class AuthoringRevision3ManagedCompilerEvidence {
         'authoring revision-3 managed compiler output disposal or recovery state is invalid',
       );
     }
+    final backend = expectedBackend == null
+        ? null
+        : ScriptCompilerBackendEvidence.fromJson(
+            json['compiler_backend'],
+            expectedMode: expectedBackend,
+          );
     final restoreRequiresRecovery =
         installRestore ==
             ScriptCompileInstallRestore
@@ -313,7 +333,10 @@ final class AuthoringRevision3ManagedCompilerEvidence {
           (diagnostics.capture != ScriptCompileCaptureDisposition.captured &&
               diagnostics.capture !=
                   ScriptCompileCaptureDisposition.unavailableFallback) ||
-          installRestore != ScriptCompileInstallRestore.restoredExact ||
+          (installRestore != ScriptCompileInstallRestore.restoredExact &&
+              !(installRestore == ScriptCompileInstallRestore.notStarted &&
+                  backend?.resultBackend ==
+                      ScriptCompilerBackendName.standalone)) ||
           recoveryRequired ||
           !outputDiscarded) {
         throw const FormatException(
@@ -339,6 +362,7 @@ final class AuthoringRevision3ManagedCompilerEvidence {
       installRestore: installRestore,
       recoveryRequired: recoveryRequired,
       outputDiscarded: outputDiscarded,
+      backend: backend,
     );
   }
 }
@@ -358,6 +382,7 @@ final class AuthoringRevision3ManagedCompilerCheckResult {
     required this.deployStatus,
     required this.runtimeQualification,
     required this.publicationStatus,
+    required this.backendMode,
   });
 
   final bool exactCurrent;
@@ -372,12 +397,15 @@ final class AuthoringRevision3ManagedCompilerCheckResult {
   final AuthoringRevision3ManagedCompilerRuntimeQualification
   runtimeQualification;
   final AuthoringRevision3ManagedCompilerPublicationStatus publicationStatus;
+  final ScriptCompilerBackendMode? backendMode;
 
   /// True only when compiler acceptance is still bound to the requested head.
   bool get acceptedAtExactCurrent =>
       exactCurrent && compiler.compiledEvidenceOnly;
 
   bool get recoveryRequired => compiler.recoveryRequired;
+
+  bool get gameInstallRecoveryRequired => compiler.gameInstallRecoveryRequired;
 
   String get projectId => project.id;
   int get projectRevision => project.revision;
@@ -392,6 +420,7 @@ final class AuthoringRevision3ManagedCompilerCheckResult {
     required AuthoringWorkingHead expectedHead,
     required String requestedEntityId,
     required AuthoringRevision3ManagedCompilerEntityKind expectedKind,
+    ScriptCompilerBackendMode? expectedBackend,
   }) {
     _authoringExactFields(json, const <String>{
       'ok',
@@ -461,6 +490,7 @@ final class AuthoringRevision3ManagedCompilerCheckResult {
     );
     final compiler = AuthoringRevision3ManagedCompilerEvidence._fromJson(
       json['compiler'],
+      expectedBackend: expectedBackend,
     );
     if (compiler.recoveryRequired && exactCurrent) {
       throw const FormatException(
@@ -482,6 +512,7 @@ final class AuthoringRevision3ManagedCompilerCheckResult {
               .runtimeUnqualified,
       publicationStatus:
           AuthoringRevision3ManagedCompilerPublicationStatus.notSupported,
+      backendMode: expectedBackend,
     );
   }
 }

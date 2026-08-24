@@ -25,6 +25,7 @@ pub mod npc_archetypes;
 pub mod refs;
 pub mod remap;
 pub mod scan;
+pub mod semantic_observer;
 pub mod splice;
 pub mod structure;
 pub mod tables;

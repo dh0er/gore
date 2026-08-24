@@ -224,10 +224,10 @@ pub struct Safety {
     pub base: Class,
     /// When set, omitting this argument escalates the class to [`Class::Mutate`].
     ///
-    /// This models a family of commands exactly: `audio replace`, `audio apply-patch`, `loc import`
-    /// and `as compile` all write a new file when given `-o` and overwrite their input in place
-    /// when not. Treating them as unconditionally dangerous would block the safe usage; treating
-    /// them as unconditionally safe would let an agent overwrite the game's own files.
+    /// This models a family of commands exactly: `audio replace`, `audio apply-patch`, and
+    /// `loc import` all write a new file when given `-o` and overwrite their input in place when
+    /// not. Treating them as unconditionally dangerous would block the safe usage; treating them
+    /// as unconditionally safe would let an agent overwrite the game's own files.
     pub in_place_without: Option<&'static str>,
     /// Arguments naming a path this command overwrites if it is already there.
     ///
@@ -381,18 +381,6 @@ impl Safety {
         self
     }
 
-    /// Escalate an existing class with the same in-place rule (used by `as compile`).
-    ///
-    /// Registers the argument as truncating for the same reason
-    /// [`Safety::write_or_in_place`] does: an output that names an existing path is a replacement,
-    /// not a creation. Redundant on a `GameLaunch` command, which is gated either way — but the
-    /// builder must not be the one spelling where the rule silently stops applying.
-    pub const fn in_place_without(mut self, out_arg: &'static [&'static str; 1]) -> Self {
-        self.in_place_without = Some(out_arg[0]);
-        self.truncates = out_arg;
-        self
-    }
-
     /// The class this specific call falls into.
     pub fn effective(&self, args: &Map<String, Value>) -> Class {
         match self.in_place_without {
@@ -413,8 +401,8 @@ impl Safety {
     ///
     /// Computed from independent facts rather than from the ordered [`Class`], because a
     /// game-launching command is also install-mutating and the ordering would hide one behind the
-    /// other. `as compile` without `-o` both launches the game and overwrites the installed script
-    /// cache, and it should require both flags, not just the more severe one.
+    /// other. A game-capable compile both launches the game and stages source files in the
+    /// installation, so it requires both flags even though its output path is separate.
     ///
     /// [`Class::GameLaunch`] implies `write` even when the command writes its output elsewhere:
     /// driving the game's own compiler stages a source tree into the installation and restores it
@@ -916,10 +904,11 @@ mod tests {
     }
 
     #[test]
-    fn a_game_launching_command_stays_game_launching_when_it_also_writes_in_place() {
-        let safety = Safety::game_launch().in_place_without(&["out"]);
-        assert_eq!(safety.effective(&Map::new()), Class::GameLaunch);
-        assert_eq!(safety.worst_case(), Class::GameLaunch);
+    fn a_game_launching_command_requires_launch_and_write_permission() {
+        let requirements = Safety::game_launch().requirements(&Map::new());
+        assert!(requirements.game_launch);
+        assert!(requirements.write);
+        assert!(!requirements.rewrites_in_place);
     }
 
     #[test]
@@ -1020,7 +1009,6 @@ mod tests {
             ("gore_audio", "apply-patch", &["out"]),
             ("gore_audio", "export-patch", &["out"]),
             ("gore_audio", "replace", &["out"]),
-            ("gore_as", "compile", &["out"]),
             ("gore_catalog", "catalog", &["out"]),
             ("gore_catalog", "dump", &["out"]),
             ("gore_catalog", "gui-model", &["out"]),
