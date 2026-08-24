@@ -4047,44 +4047,68 @@ mod tests {
         }
     }
 
-    fn find_python() -> Option<PathBuf> {
-        static PYTHON: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-        if let Some(python) = PYTHON.get() {
-            return Some(python.clone());
-        }
-        let discovered = find_python_uncached()?;
-        let _ = PYTHON.set(discovered.clone());
-        Some(PYTHON.get().cloned().unwrap_or(discovered))
+    enum PythonDiscovery {
+        Found(PathBuf),
+        Absent,
+        Retry,
     }
 
-    fn find_python_uncached() -> Option<PathBuf> {
+    fn find_python() -> Option<PathBuf> {
+        static PYTHON: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+        if let Some(cached) = PYTHON.get() {
+            return cached.clone();
+        }
+        let discovered = match find_python_uncached() {
+            PythonDiscovery::Found(python) => Some(python),
+            PythonDiscovery::Absent => None,
+            // Do not turn a transient canonicalization or process-start failure into a permanent
+            // skip for every remaining Python-backed test.
+            PythonDiscovery::Retry => return None,
+        };
+        let _ = PYTHON.set(discovered.clone());
+        PYTHON.get().cloned().unwrap_or(discovered)
+    }
+
+    fn find_python_uncached() -> PythonDiscovery {
         let names: &[&str] = if cfg!(windows) {
             &["python.exe", "python3.exe"]
         } else {
             &["python3", "python"]
         };
-        for directory in std::env::split_paths(&std::env::var_os("PATH")?) {
+        let Some(path) = std::env::var_os("PATH") else {
+            return PythonDiscovery::Absent;
+        };
+        let mut retry = false;
+        for directory in std::env::split_paths(&path) {
             for name in names {
                 let candidate = directory.join(name);
                 if !candidate.is_file() {
                     continue;
                 }
                 let Ok(candidate) = std::fs::canonicalize(candidate) else {
+                    retry = true;
                     continue;
                 };
-                if Command::new(&candidate)
+                match Command::new(&candidate)
                     .arg("--version")
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .status()
-                    .is_ok_and(|status| status.success())
                 {
-                    return Some(candidate);
+                    Ok(status) if status.success() => {
+                        return PythonDiscovery::Found(candidate);
+                    }
+                    Ok(_) => {}
+                    Err(_) => retry = true,
                 }
             }
         }
-        None
+        if retry {
+            PythonDiscovery::Retry
+        } else {
+            PythonDiscovery::Absent
+        }
     }
 
     fn executable_seal(path: &Path) -> SidecarExecutableSealV1 {
