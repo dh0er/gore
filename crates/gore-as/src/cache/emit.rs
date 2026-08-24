@@ -1394,7 +1394,7 @@ fn emit_function_ctor(
     let body = fold_alias_copies(&body, &declared_locals);
     let body = fold_copy_out_temporaries(&body, &declared_locals, &const_result_slots, fields);
     let body = fold_cast_operands(&body, &declared_locals, &call_result_types);
-    let body = fold_enum_round_trips(&body, fields);
+    let body = fold_enum_round_trips(&body, fields, refs);
     let body =
         fold_returned_temporaries(&body, &declared_locals, refs, &ret, returns_by_reference);
     // hoist every referenced local; infer_locals types what it can, the rest default to `int`
@@ -6588,18 +6588,20 @@ fn fold_cast_operands(
 /// The witness is an exact name match, not an inference: the class field map says what `this.F`
 /// is, and the cast at the read spells the same type. Where the two names differ, the conversion
 /// is real and the slot stays.
-fn fold_enum_round_trips(body: &str, fields: Option<&HashMap<String, String>>) -> String {
-    let Some(fields) = fields else {
-        return body.to_owned();
-    };
+fn fold_enum_round_trips(
+    body: &str,
+    fields: Option<&HashMap<String, String>>,
+    refs: &RefResolver,
+) -> String {
     let lines: Vec<&str> = body.lines().collect();
     let mut kept: Vec<String> = Vec::new();
     let mut at = 0usize;
     while at < lines.len() {
         let folded = (|| {
             let (name, value) = slot_store(lines[at])?;
-            let field = value.strip_prefix("int(")?.strip_suffix(')')?;
-            let declared = fields.get(field.strip_prefix("this.")?)?;
+            let read = value.strip_prefix("int(")?.strip_suffix(')')?;
+            let declared = &enum_of_member_path(read, fields, refs)?;
+            let field = read;
             let reader = lines.get(at + 1)?;
             let cast = format!("{declared}({name})");
             if !reader.contains(&cast)
@@ -6629,11 +6631,7 @@ fn fold_enum_round_trips(body: &str, fields: Option<&HashMap<String, String>>) -
     // `EPerceptionSense(int(this.Sense))` is `this.Sense`. Same witness — the class field map
     // names the field's type and the cast spells the same name — and the same refusal where the
     // two names differ, because then the conversion is real.
-    for (field, ty) in fields {
-        if ty.starts_with('E') {
-            joined = joined.replace(&format!("{ty}(int(this.{field}))"), &format!("this.{field}"));
-        }
-    }
+    joined = rewrite_inline_enum_round_trips(&joined, fields, refs);
     joined
 }
 
@@ -6754,6 +6752,58 @@ fn fold_compound_assignments(body: &str) -> String {
         joined.push('\n');
     }
     joined
+}
+
+/// The enum a member PATH names, walking `this.A.B.C` one field at a time: the class's own field
+/// map answers the first step, the cache's per-class field types answer the rest. `None` unless
+/// every step resolves and the last one is an enum — a path this cannot follow keeps its cast.
+fn enum_of_member_path(
+    path: &str,
+    fields: Option<&HashMap<String, String>>,
+    refs: &RefResolver,
+) -> Option<String> {
+    let mut steps = path.strip_prefix("this.")?.split('.');
+    let mut ty = fields?.get(steps.next()?)?.clone();
+    for step in steps {
+        ty = refs
+            .field_type_by_class(&ty, step)
+            .or_else(|| refs.native_field_type(&ty, step))?
+            .to_owned();
+    }
+    ty.starts_with('E').then_some(ty)
+}
+
+/// `EFoo(int(<path>))` written inline, with no slot to travel through, is `<path>`.
+fn rewrite_inline_enum_round_trips(
+    body: &str,
+    fields: Option<&HashMap<String, String>>,
+    refs: &RefResolver,
+) -> String {
+    let mut out = body.to_owned();
+    let mut at = 0usize;
+    while let Some(found) = out[at..].find("(int(this.") {
+        let open = at + found;
+        // The enum name in front of the parenthesis, and the path inside the two.
+        let head = out[..open].rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != ':');
+        let name = &out[head.map_or(0, |k| k + 1)..open];
+        let inner = open + "(int(".len();
+        let close = out[inner..].find("))").map(|k| inner + k);
+        match close.filter(|_| !name.is_empty()) {
+            Some(close) => {
+                let path = out[inner..close].to_owned();
+                let resolved = enum_of_member_path(&path, fields, refs);
+                if resolved.as_deref() == Some(name) {
+                    let start = head.map_or(0, |k| k + 1);
+                    out.replace_range(start..close + 2, &path);
+                    at = start + path.len();
+                    continue;
+                }
+                at = close + 2;
+            }
+            None => at = open + 1,
+        }
+    }
+    out
 }
 
 /// The slot number a `local_N` identifier names.
