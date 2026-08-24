@@ -297,8 +297,9 @@ registry's compile-only inert stubs.
 `vendor/unreangel` contains 62 byte-exact files from the pinned UNREANGEL commit,
 two explicitly inventoried downstream modifications, and the root license notice.
 `SOURCE_INVENTORY.tsv` records every imported source file and notice with an exact
-source path and upstream SHA-256; modified rows additionally record the current
-vendored SHA-256. `PROVENANCE.toml` explains both changes. The inventory also names candidate
+source path and repository-canonical SHA-256; CRLF and LF checkouts are reduced to
+LF before hashing, while every other byte remains exact. Modified rows additionally
+record the current vendored SHA-256. `PROVENANCE.toml` explains both changes. The inventory also names candidate
 semantic extractions, reference-only files, dead/foreign call backends, and UE
 subtrees that remain excluded. The two embedded xxHash files are not imported;
 their future inventory rows identify BSD-2-Clause and require retention of their
@@ -310,7 +311,7 @@ future/exclusion boundary: every actual import must first be expanded to exact
 file rows with SHA-256 values and reflected in `PROVENANCE.toml`.
 
 Given a checkout of the recorded revision, verify every upstream hash, exact or
-explicitly modified vendored byte set, and inventory/tree membership mechanically with
+explicitly modified vendored canonical text, and inventory/tree membership mechanically with
 `tools/verify-source-inventory.ps1 -UpstreamRoot C:\\path\\to\\UNREANGEL`.
 
 ## Product promotion and packaging

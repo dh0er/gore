@@ -9,6 +9,42 @@ $inventoryPath = Join-Path $componentRoot 'SOURCE_INVENTORY.tsv'
 $vendorRoot = Join-Path $componentRoot 'vendor\unreangel'
 $rows = @(Import-Csv -LiteralPath $inventoryPath -Delimiter ([char]9))
 
+function Get-CanonicalTextSha256 {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $LiteralPath
+    )
+
+    # Git may materialize the same text blob with LF or CRLF depending on the
+    # checkout. Hash the repository-canonical form so the provenance check is
+    # independent of that local setting while every other byte remains exact.
+    $inputBytes = [System.IO.File]::ReadAllBytes($LiteralPath)
+    $canonicalBytes = [byte[]]::new($inputBytes.Length)
+    $writeIndex = 0
+    for ($readIndex = 0; $readIndex -lt $inputBytes.Length; $readIndex++) {
+        if (
+            $inputBytes[$readIndex] -eq 13 -and
+            $readIndex + 1 -lt $inputBytes.Length -and
+            $inputBytes[$readIndex + 1] -eq 10
+        ) {
+            $canonicalBytes[$writeIndex] = 10
+            $writeIndex++
+            $readIndex++
+        } else {
+            $canonicalBytes[$writeIndex] = $inputBytes[$readIndex]
+            $writeIndex++
+        }
+    }
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = $sha256.ComputeHash($canonicalBytes, 0, $writeIndex)
+    } finally {
+        $sha256.Dispose()
+    }
+    return -join ($hash | ForEach-Object { $_.ToString('x2') })
+}
+
 $revisions = @($rows.origin_revision | Sort-Object -Unique)
 if ($revisions.Count -ne 1) {
     throw "Inventory must name exactly one upstream revision; found $($revisions.Count)."
@@ -24,7 +60,7 @@ foreach ($row in $rows | Where-Object { $_.match_kind -eq 'exact' -and $_.sha256
     if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
         throw "Missing upstream inventory file: $($row.source_path)"
     }
-    $sourceHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $sourceHash = Get-CanonicalTextSha256 -LiteralPath $sourcePath
     if ($sourceHash -ne $row.sha256) {
         throw "Upstream SHA-256 mismatch for $($row.source_path)."
     }
@@ -34,7 +70,7 @@ foreach ($row in $rows | Where-Object { $_.match_kind -eq 'exact' -and $_.sha256
         if (-not (Test-Path -LiteralPath $vendorPath -PathType Leaf)) {
             throw "Missing vendored inventory file: $($row.vendored_path)"
         }
-        $vendorHash = (Get-FileHash -LiteralPath $vendorPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $vendorHash = Get-CanonicalTextSha256 -LiteralPath $vendorPath
         $expectedVendorHash = if ($row.disposition -eq 'vendored_modified') {
             if ([string]::IsNullOrWhiteSpace($row.vendored_sha256) -or $row.vendored_sha256 -eq '-') {
                 throw "Modified vendored file has no downstream SHA-256: $($row.vendored_path)"
