@@ -1868,7 +1868,7 @@ fn emit_function_ctor(
         // shape this one matches on.
         let body = collapse_single_use_accumulators(&body, &widened);
         let body = fold_enum_call_round_trips(&body, &call_result_types);
-        let body = fold_compound_assignments(&body);
+        let body = fold_compound_assignments(&body, fields, &path_roots, refs);
         let uses_return_slot = body.contains("__return");
         if uses_return_slot {
             let _ = writeln!(s, "{ind}    {ret} __return;");
@@ -6948,24 +6948,14 @@ fn slots_touched_only_after_a_branch(f: &Func) -> HashSet<i32> {
     let mut before = HashSet::new();
     let mut after = HashSet::new();
     for (at, ins) in instrs.iter().enumerate() {
-        // Only the instructions that name a slot as their FIRST operand address one; a call's
-        // words are a pointer, not a frame offset.
-        if !matches!(
-            ins.op.name,
-            "PSF" | "PshVPtr" | "STOREOBJ" | "CpyVtoV4" | "CpyVtoV8" | "SetV1" | "SetV4" | "SetV8"
-        ) {
-            continue;
-        }
-        let Some(slot) = ins.words.first().map(|word| *word as i16 as i32) else {
-            continue;
-        };
-        if slot <= 0 {
-            continue;
-        }
-        if at < first_branch {
-            before.insert(slot);
-        } else {
-            after.insert(slot);
+        // Which words of an instruction are frame offsets depends on its format; the operand
+        // decoder carries that table, so ask it rather than guess.
+        for slot in super::bytediff::addressed_slots(ins).into_iter().filter(|slot| *slot > 0) {
+            if at < first_branch {
+                before.insert(slot);
+            } else {
+                after.insert(slot);
+            }
         }
     }
     after.difference(&before).copied().collect()
@@ -7107,7 +7097,34 @@ fn bare_declaration(line: &str) -> Option<(String, String)> {
     Some((indent, name.to_owned()))
 }
 
-fn fold_compound_assignments(body: &str) -> String {
+/// A value the decompiler wrapped in one pair of brackets, unwrapped — but only when the pair
+/// really does span the whole thing, so `(a) + (b)` keeps both.
+fn unwrap_brackets(value: &str) -> &str {
+    let Some(inner) = value.strip_prefix('(').and_then(|rest| rest.strip_suffix(')')) else {
+        return value;
+    };
+    let mut depth = 0i32;
+    for byte in inner.bytes() {
+        match byte {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth < 0 {
+                    return value;
+                }
+            }
+            _ => {}
+        }
+    }
+    if depth == 0 { inner } else { value }
+}
+
+fn fold_compound_assignments(
+    body: &str,
+    fields: Option<&HashMap<String, String>>,
+    roots: &HashMap<String, String>,
+    refs: &RefResolver,
+) -> String {
     const OPERATORS: [&str; 7] = [" + ", " - ", " * ", " / ", " | ", " & ", " ^ "];
     let pure_member_path = |path: &str| {
         path.contains('.')
@@ -7127,7 +7144,19 @@ fn fold_compound_assignments(body: &str) -> String {
             if !pure_member_path(target) {
                 return None;
             }
-            let rest = value.strip_prefix(target)?;
+            // The decompiler brackets a value it built and may name the read's own type on the
+            // way in: `X.F = (int(X.F) + 1);`. Neither changes what runs — vanilla loads the
+            // member's reference ONCE and reads, adds and writes back through it — but both hide
+            // the shape from the match. The cast comes off only where the field already HAS that
+            // type, so a real narrowing is never rewritten into arithmetic at another width.
+            let value = unwrap_brackets(value);
+            let rest = value.strip_prefix(target).or_else(|| {
+                let ty = type_of_member_path(target, fields, roots, refs);
+                if std::env::var_os("GORE_AS_COMPOUND_DIAG").is_some() {
+                    eprintln!("[compound] cast {ty:?} for {target} | {value}");
+                }
+                value.strip_prefix(&format!("{}({target})", ty?))
+            })?;
             let operator = OPERATORS.iter().find(|op| rest.starts_with(**op))?;
             let addend = &rest[operator.len()..];
             (!addend.is_empty() && !addend.contains(target))
@@ -7302,12 +7331,18 @@ fn type_of_member_path(
         named => roots.get(named)?.clone(),
     };
     for step in steps {
+        // A declared type may carry the namespace it was declared in (`G1R::UStoryG1R`) while the
+        // class tables are keyed by the bare name. Ask for both, in that order.
+        let bare = ty.rsplit("::").next().unwrap_or(&ty).to_owned();
         ty = refs
             .field_type_by_class(&ty, step)
             .or_else(|| refs.native_field_type(&ty, step))
             // A field declared by a NATIVE class appears in no script class-fields map — the
             // installed `Binds.Cache` is what declares it, and it is read-only evidence.
-            .or_else(|| refs.native_field_value_type(&ty, step))?
+            .or_else(|| refs.native_field_value_type(&ty, step))
+            .or_else(|| refs.field_type_by_class(&bare, step))
+            .or_else(|| refs.native_field_type(&bare, step))
+            .or_else(|| refs.native_field_value_type(&bare, step))?
             .to_owned();
     }
     Some(ty)
@@ -9303,6 +9338,30 @@ mod declaration_sink_tests {
             body,
             "no single block holds every mention, so nothing can hold the declaration"
         );
+    }
+}
+
+#[cfg(test)]
+mod bracket_tests {
+    use super::unwrap_brackets;
+
+    #[test]
+    fn one_pair_around_the_whole_value_comes_off() {
+        assert_eq!(unwrap_brackets("(int(X.F) + 1)"), "int(X.F) + 1");
+    }
+
+    #[test]
+    fn brackets_that_only_look_like_a_pair_stay() {
+        assert_eq!(
+            unwrap_brackets("(a) + (b)"),
+            "(a) + (b)",
+            "the leading and trailing brackets belong to different groups"
+        );
+    }
+
+    #[test]
+    fn an_unbracketed_value_is_returned_as_it_is() {
+        assert_eq!(unwrap_brackets("X.F + 1"), "X.F + 1");
     }
 }
 

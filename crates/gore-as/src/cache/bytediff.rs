@@ -560,6 +560,19 @@ fn raw_property_operands(name: &str, ins: &Instr) -> Vec<Operand> {
 ///
 /// `rW`/`wW` word slots are frame slots (Slot); a bare `W` arg is a plain word (Word). The
 /// per-BcType word roles mirror `disasm`'s word-collection order.
+/// The frame slots an instruction addresses, decided by its format — the same table the operand
+/// decoder uses, so a caller outside this module cannot drift from it.
+pub(crate) fn addressed_slots(ins: &Instr) -> Vec<i32> {
+    let mut out = Vec::new();
+    push_word_operands(ins.op.name, ins, &mut out);
+    out.into_iter()
+        .filter_map(|operand| match operand {
+            Operand::Slot(slot) => Some(slot),
+            _ => None,
+        })
+        .collect()
+}
+
 fn push_word_operands(name: &str, ins: &Instr, out: &mut Vec<Operand>) {
     use BcType::*;
     // (is_slot?) per word position, in the order `disasm` collected them.
