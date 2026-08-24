@@ -3511,6 +3511,11 @@ mod tests {
             relative_path: "Module.as",
         }];
 
+    // These FullGraph fixtures start a Python process and perform several filesystem operations.
+    // Windows CI can spend more than five seconds starting that process under concurrent load;
+    // the production timeout is unrelated and remains unchanged.
+    const FULL_GRAPH_FAKE_SIDECAR_TEST_TIMEOUT: Duration = Duration::from_secs(30);
+
     struct TestFixture {
         root: PathBuf,
         profile_root: PathBuf,
@@ -4413,7 +4418,7 @@ output = pathlib.Path(request["output"]["cache_path"])
 output.write_bytes(data)
 print(json.dumps({"response_version":1,"ok":True,"output":{"cache_path":str(output),"byte_len":len(data),"sha256":hashlib.sha256(data).hexdigest(),"profile_sha256":request["profile"]["profile_sha256"]},"diagnostics":[]}))
 "#,
-            Duration::from_secs(5),
+            FULL_GRAPH_FAKE_SIDECAR_TEST_TIMEOUT,
         ) else {
             eprintln!("python unavailable; fake-sidecar FullGraph test skipped");
             return;
@@ -4484,7 +4489,7 @@ output = pathlib.Path(request["output"]["cache_path"])
 output.write_bytes(data)
 print(json.dumps({"response_version":1,"ok":True,"output":{"cache_path":str(output),"byte_len":len(data),"sha256":hashlib.sha256(data).hexdigest(),"profile_sha256":request["profile"]["profile_sha256"]},"diagnostics":[]}))
 "#,
-            Duration::from_secs(5),
+            FULL_GRAPH_FAKE_SIDECAR_TEST_TIMEOUT,
         ) else {
             eprintln!("python unavailable; fake-sidecar delete-only test skipped");
             return;
