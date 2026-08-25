@@ -1762,7 +1762,8 @@ fn emit_function_ctor(
         // BEFORE the value-type decl-init rewrite, which would otherwise give the loop element a
         // declaration and hide the idiom.
         let (body, foreach_suppressed) = rewrite_foreach_loops(&body, &locals, refs);
-        let (body, value_suppressed) = rewrite_value_decl_init(&body, &locals, refs);
+        let (body, value_suppressed) =
+            rewrite_value_decl_init(&body, &locals, refs, &copy_constructed_slots(f, refs));
         // A local that receives a CONST call result has to be const as well, and a const local is
         // declared where it gets its value.
         let (body, const_suppressed) =
@@ -1939,6 +1940,7 @@ fn emit_function_ctor(
         let rendered = fold_cast_operands(&rendered, &declared_locals, &call_result_types);
         let rendered = fold_enum_round_trips(&rendered, fields, &path_roots, refs);
         let rendered = fold_bool_member_comparisons(&rendered, fields, &path_roots, refs);
+        let rendered = drop_redundant_conversions(&rendered, fields, &path_roots, refs);
         let rendered = drop_block_end_handle_releases(&rendered);
         let rendered = drop_unused_declarations(&rendered);
         let rendered = fold_member_read_temporaries(
@@ -7705,6 +7707,49 @@ fn fold_bool_member_comparisons(
     out
 }
 
+/// `T X = T(<member>);` where the member IS a `T` already.
+///
+/// The conversion builds a temporary and assigns it — a default construction and an `opAssign`
+/// where vanilla copy-constructs the declaration straight from the member. Naming the type a
+/// value already has converts nothing, and the field's own declared type says whether that is the
+/// case.
+fn drop_redundant_conversions(
+    text: &str,
+    fields: Option<&HashMap<String, String>>,
+    roots: &HashMap<String, String>,
+    refs: &RefResolver,
+) -> String {
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    for line in &mut lines {
+        let Some((indent, name, init)) = declaration_with_initializer(line) else {
+            continue;
+        };
+        let head = line.trim().split(" = ").next().unwrap_or("");
+        let ty = head[..head.len().saturating_sub(name.len())].trim().to_owned();
+        if ty.is_empty() {
+            continue;
+        }
+        let Some(inner) = init
+            .strip_prefix(&format!("{ty}("))
+            .and_then(|rest| rest.strip_suffix(')'))
+        else {
+            continue;
+        };
+        if inner.contains('(') || inner.contains(',') {
+            continue;
+        }
+        if type_of_member_path(inner, fields, roots, refs).as_deref() != Some(ty.as_str()) {
+            continue;
+        }
+        *line = format!("{indent}{ty} {name} = {inner};");
+    }
+    let mut out = lines.join("\n");
+    if text.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 fn fold_compound_assignments(
     body: &str,
     fields: Option<&HashMap<String, String>>,
@@ -8072,6 +8117,31 @@ fn fold_member_read_temporaries(
             }
             let reader = reader?;
             if !read_once_at(&lines, at, reader, &name) {
+                return None;
+            }
+            // The name may be a COPY the source made on purpose: a value read out of a const
+            // member and then changed. Moving the read back puts the change on the member itself
+            // — "Non-const method call on read-only object reference".
+            let calls_non_const = super::structure::word_positions(lines[reader], &name)
+                .into_iter()
+                .filter_map(|at| {
+                    let rest = &lines[reader][at + name.len()..];
+                    let path = rest.strip_prefix('.')?;
+                    let end = path.find('(')?;
+                    Some(path[..end].to_owned())
+                })
+                .any(|path| {
+                    let method = path.rsplit('.').next().unwrap_or(&path).to_owned();
+                    // Reaching THROUGH a field: only the cache's own const-method list can say,
+                    // the way the range-for element check asks it.
+                    if path.contains('.') {
+                        return !refs.names_a_const_method(&method);
+                    }
+                    member.as_deref().is_some_and(|ty| {
+                        refs.calls_non_const_method(super::structure::bare_type_name(ty), &method)
+                    })
+                });
+            if calls_non_const {
                 return None;
             }
             let mut out: Vec<String> =
@@ -9513,13 +9583,47 @@ fn rewrite_iterator_decl_init(
 /// store. Vanilla builds the value at the point of use, so declaring at the first assignment
 /// reproduces that and keeps the module splicable. Iterators are handled above; primitives,
 /// object handles and const locals are left alone.
+/// Slots the function COPY-constructs: `PSF slot; CALLSYS $beh0` where that `$beh0` takes a
+/// parameter. A default construction takes none, so the parameter row tells the two apart.
+fn copy_constructed_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let mut out = HashSet::new();
+    for pair in instrs.windows(2) {
+        if pair[0].op.name != "PSF" || pair[1].op.name != "CALLSYS" {
+            continue;
+        }
+        let ptr = pair[1].qwords.first().copied().unwrap_or(0) as i64;
+        if refs.func_by_ptr(ptr) != Some("$beh0") {
+            continue;
+        }
+        if refs.func_params_by_ptr(ptr).is_none_or(|params| params.is_empty()) {
+            continue;
+        }
+        if let Some(slot) = pair[0].words.first().map(|word| *word as i16 as i32) {
+            if slot > 0 {
+                out.insert(slot);
+            }
+        }
+    }
+    out
+}
+
 fn rewrite_value_decl_init(
     body: &str,
     locals: &BTreeMap<i32, String>,
     refs: &RefResolver,
+    copy_constructed: &HashSet<i32>,
 ) -> (String, HashSet<i32>) {
-    let is_value =
-        |_slot: i32, ty: &str| is_value_struct_type(ty) && !constructs_by_assignment(ty, refs);
+    // A slot vanilla COPY-constructs was declared with its value: the `$beh0` there takes a
+    // parameter, which a default construction does not. That is a fact about this function, and
+    // it outranks the general reading of the type — `constructs_by_assignment` describes what a
+    // type usually does, not what the source wrote here.
+    let is_value = |slot: i32, ty: &str| {
+        copy_constructed.contains(&slot)
+            || (is_value_struct_type(ty) && !constructs_by_assignment(ty, refs))
+    };
     rewrite_decl_at_assignment(body, locals, &is_value, &|ty| ty.to_string())
 }
 
