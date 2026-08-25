@@ -1380,7 +1380,7 @@ fn emit_function_ctor(
     );
     // Runs after the producers have moved into their readers: only then is the value arm of a
     // short circuit the single assignment it was in source.
-    let body = fold_short_circuits(&body, &proven_locals, refs, fields);
+    let body = fold_short_circuits(&body, &proven_locals, refs, fields, &HashMap::new());
     let body = join_short_circuit_chains(&body);
     // Again, now that the chain IS one expression: the negation fold ran before the short
     // circuits were recovered, so `X = A && B; X = !X;` was still two branches then. Left as two
@@ -1917,11 +1917,19 @@ fn emit_function_ctor(
         let rendered = collapse_single_use_accumulators(&rendered, &widened);
         let rendered = fold_enum_call_round_trips(&rendered, &call_result_types, fields, &path_roots, refs, returns_by_reference, has_enum_conversions(f));
         let rendered = fold_compound_assignments(&rendered, fields, &path_roots, refs);
+        // Again on the joined text: a short circuit whose CONDITION is itself a short circuit is
+        // only one condition once the inner one has folded, and the pass that folds it ran before
+        // that happened. The outer arm then still stands as an if/else over a bool carrier.
+        let rendered = fold_short_circuits(&rendered, &proven_locals, refs, fields, &path_roots);
+        let rendered = join_short_circuit_chains(&rendered);
+        let rendered =
+            fold_returned_temporaries(&rendered, &declared_locals, refs, &ret, returns_by_reference);
         let rendered = fold_negated_stores(&rendered);
         let rendered = fold_assigned_temporaries(&rendered, fields, &path_roots, refs);
         // Before the folds move anything: a struct handed on by address is only recognisable
         // while its declaration and the call that takes it stand in the same text.
         let rendered = restore_dropped_struct_arguments(&rendered, &address_push_counts(f));
+        let rendered = drop_unused_declarations(&rendered);
         let rendered = fold_member_read_temporaries(
             &rendered,
             &declared_locals,
@@ -7549,6 +7557,36 @@ fn fold_assigned_temporaries(
     joined
 }
 
+/// Drops a declaration nothing mentions any more.
+///
+/// The declarations are written from the set of names the body used BEFORE the folds ran; a fold
+/// that takes the last mention away leaves the declaration behind, and an unused local still
+/// costs the slot the compiler allocates for it.
+fn drop_unused_declarations(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut kept: Vec<String> = Vec::with_capacity(lines.len());
+    for (index, line) in lines.iter().enumerate() {
+        let dead = bare_declaration(line)
+            .or_else(|| declaration_with_initializer(line).map(|(indent, name, _)| (indent, name)))
+            .is_some_and(|(_, name)| {
+                // Only a bare declaration may go: one with an initializer may be running a call.
+                bare_declaration(line).is_some()
+                    && lines
+                        .iter()
+                        .enumerate()
+                        .all(|(at, other)| at == index || count_ident(other, &name) == 0)
+            });
+        if !dead {
+            kept.push((*line).to_owned());
+        }
+    }
+    let mut joined = kept.join("\n");
+    if text.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
 fn fold_compound_assignments(
     body: &str,
     fields: Option<&HashMap<String, String>>,
@@ -8275,12 +8313,13 @@ fn fold_short_circuits(
     locals: &BTreeMap<i32, String>,
     refs: &RefResolver,
     fields: Option<&HashMap<String, String>>,
+    roots: &HashMap<String, String>,
 ) -> String {
     let lines: Vec<&str> = body.lines().collect();
     let mut kept: Vec<String> = Vec::new();
     let mut at = 0usize;
     while at < lines.len() {
-        if let Some((folded, after)) = short_circuit(&lines, at, locals, refs, fields) {
+        if let Some((folded, after)) = short_circuit(&lines, at, locals, refs, fields, roots) {
             kept.push(folded);
             at = after;
             continue;
@@ -8303,6 +8342,7 @@ fn short_circuit(
     locals: &BTreeMap<i32, String>,
     refs: &RefResolver,
     fields: Option<&HashMap<String, String>>,
+    roots: &HashMap<String, String>,
 ) -> Option<(String, usize)> {
     let condition = lines.get(at)?.trim().strip_prefix("if (")?.strip_suffix(')')?;
     if lines.get(at + 1)?.trim() != "{" {
@@ -8347,7 +8387,12 @@ fn short_circuit(
     }
     // BOTH operands have to be bool: the slot the expression writes, and the value the other arm
     // gives it. The condition is one already — it is what the branch tested.
-    if temporary_type(locals, &target) != Some("bool") || !renders_a_bool(&value, locals, refs, fields) {
+    // A PARAMETER carries its type in the signature, not in the slot table: `const bool
+    // bIsImmortal` is as much a bool as any local, and asking only the locals left the outer arm
+    // of `A || bIsImmortal` standing as an if/else over a carrier.
+    let value_is_bool = renders_a_bool(&value, locals, refs, fields)
+        || roots.get(value.as_str()).is_some_and(|ty| ty == "bool");
+    if temporary_type(locals, &target) != Some("bool") || !value_is_bool {
         sc_reject(
             match temporary_type(locals, &target) {
                 Some("bool") => "value-not-bool",
