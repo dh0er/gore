@@ -71,6 +71,12 @@ different order.
 
 Two things measured and REFUSED, so they are not tried again:
 
+* Running the producer sweep once more on the joined text: 2,470 -> 2,472.
+* Letting the accumulator fold skip a declaration standing between the value and the
+  accumulation. The shape is real — `float X = <member>; float k = 1.25; X = X * k;` is one
+  expression in vanilla — but folding it there cost more elsewhere than it paid: 2,439 -> 2,444.
+
+
 * Letting the producer-statement witness walk PAST an intervening call. A store whose slot is
   pushed much later is a producer the source named, and the walk stopped at the first call in
   between — which is exactly where the other arguments of the same statement get evaluated. Widening
