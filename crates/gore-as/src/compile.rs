@@ -1552,9 +1552,9 @@ pub fn compile_module_with_backend_v1_with_guard(
 /// Guard-aware backend selection with one exact, qualified game-target capability.
 ///
 /// The target pins remain live across the standalone attempt. If explicit fallback selects the
-/// game, duplicate handles move into the compile transaction while the originals remain in the
-/// returned report for response/evidence construction. This prevents a fallback artifact or its
-/// qualified identity evidence from crossing an EXE/Shipping/Binds replacement window.
+/// game, ownership moves into the compile transaction. Shipping is released only for the exact
+/// confirmed-process restore, then reopened and verified before the returned report can build
+/// qualified identity evidence.
 pub fn compile_module_with_backend_v1_with_guard_and_target(
     opts: &CompileOpts,
     diagnostics: &crate::diagnostics::DiagnosticsOptions,
@@ -1583,7 +1583,6 @@ fn compile_module_with_backend_v1_with_guard_and_optional_target(
 ) -> CompileModuleReport {
     let guard = std::cell::RefCell::new(Some(guard));
     let target = std::cell::RefCell::new(target);
-    let retained_target_pins = std::cell::RefCell::new(None);
     let mut report = compile_module_report_with_backend_runner_v1(
         opts,
         mode,
@@ -1595,19 +1594,12 @@ fn compile_module_with_backend_v1_with_guard_and_optional_target(
                 .ok_or_else(|| "pre-held compiler guard was consumed more than once".to_owned())?;
             match target.borrow_mut().take() {
                 Some(target) => {
-                    let retained = ProjectGameInputPins::from_compiler_target(target);
-                    *retained_target_pins.borrow_mut() = Some(retained);
-                    let execution = retained_target_pins
-                        .borrow()
-                        .as_ref()
-                        .expect("qualified target pins were retained above")
-                        .try_clone_for_execution()?;
                     game_run_regen_with_extended_diagnostics_report_with_guard_and_pins(
                         game_dir,
                         source_tree,
                         diagnostics,
                         guard,
-                        execution,
+                        ProjectGameInputPins::from_compiler_target(target),
                     )
                 }
                 None => game_run_regen_with_extended_diagnostics_report_with_guard(
@@ -1649,11 +1641,11 @@ fn compile_module_with_backend_v1_with_guard_and_optional_target(
             report.install_restore = InstallRestoreDisposition::RecoveryRequiredRestoreFailed;
         }
     }
-    report.target_pins = retained_target_pins.into_inner().or_else(|| {
-        target
+    if report.target_pins.is_none() {
+        report.target_pins = target
             .into_inner()
-            .map(ProjectGameInputPins::from_compiler_target)
-    });
+            .map(ProjectGameInputPins::from_compiler_target);
+    }
     report
 }
 
@@ -1889,8 +1881,9 @@ where
                 result,
                 diagnostics,
                 install_restore,
+                target_pins,
             } = generated;
-            *game_metadata.borrow_mut() = Some((diagnostics, install_restore));
+            *game_metadata.borrow_mut() = Some((diagnostics, install_restore, target_pins));
             result
         });
         match result {
@@ -1943,12 +1936,12 @@ where
             CompileModuleReportOutcome::Failed(error)
         }
     };
-    let (diagnostics, install_restore) = if backend == CompilerBackendNameV1::Game {
+    let (diagnostics, install_restore, target_pins) = if backend == CompilerBackendNameV1::Game {
         game_metadata
             .into_inner()
-            .unwrap_or((None, InstallRestoreDisposition::NotStarted))
+            .unwrap_or((None, InstallRestoreDisposition::NotStarted, None))
     } else {
-        (None, InstallRestoreDisposition::NotStarted)
+        (None, InstallRestoreDisposition::NotStarted, None)
     };
     CompileModuleReport {
         outcome,
@@ -1962,7 +1955,7 @@ where
         game_attempted: game_runner_called.get(),
         output_recovery_required: terminal_kind
             == Some(CompilerBackendFailureKindV1::RecoveryRequired),
-        target_pins: None,
+        target_pins,
     }
 }
 
@@ -1973,6 +1966,7 @@ struct ProjectCompilerRunnerReport {
     install_restore: InstallRestoreDisposition,
     output_disposition: ProjectCompilerOutputDisposition,
     closing_audit: ProjectCompilerClosingAuditDisposition,
+    target_pins: Option<ProjectGameInputPins>,
 }
 
 /// Qualification-only retained result from the real embedded compiler. This is crate-private so
@@ -2182,7 +2176,7 @@ where
     let guard = std::cell::RefCell::new(guard);
     let closing_audit = std::cell::RefCell::new(Some(closing_audit));
     let target = std::cell::RefCell::new(target);
-    let retained_target_pins = std::cell::RefCell::new(None);
+    let returned_target_pins = std::cell::RefCell::new(None);
     let diagnostics_report = std::cell::RefCell::new(None);
     let install_restore = std::cell::Cell::new(InstallRestoreDisposition::NotStarted);
     let closing_disposition = std::cell::Cell::new(ProjectCompilerClosingAuditDisposition::NotRun);
@@ -2347,22 +2341,7 @@ where
                 )
             })?;
             let input_pins = match target.borrow_mut().take() {
-                Some(target) => {
-                    let retained = ProjectGameInputPins::from_compiler_target(target);
-                    *retained_target_pins.borrow_mut() = Some(retained);
-                    let execution = retained_target_pins
-                        .borrow()
-                        .as_ref()
-                        .expect("qualified target pins were retained above")
-                        .try_clone_for_execution()
-                        .map_err(|error| {
-                            CompilerBackendFailureV1::new(
-                                CompilerBackendFailureKindV1::Preflight,
-                                error,
-                            )
-                        })?;
-                    execution
-                }
+                Some(target) => ProjectGameInputPins::from_compiler_target(target),
                 None => pin_game_input_seals(&opts.game_dir, &opts.base_cache, &opts.binds_cache)
                     .map_err(|error| {
                     CompilerBackendFailureV1::new(CompilerBackendFailureKindV1::Preflight, error)
@@ -2400,6 +2379,7 @@ where
                     diagnostic.severity == crate::diagnostics::DiagnosticSeverity::Error
                 })
             });
+            *returned_target_pins.borrow_mut() = report.target_pins;
             *diagnostics_report.borrow_mut() = report.diagnostics;
             install_restore.set(report.install_restore);
             closing_disposition.set(report.closing_audit);
@@ -2551,7 +2531,7 @@ where
         } else {
             Vec::new()
         };
-    let target_pins = retained_target_pins.into_inner().or_else(|| {
+    let target_pins = returned_target_pins.into_inner().or_else(|| {
         target
             .into_inner()
             .map(ProjectGameInputPins::from_compiler_target)
@@ -3098,28 +3078,6 @@ impl ProjectGameInputPins {
         }
     }
 
-    fn try_clone_for_execution(&self) -> Result<Self, String> {
-        let clone = |file: &std::fs::File, label: &str| {
-            file.try_clone()
-                .map_err(|error| format!("duplicating qualified target {label} pin: {error}"))
-        };
-        Ok(Self {
-            _executable: self
-                ._executable
-                .as_ref()
-                .map(|file| clone(file, "executable"))
-                .transpose()?,
-            shipping: clone(&self.shipping, "Shipping cache")?,
-            _binds: clone(&self._binds, "Binds cache")?,
-            _directory_pins: self
-                ._directory_pins
-                .iter()
-                .map(|file| clone(file, "directory"))
-                .collect::<Result<Vec<_>, _>>()?,
-            target_paths: self.target_paths.clone(),
-        })
-    }
-
     /// Windows parent-directory pins intentionally deny delete sharing so an attacker cannot swap
     /// an already validated target path. The same share mode also blocks our own rename of the
     /// sibling `AS_JITTED_CODE` directory. Keep all three exact target files open, release only the
@@ -3150,6 +3108,58 @@ impl ProjectGameInputPins {
             format!("qualified target path identity changed during generation isolation: {error}")
         })?;
         Ok(())
+    }
+
+    /// Drop the Shipping and directory handles that would block our own exact restore. Keep the
+    /// qualified executable and Binds objects live, then reopen and byte-check Shipping after the
+    /// restore. The complete directory chain is re-pinned only after transaction-owned locks and
+    /// recovery paths have been retired.
+    fn into_target_restore_repin(self) -> Option<ProjectTargetRestoreRepin> {
+        let Self {
+            _executable,
+            shipping,
+            _binds,
+            _directory_pins,
+            target_paths,
+        } = self;
+        drop(shipping);
+        drop(_directory_pins);
+        target_paths.map(|paths| ProjectTargetRestoreRepin {
+            executable: _executable
+                .expect("qualified target pins always retain the executable handle"),
+            binds: _binds,
+            paths,
+        })
+    }
+}
+
+struct ProjectTargetRestoreRepin {
+    executable: std::fs::File,
+    binds: std::fs::File,
+    paths: crate::compiler_target::CompilerTargetOwnedPathsV1,
+}
+
+impl ProjectTargetRestoreRepin {
+    fn reopen_shipping(self, expected_shipping: &[u8]) -> Result<ProjectGameInputPins, String> {
+        let mut shipping = open_regular_file_no_follow_read(self.paths.shipping_cache())?;
+        let restored = read_open_regular_file_bounded(
+            &mut shipping,
+            MAX_PROJECT_COMPILER_CHECK_BASE_BYTES as u64,
+            "restored live Shipping cache",
+        )?;
+        if restored != expected_shipping {
+            return Err(
+                "restored live Shipping cache no longer matches the sealed compiler snapshot"
+                    .to_owned(),
+            );
+        }
+        Ok(ProjectGameInputPins {
+            _executable: Some(self.executable),
+            shipping,
+            _binds: self.binds,
+            _directory_pins: Vec::new(),
+            target_paths: Some(self.paths),
+        })
     }
 }
 
@@ -8332,6 +8342,14 @@ impl CompileTransaction {
                 vec![error],
             ));
         }
+        // The caller briefly released and identity-repinned qualified target directories to
+        // publish the shared mutation guard. Release only those directory handles once more while
+        // this owned transaction creates its compile lock, recovery files and JIT quarantine.
+        // Exact EXE/Shipping/Binds handles remain pinned; begin_isolation re-pins and verifies every
+        // parent before source staging or game launch.
+        if let Some(pins) = project_input_pins.as_mut() {
+            pins.release_target_directories_for_isolation();
+        }
         let mut lock = match CompileLock::acquire(game_dir) {
             Ok(lock) => lock,
             Err(error) => {
@@ -8495,9 +8513,13 @@ impl CompileTransaction {
             };
         }
         // Project compiler pins deny write/delete sharing until the generator has exited. Release
-        // them only at the start of confirmed-process restoration; unconfirmed paths leak the
-        // complete transaction and therefore keep both authoritative inputs pinned.
-        self.project_input_pins.take();
+        // Shipping and the directory handles only at the start of confirmed-process restoration;
+        // keep the qualified EXE and Binds objects open. Unconfirmed paths leak the complete
+        // transaction and therefore keep every authoritative input pinned.
+        let target_restore_repin = self
+            .project_input_pins
+            .take()
+            .and_then(ProjectGameInputPins::into_target_restore_repin);
         let mut errors = Vec::new();
         if let Some(isolation) = &mut self.isolation {
             if let Err(e) = isolation.restore() {
@@ -8525,12 +8547,33 @@ impl CompileTransaction {
             errors.push(format!("failed to restore development cache: {e}"));
         }
         if errors.is_empty() {
+            if let Some(repin) = target_restore_repin {
+                match repin.reopen_shipping(&self.saved_shipping.bytes) {
+                    Ok(pins) => self.project_input_pins = Some(pins),
+                    Err(error) => errors.push(format!(
+                        "failed to re-pin the restored qualified target: {error}"
+                    )),
+                }
+            }
+        }
+        if errors.is_empty() {
             self.rollback_needed = false;
         }
         RestoreReport {
             errors,
             shipping_restored,
         }
+    }
+
+    fn finalize_target_pins_for_response(&mut self) -> Result<(), String> {
+        if let Some(pins) = self.project_input_pins.as_mut() {
+            pins.repin_target_directories_after_isolation()?;
+        }
+        Ok(())
+    }
+
+    fn take_target_pins_for_response(&mut self) -> Option<ProjectGameInputPins> {
+        self.project_input_pins.take()
     }
 
     /// Call immediately before an intentional in-place Shipping write, so a panic or partial write
@@ -8718,6 +8761,7 @@ struct GameRunRegenExtendedReport {
     result: Result<PathBuf, String>,
     diagnostics: Option<crate::diagnostics::CompilerDiagnosticsReport>,
     install_restore: InstallRestoreDisposition,
+    target_pins: Option<ProjectGameInputPins>,
 }
 
 /// Same transactional compiler path as [`game_run_regen`], with explicit diagnostics discovery /
@@ -8747,6 +8791,7 @@ pub fn game_run_regen_with_diagnostics_report(
         result,
         diagnostics,
         install_restore,
+        target_pins: _,
     } = extended;
     let Some(diagnostics) = diagnostics else {
         return Err(result.err().unwrap_or_else(|| {
@@ -8784,6 +8829,7 @@ fn game_run_regen_with_extended_diagnostics_report(
         result: generated.result,
         diagnostics: diagnostic_report.into_inner(),
         install_restore: generated.install_restore,
+        target_pins: generated.target_pins,
     })
 }
 
@@ -8817,6 +8863,7 @@ fn game_run_regen_with_extended_diagnostics_report_with_guard(
         result: generated.result,
         diagnostics: diagnostic_report.into_inner(),
         install_restore: generated.install_restore,
+        target_pins: generated.target_pins,
     })
 }
 
@@ -8853,6 +8900,7 @@ fn game_run_regen_with_extended_diagnostics_report_with_guard_and_pins(
         result: generated.result,
         diagnostics: diagnostic_report.into_inner(),
         install_restore: generated.install_restore,
+        target_pins: generated.target_pins,
     })
 }
 
@@ -9034,9 +9082,9 @@ where
         ),
     };
 
-    let (common_result, install_restore) = match generated {
-        Ok(report) => (report.result, report.install_restore),
-        Err(error) => (Err(error), InstallRestoreDisposition::NotStarted),
+    let (common_result, install_restore, target_pins) = match generated {
+        Ok(report) => (report.result, report.install_restore, report.target_pins),
+        Err(error) => (Err(error), InstallRestoreDisposition::NotStarted, None),
     };
     let diagnostics = diagnostic_report.into_inner();
     let mut output_disposition = output_disposition.get();
@@ -9090,6 +9138,7 @@ where
         install_restore,
         output_disposition,
         closing_audit,
+        target_pins,
     }
 }
 
@@ -9340,6 +9389,7 @@ where
 struct GameRunInstallReport {
     result: Result<PathBuf, String>,
     install_restore: InstallRestoreDisposition,
+    target_pins: Option<ProjectGameInputPins>,
 }
 
 fn game_run_regen_with_install_report<G>(
@@ -9395,6 +9445,7 @@ where
         Err(message) if begin_recovery_required.get() => Ok(GameRunInstallReport {
             result: Err(message),
             install_restore: InstallRestoreDisposition::RecoveryRequiredRestoreFailed,
+            target_pins: None,
         }),
         other => other,
     }
@@ -9541,6 +9592,7 @@ where
             return Ok(GameRunInstallReport {
                 result: Err(failure.message),
                 install_restore: InstallRestoreDisposition::RecoveryRequiredRestoreFailed,
+                target_pins: None,
             });
         }
         return Err(failure.message);
@@ -9550,6 +9602,7 @@ where
         Err(message) if begin_recovery_required.get() => Ok(GameRunInstallReport {
             result: Err(message),
             install_restore: InstallRestoreDisposition::RecoveryRequiredRestoreFailed,
+            target_pins: None,
         }),
         other => other,
     }
@@ -9631,6 +9684,7 @@ where
         return Ok(GameRunInstallReport {
             result: Err(txn.preserve_for_unconfirmed_generator(error)),
             install_restore: InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed,
+            target_pins: None,
         });
     }
 
@@ -9644,7 +9698,19 @@ where
             cleanup_errors.push(error);
         }
         cleanup_errors.extend(txn.finish());
+        if cleanup_errors.is_empty() {
+            if let Err(error) = txn.finalize_target_pins_for_response() {
+                cleanup_errors.push(format!(
+                    "failed to re-pin the qualified target after transaction cleanup: {error}"
+                ));
+            }
+        }
     }
+
+    let target_pins = cleanup_errors
+        .is_empty()
+        .then(|| txn.take_target_pins_for_response())
+        .flatten();
 
     let result = match result {
         Ok(p) if cleanup_errors.is_empty() => Ok(p),
@@ -9661,11 +9727,13 @@ where
         return Ok(GameRunInstallReport {
             result,
             install_restore: InstallRestoreDisposition::RecoveryRequiredRestoreFailed,
+            target_pins: None,
         });
     }
     Ok(GameRunInstallReport {
         result,
         install_restore: InstallRestoreDisposition::RestoredExact,
+        target_pins,
     })
 }
 
@@ -13186,6 +13254,7 @@ mod tests {
             install_restore: InstallRestoreDisposition::RestoredExact,
             output_disposition: ProjectCompilerOutputDisposition::Discarded,
             closing_audit: ProjectCompilerClosingAuditDisposition::Passed,
+            target_pins: None,
         }
     }
 
@@ -13689,6 +13758,7 @@ mod tests {
                     install_restore: InstallRestoreDisposition::RestoredExact,
                     output_disposition: ProjectCompilerOutputDisposition::NotCreated,
                     closing_audit: ProjectCompilerClosingAuditDisposition::Passed,
+                    target_pins: None,
                 }
             },
         );
@@ -14016,6 +14086,7 @@ mod tests {
                     install_restore: InstallRestoreDisposition::RestoredExact,
                     output_disposition: ProjectCompilerOutputDisposition::Discarded,
                     closing_audit: ProjectCompilerClosingAuditDisposition::Passed,
+                    target_pins: None,
                 }
             },
         );
@@ -14065,6 +14136,7 @@ mod tests {
                         install_restore: InstallRestoreDisposition::RestoredExact,
                         output_disposition: ProjectCompilerOutputDisposition::Discarded,
                         closing_audit: ProjectCompilerClosingAuditDisposition::Passed,
+                        target_pins: None,
                     }
                 },
             );
@@ -14104,6 +14176,7 @@ mod tests {
                     install_restore: InstallRestoreDisposition::RestoredExact,
                     output_disposition: ProjectCompilerOutputDisposition::Discarded,
                     closing_audit: ProjectCompilerClosingAuditDisposition::Passed,
+                    target_pins: None,
                 }
             },
         );
@@ -14148,6 +14221,7 @@ mod tests {
                         install_restore: InstallRestoreDisposition::RestoredExact,
                         output_disposition: ProjectCompilerOutputDisposition::Discarded,
                         closing_audit: ProjectCompilerClosingAuditDisposition::Passed,
+                        target_pins: None,
                     }
                 },
             );
@@ -14285,6 +14359,7 @@ mod tests {
                         InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed,
                     output_disposition: ProjectCompilerOutputDisposition::Discarded,
                     closing_audit: ProjectCompilerClosingAuditDisposition::NotRun,
+                    target_pins: None,
                 }
             },
         );
@@ -14711,6 +14786,69 @@ mod tests {
         assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn qualified_target_shipping_pin_is_handed_across_exact_restore() {
+        let base = unique_test_root("qualified-target-shipping-restore");
+        let (game, shipping) = fake_install(&base);
+        let _game_process = StatedGameProcess::not_running();
+        let script = shipping.parent().unwrap();
+        let binds = script.join("Binds.Cache");
+        std::fs::write(&binds, b"BINDS").unwrap();
+        let executable = game
+            .join("G1R")
+            .join("Binaries")
+            .join("Win64")
+            .join("G1R-Win64-Shipping.exe");
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+
+        let pins = ProjectGameInputPins {
+            _executable: Some(open_regular_file_no_follow_read(&executable).unwrap()),
+            shipping: open_regular_file_no_follow_read(&shipping).unwrap(),
+            _binds: open_regular_file_no_follow_read(&binds).unwrap(),
+            _directory_pins: Vec::new(),
+            target_paths: Some(
+                crate::compiler_target::CompilerTargetOwnedPathsV1::for_test(
+                    executable,
+                    shipping.clone(),
+                    binds,
+                ),
+            ),
+        };
+        let guard = InstallMutationGuard::acquire(&game, "gore-as:compile").unwrap();
+        let report = game_run_regen_with_install_report_with_guard_and_pins_and_after_restore(
+            &game,
+            &src,
+            guard,
+            pins,
+            |_, _, dev| {
+                let bytes = valid_cache();
+                std::fs::write(dev, &bytes).unwrap();
+                GeneratorRunResult::confirmed(Ok(bytes))
+            },
+            |_, _| Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.install_restore,
+            InstallRestoreDisposition::RestoredExact
+        );
+        assert!(report.result.is_ok());
+        assert!(
+            report.target_pins.is_some(),
+            "the restored qualified target must remain pinned for response construction"
+        );
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+        assert!(!compile_bak_path(&shipping).exists());
+        assert!(!compile_lock_path(&game).exists());
+        assert!(!install_mutation_lock_path(&game).exists());
+        drop(report);
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
@@ -15858,6 +15996,7 @@ mod tests {
                     .unwrap(),
                 ),
                 install_restore: InstallRestoreDisposition::RestoredExact,
+                target_pins: None,
             };
             assert_eq!(
                 report.install_restore,
@@ -15898,6 +16037,7 @@ mod tests {
                     .unwrap(),
                 ),
                 install_restore: InstallRestoreDisposition::RestoredExact,
+                target_pins: None,
             })
         });
         assert!(matches!(
@@ -15921,6 +16061,7 @@ mod tests {
                     crate::diagnostics::DiagnosticsCaptureDisposition::ProcessExitUnconfirmed,
                 )),
                 install_restore: InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed,
+                target_pins: None,
             })
         });
         assert!(matches!(
@@ -15937,6 +16078,7 @@ mod tests {
                 result: Err("isolation setup failed and its rollback also failed".to_owned()),
                 diagnostics: None,
                 install_restore: InstallRestoreDisposition::RecoveryRequiredRestoreFailed,
+                target_pins: None,
             })
         });
         assert!(matches!(
@@ -16212,6 +16354,7 @@ mod tests {
                         crate::diagnostics::DiagnosticsCaptureDisposition::Disabled,
                     )),
                     install_restore: InstallRestoreDisposition::RestoredExact,
+                    target_pins: None,
                 })
             },
         );
@@ -16273,6 +16416,7 @@ mod tests {
                         crate::diagnostics::DiagnosticsCaptureDisposition::Disabled,
                     )),
                     install_restore: InstallRestoreDisposition::RestoredExact,
+                    target_pins: None,
                 })
             },
         );

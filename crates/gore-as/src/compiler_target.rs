@@ -53,6 +53,25 @@ pub(crate) struct CompilerTargetOwnedPathsV1 {
     binds_cache: PathBuf,
 }
 
+impl CompilerTargetOwnedPathsV1 {
+    pub(crate) fn shipping_cache(&self) -> &Path {
+        &self.shipping_cache
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        executable: PathBuf,
+        shipping_cache: PathBuf,
+        binds_cache: PathBuf,
+    ) -> Self {
+        Self {
+            executable,
+            shipping_cache,
+            binds_cache,
+        }
+    }
+}
+
 pub(crate) struct CompilerTargetPinHandlesV1 {
     pub(crate) executable: File,
     pub(crate) shipping: File,
@@ -235,6 +254,27 @@ impl ValidatedCompilerTargetInputsV1 {
 
     pub fn binds_handle(&self) -> &File {
         &self.binds
+    }
+
+    /// Temporarily release only the parent-directory handles before GORE publishes its own
+    /// install-mutation lock. The exact executable, Shipping cache and Binds cache handles stay
+    /// open and non-replaceable throughout this handoff.
+    pub fn release_parent_directory_pins_for_install_mutation_v1(&mut self) {
+        self._directory_pins.clear();
+    }
+
+    /// Re-pin every target parent and prove that the retained target handles still name the same
+    /// files after GORE has published its install-mutation lock.
+    pub fn repin_parent_directories_after_install_mutation_v1(
+        &mut self,
+    ) -> Result<(), CompilerTargetInputError> {
+        self._directory_pins = repin_compiler_target_parent_chains_v1(
+            &self.paths,
+            &self.executable,
+            &self.shipping,
+            &self.binds,
+        )?;
+        Ok(())
     }
 
     pub(crate) fn into_pin_handles(self) -> CompilerTargetPinHandlesV1 {
@@ -995,5 +1035,63 @@ mod tests {
         );
         drop(repinned);
         std::fs::rename(&backup, &jitted).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn target_parent_pins_can_be_handed_across_install_lock_publication() {
+        let root = tempfile::tempdir().unwrap();
+        let install = root.path().join("install");
+        let win64 = install.join("G1R/Binaries/Win64");
+        let script = install.join("G1R/Script");
+        std::fs::create_dir_all(&win64).unwrap();
+        std::fs::create_dir_all(&script).unwrap();
+        let paths = CompilerTargetOwnedPathsV1 {
+            executable: win64.join("G1R-Win64-Shipping.exe"),
+            shipping_cache: script.join("PrecompiledScript_Shipping.Cache"),
+            binds_cache: script.join("Binds.Cache"),
+        };
+        std::fs::write(&paths.executable, b"exe").unwrap();
+        std::fs::write(&paths.shipping_cache, b"shipping").unwrap();
+        std::fs::write(&paths.binds_cache, b"binds").unwrap();
+
+        let mut directory_pins = Vec::new();
+        for path in [
+            paths.executable.as_path(),
+            paths.shipping_cache.as_path(),
+            paths.binds_cache.as_path(),
+        ] {
+            directory_pins.extend(pin_absolute_parent_chain(path).unwrap());
+        }
+        let mut target = ValidatedCompilerTargetInputsV1 {
+            profile_sha256: Sha256Digest::from_bytes([0; 32]),
+            executable: open_regular_no_follow(&paths.executable, "executable").unwrap(),
+            shipping: open_regular_no_follow(&paths.shipping_cache, "Shipping cache").unwrap(),
+            binds: open_regular_no_follow(&paths.binds_cache, "Binds cache").unwrap(),
+            shipping_bytes: b"shipping".to_vec(),
+            binds_bytes: b"binds".to_vec(),
+            _directory_pins: directory_pins,
+            paths,
+        };
+        let initializing = install.join("initializing.lock");
+        let published = install.join("published.lock");
+        let displaced = install.join("published.displaced");
+        std::fs::write(&initializing, b"owner").unwrap();
+        assert!(
+            std::fs::rename(&initializing, &published).is_err(),
+            "the selected target's install-root pin must explain the product lock conflict"
+        );
+
+        target.release_parent_directory_pins_for_install_mutation_v1();
+        std::fs::rename(&initializing, &published).unwrap();
+        target
+            .repin_parent_directories_after_install_mutation_v1()
+            .unwrap();
+        assert!(
+            std::fs::rename(&published, &displaced).is_err(),
+            "the verified re-pin must immediately close the install-root replacement window"
+        );
+        drop(target);
+        std::fs::rename(&published, &displaced).unwrap();
     }
 }

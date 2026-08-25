@@ -1996,6 +1996,24 @@ fn compile_full_graph_command(
     }
 
     let mut guard = None;
+    if requested_mode != CompilerBackendModeV1::Standalone {
+        if let Some(target) = target.as_mut() {
+            // Target validation pins every parent directory without delete sharing. Keep the exact
+            // EXE/Shipping/Binds file handles open, release only those directory handles while the
+            // product publishes its own cross-tool lock, then identity-check the complete chain
+            // again before planning or launching anything.
+            target.release_parent_directory_pins_for_install_mutation_v1();
+            let acquired = acquire_compile_guard(&game)
+                .map_err(anyhow::Error::msg)
+                .context("acquiring the full-graph install-mutation guard")?;
+            if let Err(error) = target.repin_parent_directories_after_install_mutation_v1() {
+                let primary = anyhow::Error::new(error)
+                    .context("re-pinning compiler target directories after lock publication");
+                return Err(release_compile_guard_after_error(acquired, primary));
+            }
+            guard = Some(acquired);
+        }
+    }
     let (base_cache, binds_cache) = if let Some(target) = target.as_ref() {
         (
             target.shipping_cache().to_vec(),
@@ -2019,14 +2037,6 @@ fn compile_full_graph_command(
             };
         (base, binds)
     };
-    if requested_mode != CompilerBackendModeV1::Standalone && guard.is_none() {
-        guard = Some(
-            acquire_compile_guard(&game)
-                .map_err(anyhow::Error::msg)
-                .context("acquiring the full-graph install-mutation guard")?,
-        );
-    }
-
     let plan = match gore_as::full_graph_plan::plan_complete_source_tree_v1(&base_cache, &src) {
         Ok(plan) => plan,
         Err(error) => {
