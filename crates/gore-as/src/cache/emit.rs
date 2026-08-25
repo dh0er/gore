@@ -1452,6 +1452,7 @@ fn emit_function_ctor(
     let body = fold_enum_round_trips(&body, fields, &path_roots, refs);
     let body = fold_member_read_temporaries(
         &body,
+        &widened,
         &declared_locals,
         fields,
         &path_roots,
@@ -1939,6 +1940,8 @@ fn emit_function_ctor(
             fold_copy_out_temporaries(&rendered, &declared_locals, &const_result_slots, fields);
         let rendered = fold_cast_operands(&rendered, &declared_locals, &call_result_types);
         let rendered = fold_enum_round_trips(&rendered, fields, &path_roots, refs);
+        let rendered = inline_single_use_literals(&rendered);
+        let rendered = collapse_single_use_accumulators(&rendered, &widened);
         let rendered = inline_bool_chain_into_next_condition(&rendered);
         let rendered = fold_bool_member_comparisons(&rendered, fields, &path_roots, refs);
         let rendered = drop_redundant_conversions(&rendered, fields, &path_roots, refs);
@@ -1946,6 +1949,7 @@ fn emit_function_ctor(
         let rendered = drop_unused_declarations(&rendered);
         let rendered = fold_member_read_temporaries(
             &rendered,
+            &widened,
             &declared_locals,
             fields,
             &path_roots,
@@ -7795,6 +7799,62 @@ fn inline_bool_chain_into_next_condition(body: &str) -> String {
     out
 }
 
+/// A declaration whose value is a LITERAL and which is read exactly once is that literal.
+///
+/// The compiler materializes a constant into a slot wherever it is used, with or without a name,
+/// so moving it costs nothing and cannot reorder anything — but the name standing between a value
+/// and the statement that accumulates into it hides the accumulation from the fold that would
+/// take the name away.
+fn inline_single_use_literals(body: &str) -> String {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for index in 0..lines.len() {
+            let Some((_, name, init)) = declaration_with_initializer(&lines[index]) else {
+                continue;
+            };
+            let literal = init.parse::<f64>().is_ok()
+                || matches!(init.as_str(), "true" | "false" | "nullptr")
+                || init
+                    .strip_suffix('f')
+                    .is_some_and(|head| head.parse::<f64>().is_ok());
+            if !literal {
+                continue;
+            }
+            if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != 2 {
+                continue;
+            }
+            let Some(reader) = (index + 1..lines.len())
+                .find(|at| count_ident(&lines[*at], &name) == 1)
+            else {
+                continue;
+            };
+            // Only where the name is an OPERAND of an expression. A bare argument may be an
+            // out-parameter, and a literal is "Not a valid reference"; a name on the left of `=`
+            // is being written, and a literal is not an l-value. Both were measured, 61 errors.
+            let reads_as_an_operand = ["*", "+", "-", "/", "<", ">", "==", "!=", "<=", ">="]
+                .iter()
+                .any(|op| {
+                    lines[reader].contains(&format!(" {op} {name}"))
+                        || lines[reader].contains(&format!("{name} {op} "))
+                });
+            if !reads_as_an_operand {
+                continue;
+            }
+            lines[reader] = rename_ident(&lines[reader], &name, &init);
+            lines.remove(index);
+            changed = true;
+            break;
+        }
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 fn fold_compound_assignments(
     body: &str,
     fields: Option<&HashMap<String, String>>,
@@ -8075,6 +8135,7 @@ fn path_prefixes(path: &str) -> Vec<String> {
 
 fn fold_member_read_temporaries(
     body: &str,
+    widened: &HashSet<i32>,
     locals: &BTreeMap<i32, String>,
     fields: Option<&HashMap<String, String>>,
     roots: &HashMap<String, String>,
@@ -8122,7 +8183,18 @@ fn fold_member_read_temporaries(
                     .get(&slot)
                     .and_then(|ty| declared_width(ty))
                     .is_some_and(|width| direct_reads.get(&slot) == Some(&width));
-            if locals.get(&slot) != member.as_ref() && !read_puts_it_there {
+            // A declaration may WIDEN and still be the same read: `float X = <float32 member>`
+            // converts, but so does the use it feeds, and vanilla does it there. What decides is
+            // whether the widened value was copied ON — `widened` holds the slots where it was,
+            // and those keep their name.
+            let widens_only = matches!(
+                (
+                    locals.get(&slot).map(String::as_str),
+                    member.as_deref()
+                ),
+                (Some("float" | "double"), Some("float32"))
+            ) && !widened.contains(&slot);
+            if locals.get(&slot) != member.as_ref() && !read_puts_it_there && !widens_only {
                 if std::env::var_os("GORE_AS_MEMBER_DIAG").is_some() {
                     eprintln!(
                         "[member] {} slot={:?} member={:?} | {}",
