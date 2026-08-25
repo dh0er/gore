@@ -1947,6 +1947,7 @@ fn emit_function_ctor(
         let rendered = drop_redundant_conversions(&rendered, fields, &path_roots, refs);
         let rendered =
             spell_out_argument_temporaries(&rendered, &argument_constructed_slots(f, refs), refs);
+        let rendered = fold_widening_aliases(&rendered, &declared_locals, &widened);
         let rendered = drop_block_end_handle_releases(&rendered);
         let rendered = drop_unused_declarations(&rendered);
         let rendered = fold_member_read_temporaries(
@@ -7958,6 +7959,67 @@ fn spell_out_argument_temporaries(
             let head = lines[index].trim().trim_end_matches(';');
             let ty = head[..head.len() - name.len()].trim().to_owned();
             lines[reader] = rename_ident(&lines[reader], &name, &format!("{ty}()"));
+            lines.remove(index);
+            changed = true;
+            break;
+        }
+    }
+    let mut out = lines.join("\n");
+    if text.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// `float X = <float32 local>;` read once is that local, widened where it is used.
+///
+/// The alias fold asks for the two types to match, so a declaration that only WIDENS kept its
+/// name — and the name costs the copy that fills it, where vanilla widens straight into the
+/// arithmetic. Where the widened value was copied ON, `widened` holds the slot and it keeps its
+/// name; that is the declaration the source really wrote.
+fn fold_widening_aliases(
+    text: &str,
+    locals: &BTreeMap<i32, String>,
+    widened: &HashSet<i32>,
+) -> String {
+    let slot_of_name = |name: &str| -> Option<i32> {
+        name.strip_prefix("local_")
+            .and_then(|rest| rest.split('_').next())
+            .and_then(|rest| rest.parse::<i32>().ok())
+    };
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for index in 0..lines.len() {
+            let Some((_, name, source)) = declaration_with_initializer(&lines[index]) else {
+                continue;
+            };
+            let Some(slot) = slot_of_name(&name) else {
+                continue;
+            };
+            if widened.contains(&slot) {
+                continue;
+            }
+            let head = lines[index].trim().split(" = ").next().unwrap_or("");
+            let ty = head[..head.len().saturating_sub(name.len())].trim();
+            if !matches!(ty, "float" | "double") {
+                continue;
+            }
+            if slot_of_name(&source).and_then(|from| locals.get(&from)).map(String::as_str)
+                != Some("float32")
+            {
+                continue;
+            }
+            if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != 2 {
+                continue;
+            }
+            let Some(reader) =
+                (index + 1..lines.len()).find(|at| count_ident(&lines[*at], &name) == 1)
+            else {
+                continue;
+            };
+            lines[reader] = rename_ident(&lines[reader], &name, &source);
             lines.remove(index);
             changed = true;
             break;
