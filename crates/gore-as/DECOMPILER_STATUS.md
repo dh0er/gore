@@ -71,6 +71,9 @@ different order.
 
 Some things measured and REFUSED, so they are not tried again:
 
+* Treating a name wrapped in a CONVERSION as a movable argument candidate. Vanilla really does
+  evaluate such a call inside the argument list — `TSubclassOf<T>(StaticClass())` rather than a
+  statement above the call — but moving it there cost more elsewhere than it paid: 2,286 -> 2,307.
 * Writing an enum constant as its enumerator NAME rather than a conversion. The cache carries the
   names for the 32 SCRIPT enums (the other 120 the corpus uses are native, and their names live in
   `Binds.Cache`, which is not decoded here). It is the spelling the source had and it is kept —
