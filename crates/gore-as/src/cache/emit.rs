@@ -1879,7 +1879,7 @@ fn emit_function_ctor(
         // Before the compound-assignment fold, which would rewrite the middle line out of the
         // shape this one matches on.
         let body = collapse_single_use_accumulators(&body, &widened);
-        let body = fold_enum_call_round_trips(&body, &call_result_types, fields, &path_roots, refs, returns_by_reference);
+        let body = fold_enum_call_round_trips(&body, &call_result_types, fields, &path_roots, refs, returns_by_reference, has_enum_conversions(f));
         let body = fold_compound_assignments(&body, fields, &path_roots, refs);
         let uses_return_slot = body.contains("__return");
         if uses_return_slot {
@@ -1915,7 +1915,7 @@ fn emit_function_ctor(
         // has its `T X;` in this text and its `X = ...` lines in the body, so the split form is
         // only whole once the two are joined.
         let rendered = collapse_single_use_accumulators(&rendered, &widened);
-        let rendered = fold_enum_call_round_trips(&rendered, &call_result_types, fields, &path_roots, refs, returns_by_reference);
+        let rendered = fold_enum_call_round_trips(&rendered, &call_result_types, fields, &path_roots, refs, returns_by_reference, has_enum_conversions(f));
         let rendered = fold_compound_assignments(&rendered, fields, &path_roots, refs);
         let rendered = fold_negated_stores(&rendered);
         let rendered = fold_assigned_temporaries(&rendered, fields, &path_roots, refs);
@@ -6983,6 +6983,28 @@ fn is_decompiler_local(name: &str) -> bool {
 /// `call_result_types` has already resolved per slot: when the enum being constructed IS what the
 /// call returns, both casts name a type the value already has. Anything else — a different enum,
 /// an unresolved callee, a second read of the name — is left alone.
+/// The enum a line CONSTRUCTS around a name: `EGenericTaskResult(local_63)` gives
+/// `EGenericTaskResult`.
+fn enum_around(line: &str, name: &str) -> Option<String> {
+    let at = line.find(&format!("({name})"))?;
+    let head = &line[..at];
+    let start = head
+        .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .map_or(0, |i| i + 1);
+    let ty = &head[start..];
+    (!ty.is_empty() && super::structure::is_enum_name(ty)).then(|| ty.to_owned())
+}
+
+/// Whether the function converts between an enum's byte and an int anywhere.
+fn has_enum_conversions(f: &Func) -> bool {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return true; // unreadable: assume it does, so nothing is folded on a guess
+    };
+    instrs
+        .iter()
+        .any(|ins| matches!(ins.op.name, "iTOb" | "sbTOi" | "iTOsb" | "bTOi"))
+}
+
 fn fold_enum_call_round_trips(
     body: &str,
     call_types: &HashMap<i32, String>,
@@ -6990,6 +7012,7 @@ fn fold_enum_call_round_trips(
     roots: &HashMap<String, String>,
     refs: &RefResolver,
     returns_by_reference: bool,
+    vanilla_converts: bool,
 ) -> String {
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
     let mut changed = true;
@@ -7018,9 +7041,24 @@ fn fold_enum_call_round_trips(
             let resolved = call_types.get(&slot).cloned().or_else(|| {
                 type_of_member_path(inner, fields, roots, refs)
             });
-            let Some(returned) = resolved.as_ref() else {
-                continue;
+            // Where the value's own type cannot be resolved, the FUNCTION can still say the round
+            // trip is not there: a widening and a narrowing leave `sbTOi` and `iTOb` behind, and
+            // a function whose bytecode holds neither converted nothing anywhere. The enum named
+            // by the reader is then the type the value already has.
+            let returned = match resolved.as_ref() {
+                Some(returned) => returned.clone(),
+                None if !vanilla_converts => {
+                    let Some(named) = lines[index + 1..]
+                        .iter()
+                        .find_map(|line| enum_around(line, &name))
+                    else {
+                        continue;
+                    };
+                    named
+                }
+                None => continue,
             };
+            let returned = &returned;
             if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != 2 {
                 continue;
             }
@@ -7083,7 +7121,34 @@ fn slots_touched_only_after_a_branch(f: &Func) -> HashSet<i32> {
             }
         }
     }
-    after.difference(&before).copied().collect()
+    // A HANDLE is a different question from a struct. A struct declared at function scope costs
+    // a constructor at entry and a destructor on every path out, which is what this set is for.
+    // A handle costs neither — but declared inside a BLOCK it costs an explicit `FreeNullV8` at
+    // the block's end, which a function-scope handle does not have. So a handle only belongs
+    // inside the block if vanilla releases it there.
+    let mut handles = HashSet::new();
+    let mut released = HashSet::new();
+    for ins in &instrs {
+        let slot = ins.words.first().map(|word| *word as i16 as i32);
+        match ins.op.name {
+            "STOREOBJ" | "RefCpyV" => {
+                if let Some(slot) = slot {
+                    handles.insert(slot);
+                }
+            }
+            "FreeNullV8" => {
+                if let Some(slot) = slot {
+                    released.insert(slot);
+                }
+            }
+            _ => {}
+        }
+    }
+    after
+        .difference(&before)
+        .copied()
+        .filter(|slot| !handles.contains(slot) || released.contains(slot))
+        .collect()
 }
 
 /// Moves a bare declaration down into the block that holds every mention of it.
