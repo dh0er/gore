@@ -1929,6 +1929,15 @@ fn emit_function_ctor(
         // Before the folds move anything: a struct handed on by address is only recognisable
         // while its declaration and the call that takes it stand in the same text.
         let rendered = restore_dropped_struct_arguments(&rendered, &address_push_counts(f));
+        // The rest of the fold chain, for the same reason as the passes above it: each of these
+        // asks about a declaration, and until the hoist has been joined back on there is nothing
+        // for them to ask about.
+        let rendered = fold_condition_temporaries(&rendered, &declared_locals, refs, fields);
+        let rendered = fold_alias_copies(&rendered, &declared_locals);
+        let rendered =
+            fold_copy_out_temporaries(&rendered, &declared_locals, &const_result_slots, fields);
+        let rendered = fold_cast_operands(&rendered, &declared_locals, &call_result_types);
+        let rendered = fold_enum_round_trips(&rendered, fields, &path_roots, refs);
         let rendered = drop_unused_declarations(&rendered);
         let rendered = fold_member_read_temporaries(
             &rendered,
