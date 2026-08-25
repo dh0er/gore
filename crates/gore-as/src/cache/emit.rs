@@ -6935,49 +6935,61 @@ fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>) -> Strin
             let Some(accumulate) = lines.get(index + span).map(|line| line.trim()) else {
                 continue;
             };
-            let Some(value) = accumulate
-                .strip_prefix(&format!("{name} = "))
-                .and_then(|rest| rest.strip_suffix(';'))
-            else {
-                continue;
-            };
-            // The name may stand on either side of the operator — `X = X * m` and
-            // `X = Radius + X` are both the compiler accumulating into the slot it read into.
-            // The written order is kept, so a non-commutative operator stays what it was.
-            let folded_value = if let Some(rest) = value.strip_prefix(&format!("{name} ")) {
-                let Some((op, right)) = rest.split_once(' ') else {
-                    continue;
+            let _ = accumulate;
+            // A CHAIN of accumulations, not just one: `X = X + a; X = X + b;` is a single
+            // expression in vanilla, and it accumulates in the slot the value landed in.
+            let mut folded_value = init.clone();
+            let mut steps = 0usize;
+            while let Some(line) = lines.get(index + span + steps).map(|line| line.trim()) {
+                let Some(value) = line
+                    .strip_prefix(&format!("{name} = "))
+                    .and_then(|rest| rest.strip_suffix(';'))
+                else {
+                    break;
                 };
-                if !matches!(op, "+" | "-" | "*" | "/") || right.contains(&name) {
-                    continue;
-                }
-                format!("({init} {op} {right})")
-            } else if let Some(head) = value.strip_suffix(&format!(" {name}")) {
-                let Some((left, op)) = head.rsplit_once(' ') else {
-                    continue;
+                // The name may stand on either side of the operator — `X = X * m` and
+                // `X = Radius + X` are both the compiler accumulating into the slot it read
+                // into. The written order is kept, so a non-commutative operator stays what it
+                // was.
+                let next = if let Some(rest) = value.strip_prefix(&format!("{name} ")) {
+                    let Some((op, right)) = rest.split_once(' ') else {
+                        break;
+                    };
+                    if !matches!(op, "+" | "-" | "*" | "/") || right.contains(&name) {
+                        break;
+                    }
+                    format!("({folded_value} {op} {right})")
+                } else if let Some(head) = value.strip_suffix(&format!(" {name}")) {
+                    let Some((left, op)) = head.rsplit_once(' ') else {
+                        break;
+                    };
+                    if !matches!(op, "+" | "-" | "*" | "/") || left.contains(&name) {
+                        break;
+                    }
+                    format!("({left} {op} {folded_value})")
+                } else {
+                    break;
                 };
-                if !matches!(op, "+" | "-" | "*" | "/") || left.contains(&name) {
-                    continue;
-                }
-                format!("({left} {op} {init})")
-            } else {
+                folded_value = next;
+                steps += 1;
+            }
+            if steps == 0 {
                 continue;
-            };
-            // Across the whole body, so a mention in a LATER block counts too: the declaration,
-            // twice in the accumulation, the single read that consumes it — and, where the
-            // declaration is split from its first write, that write's own mention as well.
-            let expected = if span == 1 { 4 } else { 5 };
+            }
+            // The declaration, twice per accumulation, and the single read that consumes it —
+            // plus, where the declaration is split from its first write, that write's mention.
+            let expected = 2 * steps + if span == 1 { 2 } else { 3 };
             if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != expected {
                 continue;
             }
-            let Some(reader) =
-                (index + span + 1..lines.len()).find(|at| count_ident(&lines[*at], &name) == 1)
+            let Some(reader) = (index + span + steps..lines.len())
+                .find(|at| count_ident(&lines[*at], &name) == 1)
             else {
                 continue;
             };
             let folded = folded_value;
             lines[reader] = rename_ident(&lines[reader], &name, &folded);
-            lines.drain(index..index + span + 1);
+            lines.drain(index..index + span + steps);
             let _ = indent;
             changed = true;
             break;
