@@ -6926,18 +6926,34 @@ fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>) -> Strin
             let Some(accumulate) = lines.get(index + span).map(|line| line.trim()) else {
                 continue;
             };
-            let Some(rest) = accumulate
-                .strip_prefix(&format!("{name} = {name} "))
+            let Some(value) = accumulate
+                .strip_prefix(&format!("{name} = "))
                 .and_then(|rest| rest.strip_suffix(';'))
             else {
                 continue;
             };
-            let Some((op, right)) = rest.split_once(' ') else {
+            // The name may stand on either side of the operator — `X = X * m` and
+            // `X = Radius + X` are both the compiler accumulating into the slot it read into.
+            // The written order is kept, so a non-commutative operator stays what it was.
+            let folded_value = if let Some(rest) = value.strip_prefix(&format!("{name} ")) {
+                let Some((op, right)) = rest.split_once(' ') else {
+                    continue;
+                };
+                if !matches!(op, "+" | "-" | "*" | "/") || right.contains(&name) {
+                    continue;
+                }
+                format!("({init} {op} {right})")
+            } else if let Some(head) = value.strip_suffix(&format!(" {name}")) {
+                let Some((left, op)) = head.rsplit_once(' ') else {
+                    continue;
+                };
+                if !matches!(op, "+" | "-" | "*" | "/") || left.contains(&name) {
+                    continue;
+                }
+                format!("({left} {op} {init})")
+            } else {
                 continue;
             };
-            if !matches!(op, "+" | "-" | "*" | "/") || right.contains(&name) {
-                continue;
-            }
             // Across the whole body, so a mention in a LATER block counts too: the declaration,
             // twice in the accumulation, the single read that consumes it — and, where the
             // declaration is split from its first write, that write's own mention as well.
@@ -6950,7 +6966,7 @@ fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>) -> Strin
             else {
                 continue;
             };
-            let folded = format!("({init} {op} {right})");
+            let folded = folded_value;
             lines[reader] = rename_ident(&lines[reader], &name, &folded);
             lines.drain(index..index + span + 1);
             let _ = indent;
