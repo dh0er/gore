@@ -1,5 +1,7 @@
 #pragma once
 
+#include "gore_as_standalone/protocol.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -8,7 +10,10 @@
 
 namespace gore::as::standalone {
 
-inline constexpr std::size_t max_preprocessor_sources = 4'096U;
+// Keep the frontend graph bound identical to the already reviewed process
+// boundary. A lower private limit made the complete 7,308-module game graph
+// impossible even though the request protocol accepted it.
+inline constexpr std::size_t max_preprocessor_sources = protocol::kMaxSourceFiles;
 inline constexpr std::size_t max_preprocessor_flags = 4'096U;
 // BuildID 24539464 exposes 12,904 target-owned Blueprint event argument
 // specializations. This is deliberately separate from ordinary preprocessor flags.

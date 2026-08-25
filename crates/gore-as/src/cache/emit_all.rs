@@ -62,13 +62,16 @@ impl FreeFunctionRenamePlan {
     /// are already renamed by `RefResolver::set_free_fn_renames`; touching arbitrary source tokens
     /// would also mutate methods, literals, globals, and comments.
     fn rewrite_emitted_module(&self, module_index: usize, source: &str) -> String {
-        rewrite_top_level_declarations(source, self.renames_for_module(module_index))
+        let declarations =
+            rewrite_top_level_declarations(source, self.renames_for_module(module_index));
+        qualify_emitted_collision_calls(&declarations, &self.original_names)
     }
 
     /// Make an authored overlay consistent with the collision-renamed vanilla tree. Existing edit
     /// declarations can be rewritten safely because their declaring module is known. Any remaining
     /// bare/global call using an original colliding name is ambiguous in authored source, so reject
-    /// it before starting the game compiler instead of guessing an overload/module target.
+    /// it before starting the compiler instead of guessing an overload/module target. A leading
+    /// `::` is accepted because emitted bytecode-resolved calls use that explicit global scope.
     fn prepare_overlay(
         &self,
         mods: &[Module],
@@ -853,9 +856,61 @@ fn unresolved_collision_calls(source: &str, originals: &BTreeSet<String>) -> BTr
         if index > 0 && token_text(source, &tokens[index - 1]) == "." {
             continue; // explicit object/this/super member, with arbitrary trivia around `.`
         }
+        if index >= 2
+            && token_text(source, &tokens[index - 1]) == ":"
+            && token_text(source, &tokens[index - 2]) == ":"
+            && (index == 2 || !tokens[index - 3].identifier)
+        {
+            continue; // explicit global `::Name`; a `Namespace::Name` remains ambiguous/refused
+        }
         unresolved.insert(name.to_owned());
     }
     unresolved
+}
+
+/// Mark bare collision-bound calls in bytecode-derived output as explicitly global. Unlike an
+/// authored overlay, the emitter already resolved these call sites by function id/pointer, so this
+/// does not guess an overload. The qualifier also lets the overlay scanner distinguish a prepared
+/// emitted module from an ambiguous handwritten bare call.
+fn qualify_emitted_collision_calls(source: &str, originals: &BTreeSet<String>) -> String {
+    let tokens = code_tokens(source);
+    let declarations = function_declarations(source, &tokens);
+    let declaration_names = declarations
+        .iter()
+        .map(|declaration| declaration.name_token)
+        .collect::<HashSet<_>>();
+    let mut insertions = Vec::new();
+    for (index, identifier) in tokens.iter().enumerate() {
+        if !identifier.identifier
+            || !originals.contains(token_text(source, identifier))
+            || declaration_names.contains(&index)
+        {
+            continue;
+        }
+        let call = tokens
+            .get(index + 1)
+            .is_some_and(|token| token_text(source, token) == "(");
+        let handle = index > 0 && token_text(source, &tokens[index - 1]) == "@";
+        if !call && !handle {
+            continue;
+        }
+        if index > 0 && matches!(token_text(source, &tokens[index - 1]), "." | ":") {
+            continue;
+        }
+        insertions.push(identifier.start);
+    }
+    if insertions.is_empty() {
+        return source.to_owned();
+    }
+    let mut output = String::with_capacity(source.len() + insertions.len() * 2);
+    let mut copied = 0usize;
+    for position in insertions {
+        output.push_str(&source[copied..position]);
+        output.push_str("::");
+        copied = position;
+    }
+    output.push_str(&source[copied..]);
+    output
 }
 
 #[derive(Debug, Clone)]
@@ -1086,7 +1141,8 @@ impl<'a> PreparedEmit<'a> {
     }
 
     /// Validate and rewrite an authored overlay against this prepared cache. Unqualified calls or
-    /// handles to a collision-bound name fail closed; only explicit `receiver.Name` access is safe.
+    /// handles to a collision-bound name fail closed; explicit `receiver.Name` and global
+    /// `::Name` access remain safe.
     pub fn prepare_overlay(
         &self,
         op: &str,
@@ -1383,6 +1439,22 @@ const FName Label = n"Foo";
         assert!(rewritten.contains("class C { void Foo() { Foo(); } }"));
         assert!(rewritten.contains("// Foo stays"));
         assert!(rewritten.contains("n\"Foo\""));
+    }
+
+    #[test]
+    fn emitted_collision_calls_are_globally_qualified_without_touching_other_tokens() {
+        let source = r#"// Shared() stays
+void Shared(int Value) {}
+void Caller() { Shared(1); Object.Shared(); Namespace::Shared(); Callback@ Cb = @Shared; }
+const FName Label = n"Shared() @Shared";
+"#;
+        let qualified =
+            qualify_emitted_collision_calls(source, &BTreeSet::from(["Shared".to_owned()]));
+        assert!(qualified.contains("void Shared(int Value) {}"));
+        assert!(qualified.contains("{ ::Shared(1); Object.Shared(); Namespace::Shared();"));
+        assert!(qualified.contains("Callback@ Cb = @::Shared;"));
+        assert!(qualified.contains("// Shared() stays"));
+        assert!(qualified.contains("n\"Shared() @Shared\""));
     }
 
     #[test]

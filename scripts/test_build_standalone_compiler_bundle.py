@@ -16,6 +16,7 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
     def setUp(self) -> None:
         gore_build._PREPARED_STANDALONE_BUNDLES.clear()
         gore_build._QUALIFIED_PROFILE_VERIFIER = None
+        gore_build._PROMOTION_ATTESTATION_VERIFIER = None
 
     def test_only_cli_and_studio_are_bundle_hosts(self) -> None:
         enabled = {
@@ -77,38 +78,87 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
             exclude_names=(gore_build.standalone_compiler_bundle.SIDECAR_FILE,),
         )
 
-    def test_missing_release_input_prepares_explicit_bundle_absent_catalog(
-        self,
-    ) -> None:
+    def test_default_build_materializes_the_internal_package(self) -> None:
+        release_input = ROOT / "target" / "synthetic-internal-input"
+        verifier = mock.Mock()
+        descriptor = gore_build.standalone_compiler_bundle.InternalPackageDescriptor(
+            asset=gore_build.standalone_compiler_bundle.INTERNAL_PACKAGE_ARCHIVE_FILE,
+            archive=gore_build.standalone_compiler_bundle.Seal(123, "cd" * 32),
+            compression="deflate-9",
+            catalog_sha256="ab" * 32,
+            file_count=28,
+        )
+        prepared = gore_build.standalone_compiler_bundle.PreparedBundle(
+            present=True,
+            work_root=ROOT / "target" / "standalone-compiler-product-bundle",
+            catalog_path=ROOT
+            / "target"
+            / "standalone-compiler-product-bundle"
+            / gore_build.standalone_compiler_bundle.EMBEDDED_CATALOG_FILE,
+            bundle_root=ROOT / "target" / "standalone-compiler-product-bundle/compiler",
+            sidecar_name=gore_build.standalone_compiler_bundle.SIDECAR_FILE,
+            catalog_sha256="ab" * 32,
+        )
         with (
             mock.patch.dict(gore_build.os.environ, {}, clear=True),
             mock.patch.object(
+                gore_build, "_qualified_profile_verifier", return_value=verifier
+            ) as typed,
+            mock.patch.object(
+                gore_build.standalone_compiler_bundle,
+                "read_internal_package_descriptor",
+                return_value=descriptor,
+            ) as read_descriptor,
+            mock.patch.object(
+                gore_build.standalone_compiler_bundle,
+                "materialize_internal_package",
+                return_value=release_input,
+            ) as materialize,
+            mock.patch.object(
                 gore_build.standalone_compiler_bundle,
                 "prepare_product_bundle",
-                return_value=gore_build.standalone_compiler_bundle.PreparedBundle(
-                    present=False,
-                    work_root=ROOT / "target" / "standalone-compiler-product-bundle",
-                    catalog_path=ROOT
-                    / "target"
-                    / "standalone-compiler-product-bundle"
-                    / gore_build.standalone_compiler_bundle.EMBEDDED_CATALOG_FILE,
-                    bundle_root=None,
-                    sidecar_name=None,
-                    catalog_sha256=gore_build.hashlib.sha256(b"").hexdigest(),
-                ),
+                return_value=prepared,
             ) as prepare,
         ):
             result = gore_build._prepare_standalone_compiler_bundle(
                 "gore-cli", dry=False
             )
-        assert result is not None
-        self.assertFalse(result.present)
-        prepare.assert_called_once_with(
-            None,
-            ROOT / "target" / "standalone-compiler-product-bundle",
-            qualified_profile_verifier=None,
-            promotion_attestation_verifier=None,
+        self.assertIs(result, prepared)
+        typed.assert_called_once_with(dry=False)
+        read_descriptor.assert_called_once_with(
+            gore_build._INTERNAL_STANDALONE_COMPILER_DESCRIPTOR
         )
+        materialize.assert_called_once_with(
+            gore_build._INTERNAL_STANDALONE_COMPILER_ARCHIVE,
+            gore_build._INTERNAL_STANDALONE_COMPILER_DESCRIPTOR,
+            ROOT / "target" / "standalone-compiler-internal-input" / ("cd" * 32),
+            qualified_profile_verifier=verifier,
+        )
+        prepare.assert_called_once_with(
+            release_input,
+            ROOT / "target" / "standalone-compiler-product-bundle",
+            qualified_profile_verifier=verifier,
+            promotion_attestation_verifier=(
+                gore_build.standalone_compiler_bundle.trust_pinned_internal_package_attestation
+            ),
+        )
+
+    def test_non_hosts_never_touch_the_internal_package(self) -> None:
+        with mock.patch.object(
+            gore_build.standalone_compiler_bundle,
+            "read_internal_package_descriptor",
+        ) as read_descriptor:
+            self.assertIsNone(
+                gore_build._prepare_standalone_compiler_bundle(
+                    "gore-save-editor", dry=False
+                )
+            )
+            self.assertIsNone(
+                gore_build._prepare_standalone_compiler_bundle(
+                    "gore-mod-manager", dry=False
+                )
+            )
+        read_descriptor.assert_not_called()
 
     def test_linked_host_must_report_exact_prepared_catalog_digest(self) -> None:
         digest = "ab" * 32

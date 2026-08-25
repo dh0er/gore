@@ -1,4 +1,4 @@
-//! Read-only, handle-pinned validation of the exact game artifacts selected by a compiler profile.
+//! Read-only, handle-pinned validation of game inputs against a qualified compiler API.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -8,7 +8,7 @@ use sha1::{Digest as _, Sha1};
 use sha2::Sha256;
 
 use crate::compiler_profile::manifest::{
-    CompilerProfileV1, FileSealV1, PeCodeViewV1, Sha1Digest, Sha256Digest,
+    BindsProfileV1, CompilerProfileV1, FileSealV1, PeCodeViewV1, Sha1Digest, Sha256Digest,
 };
 use crate::standalone_sidecar::ValidatedCompilerProfilePackageV1;
 
@@ -27,12 +27,13 @@ pub struct CompilerTargetInputPathsV1<'a> {
     pub binds_cache: &'a Path,
 }
 
-/// Opaque proof that EXE, Shipping and Binds all match one qualified profile.
+/// Opaque proof that EXE, Shipping and Binds are compatible with one qualified profile.
 ///
 /// The open handles and directory pins are retained for the complete compiler attempt. On Windows
-/// they deliberately omit delete sharing, closing the replace/rename window between validation and
-/// use. Shipping/Binds bytes come from those exact handles and require both profile SHA-256 and
-/// Steam content SHA-1.
+/// they deliberately omit delete sharing, closing the replace/rename window between validation
+/// and use. Product use is distribution-neutral: the executable must be a bounded AMD64 PE,
+/// Shipping must use the qualified cache format, and Binds must decode to the qualified ordered
+/// API database. Steam/GOG metadata and whole-file hashes are qualification provenance only.
 #[derive(Debug)]
 pub struct ValidatedCompilerTargetInputsV1 {
     profile_sha256: Sha256Digest,
@@ -65,7 +66,7 @@ impl ValidatedCompilerTargetInputsV1 {
         package: &ValidatedCompilerProfilePackageV1,
         paths: CompilerTargetInputPathsV1<'_>,
     ) -> Result<Self, CompilerTargetInputError> {
-        Self::load_profile(package.profile(), paths)
+        Self::load_compatible_profile(package.profile(), paths)
     }
 
     /// Qualification-only target pin. An unqualified profile may select inputs for an
@@ -79,10 +80,74 @@ impl ValidatedCompilerTargetInputsV1 {
                 "qualification profile state",
             ));
         }
-        Self::load_profile(profile, paths)
+        Self::load_exact_profile_for_qualification(profile, paths)
     }
 
-    fn load_profile(
+    fn load_compatible_profile(
+        profile: &CompilerProfileV1,
+        paths: CompilerTargetInputPathsV1<'_>,
+    ) -> Result<Self, CompilerTargetInputError> {
+        #[cfg(not(windows))]
+        {
+            let _ = (profile, paths);
+            return Err(CompilerTargetInputError::UnsupportedPlatform);
+        }
+
+        #[cfg(windows)]
+        {
+            let mut directory_pins = Vec::new();
+            for path in [paths.executable, paths.shipping_cache, paths.binds_cache] {
+                directory_pins.extend(pin_absolute_parent_chain(path)?);
+            }
+
+            let mut executable = open_regular_no_follow(paths.executable, "executable")?;
+            verify_amd64_pe_image(&mut executable, MAX_EXECUTABLE_BYTES_V1)?;
+
+            let mut shipping = open_regular_no_follow(paths.shipping_cache, "Shipping cache")?;
+            let shipping_bytes = read_bounded_unsealed(
+                &mut shipping,
+                MAX_SHIPPING_CACHE_BYTES_V1,
+                "Shipping cache",
+            )?;
+            let shipping_header = crate::cache::header::CacheHeader::parse(&shipping_bytes)
+                .map_err(|_| CompilerTargetInputError::Mismatch("Shipping cache format"))?;
+            if shipping_header.magic != profile.cache_writer.build_identifier {
+                return Err(CompilerTargetInputError::Mismatch(
+                    "Shipping cache build identifier",
+                ));
+            }
+            crate::cache::model::parse_modules(&shipping_bytes)
+                .map_err(|_| CompilerTargetInputError::Mismatch("Shipping cache structure"))?;
+
+            let mut binds = open_regular_no_follow(paths.binds_cache, "Binds cache")?;
+            let binds_bytes =
+                read_bounded_unsealed(&mut binds, MAX_BINDS_CACHE_BYTES_V1, "Binds cache")?;
+            let binds_database = crate::compiler_profile::binds::BindsDatabase::parse(&binds_bytes)
+                .map_err(|_| CompilerTargetInputError::Mismatch("Binds API database"))?;
+            if BindsProfileV1::from_database(&binds_database) != profile.binds {
+                return Err(CompilerTargetInputError::Mismatch(
+                    "Binds API compatibility fingerprint",
+                ));
+            }
+
+            Ok(Self {
+                profile_sha256: profile.profile_sha256,
+                executable,
+                shipping,
+                binds,
+                shipping_bytes,
+                binds_bytes,
+                _directory_pins: directory_pins,
+                paths: CompilerTargetOwnedPathsV1 {
+                    executable: paths.executable.to_path_buf(),
+                    shipping_cache: paths.shipping_cache.to_path_buf(),
+                    binds_cache: paths.binds_cache.to_path_buf(),
+                },
+            })
+        }
+    }
+
+    fn load_exact_profile_for_qualification(
         profile: &CompilerProfileV1,
         paths: CompilerTargetInputPathsV1<'_>,
     ) -> Result<Self, CompilerTargetInputError> {
@@ -240,8 +305,82 @@ pub enum CompilerTargetInputError {
     Changed(&'static str),
     #[error("compiler target {0} does not match the compiler profile")]
     Mismatch(&'static str),
+    #[error("compiler target executable is not a bounded Windows AMD64 PE image")]
+    InvalidExecutable,
     #[error("compiler target executable has an invalid PE CodeView directory")]
     InvalidCodeView,
+}
+
+fn read_bounded_unsealed(
+    file: &mut File,
+    max: u64,
+    label: &'static str,
+) -> Result<Vec<u8>, CompilerTargetInputError> {
+    let length = file
+        .metadata()
+        .map_err(|_| CompilerTargetInputError::UnsafeFile(label))?
+        .len();
+    if length == 0 || length > max {
+        return Err(CompilerTargetInputError::TooLarge(label));
+    }
+    let capacity =
+        usize::try_from(length).map_err(|_| CompilerTargetInputError::TooLarge(label))?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|_| CompilerTargetInputError::Changed(label))?;
+    let mut bytes = Vec::with_capacity(capacity);
+    file.take(max + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| CompilerTargetInputError::Changed(label))?;
+    if bytes.len() as u64 != length
+        || file
+            .metadata()
+            .map_err(|_| CompilerTargetInputError::Changed(label))?
+            .len()
+            != length
+    {
+        return Err(CompilerTargetInputError::Changed(label));
+    }
+    Ok(bytes)
+}
+
+fn verify_amd64_pe_image(file: &mut File, max: u64) -> Result<(), CompilerTargetInputError> {
+    let file_len = file
+        .metadata()
+        .map_err(|_| CompilerTargetInputError::InvalidExecutable)?
+        .len();
+    if file_len == 0 || file_len > max {
+        return Err(CompilerTargetInputError::InvalidExecutable);
+    }
+    let mut dos = [0u8; 0x40];
+    read_exact_at(file, 0, &mut dos, file_len)
+        .map_err(|_| CompilerTargetInputError::InvalidExecutable)?;
+    if &dos[..2] != b"MZ" {
+        return Err(CompilerTargetInputError::InvalidExecutable);
+    }
+    let pe_offset = u64::from(le_u32(&dos[0x3c..0x40]));
+    let mut pe = [0u8; 24];
+    read_exact_at(file, pe_offset, &mut pe, file_len)
+        .map_err(|_| CompilerTargetInputError::InvalidExecutable)?;
+    if &pe[..4] != b"PE\0\0" || le_u16(&pe[4..6]) != 0x8664 {
+        return Err(CompilerTargetInputError::InvalidExecutable);
+    }
+    let optional_size = usize::from(le_u16(&pe[20..22]));
+    if optional_size < 2 || optional_size > 4096 {
+        return Err(CompilerTargetInputError::InvalidExecutable);
+    }
+    let mut magic = [0u8; 2];
+    read_exact_at(file, pe_offset + 24, &mut magic, file_len)
+        .map_err(|_| CompilerTargetInputError::InvalidExecutable)?;
+    if le_u16(&magic) != 0x20b
+        || file
+            .metadata()
+            .map_err(|_| CompilerTargetInputError::InvalidExecutable)?
+            .len()
+            != file_len
+    {
+        return Err(CompilerTargetInputError::InvalidExecutable);
+    }
+    Ok(())
 }
 
 fn read_and_verify_seal(

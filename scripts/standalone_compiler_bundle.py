@@ -43,10 +43,14 @@ PROMOTION_PROVENANCE_FILE = "promotion/source-provenance.json"
 PROMOTION_ATTESTATION_FILE = "promotion/github-attestation.sigstore.json"
 SIGNED_SIDECAR_IDENTITY_SCHEMA = "gore.as.signed-standalone-compiler-identity"
 SIGNED_SIDECAR_IDENTITY_SCHEMA_VERSION = 1
-PROMOTION_PROVENANCE_SCHEMA = "gore.as.promotion-candidate-provenance"
-PROMOTION_PROVENANCE_SCHEMA_VERSION = 2
-PROMOTION_CLAIM_TAG_PREFIX = "gore-as-signing-claim-"
-PROMOTION_TAG_PREFIX = "gore-as-promotion-"
+PROMOTION_PROVENANCE_SCHEMA = (
+    "gore.as.internal-standalone-compiler-signing-provenance"
+)
+PROMOTION_PROVENANCE_SCHEMA_VERSION = 1
+LEGACY_PROMOTION_PROVENANCE_SCHEMA = "gore.as.promotion-candidate-provenance"
+LEGACY_PROMOTION_PROVENANCE_SCHEMA_VERSION = 2
+LEGACY_PROMOTION_CLAIM_TAG_PREFIX = "gore-as-signing-claim-"
+LEGACY_PROMOTION_TAG_PREFIX = "gore-as-promotion-"
 QUALIFIED_PROMOTION_RECEIPT_FILE = "qualification-promotion-receipt.json"
 EMBEDDED_QUALIFICATION_ARTIFACT_MANIFEST_FILE = "embedded-qualification-artifacts.json"
 STANDALONE_QUALIFICATION_ARTIFACT_MANIFEST_FILE = (
@@ -72,6 +76,14 @@ MAX_RELEASE_ARCHIVE_FILES = 4096
 STALE_SIDECAR_BYTE_LENGTHS = frozenset({273_408})
 RELEASE_ASSET_DESCRIPTOR_SCHEMA = "gore.as.standalone-compiler-release-asset"
 RELEASE_ASSET_DESCRIPTOR_SCHEMA_VERSION = 1
+INTERNAL_PACKAGE_DESCRIPTOR_SCHEMA = "gore.as.internal-standalone-compiler-package"
+INTERNAL_PACKAGE_DESCRIPTOR_SCHEMA_VERSION = 1
+INTERNAL_PACKAGE_ARCHIVE_FILE = "standalone-compiler-internal-package.zip"
+INTERNAL_PACKAGE_DESCRIPTOR_FILE = "standalone-compiler-internal-package.json"
+# The repository carries the qualified input compressed.  Its current 152 MiB
+# release-input tree is roughly 7 MiB with deterministic Deflate; leave ample
+# room for additional qualified game APIs without accepting an unbounded asset.
+MAX_INTERNAL_PACKAGE_BYTES = 128 * 1024 * 1024
 REQUIRED_NOTICES = (
     "UNREANGEL-LICENSE.md",
     "SOURCE_INVENTORY.tsv",
@@ -176,14 +188,22 @@ class ReleaseAssetDescriptor:
 
 
 @dataclass(frozen=True)
+class InternalPackageDescriptor:
+    asset: str
+    archive: Seal
+    compression: str
+    catalog_sha256: str
+    file_count: int
+
+
+@dataclass(frozen=True)
 class PromotionAuthority:
     repository: str
     commit: str
     workflow_sha: str
-    claim_tag: str
-    promotion_tag: str
     workflow_run_id: int
     workflow_run_attempt: int
+    legacy_release_metadata: bool = False
 
 
 SidecarVerifier = Callable[[Path, bytes], None]
@@ -1219,6 +1239,17 @@ def _parse_promotion_provenance(
     provenance = _parse_json(
         bytes_, "compiler promotion provenance", MAX_DESCRIPTOR_BYTES
     )
+    legacy_release_metadata = (
+        provenance.get("schema") == LEGACY_PROMOTION_PROVENANCE_SCHEMA
+        and provenance.get("schema_version")
+        == LEGACY_PROMOTION_PROVENANCE_SCHEMA_VERSION
+    )
+    current_internal_metadata = (
+        provenance.get("schema") == PROMOTION_PROVENANCE_SCHEMA
+        and provenance.get("schema_version") == PROMOTION_PROVENANCE_SCHEMA_VERSION
+    )
+    if not current_internal_metadata and not legacy_release_metadata:
+        raise BundleError("compiler promotion provenance schema/version is unsupported")
     _require_exact_fields(
         provenance,
         (
@@ -1227,19 +1258,13 @@ def _parse_promotion_provenance(
             "repository",
             "commit",
             "workflow_sha",
-            "claim_tag",
-            "promotion_tag",
+            *(("claim_tag", "promotion_tag") if legacy_release_metadata else ()),
             "workflow_run_id",
             "workflow_run_attempt",
             "signed_identity",
         ),
         "compiler promotion provenance",
     )
-    if (
-        provenance["schema"] != PROMOTION_PROVENANCE_SCHEMA
-        or provenance["schema_version"] != PROMOTION_PROVENANCE_SCHEMA_VERSION
-    ):
-        raise BundleError("compiler promotion provenance schema/version is unsupported")
     repository = _require_release_repository(
         provenance["repository"], "compiler promotion repository"
     )
@@ -1247,18 +1272,17 @@ def _parse_promotion_provenance(
     workflow_sha = _require_hex(
         provenance["workflow_sha"], 40, "compiler promotion workflow SHA"
     )
-    claim_tag = _require_release_asset_token(
-        provenance["claim_tag"], "compiler promotion signing-claim tag"
-    )
-    promotion_tag = _require_release_asset_token(
-        provenance["promotion_tag"], "compiler promotion tag"
-    )
-    if claim_tag != f"{PROMOTION_CLAIM_TAG_PREFIX}{commit}":
-        raise BundleError(
-            "compiler promotion signing-claim tag is not derived from its exact commit"
+    if legacy_release_metadata:
+        claim_tag = _require_release_asset_token(
+            provenance["claim_tag"], "legacy compiler signing-claim tag"
         )
-    if promotion_tag != f"{PROMOTION_TAG_PREFIX}{commit}":
-        raise BundleError("compiler promotion tag is not derived from its exact commit")
+        promotion_tag = _require_release_asset_token(
+            provenance["promotion_tag"], "legacy compiler promotion tag"
+        )
+        if claim_tag != f"{LEGACY_PROMOTION_CLAIM_TAG_PREFIX}{commit}":
+            raise BundleError("legacy compiler signing-claim tag is not commit-bound")
+        if promotion_tag != f"{LEGACY_PROMOTION_TAG_PREFIX}{commit}":
+            raise BundleError("legacy compiler promotion tag is not commit-bound")
     if expected_repository is not None and repository != expected_repository:
         raise BundleError(
             "compiler promotion repository differs from the authorized repository"
@@ -1282,8 +1306,6 @@ def _parse_promotion_provenance(
         repository=repository,
         commit=commit,
         workflow_sha=workflow_sha,
-        claim_tag=claim_tag,
-        promotion_tag=promotion_tag,
         workflow_run_id=_require_uint(
             provenance["workflow_run_id"], "compiler promotion workflow run ID"
         ),
@@ -1292,6 +1314,7 @@ def _parse_promotion_provenance(
             "compiler promotion workflow run attempt",
             maximum=(1 << 32) - 1,
         ),
+        legacy_release_metadata=legacy_release_metadata,
     )
 
 
@@ -2416,14 +2439,14 @@ def _verify_promotion_authority(
 ) -> PromotionAuthority:
     if not isinstance(value, dict):
         raise BundleError("compiler promotion authority must be an object")
+    legacy_release_metadata = "claim_tag" in value or "promotion_tag" in value
     _require_exact_fields(
         value,
         (
             "repository",
             "commit",
             "workflow_sha",
-            "claim_tag",
-            "promotion_tag",
+            *(("claim_tag", "promotion_tag") if legacy_release_metadata else ()),
             "workflow_run_id",
             "workflow_run_attempt",
             "signed_identity_file",
@@ -2439,20 +2462,17 @@ def _verify_promotion_authority(
     workflow_sha = _require_hex(
         value["workflow_sha"], 40, "compiler promotion authority workflow SHA"
     )
-    claim_tag = _require_release_asset_token(
-        value["claim_tag"], "compiler promotion authority signing-claim tag"
-    )
-    if claim_tag != f"{PROMOTION_CLAIM_TAG_PREFIX}{commit}":
-        raise BundleError(
-            "compiler promotion authority signing-claim tag is not derived from its exact commit"
+    if legacy_release_metadata:
+        claim_tag = _require_release_asset_token(
+            value["claim_tag"], "legacy compiler signing-claim tag"
         )
-    promotion_tag = _require_release_asset_token(
-        value["promotion_tag"], "compiler promotion authority tag"
-    )
-    if promotion_tag != f"{PROMOTION_TAG_PREFIX}{commit}":
-        raise BundleError(
-            "compiler promotion authority tag is not derived from its exact commit"
+        promotion_tag = _require_release_asset_token(
+            value["promotion_tag"], "legacy compiler promotion tag"
         )
+        if claim_tag != f"{LEGACY_PROMOTION_CLAIM_TAG_PREFIX}{commit}":
+            raise BundleError("legacy compiler signing-claim tag is not commit-bound")
+        if promotion_tag != f"{LEGACY_PROMOTION_TAG_PREFIX}{commit}":
+            raise BundleError("legacy compiler promotion tag is not commit-bound")
     run_id = _require_uint(
         value["workflow_run_id"], "compiler promotion authority workflow run ID"
     )
@@ -2519,10 +2539,9 @@ def _verify_promotion_authority(
     )
     if (
         authority.workflow_sha != workflow_sha
-        or authority.claim_tag != claim_tag
-        or authority.promotion_tag != promotion_tag
         or authority.workflow_run_id != run_id
         or authority.workflow_run_attempt != run_attempt
+        or authority.legacy_release_metadata != legacy_release_metadata
     ):
         raise BundleError(
             "compiler promotion authority differs from its source provenance"
@@ -2766,6 +2785,74 @@ def read_release_asset_descriptor(path: Path) -> ReleaseAssetDescriptor:
     return _parse_release_asset_descriptor(bytes_)
 
 
+def _parse_internal_package_descriptor(bytes_: bytes) -> InternalPackageDescriptor:
+    document = _parse_json(
+        bytes_, "internal standalone compiler package descriptor", MAX_DESCRIPTOR_BYTES
+    )
+    _require_exact_fields(
+        document,
+        (
+            "schema",
+            "schema_version",
+            "asset",
+            "archive",
+            "compression",
+            "release_input",
+        ),
+        "internal standalone compiler package descriptor",
+    )
+    if (
+        document["schema"] != INTERNAL_PACKAGE_DESCRIPTOR_SCHEMA
+        or document["schema_version"] != INTERNAL_PACKAGE_DESCRIPTOR_SCHEMA_VERSION
+    ):
+        raise BundleError(
+            "internal standalone compiler package schema/version is unsupported"
+        )
+    if document["compression"] != "deflate-9":
+        raise BundleError(
+            "internal standalone compiler package compression must be deflate-9"
+        )
+    release_input = document["release_input"]
+    if not isinstance(release_input, dict):
+        raise BundleError("internal compiler release-input summary must be an object")
+    _require_exact_fields(
+        release_input,
+        ("catalog_sha256", "file_count"),
+        "internal compiler release-input summary",
+    )
+    return InternalPackageDescriptor(
+        asset=_require_release_asset_token(
+            document["asset"], "internal standalone compiler package asset", suffix=".zip"
+        ),
+        archive=_seal(
+            document["archive"],
+            "internal standalone compiler package archive",
+            MAX_INTERNAL_PACKAGE_BYTES,
+        ),
+        compression="deflate-9",
+        catalog_sha256=_require_hex(
+            release_input["catalog_sha256"],
+            64,
+            "internal compiler release-input catalog SHA-256",
+        ),
+        file_count=_require_uint(
+            release_input["file_count"],
+            "internal compiler release-input file count",
+            maximum=MAX_RELEASE_ARCHIVE_FILES,
+        ),
+    )
+
+
+def read_internal_package_descriptor(path: Path) -> InternalPackageDescriptor:
+    path = _require_absolute_normalized(
+        path, "internal standalone compiler package descriptor"
+    )
+    bytes_ = _read_regular_no_follow(
+        path, MAX_DESCRIPTOR_BYTES, "internal standalone compiler package descriptor"
+    )
+    return _parse_internal_package_descriptor(bytes_)
+
+
 def _streaming_file_seal(path: Path, maximum: int, label: str) -> Seal:
     _check_no_follow_chain(path, label)
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -2823,9 +2910,11 @@ def _require_real_output_parent(path: Path, label: str) -> None:
         raise BundleError(f"{label} parent must be a real directory: {parent}")
 
 
-def _release_archive_info(relative: str) -> zipfile.ZipInfo:
+def _release_archive_info(
+    relative: str, *, compression: int = zipfile.ZIP_STORED
+) -> zipfile.ZipInfo:
     info = zipfile.ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
-    info.compress_type = zipfile.ZIP_STORED
+    info.compress_type = compression
     info.create_system = 3
     info.external_attr = (stat.S_IFREG | 0o644) << 16
     return info
@@ -2836,8 +2925,11 @@ def _write_zip_member_from_file(
     relative: str,
     source: Path,
     expected: Seal,
+    *,
+    compression: int = zipfile.ZIP_STORED,
+    label_prefix: str = "compiler release-input archive",
 ) -> None:
-    label = f"compiler release-input archive entry {relative}"
+    label = f"{label_prefix} entry {relative}"
     _check_no_follow_chain(source, label)
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -2855,7 +2947,7 @@ def _write_zip_member_from_file(
             or before.st_size != expected.byte_len
         ):
             raise BundleError(f"{label} is not the expected single-link regular file")
-        info = _release_archive_info(relative)
+        info = _release_archive_info(relative, compression=compression)
         info.file_size = expected.byte_len
         digest = hashlib.sha256()
         total = 0
@@ -3038,8 +3130,14 @@ def _read_descriptor_exact(
     return b"".join(chunks)
 
 
-def _validate_canonical_release_archive(path: Path) -> tuple[str, ...]:
-    """Validate the exact raw ZIP shape accepted by the release transport.
+def _validate_canonical_archive(
+    path: Path,
+    *,
+    expected_compression: int,
+    maximum_archive_bytes: int,
+    label: str,
+) -> tuple[str, ...]:
+    """Validate the exact raw ZIP shape accepted by one compiler transport.
 
     Release inputs are bounded below all classic ZIP limits, so ZIP64 is neither needed nor
     accepted. Parsing both header sets closes ambiguities that a central-directory-only reader
@@ -3047,14 +3145,14 @@ def _validate_canonical_release_archive(path: Path) -> tuple[str, ...]:
     and length remain the external authority for the complete archive.
     """
 
-    path = _require_absolute_normalized(path, "standalone compiler release archive")
-    _check_no_follow_chain(path, "standalone compiler release archive")
+    path = _require_absolute_normalized(path, label)
+    _check_no_follow_chain(path, label)
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(path, flags)
     except OSError as error:
         raise BundleError(
-            f"cannot open standalone compiler release archive: {error}"
+            f"cannot open {label}: {error}"
         ) from error
     try:
         status = os.fstat(descriptor)
@@ -3063,7 +3161,7 @@ def _validate_canonical_release_archive(path: Path) -> tuple[str, ...]:
             not stat.S_ISREG(status.st_mode)
             or status.st_nlink != 1
             or _is_reparse(status)
-            or not 22 < size <= MAX_RELEASE_ARCHIVE_BYTES
+            or not 22 < size <= maximum_archive_bytes
         ):
             raise BundleError(
                 "standalone compiler release archive is not a bounded regular file"
@@ -3139,10 +3237,14 @@ def _validate_canonical_release_archive(path: Path) -> tuple[str, ...]:
                 or version_made_by != 0x0314
                 or version_needed != 20
                 or entry_flags != 0
-                or compression != 0
+                or compression != expected_compression
                 or modified_time != 0
                 or modified_date != 33
-                or compressed_size != uncompressed_size
+                or not 0 < compressed_size <= maximum_archive_bytes
+                or (
+                    expected_compression == zipfile.ZIP_STORED
+                    and compressed_size != uncompressed_size
+                )
                 or not 0 < uncompressed_size <= MAX_PROFILE_BLOB_BYTES
                 or not 0 < filename_length <= 512
                 or extra_length != 0
@@ -3241,6 +3343,24 @@ def _validate_canonical_release_archive(path: Path) -> tuple[str, ...]:
         return tuple(names)
     finally:
         os.close(descriptor)
+
+
+def _validate_canonical_release_archive(path: Path) -> tuple[str, ...]:
+    return _validate_canonical_archive(
+        path,
+        expected_compression=zipfile.ZIP_STORED,
+        maximum_archive_bytes=MAX_RELEASE_ARCHIVE_BYTES,
+        label="standalone compiler release archive",
+    )
+
+
+def _validate_canonical_internal_package_archive(path: Path) -> tuple[str, ...]:
+    return _validate_canonical_archive(
+        path,
+        expected_compression=zipfile.ZIP_DEFLATED,
+        maximum_archive_bytes=MAX_INTERNAL_PACKAGE_BYTES,
+        label="internal standalone compiler package archive",
+    )
 
 
 def pack_release_input_archive(
@@ -3442,21 +3562,214 @@ def pack_release_input_archive(
             )
 
 
-def _validate_release_archive_entry(info: zipfile.ZipInfo, seen: set[str]) -> str:
+def pack_internal_package_archive(
+    release_input_root: Path,
+    archive_path: Path,
+    descriptor_output: Path,
+    *,
+    sidecar_verifier: SidecarVerifier = verify_sidecar,
+    qualified_profile_verifier: QualifiedProfileVerifier | None = None,
+    promotion_attestation_verifier: PromotionAttestationVerifier | None = None,
+) -> InternalPackageDescriptor:
+    """Create the deterministic compressed package committed inside GORE.
+
+    The expensive promotion attestation is checked here, before the package can
+    become a source-tree asset. Normal product builds subsequently trust the
+    committed archive pin and still re-check Authenticode, the typed profile,
+    every payload seal, and the complete catalog.
+    """
+
+    release_input_root = _require_absolute_normalized(
+        release_input_root, "compiler release-input root"
+    )
+    archive_path = _require_absolute_normalized(
+        archive_path, "internal standalone compiler package archive"
+    )
+    descriptor_output = _require_absolute_normalized(
+        descriptor_output, "internal standalone compiler package descriptor output"
+    )
+    if archive_path == descriptor_output:
+        raise BundleError("internal package archive and descriptor must differ")
+    if archive_path.name != INTERNAL_PACKAGE_ARCHIVE_FILE:
+        raise BundleError(
+            f"internal compiler package archive must be named {INTERNAL_PACKAGE_ARCHIVE_FILE}"
+        )
+    if descriptor_output.name != INTERNAL_PACKAGE_DESCRIPTOR_FILE:
+        raise BundleError(
+            "internal compiler package descriptor must be named "
+            f"{INTERNAL_PACKAGE_DESCRIPTOR_FILE}"
+        )
+    _require_real_output_parent(
+        archive_path, "internal standalone compiler package archive"
+    )
+    _require_real_output_parent(
+        descriptor_output, "internal standalone compiler package descriptor output"
+    )
+    if archive_path.exists() or archive_path.is_symlink():
+        raise BundleError("internal standalone compiler package archive must not exist")
+    if descriptor_output.exists() or descriptor_output.is_symlink():
+        raise BundleError("internal standalone compiler package descriptor must not exist")
+    verified = verify_release_input(
+        release_input_root,
+        sidecar_verifier=sidecar_verifier,
+        qualified_profile_verifier=qualified_profile_verifier,
+        promotion_attestation_verifier=promotion_attestation_verifier,
+    )
+    planned = {
+        "release-input.json": Seal(
+            len(verified.descriptor_bytes), _sha256(verified.descriptor_bytes)
+        ),
+        **verified.expected_files,
+    }
+    if not 0 < len(planned) <= MAX_RELEASE_ARCHIVE_FILES:
+        raise BundleError("internal compiler package file count is outside its limit")
+
+    temporary_handle, temporary_name = tempfile.mkstemp(
+        prefix=f".{archive_path.name}.", suffix=".tmp", dir=archive_path.parent
+    )
+    os.close(temporary_handle)
+    temporary_archive = Path(temporary_name)
+    temporary_archive_identity: os.stat_result | None = temporary_archive.lstat()
+    temporary_descriptor_path: Path | None = None
+    temporary_descriptor_identity: os.stat_result | None = None
+    published_archive_identity: os.stat_result | None = None
+    published_descriptor_identity: os.stat_result | None = None
+    complete = False
+    try:
+        with zipfile.ZipFile(
+            temporary_archive,
+            mode="w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=9,
+            allowZip64=False,
+        ) as archive:
+            for relative, seal in sorted(planned.items()):
+                _safe_relative(relative, f"internal compiler package entry {relative!r}")
+                _write_zip_member_from_file(
+                    archive,
+                    relative,
+                    release_input_root.joinpath(*PurePosixPath(relative).parts),
+                    seal,
+                    compression=zipfile.ZIP_DEFLATED,
+                    label_prefix="internal standalone compiler package archive",
+                )
+        raw_names = _validate_canonical_internal_package_archive(temporary_archive)
+        if raw_names != tuple(sorted(planned)):
+            raise BundleError("internal compiler package file set differs after writing")
+        archive_seal = _streaming_file_seal(
+            temporary_archive,
+            MAX_INTERNAL_PACKAGE_BYTES,
+            "temporary internal standalone compiler package archive",
+        )
+        document = {
+            "schema": INTERNAL_PACKAGE_DESCRIPTOR_SCHEMA,
+            "schema_version": INTERNAL_PACKAGE_DESCRIPTOR_SCHEMA_VERSION,
+            "asset": INTERNAL_PACKAGE_ARCHIVE_FILE,
+            "archive": {
+                "byte_len": archive_seal.byte_len,
+                "sha256": archive_seal.sha256,
+            },
+            "compression": "deflate-9",
+            "release_input": {
+                "catalog_sha256": _sha256(verified.catalog_bytes),
+                "file_count": len(planned),
+            },
+        }
+        descriptor_bytes = _canonical_pretty(document)
+        parsed_descriptor = _parse_internal_package_descriptor(descriptor_bytes)
+        temporary_descriptor_path = _write_temporary_bytes(
+            descriptor_output.parent,
+            f".{descriptor_output.name}.",
+            descriptor_bytes,
+        )
+        if not _same_file_identity(
+            temporary_archive_identity, temporary_archive.lstat()
+        ):
+            raise BundleError("temporary internal package archive path changed")
+        temporary_descriptor_identity = temporary_descriptor_path.lstat()
+        try:
+            os.link(temporary_archive, archive_path)
+        except FileExistsError as error:
+            raise BundleError(
+                "internal standalone compiler package archive must not exist"
+            ) from error
+        published_archive_identity = archive_path.lstat()
+        if not _same_file_identity(
+            temporary_archive_identity, published_archive_identity
+        ):
+            raise BundleError("published internal package archive identity differs")
+        try:
+            os.link(temporary_descriptor_path, descriptor_output)
+        except FileExistsError as error:
+            raise BundleError(
+                "internal standalone compiler package descriptor must not exist"
+            ) from error
+        published_descriptor_identity = descriptor_output.lstat()
+        if not _same_file_identity(
+            temporary_descriptor_identity, published_descriptor_identity
+        ):
+            raise BundleError("published internal package descriptor identity differs")
+        temporary_archive.unlink()
+        temporary_descriptor_path.unlink()
+        if (
+            _streaming_file_seal(
+                archive_path,
+                MAX_INTERNAL_PACKAGE_BYTES,
+                "internal standalone compiler package archive",
+            )
+            != archive_seal
+        ):
+            raise BundleError("internal compiler package archive changed while publishing")
+        if _validate_canonical_internal_package_archive(archive_path) != raw_names:
+            raise BundleError("published internal package archive structure changed")
+        if _read_regular_no_follow(
+            descriptor_output,
+            MAX_DESCRIPTOR_BYTES,
+            "internal standalone compiler package descriptor",
+        ) != descriptor_bytes:
+            raise BundleError("internal compiler package descriptor changed while publishing")
+        complete = True
+        return parsed_descriptor
+    except (OSError, zipfile.BadZipFile) as error:
+        raise BundleError(f"cannot create internal compiler package: {error}") from error
+    finally:
+        if not complete:
+            if published_descriptor_identity is not None:
+                _unlink_published_file_if_owned(
+                    descriptor_output, published_descriptor_identity
+                )
+            if published_archive_identity is not None:
+                _unlink_published_file_if_owned(archive_path, published_archive_identity)
+        if temporary_descriptor_path is not None and temporary_descriptor_identity is not None:
+            _unlink_published_file_if_owned(
+                temporary_descriptor_path, temporary_descriptor_identity
+            )
+        if temporary_archive_identity is not None:
+            _unlink_published_file_if_owned(temporary_archive, temporary_archive_identity)
+
+
+def _validate_archive_entry(
+    info: zipfile.ZipInfo,
+    seen: set[str],
+    *,
+    expected_compression: int,
+    maximum_compressed_bytes: int,
+    label: str,
+) -> str:
     relative = _safe_relative(
-        info.filename, "standalone compiler release archive entry"
+        info.filename, f"{label} entry"
     )
     key = relative.casefold()
     if key in seen:
         raise BundleError(
-            f"standalone compiler release archive contains duplicate/case alias {relative!r}"
+            f"{label} contains duplicate/case alias {relative!r}"
         )
     seen.add(key)
     mode = info.external_attr >> 16
     if (
         info.is_dir()
         or info.filename.endswith("/")
-        or info.compress_type != zipfile.ZIP_STORED
+        or info.compress_type != expected_compression
         or info.flag_bits != 0
         or info.create_system != 3
         or mode != (stat.S_IFREG | 0o644)
@@ -3464,12 +3777,26 @@ def _validate_release_archive_entry(info: zipfile.ZipInfo, seen: set[str]) -> st
         or info.extra
         or info.comment
         or not 0 < info.file_size <= MAX_PROFILE_BLOB_BYTES
-        or info.compress_size != info.file_size
+        or not 0 < info.compress_size <= maximum_compressed_bytes
+        or (
+            expected_compression == zipfile.ZIP_STORED
+            and info.compress_size != info.file_size
+        )
     ):
         raise BundleError(
-            f"standalone compiler release archive entry {relative!r} is unsafe or noncanonical"
+            f"{label} entry {relative!r} is unsafe or noncanonical"
         )
     return relative
+
+
+def _validate_release_archive_entry(info: zipfile.ZipInfo, seen: set[str]) -> str:
+    return _validate_archive_entry(
+        info,
+        seen,
+        expected_compression=zipfile.ZIP_STORED,
+        maximum_compressed_bytes=MAX_RELEASE_ARCHIVE_BYTES,
+        label="standalone compiler release archive",
+    )
 
 
 def _extract_pinned_release_archive(
@@ -3477,23 +3804,31 @@ def _extract_pinned_release_archive(
     expected_archive: Seal,
     expected_file_count: int,
     temporary_root: Path,
+    *,
+    expected_compression: int = zipfile.ZIP_STORED,
+    maximum_archive_bytes: int = MAX_RELEASE_ARCHIVE_BYTES,
+    raw_validator: Callable[[Path], tuple[str, ...]] | None = None,
+    archive_label: str = "downloaded standalone compiler release archive",
+    extraction_label: str = "compiler release extraction tree",
 ) -> tuple[set[str], set[Path]]:
     """Measure, parse, and extract one unchanged Windows archive file."""
 
     with _pin_windows_file_path(
-        archive_path, "downloaded standalone compiler release archive"
+        archive_path, archive_label
     ):
         observed_archive = _streaming_file_seal(
             archive_path,
-            MAX_RELEASE_ARCHIVE_BYTES,
-            "downloaded standalone compiler release archive",
+            maximum_archive_bytes,
+            archive_label,
         )
         if observed_archive != expected_archive:
             raise BundleError(
                 "downloaded standalone compiler release archive differs from its "
                 "pinned length/SHA-256"
             )
-        raw_names = _validate_canonical_release_archive(archive_path)
+        if raw_validator is None:
+            raw_validator = _validate_canonical_release_archive
+        raw_names = raw_validator(archive_path)
         if len(raw_names) != expected_file_count:
             raise BundleError(
                 "standalone compiler release archive raw file count differs"
@@ -3515,7 +3850,13 @@ def _extract_pinned_release_archive(
             entries: list[tuple[str, zipfile.ZipInfo]] = []
             total = 0
             for info in infos:
-                relative = _validate_release_archive_entry(info, seen)
+                relative = _validate_archive_entry(
+                    info,
+                    seen,
+                    expected_compression=expected_compression,
+                    maximum_compressed_bytes=maximum_archive_bytes,
+                    label=archive_label,
+                )
                 total += info.file_size
                 if total > MAX_RELEASE_ARCHIVE_BYTES:
                     raise BundleError(
@@ -3544,7 +3885,7 @@ def _extract_pinned_release_archive(
             ):
                 directory.mkdir()
             with _pin_windows_directories(
-                extraction_directories, "compiler release extraction tree"
+                extraction_directories, extraction_label
             ):
                 for relative, info in entries:
                     try:
@@ -3697,6 +4038,226 @@ def extract_release_input_archive(
             _remove_directory_if_owned(output_root, published_identity)
         if not complete:
             _remove_directory_if_owned(temporary_root, temporary_identity)
+
+
+def trust_pinned_internal_package_attestation(
+    _bundle_path: Path,
+    _subjects: dict[str, Path],
+    _authority: PromotionAuthority,
+) -> None:
+    """Accept promotion evidence only behind the committed internal archive pin.
+
+    `pack_internal_package_archive` requires and runs the real GitHub/Sigstore
+    verifier. A normal product build starts from the checked-in descriptor and
+    exact archive SHA-256, so repeating that external-tool verification would
+    add a GitHub CLI dependency without adding authority. All embedded seals,
+    Authenticode, typed profile data, and qualification receipts are still
+    verified on every materialization and staging pass.
+    """
+
+
+def _verify_internal_archive_pin(
+    archive_path: Path, descriptor: InternalPackageDescriptor
+) -> tuple[str, ...]:
+    if archive_path.name != descriptor.asset:
+        raise BundleError("internal compiler package archive name differs")
+    with _pin_windows_file_path(
+        archive_path, "internal standalone compiler package archive"
+    ):
+        observed = _streaming_file_seal(
+            archive_path,
+            MAX_INTERNAL_PACKAGE_BYTES,
+            "internal standalone compiler package archive",
+        )
+        if observed != descriptor.archive:
+            raise BundleError(
+                "internal standalone compiler package differs from its pinned length/SHA-256"
+            )
+        names = _validate_canonical_internal_package_archive(archive_path)
+        if len(names) != descriptor.file_count:
+            raise BundleError("internal compiler package raw file count differs")
+        return names
+
+
+def _verify_internal_release_input(
+    root: Path,
+    descriptor: InternalPackageDescriptor,
+    *,
+    sidecar_verifier: SidecarVerifier,
+    qualified_profile_verifier: QualifiedProfileVerifier,
+    promotion_attestation_verifier: PromotionAttestationVerifier,
+) -> VerifiedBundle:
+    verified = verify_release_input(
+        root,
+        sidecar_verifier=sidecar_verifier,
+        qualified_profile_verifier=qualified_profile_verifier,
+        promotion_attestation_verifier=promotion_attestation_verifier,
+    )
+    if (
+        _sha256(verified.catalog_bytes) != descriptor.catalog_sha256
+        or len(verified.expected_files) + 1 != descriptor.file_count
+    ):
+        raise BundleError(
+            "internal compiler release input differs from its package descriptor"
+        )
+    return verified
+
+
+def extract_internal_package_archive(
+    archive_path: Path,
+    package_descriptor_path: Path,
+    output_root: Path,
+    *,
+    sidecar_verifier: SidecarVerifier = verify_sidecar,
+    qualified_profile_verifier: QualifiedProfileVerifier | None = None,
+    promotion_attestation_verifier: PromotionAttestationVerifier | None = None,
+) -> Path:
+    """Verify and atomically extract one committed compressed compiler package."""
+
+    archive_path = _require_absolute_normalized(
+        archive_path, "internal standalone compiler package archive"
+    )
+    output_root = _require_absolute_normalized(
+        output_root, "internal compiler release-input root"
+    )
+    _require_real_output_parent(output_root, "internal compiler release-input root")
+    if output_root.exists() or output_root.is_symlink():
+        raise BundleError("internal compiler release-input root must not exist")
+    if qualified_profile_verifier is None:
+        raise BundleError("the Rust typed qualified-profile verifier is required")
+    if promotion_attestation_verifier is None:
+        raise BundleError("an internal package promotion verifier is required")
+    descriptor = read_internal_package_descriptor(package_descriptor_path)
+    if archive_path.name != descriptor.asset:
+        raise BundleError("internal compiler package archive name differs")
+
+    temporary_root = Path(
+        tempfile.mkdtemp(
+            prefix=f".{output_root.name}.", suffix=".tmp", dir=output_root.parent
+        )
+    )
+    temporary_identity = temporary_root.lstat()
+    published_identity: os.stat_result | None = None
+    complete = False
+    try:
+        entry_names, extraction_directories = _extract_pinned_release_archive(
+            archive_path,
+            descriptor.archive,
+            descriptor.file_count,
+            temporary_root,
+            expected_compression=zipfile.ZIP_DEFLATED,
+            maximum_archive_bytes=MAX_INTERNAL_PACKAGE_BYTES,
+            raw_validator=_validate_canonical_internal_package_archive,
+            archive_label="internal standalone compiler package archive",
+            extraction_label="internal compiler package extraction tree",
+        )
+        with _pin_windows_directories(
+            extraction_directories, "internal compiler package verification tree"
+        ):
+            actual = _enumerate_regular_files(
+                temporary_root, "internal compiler release-input root"
+            )
+            if actual != entry_names:
+                raise BundleError("internal compiler package file set changed")
+            if "release-input.json" not in actual:
+                raise BundleError("internal compiler package has no release-input.json")
+            release_input_bytes = _read_regular_no_follow(
+                temporary_root / "release-input.json",
+                MAX_DESCRIPTOR_BYTES,
+                "internal compiler release-input descriptor",
+            )
+            release_input = _parse_json(
+                release_input_bytes,
+                "internal compiler release-input descriptor",
+                MAX_DESCRIPTOR_BYTES,
+            )
+            if release_input.get("schema") != RELEASE_INPUT_SCHEMA:
+                raise BundleError("internal compiler release-input schema differs")
+            if (
+                _sha256(_canonical_pretty(_catalog(release_input.get("catalog"))))
+                != descriptor.catalog_sha256
+            ):
+                raise BundleError("internal compiler catalog differs from its package pin")
+            verified = _verify_internal_release_input(
+                temporary_root,
+                descriptor,
+                sidecar_verifier=sidecar_verifier,
+                qualified_profile_verifier=qualified_profile_verifier,
+                promotion_attestation_verifier=promotion_attestation_verifier,
+            )
+        if not _same_file_identity(temporary_identity, temporary_root.lstat()):
+            raise BundleError("temporary internal compiler input changed identity")
+        _publish_directory_no_replace(temporary_root, output_root)
+        published_status = output_root.lstat()
+        if not _same_file_identity(temporary_identity, published_status):
+            raise BundleError("published internal compiler input changed identity")
+        published_identity = published_status
+        final_verified = _verify_internal_release_input(
+            output_root,
+            descriptor,
+            sidecar_verifier=sidecar_verifier,
+            qualified_profile_verifier=qualified_profile_verifier,
+            promotion_attestation_verifier=promotion_attestation_verifier,
+        )
+        if (
+            final_verified.expected_files != verified.expected_files
+            or final_verified.descriptor_bytes != verified.descriptor_bytes
+            or final_verified.catalog_bytes != verified.catalog_bytes
+        ):
+            raise BundleError("published internal compiler input changed after publication")
+        complete = True
+        return output_root
+    except (OSError, zipfile.BadZipFile) as error:
+        raise BundleError(f"cannot extract internal compiler package: {error}") from error
+    finally:
+        if not complete and published_identity is not None:
+            _remove_directory_if_owned(output_root, published_identity)
+        if not complete:
+            _remove_directory_if_owned(temporary_root, temporary_identity)
+
+
+def materialize_internal_package(
+    archive_path: Path,
+    package_descriptor_path: Path,
+    output_root: Path,
+    *,
+    sidecar_verifier: SidecarVerifier = verify_sidecar,
+    qualified_profile_verifier: QualifiedProfileVerifier | None = None,
+    promotion_attestation_verifier: PromotionAttestationVerifier = (
+        trust_pinned_internal_package_attestation
+    ),
+) -> Path:
+    """Return a verified content-addressed extraction, creating it once if needed."""
+
+    archive_path = _require_absolute_normalized(
+        archive_path, "internal standalone compiler package archive"
+    )
+    output_root = _require_absolute_normalized(
+        output_root, "internal compiler release-input root"
+    )
+    if qualified_profile_verifier is None:
+        raise BundleError("the Rust typed qualified-profile verifier is required")
+    descriptor = read_internal_package_descriptor(package_descriptor_path)
+    _verify_internal_archive_pin(archive_path, descriptor)
+    if output_root.exists() or output_root.is_symlink():
+        if output_root.is_symlink() or not output_root.is_dir():
+            raise BundleError("cached internal compiler input is not a real directory")
+        _verify_internal_release_input(
+            output_root,
+            descriptor,
+            sidecar_verifier=sidecar_verifier,
+            qualified_profile_verifier=qualified_profile_verifier,
+            promotion_attestation_verifier=promotion_attestation_verifier,
+        )
+        return output_root
+    return extract_internal_package_archive(
+        archive_path,
+        package_descriptor_path,
+        output_root,
+        sidecar_verifier=sidecar_verifier,
+        qualified_profile_verifier=qualified_profile_verifier,
+        promotion_attestation_verifier=promotion_attestation_verifier,
+    )
 
 
 def verify_staged_bundle(
@@ -4049,8 +4610,6 @@ def record_immutable_release_input(
             "repository": promotion_authority.repository,
             "commit": promotion_authority.commit,
             "workflow_sha": promotion_authority.workflow_sha,
-            "claim_tag": promotion_authority.claim_tag,
-            "promotion_tag": promotion_authority.promotion_tag,
             "workflow_run_id": promotion_authority.workflow_run_id,
             "workflow_run_attempt": promotion_authority.workflow_run_attempt,
             "signed_identity_file": {
@@ -4279,6 +4838,19 @@ def _main() -> int:
     pack.add_argument("--descriptor-output", type=Path, required=True)
     pack.add_argument("--repository", required=True)
     pack.add_argument("--tag", required=True)
+    pack_internal = commands.add_parser(
+        "pack-internal-package",
+        help="pack one verified release input into GORE's internal compressed asset",
+    )
+    pack_internal.add_argument("--release-input", type=Path, required=True)
+    pack_internal.add_argument(
+        "--qualified-profile-verifier", type=Path, required=True
+    )
+    pack_internal.add_argument(
+        "--github-attestation-verifier", type=Path, required=True
+    )
+    pack_internal.add_argument("--archive", type=Path, required=True)
+    pack_internal.add_argument("--descriptor-output", type=Path, required=True)
     asset_info = commands.add_parser(
         "release-asset-info",
         help="validate and print one committed release-asset descriptor",
@@ -4295,6 +4867,16 @@ def _main() -> int:
     extract.add_argument("--qualified-profile-verifier", type=Path, required=True)
     extract.add_argument("--github-attestation-verifier", type=Path, required=True)
     extract.add_argument("--output", type=Path, required=True)
+    extract_internal = commands.add_parser(
+        "extract-internal-package",
+        help="verify and safely extract GORE's pinned internal compiler asset",
+    )
+    extract_internal.add_argument("--archive", type=Path, required=True)
+    extract_internal.add_argument("--descriptor", type=Path, required=True)
+    extract_internal.add_argument(
+        "--qualified-profile-verifier", type=Path, required=True
+    )
+    extract_internal.add_argument("--output", type=Path, required=True)
     sign = commands.add_parser(
         "sign-sidecar-once", help="sign one previously unsigned sidecar"
     )
@@ -4428,6 +5010,32 @@ def _main() -> int:
                     indent=2,
                 )
             )
+        elif args.command == "pack-internal-package":
+            descriptor = pack_internal_package_archive(
+                args.release_input,
+                args.archive,
+                args.descriptor_output,
+                qualified_profile_verifier=qualified_profile_verifier_from_path(
+                    args.qualified_profile_verifier
+                ),
+                promotion_attestation_verifier=promotion_attestation_verifier_from_path(
+                    args.github_attestation_verifier
+                ),
+            )
+            print(
+                json.dumps(
+                    {
+                        "asset": descriptor.asset,
+                        "archive_byte_len": descriptor.archive.byte_len,
+                        "archive_sha256": descriptor.archive.sha256,
+                        "compression": descriptor.compression,
+                        "catalog_sha256": descriptor.catalog_sha256,
+                        "file_count": descriptor.file_count,
+                        "descriptor": str(args.descriptor_output),
+                    },
+                    indent=2,
+                )
+            )
         elif args.command == "release-asset-info":
             descriptor = read_release_asset_descriptor(args.descriptor)
             expected_repository = _require_release_repository(
@@ -4466,6 +5074,27 @@ def _main() -> int:
                 ),
             )
             descriptor = read_release_asset_descriptor(args.asset_descriptor)
+            print(
+                json.dumps(
+                    {
+                        "release_input": str(extracted),
+                        "catalog_sha256": descriptor.catalog_sha256,
+                        "file_count": descriptor.file_count,
+                    },
+                    indent=2,
+                )
+            )
+        elif args.command == "extract-internal-package":
+            extracted = extract_internal_package_archive(
+                args.archive,
+                args.descriptor,
+                args.output,
+                qualified_profile_verifier=qualified_profile_verifier_from_path(
+                    args.qualified_profile_verifier
+                ),
+                promotion_attestation_verifier=trust_pinned_internal_package_attestation,
+            )
+            descriptor = read_internal_package_descriptor(args.descriptor)
             print(
                 json.dumps(
                     {

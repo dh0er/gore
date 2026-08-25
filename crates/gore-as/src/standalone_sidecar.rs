@@ -70,7 +70,10 @@ const MIN_SIDECAR_MEMORY_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_SIDECAR_MEMORY_LIMIT_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const ENGINE_UNAVAILABLE_CODE: &str = "GORE_AS_STANDALONE_ENGINE_UNAVAILABLE";
-const SCRATCH_PREFIX: &str = "gore-as-sidecar-v1-";
+// Keep the private child deliberately short. The complete game source tree contains relative
+// paths over 140 UTF-16 units; a descriptive scratch name pushes otherwise ordinary Windows work
+// roots over the legacy path limit enforced by already-qualified sidecars.
+const SCRATCH_PREFIX: &str = ".g-";
 static SCRATCH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Paths and process bounds for one standalone sidecar instance.
@@ -3084,10 +3087,7 @@ impl ScratchDirectory {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_nanos();
-            let path = root.join(format!(
-                "{SCRATCH_PREFIX}{}-{nanos}-{sequence}",
-                std::process::id()
-            ));
+            let path = root.join(format!("{SCRATCH_PREFIX}{nanos:x}-{sequence:x}"));
             match std::fs::create_dir(&path) {
                 Ok(()) => {
                     return Ok(Self {

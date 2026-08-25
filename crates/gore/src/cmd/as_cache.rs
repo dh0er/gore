@@ -134,8 +134,9 @@ pub struct AsProductCompilerBackendArgsV1 {
         default_value_t = AsCompilerBackendV1::StandaloneThenGame
     )]
     pub backend: AsCompilerBackendV1,
-    /// Publish a product-authoritative full-graph receipt. This is available only when the exact
-    /// installed target matches one profile in GORE's embedded compiler-package catalog.
+    /// Publish a product-authoritative full-graph receipt. This is available when the installed
+    /// game's parsed cache format and AngelScript API match a qualified compiler package; store,
+    /// build number and whole-file hashes are not compatibility gates.
     #[arg(long, value_name = "RECEIPT.json")]
     pub generation_receipt: Option<PathBuf>,
 }

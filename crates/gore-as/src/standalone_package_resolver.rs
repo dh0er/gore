@@ -3,7 +3,8 @@
 //! Package paths are never accepted from wire data, environment variables, or the process CWD.
 //! A caller supplies only the absolute host-module location; the package root is the fixed
 //! app-local `compiler` sibling. That location is not authority: exact embedded catalog bytes are
-//! the sole allow-list for the sidecar, profile manifest, protocol, profile identity, and target.
+//! the sole allow-list for the sidecar, profile manifest, protocol, and API identity. Installed
+//! game inputs are matched by their parsed compiler compatibility, not by Steam/GOG file hashes.
 
 #[cfg(windows)]
 use std::collections::BTreeMap;
@@ -260,7 +261,8 @@ pub enum ProductStandaloneCompilerPackageResolutionV1 {
 /// `host_module_path` supplies location only. Its parent plus the fixed `compiler` component is
 /// used; no environment variable, current directory, wire path, or neighboring manifest can add
 /// authority. `target` is still constrained to one exact embedded-catalog entry, and all three
-/// target artifacts must pass [`ValidatedCompilerTargetInputsV1`].
+/// target artifacts must pass the distribution-neutral [`ValidatedCompilerTargetInputsV1`]
+/// compatibility checks.
 pub fn resolve_embedded_product_standalone_compiler_package_v1(
     host_module_path: &Path,
     target: &ProductStandaloneCompilerTargetV1,
@@ -324,7 +326,7 @@ fn resolve_authoritative_catalog_for_inputs_v1(
     host_module_path: &Path,
     target_paths: CompilerTargetInputPathsV1<'_>,
 ) -> ProductStandaloneCompilerPackageResolutionV1 {
-    let mut matched = None;
+    let mut matched: Option<AvailableProductStandaloneCompilerPackageV1> = None;
     for profile in catalog.profiles() {
         match try_resolve_authoritative_catalog_at_host_v1(
             catalog,
@@ -334,11 +336,25 @@ fn resolve_authoritative_catalog_for_inputs_v1(
             target_paths,
         ) {
             Ok(package) => {
-                if matched.is_some() {
-                    return unavailable(
-                        ProductStandaloneCompilerPackageUnavailableKindV1::AmbiguousTarget,
-                        "physical compiler inputs match more than one embedded target",
-                    );
+                if let Some(existing) = matched.as_ref() {
+                    let left = existing.profile_package().profile();
+                    let right = package.profile_package().profile();
+                    let same_compiler_api = left.binds == right.binds
+                        && left.engine == right.engine
+                        && left.unreal_semantics == right.unreal_semantics
+                        && left.frontend == right.frontend
+                        && left.bytecode == right.bytecode
+                        && left.cache_writer == right.cache_writer
+                        && left.qualification == right.qualification;
+                    if !same_compiler_api {
+                        return unavailable(
+                            ProductStandaloneCompilerPackageUnavailableKindV1::AmbiguousTarget,
+                            "installed game inputs match more than one different compiler API",
+                        );
+                    }
+                    // Multiple distribution/build provenance records may intentionally point at
+                    // the same API. Catalog order is canonical, so retaining the first is stable.
+                    continue;
                 }
                 matched = Some(package);
             }
@@ -346,7 +362,7 @@ fn resolve_authoritative_catalog_for_inputs_v1(
                 if error.kind()
                     == ProductStandaloneCompilerPackageUnavailableKindV1::TargetAuthentication =>
             {
-                // Exact file seals or CodeView did not identify this catalog candidate.
+                // Parsed cache/API compatibility did not identify this catalog candidate.
             }
             Err(error) => return ProductStandaloneCompilerPackageResolutionV1::Unavailable(error),
         }
@@ -945,7 +961,9 @@ fn map_target_input_error(
         CompilerTargetInputError::UnsupportedPlatform => {
             ProductStandaloneCompilerPackageUnavailableKindV1::UnsupportedPlatform
         }
-        CompilerTargetInputError::Mismatch(_) | CompilerTargetInputError::InvalidCodeView => {
+        CompilerTargetInputError::Mismatch(_)
+        | CompilerTargetInputError::InvalidExecutable
+        | CompilerTargetInputError::InvalidCodeView => {
             ProductStandaloneCompilerPackageUnavailableKindV1::TargetAuthentication
         }
         CompilerTargetInputError::UnsafePath(_)
@@ -1039,6 +1057,80 @@ pub(crate) mod test_support {
         catalog_bytes: Vec<u8>,
         catalog: ProductStandaloneCompilerCatalogV1,
         manifest_bytes: Vec<u8>,
+        shipping_bytes: Vec<u8>,
+        binds_bytes: Vec<u8>,
+    }
+
+    #[cfg(windows)]
+    fn synthetic_binds_database(wide_strings: bool) -> Vec<u8> {
+        fn push_i32(output: &mut Vec<u8>, value: i32) {
+            output.extend_from_slice(&value.to_le_bytes());
+        }
+        fn push_bool(output: &mut Vec<u8>, value: bool) {
+            push_i32(output, i32::from(value));
+        }
+        fn push_string(output: &mut Vec<u8>, value: &str, wide: bool) {
+            if wide {
+                let encoded = value.encode_utf16().collect::<Vec<_>>();
+                push_i32(output, -(encoded.len() as i32 + 1));
+                for unit in encoded {
+                    output.extend_from_slice(&unit.to_le_bytes());
+                }
+                output.extend_from_slice(&0u16.to_le_bytes());
+            } else {
+                push_i32(output, value.len() as i32 + 1);
+                output.extend_from_slice(value.as_bytes());
+                output.push(0);
+            }
+        }
+        fn push_property(output: &mut Vec<u8>, declaration: &str, path: &str, wide: bool) {
+            push_string(output, declaration, wide);
+            push_string(output, path, wide);
+            for value in [true, true, false, true, false] {
+                push_bool(output, value);
+            }
+            push_string(output, "Generated", wide);
+            push_bool(output, false);
+            push_bool(output, false);
+        }
+
+        let mut output = Vec::new();
+        push_i32(&mut output, 1);
+        push_string(&mut output, "FVector", wide_strings);
+        push_string(&mut output, "/Script/CoreUObject.Vector", wide_strings);
+        push_i32(&mut output, 1);
+        push_property(
+            &mut output,
+            "float X",
+            "/Script/CoreUObject.Vector:X",
+            wide_strings,
+        );
+
+        push_i32(&mut output, 1);
+        push_string(&mut output, "UObject", wide_strings);
+        push_string(&mut output, "/Script/CoreUObject.Object", wide_strings);
+        push_i32(&mut output, 1);
+        push_string(&mut output, "FString GetName() const", wide_strings);
+        push_string(
+            &mut output,
+            "/Script/CoreUObject.Object:GetName",
+            wide_strings,
+        );
+        for value in [false, false, false, true, true] {
+            push_bool(&mut output, value);
+        }
+        output.push((-1i8) as u8);
+        output.push(2);
+        push_string(&mut output, "UObject", wide_strings);
+        push_string(&mut output, "GetName", wide_strings);
+        push_i32(&mut output, 1);
+        push_property(
+            &mut output,
+            "FName Name",
+            "/Script/CoreUObject.Object:Name",
+            wide_strings,
+        );
+        output
     }
 
     #[cfg(windows)]
@@ -1061,11 +1153,16 @@ pub(crate) mod test_support {
             let binds_path = install_root.join("Content/Script/Binds.Cache");
             std::fs::create_dir_all(shipping_path.parent().unwrap()).unwrap();
             let (executable_bytes, codeview) = synthetic_pe();
-            let shipping_bytes = b"synthetic-shipping-cache";
-            let binds_bytes = b"synthetic-binds-cache";
+            let shipping_bytes = crate::compile::build_full_graph_cache_for_test(
+                crate::cache::header::CACHE_MAGIC,
+                [1; 16],
+                &[("Module", "Module.as")],
+            )
+            .unwrap();
+            let binds_bytes = synthetic_binds_database(false);
             std::fs::write(&executable_path, &executable_bytes).unwrap();
-            std::fs::write(&shipping_path, shipping_bytes).unwrap();
-            std::fs::write(&binds_path, binds_bytes).unwrap();
+            std::fs::write(&shipping_path, &shipping_bytes).unwrap();
+            std::fs::write(&binds_path, &binds_bytes).unwrap();
 
             let target = ProductStandaloneCompilerTargetV1::try_new(
                 CompilerTargetV1 {
@@ -1156,20 +1253,14 @@ pub(crate) mod test_support {
                 target: target.target().clone(),
                 oracle: CompilerOracleV1 {
                     executable: file_seal(&executable_bytes, true),
-                    binds_cache: file_seal(binds_bytes, true),
-                    shipping_cache: file_seal(shipping_bytes, true),
+                    binds_cache: file_seal(&binds_bytes, true),
+                    shipping_cache: file_seal(&shipping_bytes, true),
                     depot_manifest: file_seal(b"synthetic-depot-manifest", false),
                     pe_codeview: target.pe_codeview().clone(),
                 },
-                binds: BindsProfileV1 {
-                    wire_schema_version: 1,
-                    struct_count: 1,
-                    class_count: 1,
-                    method_count: 1,
-                    struct_property_count: 1,
-                    class_property_count: 1,
-                    canonical_database_sha256: sha256(b"synthetic-binds-database"),
-                },
+                binds: BindsProfileV1::from_database(
+                    &crate::compiler_profile::binds::BindsDatabase::parse(&binds_bytes).unwrap(),
+                ),
                 engine: EngineProfileV1 {
                     as_create_version: 23_300,
                     ordered_engine_properties: properties_blob,
@@ -1249,6 +1340,8 @@ pub(crate) mod test_support {
                 catalog_bytes,
                 catalog,
                 manifest_bytes,
+                shipping_bytes,
+                binds_bytes,
             }
         }
 
@@ -1291,12 +1384,12 @@ pub(crate) mod test_support {
             authority
         }
 
-        pub(crate) fn base_cache_bytes(&self) -> &'static [u8] {
-            b"synthetic-shipping-cache"
+        pub(crate) fn base_cache_bytes(&self) -> &[u8] {
+            &self.shipping_bytes
         }
 
-        pub(crate) fn binds_cache_bytes(&self) -> &'static [u8] {
-            b"synthetic-binds-cache"
+        pub(crate) fn binds_cache_bytes(&self) -> &[u8] {
+            &self.binds_bytes
         }
     }
 
@@ -1728,12 +1821,9 @@ pub(crate) mod test_support {
         assert_eq!(available.identity().target(), &fixture.target);
         assert_eq!(
             available.target_inputs().shipping_cache(),
-            b"synthetic-shipping-cache"
+            fixture.shipping_bytes
         );
-        assert_eq!(
-            available.target_inputs().binds_cache(),
-            b"synthetic-binds-cache"
-        );
+        assert_eq!(available.target_inputs().binds_cache(), fixture.binds_bytes);
         let (authority, target_inputs) = available.into_execution_parts();
         assert_eq!(
             authority.identity().profile_sha256(),
@@ -1757,7 +1847,7 @@ pub(crate) mod test_support {
         )
         .is_err());
         drop(target_inputs);
-        assert!(std::fs::write(&fixture.shipping_path, b"synthetic-shipping-cache").is_ok());
+        assert!(std::fs::write(&fixture.shipping_path, &fixture.shipping_bytes).is_ok());
         assert!(std::fs::write(&fixture.sidecar_path, b"synthetic-qualified-sidecar").is_err());
         drop(authority);
 
@@ -1796,10 +1886,36 @@ pub(crate) mod test_support {
         ));
         std::fs::write(&blob_path, &original_blob).unwrap();
 
+        let original_executable = std::fs::read(&fixture.executable_path).unwrap();
+        let mut repackaged_executable = original_executable.clone();
+        *repackaged_executable.last_mut().unwrap() ^= 1;
+        std::fs::write(&fixture.executable_path, &repackaged_executable).unwrap();
+        assert!(matches!(
+            fixture.resolve_for_inputs(),
+            ProductStandaloneCompilerPackageResolutionV1::Available(_)
+        ));
+        std::fs::write(&fixture.executable_path, &original_executable).unwrap();
+
+        let wide_binds = synthetic_binds_database(true);
+        assert_ne!(wide_binds, fixture.binds_bytes);
+        std::fs::write(&fixture.binds_path, &wide_binds).unwrap();
+        assert!(matches!(
+            fixture.resolve_for_inputs(),
+            ProductStandaloneCompilerPackageResolutionV1::Available(_)
+        ));
+        std::fs::write(&fixture.binds_path, &fixture.binds_bytes).unwrap();
+
         let original_shipping = std::fs::read(&fixture.shipping_path).unwrap();
-        let mut tampered_shipping = original_shipping.clone();
-        tampered_shipping[0] ^= 1;
-        std::fs::write(&fixture.shipping_path, &tampered_shipping).unwrap();
+        let mut repackaged_shipping = original_shipping.clone();
+        repackaged_shipping[0] ^= 1; // Per-cache GUID, not compiler compatibility.
+        std::fs::write(&fixture.shipping_path, &repackaged_shipping).unwrap();
+        assert!(matches!(
+            fixture.resolve_for_inputs(),
+            ProductStandaloneCompilerPackageResolutionV1::Available(_)
+        ));
+        let mut incompatible_shipping = original_shipping.clone();
+        incompatible_shipping[16..20].copy_from_slice(&0x1234_5678u32.to_le_bytes());
+        std::fs::write(&fixture.shipping_path, &incompatible_shipping).unwrap();
         assert!(matches!(
             fixture.resolve(),
             ProductStandaloneCompilerPackageResolutionV1::Unavailable(ref value)
@@ -1846,18 +1962,47 @@ pub(crate) mod test_support {
         let mut second_profile = CompilerProfileV1::from_json(&fixture.manifest_bytes).unwrap();
         second_profile.target.steam_build_id += 1;
         second_profile.seal().unwrap();
-        let second_manifest_bytes = serde_json::to_vec(&second_profile).unwrap();
         let second_manifest_path = fixture
             .manifest_path
             .parent()
             .unwrap()
             .join("compiler-profile-ambiguous.json");
-        std::fs::write(&second_manifest_path, &second_manifest_bytes).unwrap();
+        let compatible_manifest_bytes = serde_json::to_vec(&second_profile).unwrap();
+        std::fs::write(&second_manifest_path, &compatible_manifest_bytes).unwrap();
         let second_target = ProductStandaloneCompilerTargetV1::try_new(
             second_profile.target.clone(),
             second_profile.oracle.pe_codeview.clone(),
         )
         .unwrap();
+        let mut compatible_json: serde_json::Value =
+            serde_json::from_slice(&fixture.catalog_bytes).unwrap();
+        compatible_json["profiles"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "manifest_relative_path": "profiles/build-24539464/compiler-profile-ambiguous.json",
+                "manifest_byte_len": compatible_manifest_bytes.len(),
+                "manifest_sha256": sha256(&compatible_manifest_bytes),
+                "profile_sha256": second_profile.profile_sha256,
+                "target": second_target
+            }));
+        let compatible_bytes = serde_json::to_vec_pretty(&compatible_json).unwrap();
+        let compatible_catalog =
+            ProductStandaloneCompilerCatalogV1::from_json(&compatible_bytes).unwrap();
+        assert!(matches!(
+            resolve_authoritative_catalog_for_inputs_v1(
+                &compatible_catalog,
+                sha256(&compatible_bytes),
+                &fixture.host_module,
+                fixture.target_paths(),
+            ),
+            ProductStandaloneCompilerPackageResolutionV1::Available(_)
+        ));
+
+        second_profile.engine.as_create_version += 1;
+        second_profile.seal().unwrap();
+        let second_manifest_bytes = serde_json::to_vec(&second_profile).unwrap();
+        std::fs::write(&second_manifest_path, &second_manifest_bytes).unwrap();
         let mut ambiguous_json: serde_json::Value =
             serde_json::from_slice(&fixture.catalog_bytes).unwrap();
         ambiguous_json["profiles"]

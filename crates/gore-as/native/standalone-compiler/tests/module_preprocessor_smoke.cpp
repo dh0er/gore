@@ -7,6 +7,10 @@
 
 namespace standalone = gore::as::standalone;
 
+static_assert(
+    standalone::max_preprocessor_sources == standalone::protocol::kMaxSourceFiles,
+    "frontend and sidecar source bounds must not drift apart");
+
 namespace {
 
 int fail(const char* message) {

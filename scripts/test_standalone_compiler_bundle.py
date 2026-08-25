@@ -52,10 +52,6 @@ class SyntheticReleaseInput:
         self.promotion_repository = "dh0er/gore"
         self.promotion_commit = "12" * 20
         self.promotion_workflow_sha = "56" * 20
-        self.promotion_claim_tag = (
-            f"{bundle.PROMOTION_CLAIM_TAG_PREFIX}{self.promotion_commit}"
-        )
-        self.promotion_tag = f"{bundle.PROMOTION_TAG_PREFIX}{self.promotion_commit}"
         self.promotion_run_id = 123456789
         self.promotion_run_attempt = 1
         self.target = {
@@ -227,8 +223,6 @@ class SyntheticReleaseInput:
             "repository": self.promotion_repository,
             "commit": self.promotion_commit,
             "workflow_sha": self.promotion_workflow_sha,
-            "claim_tag": self.promotion_claim_tag,
-            "promotion_tag": self.promotion_tag,
             "workflow_run_id": self.promotion_run_id,
             "workflow_run_attempt": self.promotion_run_attempt,
             "signed_identity": _seal(identity_bytes),
@@ -241,8 +235,6 @@ class SyntheticReleaseInput:
             "repository": self.promotion_repository,
             "commit": self.promotion_commit,
             "workflow_sha": self.promotion_workflow_sha,
-            "claim_tag": self.promotion_claim_tag,
-            "promotion_tag": self.promotion_tag,
             "workflow_run_id": self.promotion_run_id,
             "workflow_run_attempt": self.promotion_run_attempt,
             "signed_identity_file": {
@@ -555,8 +547,6 @@ class StandaloneCompilerBundleTests(unittest.TestCase):
             repository="dh0er/gore",
             commit="12" * 20,
             workflow_sha="56" * 20,
-            claim_tag=f"{bundle.PROMOTION_CLAIM_TAG_PREFIX}{'12' * 20}",
-            promotion_tag=f"{bundle.PROMOTION_TAG_PREFIX}{'12' * 20}",
             workflow_run_id=123,
             workflow_run_attempt=1,
         )
@@ -787,6 +777,100 @@ class StandaloneCompilerBundleTests(unittest.TestCase):
                 first_descriptor,
                 extracted,
                 expected_repository="dh0er/gore",
+                sidecar_verifier=_accept_synthetic_sidecar,
+                qualified_profile_verifier=_accept_synthetic_profile,
+                promotion_attestation_verifier=_accept_synthetic_attestation,
+            )
+
+    def test_internal_package_is_compressed_deterministic_and_reusable(self) -> None:
+        fixture = SyntheticReleaseInput(self.base)
+        outputs = []
+        descriptors = []
+        for name in ("first", "second"):
+            directory = self.base / name
+            directory.mkdir()
+            archive = directory / bundle.INTERNAL_PACKAGE_ARCHIVE_FILE
+            descriptor_path = directory / bundle.INTERNAL_PACKAGE_DESCRIPTOR_FILE
+            descriptor = bundle.pack_internal_package_archive(
+                fixture.root,
+                archive,
+                descriptor_path,
+                sidecar_verifier=_accept_synthetic_sidecar,
+                qualified_profile_verifier=_accept_synthetic_profile,
+                promotion_attestation_verifier=_accept_synthetic_attestation,
+            )
+            outputs.append(archive)
+            descriptors.append((descriptor_path, descriptor))
+
+        self.assertEqual(outputs[0].read_bytes(), outputs[1].read_bytes())
+        self.assertEqual(descriptors[0][1], descriptors[1][1])
+        self.assertEqual(descriptors[0][1].compression, "deflate-9")
+        with zipfile.ZipFile(outputs[0], "r") as archive:
+            self.assertTrue(archive.infolist())
+            self.assertTrue(
+                all(
+                    info.compress_type == zipfile.ZIP_DEFLATED
+                    for info in archive.infolist()
+                )
+            )
+
+        extracted = self.base / "internal-extracted"
+        bundle.extract_internal_package_archive(
+            outputs[0],
+            descriptors[0][0],
+            extracted,
+            sidecar_verifier=_accept_synthetic_sidecar,
+            qualified_profile_verifier=_accept_synthetic_profile,
+            promotion_attestation_verifier=_accept_synthetic_attestation,
+        )
+        self.assertEqual(_snapshot(extracted), _snapshot(fixture.root))
+        self.assertEqual(
+            bundle.materialize_internal_package(
+                outputs[0],
+                descriptors[0][0],
+                extracted,
+                sidecar_verifier=_accept_synthetic_sidecar,
+                qualified_profile_verifier=_accept_synthetic_profile,
+                promotion_attestation_verifier=_accept_synthetic_attestation,
+            ),
+            extracted,
+        )
+
+    def test_internal_package_rejects_archive_or_descriptor_tamper(self) -> None:
+        fixture = SyntheticReleaseInput(self.base)
+        package_dir = self.base / "internal"
+        package_dir.mkdir()
+        archive = package_dir / bundle.INTERNAL_PACKAGE_ARCHIVE_FILE
+        descriptor_path = package_dir / bundle.INTERNAL_PACKAGE_DESCRIPTOR_FILE
+        bundle.pack_internal_package_archive(
+            fixture.root,
+            archive,
+            descriptor_path,
+            sidecar_verifier=_accept_synthetic_sidecar,
+            qualified_profile_verifier=_accept_synthetic_profile,
+            promotion_attestation_verifier=_accept_synthetic_attestation,
+        )
+        original_archive = archive.read_bytes()
+        archive.write_bytes(original_archive[:-1] + bytes([original_archive[-1] ^ 1]))
+        with self.assertRaisesRegex(bundle.BundleError, "pinned length/SHA-256"):
+            bundle.materialize_internal_package(
+                archive,
+                descriptor_path,
+                self.base / "tampered-archive-output",
+                sidecar_verifier=_accept_synthetic_sidecar,
+                qualified_profile_verifier=_accept_synthetic_profile,
+                promotion_attestation_verifier=_accept_synthetic_attestation,
+            )
+        archive.write_bytes(original_archive)
+
+        descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+        descriptor["compression"] = "stored"
+        descriptor_path.write_bytes(bundle._canonical_pretty(descriptor))
+        with self.assertRaisesRegex(bundle.BundleError, "compression"):
+            bundle.materialize_internal_package(
+                archive,
+                descriptor_path,
+                self.base / "tampered-descriptor-output",
                 sidecar_verifier=_accept_synthetic_sidecar,
                 qualified_profile_verifier=_accept_synthetic_profile,
                 promotion_attestation_verifier=_accept_synthetic_attestation,

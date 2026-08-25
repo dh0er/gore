@@ -1334,6 +1334,15 @@ _QUALIFIED_PROFILE_VERIFIER: tuple[Path, standalone_compiler_bundle.Seal] | None
 _PROMOTION_ATTESTATION_VERIFIER: tuple[Path, standalone_compiler_bundle.Seal] | None = (
     None
 )
+_INTERNAL_STANDALONE_COMPILER_ASSET_ROOT = ROOT / "crates" / "gore-as" / "assets"
+_INTERNAL_STANDALONE_COMPILER_ARCHIVE = (
+    _INTERNAL_STANDALONE_COMPILER_ASSET_ROOT
+    / standalone_compiler_bundle.INTERNAL_PACKAGE_ARCHIVE_FILE
+)
+_INTERNAL_STANDALONE_COMPILER_DESCRIPTOR = (
+    _INTERNAL_STANDALONE_COMPILER_ASSET_ROOT
+    / standalone_compiler_bundle.INTERNAL_PACKAGE_DESCRIPTOR_FILE
+)
 
 
 def _configured_standalone_compiler_release_input() -> Path | None:
@@ -1496,46 +1505,70 @@ def _promotion_attestation_verifier(*, dry: bool):
     return verify
 
 
+def _product_promotion_attestation_verifier(*, dry: bool):
+    """Use external Sigstore verification only for an explicit development input."""
+
+    if _configured_standalone_compiler_release_input() is None:
+        return standalone_compiler_bundle.trust_pinned_internal_package_attestation
+    return _promotion_attestation_verifier(dry=dry)
+
+
 def _prepare_standalone_compiler_bundle(
     project: str, *, dry: bool
 ) -> standalone_compiler_bundle.PreparedBundle | None:
     if not PROJECTS[project].get("standalone_compiler_bundle"):
         return None
-    release_input = _configured_standalone_compiler_release_input()
-    key = (str(release_input) if release_input is not None else None, dry)
+    configured_release_input = _configured_standalone_compiler_release_input()
+    source_key = (
+        f"development:{configured_release_input}"
+        if configured_release_input is not None
+        else f"internal:{_INTERNAL_STANDALONE_COMPILER_DESCRIPTOR}"
+    )
+    key = (source_key, dry)
     cached = _PREPARED_STANDALONE_BUNDLES.get(key)
     if cached is not None:
         return cached
     work_root = ROOT / "target" / "standalone-compiler-product-bundle"
     if dry:
         state = (
-            "qualified immutable input" if release_input is not None else "BundleAbsent"
+            "development release-input override"
+            if configured_release_input is not None
+            else "GORE-internal compressed package"
         )
         print(f"[dry-run] would prepare standalone compiler bundle: {state}")
         prepared = standalone_compiler_bundle.PreparedBundle(
-            present=release_input is not None,
+            present=True,
             work_root=work_root,
             catalog_path=work_root / standalone_compiler_bundle.EMBEDDED_CATALOG_FILE,
-            bundle_root=(work_root / "compiler") if release_input is not None else None,
-            sidecar_name=(
-                standalone_compiler_bundle.SIDECAR_FILE
-                if release_input is not None
-                else None
-            ),
+            bundle_root=work_root / "compiler",
+            sidecar_name=standalone_compiler_bundle.SIDECAR_FILE,
             catalog_sha256=None,
         )
     else:
         try:
-            qualified_profile_verifier = (
-                _qualified_profile_verifier(dry=False)
-                if release_input is not None
-                else None
-            )
-            promotion_attestation_verifier = (
-                _promotion_attestation_verifier(dry=False)
-                if release_input is not None
-                else None
-            )
+            qualified_profile_verifier = _qualified_profile_verifier(dry=False)
+            if configured_release_input is None:
+                descriptor = standalone_compiler_bundle.read_internal_package_descriptor(
+                    _INTERNAL_STANDALONE_COMPILER_DESCRIPTOR
+                )
+                extracted_parent = (
+                    ROOT / "target" / "standalone-compiler-internal-input"
+                )
+                extracted_parent.mkdir(parents=True, exist_ok=True)
+                release_input = standalone_compiler_bundle.materialize_internal_package(
+                    _INTERNAL_STANDALONE_COMPILER_ARCHIVE,
+                    _INTERNAL_STANDALONE_COMPILER_DESCRIPTOR,
+                    extracted_parent / descriptor.archive.sha256,
+                    qualified_profile_verifier=qualified_profile_verifier,
+                )
+                promotion_attestation_verifier = (
+                    standalone_compiler_bundle.trust_pinned_internal_package_attestation
+                )
+            else:
+                release_input = configured_release_input
+                promotion_attestation_verifier = _promotion_attestation_verifier(
+                    dry=False
+                )
             prepared = standalone_compiler_bundle.prepare_product_bundle(
                 release_input,
                 work_root,
@@ -1544,13 +1577,9 @@ def _prepare_standalone_compiler_bundle(
             )
         except standalone_compiler_bundle.BundleError as error:
             raise SystemExit(
-                f"standalone compiler release input failed: {error}"
+                f"standalone compiler package failed: {error}"
             ) from error
-        state = (
-            f"qualified catalog {prepared.catalog_sha256}"
-            if prepared.present
-            else "BundleAbsent (empty embedded catalog)"
-        )
+        state = f"qualified catalog {prepared.catalog_sha256}"
         print(f"prepared standalone compiler bundle: {state}")
     _PREPARED_STANDALONE_BUNDLES[key] = prepared
     return prepared
@@ -1648,7 +1677,9 @@ def _stage_standalone_compiler_bundle(
                 _qualified_profile_verifier(dry=False) if prepared.present else None
             ),
             promotion_attestation_verifier=(
-                _promotion_attestation_verifier(dry=False) if prepared.present else None
+                _product_promotion_attestation_verifier(dry=False)
+                if prepared.present
+                else None
             ),
         )
     except standalone_compiler_bundle.BundleError as error:
@@ -1680,7 +1711,9 @@ def _verify_staged_standalone_compiler_bundle(
         verified = standalone_compiler_bundle.verify_staged_bundle(
             bundle_root,
             qualified_profile_verifier=_qualified_profile_verifier(dry=False),
-            promotion_attestation_verifier=_promotion_attestation_verifier(dry=False),
+            promotion_attestation_verifier=_product_promotion_attestation_verifier(
+                dry=False
+            ),
         )
     except standalone_compiler_bundle.BundleError as error:
         raise SystemExit(

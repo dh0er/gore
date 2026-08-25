@@ -138,6 +138,9 @@ fn collision_targets_are_unique_and_overlay_calls_fail_closed() {
         .prepare_overlay("add", "NewModule", "void Caller() { Namespace::Get(1); }")
         .unwrap_err()
         .contains("collision-ambiguous"));
+    assert!(prepared
+        .prepare_overlay("add", "NewModule", "void Caller() { ::Get(1); }")
+        .is_ok());
     // Explicit member calls are not global free-function references and remain legal.
     assert!(prepared
         .prepare_overlay(
