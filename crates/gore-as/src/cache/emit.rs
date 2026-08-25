@@ -1938,6 +1938,7 @@ fn emit_function_ctor(
             fold_copy_out_temporaries(&rendered, &declared_locals, &const_result_slots, fields);
         let rendered = fold_cast_operands(&rendered, &declared_locals, &call_result_types);
         let rendered = fold_enum_round_trips(&rendered, fields, &path_roots, refs);
+        let rendered = drop_block_end_handle_releases(&rendered);
         let rendered = drop_unused_declarations(&rendered);
         let rendered = fold_member_read_temporaries(
             &rendered,
@@ -7606,6 +7607,50 @@ fn drop_unused_declarations(text: &str) -> String {
         }
     }
     let mut joined = kept.join("\n");
+    if text.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
+/// Drops the handle release a BLOCK already performs.
+///
+/// A handle declared inside a block is released by the compiler when the block ends. Rendering
+/// that release as a statement of its own — `local_6 = nullptr;` as the block's last line — asks
+/// for it twice, and vanilla has one `FreeNullV8` where the regen has two.
+///
+/// Only for a declaration that stands INSIDE a block: at function scope there is no block end to
+/// do it, and the statement is the only release there is.
+fn drop_block_end_handle_releases(text: &str) -> String {
+    let lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let depths = block_depths(&lines);
+    let Some(body_depth) = depths.iter().copied().min() else {
+        return text.to_owned();
+    };
+    let mut drop: Vec<bool> = vec![false; lines.len()];
+    for (index, line) in lines.iter().enumerate() {
+        let Some((_, name)) = bare_declaration(line) else {
+            continue;
+        };
+        if depths[index] <= body_depth {
+            continue;
+        }
+        let release = format!("{name} = nullptr;");
+        // The block this declaration sits in ends at the first line shallower than it.
+        let Some(close) = (index + 1..lines.len()).find(|at| depths[*at] < depths[index]) else {
+            continue;
+        };
+        if close > 0 && lines[close - 1].trim() == release {
+            drop[close - 1] = true;
+        }
+    }
+    let mut joined = lines
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| !drop[*at])
+        .map(|(_, line)| line.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     if text.ends_with('\n') {
         joined.push('\n');
     }
