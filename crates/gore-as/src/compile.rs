@@ -4871,71 +4871,25 @@ fn install_mutation_initialization_candidates(game_dir: &Path) -> Result<Vec<Pat
 #[cfg(windows)]
 fn publish_install_mutation_initialization(
     file: &std::fs::File,
-    _init: &Path,
+    init: &Path,
     path: &Path,
 ) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt as _;
-    use std::os::windows::io::AsRawHandle as _;
-    use windows_sys::Win32::Storage::FileSystem::{
-        FileRenameInfo, SetFileInformationByHandle, FILE_RENAME_INFO,
-    };
-
-    let name: Vec<u16> = path.as_os_str().encode_wide().collect();
-    let name_bytes = name
-        .len()
-        .checked_mul(std::mem::size_of::<u16>())
-        .and_then(|bytes| u32::try_from(bytes).ok())
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "install-mutation lock path is too long for Windows rename",
-            )
-        })?;
-    let file_name_offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
-    let buffer_len = file_name_offset
-        .checked_add(name_bytes as usize)
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "install-mutation rename buffer length overflow",
-            )
-        })?;
-    let item_size = std::mem::size_of::<FILE_RENAME_INFO>();
-    let item_count = buffer_len.div_ceil(item_size);
-    let mut buffer = vec![FILE_RENAME_INFO::default(); item_count];
-    {
-        let information = &mut buffer[0];
-        information.Anonymous.ReplaceIfExists = false;
-        information.RootDirectory = std::ptr::null_mut();
-        information.FileNameLength = name_bytes;
-    }
-    unsafe {
-        let file_name = buffer
-            .as_mut_ptr()
-            .cast::<u8>()
-            .add(file_name_offset)
-            .cast::<u16>();
-        std::ptr::copy_nonoverlapping(name.as_ptr(), file_name, name.len());
-    }
-    let buffer_len = u32::try_from(buffer_len).map_err(|_| {
+    let parent = path.parent().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "install-mutation rename buffer is too large",
+            "install-mutation lock has no parent directory",
         )
     })?;
-    if unsafe {
-        SetFileInformationByHandle(
-            file.as_raw_handle() as _,
-            FileRenameInfo,
-            buffer.as_ptr().cast(),
-            buffer_len,
+    let destination_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "install-mutation lock has no destination name",
         )
-    } == 0
-    {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
+    })?;
+    // Pin the already-resolved parent directory and rename relative to that handle. An absolute
+    // SetFileInformationByHandle rename can fail with ERROR_SHARING_VIOLATION when an indexer holds
+    // the install root without delete sharing, even though this file itself stays exclusive.
+    publish_full_graph_pending_no_clobber_v1(file, parent, destination_name, init, path)
 }
 
 #[cfg(target_os = "linux")]
@@ -11491,12 +11445,20 @@ mod tests {
     #[test]
     fn install_mutation_publication_keeps_one_exclusive_handle() {
         use std::os::windows::fs::OpenOptionsExt as _;
-        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
 
         let root = unique_test_root("mutation-publish-exclusive-handle");
         std::fs::create_dir_all(&root).unwrap();
         let init = root.join("initializing.lock");
         let published = root.join("published.lock");
+        let parent_observer = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&root)
+            .unwrap();
         let mut file = install_mutation_open_options().open(&init).unwrap();
         file.write_all(b"owner").unwrap();
         file.sync_all().unwrap();
@@ -11517,6 +11479,7 @@ mod tests {
         );
         remove_install_mutation_file_by_handle(&file, &published).unwrap();
         drop(file);
+        drop(parent_observer);
         assert!(!published.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
