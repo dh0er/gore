@@ -904,12 +904,21 @@ fn emit_function_ctor(
             .filter(|(_, ty)| *ty == "bool")
             .map(|(slot, _)| *slot),
     );
+    // A slot read ONE BYTE wide into the value register is a bool: `CpyVtoR1 v5` is how a branch
+    // takes its condition, and nothing else reads a slot that way. Typing such a merge slot int
+    // writes the short circuit vanilla merged into one condition as an int carrier over two arms.
+    bool_overrides.extend(byte_read_slots(f));
     // A slot the function itself writes a 4- or 8-byte literal into is not a bool: the compiler
     // stores a bool with the 1-byte `SetV1`. That store is the slot's own width evidence, and it
     // outranks both rules above — where they disagree the compiler reused one slot for two
     // things, and typing it bool writes `local = false;` where vanilla wrote an int.
     let wide_stores = wide_literal_store_slots(f);
-    bool_overrides.retain(|slot| !wide_stores.contains(slot));
+    // Unless the same slot is READ one byte wide. `CpyVtoR1 v5` takes v5 as a bool — the compiler
+    // reads a branch value that way and no other — so a slot written `SetV4 v5, 0` and read
+    // `CpyVtoR1 v5` is a bool the compiler happened to clear four bytes of. Typing it int writes
+    // the short circuit vanilla merged into one condition as an int carrier over two arms.
+    let read_as_bool = byte_read_slots(f);
+    bool_overrides.retain(|slot| !wide_stores.contains(slot) || read_as_bool.contains(slot));
     // `NOT` proves the slot is a bool outright, so it outranks the int-family USE hints (a slot
     // pushed into an int parameter): those describe how a value is passed, not what it is, and
     // leaving them in charge writes `local = int(local == 0);` for a plain `!`. Contradicting
@@ -3941,6 +3950,22 @@ fn bool_call_result_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
 /// short-circuited and the jump over the right-hand operand. That slot holds the bool result of
 /// the whole expression, and reading its width as int costs the `!` in 190 functions (measured:
 /// every one of the 724 wide stores landing on a NOT-proven slot has exactly this shape).
+/// Slots the function reads ONE BYTE wide into the value register (`CpyVtoR1`).
+///
+/// That read is how a branch takes its condition, and nothing else uses it. A slot read that way
+/// holds a bool, whatever width some store into it happened to have.
+fn byte_read_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    instrs
+        .iter()
+        .filter(|ins| ins.op.name == "CpyVtoR1")
+        .filter_map(|ins| ins.words.first().map(|word| *word as i16 as i32))
+        .filter(|slot| *slot > 0)
+        .collect()
+}
+
 fn wide_literal_store_slots(f: &Func) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
