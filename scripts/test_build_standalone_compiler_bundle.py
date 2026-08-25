@@ -79,7 +79,7 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
         )
 
     def test_default_build_materializes_the_internal_package(self) -> None:
-        release_input = ROOT / "target" / "synthetic-internal-input"
+        internal_input = ROOT / "target" / "synthetic-internal-input"
         verifier = mock.Mock()
         descriptor = gore_build.standalone_compiler_bundle.InternalPackageDescriptor(
             asset=gore_build.standalone_compiler_bundle.INTERNAL_PACKAGE_ARCHIVE_FILE,
@@ -112,7 +112,7 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
             mock.patch.object(
                 gore_build.standalone_compiler_bundle,
                 "materialize_internal_package",
-                return_value=release_input,
+                return_value=internal_input,
             ) as materialize,
             mock.patch.object(
                 gore_build.standalone_compiler_bundle,
@@ -135,7 +135,7 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
             qualified_profile_verifier=verifier,
         )
         prepare.assert_called_once_with(
-            release_input,
+            internal_input,
             ROOT / "target" / "standalone-compiler-product-bundle",
             qualified_profile_verifier=verifier,
             promotion_attestation_verifier=(
@@ -222,8 +222,8 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
                 gore_build.hashlib.sha256(b"synthetic verifier image").hexdigest(),
             )
 
-    def test_present_release_input_builds_and_requires_typed_verifier(self) -> None:
-        release_input = Path("C:/sealed/release-input")
+    def test_present_internal_input_builds_and_requires_typed_verifier(self) -> None:
+        internal_input = Path("C:/sealed/internal-input")
         verifier = mock.Mock()
         attestation_verifier = mock.Mock()
         prepared = gore_build.standalone_compiler_bundle.PreparedBundle(
@@ -239,7 +239,7 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
         with (
             mock.patch.dict(
                 gore_build.os.environ,
-                {"GORE_STANDALONE_COMPILER_RELEASE_INPUT": str(release_input)},
+                {"GORE_STANDALONE_COMPILER_INTERNAL_INPUT": str(internal_input)},
                 clear=True,
             ),
             mock.patch.object(
@@ -263,7 +263,7 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
         typed.assert_called_once_with(dry=False)
         attestation.assert_called_once_with(dry=False)
         prepare.assert_called_once_with(
-            release_input,
+            internal_input,
             ROOT / "target" / "standalone-compiler-product-bundle",
             qualified_profile_verifier=verifier,
             promotion_attestation_verifier=attestation_verifier,

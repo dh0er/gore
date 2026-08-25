@@ -3,7 +3,7 @@
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use sha2::{Digest as _, Sha256};
 
@@ -6198,13 +6198,82 @@ impl Drop for CompileLock {
 }
 
 #[derive(Debug)]
+struct FileSnapshot {
+    bytes: Vec<u8>,
+    modified: SystemTime,
+}
+
+fn write_snapshot_to_open_file(
+    file: &mut std::fs::File,
+    snapshot: &FileSnapshot,
+    label: &str,
+) -> Result<(), String> {
+    file.set_len(0)
+        .map_err(|error| format!("truncating {label}: {error}"))?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| format!("seeking {label}: {error}"))?;
+    file.write_all(&snapshot.bytes)
+        .and_then(|_| file.sync_all())
+        .map_err(|error| format!("writing {label}: {error}"))?;
+    file.set_times(std::fs::FileTimes::new().set_modified(snapshot.modified))
+        .and_then(|_| file.sync_all())
+        .map_err(|error| format!("restoring modification time for {label}: {error}"))?;
+    let restored = file
+        .metadata()
+        .map_err(|error| format!("checking restored {label}: {error}"))?;
+    if restored.len() != snapshot.bytes.len() as u64 {
+        return Err(format!(
+            "restored {label} has {} bytes; expected {}",
+            restored.len(),
+            snapshot.bytes.len()
+        ));
+    }
+    if restored
+        .modified()
+        .map_err(|error| format!("checking modification time for restored {label}: {error}"))?
+        != snapshot.modified
+    {
+        return Err(format!(
+            "restored {label} does not retain its original modification time"
+        ));
+    }
+    Ok(())
+}
+
+fn restore_file_snapshot(path: &Path, snapshot: &FileSnapshot) -> Result<(), String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+        };
+        options
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    }
+    let file = options
+        .open(path)
+        .map_err(|error| format!("opening restore target {}: {error}", path.display()))?;
+    let mut file = validate_opened_compiled_artifact(file)
+        .map_err(|error| format!("validating restore target {}: {error}", path.display()))?;
+    write_snapshot_to_open_file(&mut file, snapshot, &path.display().to_string())
+}
+
+#[derive(Debug)]
 struct ShippingRecovery {
     path: PathBuf,
     active: bool,
 }
 
 impl ShippingRecovery {
-    fn create(live: &Path, bytes: &[u8]) -> Result<Self, String> {
+    fn create(live: &Path, snapshot: &FileSnapshot) -> Result<Self, String> {
         let path = compile_bak_path(live);
         let mut file = std::fs::OpenOptions::new()
             .write(true)
@@ -6220,7 +6289,11 @@ impl ShippingRecovery {
                     format!("creating compile backup {}: {e}", path.display())
                 }
             })?;
-        if let Err(e) = file.write_all(bytes).and_then(|_| file.sync_all()) {
+        if let Err(e) = write_snapshot_to_open_file(
+            &mut file,
+            snapshot,
+            &format!("compile backup {}", path.display()),
+        ) {
             drop(file);
             let cleanup = std::fs::remove_file(&path).err();
             return Err(match cleanup {
@@ -6263,7 +6336,7 @@ fn validate_existing_deploy_backup(path: &Path, meta: &std::fs::Metadata) -> Res
     Ok(())
 }
 
-fn create_deploy_backup_if_absent(live: &Path, bytes: &[u8]) -> Result<bool, String> {
+fn create_deploy_backup_if_absent(live: &Path, snapshot: &FileSnapshot) -> Result<bool, String> {
     let path = deploy_bak_path(live);
     match std::fs::symlink_metadata(&path) {
         Ok(meta) => {
@@ -6294,7 +6367,11 @@ fn create_deploy_backup_if_absent(live: &Path, bytes: &[u8]) -> Result<bool, Str
         }
         Err(e) => return Err(format!("creating deploy backup {}: {e}", path.display())),
     };
-    if let Err(e) = file.write_all(bytes).and_then(|_| file.sync_all()) {
+    if let Err(e) = write_snapshot_to_open_file(
+        &mut file,
+        snapshot,
+        &format!("deploy backup {}", path.display()),
+    ) {
         drop(file);
         let cleanup = std::fs::remove_file(&path).err();
         return Err(match cleanup {
@@ -6401,11 +6478,57 @@ fn reset_compile_tree(work_dir: &Path) -> Result<PathBuf, String> {
 /// Snapshot a file that may legitimately be absent. Generation writes
 /// `PrecompiledScript.Cache`, and a developer may already have one there; callers must put that
 /// exact prior state back instead of leaving the newly generated development cache installed.
-fn snapshot_optional(path: &Path) -> Result<Option<Vec<u8>>, String> {
-    match std::fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(format!("reading {}: {e}", path.display())),
+fn snapshot_open_file(
+    file: &mut std::fs::File,
+    max_bytes: u64,
+    label: &str,
+) -> Result<FileSnapshot, String> {
+    let before = file
+        .metadata()
+        .map_err(|error| format!("inspecting {label}: {error}"))?;
+    let modified = before
+        .modified()
+        .map_err(|error| format!("reading modification time for {label}: {error}"))?;
+    let bytes = read_open_regular_file_bounded(file, max_bytes, label)?;
+    let after = file
+        .metadata()
+        .map_err(|error| format!("rechecking {label}: {error}"))?;
+    if after.len() != before.len()
+        || after
+            .modified()
+            .map_err(|error| format!("rechecking modification time for {label}: {error}"))?
+            != modified
+    {
+        return Err(format!("{label} changed while being snapshotted"));
+    }
+    Ok(FileSnapshot { bytes, modified })
+}
+
+fn snapshot_required(path: &Path, max_bytes: u64, label: &str) -> Result<FileSnapshot, String> {
+    let mut file = open_regular_file_no_follow_read(path)
+        .map_err(|error| format!("opening {label} {}: {error}", path.display()))?;
+    snapshot_open_file(&mut file, max_bytes, label)
+}
+
+fn snapshot_optional(path: &Path) -> Result<Option<FileSnapshot>, String> {
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("inspecting {}: {error}", path.display())),
+        Ok(metadata) => {
+            if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
+                return Err(format!(
+                    "refusing to snapshot {} because it is not a regular non-reparse file",
+                    path.display()
+                ));
+            }
+            let max_bytes = metadata.len();
+            snapshot_required(
+                path,
+                max_bytes,
+                &format!("optional file {}", path.display()),
+            )
+            .map(Some)
+        }
     }
 }
 
@@ -6419,11 +6542,9 @@ fn remove_if_exists(path: &Path) -> Result<(), String> {
 
 /// Restore an optional file snapshot exactly: rewrite the old bytes when it existed, otherwise
 /// remove whatever generation created.
-fn restore_optional(path: &Path, saved: &Option<Vec<u8>>) -> Result<(), String> {
+fn restore_optional(path: &Path, saved: &Option<FileSnapshot>) -> Result<(), String> {
     match saved {
-        Some(bytes) => {
-            std::fs::write(path, bytes).map_err(|e| format!("restoring {}: {e}", path.display()))
-        }
+        Some(snapshot) => restore_file_snapshot(path, snapshot),
         None => remove_if_exists(path).map_err(|e| format!("restoring absent file: {e}")),
     }
 }
@@ -7979,7 +8100,7 @@ struct RecoveryJournal {
 }
 
 impl RecoveryJournal {
-    fn create(game_dir: &Path, saved_dev: &Option<Vec<u8>>) -> Result<Self, String> {
+    fn create(game_dir: &Path, saved_dev: &Option<FileSnapshot>) -> Result<Self, String> {
         let root = recovery_journal_path(game_dir);
         match std::fs::create_dir(&root) {
             Ok(()) => {}
@@ -8007,12 +8128,21 @@ Only after the process is dead and every path is restored, remove .gore-as-compi
             std::fs::write(root.join("README.txt"), instructions)
                 .map_err(|e| format!("writing recovery instructions: {e}"))?;
             match saved_dev {
-                Some(bytes) => {
+                Some(snapshot) => {
                     let dev_dir = root.join("development-cache");
                     std::fs::create_dir(&dev_dir)
                         .map_err(|e| format!("creating dev-cache recovery directory: {e}"))?;
-                    std::fs::write(dev_dir.join("PrecompiledScript.Cache"), bytes)
-                        .map_err(|e| format!("writing dev-cache recovery snapshot: {e}"))?;
+                    let recovery = dev_dir.join("PrecompiledScript.Cache");
+                    let mut file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&recovery)
+                        .map_err(|e| format!("creating dev-cache recovery snapshot: {e}"))?;
+                    write_snapshot_to_open_file(
+                        &mut file,
+                        snapshot,
+                        "development-cache recovery snapshot",
+                    )?;
                 }
                 None => {
                     std::fs::write(root.join("development-cache.absent"), b"")
@@ -8038,7 +8168,7 @@ Only after the process is dead and every path is restored, remove .gore-as-compi
 
     fn record_staged(
         &self,
-        staged: &[(PathBuf, Option<Vec<u8>>)],
+        staged: &[(PathBuf, Option<FileSnapshot>)],
         script_dir: &Path,
     ) -> Result<(), String> {
         for (path, prior) in staged {
@@ -8060,12 +8190,28 @@ Only after the process is dead and every path is restored, remove .gore-as-compi
                     format!("creating recovery directory {}: {e}", parent.display())
                 })?;
             }
-            std::fs::write(&recovery, prior.as_deref().unwrap_or_default()).map_err(|e| {
-                format!(
-                    "writing staged recovery snapshot {}: {e}",
-                    recovery.display()
-                )
-            })?;
+            match prior {
+                Some(snapshot) => {
+                    let mut file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&recovery)
+                        .map_err(|e| {
+                            format!(
+                                "creating staged recovery snapshot {}: {e}",
+                                recovery.display()
+                            )
+                        })?;
+                    write_snapshot_to_open_file(
+                        &mut file,
+                        snapshot,
+                        &format!("staged recovery snapshot {}", recovery.display()),
+                    )?;
+                }
+                None => std::fs::write(&recovery, b"").map_err(|e| {
+                    format!("writing staged recovery marker {}: {e}", recovery.display())
+                })?,
+            }
         }
         Ok(())
     }
@@ -8090,9 +8236,9 @@ struct CompileTransaction {
     script_dir: PathBuf,
     shipping_cache: PathBuf,
     dev_cache: PathBuf,
-    saved_shipping: Vec<u8>,
-    saved_dev: Option<Vec<u8>>,
-    staged: Vec<(PathBuf, Option<Vec<u8>>)>,
+    saved_shipping: FileSnapshot,
+    saved_dev: Option<FileSnapshot>,
+    staged: Vec<(PathBuf, Option<FileSnapshot>)>,
     isolation: Option<GenerationIsolation>,
     recovery: ShippingRecovery,
     journal: RecoveryJournal,
@@ -8242,16 +8388,19 @@ impl CompileTransaction {
         let shipping_cache = script_dir.join("PrecompiledScript_Shipping.Cache");
         let dev_cache = script_dir.join("PrecompiledScript.Cache");
         let saved_shipping = match &mut project_input_pins {
-            Some(pins) => read_open_regular_file_bounded(
+            Some(pins) => snapshot_open_file(
                 &mut pins.shipping,
                 MAX_PROJECT_COMPILER_CHECK_BASE_BYTES as u64,
                 "pinned live Shipping cache",
             ),
-            None => std::fs::read(&shipping_cache)
-                .map_err(|error| format!("reading live shipping cache: {error}")),
+            None => snapshot_required(
+                &shipping_cache,
+                MAX_PROJECT_COMPILER_CHECK_BASE_BYTES as u64,
+                "live Shipping cache",
+            ),
         };
         let saved_shipping = match saved_shipping {
-            Ok(bytes) => bytes,
+            Ok(snapshot) => snapshot,
             Err(error) => {
                 let mut errors = vec![format!(
                     "reading live shipping cache {}: {e}",
@@ -8404,16 +8553,17 @@ impl CompileTransaction {
                 Err(e) => errors.push(format!("failed to clean staged sources: {e}")),
             }
         }
-        let shipping_restored = match std::fs::write(&self.shipping_cache, &self.saved_shipping) {
-            Ok(()) => true,
-            Err(e) => {
-                errors.push(format!(
-                    "FAILED to restore the live shipping cache ({e}); restore it from {}",
-                    self.recovery.path.display()
-                ));
-                false
-            }
-        };
+        let shipping_restored =
+            match restore_file_snapshot(&self.shipping_cache, &self.saved_shipping) {
+                Ok(()) => true,
+                Err(e) => {
+                    errors.push(format!(
+                        "FAILED to restore the live shipping cache ({e}); restore it from {}",
+                        self.recovery.path.display()
+                    ));
+                    false
+                }
+            };
         if let Err(e) = restore_optional(&self.dev_cache, &self.saved_dev) {
             errors.push(format!("failed to restore development cache: {e}"));
         }
@@ -10863,14 +11013,15 @@ fn request_process_tree_termination(_pid: u32, _deadline: Instant) -> TreeTermin
 }
 
 /// Recursively copy `src` into `dst`, recording every destination FILE path written into `out`
-/// together with its PRIOR bytes (`None` if it didn't exist, `Some(bytes)` if the copy overwrote a
-/// pre-existing file) — so the caller can delete what it created and RESTORE what it overwrote.
+/// together with its PRIOR state (`None` if it didn't exist, `Some(snapshot)` if the copy
+/// overwrote a pre-existing file) — so the caller can delete what it created and RESTORE what it
+/// overwrote, including its original modification time.
 /// Directories created are not recorded individually — empty ones are pruned bottom-up by
 /// [`restore_or_remove`].
 fn copy_tree(
     src: &Path,
     dst: &Path,
-    out: &mut Vec<(PathBuf, Option<Vec<u8>>)>,
+    out: &mut Vec<(PathBuf, Option<FileSnapshot>)>,
 ) -> std::io::Result<()> {
     copy_tree_with(src, dst, out, &mut |from, to| {
         std::fs::copy(from, to).map(|_| ())
@@ -10880,7 +11031,7 @@ fn copy_tree(
 fn copy_tree_with<C>(
     src: &Path,
     dst: &Path,
-    out: &mut Vec<(PathBuf, Option<Vec<u8>>)>,
+    out: &mut Vec<(PathBuf, Option<FileSnapshot>)>,
     copy_file: &mut C,
 ) -> std::io::Result<()>
 where
@@ -10916,7 +11067,15 @@ where
                             to.display()
                         )));
                     }
-                    Some(std::fs::read(&to)?)
+                    let max_bytes = meta.len();
+                    Some(
+                        snapshot_required(
+                            &to,
+                            max_bytes,
+                            &format!("staging destination {}", to.display()),
+                        )
+                        .map_err(std::io::Error::other)?,
+                    )
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
                 Err(e) => return Err(e),
@@ -11008,15 +11167,18 @@ fn ensure_real_directory(path: &Path) -> std::io::Result<()> {
 /// file restore/delete failures into the returned `Err` so a caller can report a polluted install.
 /// Directory-prune failures are NOT errors: a dir staying non-empty (e.g. it holds a restored file)
 /// is the expected, correct outcome, so empty-dir removal stays best-effort.
-fn restore_or_remove(written: &[(PathBuf, Option<Vec<u8>>)], root: &Path) -> Result<(), String> {
+fn restore_or_remove(
+    written: &[(PathBuf, Option<FileSnapshot>)],
+    root: &Path,
+) -> Result<(), String> {
     use std::collections::BTreeSet;
     // Restore-or-remove the files first, collecting (not short-circuiting on) failures so every
     // file is attempted before we report.
     let mut errs: Vec<String> = Vec::new();
     for (f, prior) in written {
         match prior {
-            Some(bytes) => {
-                if let Err(e) = std::fs::write(f, bytes) {
+            Some(snapshot) => {
+                if let Err(e) = restore_file_snapshot(f, snapshot) {
                     errs.push(format!("restore {}: {e}", f.display()));
                 }
             }
@@ -11347,6 +11509,18 @@ mod tests {
         let cache = script.join("PrecompiledScript_Shipping.Cache");
         std::fs::write(&cache, b"OLD").unwrap();
         (base.to_path_buf(), cache)
+    }
+
+    fn set_test_modified(path: &Path, seconds_since_epoch: u64) -> SystemTime {
+        let modified = std::time::UNIX_EPOCH + Duration::from_secs(seconds_since_epoch);
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(path).unwrap().modified().unwrap(),
+            modified
+        );
+        modified
     }
 
     fn unique_test_root(label: &str) -> PathBuf {
@@ -15094,6 +15268,9 @@ mod tests {
         // A matching loose path is safe: staging overwrites it, then cleanup must restore it.
         let live_mod = shipping.parent().unwrap().join("Mod.as");
         std::fs::write(&live_mod, b"LIVE-OLD").unwrap();
+        let shipping_modified = set_test_modified(&shipping, 1_600_000_001);
+        let dev_modified = set_test_modified(&dev, 1_600_000_002);
+        let live_mod_modified = set_test_modified(&live_mod, 1_600_000_003);
         let src = base.join("src");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("Mod.as"), b"STAGED-NEW").unwrap();
@@ -15134,6 +15311,21 @@ mod tests {
             std::fs::read(&live_mod).unwrap(),
             b"LIVE-OLD",
             "colliding source restored"
+        );
+        assert_eq!(
+            std::fs::metadata(&shipping).unwrap().modified().unwrap(),
+            shipping_modified,
+            "Shipping modification time restored exactly"
+        );
+        assert_eq!(
+            std::fs::metadata(&dev).unwrap().modified().unwrap(),
+            dev_modified,
+            "development-cache modification time restored exactly"
+        );
+        assert_eq!(
+            std::fs::metadata(&live_mod).unwrap().modified().unwrap(),
+            live_mod_modified,
+            "colliding source modification time restored exactly"
         );
         assert!(!shipping.with_extension("Cache.gore-compile-bak").exists());
 
@@ -16858,7 +17050,13 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("injected copy failure"));
         assert_eq!(written.len(), 1, "rollback entry registered before copy");
-        assert_eq!(written[0].1.as_deref(), Some(b"OLD".as_slice()));
+        assert_eq!(
+            written[0]
+                .1
+                .as_ref()
+                .map(|snapshot| snapshot.bytes.as_slice()),
+            Some(b"OLD".as_slice())
+        );
         assert_eq!(std::fs::read(&target).unwrap(), b"PARTIAL");
 
         restore_or_remove(&written, &dst).unwrap();
@@ -17077,9 +17275,8 @@ mod tests {
         assert!(written.iter().any(|(p, _)| p == &nested));
         // The collision was overwritten with the new bytes, and its prior bytes were captured.
         assert_eq!(std::fs::read(&over).unwrap(), b"new");
-        assert!(written
-            .iter()
-            .any(|(p, prior)| p == &over && prior.as_deref() == Some(b"old")));
+        assert!(written.iter().any(|(p, prior)| p == &over
+            && prior.as_ref().map(|snapshot| snapshot.bytes.as_slice()) == Some(b"old")));
 
         // Cleanup succeeds: the colliding file restores and the copied-only files delete cleanly.
         restore_or_remove(&written, &dst).expect("cleanup should succeed in a writable tmp tree");

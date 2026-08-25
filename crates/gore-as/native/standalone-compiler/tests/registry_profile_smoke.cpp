@@ -223,6 +223,8 @@ standalone::registry_profile make_profile() {
         {23U, standalone::host_stub_kind::callable, 0U, 1U},
         {24U, standalone::host_stub_kind::callable, 0U, 1U},
         {25U, standalone::host_stub_kind::callable, 0U, 1U},
+        {26U, standalone::host_stub_kind::callable, 0U, 1U},
+        {27U, standalone::host_stub_kind::callable, 0U, 1U},
     };
     const standalone::primitive_type primitive_types[] = {
         standalone::primitive_type::bool_type,
@@ -554,6 +556,11 @@ standalone::registry_profile make_profile() {
     append_callable(45U, standalone::registration_kind::object_method, 54U, 19U,
         "void SetNum(int32 __any_implicit_integer NewNum = 0)",
         standalone::call_convention::cdecl_object_first, 25U);
+    append_callable(46U, standalone::registration_kind::object_behaviour, 55U, 16U,
+        "void f(Actor Class)", standalone::call_convention::cdecl_object_first, 26U);
+    append_callable(47U, standalone::registration_kind::global_function, 56U, 0U,
+        "void AcceptSubclass(TSubclassOf<Actor> Class)",
+        standalone::call_convention::cdecl_call, 27U);
 
     auto value_state = type_state(10U, 8U, 8U, value_flags);
     value_state.interface_type_ids = {11U};
@@ -595,6 +602,7 @@ standalone::registry_profile make_profile() {
 
     profile.final_states.push_back(type_state(15U, 16U, 8U, text_flags));
     auto template_state = type_state(16U, 8U, 8U, template_flags);
+    template_state.has_implicit_constructors = true;
     template_state.accepts_value_subtype = true;
     template_state.accepts_reference_subtype = true;
     profile.final_states.push_back(template_state);
@@ -651,6 +659,13 @@ standalone::registry_profile make_profile() {
     auto array_set_num_state = function_state(54U);
     array_set_num_state.first_param = standalone::first_param_metadata::script_object_type;
     profile.final_states.push_back(array_set_num_state);
+    auto subclass_constructor_state = function_state(
+        55U, asTRAIT_CONSTRUCTOR | asTRAIT_PROPERTY |
+            asTRAIT_IMPLICITCONSTRUCTOR | asTRAIT_GENERIC_TEMPLATE_FUNCTION);
+    subclass_constructor_state.first_param =
+        standalone::first_param_metadata::script_object_type;
+    profile.final_states.push_back(subclass_constructor_state);
+    profile.final_states.push_back(function_state(56U));
     return profile;
 }
 
@@ -1061,6 +1076,24 @@ int main() {
         return fail("dynamic script struct or enum operations did not resolve", engine);
     }
 
+    constexpr const char* implicit_subclass_conversion =
+        "void ConvertSubclass(Actor Class) { AcceptSubclass(Class); }\n";
+    asIScriptModule* conversion_module =
+        engine->GetModule("implicit-subclass-conversion", asGM_ALWAYS_CREATE);
+    diagnostics.messages.clear();
+    const int add_conversion = conversion_module == nullptr ? asERROR :
+        conversion_module->AddScriptSection(
+            "implicit-subclass-conversion", implicit_subclass_conversion,
+            std::strlen(implicit_subclass_conversion));
+    const int build_conversion = add_conversion < 0 ? asERROR :
+        standalone::build_module(*conversion_module);
+    if (conversion_module == nullptr || add_conversion < 0 || build_conversion < 0) {
+        for (const std::string& message : diagnostics.messages) std::cerr << message << '\n';
+        return fail(
+            "registration-time implicit template conversion state was not preserved",
+            engine);
+    }
+
     const auto capabilities_match = [&](const char* declaration,
                                         const bool can_create_property,
                                         const bool never_requires_gc,
@@ -1179,7 +1212,7 @@ int main() {
 
     standalone::registry_profile unreferenced_stub = profile;
     unreferenced_stub.host_stubs.push_back(
-        {26U, standalone::host_stub_kind::callable, 0U, 1U});
+        {28U, standalone::host_stub_kind::callable, 0U, 1U});
     if (!rejected_before_mutation(unreferenced_stub)) {
         return fail("unreferenced host stub did not fail before mutation", engine);
     }

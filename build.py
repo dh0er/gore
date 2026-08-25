@@ -1345,14 +1345,14 @@ _INTERNAL_STANDALONE_COMPILER_DESCRIPTOR = (
 )
 
 
-def _configured_standalone_compiler_release_input() -> Path | None:
-    raw = os.environ.get("GORE_STANDALONE_COMPILER_RELEASE_INPUT", "").strip()
+def _configured_standalone_compiler_internal_input() -> Path | None:
+    raw = os.environ.get("GORE_STANDALONE_COMPILER_INTERNAL_INPUT", "").strip()
     if not raw:
         return None
     path = Path(raw)
     if not path.is_absolute() or any(part in (".", "..") for part in path.parts):
         raise SystemExit(
-            "GORE_STANDALONE_COMPILER_RELEASE_INPUT must be an absolute normalized path"
+            "GORE_STANDALONE_COMPILER_INTERNAL_INPUT must be an absolute normalized path"
         )
     return path
 
@@ -1508,7 +1508,7 @@ def _promotion_attestation_verifier(*, dry: bool):
 def _product_promotion_attestation_verifier(*, dry: bool):
     """Use external Sigstore verification only for an explicit development input."""
 
-    if _configured_standalone_compiler_release_input() is None:
+    if _configured_standalone_compiler_internal_input() is None:
         return standalone_compiler_bundle.trust_pinned_internal_package_attestation
     return _promotion_attestation_verifier(dry=dry)
 
@@ -1518,10 +1518,10 @@ def _prepare_standalone_compiler_bundle(
 ) -> standalone_compiler_bundle.PreparedBundle | None:
     if not PROJECTS[project].get("standalone_compiler_bundle"):
         return None
-    configured_release_input = _configured_standalone_compiler_release_input()
+    configured_internal_input = _configured_standalone_compiler_internal_input()
     source_key = (
-        f"development:{configured_release_input}"
-        if configured_release_input is not None
+        f"development:{configured_internal_input}"
+        if configured_internal_input is not None
         else f"internal:{_INTERNAL_STANDALONE_COMPILER_DESCRIPTOR}"
     )
     key = (source_key, dry)
@@ -1531,8 +1531,8 @@ def _prepare_standalone_compiler_bundle(
     work_root = ROOT / "target" / "standalone-compiler-product-bundle"
     if dry:
         state = (
-            "development release-input override"
-            if configured_release_input is not None
+            "development internal-input override"
+            if configured_internal_input is not None
             else "GORE-internal compressed package"
         )
         print(f"[dry-run] would prepare standalone compiler bundle: {state}")
@@ -1547,7 +1547,7 @@ def _prepare_standalone_compiler_bundle(
     else:
         try:
             qualified_profile_verifier = _qualified_profile_verifier(dry=False)
-            if configured_release_input is None:
+            if configured_internal_input is None:
                 descriptor = standalone_compiler_bundle.read_internal_package_descriptor(
                     _INTERNAL_STANDALONE_COMPILER_DESCRIPTOR
                 )
@@ -1555,7 +1555,7 @@ def _prepare_standalone_compiler_bundle(
                     ROOT / "target" / "standalone-compiler-internal-input"
                 )
                 extracted_parent.mkdir(parents=True, exist_ok=True)
-                release_input = standalone_compiler_bundle.materialize_internal_package(
+                internal_input = standalone_compiler_bundle.materialize_internal_package(
                     _INTERNAL_STANDALONE_COMPILER_ARCHIVE,
                     _INTERNAL_STANDALONE_COMPILER_DESCRIPTOR,
                     extracted_parent / descriptor.archive.sha256,
@@ -1565,12 +1565,12 @@ def _prepare_standalone_compiler_bundle(
                     standalone_compiler_bundle.trust_pinned_internal_package_attestation
                 )
             else:
-                release_input = configured_release_input
+                internal_input = configured_internal_input
                 promotion_attestation_verifier = _promotion_attestation_verifier(
                     dry=False
                 )
             prepared = standalone_compiler_bundle.prepare_product_bundle(
-                release_input,
+                internal_input,
                 work_root,
                 qualified_profile_verifier=qualified_profile_verifier,
                 promotion_attestation_verifier=promotion_attestation_verifier,

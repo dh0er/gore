@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Offline promotion, staging, and verification for the standalone compiler bundle.
+"""Offline signing, internal staging, and verification for the standalone compiler bundle.
 
-The regular GORE release path never builds, signs, or re-qualifies a sidecar.  It accepts either
-no release input (the honest BundleAbsent state) or one immutable release-input directory whose
-descriptor pins the already signed and qualified bytes.  This module is deliberately independent
-of the Rust product resolver.
+Regular GORE product builds never build, sign, or re-qualify a sidecar. They accept either no
+internal compiler input (the honest BundleAbsent state) or one immutable internal input directory
+whose descriptor pins the already signed and qualified bytes. This module deliberately has no
+GitHub release or tag operation and is independent of the Rust product resolver.
 """
 
 from __future__ import annotations
@@ -30,8 +30,9 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 
-RELEASE_INPUT_SCHEMA = "gore.as.standalone-compiler-release-input"
-RELEASE_INPUT_SCHEMA_VERSION = 1
+INTERNAL_INPUT_SCHEMA = "gore.as.standalone-compiler-internal-input"
+INTERNAL_INPUT_SCHEMA_VERSION = 1
+INTERNAL_INPUT_DESCRIPTOR_FILE = "internal-input.json"
 CATALOG_SCHEMA = "gore.as.product-standalone-compiler-catalog"
 CATALOG_SCHEMA_VERSION = 1
 BUNDLE_DESCRIPTOR = "compiler-bundle-manifest.json"
@@ -47,10 +48,6 @@ PROMOTION_PROVENANCE_SCHEMA = (
     "gore.as.internal-standalone-compiler-signing-provenance"
 )
 PROMOTION_PROVENANCE_SCHEMA_VERSION = 1
-LEGACY_PROMOTION_PROVENANCE_SCHEMA = "gore.as.promotion-candidate-provenance"
-LEGACY_PROMOTION_PROVENANCE_SCHEMA_VERSION = 2
-LEGACY_PROMOTION_CLAIM_TAG_PREFIX = "gore-as-signing-claim-"
-LEGACY_PROMOTION_TAG_PREFIX = "gore-as-promotion-"
 QUALIFIED_PROMOTION_RECEIPT_FILE = "qualification-promotion-receipt.json"
 EMBEDDED_QUALIFICATION_ARTIFACT_MANIFEST_FILE = "embedded-qualification-artifacts.json"
 STANDALONE_QUALIFICATION_ARTIFACT_MANIFEST_FILE = (
@@ -69,19 +66,17 @@ MAX_SIDECAR_BYTES = 256 * 1024 * 1024
 MAX_PROFILE_MANIFEST_BYTES = 4 * 1024 * 1024
 MAX_PROFILE_BLOB_BYTES = 512 * 1024 * 1024
 MAX_PROFILE_AGGREGATE_BYTES = 1024 * 1024 * 1024
-# Python's classic-ZIP writer switches to ZIP64 above this boundary.  The
-# release dialect deliberately forbids ZIP64, so the bound is explicit here.
-MAX_RELEASE_ARCHIVE_BYTES = (1 << 31) - 1
-MAX_RELEASE_ARCHIVE_FILES = 4096
+# Python's classic-ZIP writer switches to ZIP64 above this boundary. The
+# internal package deliberately forbids ZIP64, so the bound is explicit here.
+MAX_ARCHIVE_UNCOMPRESSED_BYTES = (1 << 31) - 1
+MAX_INTERNAL_INPUT_FILES = 4096
 STALE_SIDECAR_BYTE_LENGTHS = frozenset({273_408})
-RELEASE_ASSET_DESCRIPTOR_SCHEMA = "gore.as.standalone-compiler-release-asset"
-RELEASE_ASSET_DESCRIPTOR_SCHEMA_VERSION = 1
 INTERNAL_PACKAGE_DESCRIPTOR_SCHEMA = "gore.as.internal-standalone-compiler-package"
 INTERNAL_PACKAGE_DESCRIPTOR_SCHEMA_VERSION = 1
 INTERNAL_PACKAGE_ARCHIVE_FILE = "standalone-compiler-internal-package.zip"
 INTERNAL_PACKAGE_DESCRIPTOR_FILE = "standalone-compiler-internal-package.json"
 # The repository carries the qualified input compressed.  Its current 152 MiB
-# release-input tree is roughly 7 MiB with deterministic Deflate; leave ample
+# internal-input tree is roughly 7 MiB with deterministic Deflate; leave ample
 # room for additional qualified game APIs without accepting an unbounded asset.
 MAX_INTERNAL_PACKAGE_BYTES = 128 * 1024 * 1024
 REQUIRED_NOTICES = (
@@ -137,7 +132,7 @@ _FIXED_SYSTEM_DLLS = frozenset(
 
 
 class BundleError(RuntimeError):
-    """A release input or staged bundle failed closed."""
+    """An internal input or staged bundle failed closed."""
 
 
 @dataclass(frozen=True)
@@ -178,16 +173,6 @@ class QualifiedProfileTreeAuthority:
 
 
 @dataclass(frozen=True)
-class ReleaseAssetDescriptor:
-    repository: str
-    tag: str
-    asset: str
-    archive: Seal
-    catalog_sha256: str
-    file_count: int
-
-
-@dataclass(frozen=True)
 class InternalPackageDescriptor:
     asset: str
     archive: Seal
@@ -203,7 +188,6 @@ class PromotionAuthority:
     workflow_sha: str
     workflow_run_id: int
     workflow_run_attempt: int
-    legacy_release_metadata: bool = False
 
 
 SidecarVerifier = Callable[[Path, bytes], None]
@@ -294,7 +278,7 @@ def _pin_windows_file_path(
 ) -> Iterable[None]:
     """Prevent delete/ancestor replacement while another process resolves `path`.
 
-    The release artifacts are Windows-only. Reopening an already measured file by pathname
+    The signed compiler artifacts are Windows-only. Reopening an already measured file by pathname
     without holding the complete path chain would reopen a TOCTOU window, so non-Windows hosts
     fail closed instead of claiming an equivalent guarantee. Mutable signing targets may allow
     in-place writes while still withholding delete sharing; all ordinary callers deny writes too.
@@ -1239,16 +1223,10 @@ def _parse_promotion_provenance(
     provenance = _parse_json(
         bytes_, "compiler promotion provenance", MAX_DESCRIPTOR_BYTES
     )
-    legacy_release_metadata = (
-        provenance.get("schema") == LEGACY_PROMOTION_PROVENANCE_SCHEMA
-        and provenance.get("schema_version")
-        == LEGACY_PROMOTION_PROVENANCE_SCHEMA_VERSION
-    )
-    current_internal_metadata = (
-        provenance.get("schema") == PROMOTION_PROVENANCE_SCHEMA
-        and provenance.get("schema_version") == PROMOTION_PROVENANCE_SCHEMA_VERSION
-    )
-    if not current_internal_metadata and not legacy_release_metadata:
+    if (
+        provenance.get("schema") != PROMOTION_PROVENANCE_SCHEMA
+        or provenance.get("schema_version") != PROMOTION_PROVENANCE_SCHEMA_VERSION
+    ):
         raise BundleError("compiler promotion provenance schema/version is unsupported")
     _require_exact_fields(
         provenance,
@@ -1258,31 +1236,19 @@ def _parse_promotion_provenance(
             "repository",
             "commit",
             "workflow_sha",
-            *(("claim_tag", "promotion_tag") if legacy_release_metadata else ()),
             "workflow_run_id",
             "workflow_run_attempt",
             "signed_identity",
         ),
         "compiler promotion provenance",
     )
-    repository = _require_release_repository(
+    repository = _require_repository(
         provenance["repository"], "compiler promotion repository"
     )
     commit = _require_hex(provenance["commit"], 40, "compiler promotion commit")
     workflow_sha = _require_hex(
         provenance["workflow_sha"], 40, "compiler promotion workflow SHA"
     )
-    if legacy_release_metadata:
-        claim_tag = _require_release_asset_token(
-            provenance["claim_tag"], "legacy compiler signing-claim tag"
-        )
-        promotion_tag = _require_release_asset_token(
-            provenance["promotion_tag"], "legacy compiler promotion tag"
-        )
-        if claim_tag != f"{LEGACY_PROMOTION_CLAIM_TAG_PREFIX}{commit}":
-            raise BundleError("legacy compiler signing-claim tag is not commit-bound")
-        if promotion_tag != f"{LEGACY_PROMOTION_TAG_PREFIX}{commit}":
-            raise BundleError("legacy compiler promotion tag is not commit-bound")
     if expected_repository is not None and repository != expected_repository:
         raise BundleError(
             "compiler promotion repository differs from the authorized repository"
@@ -1314,7 +1280,6 @@ def _parse_promotion_provenance(
             "compiler promotion workflow run attempt",
             maximum=(1 << 32) - 1,
         ),
-        legacy_release_metadata=legacy_release_metadata,
     )
 
 
@@ -1373,7 +1338,7 @@ def _target_key(value: dict[str, object]) -> tuple[object, ...]:
 
 def _catalog(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
-        raise BundleError("release input catalog must be an object")
+        raise BundleError("internal input catalog must be an object")
     _require_exact_fields(
         value, ("schema", "schema_version", "sidecar", "profiles"), "catalog"
     )
@@ -2439,14 +2404,12 @@ def _verify_promotion_authority(
 ) -> PromotionAuthority:
     if not isinstance(value, dict):
         raise BundleError("compiler promotion authority must be an object")
-    legacy_release_metadata = "claim_tag" in value or "promotion_tag" in value
     _require_exact_fields(
         value,
         (
             "repository",
             "commit",
             "workflow_sha",
-            *(("claim_tag", "promotion_tag") if legacy_release_metadata else ()),
             "workflow_run_id",
             "workflow_run_attempt",
             "signed_identity_file",
@@ -2455,24 +2418,13 @@ def _verify_promotion_authority(
         ),
         "compiler promotion authority",
     )
-    repository = _require_release_repository(
+    repository = _require_repository(
         value["repository"], "compiler promotion authority repository"
     )
     commit = _require_hex(value["commit"], 40, "compiler promotion authority commit")
     workflow_sha = _require_hex(
         value["workflow_sha"], 40, "compiler promotion authority workflow SHA"
     )
-    if legacy_release_metadata:
-        claim_tag = _require_release_asset_token(
-            value["claim_tag"], "legacy compiler signing-claim tag"
-        )
-        promotion_tag = _require_release_asset_token(
-            value["promotion_tag"], "legacy compiler promotion tag"
-        )
-        if claim_tag != f"{LEGACY_PROMOTION_CLAIM_TAG_PREFIX}{commit}":
-            raise BundleError("legacy compiler signing-claim tag is not commit-bound")
-        if promotion_tag != f"{LEGACY_PROMOTION_TAG_PREFIX}{commit}":
-            raise BundleError("legacy compiler promotion tag is not commit-bound")
     run_id = _require_uint(
         value["workflow_run_id"], "compiler promotion authority workflow run ID"
     )
@@ -2541,7 +2493,6 @@ def _verify_promotion_authority(
         authority.workflow_sha != workflow_sha
         or authority.workflow_run_id != run_id
         or authority.workflow_run_attempt != run_attempt
-        or authority.legacy_release_metadata != legacy_release_metadata
     ):
         raise BundleError(
             "compiler promotion authority differs from its source provenance"
@@ -2571,7 +2522,7 @@ def _verify_descriptor(
     staged: bool,
 ) -> VerifiedBundle:
     descriptor = _parse_json(
-        descriptor_bytes, "compiler release input", MAX_DESCRIPTOR_BYTES
+        descriptor_bytes, "compiler internal input", MAX_DESCRIPTOR_BYTES
     )
     _require_exact_fields(
         descriptor,
@@ -2584,15 +2535,15 @@ def _verify_descriptor(
             "catalog",
             "notices",
         ),
-        "compiler release input",
+        "compiler internal input",
     )
     if (
-        descriptor["schema"] != RELEASE_INPUT_SCHEMA
-        or descriptor["schema_version"] != RELEASE_INPUT_SCHEMA_VERSION
+        descriptor["schema"] != INTERNAL_INPUT_SCHEMA
+        or descriptor["schema_version"] != INTERNAL_INPUT_SCHEMA_VERSION
     ):
-        raise BundleError("compiler release-input schema/version is unsupported")
-    _require_bool(descriptor["immutable"], True, "compiler release input immutable")
-    _require_bool(descriptor["qualified"], True, "compiler release input qualified")
+        raise BundleError("compiler internal-input schema/version is unsupported")
+    _require_bool(descriptor["immutable"], True, "compiler internal input immutable")
+    _require_bool(descriptor["qualified"], True, "compiler internal input qualified")
     catalog = _catalog(descriptor["catalog"])
     catalog_bytes = _canonical_pretty(catalog)
     if len(catalog_bytes) > MAX_CATALOG_BYTES:
@@ -2636,7 +2587,11 @@ def _verify_descriptor(
         )
         _check_sealed_bytes(bytes_, seal, f"compiler notice {name}")
         expected_files[name] = seal
-    control = {BUNDLE_DESCRIPTOR, CATALOG_FILE} if staged else {"release-input.json"}
+    control = (
+        {BUNDLE_DESCRIPTOR, CATALOG_FILE}
+        if staged
+        else {INTERNAL_INPUT_DESCRIPTOR_FILE}
+    )
     actual_files = _enumerate_regular_files(bundle_root, "compiler bundle")
     expected_names = set(expected_files) | control
     if actual_files != expected_names:
@@ -2650,7 +2605,7 @@ def _verify_descriptor(
         )
         if catalog_file != catalog_bytes:
             raise BundleError(
-                "staged compiler catalog differs from the release-input catalog"
+                "staged compiler catalog differs from the internal-input catalog"
             )
         staged_descriptor = _read_regular_no_follow(
             bundle_root / BUNDLE_DESCRIPTOR,
@@ -2664,7 +2619,7 @@ def _verify_descriptor(
     return VerifiedBundle(descriptor_bytes, catalog_bytes, expected_files, SIDECAR_FILE)
 
 
-def verify_release_input(
+def verify_internal_input(
     root: Path,
     *,
     sidecar_verifier: SidecarVerifier = verify_sidecar,
@@ -2675,11 +2630,11 @@ def verify_release_input(
         raise BundleError("the Rust typed qualified-profile verifier is required")
     if promotion_attestation_verifier is None:
         raise BundleError("the GitHub promotion attestation verifier is required")
-    root = _require_absolute_normalized(root, "compiler release-input root")
+    root = _require_absolute_normalized(root, "compiler internal-input root")
     descriptor = _read_regular_no_follow(
-        root / "release-input.json",
+        root / INTERNAL_INPUT_DESCRIPTOR_FILE,
         MAX_DESCRIPTOR_BYTES,
-        "compiler release-input descriptor",
+        "compiler internal-input descriptor",
     )
     return _verify_descriptor(
         root,
@@ -2691,7 +2646,7 @@ def verify_release_input(
     )
 
 
-def _require_release_asset_token(value: object, label: str, *, suffix: str = "") -> str:
+def _require_safe_ascii_token(value: object, label: str, *, suffix: str = "") -> str:
     if (
         not isinstance(value, str)
         or not 1 <= len(value) <= 160
@@ -2702,87 +2657,17 @@ def _require_release_asset_token(value: object, label: str, *, suffix: str = "")
         )
         or (suffix and not value.endswith(suffix))
     ):
-        raise BundleError(f"{label} is not a safe release token")
+        raise BundleError(f"{label} is not a safe ASCII token")
     return value
 
 
-def _require_release_repository(value: object, label: str) -> str:
+def _require_repository(value: object, label: str) -> str:
     if not isinstance(value, str) or value.count("/") != 1:
         raise BundleError(f"{label} must be one owner/repository pair")
     owner, repository = value.split("/", 1)
-    _require_release_asset_token(owner, f"{label} owner")
-    _require_release_asset_token(repository, f"{label} repository")
+    _require_safe_ascii_token(owner, f"{label} owner")
+    _require_safe_ascii_token(repository, f"{label} repository")
     return value
-
-
-def _parse_release_asset_descriptor(bytes_: bytes) -> ReleaseAssetDescriptor:
-    document = _parse_json(
-        bytes_, "standalone compiler release-asset descriptor", MAX_DESCRIPTOR_BYTES
-    )
-    _require_exact_fields(
-        document,
-        (
-            "schema",
-            "schema_version",
-            "repository",
-            "tag",
-            "asset",
-            "archive",
-            "release_input",
-        ),
-        "standalone compiler release-asset descriptor",
-    )
-    if (
-        document["schema"] != RELEASE_ASSET_DESCRIPTOR_SCHEMA
-        or document["schema_version"] != RELEASE_ASSET_DESCRIPTOR_SCHEMA_VERSION
-    ):
-        raise BundleError(
-            "standalone compiler release-asset schema/version is unsupported"
-        )
-    release_input = document["release_input"]
-    if not isinstance(release_input, dict):
-        raise BundleError("standalone compiler release-input summary must be an object")
-    _require_exact_fields(
-        release_input,
-        ("catalog_sha256", "file_count"),
-        "standalone compiler release-input summary",
-    )
-    return ReleaseAssetDescriptor(
-        repository=_require_release_repository(
-            document["repository"], "standalone compiler release repository"
-        ),
-        tag=_require_release_asset_token(
-            document["tag"], "standalone compiler release tag"
-        ),
-        asset=_require_release_asset_token(
-            document["asset"], "standalone compiler release asset", suffix=".zip"
-        ),
-        archive=_seal(
-            document["archive"],
-            "standalone compiler release archive",
-            MAX_RELEASE_ARCHIVE_BYTES,
-        ),
-        catalog_sha256=_require_hex(
-            release_input["catalog_sha256"],
-            64,
-            "standalone compiler release-input catalog SHA-256",
-        ),
-        file_count=_require_uint(
-            release_input["file_count"],
-            "standalone compiler release-input file count",
-            maximum=MAX_RELEASE_ARCHIVE_FILES,
-        ),
-    )
-
-
-def read_release_asset_descriptor(path: Path) -> ReleaseAssetDescriptor:
-    path = _require_absolute_normalized(
-        path, "standalone compiler release-asset descriptor"
-    )
-    bytes_ = _read_regular_no_follow(
-        path, MAX_DESCRIPTOR_BYTES, "standalone compiler release-asset descriptor"
-    )
-    return _parse_release_asset_descriptor(bytes_)
 
 
 def _parse_internal_package_descriptor(bytes_: bytes) -> InternalPackageDescriptor:
@@ -2797,7 +2682,7 @@ def _parse_internal_package_descriptor(bytes_: bytes) -> InternalPackageDescript
             "asset",
             "archive",
             "compression",
-            "release_input",
+            "internal_input",
         ),
         "internal standalone compiler package descriptor",
     )
@@ -2812,16 +2697,16 @@ def _parse_internal_package_descriptor(bytes_: bytes) -> InternalPackageDescript
         raise BundleError(
             "internal standalone compiler package compression must be deflate-9"
         )
-    release_input = document["release_input"]
-    if not isinstance(release_input, dict):
-        raise BundleError("internal compiler release-input summary must be an object")
+    internal_input = document["internal_input"]
+    if not isinstance(internal_input, dict):
+        raise BundleError("internal compiler input summary must be an object")
     _require_exact_fields(
-        release_input,
+        internal_input,
         ("catalog_sha256", "file_count"),
-        "internal compiler release-input summary",
+        "internal compiler input summary",
     )
     return InternalPackageDescriptor(
-        asset=_require_release_asset_token(
+        asset=_require_safe_ascii_token(
             document["asset"], "internal standalone compiler package asset", suffix=".zip"
         ),
         archive=_seal(
@@ -2831,14 +2716,14 @@ def _parse_internal_package_descriptor(bytes_: bytes) -> InternalPackageDescript
         ),
         compression="deflate-9",
         catalog_sha256=_require_hex(
-            release_input["catalog_sha256"],
+            internal_input["catalog_sha256"],
             64,
-            "internal compiler release-input catalog SHA-256",
+            "internal compiler input catalog SHA-256",
         ),
         file_count=_require_uint(
-            release_input["file_count"],
-            "internal compiler release-input file count",
-            maximum=MAX_RELEASE_ARCHIVE_FILES,
+            internal_input["file_count"],
+            "internal compiler input file count",
+            maximum=MAX_INTERNAL_INPUT_FILES,
         ),
     )
 
@@ -2910,7 +2795,7 @@ def _require_real_output_parent(path: Path, label: str) -> None:
         raise BundleError(f"{label} parent must be a real directory: {parent}")
 
 
-def _release_archive_info(
+def _canonical_archive_info(
     relative: str, *, compression: int = zipfile.ZIP_STORED
 ) -> zipfile.ZipInfo:
     info = zipfile.ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
@@ -2927,7 +2812,7 @@ def _write_zip_member_from_file(
     expected: Seal,
     *,
     compression: int = zipfile.ZIP_STORED,
-    label_prefix: str = "compiler release-input archive",
+    label_prefix: str = "compiler package archive",
 ) -> None:
     label = f"{label_prefix} entry {relative}"
     _check_no_follow_chain(source, label)
@@ -2947,7 +2832,7 @@ def _write_zip_member_from_file(
             or before.st_size != expected.byte_len
         ):
             raise BundleError(f"{label} is not the expected single-link regular file")
-        info = _release_archive_info(relative, compression=compression)
+        info = _canonical_archive_info(relative, compression=compression)
         info.file_size = expected.byte_len
         digest = hashlib.sha256()
         total = 0
@@ -3069,7 +2954,7 @@ def _publish_directory_no_replace(source: Path, destination: Path) -> None:
         if not move(str(source), str(destination), 0):
             error = ctypes.get_last_error()
             raise BundleError(
-                f"cannot exclusively publish extracted release input: WinError {error}"
+                f"cannot exclusively publish extracted internal compiler input: WinError {error}"
             )
         return
     if sys.platform.startswith("linux"):
@@ -3088,7 +2973,7 @@ def _publish_directory_no_replace(source: Path, destination: Path) -> None:
         if renameat2(-100, os.fsencode(source), -100, os.fsencode(destination), 1) != 0:
             error = ctypes.get_errno()
             raise BundleError(
-                f"cannot exclusively publish extracted release input: errno {error}"
+                f"cannot exclusively publish extracted internal compiler input: errno {error}"
             )
         return
     raise BundleError(
@@ -3139,7 +3024,7 @@ def _validate_canonical_archive(
 ) -> tuple[str, ...]:
     """Validate the exact raw ZIP shape accepted by one compiler transport.
 
-    Release inputs are bounded below all classic ZIP limits, so ZIP64 is neither needed nor
+    Internal inputs are bounded below all classic ZIP limits, so ZIP64 is neither needed nor
     accepted. Parsing both header sets closes ambiguities that a central-directory-only reader
     could otherwise hide. CRC is still checked by ``zipfile`` while reading every member; SHA-256
     and length remain the external authority for the complete archive.
@@ -3163,15 +3048,13 @@ def _validate_canonical_archive(
             or _is_reparse(status)
             or not 22 < size <= maximum_archive_bytes
         ):
-            raise BundleError(
-                "standalone compiler release archive is not a bounded regular file"
-            )
+            raise BundleError(f"{label} is not a bounded regular file")
 
         eocd_offset = size - 22
         eocd = struct.unpack(
             "<4s4H2IH",
             _read_descriptor_exact(
-                descriptor, eocd_offset, 22, "standalone compiler release archive EOCD"
+                descriptor, eocd_offset, 22, f"{label} EOCD"
             ),
         )
         (
@@ -3189,13 +3072,11 @@ def _validate_canonical_archive(
             or disk_number != 0
             or central_disk != 0
             or disk_entries != total_entries
-            or not 0 < total_entries <= MAX_RELEASE_ARCHIVE_FILES
+            or not 0 < total_entries <= MAX_INTERNAL_INPUT_FILES
             or comment_length != 0
             or central_offset + central_size != eocd_offset
         ):
-            raise BundleError(
-                "standalone compiler release archive has a noncanonical EOCD or trailing bytes"
-            )
+            raise BundleError(f"{label} has a noncanonical EOCD or trailing bytes")
 
         central_cursor = central_offset
         expected_local_offset = 0
@@ -3210,7 +3091,7 @@ def _validate_canonical_archive(
                     descriptor,
                     central_cursor,
                     46,
-                    "standalone compiler release archive central header",
+                    f"{label} central header",
                 ),
             )
             (
@@ -3254,30 +3135,24 @@ def _validate_canonical_archive(
                 or external_attr != expected_external_attr
                 or local_offset != expected_local_offset
             ):
-                raise BundleError(
-                    "standalone compiler release archive has a noncanonical central header"
-                )
+                raise BundleError(f"{label} has a noncanonical central header")
             name_offset = central_cursor + 46
             raw_name = _read_descriptor_exact(
                 descriptor,
                 name_offset,
                 filename_length,
-                "standalone compiler release archive central filename",
+                f"{label} central filename",
             )
             try:
                 relative = raw_name.decode("ascii")
             except UnicodeDecodeError as error:
-                raise BundleError(
-                    "standalone compiler release archive filename is not ASCII"
-                ) from error
+                raise BundleError(f"{label} filename is not ASCII") from error
             relative = _safe_relative(
-                relative, "standalone compiler release archive central filename"
+                relative, f"{label} central filename"
             )
             key = relative.casefold()
             if key in seen or (previous_name is not None and raw_name <= previous_name):
-                raise BundleError(
-                    "standalone compiler release archive names are duplicated or unsorted"
-                )
+                raise BundleError(f"{label} names are duplicated or unsorted")
             seen.add(key)
             previous_name = raw_name
 
@@ -3287,7 +3162,7 @@ def _validate_canonical_archive(
                     descriptor,
                     local_offset,
                     30,
-                    "standalone compiler release archive local header",
+                    f"{label} local header",
                 ),
             )
             (
@@ -3307,7 +3182,7 @@ def _validate_canonical_archive(
                 descriptor,
                 local_offset + 30,
                 local_filename_length,
-                "standalone compiler release archive local filename",
+                f"{label} local filename",
             )
             if (
                 local_signature != b"PK\x03\x04"
@@ -3323,35 +3198,20 @@ def _validate_canonical_archive(
                 or local_extra_length != 0
                 or local_name != raw_name
             ):
-                raise BundleError(
-                    "standalone compiler release archive local and central headers differ"
-                )
+                raise BundleError(f"{label} local and central headers differ")
             expected_local_offset = (
                 local_offset + 30 + filename_length + compressed_size
             )
             if expected_local_offset > central_offset:
-                raise BundleError(
-                    "standalone compiler release archive members overlap its central directory"
-                )
+                raise BundleError(f"{label} members overlap its central directory")
             central_cursor = name_offset + filename_length
             names.append(relative)
 
         if central_cursor != eocd_offset or expected_local_offset != central_offset:
-            raise BundleError(
-                "standalone compiler release archive contains gaps or unparsed records"
-            )
+            raise BundleError(f"{label} contains gaps or unparsed records")
         return tuple(names)
     finally:
         os.close(descriptor)
-
-
-def _validate_canonical_release_archive(path: Path) -> tuple[str, ...]:
-    return _validate_canonical_archive(
-        path,
-        expected_compression=zipfile.ZIP_STORED,
-        maximum_archive_bytes=MAX_RELEASE_ARCHIVE_BYTES,
-        label="standalone compiler release archive",
-    )
 
 
 def _validate_canonical_internal_package_archive(path: Path) -> tuple[str, ...]:
@@ -3363,207 +3223,8 @@ def _validate_canonical_internal_package_archive(path: Path) -> tuple[str, ...]:
     )
 
 
-def pack_release_input_archive(
-    release_input_root: Path,
-    archive_path: Path,
-    descriptor_output: Path,
-    *,
-    repository: str,
-    tag: str,
-    sidecar_verifier: SidecarVerifier = verify_sidecar,
-    qualified_profile_verifier: QualifiedProfileVerifier | None = None,
-    promotion_attestation_verifier: PromotionAttestationVerifier | None = None,
-) -> ReleaseAssetDescriptor:
-    """Create one deterministic, SHA-pinnable archive from an already verified release input."""
-
-    release_input_root = _require_absolute_normalized(
-        release_input_root, "compiler release-input root"
-    )
-    archive_path = _require_absolute_normalized(
-        archive_path, "standalone compiler release archive"
-    )
-    descriptor_output = _require_absolute_normalized(
-        descriptor_output, "standalone compiler release-asset descriptor output"
-    )
-    if archive_path == descriptor_output:
-        raise BundleError(
-            "release archive and descriptor output must be different files"
-        )
-    _require_real_output_parent(archive_path, "standalone compiler release archive")
-    _require_real_output_parent(
-        descriptor_output, "standalone compiler release-asset descriptor output"
-    )
-    if archive_path.exists() or archive_path.is_symlink():
-        raise BundleError("standalone compiler release archive must not exist")
-    if descriptor_output.exists() or descriptor_output.is_symlink():
-        raise BundleError(
-            "standalone compiler release-asset descriptor output must not exist"
-        )
-    repository = _require_release_repository(
-        repository, "standalone compiler release repository"
-    )
-    tag = _require_release_asset_token(tag, "standalone compiler release tag")
-    asset = _require_release_asset_token(
-        archive_path.name, "standalone compiler release asset", suffix=".zip"
-    )
-    verified = verify_release_input(
-        release_input_root,
-        sidecar_verifier=sidecar_verifier,
-        qualified_profile_verifier=qualified_profile_verifier,
-        promotion_attestation_verifier=promotion_attestation_verifier,
-    )
-    planned = {
-        "release-input.json": Seal(
-            len(verified.descriptor_bytes), _sha256(verified.descriptor_bytes)
-        ),
-        **verified.expected_files,
-    }
-    if not 0 < len(planned) <= MAX_RELEASE_ARCHIVE_FILES:
-        raise BundleError(
-            "standalone compiler release-input file count is outside its limit"
-        )
-    temporary_handle, temporary_name = tempfile.mkstemp(
-        prefix=f".{archive_path.name}.", suffix=".tmp", dir=archive_path.parent
-    )
-    os.close(temporary_handle)
-    temporary_archive = Path(temporary_name)
-    temporary_archive_identity: os.stat_result | None = temporary_archive.lstat()
-    temporary_descriptor_path: Path | None = None
-    temporary_descriptor_identity: os.stat_result | None = None
-    published_archive_identity: os.stat_result | None = None
-    published_descriptor_identity: os.stat_result | None = None
-    complete = False
-    try:
-        with zipfile.ZipFile(
-            temporary_archive,
-            mode="w",
-            compression=zipfile.ZIP_STORED,
-            allowZip64=False,
-        ) as archive:
-            for relative, seal in sorted(planned.items()):
-                _safe_relative(relative, f"release archive entry {relative!r}")
-                _write_zip_member_from_file(
-                    archive,
-                    relative,
-                    release_input_root.joinpath(*PurePosixPath(relative).parts),
-                    seal,
-                )
-        raw_names = _validate_canonical_release_archive(temporary_archive)
-        if raw_names != tuple(sorted(planned)):
-            raise BundleError(
-                "standalone compiler release archive file set differs after writing"
-            )
-        archive_seal = _streaming_file_seal(
-            temporary_archive,
-            MAX_RELEASE_ARCHIVE_BYTES,
-            "temporary standalone compiler release archive",
-        )
-        document = {
-            "schema": RELEASE_ASSET_DESCRIPTOR_SCHEMA,
-            "schema_version": RELEASE_ASSET_DESCRIPTOR_SCHEMA_VERSION,
-            "repository": repository,
-            "tag": tag,
-            "asset": asset,
-            "archive": {
-                "byte_len": archive_seal.byte_len,
-                "sha256": archive_seal.sha256,
-            },
-            "release_input": {
-                "catalog_sha256": _sha256(verified.catalog_bytes),
-                "file_count": len(planned),
-            },
-        }
-        descriptor_bytes = _canonical_pretty(document)
-        parsed_descriptor = _parse_release_asset_descriptor(descriptor_bytes)
-        temporary_descriptor_path = _write_temporary_bytes(
-            descriptor_output.parent,
-            f".{descriptor_output.name}.",
-            descriptor_bytes,
-        )
-        if not _same_file_identity(
-            temporary_archive_identity, temporary_archive.lstat()
-        ):
-            raise BundleError("temporary release archive path changed while writing")
-        temporary_descriptor_identity = temporary_descriptor_path.lstat()
-        try:
-            os.link(temporary_archive, archive_path)
-        except FileExistsError as error:
-            raise BundleError(
-                "standalone compiler release archive must not exist"
-            ) from error
-        published_archive_identity = archive_path.lstat()
-        if not _same_file_identity(
-            temporary_archive_identity, published_archive_identity
-        ):
-            raise BundleError(
-                "published release archive identity differs from its temporary file"
-            )
-        try:
-            os.link(temporary_descriptor_path, descriptor_output)
-        except FileExistsError as error:
-            raise BundleError(
-                "standalone compiler release-asset descriptor output must not exist"
-            ) from error
-        published_descriptor_identity = descriptor_output.lstat()
-        if not _same_file_identity(
-            temporary_descriptor_identity, published_descriptor_identity
-        ):
-            raise BundleError(
-                "published release-asset descriptor identity differs from its temporary file"
-            )
-        temporary_archive.unlink()
-        temporary_descriptor_path.unlink()
-        final_archive_seal = _streaming_file_seal(
-            archive_path,
-            MAX_RELEASE_ARCHIVE_BYTES,
-            "standalone compiler release archive",
-        )
-        if final_archive_seal != archive_seal:
-            raise BundleError(
-                "standalone compiler release archive changed while publishing"
-            )
-        if _validate_canonical_release_archive(archive_path) != raw_names:
-            raise BundleError("published release archive raw structure changed")
-        final_descriptor_bytes = _read_regular_no_follow(
-            descriptor_output,
-            MAX_DESCRIPTOR_BYTES,
-            "standalone compiler release-asset descriptor output",
-        )
-        if final_descriptor_bytes != descriptor_bytes:
-            raise BundleError(
-                "standalone compiler release-asset descriptor changed while publishing"
-            )
-        complete = True
-        return parsed_descriptor
-    except (OSError, zipfile.BadZipFile) as error:
-        raise BundleError(
-            f"cannot create standalone compiler release archive: {error}"
-        ) from error
-    finally:
-        if not complete:
-            if published_descriptor_identity is not None:
-                _unlink_published_file_if_owned(
-                    descriptor_output, published_descriptor_identity
-                )
-            if published_archive_identity is not None:
-                _unlink_published_file_if_owned(
-                    archive_path, published_archive_identity
-                )
-        if (
-            temporary_descriptor_path is not None
-            and temporary_descriptor_identity is not None
-        ):
-            _unlink_published_file_if_owned(
-                temporary_descriptor_path, temporary_descriptor_identity
-            )
-        if temporary_archive_identity is not None:
-            _unlink_published_file_if_owned(
-                temporary_archive, temporary_archive_identity
-            )
-
-
 def pack_internal_package_archive(
-    release_input_root: Path,
+    internal_input_root: Path,
     archive_path: Path,
     descriptor_output: Path,
     *,
@@ -3579,8 +3240,8 @@ def pack_internal_package_archive(
     every payload seal, and the complete catalog.
     """
 
-    release_input_root = _require_absolute_normalized(
-        release_input_root, "compiler release-input root"
+    internal_input_root = _require_absolute_normalized(
+        internal_input_root, "compiler internal-input root"
     )
     archive_path = _require_absolute_normalized(
         archive_path, "internal standalone compiler package archive"
@@ -3609,19 +3270,19 @@ def pack_internal_package_archive(
         raise BundleError("internal standalone compiler package archive must not exist")
     if descriptor_output.exists() or descriptor_output.is_symlink():
         raise BundleError("internal standalone compiler package descriptor must not exist")
-    verified = verify_release_input(
-        release_input_root,
+    verified = verify_internal_input(
+        internal_input_root,
         sidecar_verifier=sidecar_verifier,
         qualified_profile_verifier=qualified_profile_verifier,
         promotion_attestation_verifier=promotion_attestation_verifier,
     )
     planned = {
-        "release-input.json": Seal(
+        INTERNAL_INPUT_DESCRIPTOR_FILE: Seal(
             len(verified.descriptor_bytes), _sha256(verified.descriptor_bytes)
         ),
         **verified.expected_files,
     }
-    if not 0 < len(planned) <= MAX_RELEASE_ARCHIVE_FILES:
+    if not 0 < len(planned) <= MAX_INTERNAL_INPUT_FILES:
         raise BundleError("internal compiler package file count is outside its limit")
 
     temporary_handle, temporary_name = tempfile.mkstemp(
@@ -3648,7 +3309,7 @@ def pack_internal_package_archive(
                 _write_zip_member_from_file(
                     archive,
                     relative,
-                    release_input_root.joinpath(*PurePosixPath(relative).parts),
+                    internal_input_root.joinpath(*PurePosixPath(relative).parts),
                     seal,
                     compression=zipfile.ZIP_DEFLATED,
                     label_prefix="internal standalone compiler package archive",
@@ -3670,7 +3331,7 @@ def pack_internal_package_archive(
                 "sha256": archive_seal.sha256,
             },
             "compression": "deflate-9",
-            "release_input": {
+            "internal_input": {
                 "catalog_sha256": _sha256(verified.catalog_bytes),
                 "file_count": len(planned),
             },
@@ -3789,27 +3450,17 @@ def _validate_archive_entry(
     return relative
 
 
-def _validate_release_archive_entry(info: zipfile.ZipInfo, seen: set[str]) -> str:
-    return _validate_archive_entry(
-        info,
-        seen,
-        expected_compression=zipfile.ZIP_STORED,
-        maximum_compressed_bytes=MAX_RELEASE_ARCHIVE_BYTES,
-        label="standalone compiler release archive",
-    )
-
-
-def _extract_pinned_release_archive(
+def _extract_pinned_archive(
     archive_path: Path,
     expected_archive: Seal,
     expected_file_count: int,
     temporary_root: Path,
     *,
-    expected_compression: int = zipfile.ZIP_STORED,
-    maximum_archive_bytes: int = MAX_RELEASE_ARCHIVE_BYTES,
-    raw_validator: Callable[[Path], tuple[str, ...]] | None = None,
-    archive_label: str = "downloaded standalone compiler release archive",
-    extraction_label: str = "compiler release extraction tree",
+    expected_compression: int,
+    maximum_archive_bytes: int,
+    raw_validator: Callable[[Path], tuple[str, ...]],
+    archive_label: str,
+    extraction_label: str,
 ) -> tuple[set[str], set[Path]]:
     """Measure, parse, and extract one unchanged Windows archive file."""
 
@@ -3823,29 +3474,20 @@ def _extract_pinned_release_archive(
         )
         if observed_archive != expected_archive:
             raise BundleError(
-                "downloaded standalone compiler release archive differs from its "
-                "pinned length/SHA-256"
+                f"{archive_label} differs from its pinned length/SHA-256"
             )
-        if raw_validator is None:
-            raw_validator = _validate_canonical_release_archive
         raw_names = raw_validator(archive_path)
         if len(raw_names) != expected_file_count:
-            raise BundleError(
-                "standalone compiler release archive raw file count differs"
-            )
+            raise BundleError(f"{archive_label} raw file count differs")
         with zipfile.ZipFile(archive_path, mode="r") as archive:
             if archive.comment:
-                raise BundleError(
-                    "standalone compiler release archive comment is forbidden"
-                )
+                raise BundleError(f"{archive_label} comment is forbidden")
             infos = archive.infolist()
             if (
                 len(infos) != expected_file_count
-                or not 0 < len(infos) <= MAX_RELEASE_ARCHIVE_FILES
+                or not 0 < len(infos) <= MAX_INTERNAL_INPUT_FILES
             ):
-                raise BundleError(
-                    "standalone compiler release archive file count differs"
-                )
+                raise BundleError(f"{archive_label} file count differs")
             seen: set[str] = set()
             entries: list[tuple[str, zipfile.ZipInfo]] = []
             total = 0
@@ -3858,19 +3500,15 @@ def _extract_pinned_release_archive(
                     label=archive_label,
                 )
                 total += info.file_size
-                if total > MAX_RELEASE_ARCHIVE_BYTES:
-                    raise BundleError(
-                        "standalone compiler release archive expands beyond its limit"
-                    )
+                if total > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
+                    raise BundleError(f"{archive_label} expands beyond its limit")
                 entries.append((relative, info))
             if tuple(relative for relative, _ in entries) != raw_names:
-                raise BundleError(
-                    "standalone compiler release archive parser views disagree"
-                )
+                raise BundleError(f"{archive_label} parser views disagree")
             entry_names = {relative for relative, _ in entries}
-            if "release-input.json" not in entry_names:
+            if INTERNAL_INPUT_DESCRIPTOR_FILE not in entry_names:
                 raise BundleError(
-                    "standalone compiler release archive has no release-input.json"
+                    f"{archive_label} has no {INTERNAL_INPUT_DESCRIPTOR_FILE}"
                 )
             extraction_directories = {temporary_root}
             for relative, _ in entries:
@@ -3897,147 +3535,9 @@ def _extract_pinned_release_archive(
                             )
                     except (OSError, RuntimeError, zipfile.BadZipFile) as error:
                         raise BundleError(
-                            "cannot read standalone compiler release archive entry "
-                            f"{relative!r}: {error}"
+                            f"cannot read {archive_label} entry {relative!r}: {error}"
                         ) from error
         return entry_names, extraction_directories
-
-
-def extract_release_input_archive(
-    archive_path: Path,
-    asset_descriptor_path: Path,
-    output_root: Path,
-    *,
-    expected_repository: str,
-    sidecar_verifier: SidecarVerifier = verify_sidecar,
-    qualified_profile_verifier: QualifiedProfileVerifier | None = None,
-    promotion_attestation_verifier: PromotionAttestationVerifier | None = None,
-) -> Path:
-    """Verify the committed asset pin, then safely extract into one new release-input root."""
-
-    archive_path = _require_absolute_normalized(
-        archive_path, "downloaded standalone compiler release archive"
-    )
-    output_root = _require_absolute_normalized(
-        output_root, "downloaded standalone compiler release-input root"
-    )
-    _require_real_output_parent(
-        output_root, "downloaded standalone compiler release-input root"
-    )
-    if output_root.exists() or output_root.is_symlink():
-        raise BundleError(
-            "downloaded standalone compiler release-input root must not exist"
-        )
-    if qualified_profile_verifier is None:
-        raise BundleError("the Rust typed qualified-profile verifier is required")
-    if promotion_attestation_verifier is None:
-        raise BundleError("the GitHub promotion attestation verifier is required")
-    expected_repository = _require_release_repository(
-        expected_repository, "expected standalone compiler release repository"
-    )
-    descriptor = read_release_asset_descriptor(asset_descriptor_path)
-    if descriptor.repository.casefold() != expected_repository.casefold():
-        raise BundleError(
-            "standalone compiler release asset belongs to a different repository"
-        )
-    if archive_path.name != descriptor.asset:
-        raise BundleError("downloaded standalone compiler release asset name differs")
-    temporary_root = Path(
-        tempfile.mkdtemp(
-            prefix=f".{output_root.name}.",
-            suffix=".tmp",
-            dir=output_root.parent,
-        )
-    )
-    temporary_identity = temporary_root.lstat()
-    published_identity: os.stat_result | None = None
-    complete = False
-    try:
-        entry_names, extraction_directories = _extract_pinned_release_archive(
-            archive_path,
-            descriptor.archive,
-            descriptor.file_count,
-            temporary_root,
-        )
-        with _pin_windows_directories(
-            extraction_directories, "compiler release verification tree"
-        ):
-            actual = _enumerate_regular_files(
-                temporary_root, "downloaded standalone compiler release-input root"
-            )
-            if actual != entry_names:
-                raise BundleError(
-                    "downloaded standalone compiler release-input file set changed"
-                )
-            release_input_bytes = _read_regular_no_follow(
-                temporary_root / "release-input.json",
-                MAX_DESCRIPTOR_BYTES,
-                "downloaded compiler release-input descriptor",
-            )
-            release_input = _parse_json(
-                release_input_bytes,
-                "downloaded compiler release-input descriptor",
-                MAX_DESCRIPTOR_BYTES,
-            )
-            if release_input.get("schema") != RELEASE_INPUT_SCHEMA:
-                raise BundleError(
-                    "downloaded compiler release-input descriptor schema differs"
-                )
-            catalog_sha256 = _sha256(
-                _canonical_pretty(_catalog(release_input.get("catalog")))
-            )
-            if catalog_sha256 != descriptor.catalog_sha256:
-                raise BundleError(
-                    "downloaded compiler release-input catalog differs from its asset descriptor"
-                )
-            verified = verify_release_input(
-                temporary_root,
-                sidecar_verifier=sidecar_verifier,
-                qualified_profile_verifier=qualified_profile_verifier,
-                promotion_attestation_verifier=promotion_attestation_verifier,
-            )
-            if (
-                _sha256(verified.catalog_bytes) != descriptor.catalog_sha256
-                or len(verified.expected_files) + 1 != descriptor.file_count
-            ):
-                raise BundleError(
-                    "downloaded compiler release-input authority differs from its asset descriptor"
-                )
-        if not _same_file_identity(temporary_identity, temporary_root.lstat()):
-            raise BundleError("temporary extracted release-input root changed identity")
-        _publish_directory_no_replace(temporary_root, output_root)
-        published_identity = temporary_identity
-        published_status = output_root.lstat()
-        if not _same_file_identity(temporary_identity, published_status):
-            raise BundleError(
-                "published release-input root differs from its verified temporary root"
-            )
-        published_identity = published_status
-        final_verified = verify_release_input(
-            output_root,
-            sidecar_verifier=sidecar_verifier,
-            qualified_profile_verifier=qualified_profile_verifier,
-            promotion_attestation_verifier=promotion_attestation_verifier,
-        )
-        if (
-            final_verified.expected_files != verified.expected_files
-            or final_verified.descriptor_bytes != verified.descriptor_bytes
-            or final_verified.catalog_bytes != verified.catalog_bytes
-        ):
-            raise BundleError(
-                "published release-input changed after atomic publication"
-            )
-        complete = True
-        return output_root
-    except (OSError, zipfile.BadZipFile) as error:
-        raise BundleError(
-            f"cannot extract standalone compiler release archive: {error}"
-        ) from error
-    finally:
-        if not complete and published_identity is not None:
-            _remove_directory_if_owned(output_root, published_identity)
-        if not complete:
-            _remove_directory_if_owned(temporary_root, temporary_identity)
 
 
 def trust_pinned_internal_package_attestation(
@@ -4079,7 +3579,7 @@ def _verify_internal_archive_pin(
         return names
 
 
-def _verify_internal_release_input(
+def _verify_internal_input(
     root: Path,
     descriptor: InternalPackageDescriptor,
     *,
@@ -4087,7 +3587,7 @@ def _verify_internal_release_input(
     qualified_profile_verifier: QualifiedProfileVerifier,
     promotion_attestation_verifier: PromotionAttestationVerifier,
 ) -> VerifiedBundle:
-    verified = verify_release_input(
+    verified = verify_internal_input(
         root,
         sidecar_verifier=sidecar_verifier,
         qualified_profile_verifier=qualified_profile_verifier,
@@ -4098,7 +3598,7 @@ def _verify_internal_release_input(
         or len(verified.expected_files) + 1 != descriptor.file_count
     ):
         raise BundleError(
-            "internal compiler release input differs from its package descriptor"
+            "internal compiler input differs from its package descriptor"
         )
     return verified
 
@@ -4118,11 +3618,11 @@ def extract_internal_package_archive(
         archive_path, "internal standalone compiler package archive"
     )
     output_root = _require_absolute_normalized(
-        output_root, "internal compiler release-input root"
+        output_root, "internal compiler input root"
     )
-    _require_real_output_parent(output_root, "internal compiler release-input root")
+    _require_real_output_parent(output_root, "internal compiler input root")
     if output_root.exists() or output_root.is_symlink():
-        raise BundleError("internal compiler release-input root must not exist")
+        raise BundleError("internal compiler input root must not exist")
     if qualified_profile_verifier is None:
         raise BundleError("the Rust typed qualified-profile verifier is required")
     if promotion_attestation_verifier is None:
@@ -4140,7 +3640,7 @@ def extract_internal_package_archive(
     published_identity: os.stat_result | None = None
     complete = False
     try:
-        entry_names, extraction_directories = _extract_pinned_release_archive(
+        entry_names, extraction_directories = _extract_pinned_archive(
             archive_path,
             descriptor.archive,
             descriptor.file_count,
@@ -4155,30 +3655,32 @@ def extract_internal_package_archive(
             extraction_directories, "internal compiler package verification tree"
         ):
             actual = _enumerate_regular_files(
-                temporary_root, "internal compiler release-input root"
+                temporary_root, "internal compiler input root"
             )
             if actual != entry_names:
                 raise BundleError("internal compiler package file set changed")
-            if "release-input.json" not in actual:
-                raise BundleError("internal compiler package has no release-input.json")
-            release_input_bytes = _read_regular_no_follow(
-                temporary_root / "release-input.json",
+            if INTERNAL_INPUT_DESCRIPTOR_FILE not in actual:
+                raise BundleError(
+                    f"internal compiler package has no {INTERNAL_INPUT_DESCRIPTOR_FILE}"
+                )
+            internal_input_bytes = _read_regular_no_follow(
+                temporary_root / INTERNAL_INPUT_DESCRIPTOR_FILE,
                 MAX_DESCRIPTOR_BYTES,
-                "internal compiler release-input descriptor",
+                "internal compiler input descriptor",
             )
-            release_input = _parse_json(
-                release_input_bytes,
-                "internal compiler release-input descriptor",
+            internal_input = _parse_json(
+                internal_input_bytes,
+                "internal compiler input descriptor",
                 MAX_DESCRIPTOR_BYTES,
             )
-            if release_input.get("schema") != RELEASE_INPUT_SCHEMA:
-                raise BundleError("internal compiler release-input schema differs")
+            if internal_input.get("schema") != INTERNAL_INPUT_SCHEMA:
+                raise BundleError("internal compiler input schema differs")
             if (
-                _sha256(_canonical_pretty(_catalog(release_input.get("catalog"))))
+                _sha256(_canonical_pretty(_catalog(internal_input.get("catalog"))))
                 != descriptor.catalog_sha256
             ):
                 raise BundleError("internal compiler catalog differs from its package pin")
-            verified = _verify_internal_release_input(
+            verified = _verify_internal_input(
                 temporary_root,
                 descriptor,
                 sidecar_verifier=sidecar_verifier,
@@ -4192,7 +3694,7 @@ def extract_internal_package_archive(
         if not _same_file_identity(temporary_identity, published_status):
             raise BundleError("published internal compiler input changed identity")
         published_identity = published_status
-        final_verified = _verify_internal_release_input(
+        final_verified = _verify_internal_input(
             output_root,
             descriptor,
             sidecar_verifier=sidecar_verifier,
@@ -4233,7 +3735,7 @@ def materialize_internal_package(
         archive_path, "internal standalone compiler package archive"
     )
     output_root = _require_absolute_normalized(
-        output_root, "internal compiler release-input root"
+        output_root, "internal compiler input root"
     )
     if qualified_profile_verifier is None:
         raise BundleError("the Rust typed qualified-profile verifier is required")
@@ -4242,7 +3744,7 @@ def materialize_internal_package(
     if output_root.exists() or output_root.is_symlink():
         if output_root.is_symlink() or not output_root.is_dir():
             raise BundleError("cached internal compiler input is not a real directory")
-        _verify_internal_release_input(
+        _verify_internal_input(
             output_root,
             descriptor,
             sidecar_verifier=sidecar_verifier,
@@ -4302,14 +3804,14 @@ def _copy_expected_file(
 ) -> None:
     source = source_root.joinpath(*PurePosixPath(relative).parts)
     bytes_ = _read_regular_no_follow(
-        source, max(seal.byte_len, 1), f"release input {relative}"
+        source, max(seal.byte_len, 1), f"internal input {relative}"
     )
-    _check_sealed_bytes(bytes_, seal, f"release input {relative}")
+    _check_sealed_bytes(bytes_, seal, f"internal input {relative}")
     _write_new(destination_root.joinpath(*PurePosixPath(relative).parts), bytes_)
 
 
 def prepare_product_bundle(
-    release_input_root: Path | None,
+    internal_input_root: Path | None,
     work_root: Path,
     *,
     sidecar_verifier: SidecarVerifier = verify_sidecar,
@@ -4319,51 +3821,51 @@ def prepare_product_bundle(
     """Create one clean pre-host-build catalog/bundle workspace.
 
     `None` actively removes stale product data and writes a zero-byte embedded catalog.  A present
-    release input is verified before copying, then the copied tree is independently reverified.
+    internal input is verified before copying, then the copied tree is independently reverified.
     """
 
     work_root = _require_absolute_normalized(work_root, "compiler bundle work root")
-    release = (
-        verify_release_input(
-            release_input_root,
+    internal_input = (
+        verify_internal_input(
+            internal_input_root,
             sidecar_verifier=sidecar_verifier,
             qualified_profile_verifier=qualified_profile_verifier,
             promotion_attestation_verifier=promotion_attestation_verifier,
         )
-        if release_input_root is not None
+        if internal_input_root is not None
         else None
     )
     _remove_work_root(work_root)
     work_root.mkdir(parents=True)
     catalog_path = work_root / EMBEDDED_CATALOG_FILE
-    if release is None:
+    if internal_input is None:
         _write_new(catalog_path, b"")
         return PreparedBundle(False, work_root, catalog_path, None, None, _sha256(b""))
-    assert release_input_root is not None
+    assert internal_input_root is not None
     bundle_root = work_root / "compiler"
     bundle_root.mkdir()
-    for relative, seal in sorted(release.expected_files.items()):
-        _copy_expected_file(release_input_root, bundle_root, relative, seal)
-    _write_new(bundle_root / BUNDLE_DESCRIPTOR, release.descriptor_bytes)
-    _write_new(bundle_root / CATALOG_FILE, release.catalog_bytes)
-    _write_new(catalog_path, release.catalog_bytes)
+    for relative, seal in sorted(internal_input.expected_files.items()):
+        _copy_expected_file(internal_input_root, bundle_root, relative, seal)
+    _write_new(bundle_root / BUNDLE_DESCRIPTOR, internal_input.descriptor_bytes)
+    _write_new(bundle_root / CATALOG_FILE, internal_input.catalog_bytes)
+    _write_new(catalog_path, internal_input.catalog_bytes)
     verified = verify_staged_bundle(
         bundle_root,
         sidecar_verifier=sidecar_verifier,
         qualified_profile_verifier=qualified_profile_verifier,
         promotion_attestation_verifier=promotion_attestation_verifier,
     )
-    if verified.expected_files != release.expected_files:
+    if verified.expected_files != internal_input.expected_files:
         raise BundleError(
-            "copied compiler bundle differs from its immutable release input"
+            "copied compiler bundle differs from its immutable internal input"
         )
     return PreparedBundle(
         True,
         work_root,
         catalog_path,
         bundle_root,
-        release.sidecar_name,
-        _sha256(release.catalog_bytes),
+        internal_input.sidecar_name,
+        _sha256(internal_input.catalog_bytes),
     )
 
 
@@ -4398,7 +3900,7 @@ def stage_product_bundle(
     return destination
 
 
-def record_immutable_release_input(
+def record_internal_input(
     signed_sidecar: Path,
     qualified_profile_roots: list[Path],
     output_root: Path,
@@ -4413,7 +3915,7 @@ def record_immutable_release_input(
     promotion_attestation_verifier: PromotionAttestationVerifier | None = None,
     notice_sources: dict[str, Path] | None = None,
 ) -> VerifiedBundle:
-    """Copy final signed/qualified bytes into one new immutable release-input directory.
+    """Copy final signed/qualified bytes into one new immutable internal-input directory.
 
     This does not sign or qualify anything.  It is intentionally ordered after both operations and
     refuses a profile whose parity reports identify any other sidecar bytes or protocol.
@@ -4429,8 +3931,8 @@ def record_immutable_release_input(
     promotion_attestation = _require_absolute_normalized(
         promotion_attestation, "compiler promotion GitHub attestation"
     )
-    output_root = _require_absolute_normalized(output_root, "release-input output root")
-    expected_repository = _require_release_repository(
+    output_root = _require_absolute_normalized(output_root, "internal-input output root")
+    expected_repository = _require_repository(
         expected_repository, "authorized compiler promotion repository"
     )
     expected_commit = _require_hex(
@@ -4442,9 +3944,9 @@ def record_immutable_release_input(
         raise BundleError("the Rust typed qualified-profile verifier is required")
     if promotion_attestation_verifier is None:
         raise BundleError("the GitHub promotion attestation verifier is required")
-    _require_real_output_parent(output_root, "release-input output root")
+    _require_real_output_parent(output_root, "internal-input output root")
     if output_root.exists() or output_root.is_symlink():
-        raise BundleError("release-input output root must not exist")
+        raise BundleError("internal-input output root must not exist")
     sidecar_bytes = _read_regular_no_follow(
         signed_sidecar, MAX_SIDECAR_BYTES, "signed sidecar"
     )
@@ -4558,7 +4060,7 @@ def record_immutable_release_input(
         output_name = f"build-{build_id}-{guid_text}"
         _safe_relative(output_name, "qualified profile output directory")
         if output_name.casefold() in output_names:
-            raise BundleError("qualified profile targets collide in the release input")
+            raise BundleError("qualified profile targets collide in the internal input")
         output_names.add(output_name.casefold())
         manifest_relative = f"profiles/{output_name}/compiler-profile.json"
         catalog_entry = {
@@ -4576,7 +4078,7 @@ def record_immutable_release_input(
         profile_plans[index - 1][0] == profile_plans[index][0]
         for index in range(1, len(profile_plans))
     ):
-        raise BundleError("qualified release input contains duplicate target tuples")
+        raise BundleError("qualified internal input contains duplicate target tuples")
     sources = notice_sources or {
         "UNREANGEL-LICENSE.md": ROOT
         / "crates/gore-as/native/standalone-compiler/vendor/unreangel/UNREANGEL-LICENSE.md",
@@ -4586,7 +4088,7 @@ def record_immutable_release_input(
         / "crates/gore-as/native/standalone-compiler/PROVENANCE.toml",
     }
     if set(sources) != set(REQUIRED_NOTICES):
-        raise BundleError("release-input notice sources are incomplete")
+        raise BundleError("internal-input notice sources are incomplete")
     notice_bytes = {
         name: _read_regular_no_follow(
             _require_absolute_normalized(path, f"notice source {name}"),
@@ -4602,8 +4104,8 @@ def record_immutable_release_input(
         "profiles": [plan[5] for plan in profile_plans],
     }
     descriptor = {
-        "schema": RELEASE_INPUT_SCHEMA,
-        "schema_version": RELEASE_INPUT_SCHEMA_VERSION,
+        "schema": INTERNAL_INPUT_SCHEMA,
+        "schema_version": INTERNAL_INPUT_SCHEMA_VERSION,
         "immutable": True,
         "qualified": True,
         "promotion": {
@@ -4680,8 +4182,8 @@ def record_immutable_release_input(
             )
         for name, bytes_ in notice_bytes.items():
             _write_new(temporary_root / name, bytes_)
-        _write_new(temporary_root / "release-input.json", descriptor_bytes)
-        verified = verify_release_input(
+        _write_new(temporary_root / INTERNAL_INPUT_DESCRIPTOR_FILE, descriptor_bytes)
+        verified = verify_internal_input(
             temporary_root,
             sidecar_verifier=sidecar_verifier,
             qualified_profile_verifier=qualified_profile_verifier,
@@ -4689,16 +4191,16 @@ def record_immutable_release_input(
         )
         if not _same_file_identity(temporary_identity, temporary_root.lstat()):
             raise BundleError(
-                "temporary release-input root changed identity before publication"
+                "temporary internal-input root changed identity before publication"
             )
         _publish_directory_no_replace(temporary_root, output_root)
         published_status = output_root.lstat()
         if not _same_file_identity(temporary_identity, published_status):
             raise BundleError(
-                "published release-input root differs from its verified temporary root"
+                "published internal-input root differs from its verified temporary root"
             )
         published_identity = published_status
-        final_verified = verify_release_input(
+        final_verified = verify_internal_input(
             output_root,
             sidecar_verifier=sidecar_verifier,
             qualified_profile_verifier=qualified_profile_verifier,
@@ -4710,7 +4212,7 @@ def record_immutable_release_input(
             or final_verified.catalog_bytes != verified.catalog_bytes
         ):
             raise BundleError(
-                "published release-input changed after atomic publication"
+                "published internal-input changed after atomic publication"
             )
         complete = True
         return final_verified
@@ -4802,7 +4304,7 @@ def _main() -> int:
     prepare = commands.add_parser(
         "prepare", help="prepare an embedded catalog and staged bytes"
     )
-    prepare.add_argument("--release-input", type=Path)
+    prepare.add_argument("--internal-input", type=Path)
     prepare.add_argument("--qualified-profile-verifier", type=Path)
     prepare.add_argument("--github-attestation-verifier", type=Path)
     prepare.add_argument("--work-root", type=Path, required=True)
@@ -4813,7 +4315,8 @@ def _main() -> int:
     verify.add_argument("--qualified-profile-verifier", type=Path, required=True)
     verify.add_argument("--github-attestation-verifier", type=Path, required=True)
     record = commands.add_parser(
-        "record-release-input", help="record already signed/qualified bytes once"
+        "record-internal-input",
+        help="record already signed and qualified bytes for GORE's internal package",
     )
     record.add_argument("--signed-sidecar", type=Path, required=True)
     record.add_argument("--promotion-identity", type=Path, required=True)
@@ -4827,22 +4330,13 @@ def _main() -> int:
     record.add_argument("--qualified-profile-verifier", type=Path, required=True)
     record.add_argument("--github-attestation-verifier", type=Path, required=True)
     record.add_argument("--output", type=Path, required=True)
-    pack = commands.add_parser(
-        "pack-release-input",
-        help="pack one verified immutable release input deterministically",
-    )
-    pack.add_argument("--release-input", type=Path, required=True)
-    pack.add_argument("--qualified-profile-verifier", type=Path, required=True)
-    pack.add_argument("--github-attestation-verifier", type=Path, required=True)
-    pack.add_argument("--archive", type=Path, required=True)
-    pack.add_argument("--descriptor-output", type=Path, required=True)
-    pack.add_argument("--repository", required=True)
-    pack.add_argument("--tag", required=True)
     pack_internal = commands.add_parser(
         "pack-internal-package",
-        help="pack one verified release input into GORE's internal compressed asset",
+        help="pack one verified internal input into GORE's compressed asset",
     )
-    pack_internal.add_argument("--release-input", type=Path, required=True)
+    pack_internal.add_argument(
+        "--internal-input", type=Path, required=True
+    )
     pack_internal.add_argument(
         "--qualified-profile-verifier", type=Path, required=True
     )
@@ -4851,22 +4345,6 @@ def _main() -> int:
     )
     pack_internal.add_argument("--archive", type=Path, required=True)
     pack_internal.add_argument("--descriptor-output", type=Path, required=True)
-    asset_info = commands.add_parser(
-        "release-asset-info",
-        help="validate and print one committed release-asset descriptor",
-    )
-    asset_info.add_argument("--descriptor", type=Path, required=True)
-    asset_info.add_argument("--expected-repository", required=True)
-    extract = commands.add_parser(
-        "extract-release-input",
-        help="verify and safely extract one pinned release asset",
-    )
-    extract.add_argument("--archive", type=Path, required=True)
-    extract.add_argument("--asset-descriptor", type=Path, required=True)
-    extract.add_argument("--expected-repository", required=True)
-    extract.add_argument("--qualified-profile-verifier", type=Path, required=True)
-    extract.add_argument("--github-attestation-verifier", type=Path, required=True)
-    extract.add_argument("--output", type=Path, required=True)
     extract_internal = commands.add_parser(
         "extract-internal-package",
         help="verify and safely extract GORE's pinned internal compiler asset",
@@ -4888,18 +4366,18 @@ def _main() -> int:
             build_native_lanes(args.build_root, dry_run=args.dry_run)
         elif args.command == "prepare":
             if (
-                args.release_input is not None
+                args.internal_input is not None
                 and args.qualified_profile_verifier is None
             ):
                 raise BundleError(
-                    "--qualified-profile-verifier is required with --release-input"
+                    "--qualified-profile-verifier is required with --internal-input"
                 )
             if (
-                args.release_input is not None
+                args.internal_input is not None
                 and args.github_attestation_verifier is None
             ):
                 raise BundleError(
-                    "--github-attestation-verifier is required with --release-input"
+                    "--github-attestation-verifier is required with --internal-input"
                 )
             qualified_verifier = (
                 None
@@ -4909,7 +4387,7 @@ def _main() -> int:
                 )
             )
             prepared = prepare_product_bundle(
-                args.release_input,
+                args.internal_input,
                 args.work_root,
                 qualified_profile_verifier=qualified_verifier,
                 promotion_attestation_verifier=(
@@ -4953,8 +4431,8 @@ def _main() -> int:
                     indent=2,
                 )
             )
-        elif args.command == "record-release-input":
-            verified = record_immutable_release_input(
+        elif args.command == "record-internal-input":
+            verified = record_internal_input(
                 args.signed_sidecar,
                 args.qualified_profile_root,
                 args.output,
@@ -4973,7 +4451,7 @@ def _main() -> int:
             print(
                 json.dumps(
                     {
-                        "release_input": str(args.output),
+                        "internal_input": str(args.output),
                         "catalog_sha256": _sha256(verified.catalog_bytes),
                         "sidecar": verified.sidecar_name,
                         "file_count": len(verified.expected_files) + 1,
@@ -4981,38 +4459,9 @@ def _main() -> int:
                     indent=2,
                 )
             )
-        elif args.command == "pack-release-input":
-            descriptor = pack_release_input_archive(
-                args.release_input,
-                args.archive,
-                args.descriptor_output,
-                repository=args.repository,
-                tag=args.tag,
-                qualified_profile_verifier=qualified_profile_verifier_from_path(
-                    args.qualified_profile_verifier
-                ),
-                promotion_attestation_verifier=promotion_attestation_verifier_from_path(
-                    args.github_attestation_verifier
-                ),
-            )
-            print(
-                json.dumps(
-                    {
-                        "repository": descriptor.repository,
-                        "tag": descriptor.tag,
-                        "asset": descriptor.asset,
-                        "archive_byte_len": descriptor.archive.byte_len,
-                        "archive_sha256": descriptor.archive.sha256,
-                        "catalog_sha256": descriptor.catalog_sha256,
-                        "file_count": descriptor.file_count,
-                        "descriptor": str(args.descriptor_output),
-                    },
-                    indent=2,
-                )
-            )
         elif args.command == "pack-internal-package":
             descriptor = pack_internal_package_archive(
-                args.release_input,
+                args.internal_input,
                 args.archive,
                 args.descriptor_output,
                 qualified_profile_verifier=qualified_profile_verifier_from_path(
@@ -5036,54 +4485,6 @@ def _main() -> int:
                     indent=2,
                 )
             )
-        elif args.command == "release-asset-info":
-            descriptor = read_release_asset_descriptor(args.descriptor)
-            expected_repository = _require_release_repository(
-                args.expected_repository,
-                "expected standalone compiler release repository",
-            )
-            if descriptor.repository.casefold() != expected_repository.casefold():
-                raise BundleError(
-                    "standalone compiler release asset belongs to a different repository"
-                )
-            print(
-                json.dumps(
-                    {
-                        "repository": descriptor.repository,
-                        "tag": descriptor.tag,
-                        "asset": descriptor.asset,
-                        "archive_byte_len": descriptor.archive.byte_len,
-                        "archive_sha256": descriptor.archive.sha256,
-                        "catalog_sha256": descriptor.catalog_sha256,
-                        "file_count": descriptor.file_count,
-                    },
-                    indent=2,
-                )
-            )
-        elif args.command == "extract-release-input":
-            extracted = extract_release_input_archive(
-                args.archive,
-                args.asset_descriptor,
-                args.output,
-                expected_repository=args.expected_repository,
-                qualified_profile_verifier=qualified_profile_verifier_from_path(
-                    args.qualified_profile_verifier
-                ),
-                promotion_attestation_verifier=promotion_attestation_verifier_from_path(
-                    args.github_attestation_verifier
-                ),
-            )
-            descriptor = read_release_asset_descriptor(args.asset_descriptor)
-            print(
-                json.dumps(
-                    {
-                        "release_input": str(extracted),
-                        "catalog_sha256": descriptor.catalog_sha256,
-                        "file_count": descriptor.file_count,
-                    },
-                    indent=2,
-                )
-            )
         elif args.command == "extract-internal-package":
             extracted = extract_internal_package_archive(
                 args.archive,
@@ -5098,7 +4499,7 @@ def _main() -> int:
             print(
                 json.dumps(
                     {
-                        "release_input": str(extracted),
+                        "internal_input": str(extracted),
                         "catalog_sha256": descriptor.catalog_sha256,
                         "file_count": descriptor.file_count,
                     },
