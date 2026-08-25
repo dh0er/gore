@@ -4883,10 +4883,21 @@ fn publish_install_mutation_initialization(init: &Path, path: &Path) -> std::io:
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
-    if unsafe { MoveFileExW(init.as_ptr(), path.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
+    // Read-only observers (antivirus, indexers, Manager preflight) can briefly open the freshly
+    // closed initialization record without delete sharing. That must not turn a safe transient
+    // observation into a deterministic failure to publish the lock. Retry only Windows sharing
+    // and lock violations for a short bounded interval; all other errors, including an already
+    // published competing lock, remain immediate hard failures.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        if unsafe { MoveFileExW(init.as_ptr(), path.as_ptr(), MOVEFILE_WRITE_THROUGH) } != 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if !install_mutation_lock_busy(&error) || std::time::Instant::now() >= deadline {
+            return Err(error);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
 
@@ -11481,6 +11492,39 @@ mod tests {
         );
         assert_eq!(guard.path(), root.join(".gore-install-mutation.lock"));
         guard.release().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn install_mutation_publication_waits_for_a_transient_reader() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+
+        let root = unique_test_root("mutation-publish-transient-reader");
+        std::fs::create_dir_all(&root).unwrap();
+        let init = root.join("initializing.lock");
+        let published = root.join("published.lock");
+        std::fs::write(&init, b"owner").unwrap();
+
+        let reader_path = init.clone();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .open(reader_path)
+                .unwrap();
+            ready_tx.send(()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            drop(file);
+        });
+        ready_rx.recv().unwrap();
+
+        publish_install_mutation_initialization(&init, &published).unwrap();
+        reader.join().unwrap();
+        assert!(!init.exists());
+        assert_eq!(std::fs::read(&published).unwrap(), b"owner");
         std::fs::remove_dir_all(root).unwrap();
     }
 
