@@ -1870,7 +1870,7 @@ fn emit_function_ctor(
         // Before the compound-assignment fold, which would rewrite the middle line out of the
         // shape this one matches on.
         let body = collapse_single_use_accumulators(&body, &widened);
-        let body = fold_enum_call_round_trips(&body, &call_result_types);
+        let body = fold_enum_call_round_trips(&body, &call_result_types, fields, &path_roots, refs, returns_by_reference);
         let body = fold_compound_assignments(&body, fields, &path_roots, refs);
         let uses_return_slot = body.contains("__return");
         if uses_return_slot {
@@ -1906,7 +1906,7 @@ fn emit_function_ctor(
         // has its `T X;` in this text and its `X = ...` lines in the body, so the split form is
         // only whole once the two are joined.
         let rendered = collapse_single_use_accumulators(&rendered, &widened);
-        let rendered = fold_enum_call_round_trips(&rendered, &call_result_types);
+        let rendered = fold_enum_call_round_trips(&rendered, &call_result_types, fields, &path_roots, refs, returns_by_reference);
         let rendered = fold_compound_assignments(&rendered, fields, &path_roots, refs);
         let rendered = fold_member_read_temporaries(
             &rendered,
@@ -6096,7 +6096,14 @@ fn temporary_type<'a>(locals: &'a BTreeMap<i32, String>, temp: &str) -> Option<&
 fn is_object_handle_type(ty: &str) -> bool {
     let bare = super::structure::bare_type_name(ty.trim_start_matches("const "));
     let bytes = bare.as_bytes();
-    bytes.len() >= 2 && matches!(bytes[0], b'A' | b'U') && bytes[1].is_ascii_uppercase()
+    if bytes.len() < 2 || !matches!(bytes[0], b'A' | b'U') {
+        return false;
+    }
+    // `AGothicCharacter`, and also `A_FireGolem_EnvironmentAttack_ArenaLavaStream`: the prefix may
+    // be separated from the name by an underscore, and reading that as a value type made a range
+    // for over handles look like one over values — where a non-const call really would be a write.
+    bytes[1].is_ascii_uppercase()
+        || (bytes[1] == b'_' && bytes.get(2).is_some_and(u8::is_ascii_uppercase))
 }
 
 /// The value is a CALL’s result. A parenthesized expression ends in `)` as well and has no call
@@ -6924,7 +6931,14 @@ fn is_decompiler_local(name: &str) -> bool {
 /// `call_result_types` has already resolved per slot: when the enum being constructed IS what the
 /// call returns, both casts name a type the value already has. Anything else — a different enum,
 /// an unresolved callee, a second read of the name — is left alone.
-fn fold_enum_call_round_trips(body: &str, call_types: &HashMap<i32, String>) -> String {
+fn fold_enum_call_round_trips(
+    body: &str,
+    call_types: &HashMap<i32, String>,
+    fields: Option<&HashMap<String, String>>,
+    roots: &HashMap<String, String>,
+    refs: &RefResolver,
+    returns_by_reference: bool,
+) -> String {
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
     let mut changed = true;
     while changed {
@@ -6937,7 +6951,7 @@ fn fold_enum_call_round_trips(body: &str, call_types: &HashMap<i32, String>) -> 
             else {
                 continue;
             };
-            if !lines[index].trim_start().starts_with("int ") || !inner.contains('(') {
+            if !lines[index].trim_start().starts_with("int ") {
                 continue;
             }
             let Some(slot) = name
@@ -6947,7 +6961,12 @@ fn fold_enum_call_round_trips(body: &str, call_types: &HashMap<i32, String>) -> 
             else {
                 continue;
             };
-            let Some(returned) = call_types.get(&slot) else {
+            // The enum either came out of a CALL, where the callee's declared return type says
+            // so, or was read from a member PATH, where the field's own type does.
+            let resolved = call_types.get(&slot).cloned().or_else(|| {
+                type_of_member_path(inner, fields, roots, refs)
+            });
+            let Some(returned) = resolved.as_ref() else {
                 continue;
             };
             if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != 2 {
@@ -6958,6 +6977,18 @@ fn fold_enum_call_round_trips(body: &str, call_types: &HashMap<i32, String>) -> 
             else {
                 continue;
             };
+            // A function that returns BY REFERENCE keeps a read THROUGH A LOCAL in a name of its
+            // own. The returned reference outlives the expression, and the local it was read
+            // through is cleaned up before the caller sees it — "Resulting reference cannot be
+            // returned. The expression uses objects that during cleanup may invalidate it."
+            // A call's result is not that: it is not read through anything that goes away here.
+            let reads_through_a_local = inner.starts_with("local_");
+            if returns_by_reference
+                && reads_through_a_local
+                && lines[reader].trim_start().starts_with("return ")
+            {
+                continue;
+            }
             lines[reader] = lines[reader].replace(&round_trip, inner);
             lines.remove(index);
             changed = true;
@@ -7466,11 +7497,29 @@ fn type_of_member_path(
 ) -> Option<String> {
     let mut steps = path.split('.');
     let root = steps.next()?;
+    // The first step off `this` is a field of the class, and it may be indexed like any later one.
     let mut ty = match root {
-        "this" => fields?.get(steps.next()?)?.clone(),
-        named => roots.get(named)?.clone(),
+        "this" => {
+            let step = steps.next()?;
+            let (step, indexed) = match step.split_once('[') {
+                Some((name, _)) => (name, true),
+                None => (step, false),
+            };
+            let ty = fields?.get(step)?.clone();
+            match indexed {
+                true => element_type(&ty)?.to_owned(),
+                false => ty,
+            }
+        }
+        named => roots.get(named.split('[').next()?)?.clone(),
     };
     for step in steps {
+        // An INDEXED step reads an element: `Freepoints[Idx].WalkSpeed` walks through the array's
+        // element type, not the array's own.
+        let (step, indexed) = match step.split_once('[') {
+            Some((name, _)) => (name, true),
+            None => (step, false),
+        };
         // A declared type may carry the namespace it was declared in (`G1R::UStoryG1R`) while the
         // class tables are keyed by the bare name. Ask for both, in that order.
         let bare = ty.rsplit("::").next().unwrap_or(&ty).to_owned();
@@ -7484,8 +7533,18 @@ fn type_of_member_path(
             .or_else(|| refs.native_field_type(&bare, step))
             .or_else(|| refs.native_field_value_type(&bare, step))?
             .to_owned();
+        if indexed {
+            ty = element_type(&ty)?.to_owned();
+        }
     }
     Some(ty)
+}
+
+/// The element type of a container type: `TArray<FFoo>` gives `FFoo`.
+fn element_type(ty: &str) -> Option<&str> {
+    let inner = ty.split_once('<')?.1.strip_suffix('>')?;
+    // Only a single parameter: a map's element is not named by its first one.
+    (!inner.contains(',')).then_some(inner.trim())
 }
 
 /// `T local_N = this.Member;` read once is that member read where it is read. Vanilla reads a
@@ -8622,6 +8681,14 @@ fn is_value_struct_type(ty: &str) -> bool {
 /// row for, which costs the module its splicability. Fold the idiom back into the range-for the
 /// source actually wrote. Returns the rewritten body plus the element slots whose hoisted
 /// declaration the loop header now owns.
+/// One line per refused range-for, behind `GORE_AS_FOREACH_DIAG`, so the reasons can be counted
+/// over the whole corpus instead of guessed at from one example.
+fn foreach_reject(reason: &str) {
+    if std::env::var_os("GORE_AS_FOREACH_DIAG").is_some() {
+        eprintln!("[foreach-reject] {reason}");
+    }
+}
+
 fn rewrite_foreach_loops(
     body: &str,
     locals: &BTreeMap<i32, String>,
@@ -8633,6 +8700,23 @@ fn rewrite_foreach_loops(
     let mut replace: Vec<Option<String>> = vec![None; lines.len()];
     let mut suppressed = HashSet::new();
 
+    // Every place that has the idiom's SHAPE, found before any of them is judged. A function may
+    // run the same slot through two loops one after the other — the compiler reuses the frame —
+    // and each loop's own `elem = it.Proceed();` would otherwise read, to the other, as a mention
+    // of the element outside its loop. Measured: 71 of the refusals here were exactly that.
+    let candidates: Vec<(usize, usize, String)> = (0..lines.len())
+        .filter(|i| i + 3 < lines.len())
+        .filter_map(|i| {
+            let (iter, _) = iterator_decl(lines[i])?;
+            (lines[i + 1].trim() == format!("while (local_{iter}.CanProceed)")
+                && lines[i + 2].trim() == "{")
+            .then_some(())?;
+            let elem = proceed_assignment(lines[i + 3], iter)?;
+            let end = matching_close(&lines, i + 2)?;
+            Some((i, end, format!("local_{elem}")))
+        })
+        .collect();
+
     for i in 0..lines.len() {
         if i + 3 >= lines.len() || drop_line[i] {
             continue;
@@ -8643,9 +8727,11 @@ fn rewrite_foreach_loops(
         if lines[i + 1].trim() != format!("while (local_{iter}.CanProceed)")
             || lines[i + 2].trim() != "{"
         {
+            foreach_reject("not-the-idiom-shape");
             continue;
         }
         let Some(elem) = proceed_assignment(lines[i + 3], iter) else {
+            foreach_reject("no-proceed-assignment");
             continue;
         };
         let Some(end) = matching_close(&lines, i + 2) else {
@@ -8657,13 +8743,42 @@ fn rewrite_foreach_loops(
         let iter_ident = format!("local_{iter}");
         let elem_ident = format!("local_{elem}");
         let iter_uses: usize = lines.iter().map(|l| count_ident(l, &iter_ident)).sum();
+        // The element's own bare declaration is the one mention outside the loop that does not
+        // count: the range-for header declares the element itself, so that line is what the
+        // header REPLACES. Measured over the corpus, it is the only thing standing outside for
+        // 100 of the loops that were refused here.
+        let hoisted_declaration = lines
+            .iter()
+            .position(|line| {
+                bare_declaration(line).is_some_and(|(_, name)| name == elem_ident)
+            })
+            .filter(|at| *at < i + 3 || *at > end);
+        // A mention inside ANOTHER loop that runs the same element is that loop's own.
+        let owned_elsewhere = |n: usize| {
+            candidates.iter().any(|(start, close, elem)| {
+                *elem == elem_ident && *start != i && n >= *start && n <= *close
+            })
+        };
         let elem_outside: usize = lines
             .iter()
             .enumerate()
             .filter(|(n, _)| *n < i + 3 || *n > end)
+            .filter(|(n, _)| Some(*n) != hoisted_declaration && !owned_elsewhere(*n))
             .map(|(_, l)| count_ident(l, &elem_ident))
             .sum();
         if iter_uses != 3 || elem_outside != 0 {
+            if iter_uses != 3 {
+                foreach_reject("iterator-mentioned-elsewhere");
+            } else {
+                let outside = lines
+                    .iter()
+                    .enumerate()
+                    .filter(|(n, _)| *n < i + 3 || *n > end)
+                    .find(|(_, l)| count_ident(l, &elem_ident) > 0)
+                    .map(|(_, l)| l.trim())
+                    .unwrap_or("");
+                foreach_reject(&format!("element-mentioned-outside | {outside}"));
+            }
             continue;
         }
         // The range-for element is READ-ONLY. A body that writes through it, or calls a method
@@ -8675,6 +8790,7 @@ fn rewrite_foreach_loops(
             locals.get(&elem).map(String::as_str),
             refs,
         ) {
+            foreach_reject("element-written-through");
             continue;
         }
         // A range-for element is not assignable, so every write to it inside the loop has to be
@@ -8695,6 +8811,10 @@ fn rewrite_foreach_loops(
         drop_line[i + 3] = true;
         for n in releases {
             drop_line[n] = true;
+        }
+        // The header owns the element now, so the declaration it replaces goes with the rest.
+        if let Some(at) = hoisted_declaration {
+            drop_line[at] = true;
         }
         suppressed.insert(elem);
     }
