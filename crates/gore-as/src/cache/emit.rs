@@ -6804,8 +6804,26 @@ fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>) -> Strin
     while changed {
         changed = false;
         for index in 0..lines.len().saturating_sub(2) {
-            let Some((indent, name, init)) = declaration_with_initializer(&lines[index]) else {
-                continue;
+            // Either `T X = <init>;` on one line, or the same thing split in two — `T X;` and
+            // then `X = <init>;`. The split form is what a declaration hoist leaves behind, and
+            // it is most of the sites here.
+            let (span, indent, name, init) = match declaration_with_initializer(&lines[index]) {
+                Some((indent, name, init)) => (1usize, indent, name, init),
+                None => {
+                    let Some((indent, name)) = bare_declaration(&lines[index]) else {
+                        continue;
+                    };
+                    let Some(init) = lines
+                        .get(index + 1)
+                        .map(|line| line.trim())
+                        .and_then(|line| line.strip_prefix(&format!("{name} = ")))
+                        .and_then(|line| line.strip_suffix(';'))
+                        .filter(|init| !init.contains(&name))
+                    else {
+                        continue;
+                    };
+                    (2usize, indent, name, init.to_owned())
+                }
             };
             if name
                 .strip_prefix("local_")
@@ -6815,7 +6833,9 @@ fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>) -> Strin
             {
                 continue;
             }
-            let accumulate = lines[index + 1].trim();
+            let Some(accumulate) = lines.get(index + span).map(|line| line.trim()) else {
+                continue;
+            };
             let Some(rest) = accumulate
                 .strip_prefix(&format!("{name} = {name} "))
                 .and_then(|rest| rest.strip_suffix(';'))
@@ -6828,18 +6848,21 @@ fn collapse_single_use_accumulators(body: &str, widened: &HashSet<i32>) -> Strin
             if !matches!(op, "+" | "-" | "*" | "/") || right.contains(&name) {
                 continue;
             }
-            // Four across the whole body, so a mention in a LATER block counts too: the
-            // declaration, twice in the accumulation, and the single read that consumes it.
-            if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != 4 {
+            // Across the whole body, so a mention in a LATER block counts too: the declaration,
+            // twice in the accumulation, the single read that consumes it — and, where the
+            // declaration is split from its first write, that write's own mention as well.
+            let expected = if span == 1 { 4 } else { 5 };
+            if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != expected {
                 continue;
             }
-            let Some(reader) = (index + 2..lines.len()).find(|at| count_ident(&lines[*at], &name) == 1)
+            let Some(reader) =
+                (index + span + 1..lines.len()).find(|at| count_ident(&lines[*at], &name) == 1)
             else {
                 continue;
             };
             let folded = format!("({init} {op} {right})");
             lines[reader] = rename_ident(&lines[reader], &name, &folded);
-            lines.drain(index..index + 2);
+            lines.drain(index..index + span + 1);
             let _ = indent;
             changed = true;
             break;
@@ -7183,6 +7206,25 @@ fn spell_out_repeated_temporaries(body: &str, constructions: &HashMap<i32, usize
             if lines.iter().enumerate().any(|(at, line)| {
                 at != index && line.trim().starts_with(&format!("{name} ")) || line.contains(&format!("{name}."))
             }) {
+                continue;
+            }
+            // Every use in ONE block. Two constructions of a slot mean two temporaries the
+            // compiler laid on the same piece of frame — but that is only true where they belong
+            // to one scope. Across blocks it is the other thing that shares a slot: a separate
+            // declaration per block, whose lifetimes do not overlap. Spelling THOSE out inline
+            // puts a temporary where the source had a named local, and a parameter taking a
+            // non-const reference refuses one.
+            let depths = block_depths(&lines);
+            let mentions: Vec<usize> = (0..lines.len())
+                .filter(|at| *at != index && count_ident(&lines[*at], &name) > 0)
+                .collect();
+            let (Some(first), Some(last)) = (mentions.first(), mentions.last()) else {
+                continue;
+            };
+            let depth = depths[*first];
+            if mentions.iter().any(|at| depths[*at] != depth)
+                || (*first..=*last).any(|at| depths[at] < depth)
+            {
                 continue;
             }
             let fresh = format!("{ty}()");
