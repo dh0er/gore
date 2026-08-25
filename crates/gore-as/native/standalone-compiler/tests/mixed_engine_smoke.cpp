@@ -284,7 +284,7 @@ int main() {
         standalone::native_super_kind::other_uobject, false, false});
     std::vector<asIScriptModule*> built;
     const auto mixed = precompiled::compile_mixed_cache_checkpoint(
-        *target_engine, cache, options, overlays, nullptr, runtime, built);
+        *target_engine, cache, options, overlays, nullptr, runtime, true, built);
     asIScriptModule* const built_provider =
         target_engine->GetModule("Provider", asGM_ONLY_IF_EXISTS);
     asIScriptModule* const built_consumer =
@@ -618,7 +618,7 @@ int QualificationNameProjection()
     std::vector<asIScriptModule*> reloaded;
     const auto reload = precompiled::compile_mixed_cache_checkpoint(
         *reload_engine, decoded, options, no_overlays,
-        nullptr, reload_runtime, reloaded);
+        nullptr, reload_runtime, true, reloaded);
     asIScriptModule* const reloaded_provider =
         reload_engine->GetModule("Provider", asGM_ONLY_IF_EXISTS);
     asIScriptModule* const reloaded_consumer =
@@ -688,7 +688,7 @@ int QualificationNameProjection()
     standalone::frontend_compile_runtime rejected_runtime;
     const auto rejected = precompiled::compile_mixed_cache_checkpoint(
         *rejected_engine, cache, options, rejected_source,
-        nullptr, rejected_runtime, untouched);
+        nullptr, rejected_runtime, true, untouched);
     if (rejected.succeeded() ||
         untouched != std::vector<asIScriptModule*>{provider} ||
         rejected_engine->GetModule("Provider", asGM_ONLY_IF_EXISTS) != nullptr ||
@@ -703,6 +703,51 @@ int QualificationNameProjection()
         source_engine->ShutDownAndRelease();
         return 11;
     }
+
+    // Product compilation must compile and serialize global initializer
+    // bytecode without executing game-native calls inside the standalone
+    // process. Qualification explicitly opts into initialization separately.
+    asIScriptEngine* const deferred_engine = asCreateScriptEngine();
+    if (deferred_engine != nullptr) {
+        deferred_engine->SetMessageCallback(
+            asFUNCTION(message_callback), nullptr, asCALL_CDECL);
+    }
+    if (deferred_engine == nullptr ||
+        deferred_engine->RegisterGlobalFunction(
+            "int NativeWorldValue()", asFUNCTION(skew_function), asCALL_CDECL) < 0) {
+        if (deferred_engine != nullptr) deferred_engine->ShutDownAndRelease();
+        rejected_engine->ShutDownAndRelease();
+        reload_engine->ShutDownAndRelease();
+        target_engine->ShutDownAndRelease();
+        source_engine->ShutDownAndRelease();
+        return 12;
+    }
+    standalone::lexical_preprocess_result deferred_source;
+    deferred_source.ok = true;
+    deferred_source.modules.push_back(source_module(
+        "DeferredGlobals", "DeferredGlobals.as",
+        "const int Spawnpoint = NativeWorldValue();"));
+    precompiled::cache deferred_base;
+    standalone::frontend_compile_runtime deferred_runtime;
+    std::vector<asIScriptModule*> deferred_modules;
+    const auto deferred = precompiled::compile_mixed_cache_checkpoint(
+        *deferred_engine, deferred_base, options, deferred_source,
+        nullptr, deferred_runtime, false, deferred_modules);
+    if (!deferred.succeeded() || deferred_modules.size() != 1U ||
+        deferred_modules[0]->GetGlobalVarCount() != 1U ||
+        deferred_modules[0]->GetAddressOfGlobalVar(0U) == nullptr ||
+        deferred_modules[0]->ResetGlobalVars(nullptr) != asINIT_GLOBAL_VARS_FAILED) {
+        std::cerr << "product global initializer was not safely deferred: phase="
+                  << static_cast<int>(deferred.phase) << "; detail="
+                  << deferred.detail << '\n';
+        deferred_engine->ShutDownAndRelease();
+        rejected_engine->ShutDownAndRelease();
+        reload_engine->ShutDownAndRelease();
+        target_engine->ShutDownAndRelease();
+        source_engine->ShutDownAndRelease();
+        return 12;
+    }
+    deferred_engine->ShutDownAndRelease();
 
     rejected_engine->ShutDownAndRelease();
     reload_engine->ShutDownAndRelease();

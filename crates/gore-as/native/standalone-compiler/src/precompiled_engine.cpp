@@ -3305,6 +3305,7 @@ engine_bridge_result compile_mixed_cache_checkpoint(
     const lexical_preprocess_result& source,
     registry_runtime* const registry,
     frontend_compile_runtime& frontend_runtime,
+    const bool initialize_source_globals,
     std::vector<asIScriptModule*>& modules) {
     try {
         auto& engine = static_cast<asCScriptEngine&>(engine_interface);
@@ -3807,19 +3808,22 @@ engine_bridge_result compile_mixed_cache_checkpoint(
                 engine_bridge_phase::validate_template_instances, kNoModule,
                 "mixed graph contains invalid template instances", asERROR);
         }
-        for (std::size_t index = 0U; index < states.size(); ++index) {
-            // Cached modules are compiler inputs, not a replacement game
-            // runtime. Their initializers may call host APIs whose real
-            // implementations and world state intentionally do not exist in
-            // the standalone process. Newly compiled modules still receive
-            // the fork's normal initialization so qualification adapters can
-            // execute their probe entry points.
-            if (states[index].source == nullptr) continue;
-            const int code = states[index].module->ResetGlobalVars(nullptr);
-            if (code != asSUCCESS) {
-                return failure(
-                    engine_bridge_phase::initialize_globals, index,
-                    "mixed module global initialization failed", code);
+        if (initialize_source_globals) {
+            for (std::size_t index = 0U; index < states.size(); ++index) {
+                // Cached modules are compiler inputs, not a replacement game
+                // runtime. Their initializers may call host APIs whose real
+                // implementations and world state intentionally do not exist
+                // in the standalone process. Qualification adapters opt in
+                // for newly compiled probe modules because they execute probe
+                // entry points in this process. Product compilation keeps the
+                // compiled initializer bytecode for the game runtime instead.
+                if (states[index].source == nullptr) continue;
+                const int code = states[index].module->ResetGlobalVars(nullptr);
+                if (code != asSUCCESS) {
+                    return failure(
+                        engine_bridge_phase::initialize_globals, index,
+                        "mixed module global initialization failed", code);
+                }
             }
         }
 

@@ -2086,7 +2086,8 @@ sidecar_compile_result compile_sidecar_request(
         }
         std::vector<asIScriptModule*> modules;
         const auto compiled = cache_wire::compile_mixed_cache_checkpoint(
-            *engine, base, preprocessor, preprocessing, &registry_runtime_state, frontend_runtime, modules);
+            *engine, base, preprocessor, preprocessing, &registry_runtime_state,
+            frontend_runtime, request.qualification_mode, modules);
         if (!compiled.succeeded()) {
             return failure(wire::ExitCode::data_error, "rejected", "GORE_AS_COMPILE_REJECTED",
                 compiled.detail, diagnostics);
