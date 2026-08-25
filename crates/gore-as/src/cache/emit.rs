@@ -7344,6 +7344,13 @@ fn bare_declaration(line: &str) -> Option<(String, String)> {
     if rest.len() == name.len() || !is_decompiler_local(name) {
         return None;
     }
+    // `return local_16;` has the same shape as a declaration and is not one. A statement keyword
+    // is never a type, and reading one as a type made the element of a range-for look like it had
+    // its own declaration outside the loop.
+    let head = &rest[..rest.len() - name.len() - 1];
+    if matches!(head.trim(), "return" | "continue" | "break" | "case" | "default" | "else") {
+        return None;
+    }
     Some((indent, name.to_owned()))
 }
 
@@ -10435,17 +10442,25 @@ fn is_generated(
 #[cfg(test)]
 mod enum_call_round_trip_tests {
     use super::fold_enum_call_round_trips;
+    use crate::cache::refs::RefResolver;
     use std::collections::HashMap;
 
     fn types() -> HashMap<i32, String> {
         HashMap::from([(5, "ERelationship".to_owned())])
     }
 
+    /// The fold with everything it cannot learn from this body: no class fields, no roots, an
+    /// empty resolver, a by-value return, and a function that converts nowhere — so only the
+    /// per-slot return types decide.
+    fn fold(body: &str, types: &HashMap<i32, String>) -> String {
+        fold_enum_call_round_trips(body, types, None, &HashMap::new(), &RefResolver::default(), false, true)
+    }
+
     #[test]
     fn a_round_trip_through_the_calls_own_enum_is_the_call() {
         let body = "    int local_5 = int(this.GetRelationship(Entry));\n    this.Severities.Find(ERelationship(local_5), local_2);\n";
         assert_eq!(
-            fold_enum_call_round_trips(body, &types()),
+            fold(body, &types()),
             "    this.Severities.Find(this.GetRelationship(Entry), local_2);\n",
             "both casts name the type the call already returns"
         );
@@ -10455,7 +10470,7 @@ mod enum_call_round_trip_tests {
     fn a_round_trip_through_another_enum_is_a_conversion() {
         let body = "    int local_5 = int(this.GetRelationship(Entry));\n    this.Severities.Find(EGuild(local_5), local_2);\n";
         assert_eq!(
-            fold_enum_call_round_trips(body, &types()),
+            fold(body, &types()),
             body,
             "a different enum converts, and the conversion has to stay"
         );
@@ -10465,9 +10480,9 @@ mod enum_call_round_trip_tests {
     fn an_unresolved_callee_keeps_its_casts() {
         let body = "    int local_5 = int(this.GetRelationship(Entry));\n    this.Severities.Find(ERelationship(local_5), local_2);\n";
         assert_eq!(
-            fold_enum_call_round_trips(body, &HashMap::new()),
+            fold(body, &HashMap::new()),
             body,
-            "with no return type there is no witness, so nothing moves"
+            "with no return type and a function that DOES convert somewhere, nothing moves"
         );
     }
 }
