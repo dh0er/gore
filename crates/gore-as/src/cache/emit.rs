@@ -1945,6 +1945,8 @@ fn emit_function_ctor(
         let rendered = inline_bool_chain_into_next_condition(&rendered);
         let rendered = fold_bool_member_comparisons(&rendered, fields, &path_roots, refs);
         let rendered = drop_redundant_conversions(&rendered, fields, &path_roots, refs);
+        let rendered =
+            spell_out_argument_temporaries(&rendered, &argument_constructed_slots(f, refs), refs);
         let rendered = drop_block_end_handle_releases(&rendered);
         let rendered = drop_unused_declarations(&rendered);
         let rendered = fold_member_read_temporaries(
@@ -7862,6 +7864,107 @@ fn inline_single_use_literals(body: &str) -> String {
     }
     let mut out = lines.join("\n");
     if body.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// Slots the function constructs INSIDE an argument list: the `PSF slot; CALLSYS $beh0` pair
+/// stands right after a push.
+///
+/// A declaration constructs its value before the statement that uses it runs. A temporary written
+/// into the argument list is constructed while the arguments are being evaluated — after whatever
+/// was pushed before it. So the instruction in front of the construction says which of the two the
+/// source wrote.
+fn argument_constructed_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let pushes = |name: &str| {
+        matches!(
+            name,
+            "PshV4" | "PshV8" | "PshVPtr" | "PshC4" | "PshC8" | "PshGPtr" | "PshNull" | "PSF"
+        )
+    };
+    let mut out = HashSet::new();
+    for (at, pair) in instrs.windows(2).enumerate() {
+        if pair[0].op.name != "PSF" || pair[1].op.name != "CALLSYS" || at == 0 {
+            continue;
+        }
+        let ptr = pair[1].qwords.first().copied().unwrap_or(0) as i64;
+        if refs.func_by_ptr(ptr) != Some("$beh0") {
+            continue;
+        }
+        if !pushes(instrs[at - 1].op.name) {
+            continue;
+        }
+        if let Some(slot) = pair[0].words.first().map(|word| *word as i16 as i32) {
+            if slot > 0 {
+                out.insert(slot);
+            }
+        }
+    }
+    out
+}
+
+/// A declared temporary that vanilla built inside the argument list is written there.
+///
+/// `FGameplayTag local_4;` standing before the call constructs the value before the call's other
+/// arguments are pushed; `Call(…, FGameplayTag(), …)` constructs it among them, which is the order
+/// vanilla has. Only where the name is mentioned exactly once after its declaration, that mention
+/// is an argument of a call, and the cache says that position is not written through — a
+/// parameter taking a non-const reference refuses a temporary outright.
+fn spell_out_argument_temporaries(
+    text: &str,
+    constructed: &HashSet<i32>,
+    refs: &RefResolver,
+) -> String {
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for index in 0..lines.len() {
+            let Some((_, name)) = bare_declaration(&lines[index]) else {
+                continue;
+            };
+            let Some(slot) = name
+                .strip_prefix("local_")
+                .and_then(|rest| rest.split('_').next())
+                .and_then(|rest| rest.parse::<i32>().ok())
+            else {
+                continue;
+            };
+            if !constructed.contains(&slot) {
+                continue;
+            }
+            if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != 2 {
+                continue;
+            }
+            let Some(reader) =
+                (index + 1..lines.len()).find(|at| count_ident(&lines[*at], &name) == 1)
+            else {
+                continue;
+            };
+            let Some((callee, arguments)) = call_arguments(&lines[reader]) else {
+                continue;
+            };
+            let rendered = arguments.len();
+            let Some(position) = arguments.iter().position(|argument| *argument == name) else {
+                continue;
+            };
+            if refs.arg_position_is_written_through(&callee, rendered, position) {
+                continue;
+            }
+            let head = lines[index].trim().trim_end_matches(';');
+            let ty = head[..head.len() - name.len()].trim().to_owned();
+            lines[reader] = rename_ident(&lines[reader], &name, &format!("{ty}()"));
+            lines.remove(index);
+            changed = true;
+            break;
+        }
+    }
+    let mut out = lines.join("\n");
+    if text.ends_with('\n') {
         out.push('\n');
     }
     out
