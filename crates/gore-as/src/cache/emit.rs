@@ -1902,6 +1902,20 @@ fn emit_function_ctor(
         let rendered = sink_declarations_into_their_block(&s[declarations_at..], &touched_after_branch);
         // Same text, same reason as the sink: the declaration lives in `s`, its uses in `body`.
         let rendered = spell_out_repeated_temporaries(&rendered, &constructions);
+        // And once more here, for the same reason: an accumulator whose declaration was hoisted
+        // has its `T X;` in this text and its `X = ...` lines in the body, so the split form is
+        // only whole once the two are joined.
+        let rendered = collapse_single_use_accumulators(&rendered, &widened);
+        let rendered = fold_enum_call_round_trips(&rendered, &call_result_types);
+        let rendered = fold_compound_assignments(&rendered, fields, &path_roots, refs);
+        let rendered = fold_member_read_temporaries(
+            &rendered,
+            &declared_locals,
+            fields,
+            &path_roots,
+            refs,
+            &member_read_slots(f),
+        );
         s.truncate(declarations_at);
         s.push_str(&rendered);
     } else {
@@ -7481,6 +7495,20 @@ fn type_of_member_path(
 /// The path has to be pure — no call and no index, so reading it twice cannot differ — nothing
 /// may assign it between the read and its use, and the slot's declared type has to be the
 /// member's own, or the declaration was performing a conversion.
+/// Every proper prefix of a member path: `a.b.c` gives `a` and `a.b`.
+fn path_prefixes(path: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut so_far = String::new();
+    for step in path.split('.').take(path.split('.').count() - 1) {
+        if !so_far.is_empty() {
+            so_far.push('.');
+        }
+        so_far.push_str(step);
+        out.push(so_far.clone());
+    }
+    out
+}
+
 fn fold_member_read_temporaries(
     body: &str,
     locals: &BTreeMap<i32, String>,
@@ -7503,7 +7531,13 @@ fn fold_member_read_temporaries(
     let mut at = 0usize;
     while at < lines.len() {
         let folded = (|| {
-            let (name, path) = slot_store(lines[at])?;
+            // The read may stand as an assignment, `local_N = X.F;`, or carry its own
+            // declaration, `T local_N = X.F;` — the same read either way. Which of the two the
+            // decompiler wrote depends on whether the declaration was hoisted, and that has
+            // nothing to do with whether the source named the value.
+            let (name, path) = slot_store(lines[at]).or_else(|| {
+                declaration_with_initializer(lines[at]).map(|(_, name, init)| (name, init))
+            })?;
             let slot = slot_of(&name)?;
             if !pure_path(&path) {
                 return None;
@@ -7538,6 +7572,17 @@ fn fold_member_read_temporaries(
             for (offset, line) in lines[at + 1..].iter().enumerate() {
                 if slot_store(line).is_some_and(|(target, _)| target == path) {
                     break; // the member moved on
+                }
+                // Leaving the block the read stands in. What the read took is still the same
+                // value out there, but the path that names it need not be: a local declared
+                // inside the block does not reach past its brace.
+                if indent_of(line).len() < indent_of(lines[at]).len() {
+                    break;
+                }
+                // A write to any PREFIX of the path retires the value the read took —
+                // `local_32 = nullptr;` between the two makes the moved read a read of null.
+                if path_prefixes(&path).iter().any(|prefix| is_definition_line(line, prefix)) {
+                    break;
                 }
                 if count_ident(line, &name) > 0 {
                     reader = (count_ident(line, &name) == 1).then_some(at + 1 + offset);
