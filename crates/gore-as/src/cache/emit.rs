@@ -1918,6 +1918,9 @@ fn emit_function_ctor(
         let rendered = fold_enum_call_round_trips(&rendered, &call_result_types, fields, &path_roots, refs, returns_by_reference);
         let rendered = fold_compound_assignments(&rendered, fields, &path_roots, refs);
         let rendered = fold_negated_stores(&rendered);
+        // Before the folds move anything: a struct handed on by address is only recognisable
+        // while its declaration and the call that takes it stand in the same text.
+        let rendered = restore_dropped_struct_arguments(&rendered, &address_push_counts(f));
         let rendered = fold_member_read_temporaries(
             &rendered,
             &declared_locals,
@@ -7330,6 +7333,85 @@ fn spell_out_repeated_temporaries(body: &str, constructions: &HashMap<i32, usize
             changed = true;
             break;
         }
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// How often the function hands each slot's ADDRESS to a call as an ARGUMENT.
+///
+/// A `PSF` immediately before the call is the RECEIVER — that is the last thing pushed. One with
+/// anything else between it and the call went on the stack as an argument.
+fn address_push_counts(f: &Func) -> HashMap<i32, usize> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashMap::new();
+    };
+    let calls = |name: &str| matches!(name, "CALL" | "CALLSYS" | "CALLINTF" | "CALLBND");
+    let mut counts: HashMap<i32, usize> = HashMap::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        if ins.op.name != "PSF" || instrs.get(at + 1).is_some_and(|next| calls(next.op.name)) {
+            continue;
+        }
+        if let Some(slot) = ins.words.first().map(|word| *word as i16 as i32) {
+            if slot > 0 {
+                *counts.entry(slot).or_default() += 1;
+            }
+        }
+    }
+    counts
+}
+
+/// A struct the source built and then HANDED ON, where the rendering lost the hand-off.
+///
+/// Vanilla pushes the slot's own address at the argument (`PSF v8`); where the argument came out
+/// as a freshly default-constructed `T()` instead, the call receives an empty struct and
+/// everything done to the named one is thrown away — `RemoveActiveEffectsWithTags` asked to
+/// remove effects with NO tags rather than the one just added.
+///
+/// The witness is a count: vanilla pushes the slot once more than the text mentions it. Only the
+/// single-hand-off case is repaired, and only where the placeholder stands AFTER the last mention
+/// of the name, so nothing is put where the value did not exist yet.
+fn restore_dropped_struct_arguments(body: &str, pushes: &HashMap<i32, usize>) -> String {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    for index in 0..lines.len() {
+        let Some((_, name)) = bare_declaration(&lines[index]) else {
+            continue;
+        };
+        let ty = {
+            let trimmed = lines[index].trim().trim_end_matches(';');
+            trimmed[..trimmed.len() - name.len()].trim().to_owned()
+        };
+        let Some(slot) = name
+            .strip_prefix("local_")
+            .and_then(|rest| rest.split('_').next())
+            .and_then(|rest| rest.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        // The name has to stand for something already — a struct built and then used — and
+        // vanilla has to hand its address to a call somewhere.
+        let mentions: usize = lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() - 1;
+        if mentions == 0 || pushes.get(&slot).copied().unwrap_or(0) == 0 {
+            continue;
+        }
+        let placeholder = format!("{ty}()");
+        let last_mention = (0..lines.len())
+            .rev()
+            .find(|at| count_ident(&lines[*at], &name) > 0);
+        let Some(last_mention) = last_mention else {
+            continue;
+        };
+        let candidates: Vec<usize> = (last_mention + 1..lines.len())
+            .filter(|at| lines[*at].matches(&placeholder).count() == 1)
+            .collect();
+        if candidates.len() != 1 {
+            continue;
+        }
+        let at = candidates[0];
+        lines[at] = lines[at].replacen(&placeholder, &name, 1);
     }
     let mut out = lines.join("\n");
     if body.ends_with('\n') {
