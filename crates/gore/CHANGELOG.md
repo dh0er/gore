@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Bundle the qualified standalone AngelScript compiler with gore-cli. Script
+  builds and `as compile-module` can now compile without starting the game.
+- Use `standalone-then-game` by default: GORE shows why the standalone attempt
+  was rejected before using the game's embedded compiler as a fallback.
+  Strict `standalone` and explicit `game` modes remain available.
+- Match compatible game installations by Shipping cache format and the
+  complete AngelScript Binds API instead of requiring an exact whole-EXE hash,
+  so compatible Steam, GOG, and differently packed binaries are supported.
+
 ## [0.1.0] - 2026-08-18
 
 First release. Command-line toolkit for modding Gothic 1 Remake.
