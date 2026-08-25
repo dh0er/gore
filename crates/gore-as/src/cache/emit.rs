@@ -1950,7 +1950,7 @@ fn emit_function_ctor(
         let rendered = drop_redundant_conversions(&rendered, fields, &path_roots, refs);
         let rendered =
             spell_out_argument_temporaries(&rendered, &argument_constructed_slots(f, refs), refs);
-        let rendered = fold_widening_aliases(&rendered, &declared_locals, &widened);
+        let rendered = fold_widening_aliases(&rendered, &declared_locals, &path_roots, &widened);
         let rendered = drop_block_end_handle_releases(&rendered);
         let rendered = drop_unused_declarations(&rendered);
         let rendered = fold_member_read_temporaries(
@@ -7999,6 +7999,7 @@ fn spell_out_argument_temporaries(
 fn fold_widening_aliases(
     text: &str,
     locals: &BTreeMap<i32, String>,
+    roots: &HashMap<String, String>,
     widened: &HashSet<i32>,
 ) -> String {
     let slot_of_name = |name: &str| -> Option<i32> {
@@ -8011,8 +8012,23 @@ fn fold_widening_aliases(
     while changed {
         changed = false;
         for index in 0..lines.len() {
-            let Some((_, name, source)) = declaration_with_initializer(&lines[index]) else {
-                continue;
+            // `T X = <name>;` on one line, or the same split in two by a declaration hoist.
+            let (span, name, source) = match declaration_with_initializer(&lines[index]) {
+                Some((_, name, source)) => (1usize, name, source),
+                None => {
+                    let Some((_, name)) = bare_declaration(&lines[index]) else {
+                        continue;
+                    };
+                    let Some(source) = lines
+                        .get(index + 1)
+                        .map(|line| line.trim())
+                        .and_then(|line| line.strip_prefix(&format!("{name} = ")))
+                        .and_then(|line| line.strip_suffix(';'))
+                    else {
+                        continue;
+                    };
+                    (2usize, name, source.to_owned())
+                }
             };
             let Some(slot) = slot_of_name(&name) else {
                 continue;
@@ -8021,25 +8037,37 @@ fn fold_widening_aliases(
                 continue;
             }
             let head = lines[index].trim().split(" = ").next().unwrap_or("");
+            let head = head.trim_end_matches(';');
             let ty = head[..head.len().saturating_sub(name.len())].trim();
-            if !matches!(ty, "float" | "double") {
+            if !matches!(ty, "float32" | "float" | "double") {
                 continue;
             }
-            if slot_of_name(&source).and_then(|from| locals.get(&from)).map(String::as_str)
-                != Some("float32")
-            {
+            // The source may be a local or one of the function's own parameters; both carry
+            // their type in a table. Only a NARROWER numeric one — the conversion the
+            // declaration performs is the one the use would perform anyway.
+            let from = slot_of_name(&source)
+                .and_then(|slot| locals.get(&slot))
+                .or_else(|| roots.get(&source))
+                .map(String::as_str);
+            let widens = matches!(
+                (ty, from),
+                ("float" | "double", Some("float32" | "int" | "uint"))
+                    | ("float32", Some("int" | "uint" | "int8" | "uint8" | "int16" | "uint16"))
+            );
+            if !widens {
                 continue;
             }
-            if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != 2 {
+            let expected = if span == 1 { 2 } else { 3 };
+            if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != expected {
                 continue;
             }
             let Some(reader) =
-                (index + 1..lines.len()).find(|at| count_ident(&lines[*at], &name) == 1)
+                (index + span..lines.len()).find(|at| count_ident(&lines[*at], &name) == 1)
             else {
                 continue;
             };
             lines[reader] = rename_ident(&lines[reader], &name, &source);
-            lines.remove(index);
+            lines.drain(index..index + span);
             changed = true;
             break;
         }
