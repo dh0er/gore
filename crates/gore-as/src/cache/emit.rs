@@ -1918,6 +1918,7 @@ fn emit_function_ctor(
         let rendered = fold_enum_call_round_trips(&rendered, &call_result_types, fields, &path_roots, refs, returns_by_reference);
         let rendered = fold_compound_assignments(&rendered, fields, &path_roots, refs);
         let rendered = fold_negated_stores(&rendered);
+        let rendered = fold_assigned_temporaries(&rendered, fields, &path_roots, refs);
         // Before the folds move anything: a struct handed on by address is only recognisable
         // while its declaration and the call that takes it stand in the same text.
         let rendered = restore_dropped_struct_arguments(&rendered, &address_push_counts(f));
@@ -7420,6 +7421,69 @@ fn restore_dropped_struct_arguments(body: &str, pushes: &HashMap<i32, usize>) ->
     out
 }
 
+/// `T X = <expr>; <target> = X;` is `<target> = <expr>;`.
+///
+/// The name buys nothing: the compiler evaluates the expression, puts it in the slot the name
+/// asked for, and copies it straight on to the target. Vanilla writes the result where it belongs
+/// and the copy is not there. Mentioned exactly twice, so the read that follows is its last, and
+/// neither side may mention the name itself.
+fn fold_assigned_temporaries(
+    body: &str,
+    fields: Option<&HashMap<String, String>>,
+    roots: &HashMap<String, String>,
+    refs: &RefResolver,
+) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut kept: Vec<String> = Vec::new();
+    let mut at = 0usize;
+    while at < lines.len() {
+        let folded = (|| {
+            let (_, name, init) = declaration_with_initializer(lines[at])?;
+            let declared = {
+                let head = lines[at].trim().split(" = ").next()?;
+                head[..head.len() - name.len()].trim().to_owned()
+            };
+            if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != 2 {
+                return None;
+            }
+            let next = lines.get(at + 1)?;
+            let (target, value) = next.trim().strip_suffix(';')?.split_once(" = ")?;
+            // The declaration may be the CONVERSION: `bool X = <cmp>; IntThing = X;` narrows on
+            // the way out, and folding it hands the target a bool it cannot take. Fold only where
+            // the target's own type is the one the declaration gave the value, and refuse
+            // outright where the target's type cannot be resolved.
+            if type_of_member_path(target, fields, roots, refs).as_deref() != Some(declared.as_str())
+            {
+                return None;
+            }
+            if value != name
+                || count_ident(target, &name) > 0
+                || count_ident(&init, &name) > 0
+                || indent_of(lines[at]) != indent_of(next)
+                || init.contains(RVODEF)
+            {
+                return None;
+            }
+            Some(format!("{}{target} = {init};", indent_of(lines[at])))
+        })();
+        match folded {
+            Some(replacement) => {
+                kept.push(replacement);
+                at += 2;
+            }
+            None => {
+                kept.push(lines[at].to_owned());
+                at += 1;
+            }
+        }
+    }
+    let mut joined = kept.join("\n");
+    if body.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
+}
+
 fn fold_compound_assignments(
     body: &str,
     fields: Option<&HashMap<String, String>>,
@@ -7709,7 +7773,12 @@ fn fold_member_read_temporaries(
     // A path, not a literal: `5.0f` also contains a dot, and reading it as a member path made
     // every float constant look like an unresolvable member.
     let pure_path = |path: &str| {
-        path.contains('.')
+        // A bare PARAMETER name is a path too: reading it twice has no side effect, exactly like
+        // reading a member, and the decompiler names a parameter read the same way it names a
+        // member read. `roots` holds the function's locals as well, and a local is NOT one of
+        // these: it is a name the source may write again, and treating a copy between two locals
+        // as a member read takes the initialisation out from under an accumulator.
+        (path.contains('.') || (roots.contains_key(path) && !is_decompiler_local(path)))
             && path.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
             && path
                 .bytes()
@@ -7759,7 +7828,9 @@ fn fold_member_read_temporaries(
             }
             let mut reader = None;
             for (offset, line) in lines[at + 1..].iter().enumerate() {
-                if slot_store(line).is_some_and(|(target, _)| target == path) {
+                if slot_store(line).is_some_and(|(target, _)| target == path)
+                    || assignment_target_is_rooted_at_ident(line, &path)
+                {
                     break; // the member moved on
                 }
                 // Leaving the block the read stands in. What the read took is still the same
