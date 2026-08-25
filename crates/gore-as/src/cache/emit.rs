@@ -1917,6 +1917,7 @@ fn emit_function_ctor(
         let rendered = collapse_single_use_accumulators(&rendered, &widened);
         let rendered = fold_enum_call_round_trips(&rendered, &call_result_types, fields, &path_roots, refs, returns_by_reference);
         let rendered = fold_compound_assignments(&rendered, fields, &path_roots, refs);
+        let rendered = fold_negated_stores(&rendered);
         let rendered = fold_member_read_temporaries(
             &rendered,
             &declared_locals,
@@ -5942,7 +5943,9 @@ fn inline_temporary_into(
                 // A bool is not one, and the cache can say so.
                 || (lines[index].trim().starts_with("return ")
                     && renders_a_bool(&value, locals, refs, fields)))
-                && (same_typed_own_field(&value, temp, locals, fields) || is_call_result(&value))
+                && (same_typed_own_field(&value, temp, locals, fields)
+                    || is_call_result(&value)
+                    || names_a_static_class(&value, temp, locals))
         }
         // An argument or a receiver takes the value as it is, so a member read may travel there
         // too — reading a member has no side effect of its own, and the field map proves the
@@ -5952,6 +5955,7 @@ fn inline_temporary_into(
         _ => {
             is_call_result(&value)
                 || same_typed_own_field(&value, temp, locals, fields)
+                || names_a_static_class(&value, temp, locals)
                 || (temporary_type(locals, temp) == Some("bool")
                     && renders_a_bool(&value, locals, refs, fields))
         }
@@ -6040,6 +6044,25 @@ enum Position {
 /// `this.<Field>` whose declared field type is exactly the slot's. Reading a member has no side
 /// effect of its own, so it can be read where it is used instead of being materialized into a
 /// slot first — but only when the slot's declaration was not also performing a conversion.
+/// A bare class NAME stored into a class-typed slot: `local_4 = UHumanFists;`.
+///
+/// The decompiler renders a static class reference that way, and vanilla builds it as a temporary
+/// wherever it is used — `PshGPtr __StaticType_UHumanFists; CHKREF; opImplConv; STOREOBJ`. It has
+/// no operands of its own, so moving it into its reader cannot reorder anything, and leaving it
+/// behind keeps a name in an arm that vanilla wrote as one expression.
+fn names_a_static_class(value: &str, temp: &str, locals: &BTreeMap<i32, String>) -> bool {
+    if !value.starts_with(|c: char| c.is_ascii_uppercase())
+        || !value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    {
+        return false;
+    }
+    temp.strip_prefix("local_")
+        .and_then(|rest| rest.split('_').next())
+        .and_then(|rest| rest.parse::<i32>().ok())
+        .and_then(|slot| locals.get(&slot))
+        .is_some_and(|ty| ty == "UClass" || ty.starts_with("TSubclassOf<"))
+}
+
 fn same_typed_own_field(
     value: &str,
     temp: &str,
@@ -8312,7 +8335,10 @@ fn fold_negated_stores(body: &str) -> String {
                 let previous = kept.last()?;
                 let (target, value) = previous.trim().strip_suffix(';')?.split_once(" = ")?;
                 let declares = target.split_whitespace().last()? == slot.as_str();
-                (declares && count_ident(value, &slot) == 0 && !value.starts_with('!')).then(|| {
+                // A value that is ALREADY a negation folds too: `X = !(e); X = !X;` is the
+                // double negation vanilla wrote, and it emits `NOT` twice on the one slot. Kept
+                // apart, the two negations travel through a name and cost a copy each way.
+                (declares && count_ident(value, &slot) == 0).then(|| {
                     let indent: String =
                         previous.chars().take_while(|c| c.is_whitespace()).collect();
                     format!("{indent}{target} = !({value});")
