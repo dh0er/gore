@@ -4869,40 +4869,81 @@ fn install_mutation_initialization_candidates(game_dir: &Path) -> Result<Vec<Pat
 }
 
 #[cfg(windows)]
-fn publish_install_mutation_initialization(init: &Path, path: &Path) -> std::io::Result<()> {
+fn publish_install_mutation_initialization(
+    file: &std::fs::File,
+    _init: &Path,
+    path: &Path,
+) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt as _;
-    use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileRenameInfo, SetFileInformationByHandle, FILE_RENAME_INFO,
+    };
 
-    let init: Vec<u16> = init
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let path: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    // Read-only observers (antivirus, indexers, Manager preflight) can briefly open the freshly
-    // closed initialization record without delete sharing. That must not turn a safe transient
-    // observation into a deterministic failure to publish the lock. Retry only Windows sharing
-    // and lock violations for a short bounded interval; all other errors, including an already
-    // published competing lock, remain immediate hard failures.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    loop {
-        if unsafe { MoveFileExW(init.as_ptr(), path.as_ptr(), MOVEFILE_WRITE_THROUGH) } != 0 {
-            return Ok(());
-        }
-        let error = std::io::Error::last_os_error();
-        if !install_mutation_lock_busy(&error) || std::time::Instant::now() >= deadline {
-            return Err(error);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+    let name: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let name_bytes = name
+        .len()
+        .checked_mul(std::mem::size_of::<u16>())
+        .and_then(|bytes| u32::try_from(bytes).ok())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "install-mutation lock path is too long for Windows rename",
+            )
+        })?;
+    let file_name_offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
+    let buffer_len = file_name_offset
+        .checked_add(name_bytes as usize)
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "install-mutation rename buffer length overflow",
+            )
+        })?;
+    let item_size = std::mem::size_of::<FILE_RENAME_INFO>();
+    let item_count = buffer_len.div_ceil(item_size);
+    let mut buffer = vec![FILE_RENAME_INFO::default(); item_count];
+    {
+        let information = &mut buffer[0];
+        information.Anonymous.ReplaceIfExists = false;
+        information.RootDirectory = std::ptr::null_mut();
+        information.FileNameLength = name_bytes;
+    }
+    unsafe {
+        let file_name = buffer
+            .as_mut_ptr()
+            .cast::<u8>()
+            .add(file_name_offset)
+            .cast::<u16>();
+        std::ptr::copy_nonoverlapping(name.as_ptr(), file_name, name.len());
+    }
+    let buffer_len = u32::try_from(buffer_len).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "install-mutation rename buffer is too large",
+        )
+    })?;
+    if unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle() as _,
+            FileRenameInfo,
+            buffer.as_ptr().cast(),
+            buffer_len,
+        )
+    } == 0
+    {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
     }
 }
 
 #[cfg(target_os = "linux")]
-fn publish_install_mutation_initialization(init: &Path, path: &Path) -> std::io::Result<()> {
+fn publish_install_mutation_initialization(
+    _file: &std::fs::File,
+    init: &Path,
+    path: &Path,
+) -> std::io::Result<()> {
     use std::os::unix::ffi::OsStrExt as _;
 
     let init = std::ffi::CString::new(init.as_os_str().as_bytes()).map_err(|_| {
@@ -4934,7 +4975,11 @@ fn publish_install_mutation_initialization(init: &Path, path: &Path) -> std::io:
 }
 
 #[cfg(target_vendor = "apple")]
-fn publish_install_mutation_initialization(init: &Path, path: &Path) -> std::io::Result<()> {
+fn publish_install_mutation_initialization(
+    _file: &std::fs::File,
+    init: &Path,
+    path: &Path,
+) -> std::io::Result<()> {
     use std::os::unix::ffi::OsStrExt as _;
 
     let init = std::ffi::CString::new(init.as_os_str().as_bytes()).map_err(|_| {
@@ -4966,7 +5011,11 @@ fn publish_install_mutation_initialization(init: &Path, path: &Path) -> std::io:
 }
 
 #[cfg(not(any(windows, target_os = "linux", target_vendor = "apple")))]
-fn publish_install_mutation_initialization(_init: &Path, _path: &Path) -> std::io::Result<()> {
+fn publish_install_mutation_initialization(
+    _file: &std::fs::File,
+    _init: &Path,
+    _path: &Path,
+) -> std::io::Result<()> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "atomic no-clobber install-mutation publication is unsupported on this platform",
@@ -5052,40 +5101,6 @@ fn remove_install_mutation_file_by_handle(
     _path: &Path,
 ) -> Result<(), String> {
     Err("identity-bound install-mutation lock release is unsupported on this platform".to_owned())
-}
-
-fn remove_install_mutation_initialization_if_owned(
-    init_path: &Path,
-    expected_payload: &[u8],
-) -> Result<(), String> {
-    let mut file = install_mutation_open_existing_options()
-        .open(init_path)
-        .map_err(|error| {
-            format!(
-                "opening failed install-mutation initialization {}: {error}",
-                init_path.display()
-            )
-        })?;
-    lock_install_mutation_handle(&file).map_err(|error| {
-        format!(
-            "locking failed install-mutation initialization {}: {error}",
-            init_path.display()
-        )
-    })?;
-    if !install_mutation_handle_still_names_path(&file, init_path)? {
-        return Err(format!(
-            "refusing changed install-mutation initialization {}",
-            init_path.display()
-        ));
-    }
-    let actual = read_install_mutation_payload(&mut file, init_path)?;
-    if actual != expected_payload {
-        return Err(format!(
-            "refusing changed install-mutation initialization payload {}",
-            init_path.display()
-        ));
-    }
-    remove_install_mutation_file_by_handle(&file, init_path)
 }
 
 fn take_over_abandoned_initialization(
@@ -5333,11 +5348,9 @@ impl InstallMutationGuard {
             };
             return Err(bounded_probe_text(&message, INSTALL_COMPILE_PROBE_MESSAGE_LIMIT).0);
         }
-        drop(init_file);
-        if let Err(error) = publish_install_mutation_initialization(&init_path, &path) {
-            let cleanup =
-                remove_install_mutation_initialization_if_owned(&init_path, payload.as_bytes())
-                    .err();
+        if let Err(error) = publish_install_mutation_initialization(&init_file, &init_path, &path) {
+            let cleanup = remove_install_mutation_file_by_handle(&init_file, &init_path).err();
+            drop(init_file);
             let message = match cleanup {
                 Some(cleanup) => format!(
                     "publishing install-mutation lock {}: {error}; additionally failed to remove \
@@ -5360,28 +5373,7 @@ impl InstallMutationGuard {
                 )
             })?;
         }
-        let mut file = install_mutation_open_existing_options()
-            .open(&path)
-            .map_err(|error| {
-                bounded_probe_text(
-                    &format!(
-                        "opening published install-mutation lock {}: {error}",
-                        path.display()
-                    ),
-                    INSTALL_COMPILE_PROBE_MESSAGE_LIMIT,
-                )
-                .0
-            })?;
-        lock_install_mutation_handle(&file).map_err(|error| {
-            bounded_probe_text(
-                &format!(
-                    "locking published install-mutation record {}: {error}",
-                    path.display()
-                ),
-                INSTALL_COMPILE_PROBE_MESSAGE_LIMIT,
-            )
-            .0
-        })?;
+        let mut file = init_file;
         if !install_mutation_handle_still_names_path(&file, &path)? {
             return Err(format!(
                 "published install-mutation record changed filesystem identity: {}",
@@ -11497,34 +11489,35 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn install_mutation_publication_waits_for_a_transient_reader() {
+    fn install_mutation_publication_keeps_one_exclusive_handle() {
         use std::os::windows::fs::OpenOptionsExt as _;
         use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
 
-        let root = unique_test_root("mutation-publish-transient-reader");
+        let root = unique_test_root("mutation-publish-exclusive-handle");
         std::fs::create_dir_all(&root).unwrap();
         let init = root.join("initializing.lock");
         let published = root.join("published.lock");
-        std::fs::write(&init, b"owner").unwrap();
+        let mut file = install_mutation_open_options().open(&init).unwrap();
+        file.write_all(b"owner").unwrap();
+        file.sync_all().unwrap();
 
-        let reader_path = init.clone();
-        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
-        let reader = std::thread::spawn(move || {
-            let file = std::fs::OpenOptions::new()
-                .read(true)
-                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
-                .open(reader_path)
-                .unwrap();
-            ready_tx.send(()).unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            drop(file);
-        });
-        ready_rx.recv().unwrap();
+        let observer_error = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(&init)
+            .unwrap_err();
+        assert!(install_mutation_lock_busy(&observer_error));
 
-        publish_install_mutation_initialization(&init, &published).unwrap();
-        reader.join().unwrap();
+        publish_install_mutation_initialization(&file, &init, &published).unwrap();
         assert!(!init.exists());
-        assert_eq!(std::fs::read(&published).unwrap(), b"owner");
+        assert!(install_mutation_handle_still_names_path(&file, &published).unwrap());
+        assert_eq!(
+            read_install_mutation_payload(&mut file, &published).unwrap(),
+            b"owner"
+        );
+        remove_install_mutation_file_by_handle(&file, &published).unwrap();
+        drop(file);
+        assert!(!published.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 
