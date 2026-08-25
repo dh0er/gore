@@ -95,6 +95,11 @@ pub struct RefResolver {
     /// A name that appears in two namespaces cannot be qualified from the name alone, so it is
     /// removed rather than guessed.
     type_ns_by_name: HashMap<String, Option<String>>,
+    /// Enum name -> its entries, in declaration order. The cache carries the enumerator NAMES for
+    /// every script enum, and a constant written as its name is not the same expression as one
+    /// built with a conversion: the compiler stores a named constant where the destination is,
+    /// and builds a converted one before it goes looking.
+    enum_entries: HashMap<String, Vec<(String, i32)>>,
     /// Class -> its methods that are NOT declared const (injected from the parsed modules).
     non_const_methods: HashMap<String, HashSet<String>>,
     /// Class -> the `name/arity` keys it declares ITSELF (not inherited). An override calling
@@ -1084,6 +1089,20 @@ impl RefResolver {
     /// Install `class -> methods that are NOT declared const` from the parsed modules. A const
     /// method may not call one of these on `this`, so the emitter needs the set to decide
     /// whether re-emitting a `const` qualifier keeps the body compiling.
+    /// The enum tables, keyed by bare name. A name two modules disagree about is dropped rather
+    /// than guessed at, the same way the namespace table treats an ambiguous name.
+    pub fn set_enum_entries(&mut self, by_name: HashMap<String, Vec<(String, i32)>>) {
+        self.enum_entries = by_name;
+    }
+
+    /// The enumerator an enum gives a value, where the enum is known and exactly one entry has it.
+    pub fn enumerator_name(&self, ty: &str, value: i32) -> Option<&str> {
+        let entries = self.enum_entries.get(ty)?;
+        let mut hit = entries.iter().filter(|(_, entry)| *entry == value);
+        let (name, _) = hit.next()?;
+        hit.next().is_none().then_some(name.as_str())
+    }
+
     pub fn set_non_const_methods(&mut self, by_class: HashMap<String, HashSet<String>>) {
         self.non_const_methods = by_class;
     }

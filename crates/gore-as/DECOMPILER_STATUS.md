@@ -69,7 +69,14 @@ comparison then runs at the wrong width — the widening is rendered as a plain 
 folds collapse it as if it were an alias), and 545 whose instructions match but run in a
 different order.
 
-Two things measured and REFUSED, so they are not tried again:
+Some things measured and REFUSED, so they are not tried again:
+
+* Writing an enum constant as its enumerator NAME rather than a conversion. The cache carries the
+  names for the 32 SCRIPT enums (the other 120 the corpus uses are native, and their names live in
+  `Binds.Cache`, which is not decoded here). It is the spelling the source had and it is kept —
+  but it is byte-neutral: 2,353 before and after. The order difference it was meant to explain has
+  another cause.
+
 
 * Running the producer sweep once more on the joined text: 2,470 -> 2,472.
 * Letting the accumulator fold skip a declaration standing between the value and the

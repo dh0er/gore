@@ -615,7 +615,7 @@ impl Ctx<'_> {
                         if declared_ty.as_deref() == Some(tn.as_str()) {
                             v
                         } else {
-                            cast_to_typename(&v, &tn).unwrap_or(v)
+                            cast_to_typename(&v, &tn, self.refs).unwrap_or(v)
                         }
                     }
                     _ => v,
@@ -1465,7 +1465,7 @@ fn build_call(
             }
         }
         maybe_reverse_args(&mut a, params, refs);
-        cast_container_args(f, recv.ty.as_deref(), &mut a);
+        cast_container_args(f, recv.ty.as_deref(), &mut a, refs);
         Some(format!(
             "{}.{f}({})",
             wrap_uobject_recv(&recv, target_owner, refs),
@@ -1730,7 +1730,7 @@ fn arg_mismatch_count(a: &[Arg], params: &[DataType], refs: &RefResolver) -> usi
         // maybe_reverse_args sees the evidence and can flip a reverse-pushed call. An int
         // const carries `ty: None`, so without this it was invisible to the scorer.
         if arg.is_int {
-            if cast_to_typename("0", &pt.base_name(refs)).is_none() {
+            if cast_to_typename("0", &pt.base_name(refs), refs).is_none() {
                 n += 1;
             }
             continue;
@@ -1796,7 +1796,7 @@ fn maybe_reverse_args(a: &mut Vec<Arg>, params: Option<&[DataType]>, refs: &RefR
 /// Derive the expected types from the receiver's COMPOSED type name (`TMap<ECombatRole,
 /// float>` — locals via obj_locals, this-class members via the fields map) and wrap int args
 /// in place. Foreign-member receivers with unknown types stay untouched (status-quo error).
-fn cast_container_args(method: &str, recv_ty: Option<&str>, a: &mut [Arg]) {
+fn cast_container_args(method: &str, recv_ty: Option<&str>, a: &mut [Arg], refs: &RefResolver) {
     let Some(t) = recv_ty else { return };
     let t = t.trim_start_matches("const ");
     let Some((head, rest)) = t.split_once('<') else {
@@ -1841,7 +1841,7 @@ fn cast_container_args(method: &str, recv_ty: Option<&str>, a: &mut [Arg]) {
         if !(arg.is_int || (arg.is_psf && arg.ty.is_none())) {
             continue;
         }
-        if let Some(c) = cast_to_typename(&arg.s, want) {
+        if let Some(c) = cast_to_typename(&arg.s, want, refs) {
             arg.s = c;
             arg.is_int = false;
             arg.cbits = None;
@@ -1993,7 +1993,7 @@ fn cast_arg(arg: &Arg, pt: &DataType, refs: &RefResolver) -> String {
     if pt.token == 5 {
         // object/enum identifier type: UE enums are `E<Upper>...`; cast int -> enum
         let base = pt.base_name(refs);
-        if let Some(c) = cast_to_typename(&arg.s, &base) {
+        if let Some(c) = cast_to_typename(&arg.s, &base, refs) {
             return c;
         }
         // an int arg to a non-enum object/struct param can't convert at all — the arg
@@ -2053,8 +2053,8 @@ fn downcast(
 /// F-structs, U*/A* objects) can't hold an int — return UNRESOLVED so just THIS assignment
 /// is dropped (a generator-inlined CDO default we can't reconstruct) and the rest of the
 /// function still recovers, rather than stubbing the whole body.
-fn field_assign_rhs(rhs: &str, tyname: &str) -> String {
-    if let Some(c) = cast_to_typename(rhs, tyname) {
+fn field_assign_rhs(rhs: &str, tyname: &str, refs: &RefResolver) -> String {
+    if let Some(c) = cast_to_typename(rhs, tyname, refs) {
         return c; // bool / enum
     }
     match tyname {
@@ -2203,7 +2203,7 @@ fn enum_to_int(rhs: String, src_ty: Option<&str>, dst_is_int: bool) -> String {
 
 /// Cast an int RHS to a named target type: `bool` -> `(x != 0)`, UE enum
 /// (`E<Upper>...`) -> `EEnum(x)`. Returns None when no cast applies.
-fn cast_to_typename(rhs: &str, tyname: &str) -> Option<String> {
+fn cast_to_typename(rhs: &str, tyname: &str, refs: &RefResolver) -> Option<String> {
     if tyname == "bool" {
         // Already a bool: `(true != 0)` is "No conversion from 'int' to 'bool'".
         if matches!(rhs, "true" | "false") {
@@ -2213,8 +2213,20 @@ fn cast_to_typename(rhs: &str, tyname: &str) -> Option<String> {
     }
     // The CHECK reduces to the bare name; the CAST keeps the qualified one, which is what has
     // to be written when the enum lives in a namespace.
-    let b = bare_type_name(tyname).as_bytes();
+    let bare = bare_type_name(tyname);
+    let b = bare.as_bytes();
     if b.len() >= 2 && b[0] == b'E' && b[1].is_ascii_uppercase() {
+        // The cache carries the enumerator NAMES. A constant written as its name is what the
+        // source had, and it is not the same expression as one built by a conversion: the
+        // compiler stores a named constant where the destination already is, while a conversion
+        // is built first and the destination looked up afterwards.
+        if let Some(entry) = rhs
+            .parse::<i32>()
+            .ok()
+            .and_then(|value| refs.enumerator_name(&bare, value))
+        {
+            return Some(format!("{tyname}::{entry}"));
+        }
         return Some(format!("{tyname}({rhs})"));
     }
     None
@@ -3203,7 +3215,7 @@ fn block_stmts_in(
                         Some("float") | Some("double") => {
                             float_lit(&set_consts, slot, true).unwrap_or(raw.clone())
                         }
-                        Some(t) if looks_int(&raw) => field_assign_rhs(&raw, t),
+                        Some(t) if looks_int(&raw) => field_assign_rhs(&raw, t, ctx.refs),
                         _ => raw.clone(),
                     };
                     // batch-45b (FIX-3): a member-write on a FOREIGN object (a call-result /
@@ -3255,7 +3267,7 @@ fn block_stmts_in(
                                         .unwrap_or_else(|| raw.clone()),
                                     "float" | "double" => float_lit(&set_consts, slot, true)
                                         .unwrap_or_else(|| raw.clone()),
-                                    _ if looks_int(&raw) => field_assign_rhs(&raw, v),
+                                    _ if looks_int(&raw) => field_assign_rhs(&raw, v, ctx.refs),
                                     _ => raw.clone(),
                                 };
                                 if cand != UNRESOLVED {
@@ -3315,7 +3327,7 @@ fn block_stmts_in(
                             .unwrap_or(false)
                     {
                         if let Some(ety) = ref_reg_nfty.as_deref() {
-                            if let Some(c) = cast_to_typename(&raw, ety) {
+                            if let Some(c) = cast_to_typename(&raw, ety, ctx.refs) {
                                 rhs = c;
                             }
                         }
@@ -3416,7 +3428,16 @@ fn block_stmts_in(
                     // batch-31c (N3 Fix 2): an ENUM-typed slot (out-param slot typing)
                     // written a raw ordinal needs the explicit conversion — AS has no
                     // implicit int->enum (`EInventoryTypes local_7 = 0;` fails).
-                    format!("{}({})", ctx.slot_type(w(ins, 0)).unwrap(), bits as i32)
+                    //
+                    // Where the cache carries the enumerator's NAME, write that instead. It is
+                    // what the source had, and it is not the same expression: a named constant
+                    // goes straight where the destination is, while a conversion is built first
+                    // and the destination looked up afterwards.
+                    let ty = ctx.slot_type(w(ins, 0)).unwrap();
+                    match ctx.refs.enumerator_name(&ty, bits as i32) {
+                        Some(entry) => format!("{ty}::{entry}"),
+                        None => format!("{ty}({})", bits as i32),
+                    }
                 } else {
                     (bits as i32).to_string()
                 };

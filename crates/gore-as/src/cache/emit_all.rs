@@ -265,6 +265,25 @@ pub fn prepare_resolver_semantics(
         })
         .collect();
     refs.set_non_const_methods(non_const);
+    // The enum tables, so a constant can be written the way the source wrote it. A bare name two
+    // modules disagree about carries no witness and is dropped.
+    let mut enum_entries: HashMap<String, Vec<(String, i32)>> = HashMap::new();
+    let mut ambiguous: HashSet<String> = HashSet::new();
+    for module in mods {
+        for enum_def in &module.enums {
+            match enum_entries.get(&enum_def.name) {
+                Some(seen) if *seen != enum_def.entries => {
+                    ambiguous.insert(enum_def.name.clone());
+                }
+                Some(_) => {}
+                None => {
+                    enum_entries.insert(enum_def.name.clone(), enum_def.entries.clone());
+                }
+            }
+        }
+    }
+    enum_entries.retain(|name, _| !ambiguous.contains(name));
+    refs.set_enum_entries(enum_entries);
     let declared = mods
         .iter()
         .flat_map(|module| &module.classes)
