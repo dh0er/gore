@@ -1763,6 +1763,9 @@ fn emit_function_ctor(
         // BEFORE the value-type decl-init rewrite, which would otherwise give the loop element a
         // declaration and hide the idiom.
         let (body, foreach_suppressed) = rewrite_foreach_loops(&body, &locals, refs);
+        // Before the declaration merge: a conversion naming the type the value already has hides
+        // the copy-construction the merge is looking for.
+        let body = drop_redundant_conversions(&body, fields, &path_roots, refs);
         let (body, value_suppressed) =
             rewrite_value_decl_init(&body, &locals, refs, &copy_constructed_slots(f, refs));
         // A local that receives a CONST call result has to be const as well, and a const local is
@@ -7741,11 +7744,24 @@ fn drop_redundant_conversions(
 ) -> String {
     let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
     for line in &mut lines {
-        let Some((indent, name, init)) = declaration_with_initializer(line) else {
+        // Either a declaration, `T X = T(<member>);`, or the assignment a hoist left behind,
+        // `X = T(<member>);` — the same conversion either way, and the same nothing it converts.
+        let Some((indent, name, init)) = declaration_with_initializer(line).or_else(|| {
+            let statement = line.trim().strip_suffix(';')?;
+            let (target, value) = statement.split_once(" = ")?;
+            is_decompiler_local(target).then(|| {
+                (indent_of(line), target.to_owned(), value.to_owned())
+            })
+        }) else {
             continue;
         };
         let head = line.trim().split(" = ").next().unwrap_or("");
-        let ty = head[..head.len().saturating_sub(name.len())].trim().to_owned();
+        let declared = head[..head.len().saturating_sub(name.len())].trim().to_owned();
+        let ty = match declared.is_empty() {
+            // An assignment carries no type of its own; the value names the one it converts to.
+            true => init.split('(').next().unwrap_or("").to_owned(),
+            false => declared.clone(),
+        };
         if ty.is_empty() {
             continue;
         }
@@ -7761,7 +7777,10 @@ fn drop_redundant_conversions(
         if type_of_member_path(inner, fields, roots, refs).as_deref() != Some(ty.as_str()) {
             continue;
         }
-        *line = format!("{indent}{ty} {name} = {inner};");
+        *line = match declared.is_empty() {
+            true => format!("{indent}{name} = {inner};"),
+            false => format!("{indent}{declared} {name} = {inner};"),
+        };
     }
     let mut out = lines.join("\n");
     if text.ends_with('\n') {
