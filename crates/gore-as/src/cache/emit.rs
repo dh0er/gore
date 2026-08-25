@@ -1939,6 +1939,7 @@ fn emit_function_ctor(
             fold_copy_out_temporaries(&rendered, &declared_locals, &const_result_slots, fields);
         let rendered = fold_cast_operands(&rendered, &declared_locals, &call_result_types);
         let rendered = fold_enum_round_trips(&rendered, fields, &path_roots, refs);
+        let rendered = inline_bool_chain_into_next_condition(&rendered);
         let rendered = fold_bool_member_comparisons(&rendered, fields, &path_roots, refs);
         let rendered = drop_redundant_conversions(&rendered, fields, &path_roots, refs);
         let rendered = drop_block_end_handle_releases(&rendered);
@@ -7745,6 +7746,50 @@ fn drop_redundant_conversions(
     }
     let mut out = lines.join("\n");
     if text.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// `bool X = <chain>;` read once by the very next condition is that condition's own operand.
+///
+/// Vanilla branches on the comparison it just made; a name in between makes the compiler
+/// materialize the value into a slot and read it back one byte wide before the branch. The value
+/// travels in brackets, so a chain mixing `&&` and `||` keeps the grouping it had — mixing them
+/// without brackets is a warning here, and warnings are errors.
+fn inline_bool_chain_into_next_condition(body: &str) -> String {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for index in 0..lines.len().saturating_sub(1) {
+            let Some((_, name, value)) = declaration_with_initializer(&lines[index]) else {
+                continue;
+            };
+            if !lines[index].trim_start().starts_with("bool ") {
+                continue;
+            }
+            if !(value.contains("&&") || value.contains("||")) {
+                continue;
+            }
+            if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != 2 {
+                continue;
+            }
+            let reader = index + 1;
+            let trimmed = lines[reader].trim_start();
+            if count_ident(&lines[reader], &name) != 1
+                || !(trimmed.starts_with("if (") || trimmed.starts_with("return "))
+            {
+                continue;
+            }
+            lines[reader] = rename_ident(&lines[reader], &name, &format!("({value})"));
+            lines.remove(index);
+            changed = true;
+            break;
+        }
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') {
         out.push('\n');
     }
     out
