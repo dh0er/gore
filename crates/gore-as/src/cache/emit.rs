@@ -1938,6 +1938,7 @@ fn emit_function_ctor(
             fold_copy_out_temporaries(&rendered, &declared_locals, &const_result_slots, fields);
         let rendered = fold_cast_operands(&rendered, &declared_locals, &call_result_types);
         let rendered = fold_enum_round_trips(&rendered, fields, &path_roots, refs);
+        let rendered = fold_bool_member_comparisons(&rendered, fields, &path_roots, refs);
         let rendered = drop_block_end_handle_releases(&rendered);
         let rendered = drop_unused_declarations(&rendered);
         let rendered = fold_member_read_temporaries(
@@ -7655,6 +7656,53 @@ fn drop_block_end_handle_releases(text: &str) -> String {
         joined.push('\n');
     }
     joined
+}
+
+/// `int X = <bool member>; ... (X != 0) ...` is that member.
+///
+/// The slot fell back to `int`, and an int carrying a bool has to be compared to reach a bool
+/// again — so a one-line `return this.m_Activated;` came back as a read, a copy, a comparison and
+/// a conversion where vanilla has `RDR1` and a return. The field's own declared type is the
+/// witness: where it IS a bool, the comparison is asking for what the value already is.
+fn fold_bool_member_comparisons(
+    body: &str,
+    fields: Option<&HashMap<String, String>>,
+    roots: &HashMap<String, String>,
+    refs: &RefResolver,
+) -> String {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for index in 0..lines.len() {
+            let Some((_, name, path)) = declaration_with_initializer(&lines[index]) else {
+                continue;
+            };
+            if !lines[index].trim_start().starts_with("int ") {
+                continue;
+            }
+            if type_of_member_path(&path, fields, roots, refs).as_deref() != Some("bool") {
+                continue;
+            }
+            if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != 2 {
+                continue;
+            }
+            let comparison = format!("({name} != 0)");
+            let Some(reader) = (index + 1..lines.len()).find(|at| lines[*at].contains(&comparison))
+            else {
+                continue;
+            };
+            lines[reader] = lines[reader].replace(&comparison, &path);
+            lines.remove(index);
+            changed = true;
+            break;
+        }
+    }
+    let mut out = lines.join("\n");
+    if body.ends_with('\n') {
+        out.push('\n');
+    }
+    out
 }
 
 fn fold_compound_assignments(
