@@ -31,7 +31,7 @@ complete resolved identities.
 `full_qualification_corpus_v1()` returns 27 ordered cases under
 `gore.as.full-differential-qualification/v2`. The current exact corpus/source seal is:
 
-`01afb701c5f7ef7959a6d6c9b81f290f2e8d0b33671342ea50d9db87123daa94`
+`6220f1671c42a771e4895e55ded4bad49247140f00a7d77ba7857fe4c6fe2761`
 
 The corpus includes positive and negative syntax, overloads/defaults, templates/validators,
 containers, namespaces/imports, metadata, class generation, scalar and structured invocation,

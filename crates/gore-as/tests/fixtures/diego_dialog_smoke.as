@@ -3,7 +3,7 @@ FText GoreDiegoSmokeCaption(const FName Text)
     return FText::FromString(Text.ToString());
 }
 
-class UChoiceGoreDiegoSmoke : UTopic_Hero__OC_STT_DIEGO
+class UChoiceGoreDiegoSmoke : UGoreDiegoTopicBase
 {
     default Caption = GoreDiegoSmokeCaption(n"[GORE test] Dialog works");
     default PriorityRank = 2;

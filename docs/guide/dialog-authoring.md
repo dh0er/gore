@@ -43,7 +43,11 @@ FText MyModCaption(const FName Text)
     return FText::FromString(Text.ToString());
 }
 
-class UChoiceMyModDiego : UTopic_Hero__OC_STT_DIEGO
+class UMyModDiegoTopicBase : UTopic_Hero__OC_STT_DIEGO
+{
+}
+
+class UChoiceMyModDiego : UMyModDiegoTopicBase
 {
     default Caption = MyModCaption(n"My test option");
     default PriorityRank = 2;

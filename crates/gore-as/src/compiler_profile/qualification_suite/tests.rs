@@ -624,7 +624,7 @@ fn full_corpus_has_stable_seal_ids_sources_and_required_dimensions() {
     assert_eq!(first.canonical_sha256, second.canonical_sha256);
     assert_eq!(
         first.canonical_sha256,
-        Sha256Digest::from_hex("01afb701c5f7ef7959a6d6c9b81f290f2e8d0b33671342ea50d9db87123daa94")
+        Sha256Digest::from_hex("6220f1671c42a771e4895e55ded4bad49247140f00a7d77ba7857fe4c6fe2761")
             .unwrap()
     );
     let ids: Vec<_> = first
@@ -663,6 +663,28 @@ fn full_corpus_has_stable_seal_ids_sources_and_required_dimensions() {
             "negative.diagnostics.located-warning-as-error",
             "negative.unsupported.try-catch",
         ]
+    );
+    let diego = first
+        .cases
+        .iter()
+        .find(|case| case.case_id == "positive.game.dialog-diego-authoring")
+        .unwrap();
+    assert_eq!(diego.sections.len(), 2);
+    assert_eq!(
+        diego.sections[0].module,
+        "Story.Dialogs.Diego.GoreDiegoQualificationBase"
+    );
+    assert_eq!(
+        diego.sections[0].relative_path,
+        "Story/Dialogs/Diego/GoreDiegoQualificationBase.as"
+    );
+    assert_eq!(
+        diego.sections[1].module,
+        "Story.Dialogs.Diego.GoreDiegoDialogSmoke"
+    );
+    assert_eq!(
+        diego.sections[1].relative_path,
+        "Story/Dialogs/Diego/GoreDiegoDialogSmoke.as"
     );
     validate_full_qualification_coverage_v1(&first).unwrap();
     assert_eq!(FULL_QUALIFICATION_COVERAGE_V1.len(), 44);

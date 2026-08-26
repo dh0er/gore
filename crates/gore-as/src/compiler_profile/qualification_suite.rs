@@ -526,11 +526,18 @@ pub fn full_qualification_corpus_v1() -> Result<CompilerProbeCorpusV1, Qualifica
             "requires_captured_profile/game-dialog-diego-authoring;coverage=game-dialog-diego-authoring",
             ProbeOutcomeV1::Accepted,
             ProbeModeV1::CompileOnly,
-            &[section(
-                "Gore.Examples.DiegoDialogSmoke",
-                "Gore/Examples/DiegoDialogSmoke.as",
-                include_str!("../../tests/fixtures/diego_dialog_smoke.as"),
-            )],
+            &[
+                section(
+                    "Story.Dialogs.Diego.GoreDiegoQualificationBase",
+                    "Story/Dialogs/Diego/GoreDiegoQualificationBase.as",
+                    "class UGoreDiegoTopicBase : UObject { FText Caption; int32 PriorityRank; void EndConversation() {} }",
+                ),
+                section(
+                    "Story.Dialogs.Diego.GoreDiegoDialogSmoke",
+                    "Story/Dialogs/Diego/GoreDiegoDialogSmoke.as",
+                    include_str!("../../tests/fixtures/diego_dialog_smoke.as"),
+                ),
+            ],
         ),
         case(
             "positive.fname.non-ascii-equivalence",
