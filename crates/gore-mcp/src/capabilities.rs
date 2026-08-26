@@ -120,8 +120,9 @@ pub fn instructions(opts: &Options, policy: Policy) -> String {
     // they may drive the game to regenerate the cache and stage sources in the installation, so
     // they need write pre-approval too.
     text.push_str(&format!(
-        "- `gore_as_compile` and `gore_as_compile_module` always run offline without consent. \
-         The mixed `gore_as` tool does the same with explicit `backend: standalone`. \
+        "- `gore_as_compile` and `gore_as_compile_module` always run offline. With a fresh \
+         `work_dir/tree` and outputs outside the installation they need no consent. The mixed \
+         `gore_as` tool does the same with explicit `backend: standalone`. \
          A `game` or `standalone-then-game` backend, including the omitted default, may open a real \
          game window and stage sources in the installation: {}.\n",
         will_be(&LAUNCHES, opts, policy)
@@ -259,8 +260,8 @@ TOOLS
   gore_mod_inspect  Read-only bundle validation; pass the directory or ZIP directly on this tool.
   gore_mgr       Manage a loadout end to end: import, order, preflight, recover, apply, status, reset.
   gore_mgr_preflight  Read-only Manager readiness check; arguments go directly on this tool.
-  gore_as_compile  Strict standalone full-tree compilation. No game launch and no consent.
-  gore_as_compile_module  Strict standalone one-module compilation. No game launch and no consent.
+  gore_as_compile  Strict standalone full-tree compilation. No game launch; a fresh work tree needs no consent.
+  gore_as_compile_module  Strict standalone one-module compilation. No game launch; a fresh work tree and outside-install outputs need no consent.
   gore_as        AngelScript cache: inspect, decompile, patch defaults, recompile modules.
 
 `gore_doctor`, `gore_find`, `gore_mod_inspect`, `gore_mgr_preflight`, `gore_as_compile`, and
@@ -441,7 +442,13 @@ mod tests {
             "one flag is not enough and the primer must say so"
         );
         assert!(asking(true, true).contains("installation: PRE-APPROVED"));
-        assert!(asking(false, false).contains("always run offline without consent"));
+        let standalone = asking(false, false);
+        assert!(standalone.contains("always run offline"), "{standalone}");
+        assert!(standalone.contains("fresh `work_dir/tree`"), "{standalone}");
+        assert!(
+            !standalone.contains("always run offline without consent"),
+            "{standalone}"
+        );
 
         // What the primer claims and what the gate does must agree in every combination. The gate
         // is consulted here rather than restated, so a change to `Safety` that the primer does not
