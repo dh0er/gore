@@ -70,8 +70,7 @@ impl FreeFunctionRenamePlan {
     /// Make an authored overlay consistent with the collision-renamed vanilla tree. Existing edit
     /// declarations can be rewritten safely because their declaring module is known. Any remaining
     /// bare/global call using an original colliding name is ambiguous in authored source, so reject
-    /// it before starting the compiler instead of guessing an overload/module target. A leading
-    /// `::` is accepted because emitted bytecode-resolved calls use that explicit global scope.
+    /// it before starting the compiler instead of guessing an overload/module target.
     fn prepare_overlay(
         &self,
         mods: &[Module],
@@ -108,7 +107,7 @@ impl FreeFunctionRenamePlan {
         let unresolved = unresolved_collision_calls(&rewritten, &self.original_names);
         if !unresolved.is_empty() {
             return Err(format!(
-                "authored overlay contains collision-ambiguous free call(s): {}; use a prepared emitted module or remove/qualify the call",
+                "authored overlay contains collision-ambiguous free call(s): {}; use the deterministic renamed function or remove the call",
                 unresolved.into_iter().collect::<Vec<_>>().join(", ")
             ));
         }
@@ -856,13 +855,6 @@ fn unresolved_collision_calls(source: &str, originals: &BTreeSet<String>) -> BTr
         if index > 0 && token_text(source, &tokens[index - 1]) == "." {
             continue; // explicit object/this/super member, with arbitrary trivia around `.`
         }
-        if index >= 2
-            && token_text(source, &tokens[index - 1]) == ":"
-            && token_text(source, &tokens[index - 2]) == ":"
-            && (index == 2 || !tokens[index - 3].identifier)
-        {
-            continue; // explicit global `::Name`; a `Namespace::Name` remains ambiguous/refused
-        }
         unresolved.insert(name.to_owned());
     }
     unresolved
@@ -1146,9 +1138,9 @@ impl<'a> PreparedEmit<'a> {
             )
     }
 
-    /// Validate and rewrite an authored overlay against this prepared cache. Unqualified calls or
-    /// handles to a collision-bound name fail closed; explicit `receiver.Name` and global
-    /// `::Name` access remain safe.
+    /// Validate and rewrite an authored overlay against this prepared cache. Bare, global, or
+    /// namespace-qualified calls and handles to a collision-bound name fail closed; only explicit
+    /// `receiver.Name` access is safe.
     pub fn prepare_overlay(
         &self,
         op: &str,

@@ -140,7 +140,13 @@ fn collision_targets_are_unique_and_overlay_calls_fail_closed() {
         .contains("collision-ambiguous"));
     assert!(prepared
         .prepare_overlay("add", "NewModule", "void Caller() { ::Get(1); }")
-        .is_ok());
+        .unwrap_err()
+        .contains("collision-ambiguous"));
+    let global_edit = "void Get(int Value)\n{\n}\nvoid Caller()\n{\n    ::Get(1);\n}\n";
+    assert!(prepared
+        .prepare_overlay("edit", "A", global_edit)
+        .unwrap_err()
+        .contains("collision-ambiguous"));
     // Explicit member calls are not global free-function references and remain legal.
     assert!(prepared
         .prepare_overlay(

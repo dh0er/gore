@@ -7758,10 +7758,11 @@ where
 
     // 2. Overlay the user's .as at its rel path.
     let dst = tree.join(&overlay_rel_path);
-    if let Some(parent) = dst.parent() {
-        std::fs::create_dir_all(parent).map_err(io("mkdir overlay"))?;
-    }
-    std::fs::write(&dst, overlay.as_bytes()).map_err(io("overlay .as"))?;
+    write_compile_overlay(
+        &dst,
+        overlay.as_bytes(),
+        emit_base_tree && opts.op == "edit",
+    )?;
 
     // 3. Drive the game to regenerate the precompiled cache from `tree`.
     let regen_path = run_regen(&opts.game_dir, &tree).map_err(CompileError::Regen)?;
@@ -7828,6 +7829,33 @@ where
     let mini_path = opts.work_dir.join("module.cache");
     let artifact = write_compiled_artifact(mini_path.clone(), &mini)?;
     Ok(CompileOutput::retained(mini_path, target, artifact))
+}
+
+/// Write one prepared overlay without following a linked/reparse parent or final file. The game
+/// backend replaces the emitted base file; the standalone backend creates a new sparse-tree file.
+fn write_compile_overlay(
+    path: &Path,
+    source: &[u8],
+    replace_existing: bool,
+) -> Result<(), CompileError> {
+    if let Some(parent) = path.parent() {
+        ensure_real_directory(parent).map_err(io("creating overlay parent"))?;
+    }
+    let mut file = if replace_existing {
+        open_compiled_artifact_existing(path)
+            .map_err(|error| CompileError::Io(format!("opening overlay: {error}")))?
+    } else {
+        open_compiled_artifact_create_new(path)
+            .map_err(|error| CompileError::Io(format!("creating overlay: {error}")))?
+    };
+    if replace_existing {
+        file.set_len(0)
+            .and_then(|_| file.seek(SeekFrom::Start(0)).map(|_| ()))
+            .map_err(io("resetting overlay"))?;
+    }
+    file.write_all(source)
+        .and_then(|_| file.sync_all())
+        .map_err(io("writing overlay"))
 }
 
 /// Load native arities from the `GORE_AS_BINDS` env path if set, else a `Binds.Cache` sitting next
@@ -11668,6 +11696,32 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    fn compile_overlay_write_rejects_linked_parent() {
+        let root = unique_test_root("overlay-linked-parent");
+        let tree = root.join("tree");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let linked = tree.join("AI");
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &linked).unwrap();
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_dir(&outside, &linked).is_err() {
+            // The production guard also rejects junctions through their reparse attribute. Some
+            // Windows test hosts cannot create the equivalent symlink without Developer Mode.
+            let _ = std::fs::remove_dir_all(&root);
+            return;
+        }
+
+        let error = write_compile_overlay(&linked.join("Mod.as"), b"NEW", false)
+            .expect_err("overlay write must not traverse a linked parent");
+        assert!(error.to_string().contains("linked/reparse"), "{error}");
+        assert!(!outside.join("Mod.as").exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
