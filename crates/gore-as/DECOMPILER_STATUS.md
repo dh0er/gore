@@ -69,6 +69,32 @@ comparison then runs at the wrong width — the widening is rendered as a plain 
 folds collapse it as if it were an alias), and 545 whose instructions match but run in a
 different order.
 
+### The loop whose condition is a short circuit
+
+41 functions lose a loop outright — the back edge AND the `SUSPEND` that comes with it — and the
+diagnosis is exact. `uncond_latch_loop` asks that the header be a SINGLE two-successor block. Where
+the condition short-circuits, it is not: `while (!A() && !B())` computes its value across three
+blocks and tests the result in a fourth.
+
+The smallest case, `UAIState_TheftPursuit::WaitUntilDeadlineOrExit`, is 21 instructions:
+
+    [0000] …IsTimeInThePast … JLowNZ ->[0009]     <- the back edge targets HERE
+    [0007] SetV4 v1, 0 ; JMP ->[0014]
+    [0009] …ExitEarly … CpyVtoV4 v1, v2
+    [0014] CpyVtoR1 v1 ; JLowZ ->[0020]           <- the exit test
+    [0016] SUSPEND ; WaitOneTick ; JMP ->[0000]   <- the latch
+    [0020] RET
+
+The detector starts at block 0, takes the false ARM of the short circuit for the loop body, finds
+the exit inside the latch span and bails — correctly, for the shape it models. The `is_cond` arm
+then renders the region as an `if`, and the latch's `JMP` has no rendering at all.
+
+Rendering it faithfully needs the CONDITION as an expression at the loop head, and the structurer
+does not have one: it writes the short circuit as a two-armed store and leaves the merge to a text
+pass in the emitter. `while (true) { …; if (!c) break; … }` is NOT the same bytecode — the break
+costs a jump vanilla does not have — so the fix is to give the structurer the expression, not to
+pick a different keyword.
+
 Some things measured and REFUSED, so they are not tried again:
 
 * Treating a name wrapped in a CONVERSION as a movable argument candidate. Vanilla really does
