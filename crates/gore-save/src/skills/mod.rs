@@ -110,9 +110,62 @@ fn tier_options(def: &SkillDef, learned: bool, current: &str) -> Vec<Value> {
     }
 }
 
+/// What an uncatalogued learned class says about itself: its current value and
+/// the options its row offers. Removal is the only thing this editor can
+/// honestly do with a class it knows nothing else about, so `Untrained` always
+/// has to be reachable — and reachable means DIFFERENT from the current value,
+/// since the UI drops an edit that re-states what is already selected.
+///
+/// A class whose own suffix reads as `Untrained` would otherwise collapse both
+/// into one option and strand the element for good. Such a row says `Learned`
+/// instead: for a class with no catalogued ladder there is no rank to report,
+/// and "the effect is present" is the honest statement.
+fn uncatalogued_state(tier: Option<&str>) -> (String, Vec<Value>) {
+    let current = match current_value(tier) {
+        untrained if untrained == "Untrained" => "Learned".to_string(),
+        other => other,
+    };
+    let options = vec![
+        json!({ "value": current.clone() }),
+        json!({ "value": "Untrained" }),
+    ];
+    (current, options)
+}
+
+/// The highest rung `base` appears at among the actor's learned classes. A save
+/// normally holds one element per skill, but not always — see the scutes ladder
+/// in [`catalog`] — and the higher class implies the lower.
+fn best_tier(
+    learned: &[(String, Option<String>)],
+    base: &str,
+    def: Option<&SkillDef>,
+) -> Option<String> {
+    let mut best: Option<&Option<String>> = None;
+    for (candidate, tier) in learned {
+        if candidate != base {
+            continue;
+        }
+        let better = match (best, def) {
+            (None, _) => true,
+            (Some(current), Some(def)) => {
+                catalog::tier_rank(def, tier.as_deref())
+                    > catalog::tier_rank(def, current.as_deref())
+            }
+            // Uncatalogued class: no ladder to rank it by, so keep the first.
+            (Some(_), None) => false,
+        };
+        if better {
+            best = Some(tier);
+        }
+    }
+    best.cloned().flatten()
+}
+
 /// List the actor's skills: every learned skill (from its ActiveEffects array)
-/// plus every catalogued skill it has not learned (the learnable roster). Each
-/// entry carries the tier options the UI renders. `actor` is normally [`HERO`].
+/// plus every catalogued skill it has not learned (the learnable roster). A
+/// learned class the catalog does not know is listed too, under its raw name and
+/// with an Untrained option, so it can be dropped again. Each entry carries the
+/// tier options the UI renders. `actor` is normally [`HERO`].
 pub fn list_skills(root: &properties::RootObject, actor: &str) -> Value {
     let located = locate_active_effects(root, actor);
     let found = located.is_some();
@@ -134,18 +187,22 @@ pub fn list_skills(root: &properties::RootObject, actor: &str) -> Value {
     let mut skills: Vec<Value> = Vec::new();
 
     // Emit learned skills first (a save may hold a class not yet catalogued;
-    // still surface it as a raw entry so nothing is silently hidden). Emit one
-    // row per base: the UI keys pending edits by base and `apply_skill_set`
-    // targets the first matching element, so a save with duplicate effects for
-    // the same skill must not produce multiple (divergent) rows.
+    // still surface it as a raw entry so nothing is silently hidden). One row per
+    // base, carrying the HIGHEST rung the save holds for it: the game leaves
+    // Cavalorn's first scutes lesson in place when it grants the second, and the
+    // higher class implies the lower, so the higher one is what the hero can
+    // actually do. Showing the first element instead would report a master
+    // hunter as merely trained — and hide the rung an edit then silently drops.
     let mut emitted_bases: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    for (base, tier) in &learned {
+    for (base, _) in &learned {
         if !emitted_bases.insert(base.as_str()) {
             continue;
         }
         let def = catalog::find(base);
+        let tier = best_tier(&learned, base, def);
+        let tier = &tier;
         let kind = def.map(|d| d.kind).unwrap_or(Kind::Ladder);
-        let current = current_value(tier.as_deref());
+        let mut current = current_value(tier.as_deref());
         let (label, category, has_untrained, mut options) = match def {
             Some(d) => (
                 d.label.to_string(),
@@ -153,12 +210,17 @@ pub fn list_skills(root: &properties::RootObject, actor: &str) -> Value {
                 d.has_untrained,
                 tier_options(d, true, &current),
             ),
-            None => (
-                base.replace('_', " "),
-                "Other".to_string(),
-                false,
-                vec![json!({ "value": current })],
-            ),
+            // An uncatalogued class: a skill the game defines but nothing ever
+            // grants or reads, one a console `addskill` put there, or one a
+            // newer game version added. Surface it under its raw name and offer
+            // Untrained, so whatever the save carries can always be dropped
+            // again — that removal is the only thing this editor can honestly
+            // do with a class it knows nothing else about.
+            None => {
+                let (raw_current, options) = uncatalogued_state(tier.as_deref());
+                current = raw_current;
+                (base.replace('_', " "), "Other".to_string(), false, options)
+            }
         };
         // The dropdown requires the current value to be a selectable option. A
         // ladder/circle class stored without its tier suffix maps to a `current`
@@ -179,14 +241,16 @@ pub fn list_skills(root: &properties::RootObject, actor: &str) -> Value {
         }));
     }
 
-    // Roster: every catalogued skill the actor has not learned.
+    // Roster: every catalogued skill the actor has not learned. The catalog only
+    // holds skills the game actually teaches or checks, so nothing offered here
+    // is dead weight.
     let learned_bases: std::collections::HashSet<&str> =
         learned.iter().map(|(b, _)| b.as_str()).collect();
     for def in catalog::SKILLS {
         if learned_bases.contains(def.base) {
             continue;
         }
-        skills.push(json!({
+        let row = json!({
             "base": def.base,
             "label": def.label,
             "category": def.category,
@@ -195,7 +259,8 @@ pub fn list_skills(root: &properties::RootObject, actor: &str) -> Value {
             "current": "Untrained",
             "hasUntrained": def.has_untrained,
             "options": tier_options(def, false, "Untrained"),
-        }));
+        });
+        skills.push(row);
     }
 
     // Stable UI order: category (catalog order), then learned-before-roster,
@@ -285,13 +350,26 @@ impl SkillSetEdit {
         // unknown base or a tier outside the skill's options (a stale UI option,
         // a typo, a manual API caller) would otherwise build and write a
         // `GE_Skill_*` reference the game does not define.
-        let def = catalog::find(&base).ok_or_else(|| {
-            CoreError::InvalidRequest(format!("private.skills.set: unknown skill base {base:?}"))
-        })?;
-        if !catalog::valid_tiers(def).contains(&tier.as_str()) {
-            return Err(CoreError::InvalidRequest(format!(
-                "private.skills.set: tier {tier:?} is not valid for skill {base:?}"
-            )));
+        //
+        // Untrained is the one exception, because it composes nothing: it
+        // REMOVES the element the save already carries. Refusing it for an
+        // uncatalogued base would make whatever the save holds — a skill the
+        // game ignores, a console `addskill`, a class from a newer game version
+        // — permanently unremovable.
+        match catalog::find(&base) {
+            Some(def) => {
+                if !catalog::valid_tiers(def).contains(&tier.as_str()) {
+                    return Err(CoreError::InvalidRequest(format!(
+                        "private.skills.set: tier {tier:?} is not valid for skill {base:?}"
+                    )));
+                }
+            }
+            None if tier == "Untrained" => {}
+            None => {
+                return Err(CoreError::InvalidRequest(format!(
+                    "private.skills.set: unknown skill base {base:?} can only be set to Untrained"
+                )));
+            }
         }
         Ok(SkillSetEdit { actor, base, tier })
     }
@@ -301,9 +379,11 @@ impl SkillSetEdit {
 ///
 /// Transitions (resolved fresh from the payload each call, addressed by skill
 /// base, so a batch of these is order-independent and offset-safe):
-/// - learned, `tier == Untrained`, no `_Untrained` class → remove the element.
-/// - learned, target class differs → retarget the element's `Def` in place
-///   (string patch; also covers lowering to an existing `_Untrained` class).
+/// - learned, `tier == Untrained`, no `_Untrained` class → remove EVERY element
+///   of that skill.
+/// - learned, target class differs → keep the first element, remove any further
+///   ones, and retarget the survivor's `Def` in place (string patch; also covers
+///   lowering to an existing `_Untrained` class).
 /// - not learned, `tier != Untrained` → clone a donor element (or the embedded
 ///   template on an empty array) and retarget its `Def`.
 /// - otherwise a no-op.
@@ -328,9 +408,13 @@ pub(crate) fn apply_skill_set(
     let want_untrained = edit.tier == "Untrained";
     let target_class = catalog::skill_class(&edit.base, &edit.tier);
 
-    // Find an existing element for this base (and note a same-category donor for
-    // the learn path).
-    let mut existing: Option<usize> = None;
+    // Find EVERY element for this base (and note a same-category donor for the
+    // learn path). All of them, not just the first: a save can hold two rungs of
+    // one skill (the game leaves Cavalorn's first scutes lesson in place when it
+    // grants the second), and an edit that touched only one would leave the
+    // other behind — the skill would come back on the next read, and the rung the
+    // user did not see would decide what the hero can do.
+    let mut existing: Vec<usize> = Vec::new();
     let mut same_category_donor: Option<usize> = None;
     let mut any_donor: Option<usize> = None;
     let target_category = def.map(|d| d.category);
@@ -343,9 +427,7 @@ pub(crate) fn apply_skill_set(
         };
         any_donor.get_or_insert(idx);
         if b == edit.base {
-            // First match wins, matching list_skills' dedup (keep-first) so the
-            // row the UI shows and the element this edits are the same one.
-            existing.get_or_insert(idx);
+            existing.push(idx);
         }
         if target_category.is_some() && catalog::find(&b).map(|d| d.category) == target_category {
             same_category_donor.get_or_insert(idx);
@@ -362,17 +444,36 @@ pub(crate) fn apply_skill_set(
     // Read the existing element's class here, while the tree is still in hand; the
     // borrow of the cache ends with this block so the writes below can hand it their
     // proof parses.
-    let existing_class = existing
+    let keep = existing.first().copied();
+    let existing_class = keep
         .and_then(|idx| elements.get(idx))
         .and_then(element_class)
         .map(str::to_string);
+    // Every other element of this skill goes, whatever rung it sits on, so the
+    // skill ends up saying exactly one thing.
+    let surplus: Vec<usize> = existing.iter().skip(1).copied().collect();
 
-    match existing {
+    match keep {
         Some(idx) => {
             if want_untrained && !has_untrained {
-                // Unlearn: no `_Untrained` class exists, so remove the element.
-                container_edit(payload, cache, &array_path, ContainerEdit::ArrayRemove(idx))
-            } else if existing_class.as_deref() == Some(target_class.as_str()) {
+                // Unlearn: no `_Untrained` class exists, so the elements go.
+                return container_edit(
+                    payload,
+                    cache,
+                    &array_path,
+                    ContainerEdit::ArrayRemoveMany(existing),
+                );
+            }
+            if !surplus.is_empty() {
+                // Removing only higher indices leaves `idx` where it is.
+                container_edit(
+                    payload,
+                    cache,
+                    &array_path,
+                    ContainerEdit::ArrayRemoveMany(surplus),
+                )?;
+            }
+            if existing_class.as_deref() == Some(target_class.as_str()) {
                 Ok(()) // already the requested class
             } else {
                 retarget_def(payload, cache, &array_path, idx, &target_class)
@@ -530,6 +631,94 @@ mod tests {
         let def = catalog::find("Crafting_Blacksmith").unwrap();
         let opts = tier_options(def, false, "Untrained");
         assert_eq!(opt_values(&opts), ["Untrained", "Trained", "Master"]);
+    }
+
+    #[test]
+    fn the_scutes_ladder_offers_both_of_cavalorns_lessons() {
+        let def = catalog::find("Hunting_Scutes").unwrap();
+        assert_eq!(
+            opt_values(&tier_options(def, true, "Trained")),
+            ["Untrained", "Trained", "Master"]
+        );
+        // The rung that unlocks razor plates has to be expressible at all — the
+        // single-state shape this skill used to have could only write Trained.
+        assert!(
+            SkillSetEdit::from_json(&json!({"base": "Hunting_Scutes", "tier": "Master"})).is_ok()
+        );
+    }
+
+    #[test]
+    fn a_skill_reads_as_its_highest_rung() {
+        let def = catalog::find("Hunting_Scutes");
+        // Array order must not decide: the game grants the second scutes lesson
+        // without removing the first, and the higher class implies the lower.
+        let both = vec![
+            ("Hunting_Scutes".to_string(), Some("Trained".to_string())),
+            ("Hunting_Scutes".to_string(), Some("Master".to_string())),
+        ];
+        assert_eq!(
+            best_tier(&both, "Hunting_Scutes", def),
+            Some("Master".to_string())
+        );
+        let reversed = vec![both[1].clone(), both[0].clone()];
+        assert_eq!(
+            best_tier(&reversed, "Hunting_Scutes", def),
+            Some("Master".to_string())
+        );
+        // An uncatalogued class has no ladder to rank by: keep what was found.
+        let raw = vec![("Whatever".to_string(), Some("Trained".to_string()))];
+        assert_eq!(
+            best_tier(&raw, "Whatever", None),
+            Some("Trained".to_string())
+        );
+    }
+
+    #[test]
+    fn an_uncatalogued_untrained_class_still_offers_removal() {
+        // The UI drops an edit that re-states the current value, so a row whose
+        // only option IS its current value can never be acted on. A class whose
+        // own suffix reads as `Untrained` used to produce exactly that, which
+        // left the element in the save for good.
+        let (current, options) = uncatalogued_state(Some("Untrained"));
+        assert_eq!(current, "Learned");
+        assert_eq!(opt_values(&options), ["Learned", "Untrained"]);
+        assert_ne!(options[0], options[1]);
+
+        // A rank we cannot place is still reported as itself.
+        let (current, options) = uncatalogued_state(Some("Master"));
+        assert_eq!(current, "Master");
+        assert_eq!(opt_values(&options), ["Master", "Untrained"]);
+
+        // And a suffix-less class keeps the sentinel it always had.
+        let (current, options) = uncatalogued_state(None);
+        assert_eq!(current, "Learned");
+        assert_eq!(opt_values(&options), ["Learned", "Untrained"]);
+    }
+
+    #[test]
+    fn an_uncatalogued_class_can_always_be_dropped() {
+        // Whatever a save carries has to be removable, even a class this editor
+        // knows nothing about: a skill the game ignores, a console `addskill`,
+        // or one a newer game version added.
+        let edit =
+            SkillSetEdit::from_json(&json!({"base": "Hunting_Whatever", "tier": "Untrained"}))
+                .expect("an unknown base can be unlearned");
+        assert_eq!(edit.base, "Hunting_Whatever");
+        assert_eq!(edit.tier, "Untrained");
+    }
+
+    #[test]
+    fn an_uncatalogued_class_cannot_be_learned_or_retiered() {
+        // The other direction stays shut: composing a class out of a base this
+        // catalog never verified would write a reference the game may not define.
+        for tier in ["Trained", "Master", "Learned", "6"] {
+            let err = SkillSetEdit::from_json(&json!({"base": "Hunting_Whatever", "tier": tier}))
+                .expect_err("an unknown base must not be learnable");
+            assert!(
+                format!("{err}").contains("can only be set to Untrained"),
+                "unexpected error for tier {tier}: {err}"
+            );
+        }
     }
 
     #[test]

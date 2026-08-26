@@ -274,6 +274,12 @@ class AppLocalizationsJa extends AppLocalizations {
   String get skillHintBlacksmith2H => '両手武器';
 
   @override
+  String get skillScutesTrained => '熟練（骨板）';
+
+  @override
+  String get skillScutesMaster => '達人（＋レイザーの角板）';
+
+  @override
   String get skillCategoryCombat => '戦闘';
 
   @override
@@ -293,6 +299,9 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get skillCategoryThievery => '盗み';
+
+  @override
+  String get skillCategoryOther => 'その他';
 
   @override
   String get skillNameOneHanded => '片手持ち';
@@ -1706,6 +1715,10 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get heroGroupDiving => '潜水';
+
+  @override
+  String get heroDivingSkillNote =>
+      'ダイビングを習得すると、ゲームはセーブデータを読み込むたびに息とその回復をスキル側の値に戻します。毎秒の消費量は設定したまま残ります。';
 
   @override
   String get heroGroupSleep => '睡眠と休息';

@@ -282,6 +282,12 @@ class AppLocalizationsPt extends AppLocalizations {
   String get skillHintBlacksmith2H => 'Armas de duas mãos';
 
   @override
+  String get skillScutesTrained => 'Treinado (escamas ósseas)';
+
+  @override
+  String get skillScutesMaster => 'Mestre (+ placas de razor)';
+
+  @override
   String get skillCategoryCombat => 'Combate';
 
   @override
@@ -301,6 +307,9 @@ class AppLocalizationsPt extends AppLocalizations {
 
   @override
   String get skillCategoryThievery => 'Roubo';
+
+  @override
+  String get skillCategoryOther => 'Outras';
 
   @override
   String get skillNameOneHanded => 'Uma Mão';
@@ -1756,6 +1765,10 @@ class AppLocalizationsPt extends AppLocalizations {
   String get heroGroupDiving => 'Mergulho';
 
   @override
+  String get heroDivingSkillNote =>
+      'Depois de aprender Mergulho, o jogo redefine o fôlego e a recuperação para os valores da habilidade sempre que carrega o save. O ar gasto por segundo permanece como você definir.';
+
+  @override
   String get heroGroupSleep => 'Sono e descanso';
 
   @override
@@ -3198,6 +3211,12 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   String get skillHintBlacksmith2H => 'Armas de duas mãos';
 
   @override
+  String get skillScutesTrained => 'Treinado (escamas ósseas)';
+
+  @override
+  String get skillScutesMaster => 'Mestre (+ placas de razor)';
+
+  @override
   String get skillCategoryCombat => 'Combate';
 
   @override
@@ -3217,6 +3236,9 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get skillCategoryThievery => 'Furto';
+
+  @override
+  String get skillCategoryOther => 'Outras';
 
   @override
   String get skillNameOneHanded => 'Uma Mão';
@@ -4670,6 +4692,10 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
 
   @override
   String get heroGroupDiving => 'Mergulho';
+
+  @override
+  String get heroDivingSkillNote =>
+      'Depois de aprender Mergulho, o jogo redefine o fôlego e a recuperação para os valores da habilidade sempre que carrega o save. O ar gasto por segundo permanece como você definir.';
 
   @override
   String get heroGroupSleep => 'Sono e descanso';

@@ -280,6 +280,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String get skillHintBlacksmith2H => '2H weapons';
 
   @override
+  String get skillScutesTrained => 'Trained (bone scutes)';
+
+  @override
+  String get skillScutesMaster => 'Master (+ razor plates)';
+
+  @override
   String get skillCategoryCombat => 'Combat';
 
   @override
@@ -299,6 +305,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get skillCategoryThievery => 'Thievery';
+
+  @override
+  String get skillCategoryOther => 'Other';
 
   @override
   String get skillNameOneHanded => 'One Handed';
@@ -1742,6 +1751,10 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get heroGroupDiving => 'Diving';
+
+  @override
+  String get heroDivingSkillNote =>
+      'Once Diving is learned, the game resets breath and recovery to the skill\'s own values every time the savegame loads. Breath used per second stays as you set it.';
 
   @override
   String get heroGroupSleep => 'Sleep & Rest';

@@ -354,9 +354,21 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       final isSkillsPane = entry == _SidebarEntry.thieving;
       final attributes = isSkillsPane ? const [] : (byGroup[group] ?? const []);
       final skills = isSkillsPane ? widget.skillsSection : null;
+      // Breath is the one group where an edit can silently fail to survive: the
+      // player definition carries its own oxygen values for the Diving skill's
+      // tag, and the game applies those on every load. Say so where the fields
+      // are, rather than let people find out two savegames later.
+      final note = entry == _SidebarEntry.diving
+          ? _GroupNote(text: AppLocalizations.of(context).heroDivingSkillNote)
+          : null;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [?errorRow, for (final a in attributes) _row(a), ?skills],
+        children: [
+          ?errorRow,
+          ?note,
+          for (final a in attributes) _row(a),
+          ?skills,
+        ],
       );
     }
 
@@ -450,6 +462,42 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
           : null,
       onBaseChanged: (text) => _onFieldChanged(attribute.basePath, text),
       onCurrentChanged: (text) => _onFieldChanged(attribute.currentPath, text),
+    );
+  }
+}
+
+/// A quiet line above an attribute group: something about these values the user
+/// cannot see in the numbers themselves. Deliberately not a card — it explains,
+/// it does not warn.
+class _GroupNote extends StatelessWidget {
+  const _GroupNote({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.info_outline,
+            size: 15,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

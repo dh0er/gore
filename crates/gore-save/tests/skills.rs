@@ -148,6 +148,215 @@ fn skills_batch_learn_unlearn_retier_roundtrips() {
     eprintln!("roundtrip ok: learn {learn}, unlearn {unlearn}, retier {retier}->Trained");
 }
 
+/// Take Scutes is ranked, and the game leaves Cavalorn's first lesson in place
+/// when it grants the second — so a real save can hold TWO elements for it. The
+/// row has to read as the higher rung (the Master class implies the lower one:
+/// a hero carrying only it harvests both trophies, verified in game), and an
+/// edit has to reconcile every element, not just the first one it finds.
+#[test]
+fn a_skill_carrying_two_rungs_reads_and_edits_as_one() {
+    let Ok(path) = std::env::var("GORE_SAVE") else {
+        eprintln!("GORE_SAVE not set; skipping");
+        return;
+    };
+    const TRAINED: &str = "/Script/Angelscript.Default__GE_Skill_Hunting_Scutes_Trained";
+    const MASTER: &str = "/Script/Angelscript.Default__GE_Skill_Hunting_Scutes_Master";
+    const BASE: &str = "Hunting_Scutes";
+
+    let mut out = std::env::temp_dir();
+    out.push("gore_skills_scutes.sav");
+    let out = out.to_string_lossy().to_string();
+
+    let def_path = |index: usize| {
+        json!([
+            "m_GenericData",
+            "{CharacterStates}",
+            "AnyCharacterType",
+            "ActiveEffectsByGlobalId",
+            "{Hero}",
+            "ActiveEffects",
+            format!("[{index}]"),
+            "EffectSpec",
+            "Def"
+        ])
+    };
+
+    // Plant both rungs, lower one first — the order the game itself produces.
+    exec(json!({
+        "command": "write_save",
+        "payload": {
+            "path": path,
+            "outputPath": out,
+            "backup": false,
+            "edits": [
+                { "path": "private.typed.setValue",
+                  "value": { "path": def_path(0), "value": TRAINED } },
+            ],
+        }
+    }));
+    exec(json!({
+        "command": "write_save",
+        "payload": {
+            "path": out,
+            "backup": false,
+            "edits": [
+                { "path": "private.typed.setValue",
+                  "value": { "path": def_path(1), "value": MASTER } },
+            ],
+        }
+    }));
+
+    let planted = list_skills(&out);
+    let row = skill(&planted, BASE).expect("scutes row");
+    assert_eq!(
+        row["current"],
+        json!("Master"),
+        "a hero holding both rungs must read as the higher one, not as whichever          element comes first: {row}"
+    );
+
+    // Lowering to Trained must leave ONE element behind, on the lower rung —
+    // otherwise the Master element survives unseen and still grants the plates.
+    exec(json!({
+        "command": "write_save",
+        "payload": {
+            "path": out,
+            "backup": false,
+            "edits": [
+                { "path": "private.skills.set", "value": { "base": BASE, "tier": "Trained" } },
+            ],
+        }
+    }));
+    let lowered = list_skills(&out);
+    assert_eq!(skill(&lowered, BASE).unwrap()["current"], json!("Trained"));
+    let search = exec(json!({
+        "command": "search_typed_properties",
+        "payload": { "path": out, "query": "ActiveEffectsByGlobalId {Hero}",
+                     "offset": 0, "limit": 400, "source": "private" }
+    }));
+    let scutes_elements = search["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| {
+            r["value"]
+                .as_str()
+                .is_some_and(|v| v.contains("GE_Skill_Hunting_Scutes"))
+        })
+        .count();
+    assert_eq!(
+        scutes_elements, 1,
+        "the skill must end up saying exactly one thing"
+    );
+
+    // And unlearning takes every element with it.
+    exec(json!({
+        "command": "write_save",
+        "payload": {
+            "path": out,
+            "backup": false,
+            "edits": [
+                { "path": "private.skills.set", "value": { "base": BASE, "tier": "Untrained" } },
+            ],
+        }
+    }));
+    assert_eq!(
+        skill(&list_skills(&out), BASE).unwrap()["learned"],
+        json!(false)
+    );
+
+    let _ = std::fs::remove_file(&out);
+}
+
+/// A class the catalog does not know — a skill the game defines but never
+/// grants (Extract Mandibles), a console `addskill`, or one a newer game version
+/// added — still has to come back out of a save. It is listed under "Other" with
+/// an Untrained option, and the edit API accepts that one transition for it.
+#[test]
+fn an_uncatalogued_class_is_listed_and_can_be_removed() {
+    let Ok(path) = std::env::var("GORE_SAVE") else {
+        eprintln!("GORE_SAVE not set; skipping");
+        return;
+    };
+    const DEAD: &str = "/Script/Angelscript.Default__GE_Skill_Hunting_MandibleMineCrawler_Trained";
+    const BASE: &str = "Hunting_MandibleMineCrawler";
+
+    let mut out = std::env::temp_dir();
+    out.push("gore_skills_orphan.sav");
+    let out = out.to_string_lossy().to_string();
+
+    // Plant one: retarget the hero's first effect at the dead class, the way an
+    // older editor build (or the game console) would have put it there.
+    exec(json!({
+        "command": "write_save",
+        "payload": {
+            "path": path,
+            "outputPath": out,
+            "backup": false,
+            "edits": [
+                { "path": "private.typed.setValue", "value": {
+                    "path": ["m_GenericData", "{CharacterStates}", "AnyCharacterType",
+                             "ActiveEffectsByGlobalId", "{Hero}", "ActiveEffects", "[0]",
+                             "EffectSpec", "Def"],
+                    "value": DEAD
+                } },
+            ],
+        }
+    }));
+
+    let planted = list_skills(&out);
+    let row = skill(&planted, BASE).expect("an uncatalogued class must still be listed");
+    assert_eq!(row["learned"], json!(true));
+    assert_eq!(row["category"], json!("Other"), "row: {row}");
+    let options: Vec<&str> = row["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|o| o["value"].as_str())
+        .collect();
+    assert!(
+        options.contains(&"Untrained"),
+        "no way to drop it again: {options:?}"
+    );
+
+    exec(json!({
+        "command": "write_save",
+        "payload": {
+            "path": out,
+            "backup": false,
+            "edits": [
+                { "path": "private.skills.set", "value": { "base": BASE, "tier": "Untrained" } },
+            ],
+        }
+    }));
+    assert!(
+        skill(&list_skills(&out), BASE).is_none(),
+        "the dead class survived its removal"
+    );
+
+    // The other direction stays shut: nothing can put it back.
+    let resp: Value = serde_json::from_str(&gore_save::execute_json(
+        &json!({
+            "command": "write_save",
+            "payload": {
+                "path": out,
+                "backup": false,
+                "edits": [
+                    { "path": "private.skills.set", "value": { "base": BASE, "tier": "Trained" } },
+                ],
+            }
+        })
+        .to_string(),
+    ))
+    .unwrap();
+    assert_eq!(
+        resp["ok"],
+        json!(false),
+        "a dead class must not be learnable"
+    );
+
+    let _ = std::fs::remove_file(&out);
+}
+
 /// A skill edit (which can splice the hero's ActiveEffects array) must be
 /// rejected when batched with an index-addressed typed edit, since the splice
 /// shifts the index that edit resolves against.

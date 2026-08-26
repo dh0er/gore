@@ -281,6 +281,12 @@ class AppLocalizationsDe extends AppLocalizations {
   String get skillHintBlacksmith2H => '2H-Waffen';
 
   @override
+  String get skillScutesTrained => 'Trainiert (Knochenpanzer)';
+
+  @override
+  String get skillScutesMaster => 'Meister (+ Hornplatten)';
+
+  @override
   String get skillCategoryCombat => 'Kampf';
 
   @override
@@ -300,6 +306,9 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get skillCategoryThievery => 'Diebeskunst';
+
+  @override
+  String get skillCategoryOther => 'Sonstige';
 
   @override
   String get skillNameOneHanded => 'Einhand';
@@ -1753,6 +1762,10 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get heroGroupDiving => 'Tauchen';
+
+  @override
+  String get heroDivingSkillNote =>
+      'Sobald Tauchen gelernt ist, setzt das Spiel Atemvorrat und Erholung bei jedem Laden auf die Werte der Fähigkeit zurück. Der Verbrauch pro Sekunde bleibt so, wie du ihn einstellst.';
 
   @override
   String get heroGroupSleep => 'Schlafen & Rasten';

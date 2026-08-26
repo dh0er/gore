@@ -284,6 +284,12 @@ class AppLocalizationsFr extends AppLocalizations {
   String get skillHintBlacksmith2H => 'Armes à deux mains';
 
   @override
+  String get skillScutesTrained => 'Entraîné (écailles osseuses)';
+
+  @override
+  String get skillScutesMaster => 'Maître (+ plaques de razor)';
+
+  @override
   String get skillCategoryCombat => 'Combat';
 
   @override
@@ -303,6 +309,9 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get skillCategoryThievery => 'Vol';
+
+  @override
+  String get skillCategoryOther => 'Autres';
 
   @override
   String get skillNameOneHanded => 'À une main';
@@ -1763,6 +1772,10 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get heroGroupDiving => 'Plongée';
+
+  @override
+  String get heroDivingSkillNote =>
+      'Une fois la Plongée apprise, le jeu réinitialise le souffle et la récupération aux valeurs de la compétence à chaque chargement. L\'air consommé par seconde reste tel que vous le réglez.';
 
   @override
   String get heroGroupSleep => 'Sommeil et repos';

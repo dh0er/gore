@@ -124,6 +124,45 @@ void main() {
     expect(find.textContaining('Localized maximum health base'), findsNothing);
   });
 
+  testWidgets('the breath group says the Diving skill overrides it', (
+    tester,
+  ) async {
+    // The player definition carries its own oxygen values for the Diving tag
+    // and the game applies them on every load, so an edit here can silently not
+    // survive. The note is the only place the user can learn that.
+    await tester.pumpWidget(
+      _wrap(
+        _card(
+          load: () async => HeroAttributesResult(
+            attributes: [
+              _attribute('MaxOxygen', '/Script/G1R.AttributeSet_Oxygen', 45),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Once Diving is learned'), findsOneWidget);
+  });
+
+  testWidgets('groups the skill does not touch carry no note', (tester) async {
+    await tester.pumpWidget(
+      _wrap(
+        _card(
+          load: () async => HeroAttributesResult(
+            attributes: [
+              _attribute('MaxHealth', '/Script/G1R.AttributeSet_Health', 64),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Once Diving is learned'), findsNothing);
+  });
+
   // ---------------------------------------------------------------------------
   // Sidebar visibility / navigation
   // ---------------------------------------------------------------------------
