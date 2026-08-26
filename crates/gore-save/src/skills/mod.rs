@@ -110,6 +110,28 @@ fn tier_options(def: &SkillDef, learned: bool, current: &str) -> Vec<Value> {
     }
 }
 
+/// What an uncatalogued learned class says about itself: its current value and
+/// the options its row offers. Removal is the only thing this editor can
+/// honestly do with a class it knows nothing else about, so `Untrained` always
+/// has to be reachable — and reachable means DIFFERENT from the current value,
+/// since the UI drops an edit that re-states what is already selected.
+///
+/// A class whose own suffix reads as `Untrained` would otherwise collapse both
+/// into one option and strand the element for good. Such a row says `Learned`
+/// instead: for a class with no catalogued ladder there is no rank to report,
+/// and "the effect is present" is the honest statement.
+fn uncatalogued_state(tier: Option<&str>) -> (String, Vec<Value>) {
+    let current = match current_value(tier) {
+        untrained if untrained == "Untrained" => "Learned".to_string(),
+        other => other,
+    };
+    let options = vec![
+        json!({ "value": current.clone() }),
+        json!({ "value": "Untrained" }),
+    ];
+    (current, options)
+}
+
 /// The highest rung `base` appears at among the actor's learned classes. A save
 /// normally holds one element per skill, but not always — see the scutes ladder
 /// in [`catalog`] — and the higher class implies the lower.
@@ -180,7 +202,7 @@ pub fn list_skills(root: &properties::RootObject, actor: &str) -> Value {
         let tier = best_tier(&learned, base, def);
         let tier = &tier;
         let kind = def.map(|d| d.kind).unwrap_or(Kind::Ladder);
-        let current = current_value(tier.as_deref());
+        let mut current = current_value(tier.as_deref());
         let (label, category, has_untrained, mut options) = match def {
             Some(d) => (
                 d.label.to_string(),
@@ -195,13 +217,8 @@ pub fn list_skills(root: &properties::RootObject, actor: &str) -> Value {
             // again — that removal is the only thing this editor can honestly
             // do with a class it knows nothing else about.
             None => {
-                let mut options = vec![json!({ "value": current })];
-                // Never twice: an `_Untrained` class the catalog does not know
-                // would otherwise produce two identical options, and the UI's
-                // dropdown asserts on a duplicated value.
-                if current != "Untrained" {
-                    options.push(json!({ "value": "Untrained" }));
-                }
+                let (raw_current, options) = uncatalogued_state(tier.as_deref());
+                current = raw_current;
                 (base.replace('_', " "), "Other".to_string(), false, options)
             }
         };
@@ -654,6 +671,28 @@ mod tests {
             best_tier(&raw, "Whatever", None),
             Some("Trained".to_string())
         );
+    }
+
+    #[test]
+    fn an_uncatalogued_untrained_class_still_offers_removal() {
+        // The UI drops an edit that re-states the current value, so a row whose
+        // only option IS its current value can never be acted on. A class whose
+        // own suffix reads as `Untrained` used to produce exactly that, which
+        // left the element in the save for good.
+        let (current, options) = uncatalogued_state(Some("Untrained"));
+        assert_eq!(current, "Learned");
+        assert_eq!(opt_values(&options), ["Learned", "Untrained"]);
+        assert_ne!(options[0], options[1]);
+
+        // A rank we cannot place is still reported as itself.
+        let (current, options) = uncatalogued_state(Some("Master"));
+        assert_eq!(current, "Master");
+        assert_eq!(opt_values(&options), ["Master", "Untrained"]);
+
+        // And a suffix-less class keeps the sentinel it always had.
+        let (current, options) = uncatalogued_state(None);
+        assert_eq!(current, "Learned");
+        assert_eq!(opt_values(&options), ["Learned", "Untrained"]);
     }
 
     #[test]

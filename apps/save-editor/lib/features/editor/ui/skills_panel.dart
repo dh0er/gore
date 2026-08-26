@@ -500,6 +500,11 @@ String _categoryLabel(AppLocalizations l10n, String category) {
       return l10n.skillCategoryMovement;
     case 'Thievery':
       return l10n.skillCategoryThievery;
+    // The core's catch-all for a learned class it does not catalogue: one an
+    // older build left behind, or the game console added. Such a row exists so
+    // it can be removed.
+    case 'Other':
+      return l10n.skillCategoryOther;
     default:
       return category;
   }

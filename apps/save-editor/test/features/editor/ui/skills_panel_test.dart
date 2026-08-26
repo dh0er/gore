@@ -132,9 +132,9 @@ Future<EditorNotifier> _notifier(WidgetTester tester, _SkillsCore core) async {
   return notifier;
 }
 
-Widget _wrap(Widget child) => ProviderScope(
+Widget _wrap(Widget child, {String locale = 'en'}) => ProviderScope(
   child: MaterialApp(
-    locale: const Locale('en'),
+    locale: Locale(locale),
     localizationsDelegates: testLocalizationsDelegates,
     supportedLocales: AppLocalizations.supportedLocales,
     home: Scaffold(body: SizedBox(width: 1000, height: 700, child: child)),
@@ -185,6 +185,35 @@ void main() {
       'path': 'private.skills.set',
       'value': {'actor': 'Hero', 'base': 'Hunting_Scutes', 'tier': 'Master'},
     });
+  });
+
+  // An English-only check cannot see this: the raw category the core emits and
+  // its English translation are the same word.
+  testWidgets('the catch-all category header is translated', (tester) async {
+    final core = _SkillsCore(
+      skills: [
+        _skill(
+          'Hunting_Whatever',
+          'Hunting Whatever',
+          'ladder',
+          true,
+          'Trained',
+          ['Trained', 'Untrained'],
+          category: 'Other',
+        ),
+      ],
+    );
+    final notifier = await _notifier(tester, core);
+    await tester.pumpWidget(
+      _wrap(
+        SkillsSection(notifier: notifier, editable: true, reloadKey: 'k'),
+        locale: 'de',
+      ),
+    );
+    await _settle(tester);
+
+    expect(find.text('Sonstige'), findsOneWidget);
+    expect(find.text('Other'), findsNothing);
   });
 
   // Whatever a save carries has to be removable, including a class the core
