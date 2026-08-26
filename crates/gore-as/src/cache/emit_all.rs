@@ -894,7 +894,13 @@ fn qualify_emitted_collision_calls(source: &str, originals: &BTreeSet<String>) -
         if !call && !handle {
             continue;
         }
-        if index > 0 && matches!(token_text(source, &tokens[index - 1]), "." | ":") {
+        if index > 0 && token_text(source, &tokens[index - 1]) == "." {
+            continue;
+        }
+        if index >= 2
+            && token_text(source, &tokens[index - 1]) == ":"
+            && token_text(source, &tokens[index - 2]) == ":"
+        {
             continue;
         }
         insertions.push(identifier.start);
@@ -1445,13 +1451,22 @@ const FName Label = n"Foo";
     fn emitted_collision_calls_are_globally_qualified_without_touching_other_tokens() {
         let source = r#"// Shared() stays
 void Shared(int Value) {}
-void Caller() { Shared(1); Object.Shared(); Namespace::Shared(); Callback@ Cb = @Shared; }
+void Caller(bool Flag) {
+    Shared(1); Object.Shared(); Namespace::Shared(); ::Shared(2);
+    int Value = Flag ? Shared(3) : Shared(4);
+    switch (Value) { case 1: Shared(5); }
+    Callback@ Cb = @Shared;
+}
 const FName Label = n"Shared() @Shared";
 "#;
         let qualified =
             qualify_emitted_collision_calls(source, &BTreeSet::from(["Shared".to_owned()]));
         assert!(qualified.contains("void Shared(int Value) {}"));
-        assert!(qualified.contains("{ ::Shared(1); Object.Shared(); Namespace::Shared();"));
+        assert!(
+            qualified.contains("::Shared(1); Object.Shared(); Namespace::Shared(); ::Shared(2);")
+        );
+        assert!(qualified.contains("Flag ? ::Shared(3) : ::Shared(4)"));
+        assert!(qualified.contains("case 1: ::Shared(5);"));
         assert!(qualified.contains("Callback@ Cb = @::Shared;"));
         assert!(qualified.contains("// Shared() stays"));
         assert!(qualified.contains("n\"Shared() @Shared\""));
