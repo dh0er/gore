@@ -3209,16 +3209,28 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 profile
             };
 
-            let (base_override, guard) = if let Some(target) = standalone_target.as_ref() {
+            let (base_override, guard) = if let Some(target) = standalone_target.as_mut() {
                 let guard = if requested_mode == gore_as::compile::CompilerBackendModeV1::Standalone
                 {
                     None
                 } else {
-                    Some(
-                        acquire_compile_guard(&game)
-                            .map_err(anyhow::Error::msg)
-                            .context("acquiring the compile install-mutation guard")?,
-                    )
+                    // Match full-graph compilation's Windows lock handoff. Target validation pins
+                    // each parent directory without delete sharing, which would otherwise block
+                    // atomic publication of the install-mutation lock in the game root. The exact
+                    // target files stay pinned while only their parent chains are released, then
+                    // the complete chain is identity-checked again before either backend runs.
+                    target.release_parent_directory_pins_for_install_mutation_v1();
+                    let acquired = acquire_compile_guard(&game)
+                        .map_err(anyhow::Error::msg)
+                        .context("acquiring the compile-module install-mutation guard")?;
+                    if let Err(error) = target.repin_parent_directories_after_install_mutation_v1()
+                    {
+                        let primary = anyhow::Error::new(error).context(
+                            "re-pinning compiler target directories after lock publication",
+                        );
+                        return Err(release_compile_guard_after_error(acquired, primary));
+                    }
+                    Some(acquired)
                 };
                 (target.shipping_cache().to_vec(), guard)
             } else if requested_mode == gore_as::compile::CompilerBackendModeV1::Standalone {
