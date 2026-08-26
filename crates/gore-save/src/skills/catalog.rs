@@ -8,8 +8,32 @@
 //!
 //! Ported from the reference editor's `catalog.py`
 //! (github.com/Xetoxyc/gothic-remake-savegame-editor). SOURCE OF TRUTH: the
-//! `GE_Skill_*` classes observed in real savegames. When a save shows a class
-//! not listed here, ADD IT.
+//! `GE_Skill_*` classes the shipped game actually TEACHES (`LearnSkill`) or
+//! CHECKS (`HasLearnedSkill`). A class a save happens to carry is not reason
+//! enough: the game also ships skills nothing ever grants or reads, and
+//! offering one only costs the user an evening. Before adding a class, grep the
+//! decompiled scripts (`gore as emit-all`) for both calls.
+//!
+//! What a skill actually unlocks is decided by GameplayTags, and those settle
+//! every question this catalog has to answer. Each `GE_Skill_*` class grants one
+//! `Skill_*` tag (its class defaults), and each harvestable trophy item names
+//! the tag it requires (`AddItemSpec(...)` in `Items/GenericItems/MaterialsGeneric.as`).
+//! Read both with `gore as emit`, which prints the class defaults.
+//!
+//! Deliberately NOT listed:
+//! - `GE_Skill_Hunting_MandibleMineCrawler_Trained` — grants `Skill_Hunting_MCMandibles`,
+//!   a tag NO item requires. The mandible item (`ItAt_Crawler_01`) requires
+//!   `Skill_Hunting_Secretion` instead. Dead content, confirmed in game.
+//! - `GE_Skill_Hunting_Reptiles_Trained` — a duplicate of `Hunting_Stings_Trained`
+//!   (same asset tag, same granted tag), never taught. Offering it would give the
+//!   hero two rows that remove each other.
+//! - `GE_Skill_Hunting_StingsBloodfly_Trained` — grants `Skill_Hunting_BloodflyStings`,
+//!   which no item requires; the bloodfly stinger hangs off `Hunting_Stings`.
+//! - `GE_Skill_Scavenging` (applied by the transform spell, not learned) and
+//!   `GE_Skill_BuyAttribute*` / `GE_Skill_Generic` (not skills).
+//!
+//! A save that carries one of these still gets a row — see `list_skills` — so it
+//! can be dropped again.
 
 /// Prefix shared by every hero-skill GameplayEffect class reference stored in a
 /// save. The full value is `GE_PREFIX + base (+ "_" + suffix)`.
@@ -239,27 +263,36 @@ pub const SKILLS: &[SkillDef] = &[
         has_untrained: false,
         tier_labels: NO_HINTS,
     },
+    // Cavalorn's two lessons are two rungs of ONE skill, and the rungs are
+    // GameplayTags that nest: `Scutes_Trained` grants `Skill.Hunting.Scutes`,
+    // `Scutes_Master` grants `Skill.Hunting.Scutes.Master`. Tag matching walks
+    // the hierarchy, so the Master tag also satisfies a query for the parent —
+    // verified in game: a hero carrying ONLY the Master effect harvests the
+    // razor's dermal plate (`ItAt_Razor_02`, requires `Skill.Hunting.Scutes.Master`)
+    // AND the lizard's bone scute (`ItAt_Lizard_03`, requires
+    // `Skill.Hunting.Scutes`). One element therefore says everything, which is
+    // why this is a ladder and not two skills.
+    //
+    // No `_Untrained` class exists, so the bottom rung unlearns by removing the
+    // element. Beware the asymmetry when reading the removal rules: the Trained
+    // class removes effects tagged `GE.Skill.Hunting.Scutes`, which by the same
+    // hierarchy ALSO matches the Master effect — so lowering the rung is a real
+    // demotion. That eviction only fires when the game APPLIES the lower class at
+    // runtime, though: a save carrying both rungs survives a load and a re-save
+    // with its effect array untouched (measured, 19 effects in and out, same
+    // order), so restoring a save does not run it.
     SkillDef {
         base: "Hunting_Scutes",
         label: "Take Scutes",
         category: "Hunting",
-        kind: Kind::Hunting,
-        ladder: NO_TIERS,
+        kind: Kind::Ladder,
+        ladder: RANK2,
         has_untrained: false,
-        tier_labels: NO_HINTS,
+        tier_labels: &[("Trained", "bone scutes"), ("Master", "+ razor plates")],
     },
     SkillDef {
         base: "Hunting_UluMulu",
         label: "Take Ulu-Mulu Trophies",
-        category: "Hunting",
-        kind: Kind::Hunting,
-        ladder: NO_TIERS,
-        has_untrained: false,
-        tier_labels: NO_HINTS,
-    },
-    SkillDef {
-        base: "Hunting_MandibleMineCrawler",
-        label: "Extract Mandibles",
         category: "Hunting",
         kind: Kind::Hunting,
         ladder: NO_TIERS,
@@ -462,6 +495,23 @@ fn learn_suffix(kind: Kind) -> &'static str {
     }
 }
 
+/// Where a tier sits on its skill's ladder — higher is later. A save can carry
+/// several elements of one skill (the game leaves Cavalorn's first scutes lesson
+/// in place when it grants the second), and since the higher class implies the
+/// lower one, the highest rung is the one that speaks for the skill.
+pub fn tier_rank(def: &SkillDef, tier: Option<&str>) -> usize {
+    let Some(tier) = tier else {
+        return 1; // suffix-less binary class: simply learned
+    };
+    match def.kind {
+        Kind::Ladder | Kind::Circle => std::iter::once("Untrained")
+            .chain(def.ladder.iter().copied())
+            .position(|rung| rung == tier)
+            .unwrap_or(1),
+        _ => usize::from(tier != "Untrained"),
+    }
+}
+
 /// Look up a skill by its base name.
 pub fn find(base: &str) -> Option<&'static SkillDef> {
     SKILLS.iter().find(|s| s.base == base)
@@ -594,6 +644,35 @@ mod tests {
     fn skill_class_language_learns_as_untrained() {
         // Orcish is a ladder now, but the language-kind suffix mapping is kept.
         assert_eq!(learn_suffix(Kind::Language), "Untrained");
+    }
+
+    #[test]
+    fn cavalorns_two_lessons_are_the_two_rungs_of_one_skill() {
+        let def = find("Hunting_Scutes").unwrap();
+        assert_eq!(valid_tiers(def), ["Untrained", "Trained", "Master"]);
+        assert_eq!(
+            skill_class("Hunting_Scutes", "Trained"),
+            "/Script/Angelscript.Default__GE_Skill_Hunting_Scutes_Trained"
+        );
+        assert_eq!(
+            skill_class("Hunting_Scutes", "Master"),
+            "/Script/Angelscript.Default__GE_Skill_Hunting_Scutes_Master"
+        );
+        // Master outranks Trained, so a save carrying both reads as Master.
+        assert!(tier_rank(def, Some("Master")) > tier_rank(def, Some("Trained")));
+        assert!(tier_rank(def, Some("Trained")) > tier_rank(def, Some("Untrained")));
+    }
+
+    #[test]
+    fn both_scutes_classes_split_to_the_same_base() {
+        assert_eq!(
+            split_class("/Script/Angelscript.Default__GE_Skill_Hunting_Scutes_Master"),
+            Some(("Hunting_Scutes".to_string(), Some("Master".to_string())))
+        );
+        assert_eq!(
+            split_class("/Script/Angelscript.Default__GE_Skill_Hunting_Scutes_Trained"),
+            Some(("Hunting_Scutes".to_string(), Some("Trained".to_string())))
+        );
     }
 
     #[test]

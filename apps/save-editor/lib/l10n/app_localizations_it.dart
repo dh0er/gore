@@ -282,6 +282,12 @@ class AppLocalizationsIt extends AppLocalizations {
   String get skillHintBlacksmith2H => 'Armi a due mani';
 
   @override
+  String get skillScutesTrained => 'Addestrato (placche ossee)';
+
+  @override
+  String get skillScutesMaster => 'Maestro (+ placche di razor)';
+
+  @override
   String get skillCategoryCombat => 'Combattimento';
 
   @override
@@ -301,6 +307,9 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get skillCategoryThievery => 'Furto';
+
+  @override
+  String get skillCategoryOther => 'Altre';
 
   @override
   String get skillNameOneHanded => 'A una mano';
@@ -1759,6 +1768,10 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get heroGroupDiving => 'Immersione';
+
+  @override
+  String get heroDivingSkillNote =>
+      'Una volta appresa Immersione, a ogni caricamento il gioco riporta fiato e recupero ai valori dell\'abilità. L\'aria consumata al secondo resta come la imposti.';
 
   @override
   String get heroGroupSleep => 'Sonno e riposo';

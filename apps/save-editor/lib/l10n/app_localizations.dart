@@ -560,6 +560,18 @@ abstract class AppLocalizations {
   /// **'2H weapons'**
   String get skillHintBlacksmith2H;
 
+  /// No description provided for @skillScutesTrained.
+  ///
+  /// In en, this message translates to:
+  /// **'Trained (bone scutes)'**
+  String get skillScutesTrained;
+
+  /// No description provided for @skillScutesMaster.
+  ///
+  /// In en, this message translates to:
+  /// **'Master (+ razor plates)'**
+  String get skillScutesMaster;
+
   /// No description provided for @skillCategoryCombat.
   ///
   /// In en, this message translates to:
@@ -601,6 +613,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Thievery'**
   String get skillCategoryThievery;
+
+  /// No description provided for @skillCategoryOther.
+  ///
+  /// In en, this message translates to:
+  /// **'Other'**
+  String get skillCategoryOther;
 
   /// No description provided for @skillNameOneHanded.
   ///
@@ -3091,6 +3109,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Diving'**
   String get heroGroupDiving;
+
+  /// No description provided for @heroDivingSkillNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Once Diving is learned, the game resets breath and recovery to the skill\'s own values every time the savegame loads. Breath used per second stays as you set it.'**
+  String get heroDivingSkillNote;
 
   /// No description provided for @heroGroupSleep.
   ///

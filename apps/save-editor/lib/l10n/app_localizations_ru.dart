@@ -284,6 +284,12 @@ class AppLocalizationsRu extends AppLocalizations {
   String get skillHintBlacksmith2H => 'Двуручное оружие';
 
   @override
+  String get skillScutesTrained => 'Обучен (костяные пластины)';
+
+  @override
+  String get skillScutesMaster => 'Мастер (+ пластины разора)';
+
+  @override
   String get skillCategoryCombat => 'Бой';
 
   @override
@@ -303,6 +309,9 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get skillCategoryThievery => 'Воровство';
+
+  @override
+  String get skillCategoryOther => 'Прочее';
 
   @override
   String get skillNameOneHanded => 'Одноручное оружие';
@@ -1764,6 +1773,10 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get heroGroupDiving => 'Ныряние';
+
+  @override
+  String get heroDivingSkillNote =>
+      'После изучения ныряния игра при каждой загрузке возвращает запас воздуха и его восстановление к значениям навыка. Расход в секунду остаётся таким, каким вы его зададите.';
 
   @override
   String get heroGroupSleep => 'Сон и отдых';

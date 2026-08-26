@@ -283,6 +283,12 @@ class AppLocalizationsPl extends AppLocalizations {
   String get skillHintBlacksmith2H => 'Broń dwuręczna';
 
   @override
+  String get skillScutesTrained => 'Wyszkolony (łuski kostne)';
+
+  @override
+  String get skillScutesMaster => 'Mistrz (+ płyty razora)';
+
+  @override
   String get skillCategoryCombat => 'Walka';
 
   @override
@@ -302,6 +308,9 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get skillCategoryThievery => 'Złodziejstwo';
+
+  @override
+  String get skillCategoryOther => 'Inne';
 
   @override
   String get skillNameOneHanded => 'Broń jednoręczna';
@@ -1770,6 +1779,10 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get heroGroupDiving => 'Nurkowanie';
+
+  @override
+  String get heroDivingSkillNote =>
+      'Po nauczeniu się nurkowania gra przy każdym wczytaniu przywraca zapas i regenerację oddechu do wartości z umiejętności. Zużycie na sekundę pozostaje takie, jakie ustawisz.';
 
   @override
   String get heroGroupSleep => 'Sen i odpoczynek';

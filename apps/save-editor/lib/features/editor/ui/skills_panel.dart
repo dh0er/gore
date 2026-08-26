@@ -426,6 +426,14 @@ String _optionLabel(AppLocalizations l10n, Skill skill, int index) {
     if (value == 'Master') return l10n.skillSmithing2H;
   }
 
+  // Take Scutes is the one ranked hunting skill, and the game gives its two
+  // rungs no names of their own — one entry, one description covering both. Name
+  // them by what they yield, or nobody can tell them apart.
+  if (skill.base == 'Hunting_Scutes') {
+    if (value == 'Trained') return l10n.skillScutesTrained;
+    if (value == 'Master') return l10n.skillScutesMaster;
+  }
+
   // Magic Circle uses the game's circle names (skill_mage_circle_*).
   if (skill.kind == 'circle') {
     switch (value) {

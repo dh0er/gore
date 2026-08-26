@@ -6,10 +6,24 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.3.1] - 2026-08-26
+
+### Changed
+
+- The breath values now say that the Diving skill overrides them: once it is
+  learned, a raised capacity does not survive loading. The depletion rate does.
 
 ### Fixed
 
+- Take Scutes has two levels — Cavalorn teaches bone scutes first, razor plates
+  after his quest. The editor knew only the first level, showed a master hunter
+  as merely trained, and wrote that back, which cost him the razor plates. Both
+  levels are selectable now, named after what they yield.
+- Extract Mandibles is gone from the skill list. Nothing in the game grants it
+  and nothing checks it; minecrawler mandibles come from Extract Secretion.
+- A skill the editor does not know — left by an older version, or added from the
+  game console — is now listed under "Other" and can be removed. Until now there
+  was no way to get rid of it.
 - The portable update check could hang, stack prompts, or do nothing. It had no
   request timeout, so a stalled connection blocked every later check; the
   hourly timer could open one more prompt per hour on an unattended machine;

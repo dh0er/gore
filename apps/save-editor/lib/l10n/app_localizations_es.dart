@@ -282,6 +282,12 @@ class AppLocalizationsEs extends AppLocalizations {
   String get skillHintBlacksmith2H => 'armas a dos manos';
 
   @override
+  String get skillScutesTrained => 'Entrenado (placas dérmicas)';
+
+  @override
+  String get skillScutesMaster => 'Maestro (+ placas de razor)';
+
+  @override
   String get skillCategoryCombat => 'Combate';
 
   @override
@@ -301,6 +307,9 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get skillCategoryThievery => 'Hurto';
+
+  @override
+  String get skillCategoryOther => 'Otras';
 
   @override
   String get skillNameOneHanded => 'Una mano';
@@ -1754,6 +1763,10 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get heroGroupDiving => 'Buceo';
+
+  @override
+  String get heroDivingSkillNote =>
+      'Una vez aprendido Buceo, el juego restablece el aire y la recuperación a los valores de la habilidad cada vez que carga la partida. El aire consumido por segundo se mantiene como lo dejes.';
 
   @override
   String get heroGroupSleep => 'Sueño y descanso';

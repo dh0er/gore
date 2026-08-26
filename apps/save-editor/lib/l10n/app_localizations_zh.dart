@@ -269,6 +269,12 @@ class AppLocalizationsZh extends AppLocalizations {
   String get skillHintBlacksmith2H => '双手武器';
 
   @override
+  String get skillScutesTrained => '熟练（骨板）';
+
+  @override
+  String get skillScutesMaster => '大师（＋剃刀兽角板）';
+
+  @override
   String get skillCategoryCombat => '战斗';
 
   @override
@@ -288,6 +294,9 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get skillCategoryThievery => '盗窃';
+
+  @override
+  String get skillCategoryOther => '其他';
 
   @override
   String get skillNameOneHanded => '单手';
@@ -1681,6 +1690,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String get heroGroupDiving => '潜水';
 
   @override
+  String get heroDivingSkillNote =>
+      '学会潜水后，游戏每次读取存档都会把屏息量和恢复速度重置为技能自带的数值。每秒消耗量则保持你设定的值。';
+
+  @override
   String get heroGroupSleep => '睡眠与休息';
 
   @override
@@ -3063,6 +3076,12 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get skillHintBlacksmith2H => '双手武器';
 
   @override
+  String get skillScutesTrained => '熟练（骨板）';
+
+  @override
+  String get skillScutesMaster => '大师（＋剃刀兽角板）';
+
+  @override
   String get skillCategoryCombat => '战斗';
 
   @override
@@ -3082,6 +3101,9 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get skillCategoryThievery => '盗窃';
+
+  @override
+  String get skillCategoryOther => '其他';
 
   @override
   String get skillNameOneHanded => '单手';
@@ -4473,6 +4495,10 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get heroGroupDiving => '潜水';
+
+  @override
+  String get heroDivingSkillNote =>
+      '学会潜水后，游戏每次读取存档都会把屏息量和恢复速度重置为技能自带的数值。每秒消耗量则保持你设定的值。';
 
   @override
   String get heroGroupSleep => '睡眠与休息';
