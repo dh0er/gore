@@ -1951,6 +1951,8 @@ fn emit_function_ctor(
         let rendered =
             spell_out_argument_temporaries(&rendered, &argument_constructed_slots(f, refs), refs);
         let rendered = fold_widening_aliases(&rendered, &declared_locals, &path_roots, &widened);
+        let rendered =
+            spell_out_default_temporaries(&rendered, &default_only_construction_counts(f, refs));
         let rendered = drop_block_end_handle_releases(&rendered);
         let rendered = drop_unused_declarations(&rendered);
         let rendered = fold_member_read_temporaries(
@@ -8089,6 +8091,86 @@ fn fold_widening_aliases(
             lines.drain(index..index + span);
             changed = true;
             break;
+        }
+    }
+    let mut out = lines.join("\n");
+    if text.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// Slots the function DEFAULT-constructs (a `$beh0` taking no parameter), and how often.
+fn default_only_construction_counts(f: &Func, refs: &RefResolver) -> HashMap<i32, usize> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashMap::new();
+    };
+    let mut counts: HashMap<i32, usize> = HashMap::new();
+    for pair in instrs.windows(2) {
+        if pair[0].op.name != "PSF" || pair[1].op.name != "CALLSYS" {
+            continue;
+        }
+        let ptr = pair[1].qwords.first().copied().unwrap_or(0) as i64;
+        if refs.func_by_ptr(ptr) != Some("$beh0")
+            || refs.func_params_by_ptr(ptr).is_some_and(|params| !params.is_empty())
+        {
+            continue;
+        }
+        if let Some(slot) = pair[0].words.first().map(|word| *word as i16 as i32) {
+            if slot > 0 {
+                *counts.entry(slot).or_default() += 1;
+            }
+        }
+    }
+    counts
+}
+
+/// The LAST uses of a named value that vanilla built fresh each time.
+///
+/// The compiler puts a full-expression temporary in the slot a named value already occupies, so
+/// `this.LastMoveOrderAt = FInGameTime();` reuses the slot holding `FInGameTime::Now()`. Rendered
+/// as the NAME, the member receives the current time where the source stored a default — a wrong
+/// value, not only a different spelling.
+///
+/// The count is the witness: N default constructions of that slot mean its last N uses were each
+/// a fresh one. Only assignments to a member take part; an argument may be a reference the callee
+/// writes through, and a temporary cannot bind to one.
+fn spell_out_default_temporaries(text: &str, defaults: &HashMap<i32, usize>) -> String {
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    for index in 0..lines.len() {
+        let Some((_, name, _)) = declaration_with_initializer(&lines[index]) else {
+            continue;
+        };
+        let Some(slot) = name
+            .strip_prefix("local_")
+            .and_then(|rest| rest.split('_').next())
+            .and_then(|rest| rest.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        let Some(fresh) = defaults.get(&slot).copied().filter(|count| *count > 0) else {
+            continue;
+        };
+        let head = lines[index].trim().split(" = ").next().unwrap_or("");
+        let ty = head[..head.len().saturating_sub(name.len())].trim().to_owned();
+        if ty.is_empty() {
+            continue;
+        }
+        // Every mention after the declaration that is a member assignment of exactly this name.
+        let uses: Vec<usize> = (index + 1..lines.len())
+            .filter(|at| {
+                lines[*at]
+                    .trim()
+                    .strip_suffix(';')
+                    .and_then(|statement| statement.split_once(" = "))
+                    .is_some_and(|(target, value)| value == name && target.contains('.'))
+            })
+            .collect();
+        if uses.len() <= fresh {
+            continue; // the first use is the named value itself; there has to be one left
+        }
+        for at in uses.into_iter().rev().take(fresh) {
+            lines[at] = lines[at].replace(&format!("= {name};"), &format!("= {ty}();"));
         }
     }
     let mut out = lines.join("\n");
