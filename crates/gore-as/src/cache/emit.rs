@@ -1972,6 +1972,19 @@ fn emit_function_ctor(
             &rvo_temporary_slots(f, refs),
             refs,
         );
+        // Now that the operands carry no names of their own, an in-place update stands directly
+        // under its declaration and the pair is one statement — which can expose another value.
+        let rendered = merge_self_assignments(&rendered);
+        let rendered = inline_unnamed_value_temporaries(
+            &rendered,
+            &unnamed_value_slots(f, refs)
+                .union(&immediately_consumed_slots(f))
+                .copied()
+                .chain(rvo_temporary_slots(f, refs))
+                .collect(),
+            &rvo_temporary_slots(f, refs),
+            refs,
+        );
         let rendered =
             spell_out_argument_temporaries(
                 &rendered,
@@ -8807,6 +8820,54 @@ fn rvo_temporary_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         }
     }
     out
+}
+
+/// `T x = A; x = <expr with x>;` is one declaration: `T x = <expr with A>;`.
+///
+/// The compiler computes an expression into a slot and then updates it in place, and the emitter
+/// renders the two steps as two statements. Vanilla wrote one — the initial value is not a value
+/// of its own, it is the left operand. Folding the pair costs nothing and lets the value-life
+/// rules see the whole expression, which is what says whether the slot was ever named.
+fn merge_self_assignments(body: &str) -> String {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut at = 0usize;
+    while at + 1 < lines.len() {
+        let merged = (|| {
+            let (indent, name, init) = declaration_with_initializer(&lines[at])?;
+            let next = &lines[at + 1];
+            if indent_of(next) != indent {
+                return None;
+            }
+            let (target, value) = next.trim().strip_suffix(';')?.split_once(" = ")?;
+            if target != name || count_ident(value, &name) != 1 {
+                return None;
+            }
+            // the whole initializer takes the name's place, bracketed unless it already is one
+            let operand = if init.contains(' ') && !(init.starts_with('(') && init.ends_with(')')) {
+                format!("({init})")
+            } else {
+                init.clone()
+            };
+            let head = lines[at].trim().trim_end_matches(';');
+            let ty = head[..head.len() - name.len() - init.len() - 3].trim();
+            Some(format!(
+                "{indent}{ty} {name} = {};",
+                rename_ident(value, &name, &operand)
+            ))
+        })();
+        match merged {
+            Some(line) => {
+                lines[at] = line;
+                lines.remove(at + 1);
+            }
+            None => at += 1,
+        }
+    }
+    let mut text = lines.join("\n");
+    if body.ends_with('\n') {
+        text.push('\n');
+    }
+    text
 }
 
 /// Value slots the source never NAMED. This compiler cannot write a scalar local directly: even
