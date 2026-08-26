@@ -73,7 +73,7 @@ def load(path: Path) -> dict:
 def inspect_server_map(
     servers: object, label: str, problems: list[str]
 ) -> tuple[dict | None, set[str]]:
-    """Validate one direct server map and collect its Claude placeholders."""
+    """Validate one unwrapped server-map value and collect its Claude placeholders."""
     if not isinstance(servers, dict) or not servers:
         problems.append(f"{label}: server map must be a non-empty object")
         return None, set()

@@ -55,7 +55,7 @@ not the plugin. Fix that and restart the client.
 
 | | |
 |---|---|
-| `.mcp.json`, `mcp.json` | the server: every `gore` command, dedicated offline standalone-compile tools, read-only bundle-inspection and Manager-preflight aliases, plus `gore_guide` and `gore_help`. The same server map in the direct Claude/Codex shape and Cursor's wrapped shape |
+| `.mcp.json`, `mcp.json` | the server: every `gore` command, dedicated offline standalone-compile tools, read-only bundle-inspection and Manager-preflight aliases, plus `gore_guide` and `gore_help`. Both files carry the same server map under the `mcpServers` wrapper expected by their clients |
 | `skills/gore-modding/` | when to reach for which tool, the consent gate, and what a deploy does and does not prove |
 | `.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/` | the same plugin, described the way each client wants it |
 

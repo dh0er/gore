@@ -55,11 +55,10 @@ their own way — so this repository carries a marketplace manifest for each:
 | Codex | `.agents/plugins/marketplace.json` | `.codex-plugin/plugin.json` | `.mcp.json` |
 | Cursor | `.cursor-plugin/marketplace.json` | `.cursor-plugin/plugin.json` | `mcp.json` |
 
-The two MCP files contain the same server map in the shapes their clients
-require. `.mcp.json` is a direct server map accepted by Claude Code and required
-by Codex; `mcp.json` wraps that map in `mcpServers` for Cursor. The Codex
-manifest points to `.mcp.json` explicitly. `scripts/check_plugin.py` normalizes
-both shapes and keeps them in step.
+The two MCP files contain the same server map under an `mcpServers` wrapper.
+Claude Code and Codex read `.mcp.json`; Cursor reads `mcp.json`. The Codex
+manifest points to `.mcp.json` explicitly. `scripts/check_plugin.py` validates
+both wrapped files and keeps their server maps in step.
 
 **Codex** takes a local marketplace directly, which makes it the easiest of the
 three to try from a checkout:
@@ -284,8 +283,8 @@ In Claude Code you never touch a variable: the plugin declares them under
 `userConfig`, so enabling it asks you, in a dialog, whether GORE may change the
 game, replace Manager-library content, or perform another protected write
 without confirming each time. Leave both off unless you have a reason.
-`${user_config.…}` is a Claude Code substitution. Codex reads the direct
-`.mcp.json` map and Cursor reads the wrapped `mcp.json` map; both pass the
+`${user_config.…}` is a Claude Code substitution. Codex reads the wrapped
+`.mcp.json` file and Cursor reads the wrapped `mcp.json` file; both pass the
 placeholder text through untouched, which the server reads as "not set" rather
 than as an error.
 
