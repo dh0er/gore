@@ -5,8 +5,9 @@
 //!
 //! - `compile` and `compile-module` expose an explicit standalone/game backend policy. Their
 //!   worst case remains a game launch, but the per-call gate lets explicit strict standalone run
-//!   without game-launch consent. Ordinary build outputs need no install-write consent either;
-//!   an output explicitly aimed into the game installation remains protected.
+//!   without game-launch consent. A fresh workspace and ordinary build outputs need no
+//!   install-write consent either; an existing generated work tree or an output explicitly aimed
+//!   into the game installation remains protected.
 //! - `bytediff` spells `--json` as a *path* to write a report to, not as a switch that changes
 //!   stdout. It is therefore an ordinary argument and is never passed implicitly; passing it
 //!   automatically would create a file nobody asked for.
@@ -16,8 +17,8 @@
 use crate::spec::{
     ArgForm::{Long, LongRepeated, Positional, PositionalRepeated, Switch},
     ArgKind::{Bool, Enum, Hex, Int, IntList, Path, Str, StrList},
-    ArgSpec, CommandSpec, GroupShape, GroupSpec, JsonSupport, Safety, T_COMPILE, T_FAST, T_LONG,
-    T_NORMAL,
+    ArgSpec, CommandSpec, Derived, GroupShape, GroupSpec, JsonSupport, Safety, T_COMPILE, T_FAST,
+    T_LONG, T_NORMAL,
 };
 
 const CACHE_FILE: ArgSpec = ArgSpec::new(
@@ -910,7 +911,8 @@ const AS_COMMANDS: &[CommandSpec] = &[
         "Compile a complete authoritative AngelScript tree into a new precompiled cache. Uses the \
          requested standalone/game policy; only game or explicit fallback may launch the game.",
         COMPILE_ARGS,
-        Safety::game_launch_except("backend", "standalone"),
+        Safety::game_launch_except("backend", "standalone")
+            .also_writes(&[("work_dir", Derived::Child("tree"))]),
         T_COMPILE,
     )
     .at_most_one(DIAGNOSTICS_CONFLICT)
@@ -921,6 +923,7 @@ const AS_COMMANDS: &[CommandSpec] = &[
          Studio pipeline with an explicit standalone/game policy.",
         COMPILE_MODULE_ARGS,
         Safety::game_launch_except("backend", "standalone")
+            .also_writes(&[("work_dir", Derived::Child("tree"))])
             .writes_into(&["out", "generation_receipt"]),
         T_COMPILE,
     )
@@ -982,7 +985,8 @@ pub const AS: GroupSpec = GroupSpec {
     summary: "AngelScript precompiled-cache tooling: inspect and decompile the shipped script \
               cache, patch scalar defaults in place, and compile authored modules back in. \
               Compilation has an explicit standalone/game policy: strict standalone runs offline \
-              without game-launch consent, while outputs aimed into the installation remain protected; \
+              without game-launch consent; fresh workspaces run without install-write consent, while \
+              occupied generated work trees and outputs aimed into the installation remain protected; \
               game and fallback-capable calls require game-launch and install-write consent.",
     shape: GroupShape::Nested,
     commands: AS_COMMANDS,
@@ -990,9 +994,9 @@ pub const AS: GroupSpec = GroupSpec {
 
 const STANDALONE_COMPILE_COMMANDS: &[CommandSpec] = &[CommandSpec::new(
     "compile",
-    "Compile a complete AngelScript tree with GORE's bundled standalone compiler. This never starts the game or stages files in the installation.",
+    "Compile a complete AngelScript tree with GORE's bundled standalone compiler. This never starts the game or stages files in the installation; a fresh workspace needs no consent, while replacing an existing generated work tree remains protected.",
     STANDALONE_COMPILE_ARGS,
-    Safety::write(),
+    Safety::write().also_writes(&[("work_dir", Derived::Child("tree"))]),
     T_COMPILE,
 )
 .forced(&["--backend", "standalone"])
@@ -1007,16 +1011,18 @@ pub const AS_COMPILE: GroupSpec = GroupSpec {
     tool: "gore_as_compile",
     title: "gore as compile (standalone)",
     cli: "as",
-    summary: "Strict standalone full-tree AngelScript compilation with native diagnostics and no game-launch or install-write consent.",
+    summary: "Strict standalone full-tree AngelScript compilation with native diagnostics, no game-launch consent, and install-write protection only for an occupied generated work tree.",
     shape: GroupShape::Nested,
     commands: STANDALONE_COMPILE_COMMANDS,
 };
 
 const STANDALONE_COMPILE_MODULE_COMMANDS: &[CommandSpec] = &[CommandSpec::new(
     "compile-module",
-    "Compile one authored AngelScript module with GORE's bundled standalone compiler. This never starts the game; ordinary build outputs need no consent, while outputs aimed into the installation remain protected.",
+    "Compile one authored AngelScript module with GORE's bundled standalone compiler. This never starts the game; a fresh workspace and ordinary build outputs need no consent, while an occupied generated work tree or outputs aimed into the installation remain protected.",
     STANDALONE_COMPILE_MODULE_ARGS,
-    Safety::write().writes_into(&["out", "generation_receipt"]),
+    Safety::write()
+        .also_writes(&[("work_dir", Derived::Child("tree"))])
+        .writes_into(&["out", "generation_receipt"]),
     T_COMPILE,
 )
 .forced(&["--backend", "standalone"])
@@ -1036,7 +1042,7 @@ pub const AS_COMPILE_MODULE: GroupSpec = GroupSpec {
     tool: "gore_as_compile_module",
     title: "gore as compile-module (standalone)",
     cli: "as",
-    summary: "Strict standalone one-module AngelScript compilation with native diagnostics, no game-launch consent, and install protection only when an output targets the game tree.",
+    summary: "Strict standalone one-module AngelScript compilation with native diagnostics, no game-launch consent, and write protection only for an occupied generated work tree or output targeting the game tree.",
     shape: GroupShape::Nested,
     commands: STANDALONE_COMPILE_MODULE_COMMANDS,
 };

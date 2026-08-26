@@ -1285,6 +1285,26 @@ mod tests {
 
         let expected: Vec<(&str, &str, &[(&'static str, Derived)])> = vec![
             (
+                "gore_as",
+                "compile",
+                &[("work_dir", Derived::Child("tree"))],
+            ),
+            (
+                "gore_as",
+                "compile-module",
+                &[("work_dir", Derived::Child("tree"))],
+            ),
+            (
+                "gore_as_compile",
+                "compile",
+                &[("work_dir", Derived::Child("tree"))],
+            ),
+            (
+                "gore_as_compile_module",
+                "compile-module",
+                &[("work_dir", Derived::Child("tree"))],
+            ),
+            (
                 "gore_catalog",
                 "dump-mod",
                 &[("out", Derived::Child("gore-dump"))],

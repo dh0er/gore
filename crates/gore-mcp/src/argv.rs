@@ -2240,6 +2240,78 @@ mod tests {
     }
 
     #[test]
+    fn standalone_compilers_protect_only_an_existing_generated_work_tree() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let cases = [
+            (
+                "gore_as",
+                "compile",
+                json!({ "src": "scripts", "backend": "standalone", "game": "G" }),
+            ),
+            (
+                "gore_as",
+                "compile-module",
+                json!({
+                    "op": "add",
+                    "module": "MyMod.Dialog",
+                    "rel_path": "MyMod/Dialog.as",
+                    "source": "Dialog.as",
+                    "backend": "standalone",
+                    "game": "G",
+                }),
+            ),
+            (
+                "gore_as_compile",
+                "compile",
+                json!({ "src": "scripts", "game": "G" }),
+            ),
+            (
+                "gore_as_compile_module",
+                "compile-module",
+                json!({
+                    "op": "add",
+                    "module": "MyMod.Dialog",
+                    "rel_path": "MyMod/Dialog.as",
+                    "source": "Dialog.as",
+                    "game": "G",
+                }),
+            ),
+        ];
+
+        for (index, (tool, sub, mut args)) in cases.into_iter().enumerate() {
+            let work_dir = root.path().join(format!("work-{index}"));
+            let out = root.path().join(format!("out-{index}.Cache"));
+            let object = args.as_object_mut().expect("compiler arguments");
+            object.insert("work_dir".into(), json!(work_dir.to_string_lossy()));
+            object.insert("out".into(), json!(out.to_string_lossy()));
+
+            assert!(
+                question(tool, sub, args.clone(), &options()).is_none(),
+                "{tool} asked about a fresh work tree"
+            );
+
+            let tree = work_dir.join("tree");
+            std::fs::create_dir_all(&tree).expect("occupied generated tree");
+            std::fs::write(tree.join("stale.as"), b"stale").expect("stale generated source");
+            let raised = question(tool, sub, args, &options())
+                .unwrap_or_else(|| panic!("{tool} did not protect its occupied work tree"));
+            assert_eq!(
+                raised.needs,
+                Needs {
+                    write: true,
+                    game_launch: false,
+                },
+                "{tool}"
+            );
+            assert!(
+                raised.reason.contains("derives from `work_dir`"),
+                "{raised:?}"
+            );
+            assert!(raised.reason.contains("tree"), "{raised:?}");
+        }
+    }
+
+    #[test]
     fn explicit_game_fallback_and_omitted_backend_all_keep_consent() {
         for backend in [None, Some("game"), Some("standalone-then-game")] {
             let mut args = compile_args();

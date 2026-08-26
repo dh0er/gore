@@ -465,12 +465,12 @@ mod tests {
             (
                 "gore_as_compile",
                 "src",
-                "no game-launch or install-write consent",
+                "install-write protection only for an occupied generated work tree",
             ),
             (
                 "gore_as_compile_module",
                 "source",
-                "install protection only when an output targets the game tree",
+                "write protection only for an occupied generated work tree or output targeting the game tree",
             ),
         ] {
             let definition = tool(tool_name);
