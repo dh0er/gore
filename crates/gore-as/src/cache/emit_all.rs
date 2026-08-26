@@ -913,7 +913,9 @@ fn unresolved_collision_calls(
         let leading_global = index >= 2
             && token_text(source, &tokens[index - 1]) == ":"
             && token_text(source, &tokens[index - 2]) == ":"
-            && (index == 2 || !tokens[index - 3].identifier);
+            && (index == 2
+                || !tokens[index - 3].identifier
+                || is_angelscript_keyword(token_text(source, &tokens[index - 3])));
         if call
             && leading_global
             && call_argument_count(source, tokens[index + 1].start).is_some_and(|arity| {
@@ -929,8 +931,86 @@ fn unresolved_collision_calls(
     unresolved
 }
 
-/// Count top-level arguments in one call without mistaking commas in strings, comments, nested
-/// calls, indexing, or initializer lists for separators.
+fn is_angelscript_keyword(value: &str) -> bool {
+    matches!(
+        value,
+        "abstract"
+            | "access"
+            | "and"
+            | "and_eq"
+            | "as"
+            | "auto"
+            | "bool"
+            | "break"
+            | "case"
+            | "cast"
+            | "catch"
+            | "class"
+            | "const"
+            | "continue"
+            | "default"
+            | "delegate"
+            | "do"
+            | "double"
+            | "else"
+            | "enum"
+            | "event"
+            | "explicit"
+            | "external"
+            | "false"
+            | "final"
+            | "float"
+            | "for"
+            | "from"
+            | "funcdef"
+            | "get"
+            | "if"
+            | "import"
+            | "in"
+            | "inout"
+            | "int"
+            | "int8"
+            | "int16"
+            | "int32"
+            | "int64"
+            | "interface"
+            | "is"
+            | "mixin"
+            | "namespace"
+            | "not"
+            | "not_eq"
+            | "null"
+            | "or"
+            | "or_eq"
+            | "out"
+            | "override"
+            | "private"
+            | "property"
+            | "protected"
+            | "return"
+            | "set"
+            | "shared"
+            | "super"
+            | "switch"
+            | "struct"
+            | "this"
+            | "true"
+            | "try"
+            | "typedef"
+            | "uint"
+            | "uint8"
+            | "uint16"
+            | "uint32"
+            | "uint64"
+            | "void"
+            | "while"
+            | "xor"
+            | "xor_eq"
+    )
+}
+
+/// Count top-level arguments in one call without mistaking commas in strings, comments, generic
+/// type lists, nested calls, indexing, or initializer lists for separators.
 fn call_argument_count(source: &str, open_paren: usize) -> Option<usize> {
     let bytes = source.as_bytes();
     if bytes.get(open_paren) != Some(&b'(') {
@@ -940,13 +1020,15 @@ fn call_argument_count(source: &str, open_paren: usize) -> Option<usize> {
     let mut parens = 1usize;
     let mut brackets = 0usize;
     let mut braces = 0usize;
+    let mut angles = 0usize;
     let mut complete_arguments = 0usize;
     let mut current_argument = false;
     let mut index = open_paren + 1;
     while index < bytes.len() {
         match state {
             LexState::Code => {
-                let top_level = parens == 1 && brackets == 0 && braces == 0;
+                let call_level = parens == 1 && brackets == 0 && braces == 0;
+                let top_level = call_level && angles == 0;
                 if bytes[index..].starts_with(b"//") {
                     state = LexState::LineComment;
                     index += 2;
@@ -967,7 +1049,10 @@ fn call_argument_count(source: &str, open_paren: usize) -> Option<usize> {
                             }
                             parens += 1;
                         }
-                        b')' if top_level => {
+                        b')' if call_level => {
+                            if angles != 0 {
+                                return None;
+                            }
                             return if current_argument {
                                 Some(complete_arguments + 1)
                             } else if complete_arguments == 0 {
@@ -991,6 +1076,13 @@ fn call_argument_count(source: &str, open_paren: usize) -> Option<usize> {
                             braces += 1;
                         }
                         b'}' => braces = braces.checked_sub(1)?,
+                        b'<' if call_level => {
+                            if top_level {
+                                current_argument = true;
+                            }
+                            angles += 1;
+                        }
+                        b'>' if call_level && angles > 0 => angles -= 1,
                         b',' if top_level => {
                             if !current_argument {
                                 return None;

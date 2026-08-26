@@ -147,6 +147,14 @@ fn collision_targets_are_unique_and_overlay_calls_fail_closed() {
         .unwrap_err()
         .contains("collision-ambiguous"));
     assert!(prepared
+        .prepare_overlay(
+            "add",
+            "NewModule",
+            "void Caller() { Namespace::Get(1, 2); }"
+        )
+        .unwrap_err()
+        .contains("collision-ambiguous"));
+    assert!(prepared
         .prepare_overlay("add", "NewModule", "void Caller() { ::Get(1); }")
         .unwrap_err()
         .contains("collision-ambiguous"));
@@ -157,6 +165,17 @@ fn collision_targets_are_unique_and_overlay_calls_fail_closed() {
             "void Caller() { ::Get(\"comma, stays\", Nested(1, 2)); }"
         )
         .is_ok());
+    assert!(prepared
+        .prepare_overlay("add", "NewModule", "int Caller() { return ::Get(1, 2); }")
+        .is_ok());
+    assert!(prepared
+        .prepare_overlay(
+            "add",
+            "NewModule",
+            "void Caller() { ::Get(TMap<FString, int>()); }"
+        )
+        .unwrap_err()
+        .contains("collision-ambiguous"));
     assert!(prepared
         .prepare_overlay(
             "add",
