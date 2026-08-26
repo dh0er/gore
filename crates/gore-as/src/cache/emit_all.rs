@@ -848,7 +848,11 @@ fn unresolved_collision_calls(source: &str, originals: &BTreeSet<String>) -> BTr
         let call = tokens
             .get(index + 1)
             .is_some_and(|token| token_text(source, token) == "(");
-        let handle = index > 0 && token_text(source, &tokens[index - 1]) == "@";
+        let handle = (index > 0 && token_text(source, &tokens[index - 1]) == "@")
+            || (index >= 3
+                && token_text(source, &tokens[index - 1]) == ":"
+                && token_text(source, &tokens[index - 2]) == ":"
+                && token_text(source, &tokens[index - 3]) == "@");
         if !call && !handle {
             continue;
         }
