@@ -7628,8 +7628,20 @@ fn drop_unused_declarations(text: &str) -> String {
         let dead = bare_declaration(line)
             .or_else(|| declaration_with_initializer(line).map(|(indent, name, _)| (indent, name)))
             .is_some_and(|(_, name)| {
-                // Only a bare declaration may go: one with an initializer may be running a call.
-                bare_declaration(line).is_some()
+                // A bare declaration may go, and so may one whose initializer is a plain LITERAL:
+                // there is nothing to lose by not running it, and the constant it materializes is
+                // a store vanilla does not have. Anything else may be running a call.
+                let harmless = bare_declaration(line).is_some()
+                    || declaration_with_initializer(line).is_some_and(|(_, _, init)| {
+                        !init.contains('(')
+                            && !init.contains('[')
+                            && (init.parse::<f64>().is_ok()
+                                || matches!(init.as_str(), "true" | "false" | "nullptr")
+                                || init
+                                    .strip_suffix('f')
+                                    .is_some_and(|head| head.parse::<f64>().is_ok()))
+                    });
+                harmless
                     && lines
                         .iter()
                         .enumerate()
