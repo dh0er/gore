@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 98.94% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 98.96% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **98.94%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **98.96%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,743 functions (1.06%) recompile to bytecode that differs semantically.** A semantic
+**1,720 functions (1.04%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -433,6 +433,23 @@ whose last arguments are default-constructed temporaries can be written the way 
 where omitting it makes the compiler bind its own temporary to that reference and refuse.
 
 1,895 to 1,764, compile clean, no alignment loss.
+
+The short-circuit recovery asked too much of the value arm: it accepted the arm's own
+intermediate step only when that step WAS the whole value. Usually it is one OPERAND of it — the
+compiler materialising the right-hand side's sub-expression — and putting it back where it was
+read makes the arm one expression again, so `if (A) { c = true; } else { … c = <expr>; } if (c)`
+folds to `A || <expr>`. Two shapes are refused: a substitution that leaves a bare member path
+standing (the comparison fold behind it would write `path != 0`, which this compiler refuses for a
+bool field) and an int-carrier comparison `(carrier != 0)`, which that same fold rewrites through
+the declaration this one would be consuming.
+
+Refused, measured: keying the temporary rules by the LIFE of a slot rather than the slot — the
+emitter numbers a reused slot's declarations `local_8`, `local_8_2`, in program order, so the
+mapping exists and would reach 95 more functions. It crashes the game's compiler outright, with no
+diagnostic, exactly like the default-argument pairing did. Both admissions widen what may be
+inlined; something in that wider set is more than the compiler can parse.
+
+1,743 to 1,720, compile clean, no alignment loss.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern

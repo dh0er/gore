@@ -1948,7 +1948,7 @@ fn emit_function_ctor(
         // for them to ask about.
         let rendered = fold_condition_temporaries(&rendered, &declared_locals, refs, fields);
         let rendered = fold_alias_copies(&rendered, &declared_locals);
-        let rendered = fold_assignment_receivers(&rendered, &immediately_consumed_slots(f));
+        let rendered = fold_assignment_receivers(&rendered, &immediately_consumed_defs(f));
         let rendered =
             fold_copy_out_temporaries(&rendered, &declared_locals, &const_result_slots, fields);
         let rendered = fold_cast_operands(&rendered, &declared_locals, &call_result_types);
@@ -1964,10 +1964,10 @@ fn emit_function_ctor(
         // arguments — the same instructions in a different order.
         let rendered = inline_unnamed_value_temporaries(
             &rendered,
-            &unnamed_value_slots(f, refs)
-                .union(&immediately_consumed_slots(f))
+            &unnamed_value_defs(f, refs)
+                .union(&immediately_consumed_defs(f))
                 .copied()
-                .chain(rvo_temporary_slots(f, refs))
+                .chain(rvo_temporary_slots(f, refs).into_iter().map(|slot| (slot, 1)))
                 .collect(),
             &rvo_temporary_slots(f, refs),
             refs,
@@ -1977,10 +1977,10 @@ fn emit_function_ctor(
         let rendered = merge_self_assignments(&rendered);
         let rendered = inline_unnamed_value_temporaries(
             &rendered,
-            &unnamed_value_slots(f, refs)
-                .union(&immediately_consumed_slots(f))
+            &unnamed_value_defs(f, refs)
+                .union(&immediately_consumed_defs(f))
                 .copied()
-                .chain(rvo_temporary_slots(f, refs))
+                .chain(rvo_temporary_slots(f, refs).into_iter().map(|slot| (slot, 1)))
                 .collect(),
             &rvo_temporary_slots(f, refs),
             refs,
@@ -8870,6 +8870,30 @@ fn merge_self_assignments(body: &str) -> String {
     text
 }
 
+/// `local_8` is the FIRST life of slot 8, `local_8_2` the second: the pass that splits a reused
+/// slot into separate declarations numbers them in program order. A rule that judges a value has
+/// to judge the right one — the compiler reuses one frame slot for unrelated values, and only one
+/// of them may be the temporary.
+fn slot_and_life(name: &str) -> Option<(i32, usize)> {
+    let mut parts = name.strip_prefix("local_")?.split('_');
+    let slot: i32 = parts.next()?.parse().ok()?;
+    let life = match parts.next() {
+        Some(_) => return None,
+        None => 1,
+    };
+    (parts.next().is_none()).then_some((slot, life))
+}
+
+/// The declared type of `name` as this text spells it, from its declaration line.
+fn declared_type(lines: &[String], name: &str) -> Option<String> {
+    lines.iter().find_map(|line| {
+        let head = line.trim().strip_suffix(';')?;
+        let head = head.split_once(" = ").map(|(left, _)| left).unwrap_or(head);
+        let (ty, declared) = head.rsplit_once(' ')?;
+        (declared == name && !ty.contains('(') && !ty.is_empty()).then(|| ty.trim().to_owned())
+    })
+}
+
 /// Value slots the source never NAMED. This compiler cannot write a scalar local directly: even
 /// `bool b = false;` goes `SetV1 vT, 0; CpyVtoV4 vB, vT`, and a named `float` is the destination
 /// of a copy, never of the widening itself. So a slot that is PRODUCED — a member read, a
@@ -8880,7 +8904,7 @@ fn merge_self_assignments(body: &str) -> String {
 /// callee writes through; a slot that is any copy's destination, or a constant store's, is a
 /// name; a slot produced twice is not one value; a slot read other than once cannot be a value
 /// consumed where it was produced.
-fn unnamed_value_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+fn unnamed_value_defs(f: &Func, refs: &RefResolver) -> HashSet<(i32, usize)> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
@@ -9016,15 +9040,19 @@ fn unnamed_value_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
                     | "fTOu64"
             )
     };
-    let mut first: HashMap<i32, usize> = HashMap::new();
+    // every definition of every slot, in program order — each is its own life
+    let mut lives: HashMap<i32, usize> = HashMap::new();
+    let mut defs: Vec<(i32, usize, usize)> = Vec::new();
     let mut out = HashSet::new();
     for (i, ins) in instrs.iter().enumerate() {
         let dst = w0(ins);
         if dst > 0 && writes(ins.op.name) {
-            first.entry(dst).or_insert(i);
+            let life = lives.entry(dst).or_default();
+            *life += 1;
+            defs.push((dst, *life, i));
         }
     }
-    for (slot, at) in first {
+    for (slot, life, at) in defs {
         let ins = &instrs[at];
         if !produces(ins.op.name) {
             continue;
@@ -9063,7 +9091,7 @@ fn unnamed_value_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
                 .count();
         }
         if reads == 1 {
-            out.insert(slot);
+            out.insert((slot, life));
         }
     }
     out
@@ -9075,7 +9103,7 @@ fn unnamed_value_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
 /// the constant that branch's `return` was carrying.
 fn inline_unnamed_value_temporaries(
     body: &str,
-    unnamed: &HashSet<i32>,
+    unnamed: &HashSet<(i32, usize)>,
     receiver_only: &HashSet<i32>,
     refs: &RefResolver,
 ) -> String {
@@ -9088,7 +9116,7 @@ fn inline_unnamed_value_temporaries(
                 let (target, value) = slot_store(&lines[at])?;
                 is_decompiler_local(&target).then(|| (indent_of(&lines[at]), target, value))
             })?;
-            if !unnamed.contains(&slot_of(&name)?) || count_ident(body, &name) != 2 {
+            if !unnamed.contains(&slot_and_life(&name)?) || count_ident(body, &name) != 2 {
                 return None;
             }
             // The reader is not always the line below: several temporaries of ONE call stand in a
@@ -9103,7 +9131,7 @@ fn inline_unnamed_value_temporaries(
                             .then(|| (indent_of(&lines[reader]), target, value))
                     })
                     .is_some_and(|(ind, n, _)| {
-                        ind == indent && slot_of(&n).is_some_and(|s| unnamed.contains(&s))
+                        ind == indent && slot_and_life(&n).is_some_and(|s| unnamed.contains(&s))
                     });
                 if !sibling {
                     return None;
@@ -9117,7 +9145,7 @@ fn inline_unnamed_value_temporaries(
             // A by-value call result may only be inlined where it is the RECEIVER. As an
             // argument it is a temporary, and this compiler refuses a temporary for a non-const
             // reference parameter — which is what most of these positions are.
-            if receiver_only.contains(&slot_of(&name)?) {
+            if receiver_only.contains(&slot_and_life(&name)?.0) {
                 // An operator result is a temporary the compiler builds for the expression, and
                 // handing it on as a receiver binds it to the method's non-const `this`. A call
                 // chain is what vanilla wrote inline; a bracketed operand is not.
@@ -9142,11 +9170,14 @@ fn inline_unnamed_value_temporaries(
             }
             // A plain copy into another local carries the source's TYPE as well as its value, and
             // the destination's recovered type is not always the one the literal has: this
-            // compiler takes `intSlot = boolLocal;` and refuses `intSlot = false;`.
-            if matches!(init.as_str(), "true" | "false")
-                && slot_store(consumer).is_some_and(|(_, value)| value == name)
-            {
-                return None;
+            // compiler takes `intSlot = boolLocal;` and refuses `intSlot = false;`. Where the
+            // destination is declared with the literal's own type there is nothing to lose.
+            if matches!(init.as_str(), "true" | "false") {
+                if let Some((target, value)) = slot_store(consumer) {
+                    if value == name && declared_type(&lines, &target).as_deref() != Some("bool") {
+                        return None;
+                    }
+                }
             }
             let value = if init.contains(' ') && !(init.starts_with('(') && init.ends_with(')')) {
                 format!("({init})")
@@ -9172,33 +9203,29 @@ fn inline_unnamed_value_temporaries(
 /// Slots whose object value is consumed where it was produced: a `STOREOBJ` whose very next
 /// instruction pushes the same slot. A slot written any other way — a second `STOREOBJ` that is
 /// not consumed at once, a handle copy, a null store — is not one of these.
-fn immediately_consumed_slots(f: &Func) -> HashSet<i32> {
+fn immediately_consumed_defs(f: &Func) -> HashSet<(i32, usize)> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
-    let mut consumed: HashSet<i32> = HashSet::new();
-    let mut seen: HashSet<i32> = HashSet::new();
+    let mut lives: HashMap<i32, usize> = HashMap::new();
+    let mut out = HashSet::new();
     for (i, ins) in instrs.iter().enumerate() {
         let dst = w0(ins);
         if dst <= 0 || !matches!(ins.op.name, "STOREOBJ" | "RefCpyV") {
             continue;
         }
-        // Only the FIRST definition of the slot is the one our text names; what the compiler does
-        // with the same frame later — a cast's null arm, another temporary — is invisible to the
-        // source and cannot disqualify it.
-        if !seen.insert(dst) {
-            continue;
-        }
+        let life = lives.entry(dst).or_default();
+        *life += 1;
         let at_once = ins.op.name == "STOREOBJ"
             && instrs
                 .get(i + 1)
                 .is_some_and(|next| next.op.name == "PshVPtr" && w0(next) == dst);
         if at_once {
-            consumed.insert(dst);
+            out.insert((dst, *life));
         }
     }
-    consumed
+    out
 }
 
 /// `T local_N = <call>;` whose only other mention is the receiver of the assignment right below
@@ -9206,7 +9233,7 @@ fn immediately_consumed_slots(f: &Func) -> HashSet<i32> {
 /// declaration is evaluated BEFORE the right-hand side, a receiver spelled inside the assignment
 /// after it. Same statement, different bytecode — and the witness for which one vanilla wrote is
 /// its own `STOREOBJ`, which stands where the value is pushed.
-fn fold_assignment_receivers(body: &str, consumed: &HashSet<i32>) -> String {
+fn fold_assignment_receivers(body: &str, consumed: &HashSet<(i32, usize)>) -> String {
     let lines: Vec<&str> = body.lines().collect();
     let mut out: Vec<String> = Vec::new();
     let mut at = 0usize;
@@ -9216,7 +9243,7 @@ fn fold_assignment_receivers(body: &str, consumed: &HashSet<i32>) -> String {
             if !init.ends_with(')') || init.contains(" = ") {
                 return None;
             }
-            if !consumed.contains(&slot_of(&name)?) || count_ident(body, &name) != 2 {
+            if !consumed.contains(&slot_and_life(&name)?) || count_ident(body, &name) != 2 {
                 return None;
             }
             let next = lines.get(at + 1)?;
@@ -9907,12 +9934,40 @@ fn short_circuit(
         2 => {
             let (carrier, carried) = slot_store(lines.get(then_end + 3)?)?;
             let arm = lines[then_end + 3..else_end].join("\n");
-            match carrier == value && count_ident(&arm, &carrier) == 2 {
-                true => carried,
-                false => {
+            if count_ident(&arm, &carrier) != 2 {
+                sc_reject("carrier", lines[at]);
+                return None;
+            }
+            if carrier == value {
+                carried
+            } else if count_ident(&value, &carrier) == 1 {
+                // The step is not the whole value but one OPERAND of it — the compiler
+                // materialising the right-hand side own sub-expression. Put it back where it
+                // was read and the arm is one expression again.
+                let carried = match carried.contains(' ') {
+                    true => format!("({carried})"),
+                    false => carried,
+                };
+                // `(<carrier> != 0)` is the int-carrier comparison the bool-member fold behind
+                // us rewrites using the DECLARATION we would be consuming here. Substituting
+                // first leaves `path != 0`, which this compiler refuses for a bool field.
+                let bare = value.trim_matches(['(', ')']);
+                if bare == format!("{carrier} != 0") || bare == format!("{carrier} == 0") {
                     sc_reject("carrier", lines[at]);
                     return None;
                 }
+                let substituted = rename_ident(&value, &carrier, &carried);
+                // A bare member path left standing here is read as an int by the comparison fold
+                // behind us, which then writes `path != 0` — and this compiler refuses that for a
+                // bool field. Only an expression that already carries its own operator is safe.
+                if !substituted.contains(['=', '<', '>', '(']) {
+                    sc_reject("carrier", lines[at]);
+                    return None;
+                }
+                substituted
+            } else {
+                sc_reject("carrier", lines[at]);
+                return None;
             }
         }
         _ => {
