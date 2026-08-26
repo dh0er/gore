@@ -724,6 +724,16 @@ fn full_corpus_has_stable_seal_ids_sources_and_required_dimensions() {
 }
 
 #[test]
+fn qualification_source_sections_are_checkout_line_ending_independent() {
+    let lf = section("Fixture", "Fixture.as", "int A;\nint B;\n");
+    let crlf = section("Fixture", "Fixture.as", "int A;\r\nint B;\r\n");
+    let cr = section("Fixture", "Fixture.as", "int A;\rint B;\r");
+
+    assert_eq!(lf, crlf);
+    assert_eq!(lf, cr);
+}
+
+#[test]
 fn sealed_offline_artifacts_qualify_with_zero_unexplained_differences() {
     let corpus = full_qualification_corpus_v1().unwrap();
     let embedded = package(&corpus, CompilerProbeBackendKindV1::EmbeddedGame);
