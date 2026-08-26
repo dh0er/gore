@@ -1762,7 +1762,8 @@ fn emit_function_ctor(
         // The iterator idiom is a range-for the compiler desugared; write it back as one. Runs
         // BEFORE the value-type decl-init rewrite, which would otherwise give the loop element a
         // declaration and hide the idiom.
-        let (body, foreach_suppressed) = rewrite_foreach_loops(&body, &locals, refs);
+        let (body, foreach_suppressed) =
+            rewrite_foreach_loops(&body, &locals, refs, &range_for_iterator_slots(f, refs));
         // Before the declaration merge: a conversion naming the type the value already has hides
         // the copy-construction the merge is looking for.
         let body = drop_redundant_conversions(&body, fields, &path_roots, refs);
@@ -1916,6 +1917,7 @@ fn emit_function_ctor(
         let rendered = sink_declarations_into_their_block(&s[declarations_at..], &touched_after_branch);
         // Same text, same reason as the sink: the declaration lives in `s`, its uses in `body`.
         let rendered = spell_out_repeated_temporaries(&rendered, &constructions);
+        let rendered = sink_declarations_to_first_use(&rendered, &late_constructed_slots(f, refs));
         // And once more here, for the same reason: an accumulator whose declaration was hoisted
         // has its `T X;` in this text and its `X = ...` lines in the body, so the split form is
         // only whole once the two are joined.
@@ -1950,7 +1952,7 @@ fn emit_function_ctor(
         let rendered = inline_bool_chain_into_next_condition(&rendered);
         let rendered = fold_bool_member_comparisons(&rendered, fields, &path_roots, refs);
         let rendered = drop_redundant_conversions(&rendered, fields, &path_roots, refs);
-        let rendered = inline_unnamed_value_temporaries(&rendered, &unnamed_value_slots(f));
+        let rendered = inline_unnamed_value_temporaries(&rendered, &unnamed_value_slots(f, refs));
         let rendered =
             spell_out_argument_temporaries(&rendered, &argument_constructed_slots(f, refs), refs);
         let rendered = fold_widening_aliases(&rendered, &declared_locals, &path_roots, &widened);
@@ -8489,6 +8491,95 @@ fn enum_of_member_path(
     ty.starts_with('E').then_some(ty)
 }
 
+/// Slots whose ONE default construction stands behind real work — a call or a branch runs before
+/// it. A value-type declaration costs a constructor where it stands, so the position is evidence:
+/// the source declared it there, not in the prologue where the emitter hoists every declaration.
+fn late_constructed_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let mut first: HashMap<i32, usize> = HashMap::new();
+    let mut counts: HashMap<i32, usize> = HashMap::new();
+    for (i, pair) in instrs.windows(2).enumerate() {
+        if pair[0].op.name != "PSF" || pair[1].op.name != "CALLSYS" {
+            continue;
+        }
+        let ptr = pair[1].qwords.first().copied().unwrap_or(0) as i64;
+        if refs.func_by_ptr(ptr) != Some("$beh0") {
+            continue;
+        }
+        let Some(slot) = pair[0].words.first().map(|word| *word as i16 as i32) else {
+            continue;
+        };
+        if slot > 0 {
+            *counts.entry(slot).or_default() += 1;
+            first.entry(slot).or_insert(i);
+        }
+    }
+    first
+        .into_iter()
+        .filter(|(slot, at)| {
+            counts.get(slot) == Some(&1)
+                && instrs[..*at].iter().any(|ins| {
+                    matches!(ins.op.name, "CALL" | "CALLSYS" | "CALLINTF" | "CALLBND")
+                        || ins.op.name.starts_with('J')
+                })
+        })
+        .map(|(slot, _)| slot)
+        .collect()
+}
+
+/// A bare declaration the emitter hoisted to the top of the body, moved down to the statement that
+/// first mentions it — when vanilla's own constructor for that slot stands behind work of its own.
+///
+/// The companion of [`sink_declarations_into_their_block`], which can only move a declaration into
+/// a DEEPER block: most of these belong in the same block, just later, behind the guard clauses
+/// that return before the value is ever needed. Same block only — a move across a brace would
+/// change the scope, and a first use one level in is the other pass's business.
+fn sink_declarations_to_first_use(body: &str, late: &HashSet<i32>) -> String {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    // Each declaration moves at most once. Two of them that share a reader would otherwise
+    // leapfrog: the first moves below the second, the second below the first, forever.
+    let mut already: HashSet<String> = HashSet::new();
+    let mut at = 0usize;
+    while at < lines.len() {
+        let moved = (|| {
+            let (indent, name) = bare_declaration(&lines[at])?;
+            if !late.contains(&slot_of(&name)?) || already.contains(&name) {
+                return None;
+            }
+            already.insert(name.clone());
+            let mut use_at = None;
+            for (offset, line) in lines[at + 1..].iter().enumerate() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if indent_of(line).len() < indent.len() {
+                    return None; // the block ends before the value is used
+                }
+                if count_ident(line, &name) > 0 {
+                    use_at = (indent_of(line) == indent).then_some(at + 1 + offset);
+                    break;
+                }
+            }
+            let use_at = use_at?;
+            (use_at > at + 1).then_some(use_at)
+        })();
+        match moved {
+            Some(use_at) => {
+                let decl = lines.remove(at);
+                lines.insert(use_at - 1, decl);
+            }
+            None => at += 1,
+        }
+    }
+    let mut text = lines.join("\n");
+    if body.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
 /// Value slots the source never NAMED. This compiler cannot write a scalar local directly: even
 /// `bool b = false;` goes `SetV1 vT, 0; CpyVtoV4 vB, vT`, and a named `float` is the destination
 /// of a copy, never of the widening itself. So a slot that is PRODUCED — a member read, a
@@ -8499,7 +8590,7 @@ fn enum_of_member_path(
 /// callee writes through; a slot that is any copy's destination, or a constant store's, is a
 /// name; a slot produced twice is not one value; a slot read other than once cannot be a value
 /// consumed where it was produced.
-fn unnamed_value_slots(f: &Func) -> HashSet<i32> {
+fn unnamed_value_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
@@ -8533,6 +8624,15 @@ fn unnamed_value_slots(f: &Func) -> HashSet<i32> {
             refused.insert(dst);
         }
         if produces(name) && dst > 0 {
+            // The element of a range-for is stored right after `Proceed()`, and it IS named —
+            // by the loop header. Inlining it hides the idiom from the foreach recovery, which
+            // then leaves the whole loop in its explicit-iterator shape.
+            if i > 0 && instrs[i - 1].op.name == "CALLSYS" {
+                let ptr = instrs[i - 1].qwords.first().copied().unwrap_or(0) as i64;
+                if refs.func_by_ptr(ptr) == Some("Proceed") {
+                    refused.insert(dst);
+                }
+            }
             *produced.entry(dst).or_default() += 1;
             let copied_on = instrs.get(i + 1).is_some_and(|next| {
                 next.op.name.starts_with("CpyVtoV")
@@ -9996,6 +10096,7 @@ fn rewrite_foreach_loops(
     body: &str,
     locals: &BTreeMap<i32, String>,
     refs: &RefResolver,
+    range_for: &HashSet<i32>,
 ) -> (String, HashSet<i32>) {
     let trailing_newline = body.ends_with('\n');
     let lines: Vec<&str> = body.lines().collect();
@@ -10010,7 +10111,7 @@ fn rewrite_foreach_loops(
     let candidates: Vec<(usize, usize, String)> = (0..lines.len())
         .filter(|i| i + 3 < lines.len())
         .filter_map(|i| {
-            let (iter, _) = iterator_decl(lines[i])?;
+            let (iter, _) = iterator_decl(lines[i], range_for)?;
             (lines[i + 1].trim() == format!("while (local_{iter}.CanProceed)")
                 && lines[i + 2].trim() == "{")
             .then_some(())?;
@@ -10024,7 +10125,7 @@ fn rewrite_foreach_loops(
         if i + 3 >= lines.len() || drop_line[i] {
             continue;
         }
-        let Some((iter, container)) = iterator_decl(lines[i]) else {
+        let Some((iter, container)) = iterator_decl(lines[i], range_for) else {
             continue;
         };
         if lines[i + 1].trim() != format!("while (local_{iter}.CanProceed)")
@@ -10314,19 +10415,60 @@ fn element_is_written_through(
     false
 }
 
+/// Iterator slots vanilla built with a RANGE-FOR over an expression, not with a named iterator.
+///
+/// A range-for evaluates its container into a temporary that lives across the loop; written as
+/// `auto it = <expr>.Iterator();` the container is a full expression, so its destructor runs
+/// BEFORE the loop and the iterator then walks something that is gone. The two are told apart at
+/// the `Iterator` call: a range-for jumps STRAIGHT to the bottom test, while a named iterator has
+/// the temporary's cleanup in between.
+fn range_for_iterator_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let mut slots = HashSet::new();
+    for (i, ins) in instrs.iter().enumerate() {
+        if ins.op.name != "CALLSYS" {
+            continue;
+        }
+        let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+        if refs.func_by_ptr(ptr) != Some("Iterator") {
+            continue;
+        }
+        if instrs.get(i + 1).map(|next| next.op.name) != Some("JMP") {
+            continue;
+        }
+        // the returned iterator's own frame slot is pushed by address in the run before the call
+        for prev in instrs[i.saturating_sub(24)..i].iter() {
+            if prev.op.name == "PSF" {
+                if let Some(slot) = prev.words.first().map(|w| *w as i16 as i32) {
+                    if slot > 0 {
+                        slots.insert(slot);
+                    }
+                }
+            }
+        }
+    }
+    slots
+}
+
 /// `auto local_N = <pure path>.Iterator();` -> (N, container path).
-fn iterator_decl(line: &str) -> Option<(i32, String)> {
+fn iterator_decl(line: &str, range_for: &HashSet<i32>) -> Option<(i32, String)> {
     let rest = line.trim().strip_prefix("auto local_")?;
     let (slot, rest) = rest.split_once(" = ")?;
     let slot: i32 = slot.parse().ok()?;
     let container = rest.strip_suffix(".Iterator();")?;
     // A pure member path is evaluated once by the range-for exactly as it was by the call, so
-    // the fold cannot move an observable side effect.
-    if container.is_empty()
-        || !container
+    // the fold cannot move an observable side effect. A container that is an EXPRESSION needs
+    // vanilla to say so: `range_for_iterator_slots` reads that off the `Iterator` call itself.
+    let pure = !container.is_empty()
+        && container
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.'))
-    {
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.'));
+    if !pure && !(range_for.contains(&slot) && !container.contains(['=', ';'])) {
+        return None;
+    }
+    if container.is_empty() {
         return None;
     }
     Some((slot, container.to_owned()))
@@ -11386,7 +11528,12 @@ mod source_shape_tests {
             "        }\n",
         );
         let (out, gone) =
-            rewrite_foreach_loops(body, &locals(&[(16, "AActor")]), &RefResolver::default());
+            rewrite_foreach_loops(
+                body,
+                &locals(&[(16, "AActor")]),
+                &RefResolver::default(),
+                &std::collections::HashSet::new(),
+            );
         assert_eq!(
             out,
             concat!(
@@ -11419,6 +11566,7 @@ mod source_shape_tests {
             body,
             &locals(&[(16, "FItemVirtualData")]),
             &RefResolver::default(),
+            &std::collections::HashSet::new(),
         );
         assert_eq!(
             out,
@@ -11447,7 +11595,12 @@ mod source_shape_tests {
             "        }\n",
         );
         let (out, gone) =
-            rewrite_foreach_loops(body, &locals(&[(16, "AActor")]), &RefResolver::default());
+            rewrite_foreach_loops(
+                body,
+                &locals(&[(16, "AActor")]),
+                &RefResolver::default(),
+                &std::collections::HashSet::new(),
+            );
         assert_eq!(out, body);
         assert!(gone.is_empty());
     }
@@ -11463,7 +11616,12 @@ mod source_shape_tests {
             "        return local_16;\n",
         );
         let (out, _) =
-            rewrite_foreach_loops(body, &locals(&[(16, "AActor")]), &RefResolver::default());
+            rewrite_foreach_loops(
+                body,
+                &locals(&[(16, "AActor")]),
+                &RefResolver::default(),
+                &std::collections::HashSet::new(),
+            );
         assert_eq!(out, body);
     }
 

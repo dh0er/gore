@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 98.73% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 98.76% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **98.73%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **98.76%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**2,083 functions (1.27%) recompile to bytecode that differs semantically.** A semantic
+**2,048 functions (1.24%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -317,6 +317,25 @@ function's own epilogue — and merging THOSE only costs the carrier the compile
 `RET` row.
 
 2,111 to 2,083, compile clean, no alignment loss.
+
+Two more, both about WHERE a statement stands rather than what it says:
+
+- **A declaration belongs where its constructor is.** A value-type declaration costs a
+  constructor where it stands, so vanilla's own `PSF vX; CALLSYS ::$beh0` is the evidence: where
+  it stands behind a call or a branch, the source declared it there, not in the prologue the
+  emitter hoists everything to. The existing sink can only move a declaration into a DEEPER
+  block; most of these belong in the same block, just later — behind the guard clauses that
+  return before the value is ever needed. Each declaration moves at most once: two that share a
+  reader otherwise leapfrog, one below the other, forever (measured — it hung the emitter).
+- **A range-for over an expression.** The recovery required the container to be a pure path,
+  because a range-for evaluates its container once and a fold must not move a side effect. But
+  vanilla says which form it wrote, at the `Iterator` call: a range-for jumps STRAIGHT to the
+  bottom test, while a named iterator has the container temporary's cleanup in between. With the
+  witness the expression form is safe — and it is not only bytes: written as
+  `auto it = <expr>.Iterator();` the container is a full expression, so its destructor runs
+  BEFORE the loop and the iterator walks something that is gone.
+
+2,083 to 2,048, compile clean, no alignment loss.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
