@@ -2195,12 +2195,14 @@ def build_project(project: str, release: bool, dry: bool) -> None:
             dry=dry,
             extra_env=_standalone_compiler_build_env(project, dry=dry),
         )
+        host_dir = target_dir(release)
         if not dry:
             _verify_host_embedded_standalone_compiler_catalog(
                 project,
-                target_dir(release) / f"{cfg['bin']}.exe",
+                host_dir / f"{cfg['bin']}.exe",
                 dry=False,
             )
+        _stage_standalone_compiler_bundle(project, host_dir, dry=dry)
         return
     # flutter app: build native cdylib first, then the app, then bundle the dll.
     # The cargo package id (hyphenated) and the produced dll basename

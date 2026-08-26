@@ -55,12 +55,18 @@ class BuildStandaloneCompilerBundleTests(unittest.TestCase):
             mock.patch.object(
                 gore_build, "_verify_host_embedded_standalone_compiler_catalog"
             ) as linked,
+            mock.patch.object(
+                gore_build, "_stage_standalone_compiler_bundle"
+            ) as staged,
             mock.patch.object(gore_build, "run", side_effect=run),
         ):
             gore_build.build_project("gore-cli", release=True, dry=False)
         self.assertEqual(events, ["catalog", "host"])
         linked.assert_called_once_with(
             "gore-cli", gore_build.target_dir(True) / "gore.exe", dry=False
+        )
+        staged.assert_called_once_with(
+            "gore-cli", gore_build.target_dir(True), dry=False
         )
 
     def test_later_sign_dir_excludes_the_already_signed_sidecar(self) -> None:
