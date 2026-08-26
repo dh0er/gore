@@ -2145,6 +2145,12 @@ pub(crate) fn bare_type_name(tyname: &str) -> &str {
 /// Qualify a bare class name for use in an EXPRESSION (`G1R::UStoryG1R::StaticClass()`,
 /// `default MainStoryClass = G1R::UStoryG1R;`). A class declared in a namespace is not reachable
 /// by its bare name from anywhere else, and `UStoryG1R::StaticClass()` is then read as a
+/// The mark a then-arm carries when its last block jumped BACK to the test: a loop the block
+/// detectors could not take, because its condition is computed across several blocks. The
+/// emitter turns the pair into a `while` once the condition is one expression, and drops the
+/// mark when it cannot -- leaving exactly the `if` that stood here before.
+pub(crate) const LOOP_BACK_EDGE: &str = "//__gore_back_edge";
+
 /// NAMESPACE access, which fails with "Namespace 'UStoryG1R' doesn't exist".
 pub(crate) fn qualify_class_name(name: &str, refs: &RefResolver) -> String {
     match refs.type_ns_by_name(name) {
@@ -6277,13 +6283,33 @@ impl Structurer<'_> {
                     continue;
                 }
                 let then_end = else_idx.unwrap_or(stop).min(stop).max(i + 1);
+                // A then-arm whose LAST block jumps unconditionally BACK to at-or-before this
+                // test is the latch of a loop the detectors could not take: they ask for a
+                // single-block header, and a short-circuited condition is computed across
+                // several. The latch has no rendering of its own, so the loop vanishes silently.
+                // Mark it instead, and let the emitter turn the pair into a `while` once it has
+                // folded the condition into one expression -- where it cannot, the mark is
+                // dropped and this stays the `if` it is today.
+                let latch_back = (then_end > i + 1
+                    && self.is_backward_jump(then_end - 1)
+                    && self.g.blocks[then_end - 1]
+                        .succs
+                        .first()
+                        .is_some_and(|&s| s <= b.start_dw))
+                .then_some(then_end - 1);
+                // The latch block is NOT excluded: its jump is only its terminator, and the
+                // statements before it are the body's last ones.
+                let then_end_body = then_end;
                 let _ = writeln!(out, "{ind}if ({cond})");
                 let _ = writeln!(out, "{ind}{{");
                 let then_body_at = out.len();
                 if let Some(t) = then_idx {
-                    if t > i && t <= then_end {
-                        self.emit_range(t, then_end, depth + 1, out);
+                    if t > i && t <= then_end_body {
+                        self.emit_range(t, then_end_body, depth + 1, out);
                     }
+                }
+                if latch_back.is_some() {
+                    let _ = writeln!(out, "{ind}    {LOOP_BACK_EDGE}");
                 }
                 // Whether the arm we just WROTE ends in a return. The bytecode saying the branch
                 // returns is not enough: a return this renderer cannot express — a void one, a

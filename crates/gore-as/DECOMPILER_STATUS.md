@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**2,253 functions (1.37%) recompile to bytecode that differs semantically.** A semantic
+**2,239 functions (1.36%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -69,9 +69,18 @@ comparison then runs at the wrong width — the widening is rendered as a plain 
 folds collapse it as if it were an alias), and 545 whose instructions match but run in a
 different order.
 
-### The loop whose condition is a short circuit
+### The loop whose condition is a short circuit — RECOVERED
 
-41 functions lose a loop outright — the back edge AND the `SUSPEND` that comes with it — and the
+This is fixed; the account below is what it was and how it is read now. 84 loops came back, and
+they were not only bytes: the body of each ran ONCE in the decompiled source where the game runs
+it until the condition fails.
+
+The structurer marks a then-arm whose last block jumps back to the test, and the emitter turns the
+pair into a `while` once its short-circuit folds have made the condition one expression — which is
+what a loop head needs. Where the condition is still a bare name whose producer cannot move into
+the head, the mark is swept and the `if` stays exactly as it was, so nothing is guessed.
+
+It used to be: 41 functions lost a loop outright — the back edge AND the `SUSPEND` that comes with it — and the
 diagnosis is exact. `uncond_latch_loop` asks that the header be a SINGLE two-successor block. Where
 the condition short-circuits, it is not: `while (!A() && !B())` computes its value across three
 blocks and tests the result in a fourth.

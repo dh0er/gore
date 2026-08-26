@@ -1929,6 +1929,7 @@ fn emit_function_ctor(
         let rendered = join_short_circuit_chains(&rendered);
         let rendered =
             fold_returned_temporaries(&rendered, &declared_locals, refs, &ret, returns_by_reference);
+        let rendered = recover_condition_loops(&rendered);
         let rendered = fold_negated_stores(&rendered);
         let rendered = fold_assigned_temporaries(&rendered, fields, &path_roots, refs);
         // Before the folds move anything: a struct handed on by address is only recognisable
@@ -8173,6 +8174,86 @@ fn spell_out_default_temporaries(text: &str, defaults: &HashMap<i32, usize>) -> 
             lines[at] = lines[at].replace(&format!("= {name};"), &format!("= {ty}();"));
         }
     }
+    let mut out = lines.join("\n");
+    if text.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// Turns a marked `if` back into the `while` it was.
+///
+/// The structurer marks a then-arm whose last block jumped BACK to the test — a loop its block
+/// detectors could not take, because the condition is computed across several blocks. By the time
+/// this runs the short-circuit folds have made that condition ONE expression, which is what a
+/// loop head needs: `while (true) { …; if (!c) break; … }` is not the same bytecode, since the
+/// break costs a jump vanilla does not have.
+///
+/// Fail-closed: where the condition is still a bare name whose producer cannot move into the
+/// head, the mark is dropped and the `if` stays exactly as it was.
+fn recover_condition_loops(text: &str) -> String {
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let Some(mark) = lines.iter().position(|line| line.trim() == super::structure::LOOP_BACK_EDGE)
+        else {
+            break;
+        };
+        // The mark's OWN indent, taken before it goes: the line that slides into its place is the
+        // closing brace, which sits at the `if`'s own indent and would find no head above it.
+        let indent = indent_of(&lines[mark]).len();
+        lines.remove(mark);
+        let Some(head) = (0..mark).rev().find(|at| {
+            lines[*at].trim_start().starts_with("if (") && indent_of(&lines[*at]).len() < indent
+        }) else {
+            changed = true;
+            continue; // mark dropped, nothing else to do
+        };
+        let Some(cond) = lines[head]
+            .trim()
+            .strip_prefix("if (")
+            .and_then(|rest| rest.strip_suffix(')'))
+            .map(str::to_owned)
+        else {
+            changed = true;
+            continue;
+        };
+        let head_indent = indent_of(&lines[head]);
+        // A bare name at the head has its producer on the line before, and that producer belongs
+        // IN the head: left outside, it is computed once and the loop never ends.
+        if is_decompiler_local(&cond) {
+            let producer = head.checked_sub(1).filter(|at| {
+                lines[*at]
+                    .trim()
+                    .strip_suffix(';')
+                    .and_then(|statement| statement.split_once(" = "))
+                    .is_some_and(|(target, value)| target == cond && !value.contains(&cond))
+            });
+            let Some(producer) = producer else {
+                changed = true;
+                continue;
+            };
+            if lines.iter().map(|line| count_ident(line, &cond)).sum::<usize>() != 2 {
+                changed = true;
+                continue;
+            }
+            let value = lines[producer]
+                .trim()
+                .strip_suffix(';')
+                .and_then(|statement| statement.split_once(" = "))
+                .map(|(_, value)| value.to_owned())
+                .unwrap_or(cond);
+            lines[head] = format!("{head_indent}while ({value})");
+            lines.remove(producer);
+        } else {
+            lines[head] = format!("{head_indent}while ({cond})");
+        }
+        changed = true;
+    }
+    // A mark that found no head it could take is left behind as a comment, and it goes here: the
+    // `if` it sat in stays exactly what it was.
+    lines.retain(|line| line.trim() != super::structure::LOOP_BACK_EDGE);
     let mut out = lines.join("\n");
     if text.ends_with('\n') {
         out.push('\n');
