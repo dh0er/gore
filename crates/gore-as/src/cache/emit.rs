@@ -7702,6 +7702,20 @@ fn drop_unused_declarations(text: &str) -> String {
 /// Only for a declaration that stands INSIDE a block: at function scope there is no block end to
 /// do it, and the statement is the only release there is.
 fn drop_block_end_handle_releases(text: &str) -> String {
+    // A block that declares two handles ends with two releases, and only the last of them stands
+    // directly before the brace: dropping one uncovers the next.
+    let mut text = text.to_owned();
+    for _ in 0..8 {
+        let next = drop_one_block_end_handle_release(&text);
+        if next == text {
+            break;
+        }
+        text = next;
+    }
+    text
+}
+
+fn drop_one_block_end_handle_release(text: &str) -> String {
     let lines: Vec<String> = text.lines().map(str::to_owned).collect();
     let depths = block_depths(&lines);
     let Some(body_depth) = depths.iter().copied().min() else {
@@ -8762,13 +8776,16 @@ fn immediately_consumed_slots(f: &Func) -> HashSet<i32> {
     };
     let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
     let mut consumed: HashSet<i32> = HashSet::new();
-    let mut disqualified: HashSet<i32> = HashSet::new();
+    let mut seen: HashSet<i32> = HashSet::new();
     for (i, ins) in instrs.iter().enumerate() {
-        let dst = match ins.op.name {
-            "STOREOBJ" | "RefCpyV" | "ClrVPtr" | "LOADOBJ" => w0(ins),
-            _ => continue,
-        };
-        if dst <= 0 {
+        let dst = w0(ins);
+        if dst <= 0 || !matches!(ins.op.name, "STOREOBJ" | "RefCpyV") {
+            continue;
+        }
+        // Only the FIRST definition of the slot is the one our text names; what the compiler does
+        // with the same frame later — a cast's null arm, another temporary — is invisible to the
+        // source and cannot disqualify it.
+        if !seen.insert(dst) {
             continue;
         }
         let at_once = ins.op.name == "STOREOBJ"
@@ -8777,11 +8794,8 @@ fn immediately_consumed_slots(f: &Func) -> HashSet<i32> {
                 .is_some_and(|next| next.op.name == "PshVPtr" && w0(next) == dst);
         if at_once {
             consumed.insert(dst);
-        } else {
-            disqualified.insert(dst);
         }
     }
-    consumed.retain(|slot| !disqualified.contains(slot));
     consumed
 }
 
