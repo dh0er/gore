@@ -730,34 +730,6 @@ impl<R: BufRead, W: Write> Peer for TransportPeer<'_, R, W> {
                 Err(error) => return Err(format!("the connection failed while waiting: {error}")),
             };
 
-            if let Frame::Answer {
-                id: answered,
-                result,
-                error,
-                version_ok,
-            } = &frame
-            {
-                if *answered == id {
-                    // Failed closed, before the payload is looked at. A peer that answers a "may I
-                    // change your game installation?" question in a protocol revision it did not
-                    // negotiate is not one whose "run it" this server should act on, and treating
-                    // the failure as a refusal costs nothing but a question asked again.
-                    if !version_ok {
-                        return Err(
-                            "the answer declared a JSON-RPC version this server does not \
-                                    speak, so it was not read as consent"
-                                .into(),
-                        );
-                    }
-                    if let Some(error) = error {
-                        return Err(describe_error(error));
-                    }
-                    return result
-                        .clone()
-                        .ok_or_else(|| "the answer carried neither a result nor an error".into());
-                }
-            }
-
             if cancels(&frame, &self.call_id) {
                 // A batch is put back rather than dropped. The cancellation itself earns no reply,
                 // but its fellow members may be requests, and an unanswered request leaves the
@@ -768,13 +740,77 @@ impl<R: BufRead, W: Write> Peer for TransportPeer<'_, R, W> {
                 return Err("the client cancelled the call with the question open".into());
             }
 
-            if self.deferred.len() >= MAX_DEFERRED_FRAMES {
-                return Err(format!(
-                    "the client sent more than {MAX_DEFERRED_FRAMES} messages without answering"
-                ));
+            let (answer, remainder) = split_matching_answer(frame, &id);
+            if let Some(remainder) = remainder {
+                if self.deferred.len() >= MAX_DEFERRED_FRAMES {
+                    return Err(format!(
+                        "the client sent more than {MAX_DEFERRED_FRAMES} messages without answering"
+                    ));
+                }
+                self.deferred.push_back(remainder);
             }
-            self.deferred.push_back(frame);
+            if let Some(Frame::Answer {
+                result,
+                error,
+                version_ok,
+                ..
+            }) = answer
+            {
+                // Failed closed, before the payload is looked at. A peer that answers a "may I
+                // change your game installation?" question in a protocol revision it did not
+                // negotiate is not one whose "run it" this server should act on, and treating
+                // the failure as a refusal costs nothing but a question asked again.
+                if !version_ok {
+                    return Err(
+                        "the answer declared a JSON-RPC version this server does not \
+                                speak, so it was not read as consent"
+                            .into(),
+                    );
+                }
+                if let Some(error) = error {
+                    return Err(describe_error(&error));
+                }
+                return result
+                    .ok_or_else(|| "the answer carried neither a result nor an error".into());
+            }
         }
+    }
+}
+
+/// Remove the answer to the open server request from a top-level frame or one batch. Other batch
+/// members remain queued for the main loop in their original order.
+fn split_matching_answer(frame: Frame, id: &Value) -> (Option<Frame>, Option<Frame>) {
+    match frame {
+        Frame::Answer {
+            id: answered,
+            result,
+            error,
+            version_ok,
+        } => {
+            let matches = &answered == id;
+            let answer = Frame::Answer {
+                id: answered,
+                result,
+                error,
+                version_ok,
+            };
+            if matches {
+                (Some(answer), None)
+            } else {
+                (None, Some(answer))
+            }
+        }
+        Frame::Batch(mut members) => {
+            let Some(index) = members.iter().position(
+                |member| matches!(member, Frame::Answer { id: answered, .. } if answered == id),
+            ) else {
+                return (None, Some(Frame::Batch(members)));
+            };
+            let answer = members.remove(index);
+            let remainder = (!members.is_empty()).then_some(Frame::Batch(members));
+            (Some(answer), remainder)
+        }
+        other => (None, Some(other)),
     }
 }
 
@@ -2376,6 +2412,21 @@ mod tests {
         assert_eq!(sent[0]["id"], "gore-consent-1");
         assert_eq!(answer.expect("an answer")["action"], "accept");
         assert_eq!(deferred, 0);
+    }
+
+    #[test]
+    fn a_question_accepts_its_answer_inside_a_batch_and_defers_the_rest() {
+        let (answer, _, deferred) = ask_over(
+            concat!(
+                "[{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"},",
+                "{\"jsonrpc\":\"2.0\",\"id\":\"gore-consent-1\",",
+                "\"result\":{\"action\":\"accept\"}}]\n",
+            ),
+            json!(1),
+        );
+
+        assert_eq!(answer.expect("an answer")["action"], "accept");
+        assert_eq!(deferred, 1, "the ping remains queued for the main loop");
     }
 
     #[test]
