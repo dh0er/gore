@@ -1954,6 +1954,8 @@ fn emit_function_ctor(
         let rendered = fold_widening_aliases(&rendered, &declared_locals, &path_roots, &widened);
         let rendered =
             spell_out_default_temporaries(&rendered, &default_only_construction_counts(f, refs));
+        let rendered =
+            merge_copy_constructed_declarations(&rendered, &copy_constructed_slots(f, refs));
         let rendered = drop_block_end_handle_releases(&rendered);
         let rendered = drop_unused_declarations(&rendered);
         let rendered = fold_member_read_temporaries(
@@ -8264,6 +8266,60 @@ fn recover_condition_loops(text: &str) -> String {
     // A mark that found no head it could take is left behind as a comment, and it goes here: the
     // `if` it sat in stays exactly what it was.
     lines.retain(|line| line.trim() != super::structure::LOOP_BACK_EDGE);
+    let mut out = lines.join("\n");
+    if text.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// Merges a hoisted declaration with the write vanilla COPY-CONSTRUCTS.
+///
+/// `T X; X = <value>;` builds the value twice: a default construction for the declaration and an
+/// `opAssign` for the store. Vanilla builds it once, from the value — its `$beh0` there takes a
+/// parameter. The general declaration-placement engine bails for a slot written more than once,
+/// because it cannot give each write its own scope; this moves only the FIRST write, and leaves
+/// every later one exactly where it is.
+///
+/// The write has to be the NEXT line, at the declaration's own depth: anything in between is
+/// somebody else's statement, and merging across it moves the declaration past code that may
+/// already depend on where it stood.
+fn merge_copy_constructed_declarations(text: &str, copy_constructed: &HashSet<i32>) -> String {
+    let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let depths = block_depths(&lines);
+        for index in 0..lines.len().saturating_sub(1) {
+            let Some((indent, name)) = bare_declaration(&lines[index]) else {
+                continue;
+            };
+            let Some(slot) = name
+                .strip_prefix("local_")
+                .and_then(|rest| rest.split('_').next())
+                .and_then(|rest| rest.parse::<i32>().ok())
+            else {
+                continue;
+            };
+            if !copy_constructed.contains(&slot) || depths[index + 1] != depths[index] {
+                continue;
+            }
+            let Some(value) = lines[index + 1]
+                .trim()
+                .strip_prefix(&format!("{name} = "))
+                .and_then(|rest| rest.strip_suffix(';'))
+                .filter(|value| count_ident(value, &name) == 0)
+            else {
+                continue;
+            };
+            let head = lines[index].trim().trim_end_matches(';');
+            let ty = head[..head.len() - name.len()].trim().to_owned();
+            lines[index + 1] = format!("{indent}{ty} {name} = {value};");
+            lines.remove(index);
+            changed = true;
+            break;
+        }
+    }
     let mut out = lines.join("\n");
     if text.ends_with('\n') {
         out.push('\n');
