@@ -771,6 +771,21 @@ impl Ctx<'_> {
         (ty.is_object_handle || ty.is_reference) && !ty.is_read_only && !ty.is_object_const
     }
 
+    /// Whether the object PARAMETER `name` is const — read-only or a const handle. `param_src_ok`
+    /// refuses those outright; a copy of one is still recoverable when its only consumer is a
+    /// comparison, which const cannot break.
+    fn param_is_const(&self, name: &str) -> bool {
+        let idx = self
+            .f
+            .param_names
+            .iter()
+            .position(|n| !n.is_empty() && n == name);
+        match idx.and_then(|i| self.f.param_types.get(i)) {
+            Some(t) => t.is_read_only || t.is_object_const,
+            None => false,
+        }
+    }
+
     /// batch-45c (FIX-4): true when `name` is EXACTLY a declared object/reference PARAMETER —
     /// const-AGNOSTIC (unlike `param_src_ok`), because the only use is a null-guard fold
     /// (`if (<param> == nullptr)`), a comparison that is const-safe. Never matches `this` (not a
@@ -4848,6 +4863,24 @@ fn block_stmts_in(
                     // a plain local is a legal handle assign. Additive: a copy that is neither a
                     // getter-compare nor an immediate null-guard was DROPPED before, so recovering
                     // it can only ADD the vanilla store back.
+                    // A CONST param, or `this`, copied for a COMPARISON. `param_src_ok` refuses
+                    // both — rightly, for a copy that is written through or handed on, where
+                    // const would not hold. A comparison cannot break it, and dropping the copy
+                    // is not a byte difference but a WRONG PROGRAM: the comparison then reads an
+                    // uninitialised slot, so `if (Node == OtherNode)` became `if (Node == null)`
+                    // and the function always returned false.
+                    let const_src_into_cmp = (top.s == "this"
+                        || (ctx.param_object_ref(&top.s) && ctx.param_is_const(&top.s)))
+                        && insns[k + 1..].iter().any(|nx| {
+                            nx.op.name == "CmpPtr"
+                                && (w(nx, 0) == dst_slot0 || w(nx, 1) == dst_slot0)
+                        })
+                        && !insns[k + 1..].iter().any(|nx| {
+                            matches!(
+                                nx.op.name,
+                                "RefCpyV" | "STOREOBJ" | "ClrVPtr" | "FreeNullV8"
+                            ) && w(nx, 0) == dst_slot0
+                        });
                     let param_into_later_use = ctx.param_src_ok(&top.s) && {
                         let mut consumed = false;
                         for j in (k + 1)..insns.len() {
@@ -4967,6 +5000,7 @@ fn block_stmts_in(
                             || getter_into_null_cmp
                             || param_into_cmp
                             || param_into_later_use
+                            || const_src_into_cmp
                             || getter_into_store_rhs);
                     if ok {
                         flush!();
@@ -4996,12 +5030,19 @@ fn block_stmts_in(
                         // CONSTSTORE marker so the emitter declares the destination
                         // `const T` — the downcast() exact-type rule, mirrored for the
                         // RefCpyV member-read shape (CharacterAI_Gothic:3002).
-                        if top.nf_const.is_some()
-                            && top.nf_const.as_deref()
-                                == (dst_slot > 0)
-                                    .then(|| ctx.slot_type(dst_slot))
-                                    .flatten()
-                                    .as_deref()
+                        // a const source needs a const destination, or the declaration will
+                        // not hold what was copied into it
+                        // Always const: the copy exists only to be compared, and a const
+                        // destination holds a non-const source just as well as the other way
+                        // round would not.
+                        let const_source = const_src_into_cmp;
+                        if const_source
+                            || (top.nf_const.is_some()
+                                && top.nf_const.as_deref()
+                                    == (dst_slot > 0)
+                                        .then(|| ctx.slot_type(dst_slot))
+                                        .flatten()
+                                        .as_deref())
                         {
                             out.push(format!("{dst} = {CONSTSTORE}{rhs};"));
                             // batch-41d: the dest slot now holds a const object handle; a later

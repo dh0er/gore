@@ -1763,7 +1763,13 @@ fn emit_function_ctor(
         // BEFORE the value-type decl-init rewrite, which would otherwise give the loop element a
         // declaration and hide the idiom.
         let (body, foreach_suppressed) =
-            rewrite_foreach_loops(&body, &locals, refs, &range_for_iterator_slots(f, refs));
+            rewrite_foreach_loops(
+                &body,
+                &locals,
+                refs,
+                &range_for_iterator_slots(f, refs),
+                &proceed_element_slots(f, refs),
+            );
         // Before the declaration merge: a conversion naming the type the value already has hides
         // the copy-construction the merge is looking for.
         let body = drop_redundant_conversions(&body, fields, &path_roots, refs);
@@ -1954,7 +1960,14 @@ fn emit_function_ctor(
         let rendered = drop_redundant_conversions(&rendered, fields, &path_roots, refs);
         let rendered = inline_unnamed_value_temporaries(&rendered, &unnamed_value_slots(f, refs));
         let rendered =
-            spell_out_argument_temporaries(&rendered, &argument_constructed_slots(f, refs), refs);
+            spell_out_argument_temporaries(
+                &rendered,
+                &argument_constructed_slots(f, refs)
+                    .union(&paired_temporary_slots(f, refs))
+                    .copied()
+                    .collect(),
+                refs,
+            );
         let rendered = fold_widening_aliases(&rendered, &declared_locals, &path_roots, &widened);
         let rendered =
             spell_out_default_temporaries(&rendered, &default_only_construction_counts(f, refs));
@@ -7961,6 +7974,47 @@ fn argument_constructed_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
     out
 }
 
+/// Slots whose constructions and destructions PAIR — the shape of a temporary built for one call
+/// and destroyed right after it, as many times as the call is made. A declared local is built once
+/// in the prologue and destroyed on every exit, which pairs only by accident at one exit; two or
+/// more matched pairs, with the slot never written and only ever pushed by address, is the
+/// argument temporary. This is the witness for the run's FIRST temporary, whose `$beh0` has
+/// control flow in front of it rather than another push.
+fn paired_temporary_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut ctors: HashMap<i32, usize> = HashMap::new();
+    let mut dtors: HashMap<i32, usize> = HashMap::new();
+    let mut impure: HashSet<i32> = HashSet::new();
+    for (at, pair) in instrs.windows(2).enumerate() {
+        if pair[0].op.name == "PSF" && pair[1].op.name == "CALLSYS" {
+            let ptr = pair[1].qwords.first().copied().unwrap_or(0) as i64;
+            match refs.func_by_ptr(ptr) {
+                Some("$beh0") => *ctors.entry(w0(&pair[0])).or_default() += 1,
+                Some("$beh2") => *dtors.entry(w0(&pair[0])).or_default() += 1,
+                _ => {}
+            }
+            continue;
+        }
+        // any use that is not an address push means the value is read or written, not handed on
+        let name = instrs[at].op.name;
+        if !matches!(name, "PSF" | "CALLSYS" | "CALL" | "CALLINTF" | "CALLBND") {
+            for slot in super::bytediff::addressed_slots(&instrs[at]) {
+                impure.insert(slot);
+            }
+        }
+    }
+    ctors
+        .into_iter()
+        .filter(|(slot, n)| {
+            *slot > 0 && *n >= 2 && dtors.get(slot) == Some(n) && !impure.contains(slot)
+        })
+        .map(|(slot, _)| slot)
+        .collect()
+}
+
 /// A declared temporary that vanilla built inside the argument list is written there.
 ///
 /// `FGameplayTag local_4;` standing before the call constructs the value before the call's other
@@ -7991,27 +8045,33 @@ fn spell_out_argument_temporaries(
             if !constructed.contains(&slot) {
                 continue;
             }
-            if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != 2 {
+            // One declaration and one or more readers, each of them a call argument. A default
+            // argument spelled out at two call sites is the same temporary twice, not a local.
+            let mentions: usize = lines.iter().map(|line| count_ident(line, &name)).sum();
+            let readers: Vec<usize> = (index + 1..lines.len())
+                .filter(|at| count_ident(&lines[*at], &name) > 0)
+                .collect();
+            if mentions < 2 || readers.len() + 1 != mentions {
                 continue;
             }
-            let Some(reader) =
-                (index + 1..lines.len()).find(|at| count_ident(&lines[*at], &name) == 1)
-            else {
-                continue;
-            };
-            let Some((callee, arguments)) = call_arguments(&lines[reader]) else {
-                continue;
-            };
-            let rendered = arguments.len();
-            let Some(position) = arguments.iter().position(|argument| *argument == name) else {
-                continue;
-            };
-            if refs.arg_position_is_written_through(&callee, rendered, position) {
+            let usable = readers.iter().all(|reader| {
+                call_arguments(&lines[*reader]).is_some_and(|(callee, arguments)| {
+                    arguments
+                        .iter()
+                        .position(|argument| *argument == name)
+                        .is_some_and(|position| {
+                            !refs.arg_position_is_written_through(&callee, arguments.len(), position)
+                        })
+                })
+            });
+            if !usable {
                 continue;
             }
             let head = lines[index].trim().trim_end_matches(';');
             let ty = head[..head.len() - name.len()].trim().to_owned();
-            lines[reader] = rename_ident(&lines[reader], &name, &format!("{ty}()"));
+            for reader in &readers {
+                lines[*reader] = rename_ident(&lines[*reader], &name, &format!("{ty}()"));
+            }
             lines.remove(index);
             changed = true;
             break;
@@ -10097,6 +10157,7 @@ fn rewrite_foreach_loops(
     locals: &BTreeMap<i32, String>,
     refs: &RefResolver,
     range_for: &HashSet<i32>,
+    elements: &HashMap<i32, i32>,
 ) -> (String, HashSet<i32>) {
     let trailing_newline = body.ends_with('\n');
     let lines: Vec<&str> = body.lines().collect();
@@ -10115,7 +10176,8 @@ fn rewrite_foreach_loops(
             (lines[i + 1].trim() == format!("while (local_{iter}.CanProceed)")
                 && lines[i + 2].trim() == "{")
             .then_some(())?;
-            let elem = proceed_assignment(lines[i + 3], iter)?;
+            let elem = proceed_assignment(lines[i + 3], iter)
+                .or_else(|| inline_proceed_element(&lines, i, iter, elements).map(|(e, _)| e))?;
             let end = matching_close(&lines, i + 2)?;
             Some((i, end, format!("local_{elem}")))
         })
@@ -10134,10 +10196,16 @@ fn rewrite_foreach_loops(
             foreach_reject("not-the-idiom-shape");
             continue;
         }
-        let Some(elem) = proceed_assignment(lines[i + 3], iter) else {
+        let inline_elem = inline_proceed_element(&lines, i, iter, elements);
+        let Some(elem) = proceed_assignment(lines[i + 3], iter).or(inline_elem.as_ref().map(|(e, _)| *e))
+        else {
             foreach_reject("no-proceed-assignment");
             continue;
         };
+        let inline_elem = proceed_assignment(lines[i + 3], iter)
+            .is_none()
+            .then_some(inline_elem)
+            .flatten();
         let Some(end) = matching_close(&lines, i + 2) else {
             continue;
         };
@@ -10212,7 +10280,11 @@ fn rewrite_foreach_loops(
         let indent = leading_indent(lines[i]);
         replace[i] = Some(format!("{indent}for (auto {elem_ident} : {container})"));
         drop_line[i + 1] = true;
-        drop_line[i + 3] = true;
+        match &inline_elem {
+            // the element was read inside a larger expression: keep that statement, with the name
+            Some((_, rewritten)) => replace[i + 3] = Some(rewritten.clone()),
+            None => drop_line[i + 3] = true,
+        }
         for n in releases {
             drop_line[n] = true;
         }
@@ -10452,6 +10524,48 @@ fn range_for_iterator_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
     slots
 }
 
+/// For each iterator slot, the slot vanilla stored its element in: `PshVPtr vI; CALLSYS ::Proceed`
+/// followed by a store. The range-for header NAMES that element, so a body that reads it inline
+/// still describes the same loop — the name just has to be put back.
+fn proceed_element_slots(f: &Func, refs: &RefResolver) -> HashMap<i32, i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashMap::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut map = HashMap::new();
+    for (i, ins) in instrs.iter().enumerate() {
+        if ins.op.name != "CALLSYS" {
+            continue;
+        }
+        let ptr = ins.qwords.first().copied().unwrap_or(0) as i64;
+        if refs.func_by_ptr(ptr) != Some("Proceed") {
+            continue;
+        }
+        let Some(iter) = i.checked_sub(1).map(|j| &instrs[j]).filter(|prev| {
+            matches!(prev.op.name, "PshVPtr" | "PSF")
+        }) else {
+            continue;
+        };
+        let stored = instrs.get(i + 1).filter(|next| {
+            matches!(next.op.name, "CpyRtoV4" | "CpyRtoV8" | "RefCpyV" | "STOREOBJ")
+        });
+        // `PshRPtr; RDSPtr; RefCpyV vE` reaches the element through the returned reference
+        let stored = stored.or_else(|| {
+            (instrs.get(i + 1).map(|n| n.op.name) == Some("PshRPtr")
+                && instrs.get(i + 2).map(|n| n.op.name) == Some("RDSPtr"))
+            .then(|| instrs.get(i + 3))
+            .flatten()
+            .filter(|n| n.op.name == "RefCpyV")
+        });
+        if let (iter, Some(elem)) = (w0(iter), stored.map(w0)) {
+            if iter > 0 && elem > 0 {
+                map.insert(iter, elem);
+            }
+        }
+    }
+    map
+}
+
 /// `auto local_N = <pure path>.Iterator();` -> (N, container path).
 fn iterator_decl(line: &str, range_for: &HashSet<i32>) -> Option<(i32, String)> {
     let rest = line.trim().strip_prefix("auto local_")?;
@@ -10472,6 +10586,28 @@ fn iterator_decl(line: &str, range_for: &HashSet<i32>) -> Option<(i32, String)> 
         return None;
     }
     Some((slot, container.to_owned()))
+}
+
+/// The first body statement reads `local_I.Proceed()` inside a larger expression rather than
+/// storing it: put vanilla's own element name back in its place. Refused unless the loop reads
+/// `Proceed()` exactly once — anything else is not the element binding.
+fn inline_proceed_element(
+    lines: &[&str],
+    at: usize,
+    iter: i32,
+    elements: &HashMap<i32, i32>,
+) -> Option<(i32, String)> {
+    let call = format!("local_{iter}.Proceed()");
+    let end = matching_close(lines, at + 2)?;
+    let uses: usize = lines[at + 3..=end]
+        .iter()
+        .map(|line| line.matches(&call).count())
+        .sum();
+    if uses != 1 || lines[at + 3].matches(&call).count() != 1 {
+        return None;
+    }
+    let elem = *elements.get(&iter)?;
+    Some((elem, lines[at + 3].replace(&call, &format!("local_{elem}"))))
 }
 
 /// `local_E = local_I.Proceed();` / `auto local_E = local_I.Proceed();` -> E.
@@ -11533,6 +11669,7 @@ mod source_shape_tests {
                 &locals(&[(16, "AActor")]),
                 &RefResolver::default(),
                 &std::collections::HashSet::new(),
+                &std::collections::HashMap::new(),
             );
         assert_eq!(
             out,
@@ -11567,6 +11704,7 @@ mod source_shape_tests {
             &locals(&[(16, "FItemVirtualData")]),
             &RefResolver::default(),
             &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
         );
         assert_eq!(
             out,
@@ -11600,6 +11738,7 @@ mod source_shape_tests {
                 &locals(&[(16, "AActor")]),
                 &RefResolver::default(),
                 &std::collections::HashSet::new(),
+                &std::collections::HashMap::new(),
             );
         assert_eq!(out, body);
         assert!(gone.is_empty());
@@ -11621,6 +11760,7 @@ mod source_shape_tests {
                 &locals(&[(16, "AActor")]),
                 &RefResolver::default(),
                 &std::collections::HashSet::new(),
+                &std::collections::HashMap::new(),
             );
         assert_eq!(out, body);
     }

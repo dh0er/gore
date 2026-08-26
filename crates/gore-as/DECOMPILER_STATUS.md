@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 98.76% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 98.78% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **98.76%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **98.78%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**2,048 functions (1.24%) recompile to bytecode that differs semantically.** A semantic
+**2,016 functions (1.22%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -336,6 +336,23 @@ Two more, both about WHERE a statement stands rather than what it says:
   BEFORE the loop and the iterator walks something that is gone.
 
 2,083 to 2,048, compile clean, no alignment loss.
+
+Two more wrong programs, both found by asking what vanilla NAMED:
+
+- **The element of a range-for, read inside a larger expression.** Where an upstream fold had
+  written `Modifier.IsA(local_8.Proceed())` instead of storing the element first, the loop no
+  longer looked like the idiom and kept its explicit-iterator shape. Vanilla stores the element
+  right after `Proceed()`, which both names it and says where its name goes: the recovery now
+  puts that name back into the expression and writes the header. (The same store is why the
+  unnamed-value fold must never inline a value produced right after `Proceed()`.)
+- **A `const` parameter, or `this`, copied for a comparison.** The `RefCpyV` gate refused both —
+  rightly for a copy that is written through or handed on, where const would not hold. But
+  dropping the copy leaves the comparison reading an UNINITIALISED slot: `if (Node == OtherNode)`
+  came back as `if (Node == null)` and `IsIndirectChildOf` always returned false, with its
+  parameter unused. A comparison cannot break const, so the copy is materialised into a `const`
+  declaration when its only consumer is a pointer compare and nothing reassigns the slot.
+
+2,048 to 2,016, compile clean, no alignment loss.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
