@@ -44,12 +44,14 @@ pub fn definition() -> Value {
                     "type": "string",
                     "enum": ["list", "read", "search"],
                     "description": "list: every page with its sections. read: one page, or one \
-                                    section of it. search: rank sections against a query.",
+                                    section of it. search: rank sections globally across the guide \
+                                    and reference; omit `page`.",
                 },
                 "page": {
                     "type": "string",
                     "enum": guide::slugs(),
-                    "description": "Page slug. Required for `read`.",
+                    "description": "Page slug. Required only for `read`; omit it for the global \
+                                    `search` action.",
                 },
                 "section": {
                     "type": "string",
@@ -95,7 +97,9 @@ fn description() -> String {
         "Search and read the GORE documentation.\n\n\
          Read it before running an unfamiliar command. The tool schemas list flags; this explains \
          which command to reach for, in what order, and what breaks if a step is skipped.\n\n\
-         Start with `search`; it ranks individual sections, so the follow-up `read` stays small. \
+         Start with one problem-focused `search` without `page`; it ranks individual sections \
+         globally across the guide and reference, so do not repeat the same query once per page. \
+         If the page and section are already known, call `read` directly. \
          Reading a whole page is fine for short ones but some run to several hundred lines; those \
          come back in parts, each naming what the other parts hold.\n\n\
          Describe the problem in the words you would use to report it — \"deployed but nothing \
@@ -405,6 +409,13 @@ fn kind_of(slug: &str) -> &'static str {
 }
 
 fn run_search(arguments: &Map<String, Value>) -> Value {
+    if arguments.contains_key("page") {
+        return to_error_result(
+            "`search` is global and does not accept `page`. Remove `page` to search every guide \
+             and reference section once, or use `read` for a known page.",
+        );
+    }
+
     let Some(query) = arguments.get("query").and_then(Value::as_str) else {
         return to_error_result("`search` requires `query`.");
     };
@@ -787,6 +798,19 @@ mod tests {
         let text = text_of(&result);
         assert!(text.contains("gore_guide{action:\"read\""), "{text}");
         assert!(text.contains("textures"), "the top hit belongs in the text: {text}");
+    }
+
+    #[test]
+    fn search_rejects_page_instead_of_silently_repeating_the_global_search() {
+        let result = call_with(json!({
+            "action": "search",
+            "page": "textures",
+            "query": "replace a texture",
+        }));
+        assert_eq!(result["isError"], json!(true));
+        let text = text_of(&result);
+        assert!(text.contains("global"), "{text}");
+        assert!(text.contains("does not accept `page`"), "{text}");
     }
 
     #[test]

@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "GORE for Gothic 1 Remake: author mods and safely run the complete Mod Manager lifecycle through the CLI-backed MCP server and workflow skill.",
-    "version": "0.3.0",
+    "version": "0.3.2",
     "pluginRoot": "plugins"
   },
   "plugins": [

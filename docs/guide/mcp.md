@@ -366,11 +366,14 @@ line:
   answered — stdin is the protocol channel — so it is suppressed and the MCP
   dialog stands in for it, which is the same question by another route.
 - **Only game-capable compilation is both at once.** Explicit
-  `--backend standalone` runs offline and never enters the install-mutation
-  window, so it asks nobody. `game`, `standalone-then-game`, and the omitted
-  default may drive the game to regenerate the script cache and stage sources,
-  so pre-approving only the launch is not enough. `mgr remove` asks for a
-  different reason: it deletes an imported mod from your library.
+  `--backend standalone` runs offline and needs no game-launch consent. With a
+  fresh generated work tree and ordinary outputs outside the installation it
+  also needs no install-write consent. An occupied generated work tree or an
+  output aimed into the installation remains protected. `game`,
+  `standalone-then-game`, and the omitted default may drive the game to
+  regenerate the script cache and stage sources, so pre-approving only the
+  launch is not enough. `mgr remove` asks for a different reason: it deletes an
+  imported mod from your library.
 
 Two more flags tune behaviour rather than permissions:
 
@@ -437,10 +440,12 @@ The reference is included on purpose. The guide says which command to reach for;
 the reference says what a receipt seals and why a patch was refused. An assistant
 that can only read the guide will hit a refusal it cannot explain.
 
-- **`gore_guide`** — `search` ranks individual sections across both bodies and
-  labels each hit `[guide]` or `[reference]`, `read` fetches a page or one
-  section of it, `list` shows the outline grouped by body. This is what the
-  agent uses. A page too long for one result comes back in parts split at
+- **`gore_guide`** — `search` ranks individual sections globally across both
+  bodies and labels each hit `[guide]` or `[reference]`; call it once without
+  `page`, not once per candidate page. If the page and section are already
+  known, use `read` directly. `read` fetches a page or one section of it, and
+  `list` shows the outline grouped by body. This is what the agent uses. A page
+  too long for one result comes back in parts split at
   heading boundaries, each naming the sections the other parts hold, so `read`
   never silently drops the half an agent needed.
   [`gore guide search`](cli-reference.md#guide) runs the same ranking from a

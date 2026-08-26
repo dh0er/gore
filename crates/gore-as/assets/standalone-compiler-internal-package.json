@@ -3,12 +3,12 @@
   "schema_version": 1,
   "asset": "standalone-compiler-internal-package.zip",
   "archive": {
-    "byte_len": 7861184,
-    "sha256": "d1b7e54013d17da5011d545d565ce9434502b0f407f755b1e2b51ed23927f628"
+    "byte_len": 7861491,
+    "sha256": "be760db1bce6c03dcfbe39933b6338e3ee57b55fb8dc2db543492aedd15164dc"
   },
   "compression": "deflate-9",
   "internal_input": {
-    "catalog_sha256": "94bf7caa0fb15b58e3dcfe590db02ed9cc47a7e09cd0b1b76f3d7a818e403a4a",
+    "catalog_sha256": "ebc5e6020113d9cf664481856822d7e143e199ef4563de4b9052eb9b06da615b",
     "file_count": 28
   }
 }

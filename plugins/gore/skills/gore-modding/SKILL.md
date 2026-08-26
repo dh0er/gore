@@ -22,17 +22,25 @@ Nothing below applies until that is fixed.
 
 Call `gore_guide` for the page that covers your domain: `textures`, `audio`,
 `voice`, `text-and-dialogs`, `items`, `scripts`, `bundles`, `mod-manager`. Use
-`action: "search"` first — it ranks single sections, so the follow-up read stays
-small. `gore_help` gives exact current flags; the guide gives the order to do
-things in and what breaks when a step is skipped.
+`action: "search"` once without `page` — it ranks single sections globally
+across the guide and reference, so never repeat the same search for candidate
+pages. If the page and section are already known, use `read` directly.
+`gore_help` gives exact current flags; the guide gives the order to do things in
+and what breaks when a step is skipped.
 
 Do not preload every guide page or ask for help for every command in a planned
 workflow. Read one ranked section for the step in front of you, and call
 `gore_help` only when the tool schema leaves an argument unclear. `gore_help`
 takes one CLI command path: use `{"command":"loc export"}`, never a `gore_loc`
 tool name and never a separate `subcommand` field. For a broad smoke-test mod,
-run Doctor once, prove each chosen target, build once, inspect once, and leave
-Manager help/import/preflight until the user actually chooses installation.
+run Doctor once and use the game path it reports; call `config get` only when
+that path is missing or contradictory. Prove each chosen target, build once,
+inspect once, and leave Manager help/import/preflight until the user actually
+chooses installation.
+
+When an MCP client defers or hides tools, list only the matching tool names.
+Never dump the complete tool registry or every tool description. Load only the
+definition of the next tool when its schema is not already available.
 
 ## Manage a loadout as one declarative deployment
 
@@ -135,10 +143,13 @@ it afterwards, which costs you the whole build.
 
 For ordinary authoring, use the dedicated `gore_as_compile` or
 `gore_as_compile_module` tool. They select strict standalone themselves, do not
-offer a game backend, and never need consent. Strict standalone uses the bundled
-compiler, does not start the game, does not stage anything in the installation,
-and needs no consent. It also returns native compiler diagnostics; the optional
-runtime diagnostics hook belongs only to the game backend.
+offer a game backend, and never need game-launch consent. Strict standalone uses
+the bundled compiler, does not start the game, and does not stage anything in
+the installation. Use a fresh unique `work_dir` whose generated `tree` is absent
+and ordinary outputs outside the game installation; that normal path needs no
+consent. An occupied generated tree or an output aimed into the installation
+remains protected. Standalone also returns native compiler diagnostics; the
+optional runtime diagnostics hook belongs only to the game backend.
 
 Use the mixed `gore_as` compile routes only when the user knowingly chose
 `game` or `standalone-then-game`; those may fall back to the embedded game
@@ -164,9 +175,11 @@ A call asks first when it would change the game installation, or destroy
 something outside it that this server can see is there — an output file that
 already exists, an output directory that already holds files, a bundle folder
 about to be cleared and rebuilt. Writing into a fresh or empty scratch directory
-asks nobody. Explicit strict standalone AngelScript compilation also asks
-nobody. If a question does arrive, it is about something real; read what it
-names rather than approving it reflexively.
+asks nobody. Explicit strict standalone AngelScript compilation needs no
+game-launch consent, but its occupied generated tree and outputs aimed into the
+installation remain protected like every other write. If a question does
+arrive, it is about something real; read what it names rather than approving it
+reflexively.
 
 Many clients answer that question themselves in milliseconds without showing
 anybody anything, so the call comes back refused even though nobody declined.
