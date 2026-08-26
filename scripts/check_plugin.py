@@ -18,7 +18,7 @@ different shapes and three different places:
     plugins/gore/.codex-plugin/plugin.json
     plugins/gore/.cursor-plugin/plugin.json
 
-    plugins/gore/.mcp.json    Claude Code/Codex direct server map
+    plugins/gore/.mcp.json    Claude Code/Codex wrapped server map
     plugins/gore/mcp.json     Cursor wrapped server map
 
 Every one of those hand-carries a name, and two carry a version. Nothing in any
@@ -51,10 +51,9 @@ MANIFESTS = (
     Path(".cursor-plugin") / "plugin.json",
 )
 
-# Claude Code accepts the direct map that Codex requires in `.mcp.json`.
-# Cursor discovers the same map wrapped in `mcpServers` under `mcp.json`.
+# All three clients discover the same server map under the `mcpServers` wrapper.
 MCP_CONFIGS = (
-    (".mcp.json", None, "Claude Code/Codex"),
+    (".mcp.json", "mcpServers", "Claude Code/Codex"),
     ("mcp.json", "mcpServers", "Cursor"),
 )
 
@@ -123,19 +122,9 @@ def check_mcp(plugin_dir: Path, rel: str, problems: list[str]) -> set[str]:
         if not isinstance(data, dict):
             problems.append(f"{rel}/{name}: top level must be an object")
             continue
-        if wrapper is None:
-            if "mcpServers" in data or "mcp_servers" in data:
-                problems.append(
-                    f"{rel}/{name}: Codex requires a direct server map, not a wrapper"
-                )
-                continue
-            raw_servers = data
-        else:
-            if set(data) != {wrapper}:
-                problems.append(
-                    f"{rel}/{name}: must only contain the `{wrapper}` wrapper"
-                )
-            raw_servers = data.get(wrapper)
+        if set(data) != {wrapper}:
+            problems.append(f"{rel}/{name}: must only contain the `{wrapper}` wrapper")
+        raw_servers = data.get(wrapper)
         servers, config_used = inspect_server_map(
             raw_servers, f"{rel}/{name}", problems
         )
