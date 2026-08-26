@@ -1950,6 +1950,7 @@ fn emit_function_ctor(
         let rendered = inline_bool_chain_into_next_condition(&rendered);
         let rendered = fold_bool_member_comparisons(&rendered, fields, &path_roots, refs);
         let rendered = drop_redundant_conversions(&rendered, fields, &path_roots, refs);
+        let rendered = inline_unnamed_value_temporaries(&rendered, &unnamed_value_slots(f));
         let rendered =
             spell_out_argument_temporaries(&rendered, &argument_constructed_slots(f, refs), refs);
         let rendered = fold_widening_aliases(&rendered, &declared_locals, &path_roots, &widened);
@@ -8486,6 +8487,136 @@ fn enum_of_member_path(
             .to_owned();
     }
     ty.starts_with('E').then_some(ty)
+}
+
+/// Value slots the source never NAMED. This compiler cannot write a scalar local directly: even
+/// `bool b = false;` goes `SetV1 vT, 0; CpyVtoV4 vB, vT`, and a named `float` is the destination
+/// of a copy, never of the widening itself. So a slot that is PRODUCED — a member read, a
+/// widening, a call result, a negation — and never copied ON is the compiler's own temporary, and
+/// the source spelled that expression where it is used.
+///
+/// Refused, each for its own reason: a slot whose address is taken (`PSF`) is a real variable the
+/// callee writes through; a slot that is any copy's destination, or a constant store's, is a
+/// name; a slot produced twice is not one value; a slot read other than once cannot be a value
+/// consumed where it was produced.
+fn unnamed_value_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let produces = |op: &str| {
+        matches!(
+            op,
+            "RDR1"
+                | "RDR2"
+                | "RDR4"
+                | "RDR8"
+                | "fTOd"
+                | "dTOf"
+                | "iTOd"
+                | "iTOf"
+                | "uTOf"
+                | "uTOd"
+                | "CpyRtoV1"
+                | "CpyRtoV4"
+                | "CpyRtoV8"
+                | "NOT"
+        )
+    };
+    let mut produced: HashMap<i32, usize> = HashMap::new();
+    let mut refused: HashSet<i32> = HashSet::new();
+    let mut reads: HashMap<i32, usize> = HashMap::new();
+    for (i, ins) in instrs.iter().enumerate() {
+        let name = ins.op.name;
+        let dst = w0(ins);
+        if dst > 0 && (name == "PSF" || name.starts_with("CpyVtoV") || name.starts_with("SetV")) {
+            refused.insert(dst);
+        }
+        if produces(name) && dst > 0 {
+            *produced.entry(dst).or_default() += 1;
+            let copied_on = instrs.get(i + 1).is_some_and(|next| {
+                next.op.name.starts_with("CpyVtoV")
+                    && next.words.get(1).map(|w| *w as i16 as i32) == Some(dst)
+            });
+            if copied_on {
+                refused.insert(dst);
+            }
+        }
+        for slot in super::bytediff::addressed_slots(ins) {
+            if slot > 0 && (slot != dst || !produces(name)) {
+                *reads.entry(slot).or_default() += 1;
+            }
+        }
+    }
+    produced
+        .into_iter()
+        .filter(|(slot, writes)| {
+            *writes == 1
+                && !refused.contains(slot)
+                && reads.get(slot).copied().unwrap_or(0) == 1
+        })
+        .map(|(slot, _)| slot)
+        .collect()
+}
+
+/// `T local_N = <expr>;` (or the split `local_N = <expr>;`) whose one reader is the statement
+/// directly below it, for a slot [`unnamed_value_slots`] proves the source never named. The name
+/// costs the copy vanilla does not have — and where the value is a branch condition it also costs
+/// the constant that branch's `return` was carrying.
+fn inline_unnamed_value_temporaries(body: &str, unnamed: &HashSet<i32>) -> String {
+    let mut lines: Vec<String> = body.lines().map(|l| l.to_owned()).collect();
+    let mut at = 0usize;
+    while at < lines.len() {
+        let folded = (|| {
+            let (indent, name, init) = declaration_with_initializer(&lines[at]).or_else(|| {
+                let (target, value) = slot_store(&lines[at])?;
+                is_decompiler_local(&target).then(|| (indent_of(&lines[at]), target, value))
+            })?;
+            if !unnamed.contains(&slot_of(&name)?) || count_ident(body, &name) != 2 {
+                return None;
+            }
+            // The reader is not always the line below: several temporaries of ONE call stand in a
+            // row, each holding an argument. Walk past those — anything else in between could
+            // observe the value's computation moving, so refuse.
+            let mut reader = at + 1;
+            while reader < lines.len() && count_ident(&lines[reader], &name) == 0 {
+                let sibling = declaration_with_initializer(&lines[reader])
+                    .or_else(|| {
+                        let (target, value) = slot_store(&lines[reader])?;
+                        is_decompiler_local(&target)
+                            .then(|| (indent_of(&lines[reader]), target, value))
+                    })
+                    .is_some_and(|(ind, n, _)| {
+                        ind == indent && slot_of(&n).is_some_and(|s| unnamed.contains(&s))
+                    });
+                if !sibling {
+                    return None;
+                }
+                reader += 1;
+            }
+            let consumer = lines.get(reader)?;
+            if indent_of(consumer) != indent || count_ident(consumer, &name) != 1 {
+                return None;
+            }
+            let value = if init.contains(' ') && !(init.starts_with('(') && init.ends_with(')')) {
+                format!("({init})")
+            } else {
+                init.clone()
+            };
+            lines[reader] = rename_ident(consumer, &name, &value);
+            Some(())
+        })();
+        if folded.is_some() {
+            lines.remove(at);
+        } else {
+            at += 1;
+        }
+    }
+    let mut text = lines.join("\n");
+    if body.ends_with('\n') {
+        text.push('\n');
+    }
+    text
 }
 
 /// Slots whose object value is consumed where it was produced: a `STOREOBJ` whose very next

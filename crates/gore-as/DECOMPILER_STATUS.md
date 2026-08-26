@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 98.72% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 98.73% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **98.72%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **98.73%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**2,111 functions (1.28%) recompile to bytecode that differs semantically.** A semantic
+**2,083 functions (1.27%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -292,6 +292,31 @@ The failure in between is worth keeping: the first attempt compiled to ONE "Unre
 warning, which this compiler promotes to an error, and that cost a whole cycle. `scratchpad/
 unreach.py` now walks the emitted tree the way the compiler does (0 on a tree that compiled,
 exactly the compiler's line on the tree that failed), next to the scope and l-value checkers.
+
+A third witness of the same kind, and the compiler fact behind it: **this compiler cannot write a
+scalar local directly.** `bool b = false;` is `SetV1 vT, 0; CpyVtoV4 vB, vT`, and a named `float`
+is the destination of a copy, never of the widening itself. So a slot that is PRODUCED — a member
+read, a widening, a call result, a negation — and never copied ON is the compiler's own
+temporary, and the source spelled that expression where it is used. Naming it costs the copy.
+Refused for their own reasons: a slot whose address is taken (`PSF`) is a real variable the callee
+writes through (this is what keeps an `&out` argument a variable); a copy's destination is a name;
+a slot produced twice is not one value. The reader is not always the line below — several
+temporaries of one call stand in a row, each holding an argument — so the fold walks past sibling
+temporaries and refuses anything else in between.
+
+The same fact fixes a WRONG PROGRAM. `SetV*` registers a constant rather than rendering a
+statement, so where no store was rendered the return kept the slot — and the slot still carried
+the condition just tested. `if (!ok) { return false; }` came back as `return <the condition>`,
+which is `true` there. 29 functions returned the opposite value; they now return the constant.
+
+Also measured and then narrowed: two tests that jump to the same false target are `A && B`, and
+rendering them as a nested `if` leaves the middle path — A true, B false — running nothing where
+vanilla runs the `else`. But two guard clauses in a row fail to the same place as well — the
+function's own epilogue — and merging THOSE only costs the carrier the compiler builds for a real
+`&&` (measured: 9 functions). The merge is therefore refused when the shared target is the bare
+`RET` row.
+
+2,111 to 2,083, compile clean, no alignment loss.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern

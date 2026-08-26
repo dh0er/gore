@@ -6256,20 +6256,7 @@ impl Structurer<'_> {
                 let taken = b.succs.first().copied();
                 let then_idx = fall.and_then(|o| self.idx_of.get(&o).copied());
                 let else_idx = taken.and_then(|o| self.idx_of.get(&o).copied());
-                let taken_cond = branch_cond(&cmp, jop);
-                let cond = cmp
-                    .as_ref()
-                    .and_then(|c| c.expr.as_deref())
-                    .and_then(|expr| {
-                        let slot = expr
-                            .strip_prefix("local_")
-                            .and_then(|digits| digits.parse::<i32>().ok());
-                        (matches!(jop, "JZ" | "JLowZ")
-                            && slot.and_then(|slot| self.ctx.slot_type(slot)).as_deref()
-                                == Some("bool"))
-                        .then(|| expr.to_string())
-                    })
-                    .unwrap_or_else(|| negate(&taken_cond));
+                let cond = self.fall_condition(&cmp, jop);
                 if let Some((straight, ret_idx)) = self.bool_return_diamond(then_idx, else_idx) {
                     // A guarded return and a bare one after it — NOT an `else` branch, which would
                     // make the second return jump to the shared exit instead of falling into it
@@ -6282,6 +6269,44 @@ impl Structurer<'_> {
                     i = (ret_idx + 1).max(i + 1);
                     continue;
                 }
+                // `A && B` compiles to two tests that jump to the SAME false target. Rendered
+                // as a nested `if`, the middle path — A true, B false — runs NOTHING where
+                // vanilla runs the `else` arm. Merge the chain back into one condition while the
+                // shape holds: the second test must be the block we fall into, must contribute no
+                // statement of its own, and must fail to the same place as the first.
+                let (cond, then_idx) = {
+                    let (mut cond, mut then_idx, mut head) = (cond, then_idx, i);
+                    while let (Some(t), Some(taken_off)) = (then_idx, taken) {
+                        if t != head + 1 || t >= stop || !self.is_cond(t) {
+                            break;
+                        }
+                        let tb = &self.g.blocks[t];
+                        if tb.succs.first().copied() != Some(taken_off) {
+                            break;
+                        }
+                        // Two guard clauses in a row fail to the same place as well — the
+                        // function's own epilogue — and merging THOSE only costs the carrier the
+                        // compiler builds for a real `&&` (measured: 9 functions). What needs the
+                        // merge is a pair that fails into an `else` arm, where a nested rendering
+                        // leaves the middle path — A true, B false — running nothing.
+                        if self.is_bare_ret_off(taken_off) {
+                            break;
+                        }
+                        let (inner_stmts, inner_cmp, _) =
+                            block_stmts_in(self.ctx, tb.instr_lo, tb.instr_hi, Vec::new(), false);
+                        if !inner_stmts.is_empty() {
+                            break;
+                        }
+                        let inner = self.fall_condition(&inner_cmp, self.jump_op(t));
+                        if inner.contains(UNRESOLVED) {
+                            break;
+                        }
+                        cond = format!("{cond} && {inner}");
+                        then_idx = tb.succs.get(1).and_then(|o| self.idx_of.get(o).copied());
+                        head = t;
+                    }
+                    (cond, then_idx)
+                };
                 let then_end = else_idx.unwrap_or(stop).min(stop).max(i + 1);
                 // A then-arm whose LAST block jumps unconditionally BACK to at-or-before this
                 // test is the latch of a loop the detectors could not take: they ask for a
@@ -6411,9 +6436,10 @@ impl Structurer<'_> {
                 let ret_ref_tail = self.ctx.ret_is_ref() && self.flows_to_bare_ret(i);
                 let (mut stmts, _, _) =
                     block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, ret_ref_tail);
-                let plain_return = self
-                    .plain_return_exit_stmt(i)
-                    .map(|exit| fold_return_into_store(&mut stmts, exit));
+                let plain_return = self.plain_return_exit_stmt(i).map(|exit| {
+                    let exit = fold_return_into_store(&mut stmts, exit);
+                    self.constant_return_exit(i, exit, &stmts)
+                });
                 for s in &stmts {
                     let _ = writeln!(out, "{ind}{s}");
                 }
@@ -6423,9 +6449,9 @@ impl Structurer<'_> {
                 // `loop_exit_stmt` renders a bare `JMP` to the loop break/continue offset (or to a
                 // bare-RET row inside the body) as `break;`/`continue;`/`return ...;`.
                 if let Some(x) = self.region_exit_stmt(i) {
-                    let _ = writeln!(out, "{ind}{x}");
+                    let _ = writeln!(out, "{ind}{}", self.constant_return_exit(i, x, &stmts));
                 } else if let Some(x) = self.loop_exit_stmt(i) {
-                    let _ = writeln!(out, "{ind}{x}");
+                    let _ = writeln!(out, "{ind}{}", self.constant_return_exit(i, x, &stmts));
                 } else if let Some(x) = plain_return {
                     let _ = writeln!(out, "{ind}{x}");
                 }
@@ -6461,14 +6487,15 @@ impl Structurer<'_> {
             };
             let (mut stmts, cmp, leftover) =
                 block_stmts_in(self.ctx, b.instr_lo, b.instr_hi, init, false);
-            let plain_return = self
-                .plain_return_exit_stmt(bi)
-                .map(|exit| fold_return_into_store(&mut stmts, exit));
+            let plain_return = self.plain_return_exit_stmt(bi).map(|exit| {
+                let exit = fold_return_into_store(&mut stmts, exit);
+                self.constant_return_exit(bi, exit, &stmts)
+            });
             for s in &stmts {
                 let _ = writeln!(out, "{ind}{s}");
             }
             if let Some(x) = self.region_exit_stmt(bi) {
-                let _ = writeln!(out, "{ind}{x}");
+                let _ = writeln!(out, "{ind}{}", self.constant_return_exit(bi, x, &stmts));
             } else if let Some(x) = plain_return {
                 let _ = writeln!(out, "{ind}{x}");
             }
@@ -6663,6 +6690,62 @@ impl Structurer<'_> {
             b.instr_hi - 1,
             b.instr_lo,
         )))
+    }
+
+    /// The condition under which the test FALLS THROUGH — the one an `if` is written with. A
+    /// bool slot tested for zero reads as itself; everything else is the taken condition negated.
+    fn fall_condition(&self, cmp: &Option<Cmp>, jop: &str) -> String {
+        cmp.as_ref()
+            .and_then(|c| c.expr.as_deref())
+            .and_then(|expr| {
+                let slot = expr
+                    .strip_prefix("local_")
+                    .and_then(|digits| digits.parse::<i32>().ok());
+                (matches!(jop, "JZ" | "JLowZ")
+                    && slot.and_then(|slot| self.ctx.slot_type(slot)).as_deref() == Some("bool"))
+                .then(|| expr.to_string())
+            })
+            .unwrap_or_else(|| negate(&branch_cond(cmp, jop)))
+    }
+
+    /// `return local_N;` where a `SetV1` wrote the slot the instruction before the return read
+    /// it returns THAT CONSTANT. `SetV*` registers a constant rather than rendering a statement,
+    /// so where no store was rendered for the store fold to take, the return kept the slot — and
+    /// the slot still carried the condition just tested. `if (!ok) { return false; }` came back
+    /// as `return <the condition>`, which is `true` there: not a byte difference, a wrong
+    /// program. Only applies when the fold left a bare slot behind.
+    fn constant_return_exit(&self, bi: usize, exit: String, stmts: &[String]) -> String {
+        let Some(name) = exit
+            .strip_prefix("return ")
+            .and_then(|v| v.strip_suffix(';'))
+            .filter(|v| v.starts_with("local_") && !v.contains(['.', '(', ' ', '[']))
+        else {
+            return exit;
+        };
+        if self.ctx.ret_ty.map(|t| t.token) != Some(0x41) {
+            return exit;
+        }
+        let b = &self.g.blocks[bi];
+        if b.instr_hi < b.instr_lo + 3 {
+            return exit;
+        }
+        let read = b.instr_hi - 2;
+        let slot = self.ctx.instrs[read].words.first().copied().map(s16);
+        if slot.map(|s| self.ctx.slot_name(s)).as_deref() != Some(name) {
+            return exit;
+        }
+        let prev = &self.ctx.instrs[read - 1];
+        if prev.op.name != "SetV1" || prev.words.first().copied().map(s16) != slot {
+            return exit;
+        }
+        if stmts
+            .iter()
+            .any(|s| s.trim().starts_with(&format!("{name} = ")))
+        {
+            return exit; // the store IS rendered — that line already carries the constant
+        }
+        let bits = prev.dwords.first().copied().unwrap_or(0);
+        self.ctx.return_stmt(Some((bits as i32).to_string()))
     }
 
     /// The block at dword offset `off` is a bare `RET` row (exactly one instruction).
