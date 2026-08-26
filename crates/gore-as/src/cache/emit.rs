@@ -8662,49 +8662,74 @@ fn unnamed_value_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
                 | "SetV8"
         )
     };
-    let mut produced: HashMap<i32, usize> = HashMap::new();
-    let mut refused: HashSet<i32> = HashSet::new();
-    let mut reads: HashMap<i32, usize> = HashMap::new();
+    // Every op that leaves a new value in its first operand. The compiler reuses a frame slot for
+    // unrelated values, and the emitter names each of those separately (`local_8`, `local_8_2`),
+    // so a value's life ends at the next write and the reads after it belong to someone else.
+    let writes = |op: &str| {
+        produces(op)
+            || op.starts_with("CpyVtoV")
+            || matches!(
+                op,
+                "STOREOBJ" | "RefCpyV" | "ClrVPtr" | "LOADOBJ" | "FreeNullV8"
+            )
+            || matches!(
+                op.trim_end_matches(|c: char| c.is_ascii_digit() || c == 'f' || c == 'd'),
+                "ADDI" | "SUBI" | "MULI" | "DIVI" | "MODI" | "NEGI" | "INCI" | "DECI" | "ADD"
+                    | "SUB" | "MUL" | "DIV" | "MOD" | "NEG" | "INC" | "DEC" | "BAND" | "BOR"
+                    | "BXOR" | "BSLL" | "BSRL" | "BSRA" | "POW"
+            )
+    };
+    let mut first: HashMap<i32, usize> = HashMap::new();
+    let mut out = HashSet::new();
     for (i, ins) in instrs.iter().enumerate() {
-        let name = ins.op.name;
         let dst = w0(ins);
-        if dst > 0 && (name == "PSF" || name.starts_with("CpyVtoV")) {
-            refused.insert(dst);
-        }
-        if produces(name) && dst > 0 {
-            // The element of a range-for is stored right after `Proceed()`, and it IS named —
-            // by the loop header. Inlining it hides the idiom from the foreach recovery, which
-            // then leaves the whole loop in its explicit-iterator shape.
-            if i > 0 && instrs[i - 1].op.name == "CALLSYS" {
-                let ptr = instrs[i - 1].qwords.first().copied().unwrap_or(0) as i64;
-                if refs.func_by_ptr(ptr) == Some("Proceed") {
-                    refused.insert(dst);
-                }
-            }
-            *produced.entry(dst).or_default() += 1;
-            let copied_on = instrs.get(i + 1).is_some_and(|next| {
-                next.op.name.starts_with("CpyVtoV")
-                    && next.words.get(1).map(|w| *w as i16 as i32) == Some(dst)
-            });
-            if copied_on {
-                refused.insert(dst);
-            }
-        }
-        for slot in super::bytediff::addressed_slots(ins) {
-            if slot > 0 && (slot != dst || !produces(name)) {
-                *reads.entry(slot).or_default() += 1;
-            }
+        if dst > 0 && writes(ins.op.name) {
+            first.entry(dst).or_insert(i);
         }
     }
-    produced
-        .into_iter()
-        .filter(|(slot, writes)| {
-            *writes == 1
-                && !refused.contains(slot)
-                && reads.get(slot).copied().unwrap_or(0) == 1
-        })
-        .map(|(slot, _)| slot)
-        .collect()
+    for (slot, at) in first {
+        let ins = &instrs[at];
+        if !produces(ins.op.name) {
+            continue;
+        }
+        // The element of a range-for is stored right after `Proceed()`, and it IS named — by the
+        // loop header. Inlining it hides the idiom from the foreach recovery.
+        if at > 0 && instrs[at - 1].op.name == "CALLSYS" {
+            let ptr = instrs[at - 1].qwords.first().copied().unwrap_or(0) as i64;
+            if refs.func_by_ptr(ptr) == Some("Proceed") {
+                continue;
+            }
+        }
+        // copied ON is the source naming it
+        if instrs.get(at + 1).is_some_and(|next| {
+            next.op.name.starts_with("CpyVtoV")
+                && next.words.get(1).map(|w| *w as i16 as i32) == Some(slot)
+        }) {
+            continue;
+        }
+        // an address push is a real variable the callee writes through — anywhere, not just here
+        if instrs
+            .iter()
+            .any(|other| other.op.name == "PSF" && w0(other) == slot)
+        {
+            continue;
+        }
+        // exactly one read, and it must come before the slot holds anything else
+        let mut reads = 0usize;
+        for other in &instrs[at + 1..] {
+            if w0(other) == slot && writes(other.op.name) {
+                break;
+            }
+            reads += super::bytediff::addressed_slots(other)
+                .into_iter()
+                .filter(|s| *s == slot)
+                .count();
+        }
+        if reads == 1 {
+            out.insert(slot);
+        }
+    }
+    out
 }
 
 /// `T local_N = <expr>;` (or the split `local_N = <expr>;`) whose one reader is the statement
@@ -8744,6 +8769,14 @@ fn inline_unnamed_value_temporaries(body: &str, unnamed: &HashSet<i32>) -> Strin
             }
             let consumer = lines.get(reader)?;
             if indent_of(consumer) != indent || count_ident(consumer, &name) != 1 {
+                return None;
+            }
+            // A plain copy into another local carries the source's TYPE as well as its value, and
+            // the destination's recovered type is not always the one the literal has: this
+            // compiler takes `intSlot = boolLocal;` and refuses `intSlot = false;`.
+            if matches!(init.as_str(), "true" | "false")
+                && slot_store(consumer).is_some_and(|(_, value)| value == name)
+            {
                 return None;
             }
             let value = if init.contains(' ') && !(init.starts_with('(') && init.ends_with(')')) {

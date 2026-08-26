@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,897 functions (1.15%) recompile to bytecode that differs semantically.** A semantic
+**1,895 functions (1.15%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -405,6 +405,14 @@ Two refinements of the same witness, 1,919 to 1,897:
   directly before the brace, so dropping one uncovers the next. The release drop now runs to a
   fixpoint, and last in the chain — the folds before it can delete the statement that stood
   between the release and the closing brace.
+
+A value's life ends at the next write to its slot, not at the end of the function: the compiler
+reuses a frame slot for unrelated values and the emitter names each of those separately
+(`local_8`, `local_8_2`), so reads after the next write belong to someone else. Counting them
+refused most of the copy class. Worth only 2 net — most of the 83 modules it changed were already
+byte-identical — and it exposed one real asymmetry worth recording: this compiler accepts
+`intSlot = boolLocal;` and refuses `intSlot = false;`, so a literal is not folded into a plain
+copy whose destination carries a recovered type of its own.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
