@@ -451,6 +451,20 @@ inlined; something in that wider set is more than the compiler can parse.
 
 1,743 to 1,720, compile clean, no alignment loss.
 
+Three separate widenings of the inline-where-produced rule were measured and all three end the
+same way — the game's compiler dies with exit 3 and no diagnostic at all:
+
+- keying the rule by the LIFE of a slot (`local_8_2`), for value and object temporaries alike;
+- admitting a default-argument temporary by its constructor/destructor pairing;
+- letting the consuming push be separated from the store by the other arguments of the same call
+  (the object temporary "consumed where produced" window), with and without an added guard that
+  the argument position provably takes a temporary.
+
+Each of them is right about the SOURCE — the emitted trees read like vanilla and pass the scope,
+l-value and unreachable-code checkers — so what they hit is a limit of the compiler, not of the
+witness. Finding it needs a bisection of the tree itself (30 changed modules, one compile each),
+which is the next thing to try for this class; together the three reach about 200 functions.
+
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
 vanilla holds, where the largest finite float came back one ULP low every time. The belief that
