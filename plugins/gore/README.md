@@ -55,14 +55,15 @@ not the plugin. Fix that and restart the client.
 
 | | |
 |---|---|
-| `.mcp.json`, `mcp.json` | the server: every `gore` command, as fourteen command-family tools plus `gore_guide` and `gore_help`. The same server map in the direct Claude/Codex shape and Cursor's wrapped shape |
+| `.mcp.json`, `mcp.json` | the server: every `gore` command, dedicated offline standalone-compile tools, read-only bundle-inspection and Manager-preflight aliases, plus `gore_guide` and `gore_help`. The same server map in the direct Claude/Codex shape and Cursor's wrapped shape |
 | `skills/gore-modding/` | when to reach for which tool, the consent gate, and what a deploy does and does not prove |
 | `.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/` | the same plugin, described the way each client wants it |
 
 Enabling the plugin in Claude Code asks whether GORE may change your game
 installation or perform protected Manager import, replacement, removal,
 recovery, or Reset calls without confirming each call, and whether it may start
-the game to compile AngelScript. Reversible `enable`, `disable`, and `order`
+the game for a game-capable AngelScript backend. Explicit strict standalone
+compilation is offline and never needs either permission. Reversible `enable`, `disable`, and `order`
 edits update the target loadout immediately and are intentionally ungated. Both
 settings are off unless you say otherwise; they map to
 `GORE_MCP_ALLOW_WRITE` and `GORE_MCP_ALLOW_GAME_LAUNCH`, which is also how to set

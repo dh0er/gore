@@ -27,7 +27,7 @@ use crate::cache::semantic_observer::{
     WholeCacheSemanticObservationV1,
 };
 
-pub const FULL_QUALIFICATION_SUITE_ID_V1: &str = "gore.as.full-differential-qualification/v1";
+pub const FULL_QUALIFICATION_SUITE_ID_V1: &str = "gore.as.full-differential-qualification/v2";
 pub const OFFLINE_PROBE_ARTIFACT_SCHEMA_V1: &str = "gore.as.offline-probe-artifacts";
 pub const OFFLINE_PROBE_ARTIFACT_SCHEMA_VERSION_V1: u32 = 1;
 
@@ -126,6 +126,11 @@ pub const FULL_QUALIFICATION_COVERAGE_V1: &[QualificationCoverageRequirementV1] 
     requirement(
         "preprocessor-flags-automatic-import-closure",
         "positive.preprocessor.import-closure",
+        true,
+    ),
+    requirement(
+        "game-dialog-diego-authoring",
+        "positive.game.dialog-diego-authoring",
         true,
     ),
     requirement(
@@ -515,6 +520,17 @@ pub fn full_qualification_corpus_v1() -> Result<CompilerProbeCorpusV1, Qualifica
                     "#if RELEASE\nint32 ConsumerValue() { return MiddleValue(); }\n#endif",
                 ),
             ],
+        ),
+        case(
+            "positive.game.dialog-diego-authoring",
+            "requires_captured_profile/game-dialog-diego-authoring;coverage=game-dialog-diego-authoring",
+            ProbeOutcomeV1::Accepted,
+            ProbeModeV1::CompileOnly,
+            &[section(
+                "Gore.Examples.DiegoDialogSmoke",
+                "Gore/Examples/DiegoDialogSmoke.as",
+                include_str!("../../tests/fixtures/diego_dialog_smoke.as"),
+            )],
         ),
         case(
             "positive.fname.non-ascii-equivalence",

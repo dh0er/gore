@@ -16,6 +16,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Match compatible game installations by Shipping cache format and the
   complete AngelScript Binds API instead of requiring an exact whole-EXE hash,
   so compatible Steam, GOG, and differently packed binaries are supported.
+- Add dedicated MCP tools for strict standalone script compilation. They cannot
+  select or fall back to the game compiler and therefore never ask for game
+  launch or installation-write approval. Native compiler errors include
+  file, line, column, severity, code, and message where available.
+- Make `gore doctor` authenticate the bundled compiler and check the installed
+  Shipping/Binds inputs through the same compatibility resolver used by real
+  standalone compilation.
+- Add `gore mod inspect` and its read-only MCP alias for bounded offline
+  validation of bundle directories and ZIPs, including declared payloads,
+  UE4SS `Scripts/main.lua`, component formats, and deterministic hashes.
+- Add `gore voice validate` for read-only Ogg/Vorbis and Opus validation with
+  exact duration metadata, and reject invalid end-of-stream timing before a
+  voice bundle is built.
+- Derive newly added AngelScript module identities from their relative `.as`
+  paths, matching both the standalone compiler and the game's source discovery.
 
 ## [0.1.0] - 2026-08-18
 

@@ -95,6 +95,13 @@ gore as compile out_as -o regen.Cache --work-dir .gore-as-work `
 `--backend standalone-then-game` is the default. `standalone` and `game` never
 fall back silently.
 
+Through the GORE MCP plugin, use `gore_as_compile` or
+`gore_as_compile_module` for normal authoring. Those dedicated tools force the
+strict standalone backend and run without a consent question because they
+cannot launch the game or touch the installation. The mixed `gore_as` routes
+remain available only for a deliberately selected game-capable backend and
+correctly ask before a call that may use the game compiler.
+
 ### Safety rules around compilation
 
 These are enforced, not advisory:

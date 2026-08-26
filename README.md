@@ -138,7 +138,10 @@ New-Item -ItemType Junction `
 `gore.exe` must be on `PATH`; check with `gore --version`.
 
 For unattended use, add `--allow-write` and/or `--allow-game-launch` to
-`gore mcp serve` to pre-approve writes or game launches. Compiling requires both.
+`gore mcp serve` to pre-approve writes or game launches. Explicit
+`--backend standalone` compilation needs neither; `game`, the default
+`standalone-then-game`, and an omitted backend need both because they may use the
+game compiler.
 
 ## 📚 Documentation
 

@@ -28,15 +28,15 @@ complete resolved identities.
 
 ## Sealed corpus and concrete gates
 
-`full_qualification_corpus_v1()` returns 25 ordered cases under
-`gore.as.full-differential-qualification/v1`. The current exact corpus/source seal is:
+`full_qualification_corpus_v1()` returns 27 ordered cases under
+`gore.as.full-differential-qualification/v2`. The current exact corpus/source seal is:
 
-`98b722e44c116c22e6b6ee2d76df664411ba46bafdb7baea3038b1a97205a7fe`
+`01afb701c5f7ef7959a6d6c9b81f290f2e8d0b33671342ea50d9db87123daa94`
 
 The corpus includes positive and negative syntax, overloads/defaults, templates/validators,
 containers, namespaces/imports, metadata, class generation, scalar and structured invocation,
 fork bytecode and reference lifetimes, globals/classes/behaviours/properties/accessors, all tails,
-preprocessor/import closure, Unicode `FName`, UTF-8 `FString` factory behavior, frontend hooks,
+preprocessor/import closure, the exact Diego dialog-authoring example, Unicode `FName`, UTF-8 `FString` factory behavior, frontend hooks,
 editor/release discovery, graph change/delete/add, located info/warning/error diagnostics, and
 unsupported try/catch.
 
@@ -123,7 +123,7 @@ promotion check.
 `OfflineQualificationCaptureBackendV1`. It owns `full_qualification_corpus_v1()` and rejects any
 caller case which is not byte-for-byte the corresponding sealed row. Construction strictly reloads
 the fixed-name unqualified materializer package, binds its corpus payload seal to the executable
-26-case corpus, verifies Shipping/Binds against the profile, and verifies the opened sidecar against
+27-case corpus, verifies Shipping/Binds against the profile, and verifies the opened sidecar against
 an externally authorized final executable identity. The external identity is the one unavoidable
 pre-promotion input: an unqualified package cannot authenticate the binary which is about to qualify
 it. It must come from the signed sidecar release/catalog authority, never the package directory.

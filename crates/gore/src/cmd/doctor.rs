@@ -19,9 +19,10 @@
 //! through [`gore_tex::container::mods_dir`], the deployment through
 //! [`gore_mod::mgr::status::status`] (what `gore mgr status` prints), the install-mutation lock
 //! and gore-as recovery artifacts through [`gore_as::compile::probe_install_compile_state`] (what
-//! deploy and `as compile` consult before they refuse), and the localized-text catalog through
-//! [`gore_loc::loc_store::status`] (what `gore loc status` prints). A doctor that disagreed with
-//! the commands it diagnoses would be worse than no doctor at all.
+//! deploy and game-backed compilation consult before they refuse), the product-owned standalone
+//! compiler resolver (what strict standalone compilation uses), and the localized-text catalog
+//! through [`gore_loc::loc_store::status`] (what `gore loc status` prints). A doctor that
+//! disagreed with the commands it diagnoses would be worse than no doctor at all.
 //!
 //! Nothing in this module writes, creates, or removes anything. Deployment inspection joins an
 //! already-established Windows Library lock (or the Unix directory-inode lock), but deliberately
@@ -309,6 +310,7 @@ fn collect(explicit: Option<&Path>) -> Report {
     checks.push(check_mods_folder(&gp));
     checks.push(check_leftovers(&gp, &probe, &owned_backups));
     checks.push(check_game_process(&probe));
+    checks.push(check_standalone_compiler(&gp));
     checks.push(check_loc_catalog(
         gore_loc::loc_store::status(),
         &gore_loc::paths::loc_catalog_path(),
@@ -330,6 +332,7 @@ const SKIPPED_WITHOUT_INSTALL: &[(&str, &str)] = &[
     ("mods_folder", "~mods"),
     ("leftovers", "leftovers"),
     ("game_process", "game process"),
+    ("standalone_compiler", "AS standalone"),
     ("loc_catalog", "loc catalog"),
 ];
 
@@ -1623,11 +1626,12 @@ fn check_mods_folder(gp: &GamePaths) -> Check {
 ///
 /// Two sources, because they are left by two different kinds of interruption: the install-mutation
 /// lock, the gore-as compile lock, its recovery journal and its cache/JIT/proxy backups come from
-/// [`gore_as::compile::probe_install_compile_state`] — the same probe deploy and `as compile`
-/// consult before they refuse to start — and the `*.gore-bak` snapshots come from a scan of the
-/// four folders this toolkit edits in place. A `*.gore-bak` is normal while something is deployed;
-/// with no deploy record it means a game file is still modified and its pristine copy is sitting
-/// next to it, which is exactly the state "I undeployed and the game still looks wrong" describes.
+/// [`gore_as::compile::probe_install_compile_state`] — the same probe deploy and game-backed
+/// compilation consult before they refuse to start — and the `*.gore-bak` snapshots come from a
+/// scan of the four folders this toolkit edits in place. Strict standalone compilation does not
+/// enter that install-mutation window. A `*.gore-bak` is normal while something is deployed; with
+/// no deploy record it means a game file is still modified and its pristine copy is sitting next
+/// to it, which is exactly the state "I undeployed and the game still looks wrong" describes.
 fn check_leftovers(
     gp: &GamePaths,
     probe: &InstallCompileStateProbe,
@@ -1683,6 +1687,12 @@ fn check_leftovers(
         Err(_) => Vec::new(),
     };
 
+    // Compile recovery uses `*.gore-compile-bak`; the ordinary in-place/deploy backup scan finds
+    // distinct `*.gore-bak` files. Keep both kinds visible, but never fold the latter into the
+    // blocking lock/recovery count. That is what makes a detail such as "4 blockers; 1 separate
+    // backup" agree with its five displayed paths without pretending the backup itself blocks
+    // strict standalone compilation.
+    let separate_backup_count = backups.len();
     items.extend(backups.iter().cloned());
     if let Some(error) = &scan_error {
         items.push(format!("could not scan for leftover backups: {error}"));
@@ -1697,9 +1707,10 @@ fn check_leftovers(
     }
 
     // Ranked ahead of both inspection failures below. A lock or journal is why deploy and
-    // 'as compile' refuse to start. Its next step depends on the native owner decision: wait for an
-    // active operation, offer the app's exact Manager recovery, or leave compile/unclear evidence
-    // for recovery help. Inside the probe `InspectionFailed` already outranks
+    // game-backed compilation refuse to start. Strict standalone never enters that mutation
+    // window. The next step depends on the native owner decision: wait for an active operation,
+    // offer the app's exact Manager recovery, or leave compile/unclear evidence for recovery help.
+    // Inside the probe `InspectionFailed` already outranks
     // `RecoveryArtifactsPresent` — an unreadable process list is enough to trigger it — so unless
     // this branch comes first, a found lock is reported as a Note about something else entirely.
     if artifact_count > 0 {
@@ -1710,13 +1721,18 @@ fn check_leftovers(
         } else {
             ""
         };
+        let also_backups = match separate_backup_count {
+            0 => String::new(),
+            count => format!("; {count} separate *.gore-bak backup(s) are also listed"),
+        };
         return Check::new(
             "leftovers",
             "leftovers",
             Verdict::Problem,
             format!(
-                "{artifact_count} lock/recovery artifact(s) are still in the install, so deploy \
-                 and 'as compile' will refuse to start{and_unread}"
+                "{artifact_count} blocking lock/recovery artifact(s) are still in the install, \
+                 so deploy and game-backed AngelScript compilation will refuse to \
+                 start{and_unread}{also_backups}"
             ),
         )
         .with_items(items)
@@ -1875,8 +1891,10 @@ fn check_game_process(probe: &InstallCompileStateProbe) -> Check {
             "G1R-Win64-Shipping.exe is running",
         )
         .with_fix(
-            "deploy, undeploy and 'as compile' refuse to change an installation while the game \
-             holds it open. Close the game before any of them",
+            "deploy, undeploy and game-backed AngelScript compilation refuse to change an \
+             installation while the game holds it open. Close the game before those operations; \
+             strict standalone compilation does not launch or modify the game and is not blocked \
+             by this process check",
         ),
         InstallCompileGameProcessDisposition::InspectionFailed => Check::new(
             "game_process",
@@ -1887,6 +1905,93 @@ fn check_game_process(probe: &InstallCompileStateProbe) -> Check {
         .with_fix(
             "deploy and undeploy fail closed on this too, so they will refuse until the process \
              list can be read",
+        ),
+    }
+}
+
+/// Can this installed cache/API use the authenticated product standalone compiler right now?
+///
+/// The resolver is the compile path's own read-only authority check. It authenticates the package
+/// beside this executable and matches the physical EXE/Shipping/Binds inputs by compiler
+/// compatibility rather than by a whole game-executable checksum. It does not launch the sidecar,
+/// create a work directory, take the install-mutation lock, or modify the installation.
+fn check_standalone_compiler(gp: &GamePaths) -> Check {
+    use gore_as::compiler_target::CompilerTargetInputPathsV1;
+    use gore_as::standalone_package_resolver::{
+        resolve_embedded_product_standalone_compiler_package_for_inputs_v1,
+        ProductStandaloneCompilerPackageResolutionV1,
+    };
+
+    let host = match std::env::current_exe() {
+        Ok(host) => host,
+        Err(error) => {
+            return standalone_compiler_check(StandaloneCompilerReadiness::Unavailable {
+                kind: "host_path".into(),
+                detail: format!("could not resolve the running GORE executable: {error}"),
+            });
+        }
+    };
+    let binds = gp.root.join("G1R").join("Script").join("Binds.Cache");
+    let resolution = resolve_embedded_product_standalone_compiler_package_for_inputs_v1(
+        &host,
+        CompilerTargetInputPathsV1 {
+            executable: &gp.executable,
+            shipping_cache: &gp.script_cache,
+            binds_cache: &binds,
+        },
+    );
+    let readiness = match resolution {
+        ProductStandaloneCompilerPackageResolutionV1::Available(_) => {
+            StandaloneCompilerReadiness::Available
+        }
+        ProductStandaloneCompilerPackageResolutionV1::BundleAbsent => {
+            StandaloneCompilerReadiness::BundleAbsent
+        }
+        ProductStandaloneCompilerPackageResolutionV1::Unavailable(reason) => {
+            StandaloneCompilerReadiness::Unavailable {
+                kind: format!("{:?}", reason.kind()),
+                detail: reason.detail().to_owned(),
+            }
+        }
+    };
+    standalone_compiler_check(readiness)
+}
+
+enum StandaloneCompilerReadiness {
+    Available,
+    BundleAbsent,
+    Unavailable { kind: String, detail: String },
+}
+
+fn standalone_compiler_check(readiness: StandaloneCompilerReadiness) -> Check {
+    match readiness {
+        StandaloneCompilerReadiness::Available => Check::new(
+            "standalone_compiler",
+            "AS standalone",
+            Verdict::Ok,
+            "authenticated standalone compiler is compatible with this cache/API; no game launch \
+             is required",
+        ),
+        StandaloneCompilerReadiness::BundleAbsent => Check::new(
+            "standalone_compiler",
+            "AS standalone",
+            Verdict::Problem,
+            "the standalone compiler component is not bundled beside this GORE executable",
+        )
+        .with_fix(
+            "repair or reinstall the complete GORE CLI package, including its compiler folder; \
+             explicit game-backed compilation remains a separate fallback and requires consent",
+        ),
+        StandaloneCompilerReadiness::Unavailable { kind, detail } => Check::new(
+            "standalone_compiler",
+            "AS standalone",
+            Verdict::Problem,
+            format!("standalone compiler is not ready ({kind}): {detail}"),
+        )
+        .with_fix(
+            "update or repair GORE so it contains an authenticated profile compatible with this \
+             game's ScriptCache and Binds; explicit game-backed compilation remains a separate \
+             fallback and requires consent",
         ),
     }
 }
@@ -3258,6 +3363,40 @@ mod tests {
     }
 
     #[test]
+    fn blocking_artifact_count_does_not_include_separately_listed_backups() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        make_install(root);
+        std::fs::write(root.join(".gore-install-mutation.lock"), b"{}").unwrap();
+        let backup = root
+            .join("G1R")
+            .join("Story")
+            .join("Cache")
+            .join("AlkimiaLocalization_00000000.lcache.gore-bak");
+        std::fs::write(backup, b"pristine").unwrap();
+
+        let check = check_leftovers(&paths(root), &probe(root, false), &nothing_deployed());
+        assert_eq!(check.verdict, Verdict::Problem);
+        assert!(
+            check.detail.contains("1 blocking lock/recovery artifact"),
+            "{}",
+            check.detail
+        );
+        assert!(
+            check.detail.contains("1 separate *.gore-bak backup"),
+            "{}",
+            check.detail
+        );
+        assert_eq!(check.items.len(), 2, "{:?}", check.items);
+        assert!(
+            check.detail.contains("game-backed AngelScript"),
+            "{}",
+            check.detail
+        );
+        assert!(!check.detail.contains("'as compile'"), "{}", check.detail);
+    }
+
+    #[test]
     fn a_recovery_artifact_survives_a_probe_that_could_not_inspect_everything() {
         // `InspectionFailed` outranks `RecoveryArtifactsPresent` in the probe, and an unreadable
         // process list alone is enough to set it. The artifacts are still there and still block.
@@ -3531,8 +3670,31 @@ mod tests {
 
         let check = check_game_process(&probe(root, true));
         assert_eq!(check.verdict, Verdict::Note);
-        assert!(check.fix.unwrap().contains("Close the game"));
+        let fix = check.fix.unwrap();
+        assert!(fix.contains("Close the game"), "{fix}");
+        assert!(fix.contains("strict standalone"), "{fix}");
         assert_eq!(check_game_process(&probe(root, false)).verdict, Verdict::Ok);
+    }
+
+    #[test]
+    fn standalone_readiness_explains_offline_success_and_bounded_fallback() {
+        let ready = standalone_compiler_check(StandaloneCompilerReadiness::Available);
+        assert_eq!(ready.verdict, Verdict::Ok);
+        assert!(ready.detail.contains("no game launch"), "{}", ready.detail);
+        assert!(ready.items.is_empty());
+
+        let absent = standalone_compiler_check(StandaloneCompilerReadiness::BundleAbsent);
+        assert_eq!(absent.verdict, Verdict::Problem);
+        let fix = absent.fix.unwrap();
+        assert!(fix.contains("compiler folder"), "{fix}");
+        assert!(fix.contains("requires consent"), "{fix}");
+
+        let incompatible = standalone_compiler_check(StandaloneCompilerReadiness::Unavailable {
+            kind: "unsupported_target".into(),
+            detail: "cache/API did not match".into(),
+        });
+        assert_eq!(incompatible.verdict, Verdict::Problem);
+        assert!(incompatible.detail.contains("cache/API did not match"));
     }
 
     /// `extracted_at` comes from the source file rather than staying at zero, because that is

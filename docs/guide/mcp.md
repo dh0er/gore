@@ -168,10 +168,10 @@ The decision is made **per subcommand**, not per tool.
 
 | | What it covers | Examples |
 |---|---|---|
-| Runs straight away | Reading, and commands writing to a free path outside the game installation | `texture list`, `loc export` to a new file, `as decompile`, `voice extract` |
+| Runs straight away | Reading, commands writing to a free path outside the game installation, and explicit strict standalone compilation | `texture list`, `loc export` to a new file, `as decompile`, `voice extract`, `as compile --backend standalone`, `as compile-module --backend standalone` |
 | Asks you first, whatever is on disk | Changing the game installation, deleting or replacing Manager-library content, deleting other user content, or replacing a shared catalog — nothing you pass can make these harmless | `mod deploy`, `mod undeploy`, `mgr apply`, `mgr reset`, `mgr recover`, `mgr remove`, `mgr import`, `texture deploy`, `texture undeploy`, `texture replace`, `gen`, `deploy-shared`, `loc extract`, `audio restore` |
 | Asks you only when something is in the way | Overwriting an output file that already exists, writing into a directory that already holds files, rebuilding a bundle folder that is there, or rewriting a file in place | `catalog dump` onto an existing file, `texture index` without an output path, `loc import` without an output path, `mod build` over an existing bundle, `stubs`, `audio extract` and `as emit-all` into a non-empty directory |
-| Asks you first | Starting the game to compile AngelScript | `as compile`, `as compile-module` |
+| Asks you first | A compiler policy that may start the game and stage sources in the installation | `as compile --backend game`, `as compile-module --backend standalone-then-game`, or either command with the backend omitted |
 
 Many commands sidestep the question entirely: passing an output argument turns an
 in-place rewrite into a new file. `loc import --out new.lcache` runs straight
@@ -230,26 +230,32 @@ extra argument:
   "arguments": {
     "subcommand": "import",
     "args": { "lcache": "…/AlkimiaLocalization_00000000.lcache", "edits": "…/edits.json" },
+    "approval_request_id": "gore-consent-…",
     "user_approved": "ja, überschreib die Datei"
   }
 }
 ```
 
-The command then runs without a second question, and the result records what
+The refusal supplies `approval_request_id`. It is opaque, expires after 15
+minutes, works once, and is bound to the exact normalized command. Changing an
+argument, inventing the id, or reusing it is refused. The user's answer does not
+need a ritual phrase: a clear instruction such as “do it and stop asking” is a
+valid answer for that exact displayed call. It does not become a permanent
+permission for different future mutations.
+
+The exact retry then runs without a second question, and the result records what
 happened:
 
 ```
-This ran on the assistant's assertion of prior approval, quoted as: "ja,
-überschreib die Datei". No confirmation reached this server; the claim was not
-verified.
+This ran with a one-time approval request bound to this exact command, carrying
+the assistant's verbatim relay: "ja, überschreib die Datei". The binding was
+verified; who authored those words was not.
 ```
 
-Read that sentence literally. The server sees a claim, never a confirmation — an
-assistant that sets the field without asking you is not caught here. What you
-get instead is the whole exchange in your transcript: the refusal, the question
-put to you, your answer, and the note on the run itself. That is strictly more
-than `--allow-write` shows you, which grants everything silently for the life of
-the server, and strictly less than a dialog you clicked yourself.
+Read that sentence literally. The server verifies that the retry is exactly the
+call it refused and that the id has not been reused. It still cannot prove who
+typed the relayed words. What you get is the whole exchange in your transcript:
+the refusal, bound id, question put to you, your answer, and note on the run.
 
 The field is refused under `--no-consent-prompts` — that flag exists so that an
 agent nobody is reviewing cannot talk its own way past the gate.
@@ -262,7 +268,7 @@ approval layer — you can answer once at startup instead:
 | Flag | Environment variable | Effect |
 |---|---|---|
 | `--allow-write` | `GORE_MCP_ALLOW_WRITE` | Installation changes, Manager-library mutations, deletions, and in-place rewrites run without asking |
-| `--allow-game-launch` | `GORE_MCP_ALLOW_GAME_LAUNCH` | The same for starting the game. Compiling needs **both**, because it also stages files in the installation |
+| `--allow-game-launch` | `GORE_MCP_ALLOW_GAME_LAUNCH` | The same for compiler policies that may start the game. `game`, `standalone-then-game`, and an omitted backend need **both** flags; explicit strict `standalone` needs neither |
 | `--no-consent-prompts` | `GORE_MCP_NO_CONSENT_PROMPTS` | Never ask, and refuse anything that would need it. The strict posture, for a server exposed to an agent whose calls nobody reviews. It cannot be combined with the two above — that would be asking for a looser and a stricter server at once, and the server refuses to start rather than pick one |
 
 ```powershell
@@ -360,10 +366,12 @@ line:
   that the save editor and Mod Studio also read. Over MCP that prompt cannot be
   answered — stdin is the protocol channel — so it is suppressed and the MCP
   dialog stands in for it, which is the same question by another route.
-- **Compiling is both at once.** `as compile` drives the game to regenerate the
-  script cache *and* installs the result, so pre-approving only the launch is
-  not enough. `mgr remove` asks for the same family of reason: it deletes an
-  imported mod from your library and nothing puts it back.
+- **Only game-capable compilation is both at once.** Explicit
+  `--backend standalone` runs offline and never enters the install-mutation
+  window, so it asks nobody. `game`, `standalone-then-game`, and the omitted
+  default may drive the game to regenerate the script cache and stage sources,
+  so pre-approving only the launch is not enough. `mgr remove` asks for a
+  different reason: it deletes an imported mod from your library.
 
 Two more flags tune behaviour rather than permissions:
 
@@ -374,8 +382,13 @@ Two more flags tune behaviour rather than permissions:
 
 ## The tools
 
-Fourteen tools mirror the CLI's command families; each takes a `subcommand`
-plus its arguments. Two more are specific to the server.
+Eighteen CLI-backed tools mirror the CLI's command families and safe aliases. Namespace tools take a
+`subcommand` plus an `args` object. `gore_doctor` and `gore_find`, plus the
+dedicated `gore_mod_inspect`, `gore_mgr_preflight`, `gore_as_compile`, and
+`gore_as_compile_module` aliases, already
+select one command, so their typed arguments go directly at the top level; the
+old envelope remains accepted for compatibility. Two more tools are specific
+to the server.
 
 | Tool | Covers | Guide |
 |---|---|---|
@@ -393,12 +406,21 @@ plus its arguments. Two more are specific to the server.
 | `gore_texture` | `texture` | [textures](textures.md) |
 | `gore_asset` | `asset` | [dataassets](dataassets.md) |
 | `gore_mod` | `mod` | [bundles](bundles.md) |
+| `gore_mod_inspect` | read-only `mod inspect` alias | [bundles](bundles.md) |
 | `gore_mgr` | `mgr` | [mod-manager](mod-manager.md) |
+| `gore_mgr_preflight` | read-only `mgr preflight` alias | [mod-manager](mod-manager.md) |
+| `gore_as_compile` | strict standalone `as compile` alias | [scripts](scripts.md) |
+| `gore_as_compile_module` | strict standalone `as compile-module` alias | [scripts](scripts.md) |
 | `gore_as` | `as` | [scripts](scripts.md) |
 
-Sixteen tools rather than 87 keeps a client's tool list navigable while still
-covering every command. `gore_catalog` and `gore_project` have no matching CLI
-subcommand — they group top-level commands that belong to one workflow.
+Twenty tools rather than 89 leaves keeps a client's tool list navigable while
+still covering every command. The extra bundle-inspection and Manager-preflight
+routes exist because MCP annotations apply to a whole tool: mixed `gore_mod`
+and `gore_mgr` must advertise their install-changing worst cases, while
+`gore_mod_inspect` and `gore_mgr_preflight` can truthfully advertise read-only,
+while the standalone compile aliases advertise non-destructive offline writes.
+`gore_catalog` and `gore_project` have no matching CLI subcommand — they group
+top-level commands that belong to one workflow.
 
 ## The documentation, over MCP
 
@@ -430,14 +452,13 @@ Only the guide ships in the release zip and only the guide is rendered by
 
 - One command runs at a time. A call blocks until it finishes, and some commands
   (`texture index`, `as emit-all`) walk the whole installation and take minutes.
-- Every command has a wall-clock limit and is killed if it exceeds it. Killing
-  the CLI does not stop anything it started — after a timed-out `as compile`,
-  check for a running game.
-- `as compile` gets a longer cap than anything else on purpose. It hands the
-  game its own 30-minute deadline and restores the installation afterwards, so
-  the outer limit has to outlast the inner one — a wrapper killed mid-compile
-  never runs that restore. Setting `--timeout-secs` below 30 minutes removes
-  that headroom and makes a timed-out compile leave the install staged.
+- Every command has a wall-clock limit and is killed if it exceeds it. For a
+  timed-out game-capable compile, check for a running game; strict standalone
+  never starts one.
+- Game-capable `as compile` gets a longer cap than anything else on purpose. It
+  hands the game its own 30-minute deadline and restores the installation
+  afterwards, so the outer limit has to outlast the inner one. This install
+  recovery warning does not apply to explicit strict standalone.
 - Commands with a `--json` flag always get it, so what comes back is machine
   readable. It is returned as text like everything else: a result carrying
   structured content instead would be treated by some clients as *the* result,
@@ -458,8 +479,8 @@ supported yet.
 |---|---|
 | `does not identify itself as the gore CLI` at startup | The server verifies the binary it will re-exec by running `--version` once. Point the client at the real `gore.exe`. |
 | Destructive calls are refused instead of asking | Either your client does not support elicitation, or the server was started with `--no-consent-prompts`. The refusal says which. |
-| Destructive calls are refused *instantly* and no dialog ever appears | Your client is answering for you — Claude Code does this whenever it is not interactive. Have the assistant ask you in the chat and relay it (`user_approved`), use an interactive client, or start the server with `--allow-write`. |
-| A command ran that you never clicked a dialog for | Look for the note at the end of its result: it ran on `user_approved`, which is the assistant's claim that you agreed in the conversation. Scroll back to check that you did. `--no-consent-prompts` disables that route entirely. |
+| Destructive calls are refused *instantly* and no dialog ever appears | Your client is answering for you — Claude Code does this whenever it is not interactive. Have the assistant ask you in the chat and retry with the refusal's `approval_request_id` plus your words in `user_approved`, use an interactive client, or start the server with `--allow-write`. |
+| A command ran that you never clicked a dialog for | Look for the note at the end of its result: it used a one-time request bound to the exact call and carried the words relayed in `user_approved`. Scroll back to check that you gave them. `--no-consent-prompts` disables that route entirely. |
 | A call sits there doing nothing | It is waiting on the confirmation dialog. Answer it, or let your client's request timeout cancel it. |
 | A command cannot find the game | Run `gore config detect`, or `gore config set game-path <dir>`. |
 | Output ends with `… [truncated]` | Narrow the query with the command's own filter, or write to a file with its output argument. |

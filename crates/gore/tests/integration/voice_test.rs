@@ -50,6 +50,58 @@ fn ogg_crc(page: &[u8]) -> u32 {
     crc
 }
 
+#[test]
+fn validate_reports_exact_vorbis_timing_without_creating_an_output() {
+    let temp = TempDir::new().unwrap();
+    let input = temp.path().join("line.ogg");
+    std::fs::write(
+        &input,
+        include_bytes!("../../../gore-vo/testdata/tiny-vorbis.ogg"),
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("gore")
+        .unwrap()
+        .args([
+            "voice",
+            "validate",
+            "--ogg",
+            input.to_str().unwrap(),
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(report["format"], "gore-voice-validate-v1");
+    assert_eq!(report["codec"], "vorbis");
+    assert_eq!(report["channels"], 1);
+    assert_eq!(report["declared_sample_rate_hz"], 48_000);
+    assert_eq!(report["duration_timebase_hz"], 48_000);
+    assert!(report["duration_sample_frames"].as_u64().unwrap() > 0);
+    assert_eq!(report["pcm_decode_complete"], true);
+    assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn validate_names_a_wav_and_does_not_claim_it_is_an_ogg() {
+    let temp = TempDir::new().unwrap();
+    let input = temp.path().join("line.wav");
+    std::fs::write(&input, b"RIFF\x24\0\0\0WAVEfmt ").unwrap();
+
+    Command::cargo_bin("gore")
+        .unwrap()
+        .args(["voice", "validate", "--ogg", input.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(contains("WAV file"))
+        .stderr(contains("ffmpeg -i line.wav"));
+    assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
+}
+
 fn make_archive(path: &Path, entries: &[(&str, &[u8])]) {
     let file = File::create(path).unwrap();
     let mut writer = ZipWriter::new(file);

@@ -13,6 +13,47 @@ use assert_cmd::Command;
 use std::path::Path;
 use tempfile::TempDir;
 
+fn write_inspection_bundle(root: &Path) -> std::path::PathBuf {
+    let bundle = root.join("InspectMe");
+    std::fs::create_dir_all(bundle.join("loc")).unwrap();
+    std::fs::write(
+        bundle.join("gore-mod.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "format": 1,
+            "mod": { "name": "InspectMe", "version": "1.2.3", "author": "tester" },
+            "components": [ { "type": "loc_patch", "path": "loc/edits.json" } ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        bundle.join("loc/edits.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "DIA_Diego_Hello": { "german": "Hallo", "german_new": "Hallo" }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    bundle
+}
+
+fn zip_bundle(source: &Path, output: &Path) {
+    use std::io::Write as _;
+
+    let file = std::fs::File::create(output).unwrap();
+    let mut archive = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default();
+    for relative in ["gore-mod.json", "loc/edits.json"] {
+        archive
+            .start_file(format!("release/InspectMe/{relative}"), options)
+            .unwrap();
+        archive
+            .write_all(&std::fs::read(source.join(relative)).unwrap())
+            .unwrap();
+    }
+    archive.finish().unwrap();
+}
+
 fn gore(home: &Path) -> Command {
     let mut cmd = Command::cargo_bin("gore").unwrap();
     cmd.env("LOCALAPPDATA", home)
@@ -121,6 +162,122 @@ fn a_bank_written_as_a_full_path_fails_the_build_instead_of_the_deploy() {
         !out.exists(),
         "a refused spec must leave no bundle behind for a deploy to be tried against"
     );
+}
+
+#[test]
+fn inspect_validates_a_directory_and_emits_a_bounded_canonical_report() {
+    let tmp = TempDir::new().unwrap();
+    let bundle = write_inspection_bundle(tmp.path());
+    let before_manifest = std::fs::read(bundle.join("gore-mod.json")).unwrap();
+    let before_payload = std::fs::read(bundle.join("loc/edits.json")).unwrap();
+
+    let output = gore(tmp.path())
+        .args(["mod", "inspect"])
+        .arg(&bundle)
+        .arg("--json")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(report["report_format"], 1);
+    assert_eq!(report["source_kind"], "directory");
+    assert_eq!(report["bundle_format"], 1);
+    assert_eq!(report["mod"]["name"], "InspectMe");
+    assert_eq!(report["mod"]["version"], "1.2.3");
+    assert_eq!(report["component_count"], 1);
+    assert_eq!(report["components"][0]["type"], "loc_patch");
+    assert_eq!(report["components"][0]["path"], "loc/edits.json");
+    assert_eq!(report["components"][0]["target_count"], 2);
+    assert_eq!(report["components"][0]["footprint_coverage"], "exact");
+    assert_eq!(report["file_count"], 2);
+    assert_eq!(report["manifest_sha256"].as_str().unwrap().len(), 64);
+    assert_eq!(report["tree_sha256"].as_str().unwrap().len(), 64);
+    assert!(report["evidence"]["not_verified"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|boundary| boundary.as_str().unwrap().contains("runtime behavior")));
+
+    assert_eq!(
+        std::fs::read(bundle.join("gore-mod.json")).unwrap(),
+        before_manifest
+    );
+    assert_eq!(
+        std::fs::read(bundle.join("loc/edits.json")).unwrap(),
+        before_payload
+    );
+    assert!(!bundle.join("gore-manager-meta.json").exists());
+}
+
+#[test]
+fn inspect_accepts_a_wrapped_zip_and_reports_the_same_normalized_tree_hash() {
+    let tmp = TempDir::new().unwrap();
+    let bundle = write_inspection_bundle(tmp.path());
+    let zip = tmp.path().join("InspectMe.zip");
+    zip_bundle(&bundle, &zip);
+
+    let inspect_json = |path: &Path| {
+        let output = gore(tmp.path())
+            .args(["mod", "inspect"])
+            .arg(path)
+            .arg("--json")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice::<serde_json::Value>(&output).unwrap()
+    };
+    let directory_report = inspect_json(&bundle);
+    let zip_report = inspect_json(&zip);
+
+    assert_eq!(zip_report["source_kind"], "zip");
+    assert_eq!(zip_report["tree_sha256"], directory_report["tree_sha256"]);
+    assert_eq!(
+        zip_report["manifest_sha256"],
+        directory_report["manifest_sha256"]
+    );
+}
+
+#[test]
+fn inspect_rejects_a_declared_payload_that_is_missing() {
+    let tmp = TempDir::new().unwrap();
+    let bundle = tmp.path().join("Broken");
+    std::fs::create_dir_all(bundle.join("files")).unwrap();
+    std::fs::write(
+        bundle.join("gore-mod.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "format": 1,
+            "mod": { "name": "Broken", "version": "", "author": "" },
+            "components": [ {
+                "type": "file_patch",
+                "path": "files",
+                "targets": ["G1R/Content/Splash/Splash.bmp"]
+            } ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        bundle.join("files/manifest.json"),
+        br#"{"G1R/Content/Splash/Splash.bmp":"files/missing.bmp"}"#,
+    )
+    .unwrap();
+
+    let output = gore(tmp.path())
+        .args(["mod", "inspect"])
+        .arg(&bundle)
+        .arg("--json")
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("missing.bmp"), "{stderr}");
 }
 
 #[test]

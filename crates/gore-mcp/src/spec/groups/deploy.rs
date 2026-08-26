@@ -10,7 +10,8 @@
 use crate::spec::{
     ArgForm::{Long, Positional, Switch},
     ArgKind::{Bool, Int, Path, Str},
-    ArgSpec, CommandSpec, Derived, GroupShape, GroupSpec, JsonSupport, Safety, T_FAST, T_LONG, T_NORMAL,
+    ArgSpec, CommandSpec, Derived, GroupShape, GroupSpec, JsonSupport, Safety, T_FAST, T_LONG,
+    T_NORMAL,
 };
 
 /// The optional game root, spelled the same way by many commands.
@@ -35,8 +36,13 @@ const TEXTURE_ASSET: ArgSpec = ArgSpec::new(
     true,
 );
 
-const TEXTURE_NAME: ArgSpec =
-    ArgSpec::new("name", Long("name"), Str, "Base name for the triplet, e.g. zzz_MyMod_P", true);
+const TEXTURE_NAME: ArgSpec = ArgSpec::new(
+    "name",
+    Long("name"),
+    Str,
+    "Base name for the triplet, e.g. zzz_MyMod_P",
+    true,
+);
 
 const TEXTURE_LIST_ARGS: &[ArgSpec] = &[
     GAME,
@@ -64,7 +70,10 @@ const TEXTURE_PAKLIST_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "max",
         Long("max"),
-        Int { min: Some(0), max: None },
+        Int {
+            min: Some(0),
+            max: None,
+        },
         "Max entries to print. The result states how many matched when it stops here; 0 lists \
          nothing and reports only the counts",
         false,
@@ -265,7 +274,13 @@ pub const TEXTURE: GroupSpec = GroupSpec {
 // ---------------------------------------------------------------------------------------------
 
 const ASSET_EXTRACT_ARGS: &[ArgSpec] = &[
-    ArgSpec::new("game", Long("game"), Path, "Gothic 1 Remake install root containing `G1R/`.", true),
+    ArgSpec::new(
+        "game",
+        Long("game"),
+        Path,
+        "Gothic 1 Remake install root containing `G1R/`.",
+        true,
+    ),
     ArgSpec::new(
         "asset",
         Long("asset"),
@@ -300,15 +315,30 @@ const ASSET_INSPECT_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "export_index",
         Long("export-index"),
-        Int { min: Some(0), max: None },
+        Int {
+            min: Some(0),
+            max: None,
+        },
         "Inspect only this export; unsupported/missing selected exports are fatal.",
         false,
     ),
 ];
 
 const ASSET_PATCH_FIXED_ARGS: &[ArgSpec] = &[
-    ArgSpec::new("uasset", Long("uasset"), Path, "Input legacy `.uasset`; it is never modified.", true),
-    ArgSpec::new("usmap", Long("usmap"), Path, "Exact `.usmap` named by the selector.", true),
+    ArgSpec::new(
+        "uasset",
+        Long("uasset"),
+        Path,
+        "Input legacy `.uasset`; it is never modified.",
+        true,
+    ),
+    ArgSpec::new(
+        "usmap",
+        Long("usmap"),
+        Path,
+        "Exact `.usmap` named by the selector.",
+        true,
+    ),
     ArgSpec::new(
         "extract_receipt",
         Long("extract-receipt"),
@@ -375,7 +405,13 @@ const ASSET_PACK_ARGS: &[ArgSpec] = &[
         "Exact target package path, beginning with `/Game/` and without an extension.",
         true,
     ),
-    ArgSpec::new("name", Long("name"), Str, "Safe filename stem for `<NAME>.{utoc,ucas,pak}`.", true),
+    ArgSpec::new(
+        "name",
+        Long("name"),
+        Str,
+        "Safe filename stem for `<NAME>.{utoc,ucas,pak}`.",
+        true,
+    ),
     ArgSpec::new(
         "out",
         Long("out"),
@@ -469,10 +505,38 @@ const MOD_BUILD_ARGS: &[ArgSpec] = &[
     ),
 ];
 
-const MOD_DEPLOY_ARGS: &[ArgSpec] =
-    &[ArgSpec::new("bundle", Long("bundle"), Path, "Path to the bundle directory", true), GAME];
+const MOD_INSPECT_ARGS: &[ArgSpec] = &[ArgSpec::new(
+    "bundle",
+    Positional { order: 0 },
+    Path,
+    "Bundle directory or ZIP containing one GORE bundle",
+    true,
+)];
+
+const MOD_DEPLOY_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "bundle",
+        Long("bundle"),
+        Path,
+        "Path to the bundle directory",
+        true,
+    ),
+    GAME,
+];
 
 const MOD_UNDEPLOY_ARGS: &[ArgSpec] = &[GAME];
+
+const MOD_INSPECT_COMMAND: CommandSpec = CommandSpec::new(
+    "inspect",
+    "Validate and summarize a built GORE bundle without importing or deploying it",
+    MOD_INSPECT_ARGS,
+    Safety::read(),
+    T_NORMAL,
+)
+.json(JsonSupport::Stdout)
+.guide("bundles");
+
+const MOD_INSPECT_COMMANDS: &[CommandSpec] = &[MOD_INSPECT_COMMAND];
 
 const MOD_COMMANDS: &[CommandSpec] = &[
     // `gore_mod::write_bundle` calls `remove_dir_all` on `<out>/<meta.name from the spec JSON>`
@@ -485,11 +549,18 @@ const MOD_COMMANDS: &[CommandSpec] = &[
         "Build a bundle dir from a BuildSpec JSON",
         MOD_BUILD_ARGS,
         Safety::write()
-            .also_writes(&[("out", Derived::ChildNamedInJson { arg: "spec", pointer: "/meta/name" })])
+            .also_writes(&[(
+                "out",
+                Derived::ChildNamedInJson {
+                    arg: "spec",
+                    pointer: "/meta/name",
+                },
+            )])
             .installs_via(&["out"]),
         T_LONG,
     )
     .guide("bundles"),
+    MOD_INSPECT_COMMAND,
     CommandSpec::new(
         "deploy",
         "Deploy a built bundle to the game install",
@@ -520,31 +591,37 @@ pub const MOD: GroupSpec = GroupSpec {
     tool: "gore_mod",
     title: "gore mod",
     cli: "mod",
-    summary: "Build and deploy a unified mod bundle — overrides, localization, audio, voice, \
-              textures and scripts in one spec, deployed and undeployed as a single unit.",
+    summary:
+        "Build, inspect, deploy, and undeploy a unified mod bundle — overrides, localization, \
+              audio, voice, textures and scripts in one spec and one lifecycle.",
     shape: GroupShape::Nested,
     commands: MOD_COMMANDS,
+};
+
+/// Dedicated read-only route for inspecting a built bundle. The mixed `gore_mod` namespace must
+/// advertise its Deploy/Undeploy worst case, while this alias can truthfully tell MCP clients that
+/// it only reads the selected bundle and temporary inspection storage.
+pub const MOD_INSPECT: GroupSpec = GroupSpec {
+    tool: "gore_mod_inspect",
+    title: "gore mod inspect",
+    cli: "mod",
+    summary: "Read-only validation and bounded inspection of one built GORE bundle. This does not \
+              import, deploy, or resolve a game installation.",
+    shape: GroupShape::Nested,
+    commands: MOD_INSPECT_COMMANDS,
 };
 
 // ---------------------------------------------------------------------------------------------
 // gore_mgr
 // ---------------------------------------------------------------------------------------------
 
-const LIBRARY: ArgSpec = ArgSpec::new(
-    "library",
-    Long("library"),
-    Path,
-    "Library dir",
-    false,
-)
-.with_default("the shared per-user manager library");
+const LIBRARY: ArgSpec = ArgSpec::new("library", Long("library"), Path, "Library dir", false)
+    .with_default("the shared per-user manager library");
 
-const LOADOUT: ArgSpec =
-    ArgSpec::new("loadout", Long("loadout"), Path, "Loadout file", false)
-        .with_default("the shared per-user loadout");
+const LOADOUT: ArgSpec = ArgSpec::new("loadout", Long("loadout"), Path, "Loadout file", false)
+    .with_default("the shared per-user loadout");
 
-const MGR_ID: ArgSpec =
-    ArgSpec::new("id", Positional { order: 0 }, Str, "Library entry id", true);
+const MGR_ID: ArgSpec = ArgSpec::new("id", Positional { order: 0 }, Str, "Library entry id", true);
 
 const MGR_IMPORT_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
@@ -567,7 +644,10 @@ const MGR_ORDER_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "pos",
         Positional { order: 1 },
-        Int { min: Some(0), max: None },
+        Int {
+            min: Some(0),
+            max: None,
+        },
         "New 0-based position (clamped to the last slot); 0 mounts first and loses conflicts",
         true,
     ),
@@ -589,6 +669,18 @@ const MGR_RECOVER_ARGS: &[ArgSpec] = &[
         true,
     ),
 ];
+
+const MGR_PREFLIGHT_COMMAND: CommandSpec = CommandSpec::new(
+    "preflight",
+    "Inspect Manager readiness and recovery evidence without changing anything",
+    MGR_GAME_ARGS,
+    Safety::read(),
+    T_NORMAL,
+)
+.json(JsonSupport::Stdout)
+.guide("mod-manager");
+
+const MGR_PREFLIGHT_COMMANDS: &[CommandSpec] = &[MGR_PREFLIGHT_COMMAND];
 
 const MGR_COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(
@@ -673,15 +765,7 @@ const MGR_COMMANDS: &[CommandSpec] = &[
         T_NORMAL,
     )
     .guide("mod-manager"),
-    CommandSpec::new(
-        "preflight",
-        "Inspect Manager readiness and recovery evidence without changing anything",
-        MGR_GAME_ARGS,
-        Safety::read(),
-        T_NORMAL,
-    )
-    .json(JsonSupport::Stdout)
-    .guide("mod-manager"),
+    MGR_PREFLIGHT_COMMAND,
     CommandSpec::new(
         "recover",
         "Recover one exact abandoned Manager mutation selected by its preflight token",
@@ -749,6 +833,20 @@ pub const MGR: GroupSpec = GroupSpec {
     commands: MGR_COMMANDS,
 };
 
+/// A dedicated read-only route for the most common Manager diagnosis. `gore_mgr` must advertise
+/// the worst case of its Apply/Reset leaves, which makes clients put a generic write approval in
+/// front of even this strictly read-only call. The original `gore_mgr`/`preflight` route remains
+/// available for compatibility; new clients can use this accurately annotated alias directly.
+pub const MGR_PREFLIGHT: GroupSpec = GroupSpec {
+    tool: "gore_mgr_preflight",
+    title: "gore mgr preflight",
+    cli: "mgr",
+    summary: "Read-only Manager readiness and recovery evidence. This never applies, repairs, or \
+              resets anything.",
+    shape: GroupShape::Nested,
+    commands: MGR_PREFLIGHT_COMMANDS,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -758,7 +856,9 @@ mod tests {
     fn the_group_sizes_match_the_cli() {
         assert_eq!(TEXTURE.commands.len(), 8);
         assert_eq!(ASSET.commands.len(), 4);
-        assert_eq!(MOD.commands.len(), 3);
+        assert_eq!(MOD.commands.len(), 4);
+        assert_eq!(MOD_INSPECT.commands.len(), 1);
+        assert_eq!(MOD_INSPECT.worst_case(), Class::Read);
         assert_eq!(MGR.commands.len(), 12);
     }
 
@@ -782,6 +882,10 @@ mod tests {
         let preflight = MGR.command("preflight").expect("exists");
         assert_eq!(preflight.safety.worst_case(), Class::Read);
         assert_eq!(preflight.json, JsonSupport::Stdout);
+
+        assert_eq!(MGR_PREFLIGHT.commands.len(), 1);
+        assert_eq!(MGR_PREFLIGHT.commands[0].sub, "preflight");
+        assert_eq!(MGR_PREFLIGHT.worst_case(), Class::Read);
     }
 
     #[test]
@@ -795,7 +899,9 @@ mod tests {
 
         let reset = MGR.command("reset").expect("exists");
         assert!(
-            reset.gated_because.is_some_and(|reason| reason.contains("Studio deployment")),
+            reset
+                .gated_because
+                .is_some_and(|reason| reason.contains("Studio deployment")),
             "reset consent must disclose its Manager-only ownership boundary"
         );
     }
@@ -835,14 +941,18 @@ mod tests {
         assert_eq!(
             gated,
             vec![
-                "replace", "deploy", "index", "undeploy", "deploy", "undeploy",
-                "import", "remove", "recover", "apply", "reset"
+                "replace", "deploy", "index", "undeploy", "deploy", "undeploy", "import", "remove",
+                "recover", "apply", "reset"
             ]
         );
 
         let build = MOD.command("build").expect("exists");
         assert!(!build.safety.worst_case().needs_write_permission());
-        assert!(build.safety.derives.iter().any(|(_, how)| how.reads_a_file()));
+        assert!(build
+            .safety
+            .derives
+            .iter()
+            .any(|(_, how)| how.reads_a_file()));
     }
 
     #[test]
@@ -850,7 +960,12 @@ mod tests {
         // Every asset command has a `--json` switch, and the server always passes it, so the whole
         // receipt-driven workflow is structured output end to end.
         for command in ASSET.commands {
-            assert_eq!(command.json, JsonSupport::Stdout, "{} is not JSON", command.sub);
+            assert_eq!(
+                command.json,
+                JsonSupport::Stdout,
+                "{} is not JSON",
+                command.sub
+            );
         }
     }
 }

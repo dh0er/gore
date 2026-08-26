@@ -10,9 +10,9 @@ new full cache with create-new atomic rename semantics.
 
 No target links or loads Unreal Engine or a game DLL. Nothing launches the game.
 CMake performs no downloads and the source tree contains no generated SDK or
-game artifacts. A real G1R compile is still unavailable until the concrete
-current-build registry and remaining external hook facts are captured and the
-profile is qualified; unknown or incomplete profiles fail closed.
+game artifacts. Productive G1R compilation requires a completely qualified,
+signed internal profile package; unknown, incomplete, or incompatible profiles
+fail closed.
 
 ## What the core checkpoint proves
 

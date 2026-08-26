@@ -1,8 +1,8 @@
 {
   "name": "gore",
   "displayName": "GORE",
-  "description": "Author Gothic 1 Remake mods or safely import, enable, order, analyze, preflight, apply, check status, recover, remove, and reset GORE or external mods. Bundles the skill and MCP server configuration; needs the gore CLI on PATH.",
-  "version": "0.3.0",
+  "description": "Author and inspect Gothic 1 Remake mod bundles, compile AngelScript offline, validate voice assets, or safely manage GORE and external mods. Bundles the skill and MCP server configuration; needs the gore CLI on PATH.",
+  "version": "0.3.1",
   "author": {
     "name": "Daniel Hoer",
     "url": "https://github.com/dh0er"

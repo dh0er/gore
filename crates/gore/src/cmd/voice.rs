@@ -26,6 +26,15 @@ const MAX_LOC_ID_BYTES: usize = 512;
 
 #[derive(Debug, Subcommand)]
 pub enum VoiceAction {
+    /// Validate one Ogg voice file and report its codec, shape, and exact duration
+    Validate {
+        /// Ogg file to validate — Vorbis or Opus
+        #[arg(long)]
+        ogg: PathBuf,
+        /// Emit one JSON document instead of human-readable output
+        #[arg(long)]
+        json: bool,
+    },
     /// Index a voice archive and list a bounded page of its entries
     #[command(visible_alias = "index")]
     List {
@@ -145,6 +154,7 @@ impl VoiceSelector {
 
 pub fn run(action: VoiceAction) -> Result<()> {
     match action {
+        VoiceAction::Validate { ogg, json } => validate(&ogg, json),
         VoiceAction::List {
             archive,
             filter,
@@ -179,6 +189,88 @@ pub fn run(action: VoiceAction) -> Result<()> {
             manifest,
             out,
         } => apply_manifest(&archive, &manifest, &out),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+struct VoiceOggValidation {
+    format: &'static str,
+    path: String,
+    byte_size: usize,
+    codec: &'static str,
+    channels: u8,
+    declared_sample_rate_hz: u32,
+    duration_sample_frames: u64,
+    duration_timebase_hz: u32,
+    pcm_decode_complete: bool,
+    pages: usize,
+    logical_streams: usize,
+}
+
+fn validate(path: &Path, json: bool) -> Result<()> {
+    let ogg = read_ogg(path)?;
+    let validation = gore_vo::validate_ogg_with_timing(&ogg, &Limits::default())
+        .with_context(|| format!("validating Ogg file '{}'", path.display()))?;
+    let (codec, channels, declared_sample_rate_hz) = match validation.info.codec {
+        OggCodec::Vorbis {
+            channels,
+            sample_rate,
+        } => ("vorbis", channels, sample_rate),
+        OggCodec::Opus {
+            channels,
+            input_sample_rate,
+        } => ("opus", channels, input_sample_rate),
+        OggCodec::Unknown => bail!("validated Ogg file has no recognized audio codec"),
+    };
+    let report = VoiceOggValidation {
+        format: "gore-voice-validate-v1",
+        path: path.display().to_string(),
+        byte_size: ogg.len(),
+        codec,
+        channels,
+        declared_sample_rate_hz,
+        duration_sample_frames: validation.timing.duration_sample_frames,
+        duration_timebase_hz: validation.timing.duration_timebase_hz,
+        pcm_decode_complete: validation.timing.pcm_decode_complete,
+        pages: validation.info.pages,
+        logical_streams: validation.info.logical_streams,
+    };
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).context("serializing Ogg validation result")?
+        );
+    } else {
+        let seconds = report.duration_sample_frames as f64 / f64::from(report.duration_timebase_hz);
+        println!("Valid {} Ogg: {}", codec_name(report.codec), path.display());
+        println!(
+            "  Stream: {} channel(s), declared {} Hz",
+            report.channels, report.declared_sample_rate_hz
+        );
+        println!(
+            "  Duration: {} frame(s) / {} Hz ({seconds:.3} s)",
+            report.duration_sample_frames, report.duration_timebase_hz
+        );
+        println!(
+            "  Structure: {} page(s), {} logical stream(s), complete PCM decode: {}",
+            report.pages,
+            report.logical_streams,
+            if report.pcm_decode_complete {
+                "yes"
+            } else {
+                "no"
+            }
+        );
+    }
+    Ok(())
+}
+
+fn codec_name(codec: &str) -> &str {
+    match codec {
+        "vorbis" => "Vorbis",
+        "opus" => "Opus",
+        other => other,
     }
 }
 
@@ -303,8 +395,8 @@ fn list(
             .collect()
     };
     let listed = &matched[..matched.len().min(max)];
-    let notice = (listed.len() < matched.len())
-        .then(|| list_truncation_notice(matched.len(), listed.len()));
+    let notice =
+        (listed.len() < matched.len()).then(|| list_truncation_notice(matched.len(), listed.len()));
 
     if json {
         let entries = listed

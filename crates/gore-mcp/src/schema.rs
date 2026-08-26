@@ -1,6 +1,6 @@
 //! Rendering the command table into MCP tool definitions.
 //!
-//! # Why the arguments are not typed in the JSON Schema
+//! # Why namespace arguments are not typed in the JSON Schema
 //!
 //! A namespace tool covers up to twenty subcommands with different arguments. JSON Schema can
 //! express that with `oneOf` keyed on `subcommand`, but in practice many MCP clients neither
@@ -9,16 +9,16 @@
 //!
 //! What every client does show the model is the tool *description*. So the per-subcommand argument
 //! reference is generated into the description as text, and `args` stays a free-form object that
-//! [`crate::argv`] validates precisely. A wrong call then comes back as a tool error naming the
-//! offending argument, which the specification explicitly designs for: input validation failures
-//! belong in the result so the model can self-correct.
+//! [`crate::argv`] validates precisely. Single-command tools are different: there is no union to
+//! express, so their arguments are typed directly at the top level. The server keeps accepting the
+//! old `subcommand`/`args` envelope for compatibility.
 //!
 //! The cost of that choice is description length. It is bounded by writing one line per argument
 //! and never repeating the guide.
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
-use crate::spec::{ArgKind, Class, CommandSpec, GroupSpec, Safety, GROUPS};
+use crate::spec::{ArgKind, ArgSpec, Class, CommandSpec, GroupSpec, Safety, GROUPS};
 
 /// Every tool definition, in registry order.
 pub fn tool_definitions() -> Vec<Value> {
@@ -36,6 +36,10 @@ pub fn tool_json(group: &GroupSpec) -> Value {
 }
 
 fn input_schema(group: &GroupSpec) -> Value {
+    if let [command] = group.commands {
+        return direct_input_schema(command);
+    }
+
     json!({
         "type": "object",
         "properties": {
@@ -55,16 +59,153 @@ fn input_schema(group: &GroupSpec) -> Value {
             crate::consent::APPROVAL_FIELD: {
                 "type": "string",
                 "description": "The user's own words approving this exact call, quoted verbatim. \
-                                Set it only after a call was refused for want of consent, you put \
-                                the command line in front of the user, and they agreed. Never set \
-                                it on your own initiative, and never paraphrase agreement the user \
-                                did not give: this server cannot check the claim, so the result \
-                                records that the command ran on your assertion rather than on a \
-                                confirmation anyone saw.",
+                                Supply it only together with `approval_request_id`, after the \
+                                matching call was refused and the user agreed to the displayed \
+                                command. The server verifies the one-time binding, not who authored \
+                                the words.",
+            },
+            crate::consent::APPROVAL_REQUEST_FIELD: {
+                "type": "string",
+                "description": "Opaque one-time id printed by a consent refusal. It expires and \
+                                is bound to the exact normalized invocation. Retry the identical \
+                                call with this id and `user_approved`; changed arguments, reuse, or \
+                                an invented id are refused.",
             },
         },
         "required": ["subcommand"],
         "additionalProperties": false,
+    })
+}
+
+/// A single command needs no namespace envelope. Keep the old shape declared and accepted so a
+/// cached client does not break, but put the useful typed fields where every MCP client displays
+/// them. This is what makes `gore_doctor({})` and `gore_find({query:[...]})` the natural calls.
+fn direct_input_schema(command: &CommandSpec) -> Value {
+    let mut direct_properties = Map::new();
+    let mut legacy_arg_properties = Map::new();
+    let required: Vec<&str> = command
+        .args
+        .iter()
+        .filter(|arg| arg.required)
+        .map(|arg| arg.name)
+        .collect();
+
+    for arg in command.args {
+        let schema = argument_schema(arg);
+        direct_properties.insert(arg.name.into(), schema.clone());
+        legacy_arg_properties.insert(arg.name.into(), schema);
+    }
+
+    let mut legacy_args = json!({
+        "type": "object",
+        "description": "Deprecated compatibility envelope. Prefer the typed arguments at the tool's top level.",
+        "properties": legacy_arg_properties,
+        "additionalProperties": false,
+    });
+    if !required.is_empty() {
+        legacy_args["required"] = json!(required);
+    }
+    direct_properties.insert(
+        "subcommand".into(),
+        json!({
+            "type": "string",
+            "enum": [command.sub],
+            "description": "Deprecated compatibility field; this tool already selects its only command.",
+        }),
+    );
+    direct_properties.insert("args".into(), legacy_args);
+    direct_properties.insert(
+        crate::consent::APPROVAL_FIELD.into(),
+        approval_words_schema(),
+    );
+    direct_properties.insert(
+        crate::consent::APPROVAL_REQUEST_FIELD.into(),
+        approval_request_schema(),
+    );
+
+    let mut schema = json!({
+        "type": "object",
+        "properties": direct_properties,
+        "additionalProperties": false,
+    });
+    if !required.is_empty() {
+        // Direct is the advertised route; the second arm preserves the old nested call. Runtime
+        // validation remains authoritative because some MCP clients ignore conditional schemas.
+        schema["anyOf"] = json!([
+            { "required": required },
+            {
+                "required": ["args"],
+                "properties": {
+                    "args": { "required": required }
+                }
+            }
+        ]);
+    }
+    schema
+}
+
+fn argument_schema(arg: &ArgSpec) -> Value {
+    let mut description = arg.help.to_owned();
+    if let Some(default) = arg.default_hint {
+        description.push_str(&format!(" Default: {default}."));
+    }
+    match arg.kind {
+        ArgKind::Path | ArgKind::Str | ArgKind::Hex => {
+            json!({ "type": "string", "description": description })
+        }
+        ArgKind::Int { min, max } => {
+            let mut schema = json!({ "type": "integer", "description": description });
+            if let Some(min) = min {
+                schema["minimum"] = json!(min);
+            }
+            if let Some(max) = max {
+                schema["maximum"] = json!(max);
+            }
+            schema
+        }
+        ArgKind::Bool => json!({ "type": "boolean", "description": description }),
+        ArgKind::Enum(values) => {
+            json!({ "type": "string", "enum": values, "description": description })
+        }
+        ArgKind::StrList => {
+            let mut schema = json!({
+                "type": "array",
+                "items": { "type": "string" },
+                "description": description,
+            });
+            if arg.required {
+                schema["minItems"] = json!(1);
+            }
+            schema
+        }
+        ArgKind::IntList => {
+            let mut schema = json!({
+                "type": "array",
+                "items": { "type": "integer" },
+                "description": description,
+            });
+            if arg.required {
+                schema["minItems"] = json!(1);
+            }
+            schema
+        }
+    }
+}
+
+fn approval_words_schema() -> Value {
+    json!({
+        "type": "string",
+        "description": "The user's own words approving this exact call, quoted verbatim. Supply \
+                        it only together with `approval_request_id`, after the matching call was \
+                        refused and the user agreed to the displayed command.",
+    })
+}
+
+fn approval_request_schema() -> Value {
+    json!({
+        "type": "string",
+        "description": "Opaque one-time id printed by a consent refusal. It expires and is bound \
+                        to the exact normalized invocation.",
     })
 }
 
@@ -101,13 +242,39 @@ fn description(group: &GroupSpec) -> String {
     let mut text = String::with_capacity(2048);
     text.push_str(group.summary);
 
+    if let [command] = group.commands {
+        let path = match group.shape {
+            crate::spec::GroupShape::Nested => format!("{} {}", group.cli, command.sub),
+            crate::spec::GroupShape::Flat => command.sub.to_owned(),
+        };
+        text.push_str(&format!(
+            "\n\nRuns `gore {path}`. Pass its arguments directly at the top level; the old \
+             `subcommand`/`args` envelope remains accepted."
+        ));
+        if let Some(page) = command.guide {
+            text.push_str(&format!(
+                " Read `gore://guide/{page}` (or call gore_guide) before using this for the first time."
+            ));
+        }
+        text.push_str("\n\nARGUMENTS  (* marks a required argument)\n");
+        text.push_str(&format!("    [{}]\n", safety_note(&command.safety)));
+        if command.args.is_empty() {
+            text.push_str("    (no arguments)\n");
+        } else {
+            text.push_str(&describe_arguments(command));
+        }
+        return text;
+    }
+
     match group.shape {
         crate::spec::GroupShape::Nested => {
             text.push_str(&format!("\n\nRuns `gore {} <subcommand>`.", group.cli));
         }
         crate::spec::GroupShape::Flat => {
-            text.push_str("\n\nRuns `gore <subcommand>` — these are separate top-level commands, \
-                           grouped here because they belong to one workflow.");
+            text.push_str(
+                "\n\nRuns `gore <subcommand>` — these are separate top-level commands, \
+                           grouped here because they belong to one workflow.",
+            );
         }
     }
 
@@ -134,11 +301,20 @@ fn describe_command(command: &CommandSpec) -> String {
         return text;
     }
 
+    text.push_str(&describe_arguments(command));
+    text
+}
+
+fn describe_arguments(command: &CommandSpec) -> String {
+    let mut text = String::new();
     for arg in command.args {
         let marker = if arg.required { "*" } else { " " };
         let kind = match arg.kind {
             ArgKind::Enum(values) => format!("enum: {}", values.join("|")),
-            ArgKind::Int { min: Some(min), max: Some(max) } => format!("integer {min}..={max}"),
+            ArgKind::Int {
+                min: Some(min),
+                max: Some(max),
+            } => format!("integer {min}..={max}"),
             other => other.label().to_string(),
         };
         text.push_str(&format!("  {marker} {} <{kind}> — {}", arg.name, arg.help));
@@ -152,6 +328,11 @@ fn describe_command(command: &CommandSpec) -> String {
 }
 
 fn safety_note(safety: &Safety) -> String {
+    if let Some((arg, offline_value)) = safety.offline_when {
+        return format!(
+            "writes new files and stays offline when `{arg}: {offline_value}`; other values may launch the game and modify the installation, which needs consent"
+        );
+    }
     match safety.in_place_without {
         // The conditional case is worth spelling out: it is the difference between producing a new
         // file and overwriting one of the game's own, and it turns on a single argument.
@@ -186,7 +367,9 @@ mod tests {
         assert_eq!(tools.len(), spec::GROUPS.len());
         for definition in &tools {
             assert!(definition["name"].as_str().is_some());
-            assert!(definition["description"].as_str().is_some_and(|d| !d.is_empty()));
+            assert!(definition["description"]
+                .as_str()
+                .is_some_and(|d| !d.is_empty()));
             assert_eq!(definition["inputSchema"]["type"], "object");
         }
     }
@@ -201,7 +384,10 @@ mod tests {
             .map(|value| value.as_str().unwrap().to_string())
             .collect();
 
-        assert_eq!(listed, vec!["set", "get", "unset", "list", "path", "detect"]);
+        assert_eq!(
+            listed,
+            vec!["set", "get", "unset", "list", "path", "detect"]
+        );
     }
 
     #[test]
@@ -210,7 +396,86 @@ mod tests {
         assert_eq!(schema["required"], json!(["subcommand"]));
         assert_eq!(schema["additionalProperties"], json!(false));
         // `args` itself must stay open: the argv builder, not the schema, validates its contents.
-        assert_eq!(schema["properties"]["args"]["additionalProperties"], json!(true));
+        assert_eq!(
+            schema["properties"]["args"]["additionalProperties"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn single_command_tools_expose_typed_direct_arguments_and_keep_the_old_envelope() {
+        let doctor = tool("gore_doctor");
+        let doctor_schema = &doctor["inputSchema"];
+        assert_eq!(doctor_schema["properties"]["game"]["type"], "string");
+        assert!(doctor_schema.get("required").is_none());
+        assert_eq!(
+            doctor_schema["properties"]["subcommand"]["enum"],
+            json!(["doctor"])
+        );
+        assert_eq!(doctor_schema["properties"]["args"]["type"], "object");
+        let description = doctor["description"].as_str().unwrap();
+        assert!(
+            description.contains("Pass its arguments directly"),
+            "{description}"
+        );
+        assert!(!description.contains("SUBCOMMANDS"), "{description}");
+
+        let find = tool("gore_find");
+        let query = &find["inputSchema"]["properties"]["query"];
+        assert_eq!(query["type"], "array");
+        assert_eq!(query["items"]["type"], "string");
+        assert_eq!(query["minItems"], 1);
+        assert!(find["inputSchema"]["anyOf"].is_array());
+    }
+
+    #[test]
+    fn dedicated_manager_preflight_has_a_truthful_read_only_direct_schema() {
+        let preflight = tool("gore_mgr_preflight");
+        assert_eq!(preflight["annotations"]["readOnlyHint"], json!(true));
+        assert!(preflight["annotations"].get("destructiveHint").is_none());
+        assert_eq!(
+            preflight["inputSchema"]["properties"]["game"]["type"],
+            "string"
+        );
+        assert!(preflight["description"]
+            .as_str()
+            .unwrap()
+            .contains("Runs `gore mgr preflight`"));
+    }
+
+    #[test]
+    fn dedicated_bundle_inspection_has_a_truthful_read_only_direct_schema() {
+        let inspect = tool("gore_mod_inspect");
+        assert_eq!(inspect["annotations"]["readOnlyHint"], json!(true));
+        assert!(inspect["annotations"].get("destructiveHint").is_none());
+        assert_eq!(
+            inspect["inputSchema"]["properties"]["bundle"]["type"],
+            "string"
+        );
+        assert!(inspect["inputSchema"]["anyOf"].is_array());
+        assert!(inspect["description"]
+            .as_str()
+            .unwrap()
+            .contains("Runs `gore mod inspect`"));
+    }
+
+    #[test]
+    fn dedicated_standalone_compilers_are_typed_and_not_destructive() {
+        for (tool_name, required) in [
+            ("gore_as_compile", "src"),
+            ("gore_as_compile_module", "source"),
+        ] {
+            let definition = tool(tool_name);
+            assert_eq!(definition["annotations"]["readOnlyHint"], json!(false));
+            assert_eq!(definition["annotations"]["destructiveHint"], json!(false));
+            assert!(definition["inputSchema"]["properties"][required]["type"].is_string());
+            assert!(definition["inputSchema"]["properties"]
+                .get("backend")
+                .is_none());
+            let description = definition["description"].as_str().unwrap();
+            assert!(description.contains("no game-launch or install-write consent"));
+            assert!(!description.contains("LAUNCHES THE GAME"));
+        }
     }
 
     #[test]
@@ -224,8 +489,23 @@ mod tests {
         assert_eq!(approval["type"], "string", "{schema}");
         let description = approval["description"].as_str().expect("a description");
         assert!(description.contains("verbatim"), "{description}");
-        assert!(description.contains("Never"), "{description}");
-        assert_eq!(schema["required"], json!(["subcommand"]), "approval is never required");
+        assert!(description.contains("approval_request_id"), "{description}");
+        let request_id = &schema["properties"]["approval_request_id"];
+        assert_eq!(request_id["type"], "string", "{schema}");
+        let request_description = request_id["description"].as_str().expect("a description");
+        assert!(
+            request_description.contains("one-time"),
+            "{request_description}"
+        );
+        assert!(
+            request_description.contains("exact normalized invocation"),
+            "{request_description}"
+        );
+        assert_eq!(
+            schema["required"],
+            json!(["subcommand"]),
+            "approval is never required"
+        );
     }
 
     #[test]
@@ -262,32 +542,50 @@ mod tests {
             );
         }
         assert!(description.contains("* kind <enum: item|npc|knowledge>"));
-        assert!(description.contains("  script_cache <path>"), "optional args are unmarked");
+        assert!(
+            description.contains("  script_cache <path>"),
+            "optional args are unmarked"
+        );
     }
 
     #[test]
     fn a_command_without_arguments_says_so_rather_than_showing_nothing() {
-        let description = tool("gore_config")["description"].as_str().unwrap().to_string();
+        let description = tool("gore_config")["description"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(description.contains("(no arguments)"));
     }
 
     #[test]
     fn a_flat_group_explains_that_its_subcommands_are_top_level_commands() {
-        let flat = tool("gore_catalog")["description"].as_str().unwrap().to_string();
+        let flat = tool("gore_catalog")["description"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(flat.contains("Runs `gore <subcommand>`"));
 
-        let nested = tool("gore_config")["description"].as_str().unwrap().to_string();
+        let nested = tool("gore_config")["description"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(nested.contains("Runs `gore config <subcommand>`"));
     }
 
     #[test]
     fn a_group_whose_commands_share_a_guide_page_points_at_it() {
-        let catalog = tool("gore_catalog")["description"].as_str().unwrap().to_string();
+        let catalog = tool("gore_catalog")["description"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(catalog.contains("gore://guide/catalogs-and-models"));
 
         // A command that names no page does not veto the pointer — `gore config path` has none,
         // and the rest agree on `getting-started`.
-        let config = tool("gore_config")["description"].as_str().unwrap().to_string();
+        let config = tool("gore_config")["description"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(config.contains("gore://guide/getting-started"), "{config}");
     }
 
@@ -327,7 +625,10 @@ mod tests {
         assert_eq!(note, "WRITES MANAGER STATE — needs --allow-write");
         assert!(!note.contains("INSTALL"), "{note}");
 
-        let description = tool("gore_mgr")["description"].as_str().unwrap().to_string();
+        let description = tool("gore_mgr")["description"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let import = description
             .split_once("\nimport —")
             .and_then(|(_, tail)| tail.split_once("\nlist —").map(|(section, _)| section))
@@ -340,8 +641,15 @@ mod tests {
         let manager = spec::group("gore_mgr").unwrap();
         for sub in ["list", "analyze", "status"] {
             let command = manager.command(sub).unwrap();
-            assert_eq!(safety_note(&command.safety), "may reconcile Manager state", "{sub}");
-            assert!(!command.safety.requirements(&serde_json::Map::new()).write, "{sub}");
+            assert_eq!(
+                safety_note(&command.safety),
+                "may reconcile Manager state",
+                "{sub}"
+            );
+            assert!(
+                !command.safety.requirements(&serde_json::Map::new()).write,
+                "{sub}"
+            );
         }
     }
 
@@ -350,8 +658,15 @@ mod tests {
         let manager = spec::group("gore_mgr").unwrap();
         for sub in ["enable", "disable", "order"] {
             let command = manager.command(sub).unwrap();
-            assert_eq!(safety_note(&command.safety), "updates Manager loadout", "{sub}");
-            assert!(!command.safety.requirements(&serde_json::Map::new()).write, "{sub}");
+            assert_eq!(
+                safety_note(&command.safety),
+                "updates Manager loadout",
+                "{sub}"
+            );
+            assert!(
+                !command.safety.requirements(&serde_json::Map::new()).write,
+                "{sub}"
+            );
         }
     }
 }

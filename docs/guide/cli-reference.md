@@ -19,11 +19,11 @@ gore --version
 | `guide` | `search` · `html` | Search this guide and the reference from a shell, or render the guide into one self-contained HTML file. | [below](#guide) |
 | `find` | — | Search the bundled catalogs and the effect register: class names, ids, categories, display names, and what an id does in game. | [find](find.md) |
 | `gen` | — | Compile `overrides.toml` → a UE4SS Lua override mod. | [items](items.md) |
-| `mod` | `build` · `deploy` · `undeploy` | Build/deploy/undeploy a unified bundle. | [bundles](bundles.md) |
+| `mod` | `build` · `inspect` · `deploy` · `undeploy` | Build, validate, inspect, deploy, or undeploy a unified bundle. | [bundles](bundles.md) |
 | `mgr` | `import` · `list` · `remove` · `enable` · `disable` · `order` · `analyze` · `preflight` · `recover` · `apply` · `status` · `reset` | Multi-mod manager: library, load order, readiness/recovery, conflicts, composed deployment, status and Reset. | [mod-manager](mod-manager.md) |
 | `loc` | `extract` · `status` · `export` · `import` | Read/edit localized text & dialogs in the encrypted `.lcache`. | [text-and-dialogs](text-and-dialogs.md) |
 | `audio` | `list` · `extract` · `replace` · `restore` · `export-patch` · `apply-patch` | Read/replace FMOD `.bank` audio (PCM injection, `*.gore-bak`). | [audio](audio.md) |
-| `voice` | `list` (`index`) · `match-line` · `extract` · `add` · `replace` · `apply-manifest` (`apply`) | Index/extract/copy-on-write edit voice-over ZIP archives. | [voice](voice.md) |
+| `voice` | `validate` · `list` (`index`) · `match-line` · `extract` · `add` · `replace` · `apply-manifest` (`apply`) | Validate/index/extract/copy-on-write edit voice-over ZIP archives. | [voice](voice.md) |
 | `texture` | `list` · `extract` · `replace` · `pack` · `deploy` · `index` · `undeploy` · `paklist` | Extract/replace IoStore textures → Zen triplet in `~mods`. | [textures](textures.md) |
 | `asset` | `extract` · `inspect` · `patch-fixed` · `pack` | Extract, inspect, copy-on-write patch, and offline-pack one cooked DataAsset. | [dataassets](dataassets.md) |
 | `as` | see [below](#as) | AngelScript precompiled-cache tooling (experimental). | [scripts](scripts.md) |
@@ -64,9 +64,10 @@ Commands that need the install (`deploy-shared`, `mod`, `mgr`, `texture`,
 | `--game <GAME>` | Install root to diagnose. Without it, the configured game path, then Steam auto-detect. |
 | `--json` | One JSON document instead of the human-readable report. |
 
-Nine checks, one line each: `game_path`, `install`, `ue4ss`, `ue4ss_mods`,
-`deployment`, `mods_folder`, `leftovers`, `game_process`, `loc_catalog`. Every
-line that is not `ok` carries a `fix:` line.
+Ten checks, one line each: `game_path`, `install`, `ue4ss`, `ue4ss_mods`,
+`deployment`, `mods_folder`, `leftovers`, `game_process`,
+`standalone_compiler`, `loc_catalog`. Every line that is not `ok` carries a
+`fix:` line.
 
 **Exit code 0 whether or not it found something** — a problem is a finding, not
 a failure of the command, and this is the command people run when something has
@@ -77,9 +78,10 @@ complete; the human report caps them at 12 and says how many more there are.
 
 Read-only: it never writes, creates or removes anything. `deployment` reads and
 hashes the files the deploy record claims (the same work as `gore mgr status`),
-which makes it the slowest check.
+and `standalone_compiler` authenticates the compiler package and installed
+compiler inputs. Those are the two broadest checks.
 
-What the four checks worth knowing the limits of actually read:
+What the five checks worth knowing the limits of actually read:
 
 - `ue4ss` keys off `UE4SS.dll` in `G1R\Binaries\Win64\ue4ss`. It reports whether
   the loader is installed, never whether it loaded — for that, read `UE4SS.log`
@@ -90,12 +92,20 @@ What the four checks worth knowing the limits of actually read:
   write. Two of those enabled at once is reported as a problem: where both set
   one class default, whichever UE4SS loads last wins and nothing records which.
   Mods UE4SS itself ships are listed but never counted for that warning.
-- `leftovers` asks the same probe `mod deploy` and `as compile` consult before
-  they refuse to start (install-mutation lock, compile lock, recovery journal,
-  cache/JIT/proxy backups), plus a scan for `*.gore-bak` in the four directories
-  this toolkit rewrites in place. A `*.gore-bak` is ordinary while a deployment
-  is active; with no deploy record beside it, a rewritten file was probably never
-  restored.
+- `leftovers` asks the same probe `mod deploy` and game-backed AngelScript
+  compilation consult before they refuse to start (install-mutation lock,
+  compile lock, recovery journal, cache/JIT/proxy backups), plus a scan for
+  `*.gore-bak` in the four directories this toolkit rewrites in place. The
+  reported blocker count covers the lock/recovery artifacts only; separately
+  listed backups are counted as backups. Strict `--backend standalone` does not
+  enter this install-mutation window. A `*.gore-bak` is ordinary while a
+  deployment is active; with no deploy record beside it, a rewritten file was
+  probably never restored.
+- `standalone_compiler` runs the product compiler's own read-only resolver. It
+  authenticates the package beside the GORE executable and checks whether the
+  installed Shipping ScriptCache and Binds match a qualified compiler API. It
+  neither launches the game nor creates compiler scratch files. Compatibility
+  is based on the cache/API, not a whole-file Steam/GOG executable checksum.
 - `loc_catalog` compares the byte count `gore loc status` recorded against the
   `.lcache` now installed. `gore loc import` re-encrypts that file in place, so a
   count that no longer agrees usually means the shared catalog describes text the
@@ -103,8 +113,8 @@ What the four checks worth knowing the limits of actually read:
 
 Observed: a healthy install (the abridged report in
 [getting-started](getting-started.md#check-the-setup) is a real run) and an
-install root that does not exist, which yields one `problem` and eight `skipped`
-lines instead of restating one cause eight times. The missing-UE4SS,
+install root that does not exist, which yields one `problem` and nine `skipped`
+lines instead of restating one cause nine times. The missing-UE4SS,
 competing-override and leftover-lock verdicts are pinned by tests over fixture
 trees, not by a run against a real broken install.
 
@@ -148,6 +158,7 @@ and failing would bury the line explaining what was not searched.
 | Subcommand | Flags |
 |---|---|
 | `build` | `--spec <SPEC>` (asset paths resolve against its directory) · `-o, --out <OUT>` (bundle goes to `<out>/<mod-name>`) |
+| `inspect <BUNDLE>` | bundle directory or ZIP · `--json`; read-only full offline validation plus a bounded metadata/component/hash report |
 | `deploy` | `--bundle <BUNDLE>` · `--game <GAME>` |
 | `undeploy` | `--game <GAME>` |
 
@@ -208,6 +219,7 @@ it up to `*.gore-bak`.
 
 | Subcommand | Flags |
 |---|---|
+| `validate` | `--ogg <OGG>` · `--json` |
 | `list` (alias `index`) | `--archive <ZIP>` · `--filter <TEXT>` · `--max <N>` (default 100) · `--directories` · `--json` |
 | `match-line` | `--archive` · `--loc-id <ASCII_ID>` (no `.ogg` suffix) · `--json` |
 | `extract` | `--archive` · `--basename <NAME>` \| `--path <ARCHIVE_PATH>` · `-o, --out <DIR>` |
@@ -318,8 +330,10 @@ setup, the tool list, and how the guide is exposed.
 
 `serve` speaks JSON-RPC on stdin/stdout; it is not interactive. Every command
 that changes the installation or rewrites a file in place is confirmed with you
-through your client before it runs, and `as compile` counts as both a launch and
-a write. The two `--allow-*` flags answer in advance for unattended use;
+through your client before it runs. `as compile` with explicit
+`--backend standalone` is offline and needs no confirmation. The `game` and
+`standalone-then-game` policies (including an omitted backend) count as both a
+possible launch and an installation write. The two `--allow-*` flags answer in advance for unattended use;
 `--no-consent-prompts` refuses instead of asking and cannot be combined with
 them.
 

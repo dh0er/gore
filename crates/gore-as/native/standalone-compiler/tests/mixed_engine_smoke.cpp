@@ -246,7 +246,8 @@ int main() {
     overlays.modules.push_back(source_module(
         "Literal", "Literal.as",
         "int LiteralSize() { return ProbeText(\"hello\"); }\n"
-        "int Utf8LiteralSize() { return ProbeText(\"Gr\xc3\xbc\xc3\x9f\"); }"));
+        "int Utf8LiteralSize() { return ProbeText(\"Gr\xc3\xbc\xc3\x9f\"); }\n"
+        "int AutomaticCachedType() { SharedValue Value; Value.Number = 42; return Value.Number; }"));
 
     asIScriptEngine* const target_engine = asCreateScriptEngine();
     cached_initializer_calls = 0;
@@ -325,7 +326,8 @@ int main() {
             *target_engine, *built_consumer, "ReadProviderValue", 42U) ||
         !execute_no_args(*target_engine, *built_addon, "Added", 43U) ||
         !execute_no_args(*target_engine, *built_literal, "LiteralSize", 5U) ||
-        !execute_no_args(*target_engine, *built_literal, "Utf8LiteralSize", 6U)) {
+        !execute_no_args(*target_engine, *built_literal, "Utf8LiteralSize", 6U) ||
+        !execute_no_args(*target_engine, *built_literal, "AutomaticCachedType", 42U)) {
         std::cerr << "mixed edit/add graph failed: phase="
                   << static_cast<int>(mixed.phase) << "; module="
                   << mixed.module_index << "; detail=" << mixed.detail << '\n';
@@ -656,7 +658,8 @@ int QualificationNameProjection()
     const bool reloaded_addon_ok = reload_shape_ok &&
         execute_no_args(*reload_engine, *reloaded_addon, "Added", 43U);
     const bool reloaded_literal_ok = reload_shape_ok &&
-        execute_no_args(*reload_engine, *reloaded_literal, "LiteralSize", 5U);
+        execute_no_args(*reload_engine, *reloaded_literal, "LiteralSize", 5U) &&
+        execute_no_args(*reload_engine, *reloaded_literal, "AutomaticCachedType", 42U);
     if (!reload_shape_ok ||
         !reloaded_add_ok || !reloaded_call_ok || !reloaded_property_ok ||
         !reloaded_addon_ok || !reloaded_literal_ok) {

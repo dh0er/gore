@@ -26,6 +26,8 @@ pub const ELICITATION_METHOD: &str = "elicitation/create";
 /// answers its own dialogs without showing anybody anything. It is a claim, not a confirmation:
 /// see [`Decision::AllowedByAssertion`].
 pub const APPROVAL_FIELD: &str = "user_approved";
+/// The opaque one-time id issued with a refusal and bound to that exact invocation.
+pub const APPROVAL_REQUEST_FIELD: &str = "approval_request_id";
 
 /// The field the dialog collects, and the two values it may take.
 const DECISION_FIELD: &str = "decision";
@@ -140,9 +142,11 @@ impl Decision {
 
 /// Ask, if there is anyone to ask.
 ///
-/// `approval` is what the caller says the user already answered, in the user's own words. It stands
-/// in for the question rather than adding to it: where it arrives, no dialog is put, because the
-/// cases it exists for are exactly those where a dialog reaches nobody.
+/// `approval` is what the caller says the user already answered, in the user's own words. The
+/// session validates and consumes the accompanying one-time request id before passing the words
+/// here. It stands in for the question rather than adding to it: where a verified relay arrives,
+/// no dialog is put, because the cases it exists for are exactly those where a dialog reaches
+/// nobody.
 pub fn decide(
     consent: &Consent,
     policy: Policy,
@@ -226,7 +230,9 @@ fn interpret(result: &Value) -> Decision {
         // "explicitly refused" against "dismissed without choosing" — and only the second is what a
         // client sends when it never managed to put the question in front of anyone.
         "cancel" => Decision::Dismissed,
-        other => Decision::Failed(format!("the client answered with an unknown action `{other}`")),
+        other => Decision::Failed(format!(
+            "the client answered with an unknown action `{other}`"
+        )),
     }
 }
 
@@ -236,8 +242,9 @@ fn interpret(result: &Value) -> Decision {
 /// is entitled to know that nothing here verified it, and to see the words it was made with.
 pub fn assertion_note(words: &str) -> String {
     format!(
-        "This ran on the assistant's assertion of prior approval, quoted as: \"{words}\". No \
-         confirmation reached this server; the claim was not verified."
+        "This ran with a one-time approval request bound to this exact command, carrying the \
+         assistant's verbatim relay: \"{words}\". The binding was verified; who authored those \
+         words was not."
     )
 }
 
@@ -246,10 +253,20 @@ pub fn assertion_note(words: &str) -> String {
 /// A refusal that only names a flag the model cannot set is a dead end: it either gives up or nags
 /// for a restart. There is a cheaper move available to it — put the question to the user in the
 /// conversation, where this server cannot reach — and this paragraph is what tells it so.
-const ASK_THEM_YOURSELF: &str = "So do not send this call unchanged. Instead ask the user yourself, \
-here in the conversation, and show them the command line above. If they agree, send the same call \
-again with `user_approved` set to their own words: that runs it without another question, and the \
-result records that it ran on your claim rather than on an answer this server saw.";
+fn ask_them_yourself(approval_request_id: Option<&str>) -> String {
+    match approval_request_id {
+        Some(id) => format!(
+            "So do not send this call unchanged. Instead ask the user yourself, here in the \
+             conversation, and show them the command line above. If they agree, send the exact \
+             same call again with `approval_request_id` set to `{id}` and `user_approved` set to \
+             their own words. The id is bound to this command, expires, and works once; changing \
+             any command argument or reusing the id is refused."
+        ),
+        None => "No bound conversation-approval retry is available for this refusal. Send the \
+                 same call once without approval fields to obtain a fresh request id."
+            .into(),
+    }
+}
 
 /// The route that does not depend on anybody believing a claim.
 fn last_resort(consent: &Consent) -> String {
@@ -266,18 +283,23 @@ fn last_resort(consent: &Consent) -> String {
 /// Each variant says something different about what to try next, and that difference matters: a
 /// decline means this specific call was considered and rejected, while an unaskable client means
 /// the call was never seen by anyone and only the user can change that.
-pub fn refusal(consent: &Consent, decision: &Decision) -> String {
+pub fn refusal(
+    consent: &Consent,
+    decision: &Decision,
+    approval_request_id: Option<&str>,
+) -> String {
     let head = format!("`gore {}` {}", consent.path, consent.reason);
     let remedy = match &consent.remedy {
         Some(remedy) => format!("\n\n{remedy}."),
         None => String::new(),
     };
-    // The line ASK_THEM_YOURSELF sends the model off to show. It is `Invocation::display` — the
+    // The relay route sends the model off to show this line. It is `Invocation::display` — the
     // same string a successful result leads with and the dialog puts in front of a person — so what
     // the model relays is the command that would run, not a second rendering of it. The dialog is
     // where it used to live alone, and a client that answers its own dialogs discards that payload
     // without showing it to anybody.
     let line = &consent.command_line;
+    let relay = ask_them_yourself(approval_request_id);
 
     match decision {
         // Callers gate on these; producing a refusal for one would be a bug, but a message beats a
@@ -290,7 +312,7 @@ pub fn refusal(consent: &Consent, decision: &Decision) -> String {
              {line}\n\n\
              Nothing ran. Whether a person actually saw the question is not visible from here: a \
              client that cannot show a dialog answers on the user's behalf, in milliseconds.\n\n\
-             {ASK_THEM_YOURSELF}\n\n\
+             {relay}\n\n\
              {last_resort}",
             last_resort = last_resort(consent),
         ),
@@ -302,7 +324,7 @@ pub fn refusal(consent: &Consent, decision: &Decision) -> String {
              {line}\n\n\
              Nothing ran. A dismissal means nobody chose: the dialog was closed, or the client \
              could not show one at all.\n\n\
-             {ASK_THEM_YOURSELF}\n\n\
+             {relay}\n\n\
              {last_resort}",
             last_resort = last_resort(consent),
         ),
@@ -311,19 +333,19 @@ pub fn refusal(consent: &Consent, decision: &Decision) -> String {
             "refused: {head}, and this MCP client cannot put that question to the user — it did \
              not advertise the `elicitation` capability during initialize.{remedy}\n\n\
              {line}\n\n\
-             {ASK_THEM_YOURSELF}\n\n\
+             {relay}\n\n\
              {last_resort}",
             last_resort = last_resort(consent),
         ),
 
-        // The one arm that does not carry ASK_THEM_YOURSELF, so nothing here points at the command
+        // The one arm that does not carry a relay route, so nothing here points at the command
         // line and it would arrive unannounced — directly above a *different* command, the one the
         // server would have to be restarted with. It still belongs here: this arm's reason names no
         // file either. So it is introduced instead of dropped.
         Decision::NotAsked(Policy::NeverAsk) => format!(
             "refused: {head}, and this server was started with --no-consent-prompts, so it does \
-             not ask. `user_approved` is refused here too — the flag exists precisely so that an \
-             unattended agent cannot talk its own way past this.\n\n\
+             not ask. `approval_request_id` and `user_approved` are refused here too — the flag \
+             exists precisely so that an unattended agent cannot talk its own way past this.\n\n\
              The call that was refused:\n\n\
              {line}\n\n\
              Only the user can allow it, by restarting the server with:\n\
@@ -333,15 +355,15 @@ pub fn refusal(consent: &Consent, decision: &Decision) -> String {
 
         // Unreachable by construction, but a wrong message here would be a silent lie about why a
         // command did not run.
-        Decision::NotAsked(Policy::Ask) => format!(
-            "refused: {head}, and the confirmation was never sent.{remedy}"
-        ),
+        Decision::NotAsked(Policy::Ask) => {
+            format!("refused: {head}, and the confirmation was never sent.{remedy}")
+        }
 
         Decision::Failed(detail) => format!(
             "refused: {head}, and asking the user about it failed: {detail}. Treated as a \
              refusal — nothing ran.{remedy}\n\n\
              {line}\n\n\
-             {ASK_THEM_YOURSELF}\n\n\
+             {relay}\n\n\
              {last_resort}",
             last_resort = last_resort(consent),
         ),
@@ -360,11 +382,17 @@ mod tests {
 
     impl StubPeer {
         fn answering(answer: Value) -> Self {
-            Self { answer: Ok(answer), asked: Vec::new() }
+            Self {
+                answer: Ok(answer),
+                asked: Vec::new(),
+            }
         }
 
         fn failing(detail: &str) -> Self {
-            Self { answer: Err(detail.to_string()), asked: Vec::new() }
+            Self {
+                answer: Err(detail.to_string()),
+                asked: Vec::new(),
+            }
         }
     }
 
@@ -378,12 +406,16 @@ mod tests {
     fn consent() -> Consent {
         Consent {
             path: "texture pack".into(),
-            reason: "`out` already exists at `C:\\mods\\skin.utoc`, and this command overwrites its \
+            reason:
+                "`out` already exists at `C:\\mods\\skin.utoc`, and this command overwrites its \
                      output rather than refusing"
-                .into(),
+                    .into(),
             remedy: Some("Choose a path that does not exist yet".into()),
             command_line: "gore.exe texture pack --out 'C:\\mods\\skin.utoc'".into(),
-            needs: Needs { write: true, game_launch: false },
+            needs: Needs {
+                write: true,
+                game_launch: false,
+            },
         }
     }
 
@@ -393,18 +425,30 @@ mod tests {
         // itself, in milliseconds, without showing anybody anything. Asking again there produces
         // another instant refusal, so the claim has to stand in for the question, not follow it.
         let mut peer = StubPeer::answering(json!({ "action": "decline" }));
-        let decision = decide(&consent(), Policy::Ask, Some("yes, overwrite it"), &mut peer);
+        let decision = decide(
+            &consent(),
+            Policy::Ask,
+            Some("yes, overwrite it"),
+            &mut peer,
+        );
 
-        assert_eq!(decision, Decision::AllowedByAssertion("yes, overwrite it".into()));
+        assert_eq!(
+            decision,
+            Decision::AllowedByAssertion("yes, overwrite it".into())
+        );
         assert!(decision.allows());
-        assert!(peer.asked.is_empty(), "the claim replaces the question rather than adding to it");
+        assert!(
+            peer.asked.is_empty(),
+            "the claim replaces the question rather than adding to it"
+        );
     }
 
     #[test]
     fn an_assertion_carries_no_weight_where_the_server_was_told_not_to_ask() {
         // `--no-consent-prompts` is the posture for a server put in front of an agent nobody is
         // watching. A claim made by that very agent is exactly what it was set against.
-        let mut peer = StubPeer::answering(json!({ "action": "accept", "content": { DECISION_FIELD: RUN } }));
+        let mut peer =
+            StubPeer::answering(json!({ "action": "accept", "content": { DECISION_FIELD: RUN } }));
         let decision = decide(&consent(), Policy::NeverAsk, Some("go ahead"), &mut peer);
 
         assert_eq!(decision, Decision::NotAsked(Policy::NeverAsk));
@@ -420,8 +464,16 @@ mod tests {
             let mut peer = StubPeer::answering(json!({ "action": "decline" }));
             let decision = decide(&consent(), Policy::Ask, Some(blank), &mut peer);
 
-            assert_eq!(decision, Decision::Declined, "{blank:?} must not allow the call");
-            assert_eq!(peer.asked.len(), 1, "{blank:?} should have fallen through to the question");
+            assert_eq!(
+                decision,
+                Decision::Declined,
+                "{blank:?} must not allow the call"
+            );
+            assert_eq!(
+                peer.asked.len(),
+                1,
+                "{blank:?} should have fallen through to the question"
+            );
         }
     }
 
@@ -443,7 +495,8 @@ mod tests {
         let note = assertion_note("ja, überschreib die Datei");
 
         assert!(note.contains("ja, überschreib die Datei"), "{note}");
-        assert!(note.contains("assertion"), "{note}");
+        assert!(note.contains("one-time approval request"), "{note}");
+        assert!(note.contains("binding was verified"), "{note}");
         // Same rule as every refusal: this server cannot report that a person decided.
         for claim in ["the user approved", "the user said", "the user agreed"] {
             assert!(!note.contains(claim), "{note}");
@@ -462,16 +515,26 @@ mod tests {
             Decision::NotAsked(Policy::CannotAsk),
             Decision::Failed("broken pipe".into()),
         ] {
-            let text = refusal(&consent, &decision);
-            assert!(text.contains("user_approved"), "{decision:?} hides the way back: {text}");
-            assert!(text.contains("send the same call again"), "{decision:?}: {text}");
+            let text = refusal(&consent, &decision, Some("request-1"));
+            assert!(
+                text.contains("user_approved"),
+                "{decision:?} hides the way back: {text}"
+            );
+            assert!(text.contains("approval_request_id"), "{decision:?}: {text}");
+            assert!(
+                text.contains("send the exact same call again"),
+                "{decision:?}: {text}"
+            );
         }
 
         // Not this one. A server started with --no-consent-prompts refuses claims too, so offering
         // the retry there would send the model into a loop it cannot win.
-        let never = refusal(&consent, &Decision::NotAsked(Policy::NeverAsk));
-        assert!(!never.contains("send the same call again"), "{never}");
-        assert!(never.contains("user_approved"), "it must still say the field will not help: {never}");
+        let never = refusal(&consent, &Decision::NotAsked(Policy::NeverAsk), None);
+        assert!(!never.contains("send the exact same call again"), "{never}");
+        assert!(
+            never.contains("user_approved"),
+            "it must still say the field will not help: {never}"
+        );
     }
 
     #[test]
@@ -484,7 +547,10 @@ mod tests {
         let consent = consent();
         // Without this the whole test is vacuous: `find("")` is `Some(0)`, so an empty field would
         // satisfy every ordering assertion below while each refusal rendered a blank paragraph.
-        assert!(!consent.command_line.is_empty(), "the fixture has to carry a line to look for");
+        assert!(
+            !consent.command_line.is_empty(),
+            "the fixture has to carry a line to look for"
+        );
 
         for decision in [
             Decision::Declined,
@@ -493,7 +559,7 @@ mod tests {
             Decision::NotAsked(Policy::NeverAsk),
             Decision::Failed("broken pipe".into()),
         ] {
-            let text = refusal(&consent, &decision);
+            let text = refusal(&consent, &decision, Some("request-1"));
             let at = text
                 .find(&consent.command_line)
                 .unwrap_or_else(|| panic!("{decision:?} shows no command line: {text}"));
@@ -509,10 +575,18 @@ mod tests {
             // "Above" has to have exactly one antecedent. Every refusal names the indented
             // `gore mcp serve …` restart line below the call, and a model relaying that one instead
             // would ask the user to change how the server was started rather than to allow the call.
-            let restart = text.find("gore mcp serve").expect("the flag route is always named");
-            assert!(at < restart, "{decision:?} puts the call below the restart line: {text}");
+            let restart = text
+                .find("gore mcp serve")
+                .expect("the flag route is always named");
+            assert!(
+                at < restart,
+                "{decision:?} puts the call below the restart line: {text}"
+            );
             if let Some(pointer) = text.find("the command line above") {
-                assert!(at < pointer, "{decision:?} names the line after pointing at it: {text}");
+                assert!(
+                    at < pointer,
+                    "{decision:?} names the line after pointing at it: {text}"
+                );
             }
         }
     }
@@ -523,7 +597,10 @@ mod tests {
             "action": "accept",
             "content": { DECISION_FIELD: RUN },
         }));
-        assert_eq!(decide(&consent(), Policy::Ask, None, &mut peer), Decision::Allow);
+        assert_eq!(
+            decide(&consent(), Policy::Ask, None, &mut peer),
+            Decision::Allow
+        );
         assert_eq!(peer.asked.len(), 1);
         assert_eq!(peer.asked[0].0, ELICITATION_METHOD);
     }
@@ -559,10 +636,16 @@ mod tests {
         // The two produce different advice to the model, so collapsing them would send it to ask
         // the user about a decision the user never made.
         let mut peer = StubPeer::answering(json!({ "content": { DECISION_FIELD: RUN } }));
-        assert!(matches!(decide(&consent(), Policy::Ask, None, &mut peer), Decision::Failed(_)));
+        assert!(matches!(
+            decide(&consent(), Policy::Ask, None, &mut peer),
+            Decision::Failed(_)
+        ));
 
         let mut peer = StubPeer::answering(json!({ "action": "maybe" }));
-        assert!(matches!(decide(&consent(), Policy::Ask, None, &mut peer), Decision::Failed(_)));
+        assert!(matches!(
+            decide(&consent(), Policy::Ask, None, &mut peer),
+            Decision::Failed(_)
+        ));
 
         let mut peer = StubPeer::failing("broken pipe");
         match decide(&consent(), Policy::Ask, None, &mut peer) {
@@ -575,7 +658,10 @@ mod tests {
     fn a_client_that_cannot_be_asked_is_never_sent_a_question() {
         for policy in [Policy::CannotAsk, Policy::NeverAsk] {
             let mut peer = StubPeer::answering(json!({ "action": "accept" }));
-            assert_eq!(decide(&consent(), policy, None, &mut peer), Decision::NotAsked(policy));
+            assert_eq!(
+                decide(&consent(), policy, None, &mut peer),
+                Decision::NotAsked(policy)
+            );
             assert!(peer.asked.is_empty(), "{policy:?} must not reach the wire");
         }
     }
@@ -602,9 +688,15 @@ mod tests {
             reason: "would overwrite its input in place because `out` was omitted".into(),
             remedy: Some("Pass `out` to write a new file instead".into()),
             command_line: "gore.exe loc import --lcache 'D:\\G1R\\Alkimia.lcache'".into(),
-            needs: Needs { write: true, game_launch: false },
+            needs: Needs {
+                write: true,
+                game_launch: false,
+            },
         };
-        let message = elicitation_params(&in_place)["message"].as_str().unwrap().to_string();
+        let message = elicitation_params(&in_place)["message"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(message.contains("Alkimia.lcache"), "{message}");
     }
 
@@ -631,7 +723,10 @@ mod tests {
         let decision = &properties[DECISION_FIELD];
         assert_eq!(decision["enum"], json!([RUN, "cancel"]));
         assert_eq!(decision["enumNames"].as_array().unwrap().len(), 2);
-        assert!(decision.get("default").is_none(), "a confirmation must not pre-answer itself");
+        assert!(
+            decision.get("default").is_none(),
+            "a confirmation must not pre-answer itself"
+        );
         assert_eq!(schema["required"], json!([DECISION_FIELD]));
     }
 
@@ -639,9 +734,30 @@ mod tests {
     fn the_launch_flag_never_appears_without_the_write_flag() {
         // A game launch stages its result in the installation, so the launch flag alone would send
         // someone to restart with a flag set that still does not cover the call.
-        assert_eq!(Needs { write: true, game_launch: true }.flags(), "--allow-game-launch --allow-write");
-        assert_eq!(Needs { write: false, game_launch: true }.flags(), "--allow-game-launch --allow-write");
-        assert_eq!(Needs { write: true, game_launch: false }.flags(), "--allow-write");
+        assert_eq!(
+            Needs {
+                write: true,
+                game_launch: true
+            }
+            .flags(),
+            "--allow-game-launch --allow-write"
+        );
+        assert_eq!(
+            Needs {
+                write: false,
+                game_launch: true
+            }
+            .flags(),
+            "--allow-game-launch --allow-write"
+        );
+        assert_eq!(
+            Needs {
+                write: true,
+                game_launch: false
+            }
+            .flags(),
+            "--allow-write"
+        );
     }
 
     #[test]
@@ -670,7 +786,7 @@ mod tests {
             Decision::NotAsked(Policy::NeverAsk),
             Decision::Failed("broken pipe".into()),
         ] {
-            let text = refusal(&consent, &decision);
+            let text = refusal(&consent, &decision, Some("request-1"));
             for claim in claims {
                 assert!(
                     !text.contains(claim),
@@ -687,21 +803,34 @@ mod tests {
         // Both answers that came back from a client name the raw action, so the reader can tell an
         // explicit no from a dialog that was never shown, and both offer the way out — because
         // from here the two are indistinguishable.
-        let declined = refusal(&consent, &Decision::Declined);
+        let declined = refusal(&consent, &Decision::Declined, Some("request-1"));
         assert!(declined.contains("`decline`"), "{declined}");
         assert!(declined.contains("ask the user"), "{declined}");
-        assert!(declined.contains("gore mcp serve --allow-write"), "{declined}");
+        assert!(
+            declined.contains("gore mcp serve --allow-write"),
+            "{declined}"
+        );
 
-        let dismissed = refusal(&consent, &Decision::Dismissed);
+        let dismissed = refusal(&consent, &Decision::Dismissed, Some("request-1"));
         assert!(dismissed.contains("`cancel`"), "{dismissed}");
-        assert!(dismissed.contains("gore mcp serve --allow-write"), "{dismissed}");
+        assert!(
+            dismissed.contains("gore mcp serve --allow-write"),
+            "{dismissed}"
+        );
 
         for policy in [Policy::CannotAsk, Policy::NeverAsk] {
-            let text = refusal(&consent, &Decision::NotAsked(policy));
-            assert!(text.contains("gore mcp serve --allow-write"), "{policy:?}: {text}");
+            let text = refusal(&consent, &Decision::NotAsked(policy), Some("request-1"));
+            assert!(
+                text.contains("gore mcp serve --allow-write"),
+                "{policy:?}: {text}"
+            );
         }
 
-        let failed = refusal(&consent, &Decision::Failed("broken pipe".into()));
+        let failed = refusal(
+            &consent,
+            &Decision::Failed("broken pipe".into()),
+            Some("request-1"),
+        );
         assert!(failed.contains("broken pipe"), "{failed}");
         assert!(failed.contains("nothing ran"), "{failed}");
     }
@@ -711,10 +840,16 @@ mod tests {
         // The specification gives them different meanings, and only one of them is what a client
         // sends when it could not put the question in front of anybody.
         let mut peer = StubPeer::answering(json!({ "action": "cancel" }));
-        assert_eq!(decide(&consent(), Policy::Ask, None, &mut peer), Decision::Dismissed);
+        assert_eq!(
+            decide(&consent(), Policy::Ask, None, &mut peer),
+            Decision::Dismissed
+        );
 
         let mut peer = StubPeer::answering(json!({ "action": "decline" }));
-        assert_eq!(decide(&consent(), Policy::Ask, None, &mut peer), Decision::Declined);
+        assert_eq!(
+            decide(&consent(), Policy::Ask, None, &mut peer),
+            Decision::Declined
+        );
     }
 
     #[test]
@@ -727,7 +862,7 @@ mod tests {
             Decision::NotAsked(Policy::NeverAsk),
             Decision::Failed("nope".into()),
         ] {
-            let text = refusal(&consent, &decision);
+            let text = refusal(&consent, &decision, Some("request-1"));
             assert!(text.starts_with("refused:"), "{decision:?}: {text}");
             assert!(text.contains("skin.utoc"), "{decision:?}: {text}");
             assert!(text.contains("does not exist yet"), "{decision:?}: {text}");
@@ -749,7 +884,7 @@ mod tests {
             Decision::Failed("nope".into()),
             Decision::Allow,
         ] {
-            let text = refusal(&consent, &decision);
+            let text = refusal(&consent, &decision, Some("request-1"));
             for line in text.lines() {
                 // The one deliberate indent is the copy-pasteable restart line. The call's own
                 // command line is skipped for a different reason: it is data rather than prose,
@@ -763,7 +898,10 @@ mod tests {
                 assert!(!line.starts_with(' '), "{decision:?} indents {line:?}");
                 assert!(!line.contains("  "), "{decision:?} double-spaces {line:?}");
             }
-            assert!(!text.ends_with(char::is_whitespace), "{decision:?} ends in whitespace: {text}");
+            assert!(
+                !text.ends_with(char::is_whitespace),
+                "{decision:?} ends in whitespace: {text}"
+            );
         }
     }
 }

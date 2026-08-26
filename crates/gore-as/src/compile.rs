@@ -1,6 +1,7 @@
 //! Compile a staged `.as` into a 1-module mini-cache by driving the game's precompiled-data
 //! generation, then extracting (add) / extract-remapping (edit) the target module.
 
+use std::borrow::Cow;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
@@ -447,6 +448,17 @@ pub fn module_name_from_relative_path_v1(
         )));
     }
     Ok((module_name, relative_path.to_owned()))
+}
+
+fn effective_compile_module_name_v1<'a>(
+    opts: &'a CompileOpts,
+) -> Result<Cow<'a, str>, CompileError> {
+    if opts.op == "add" {
+        module_name_from_relative_path_v1(&opts.rel_path)
+            .map(|(module_name, _)| Cow::Owned(module_name))
+    } else {
+        Ok(Cow::Borrowed(&opts.module_name))
+    }
 }
 
 #[derive(Debug)]
@@ -1770,6 +1782,23 @@ fn compile_module_report_with_backend_runner_v1<G>(
 where
     G: FnOnce(&Path, &Path) -> Result<GameRunRegenExtendedReport, String>,
 {
+    let effective_module_name = match effective_compile_module_name_v1(opts) {
+        Ok(module_name) => module_name,
+        Err(error) => {
+            return CompileModuleReport {
+                outcome: CompileModuleReportOutcome::Failed(error),
+                diagnostics: None,
+                backend_diagnostics: Vec::new(),
+                install_restore: InstallRestoreDisposition::NotStarted,
+                backend: None,
+                fallback_reason: None,
+                standalone_attempted: false,
+                game_attempted: false,
+                output_recovery_required: false,
+                target_pins: None,
+            };
+        }
+    };
     let standalone_runner_called = std::cell::Cell::new(false);
     let standalone_runner_failure = std::cell::RefCell::new(None);
     let standalone_compile_error = std::cell::RefCell::new(None);
@@ -1795,7 +1824,7 @@ where
                 };
                 let overlays = [StandaloneCompilerOverlayV1 {
                     operation,
-                    module_name: &opts.module_name,
+                    module_name: &effective_module_name,
                     relative_path: &opts.rel_path,
                 }];
                 runner
@@ -7618,6 +7647,11 @@ where
             opts.op, opts.module_name
         )));
     }
+    // The game and standalone source discovery both derive a newly added module's identity from
+    // its Script-relative filename. Do that before preparing or running either backend so a stale
+    // caller-supplied hint cannot create a late SOURCE_DISCOVERY_MISMATCH. Edits keep the exact
+    // existing cache identity supplied by the caller.
+    let effective_module_name = effective_compile_module_name_v1(opts)?;
     // Read the overlay before clearing work_dir/tree. This also makes an input that intentionally
     // lives below that old tree safe: its bytes survive the clean rebuild, never its stale siblings.
     // Managed callers instead supply an already sealed byte snapshot and never reopen a
@@ -7670,13 +7704,13 @@ where
     let overlay = std::str::from_utf8(&overlay)
         .map_err(|error| CompileError::Other(format!("source .as is not valid UTF-8: {error}")))?;
     let (overlay, overlay_rel_path) = prepared
-        .prepare_compile_overlay(&opts.op, &opts.module_name, &opts.rel_path, overlay)
+        .prepare_compile_overlay(&opts.op, &effective_module_name, &opts.rel_path, overlay)
         .map_err(|error| CompileError::Other(format!("preparing authored overlay: {error}")))?;
 
     let generated_defaults = prepare_generated_defaults_edit(
         &opts.op,
         &mods,
-        &opts.module_name,
+        &effective_module_name,
         &base,
         &overlay,
         opts.allow_new_symbols,
@@ -7720,13 +7754,13 @@ where
                     .filter(|n| !base_set.contains(n.as_str()));
                 match (added.next(), added.next()) {
                     (Some(only), None) => only.clone(),
-                    _ => opts.module_name.clone(),
+                    _ => effective_module_name.to_string(),
                 }
             }
-            _ => opts.module_name.clone(),
+            _ => effective_module_name.to_string(),
         }
     } else {
-        opts.module_name.clone()
+        effective_module_name.to_string()
     };
 
     // 4. Extract + remap the target module against the vanilla base, for BOTH ops. Strict mode
@@ -7751,7 +7785,7 @@ where
         mini = plan.apply(&mini).map_err(|reason| {
             CompileError::Other(format!(
                 "refusing generated-default carry for edit module {:?}: {reason}",
-                opts.module_name
+                effective_module_name
             ))
         })?;
     }
@@ -14524,13 +14558,12 @@ mod tests {
                 "Wrong.as",
                 "does not match",
             ),
-            (valid_cache(), "add", "testmodule", "New.as", "module name"),
             (
                 valid_cache(),
                 "add",
                 "NewModule",
                 "testmodule.AS",
-                "add path",
+                "module name",
             ),
             (
                 valid_cache(),
@@ -14551,7 +14584,7 @@ mod tests {
                 "add",
                 "NewModule",
                 "EXISTING",
-                "file/directory ancestor",
+                "donor-compatible relative .as path",
             ),
         ];
 
@@ -16196,6 +16229,58 @@ mod tests {
         );
 
         drop(report);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compile_module_add_derives_identity_from_relative_path_before_backend() {
+        let root = unique_test_root("backend-v1-derived-add-identity");
+        std::fs::create_dir_all(&root).unwrap();
+        let opts = CompileOpts {
+            game_dir: root.join("game"),
+            op: "add".to_owned(),
+            module_name: "Stale.CallerHint".to_owned(),
+            rel_path: "GoreVisibleTest/VisibleTestDialog.as".to_owned(),
+            as_path: root.join("must-not-be-opened.as"),
+            source_override: Some(b"// standalone source\n".to_vec()),
+            work_dir: root.join("work"),
+            allow_new_symbols: true,
+            base_override: Some(cache_with_empty_modules(&[("Base", "Base.as")])),
+            binds_override: None,
+        };
+        let generated = cache_with_empty_modules(&[
+            ("Base", "Base.as"),
+            (
+                "GoreVisibleTest.VisibleTestDialog",
+                "GoreVisibleTest/VisibleTestDialog.as",
+            ),
+        ]);
+        let mut standalone = |inputs: StandaloneCompilerInputsV1<'_>| {
+            assert_eq!(inputs.overlays.len(), 1);
+            assert_eq!(
+                inputs.overlays[0].module_name,
+                "GoreVisibleTest.VisibleTestDialog"
+            );
+            assert_eq!(
+                inputs.overlays[0].relative_path,
+                "GoreVisibleTest/VisibleTestDialog.as"
+            );
+            let path = root.join("standalone.cache");
+            std::fs::write(&path, &generated).unwrap();
+            Ok(StandaloneCompilerOutputV1::detached(path))
+        };
+
+        let report = compile_module_report_with_backend_runner_v1(
+            &opts,
+            CompilerBackendModeV1::Standalone,
+            Some(&mut standalone),
+            |_, _| panic!("strict standalone mode must not enter the game backend"),
+        );
+        let CompileModuleReportOutcome::Compiled(output) = report.outcome else {
+            panic!("derived add identity did not compile")
+        };
+        assert_eq!(output.module_name, "GoreVisibleTest.VisibleTestDialog");
+        drop(output);
         std::fs::remove_dir_all(root).unwrap();
     }
 

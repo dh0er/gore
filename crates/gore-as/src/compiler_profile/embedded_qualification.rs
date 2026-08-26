@@ -1,4 +1,4 @@
-//! Productive embedded-game adapter for the sealed 26-case qualification corpus.
+//! Productive embedded-game adapter for the sealed 27-case qualification corpus.
 //!
 //! Every cache and diagnostic originates in the pinned game process. Invoke return values are
 //! observed by the pinned native sidecar only after the game has independently produced its raw

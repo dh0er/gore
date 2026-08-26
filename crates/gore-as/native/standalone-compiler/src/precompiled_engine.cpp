@@ -3576,11 +3576,33 @@ engine_bridge_result compile_mixed_cache_checkpoint(
                     }
                 }
             } else {
+                std::unordered_set<std::string> imported_modules;
                 for (const std::string& imported : states[index].source->imported_modules) {
+                    if (!imported_modules.insert(imported).second) continue;
                     if (!import_one(imported)) {
                         return failure(
                             engine_bridge_phase::create_modules, index,
                             "source import disappeared after mixed preflight", asNO_MODULE);
+                    }
+                }
+                // With AutomaticImports enabled the donor compiles loose source against the
+                // complete existing script graph. Cached modules are recreated as module-local
+                // shells in this bridge, so publish them to the authored module explicitly before
+                // Stage 1 type generation. These bridge-only imports are not serialized into the
+                // output module metadata; they only reproduce the donor's compile-time namespace.
+                if (options.automatic_imports) {
+                    for (std::size_t dependency = 0U;
+                         dependency < states.size(); ++dependency) {
+                        if (dependency == index || states[dependency].cached == nullptr ||
+                            !imported_modules.insert(final_names[dependency]).second) {
+                            continue;
+                        }
+                        if (!import_one(final_names[dependency])) {
+                            return failure(
+                                engine_bridge_phase::create_modules, index,
+                                "automatic cached-module import disappeared during mixed build",
+                                asNO_MODULE);
+                        }
                     }
                 }
             }

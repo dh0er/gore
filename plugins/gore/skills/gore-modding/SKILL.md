@@ -50,10 +50,12 @@ Use this lifecycle:
    `enable`, `disable`, and `order` update the reversible target loadout
    immediately and intentionally do not open the protected-write consent gate;
    state the intended edit before the call and report the resulting order.
-3. Immediately before an installation change, run `gore_mgr preflight` for the
-   exact read-only readiness/recovery report. An active Studio deployment, game
-   drift, or interrupted operation is a state to resolve, not something to
-   overwrite.
+3. Immediately before an installation change, run the dedicated
+   `gore_mgr_preflight` tool for the exact read-only readiness/recovery report.
+   Pass its typed arguments directly; it exists separately so MCP clients see a
+   truthful read-only annotation instead of `gore_mgr`'s Apply/Reset worst case.
+   An active Studio deployment, game drift, or interrupted operation is a state
+   to resolve, not something to overwrite.
 4. Before `apply`, summarize the enabled loadout and observable effects, give
    the exact Apply and Reset commands, and obtain consent. Apply writes the game
    installation. Follow it with `status` and then a concrete in-game checklist.
@@ -76,7 +78,7 @@ operation, pass its exact opaque action token as `expected_guard_id` to
 `gore_mgr recover` and obtain consent for that call. Recovery atomically rechecks
 the token; never guess or reuse one after the state changes. Compiler-owned,
 ambiguous, or invalid recovery state gets help, not an improvised reset. Re-run
-`preflight` and `status` after recovery before Apply or Reset.
+`gore_mgr_preflight` and `status` after recovery before Apply or Reset.
 
 ## Pick a target that the engine actually reads
 
@@ -103,7 +105,8 @@ where to listen, confirm the sample you replaced is one that surface plays and
 whether it is one of a numbered set — the audio guide says how.
 
 Then read your own work back. Every write path in this toolkit can be re-read:
-a replaced sample lists as replaced, a bundle records a hash per file. Do that
+a replaced sample lists as replaced, and `gore_mod_inspect` validates a built
+bundle and hashes its exact manifest plus complete normalized tree. Do that
 before reporting success, and say which items you could not check.
 
 ## Never put a name in a spec that you have not seen in a listing
@@ -116,13 +119,30 @@ in no listing, and it happened to exist. The failure mode when it does not is
 `mod build` accepting the spec and `mod deploy` refusing it afterwards, which
 costs you the whole build.
 
+## Compile AngelScript offline unless the user chooses a game fallback
+
+For ordinary authoring, use the dedicated `gore_as_compile` or
+`gore_as_compile_module` tool. They select strict standalone themselves, do not
+offer a game backend, and never need consent. Strict standalone uses the bundled
+compiler, does not start the game, does not stage anything in the installation,
+and needs no consent. It also returns native compiler diagnostics; the optional
+runtime diagnostics hook belongs only to the game backend.
+
+Use the mixed `gore_as` compile routes only when the user knowingly chose
+`game` or `standalone-then-game`; those may fall back to the embedded game
+compiler and legitimately ask for both game-launch and install-write consent.
+If a dedicated standalone call is refused with a claim that it launches the
+game, do not relay that false question: report that the installed GORE MCP
+server is older than this workflow and needs updating.
+
 ## The consent gate
 
 A call asks first when it would change the game installation, or destroy
 something outside it that this server can see is there — an output file that
 already exists, an output directory that already holds files, a bundle folder
 about to be cleared and rebuilt. Writing into a fresh or empty scratch directory
-asks nobody. If a question does arrive, it is about something real; read what it
+asks nobody. Explicit strict standalone AngelScript compilation also asks
+nobody. If a question does arrive, it is about something real; read what it
 names rather than approving it reflexively.
 
 Many clients answer that question themselves in milliseconds without showing
@@ -130,9 +150,12 @@ anybody anything, so the call comes back refused even though nobody declined.
 
 When that happens: do not resend the call unchanged, and do not tell the user they
 said no — the server cannot see who answered. Show them the command line the
-refusal prints, ask in the conversation, and only if they agree, send the same
-call again with `user_approved` set to their own words. Never fill that field in
-without having asked; it is recorded in the result as your claim.
+refusal prints and ask in the conversation. If they agree, send the exact same
+call again with the refusal's `approval_request_id` and `user_approved` set to
+their own words. The words need no ritual formula: a clear instruction to do the
+displayed operation is enough. The opaque id expires, works once, and is bound
+to the normalized call, so changing any argument or reusing it is refused. Never
+invent either field or fill the words without having asked.
 
 ## Two things that will cost you a build
 
@@ -147,8 +170,15 @@ bound exists to prevent — and a cut-off JSON array does not parse.
 
 ## Hand the build over before you ask to install it
 
-The moment `mod build` succeeds, and **before** the deploy question is put to the
-user in any form, tell them four things:
+The moment `mod build` succeeds, call the dedicated read-only
+`gore_mod_inspect` tool on the resulting bundle directory. It takes `bundle`
+directly, needs no consent, and returns bounded root metadata, components,
+manifest/tree hashes, and explicit proof limits. A failed inspection means the
+build is not ready to import or deploy. Do not substitute Manager import as a
+validator: import changes the protected library and legitimately needs consent.
+
+After inspection succeeds, and **before** the deploy question is put to the user
+in any form, tell them four things:
 
 1. **What the mod changes**, domain by domain — for each one, what they will see
    or hear, and where. Not the spec; what it does.
@@ -176,7 +206,9 @@ conversation.
 
 `gore mod deploy` and `gore mgr apply` verify that the bytes they wrote are the
 bytes they meant to write, by hash. Nothing observes the screen. A successful
-deploy or Apply is not evidence that the change is visible.
+deploy or Apply is not evidence that the change is visible. A marker that exists
+only in unreachable code is likewise not evidence for the visible or audible
+behavior the user requested.
 
 So follow it with a checklist the user can actually run: what to look at, in what
 order, and what each item would look like if it worked. Mark the items you could

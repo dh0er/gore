@@ -103,6 +103,18 @@ Windows, macOS and Linux — and convert:
 ffmpeg -i line.wav -c:a libvorbis -ar 48000 -ac 1 -q:a 5 line.ogg
 ```
 
+Check the result before building an archive or bundle:
+
+```powershell
+gore voice validate --ogg line.ogg
+gore voice validate --ogg line.ogg --json
+```
+
+This performs the same bounded structural and timing validation used by the
+archive and bundle paths. Vorbis is decoded completely to PCM; Opus packet and
+timing structure is checked without decoding its audio payload. It does not
+claim that a recording sounds good or has been heard in the game.
+
 Flag by flag: `-c:a libvorbis` writes Vorbis, `-ar 48000` resamples to 48 kHz,
 `-ac 1` mixes down to mono, `-q:a 5` sets the encoder's quality (libvorbis
 documents the range -1 to 10; higher is better and larger). Swap `line.wav` for

@@ -74,24 +74,27 @@ apps read too, so the install is configured in exactly one place.
 gore doctor
 ```
 
-One read-only pass over everything the rest of this guide assumes. Nine checks,
+One read-only pass over everything the rest of this guide assumes. Ten checks,
 one line each: where the install is and which of the three sources above
 answered, whether that folder holds Gothic 1 Remake, whether [UE4SS](#ue4ss) is
 present, which UE4SS mods are enabled, what is deployed, what an interrupted run
-left behind, whether the executable is running, and whether the shared
-localized-text catalog still describes the installed `.lcache`.
+left behind, whether the executable is running, whether the authenticated
+standalone AngelScript compiler matches the installed cache/API, and whether
+the shared localized-text catalog still describes the installed `.lcache`.
 
-Any line that is not `ok` carries a `fix:` line. From a real run, abridged:
+Every `problem` carries a `fix:` line. A `note` is informational; a `skipped`
+check can point to the earlier missing prerequisite instead. Abridged example:
 
 ```
 ok      game path     D:\SteamLibrary\steamapps\common\Gothic 1 Remake (source: config)
 ok      UE4SS         installed at …\G1R\Binaries\Win64\ue4ss
 ok      UE4SS mods    22 mod folder(s), 7 enabled
 ok      deployment    nothing is deployed (no deploy record in the install)
+ok      AS standalone authenticated standalone compiler is compatible with this cache/API; no game launch is required
 problem loc catalog   43851 ids in 19 language(s), but stale: extracted from 37081808 bytes and the installed cache is now 37093440
                       fix: … Run 'gore loc extract' so the shared catalog describes the file that is actually installed
 
-9 check(s): 8 ok, 0 note, 1 problem, 0 skipped
+10 check(s): 9 ok, 0 note, 1 problem, 0 skipped
 ```
 
 | Verdict | Meaning |
@@ -109,8 +112,9 @@ script, use `gore doctor --json`: each check carries a stable `id` and its own
 counts.
 
 Nothing here writes, creates or removes anything. The `deployment` check hashes
-the files the deploy record claims, exactly as `gore mgr status` does, which
-makes it the slowest of the nine.
+the files the deploy record claims, exactly as `gore mgr status` does. The
+standalone-compiler check separately authenticates its package and verifies that
+the installed compiler inputs match a qualified cache/API.
 
 What each check reads — and therefore what it can and cannot prove — is in the
 [CLI reference](cli-reference.md#doctor).

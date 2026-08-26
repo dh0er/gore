@@ -66,7 +66,10 @@ pub enum ArgKind {
     /// left to the command: `asset patch-fixed` takes either, `as patch-default` insists on
     /// lowercase, and this pre-check refuses neither.
     Hex,
-    Int { min: Option<i64>, max: Option<i64> },
+    Int {
+        min: Option<i64>,
+        max: Option<i64>,
+    },
     Bool,
     /// A closed set of string values, rendered into the schema as an `enum`.
     Enum(&'static [&'static str]),
@@ -114,7 +117,14 @@ impl ArgSpec {
         help: &'static str,
         required: bool,
     ) -> Self {
-        Self { name, form, kind, help, required, default_hint: None }
+        Self {
+            name,
+            form,
+            kind,
+            help,
+            required,
+            default_hint: None,
+        }
     }
 
     pub const fn with_default(mut self, hint: &'static str) -> Self {
@@ -148,7 +158,10 @@ pub enum Class {
 impl Class {
     /// Whether `--allow-write` is needed.
     pub fn needs_write_permission(&self) -> bool {
-        matches!(self, Class::ManagerWrite | Class::Mutate | Class::Destructive)
+        matches!(
+            self,
+            Class::ManagerWrite | Class::Mutate | Class::Destructive
+        )
     }
 
     /// Whether `--allow-game-launch` is needed.
@@ -169,9 +182,7 @@ impl Class {
             // because compiling stages its result in the installation. This label is the third
             // surface that states it — the primer and the refusal message are the others — and all
             // three have to agree with the gate.
-            Class::GameLaunch => {
-                "LAUNCHES THE GAME — needs --allow-game-launch AND --allow-write"
-            }
+            Class::GameLaunch => "LAUNCHES THE GAME — needs --allow-game-launch AND --allow-write",
         }
     }
 }
@@ -222,6 +233,14 @@ impl Derived {
 #[derive(Clone, Copy, Debug)]
 pub struct Safety {
     pub base: Class,
+    /// A [`Class::GameLaunch`] command may have one explicitly offline mode.
+    ///
+    /// `as compile` and `as compile-module` default to a policy that may fall back to the game's
+    /// embedded compiler, but `--backend standalone` is a materially different call: it never
+    /// launches the game and never enters the installation-mutation transaction. Keeping the
+    /// command's worst case as `GameLaunch` preserves honest tool annotations while this facet
+    /// lets the per-call gate use the backend the caller actually selected.
+    pub offline_when: Option<(&'static str, &'static str)>,
     /// When set, omitting this argument escalates the class to [`Class::Mutate`].
     ///
     /// This models a family of commands exactly: `audio replace`, `audio apply-patch`, and
@@ -304,6 +323,7 @@ impl Safety {
     const fn of(base: Class) -> Self {
         Self {
             base,
+            offline_when: None,
             in_place_without: None,
             truncates: &[],
             derives: &[],
@@ -338,6 +358,14 @@ impl Safety {
         Self::of(Class::GameLaunch)
     }
 
+    /// [`Class::GameLaunch`] except when `arg` has exactly `offline_value`.
+    pub const fn game_launch_except(arg: &'static str, offline_value: &'static str) -> Self {
+        Self {
+            offline_when: Some((arg, offline_value)),
+            ..Self::of(Class::GameLaunch)
+        }
+    }
+
     /// [`Class::Write`] when `out_arg` is supplied, [`Class::Mutate`] when it is not.
     ///
     /// The same argument is registered as truncating. Supplying it is what makes the call a write
@@ -345,13 +373,20 @@ impl Safety {
     /// path as the output turns "write a new file" back into "replace that file", and the atomic
     /// writer underneath does exactly that.
     pub const fn write_or_in_place(out_arg: &'static [&'static str; 1]) -> Self {
-        Self { in_place_without: Some(out_arg[0]), truncates: out_arg, ..Self::of(Class::Write) }
+        Self {
+            in_place_without: Some(out_arg[0]),
+            truncates: out_arg,
+            ..Self::of(Class::Write)
+        }
     }
 
     /// [`Class::Write`], but the named arguments are overwritten rather than newly created when
     /// they already exist. See [`Safety::truncates`].
     pub const fn write_truncating(outputs: &'static [&'static str]) -> Self {
-        Self { truncates: outputs, ..Self::of(Class::Write) }
+        Self {
+            truncates: outputs,
+            ..Self::of(Class::Write)
+        }
     }
 
     /// Register arguments that make this an installation change when they point into the game
@@ -383,6 +418,9 @@ impl Safety {
 
     /// The class this specific call falls into.
     pub fn effective(&self, args: &Map<String, Value>) -> Class {
+        if self.is_explicitly_offline(args) {
+            return Class::Write;
+        }
         match self.in_place_without {
             Some(escape) if !args.contains_key(escape) => self.base.max(Class::Mutate),
             _ => self.base,
@@ -408,17 +446,27 @@ impl Safety {
     /// driving the game's own compiler stages a source tree into the installation and restores it
     /// afterwards, so the installation is touched either way.
     pub fn requirements(&self, args: &Map<String, Value>) -> Requirements {
-        let rewrites_in_place =
-            self.in_place_without.is_some_and(|escape| !args.contains_key(escape));
+        let rewrites_in_place = self
+            .in_place_without
+            .is_some_and(|escape| !args.contains_key(escape));
+        let launches_game =
+            matches!(self.base, Class::GameLaunch) && !self.is_explicitly_offline(args);
         Requirements {
             write: rewrites_in_place
                 || matches!(
                     self.base,
-                    Class::ManagerWrite | Class::Mutate | Class::Destructive | Class::GameLaunch
-                ),
-            game_launch: matches!(self.base, Class::GameLaunch),
+                    Class::ManagerWrite | Class::Mutate | Class::Destructive
+                )
+                || launches_game,
+            game_launch: launches_game,
             rewrites_in_place,
         }
+    }
+
+    fn is_explicitly_offline(&self, args: &Map<String, Value>) -> bool {
+        self.offline_when.is_some_and(|(arg, offline_value)| {
+            args.get(arg).and_then(Value::as_str) == Some(offline_value)
+        })
     }
 }
 
@@ -466,6 +514,10 @@ pub struct CommandSpec {
     /// and under the stdio transport our stdin is the JSON-RPC channel, so an unsuppressed prompt
     /// would deadlock the session.
     pub forced_argv: &'static [&'static str],
+    /// Real CLI flags deliberately unavailable through a narrower safety-scoped alias.
+    /// They remain listed here so the CLI/table drift test can verify that the alias is a closed
+    /// subset of the same command rather than a second, silently drifting command definition.
+    pub cli_only_flags: &'static [&'static str],
     pub timeout_secs: u64,
     /// The guide page to read first, surfaced in descriptions and in failure messages.
     pub guide: Option<&'static str>,
@@ -520,6 +572,7 @@ impl CommandSpec {
             safety,
             json: JsonSupport::None,
             forced_argv: &[],
+            cli_only_flags: &[],
             timeout_secs,
             guide: None,
             gated_because: None,
@@ -546,6 +599,11 @@ impl CommandSpec {
 
     pub const fn forced(mut self, argv: &'static [&'static str]) -> Self {
         self.forced_argv = argv;
+        self
+    }
+
+    pub const fn hides_cli_flags(mut self, flags: &'static [&'static str]) -> Self {
+        self.cli_only_flags = flags;
         self
     }
 
@@ -610,7 +668,9 @@ impl GroupSpec {
     /// the surfaces that answer questions *about* the CLI, where a spelling the CLI itself printed
     /// has to be understood.
     pub fn command_or_alias(&self, name: &str) -> Option<&'static CommandSpec> {
-        self.commands.iter().find(|command| command.answers_to(name))
+        self.commands
+            .iter()
+            .find(|command| command.answers_to(name))
     }
 
     pub fn subcommands(&self) -> Vec<&'static str> {
@@ -625,7 +685,11 @@ impl GroupSpec {
     /// lie a client's approval UI relies on. The per-subcommand truth is in the description and is
     /// enforced by the safety gate regardless of what the annotation says.
     pub fn worst_case(&self) -> Class {
-        self.commands.iter().map(|command| command.safety.worst_case()).max().unwrap_or(Class::Read)
+        self.commands
+            .iter()
+            .map(|command| command.safety.worst_case())
+            .max()
+            .unwrap_or(Class::Read)
     }
 }
 
@@ -663,7 +727,11 @@ pub const GROUPS: &[GroupSpec] = &[
     groups::deploy::TEXTURE,
     groups::deploy::ASSET,
     groups::deploy::MOD,
+    groups::deploy::MOD_INSPECT,
     groups::deploy::MGR,
+    groups::deploy::MGR_PREFLIGHT,
+    groups::script::AS_COMPILE,
+    groups::script::AS_COMPILE_MODULE,
     groups::script::AS,
 ];
 
@@ -671,15 +739,28 @@ pub const GROUPS: &[GroupSpec] = &[
 ///
 /// A literal, not a computed value: it is a claim about the CLI, and the integration test compares
 /// it against what clap actually exposes. Changing it should be a deliberate act.
-pub const EXPECTED_LEAF_COUNT: usize = 87;
+pub const EXPECTED_LEAF_COUNT: usize = 89;
 
 pub fn group(tool: &str) -> Option<&'static GroupSpec> {
     GROUPS.iter().find(|group| group.tool == tool)
 }
 
-/// Total number of CLI leaf commands reachable through this server.
+/// Total number of distinct CLI leaf commands reachable through this server.
+///
+/// A safety-scoped alias such as `gore_mgr_preflight` deliberately exposes the same CLI leaf a
+/// second time so clients can receive an accurate read-only annotation. It must not inflate the
+/// coverage count: this number is compared with clap's distinct command surface.
 pub fn leaf_count() -> usize {
-    GROUPS.iter().map(|group| group.commands.len()).sum()
+    GROUPS
+        .iter()
+        .flat_map(|group| {
+            group.commands.iter().map(move |command| match group.shape {
+                GroupShape::Nested => format!("{} {}", group.cli, command.sub),
+                GroupShape::Flat => command.sub.to_owned(),
+            })
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
 }
 
 #[cfg(test)]
@@ -690,7 +771,7 @@ mod tests {
     #[test]
     fn the_table_covers_every_leaf_of_the_cli() {
         assert_eq!(leaf_count(), EXPECTED_LEAF_COUNT);
-        assert_eq!(GROUPS.len(), 14);
+        assert_eq!(GROUPS.len(), 18);
     }
 
     #[test]
@@ -701,7 +782,12 @@ mod tests {
         // the table, and the only way anybody saw them was reading the rendered output.
         let padded = |text: &str| text.contains("   ");
         for group in GROUPS {
-            assert!(!padded(group.summary), "{}: {:?}", group.tool, group.summary);
+            assert!(
+                !padded(group.summary),
+                "{}: {:?}",
+                group.tool,
+                group.summary
+            );
             for command in group.commands {
                 assert!(
                     !padded(command.summary),
@@ -729,7 +815,12 @@ mod tests {
         for group in GROUPS {
             for command in group.commands {
                 for set in command.exactly_one_of.iter().chain(command.at_most_one_of) {
-                    assert!(set.len() >= 2, "{}/{}: a set of one is not a set", group.tool, command.sub);
+                    assert!(
+                        set.len() >= 2,
+                        "{}/{}: a set of one is not a set",
+                        group.tool,
+                        command.sub
+                    );
                     for name in *set {
                         assert!(
                             command.arg(name).is_some(),
@@ -759,10 +850,17 @@ mod tests {
     fn tool_names_are_unique_and_client_safe() {
         let mut seen = HashSet::new();
         for group in GROUPS {
-            assert!(seen.insert(group.tool), "duplicate tool name: {}", group.tool);
+            assert!(
+                seen.insert(group.tool),
+                "duplicate tool name: {}",
+                group.tool
+            );
             // MCP restricts tool names to letters, digits, underscore, hyphen and dot.
             assert!(
-                group.tool.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')),
+                group
+                    .tool
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')),
                 "tool name is not client-safe: {}",
                 group.tool
             );
@@ -810,8 +908,11 @@ mod tests {
         // that produces a plausible-looking wrong result rather than an error.
         for group in GROUPS {
             for command in group.commands {
-                let mut orders: Vec<u8> =
-                    command.args.iter().filter_map(|arg| arg.form.positional_order()).collect();
+                let mut orders: Vec<u8> = command
+                    .args
+                    .iter()
+                    .filter_map(|arg| arg.form.positional_order())
+                    .collect();
                 orders.sort_unstable();
                 let expected: Vec<u8> = (0..orders.len() as u8).collect();
                 assert_eq!(
@@ -833,10 +934,18 @@ mod tests {
                     .filter(|arg| matches!(arg.form, ArgForm::PositionalRepeated { .. }))
                     .filter_map(|arg| arg.form.positional_order())
                     .collect();
-                assert!(variadic.len() <= 1, "{}/{} has two variadics", group.tool, command.sub);
+                assert!(
+                    variadic.len() <= 1,
+                    "{}/{} has two variadics",
+                    group.tool,
+                    command.sub
+                );
                 if let Some(order) = variadic.first() {
-                    let positionals =
-                        command.args.iter().filter_map(|arg| arg.form.positional_order()).count();
+                    let positionals = command
+                        .args
+                        .iter()
+                        .filter_map(|arg| arg.form.positional_order())
+                        .count();
                     assert_eq!(
                         *order as usize,
                         positionals - 1,
@@ -1033,9 +1142,14 @@ mod tests {
 
         // Every named argument must actually exist on its command, or the gate silently never fires.
         for (tool, sub, args) in &gated {
-            let command = group(tool).and_then(|g| g.command(sub)).expect("command exists");
+            let command = group(tool)
+                .and_then(|g| g.command(sub))
+                .expect("command exists");
             for arg in *args {
-                assert!(command.arg(arg).is_some(), "{tool} {sub} has no argument `{arg}`");
+                assert!(
+                    command.arg(arg).is_some(),
+                    "{tool} {sub} has no argument `{arg}`"
+                );
             }
         }
     }
@@ -1083,7 +1197,14 @@ mod tests {
         // destination through `prepare_absent_output_directory`, which refuses anything inside the
         // live game tree outright, so listing it here would replace a precise CLI error with a
         // permission refusal.
-        unchecked.retain(|name| name != "gore_asset extract");
+        unchecked.retain(|name| {
+            !matches!(
+                name.as_str(),
+                "gore_asset extract"
+                    | "gore_as_compile compile"
+                    | "gore_as_compile_module compile-module"
+            )
+        });
         assert!(
             unchecked.is_empty(),
             "these name an output that no safety list covers: {unchecked:?}"
@@ -1136,9 +1257,14 @@ mod tests {
         assert_eq!(sensitive, expected);
 
         for (tool, sub, args) in &sensitive {
-            let command = group(tool).and_then(|g| g.command(sub)).expect("command exists");
+            let command = group(tool)
+                .and_then(|g| g.command(sub))
+                .expect("command exists");
             for arg in *args {
-                assert!(command.arg(arg).is_some(), "{tool} {sub} has no argument `{arg}`");
+                assert!(
+                    command.arg(arg).is_some(),
+                    "{tool} {sub} has no argument `{arg}`"
+                );
             }
         }
     }
@@ -1158,21 +1284,44 @@ mod tests {
         derived.sort_unstable_by_key(|(tool, sub, _)| (*tool, *sub));
 
         let expected: Vec<(&str, &str, &[(&'static str, Derived)])> = vec![
-            ("gore_catalog", "dump-mod", &[("out", Derived::Child("gore-dump"))]),
+            (
+                "gore_catalog",
+                "dump-mod",
+                &[("out", Derived::Child("gore-dump"))],
+            ),
             (
                 "gore_mod",
                 "build",
-                &[("out", Derived::ChildNamedInJson { arg: "spec", pointer: "/meta/name" })],
+                &[(
+                    "out",
+                    Derived::ChildNamedInJson {
+                        arg: "spec",
+                        pointer: "/meta/name",
+                    },
+                )],
             ),
-            ("gore_project", "scaffold", &[("out", Derived::ChildOfArg("mod_name"))]),
-            ("gore_texture", "extract", &[("out", Derived::Extension("png.json"))]),
+            (
+                "gore_project",
+                "scaffold",
+                &[("out", Derived::ChildOfArg("mod_name"))],
+            ),
+            (
+                "gore_texture",
+                "extract",
+                &[("out", Derived::Extension("png.json"))],
+            ),
         ];
         assert_eq!(derived, expected);
 
         for (tool, sub, entries) in &derived {
-            let command = group(tool).and_then(|g| g.command(sub)).expect("command exists");
+            let command = group(tool)
+                .and_then(|g| g.command(sub))
+                .expect("command exists");
             for (arg, how) in *entries {
-                assert!(command.arg(arg).is_some(), "{tool} {sub} has no argument `{arg}`");
+                assert!(
+                    command.arg(arg).is_some(),
+                    "{tool} {sub} has no argument `{arg}`"
+                );
                 // A shape that reads a file needs the argument naming that file to exist too,
                 // and to be required — an optional one would leave the gate deriving nothing on
                 // exactly the calls that omit it.
@@ -1219,9 +1368,14 @@ mod tests {
         assert_eq!(choosing, expected);
 
         for (tool, sub, args) in &choosing {
-            let command = group(tool).and_then(|g| g.command(sub)).expect("command exists");
+            let command = group(tool)
+                .and_then(|g| g.command(sub))
+                .expect("command exists");
             for arg in *args {
-                assert!(command.arg(arg).is_some(), "{tool} {sub} has no argument `{arg}`");
+                assert!(
+                    command.arg(arg).is_some(),
+                    "{tool} {sub} has no argument `{arg}`"
+                );
             }
             // The whole narrowing rests on the directory being the only thing at risk. A command
             // that also rewrites its own input has a second target this check never looks at.
@@ -1266,10 +1420,18 @@ mod tests {
         // too far.
         for group in GROUPS {
             for command in group.commands {
-                let Some(reason) = command.gated_because else { continue };
+                let Some(reason) = command.gated_because else {
+                    continue;
+                };
                 let label = format!("{} {}", group.tool, command.sub);
-                assert!(!reason.ends_with('.'), "{label}: the renderer adds the full stop");
-                assert!(!reason.contains("  "), "{label}: doubled space in {reason:?}");
+                assert!(
+                    !reason.ends_with('.'),
+                    "{label}: the renderer adds the full stop"
+                );
+                assert!(
+                    !reason.contains("  "),
+                    "{label}: doubled space in {reason:?}"
+                );
                 assert!(
                     reason.starts_with(|first: char| first.is_lowercase()),
                     "{label}: {reason:?} must continue a sentence, not start one"

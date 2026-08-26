@@ -20,7 +20,74 @@ use super::model::{
     ModKind, PreparedManagerRootLock, RawTarget, SecureDirectory, SecureFile, SecureNode,
     META_FILE,
 };
-use crate::{Component, ModError, ModManifest, ScriptEntry, VoicePatchManifest};
+use crate::{Component, ModError, ModManifest, ModMeta, ScriptEntry, VoicePatchManifest};
+
+/// Stable, bounded summary of one built GORE bundle.
+///
+/// This is deliberately not Manager library metadata: inspecting a bundle does not import it,
+/// choose a library id, or create a loadout entry. The two hashes identify the exact root manifest
+/// bytes and the complete normalized bundle tree that were validated during this call.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GoreBundleInspection {
+    pub report_format: u32,
+    pub source_kind: GoreBundleSourceKind,
+    pub bundle_format: u32,
+    #[serde(rename = "mod")]
+    pub mod_meta: ModMeta,
+    pub component_count: usize,
+    pub components: Vec<GoreBundleComponentSummary>,
+    pub file_count: usize,
+    pub directory_count: usize,
+    pub total_file_bytes: u64,
+    pub manifest_sha256: String,
+    pub tree_sha256: String,
+    pub evidence: GoreBundleInspectionEvidence,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GoreBundleSourceKind {
+    Directory,
+    Zip,
+}
+
+/// One component without its potentially enormous target list.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GoreBundleComponentSummary {
+    #[serde(rename = "type")]
+    pub component_type: &'static str,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub target_count: usize,
+    pub footprint_coverage: super::model::FootprintCoverage,
+}
+
+/// Explicit proof boundary for the inspection result.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GoreBundleInspectionEvidence {
+    pub verified: [&'static str; 4],
+    pub not_verified: [&'static str; 4],
+}
+
+impl Default for GoreBundleInspectionEvidence {
+    fn default() -> Self {
+        Self {
+            verified: [
+                "bounded non-link materialization of the selected directory or ZIP",
+                "root manifest format plus every declared component manifest and referenced payload",
+                "portable paths, payload size limits, and supported payload structure where an offline decoder exists",
+                "SHA-256 identity of the exact manifest bytes and complete normalized bundle tree",
+            ],
+            not_verified: [
+                "compatibility with any particular game installation or game build",
+                "whether named game-side assets, samples, localization ids, or script edit targets exist",
+                "cross-mod conflicts, load order, or deployment readiness",
+                "runtime behavior, visuals, audio playback, dialog flow, or gameplay effect",
+            ],
+        }
+    }
+}
 
 /// Result of one identity-aware import.  The entry remains the same public metadata shape used by
 /// the compatibility [`import`] API; disposition and match provenance are additive native facts.
@@ -170,6 +237,155 @@ const MAX_IDENTITY_REFUSAL_IDS: usize = 2;
 const LIBRARY_LOCK_MARKER_ENV: &str = "GORE_TEST_LIBRARY_LOCK_MARKER";
 #[cfg(test)]
 const LIBRARY_LOCK_HOLD_MS_ENV: &str = "GORE_TEST_LIBRARY_LOCK_HOLD_MS";
+
+/// Fully inspect one built GORE bundle without importing or deploying it.
+///
+/// `source` may be the bundle directory itself or a ZIP containing one supported bundle root.
+/// The canonical Manager materializer, manifest detector, component parser, resource envelope and
+/// normalized tree hasher are reused. Work happens only in a temporary directory; neither the
+/// selected source, the Manager library, nor a game installation is modified.
+pub fn inspect_gore_bundle(source: &Path) -> crate::Result<GoreBundleInspection> {
+    if !source.exists() {
+        return Err(ModError::Other(format!(
+            "bundle source not found: {}",
+            source.display()
+        )));
+    }
+    let metadata = std::fs::symlink_metadata(source).map_err(crate::io(&format!(
+        "reading bundle source metadata {}",
+        source.display()
+    )))?;
+    let source_kind = if metadata.is_dir() {
+        GoreBundleSourceKind::Directory
+    } else if metadata.is_file()
+        && source
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+    {
+        GoreBundleSourceKind::Zip
+    } else {
+        return Err(ModError::Other(format!(
+            "bundle source must be a directory or .zip: {}",
+            source.display()
+        )));
+    };
+
+    let staging = tempfile::Builder::new()
+        .prefix("gore-bundle-inspect-")
+        .tempdir()
+        .map_err(crate::io("creating temporary bundle inspection directory"))?;
+    materialize(source, staging.path(), DEFAULT_IMPORT_LIMITS)?;
+
+    // Keep the same wrapper/reroot normalization as Manager import, including the ordinary
+    // "ZIP contains one folder" shape. For a GORE bundle the temporary synthetic UE4SS wrapper is
+    // discarded by rerooting and is never part of the reported tree identity.
+    let fallback_name = source
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("bundle");
+    let _temporary_wrapper = wrap_root_ue4ss(staging.path(), fallback_name)?;
+    reroot_nested_bundle(staging.path())?;
+
+    let (manifest, components) = detect(staging.path(), DEFAULT_IMPORT_LIMITS)?;
+    let manifest = manifest.ok_or_else(|| {
+        ModError::Other(format!(
+            "no GORE bundle found in {}: expected exactly one supported gore-mod.json root",
+            source.display()
+        ))
+    })?;
+    validate_inspected_gore_bundle(
+        staging.path(),
+        &manifest,
+        &components,
+        DEFAULT_IMPORT_LIMITS,
+    )?;
+
+    let manifest_bytes = read_bounded_bundle_file(
+        staging.path(),
+        Path::new("gore-mod.json"),
+        "gore-mod.json",
+        DEFAULT_IMPORT_LIMITS.max_manifest_bytes,
+    )?;
+    let manifest_sha256 = digest_hex(Sha256::digest(&manifest_bytes).into());
+    let root = open_directory_nofollow(staging.path(), "inspected GORE bundle root")?;
+    let hashes =
+        hash_secure_import_tree_hashes_inner(&root, DEFAULT_IMPORT_LIMITS, false, None, None)?;
+    let descriptors = collect_secure_import_tree(&root, DEFAULT_IMPORT_LIMITS, false)?;
+    let mut file_count = 0usize;
+    let mut directory_count = 0usize;
+    let mut total_file_bytes = 0u64;
+    for descriptor in descriptors {
+        match descriptor.kind {
+            TreeDescriptorKind::File { length, .. } => {
+                file_count += 1;
+                total_file_bytes = total_file_bytes.checked_add(length).ok_or_else(|| {
+                    ModError::Other("inspected bundle byte count overflowed".into())
+                })?;
+            }
+            TreeDescriptorKind::Directory { .. } => directory_count += 1,
+        }
+    }
+    let component_summaries = components.iter().map(component_summary).collect::<Vec<_>>();
+
+    Ok(GoreBundleInspection {
+        report_format: 1,
+        source_kind,
+        bundle_format: manifest.format,
+        mod_meta: manifest.mod_meta,
+        component_count: component_summaries.len(),
+        components: component_summaries,
+        file_count,
+        directory_count,
+        total_file_bytes,
+        manifest_sha256,
+        tree_sha256: hashes.identity_sha256,
+        evidence: GoreBundleInspectionEvidence::default(),
+    })
+}
+
+fn component_summary(component: &ComponentInfo) -> GoreBundleComponentSummary {
+    let (component_type, path, name, target_count) = match component {
+        ComponentInfo::Ue4ssLua {
+            name, rel, targets, ..
+        } => ("ue4ss_lua", rel.clone(), Some(name.clone()), targets.len()),
+        ComponentInfo::LocPatch { rel, targets } => ("loc_patch", rel.clone(), None, targets.len()),
+        ComponentInfo::AudioPatch { rel, targets } => {
+            ("audio_patch", rel.clone(), None, targets.len())
+        }
+        ComponentInfo::TexturePatch { rel, targets } => {
+            ("texture_patch", rel.clone(), None, targets.len())
+        }
+        ComponentInfo::AngelScriptPatch { rel, targets } => {
+            ("angel_script_patch", rel.clone(), None, targets.len())
+        }
+        ComponentInfo::FilePatch { rel, targets } => {
+            ("file_patch", rel.clone(), None, targets.len())
+        }
+        ComponentInfo::PakFilePatch { rel, targets } => {
+            ("pak_file_patch", rel.clone(), None, targets.len())
+        }
+        ComponentInfo::VoiceArchivePatch { rel, targets } => {
+            ("voice_archive_patch", rel.clone(), None, targets.len())
+        }
+        // `detect` cannot produce foreign component kinds when it returned a GORE manifest. Keep
+        // this total so future variants fail visibly in the bounded summary instead of panicking.
+        ComponentInfo::Triplet { rel_base, targets } => {
+            ("foreign_triplet", rel_base.clone(), None, targets.len())
+        }
+        ComponentInfo::LoosePak { rel, targets } => {
+            ("foreign_pak", rel.clone(), None, targets.len())
+        }
+        ComponentInfo::RawFile { rel, .. } => ("foreign_raw_file", rel.clone(), None, 1),
+    };
+    GoreBundleComponentSummary {
+        component_type,
+        path,
+        name,
+        target_count,
+        footprint_coverage: component.footprint_coverage(),
+    }
+}
 
 /// Import `source` (a folder, `.zip` archive, or single recognized game file) into the library
 /// at `library_dir`, returning the entry metadata that was also written as its sidecar.
@@ -5658,6 +5874,267 @@ fn loose_component_targets(
     Ok(actual)
 }
 
+/// Finish the checks that can be authoritative without a game installation.
+///
+/// `goremod_components` above is the canonical manifest/target parser used by Manager import. This
+/// pass deliberately builds on that result: it opens every referenced payload, applies the same
+/// bounded decoders used by deployment where those decoders are install-independent, and checks
+/// root declarations against the nested manifests that actually drive deployment.
+fn validate_inspected_gore_bundle(
+    bundle_dir: &Path,
+    manifest: &ModManifest,
+    components: &[ComponentInfo],
+    limits: ImportLimits,
+) -> crate::Result<()> {
+    if !crate::is_safe_mod_name(&manifest.mod_meta.name) {
+        return Err(ModError::Other(format!(
+            "invalid mod name {:?}: expected one portable path component",
+            manifest.mod_meta.name
+        )));
+    }
+    if manifest.components.is_empty() {
+        return Err(ModError::Other(
+            "bundle has no components and cannot deploy anything".into(),
+        ));
+    }
+    if components.len() != manifest.components.len() {
+        return Err(ModError::Other(format!(
+            "component inspection mismatch: gore-mod.json declares {}, parser returned {}",
+            manifest.components.len(),
+            components.len()
+        )));
+    }
+    if manifest
+        .components
+        .iter()
+        .filter(|component| matches!(component, Component::Ue4ssLua { .. }))
+        .take(2)
+        .count()
+        > 1
+    {
+        return Err(ModError::Other(
+            "multiple UE4SS components in one bundle are unsupported".into(),
+        ));
+    }
+    if manifest
+        .components
+        .iter()
+        .filter(|component| matches!(component, Component::AngelScriptPatch { .. }))
+        .take(2)
+        .count()
+        > 1
+    {
+        return Err(ModError::Other(
+            "multiple AngelScript components target the same game script cache".into(),
+        ));
+    }
+
+    let bundle_root = open_directory_nofollow(bundle_dir, "inspected GORE bundle root")?;
+    let mut script_total = 0u64;
+    for component in &manifest.components {
+        match component {
+            Component::Ue4ssLua { name, path, .. } => {
+                if !crate::is_safe_mod_name(name) {
+                    return Err(ModError::Other(format!(
+                        "unsafe UE4SS component name {name:?}"
+                    )));
+                }
+                require_bundle_directory(&bundle_root, path, "UE4SS component")?;
+                read_bounded_bundle_file(
+                    bundle_dir,
+                    &Path::new(path).join("Scripts/main.lua"),
+                    "UE4SS main script",
+                    crate::MAX_LOOSE_FILE_BYTES,
+                )?;
+            }
+            Component::LocPatch { .. } => {
+                // Parsed completely by `goremod_components`; it has no referenced payloads.
+            }
+            Component::AudioPatch { path, banks } => {
+                let map: BTreeMap<String, BTreeMap<String, String>> =
+                    serde_json::from_slice(&read_bounded_bundle_file(
+                        bundle_dir,
+                        &Path::new(path).join("manifest.json"),
+                        "audio manifest",
+                        limits.max_manifest_bytes,
+                    )?)?;
+                let mut actual_banks = map.keys().cloned().collect::<Vec<_>>();
+                let mut declared_banks = banks.clone();
+                actual_banks.sort();
+                actual_banks.dedup();
+                declared_banks.sort();
+                declared_banks.dedup();
+                if actual_banks != declared_banks {
+                    return Err(ModError::Other(format!(
+                        "audio manifest banks {actual_banks:?} disagree with the component declaration {declared_banks:?}"
+                    )));
+                }
+                for (bank, samples) in map {
+                    crate::validate_bank_name(&bank)?;
+                    for (sample, wav_path) in samples {
+                        let wav = read_bounded_bundle_file(
+                            bundle_dir,
+                            Path::new(&wav_path),
+                            "audio WAV payload",
+                            crate::MAX_AUDIO_WAV_BYTES,
+                        )?;
+                        gore_fmod::read_wav_pcm16(&wav).map_err(|error| {
+                            ModError::Fmod(format!("{bank}|{sample} payload {wav_path:?}: {error}"))
+                        })?;
+                    }
+                }
+            }
+            Component::TexturePatch { path, assets } => {
+                let map: BTreeMap<String, String> =
+                    serde_json::from_slice(&read_bounded_bundle_file(
+                        bundle_dir,
+                        &Path::new(path).join("manifest.json"),
+                        "texture manifest",
+                        limits.max_manifest_bytes,
+                    )?)?;
+                let mut actual_assets = map.keys().cloned().collect::<Vec<_>>();
+                let mut declared_assets = assets.clone();
+                actual_assets.sort();
+                actual_assets.dedup();
+                declared_assets.sort();
+                declared_assets.dedup();
+                if actual_assets != declared_assets {
+                    return Err(ModError::Other(format!(
+                        "texture manifest assets {actual_assets:?} disagree with the component declaration {declared_assets:?}"
+                    )));
+                }
+                for (asset, image_path) in map {
+                    let mount_path = gore_tex::paths::content_mount_rel(&asset).ok_or_else(|| {
+                        ModError::Other(format!(
+                            "unsupported texture asset mount root in {asset:?} (want /Game or /Engine)"
+                        ))
+                    })?;
+                    if !crate::is_safe_rel_path(&mount_path) {
+                        return Err(ModError::Other(format!(
+                            "unsafe texture asset path {asset:?}"
+                        )));
+                    }
+                    let image_bytes = read_bounded_bundle_file(
+                        bundle_dir,
+                        Path::new(&image_path),
+                        "texture image payload",
+                        crate::MAX_TEXTURE_IMAGE_BYTES,
+                    )?;
+                    let mut image_limits = image::Limits::default();
+                    image_limits.max_image_width = Some(32_768);
+                    image_limits.max_image_height = Some(32_768);
+                    let mut reader = image::ImageReader::new(std::io::Cursor::new(image_bytes))
+                        .with_guessed_format()
+                        .map_err(|error| {
+                            ModError::Other(format!(
+                                "texture image {image_path:?} for {asset:?}: {error}"
+                            ))
+                        })?;
+                    reader.limits(image_limits);
+                    reader.decode().map_err(|error| {
+                        ModError::Other(format!(
+                            "texture image {image_path:?} for {asset:?}: {error}"
+                        ))
+                    })?;
+                }
+            }
+            Component::AngelScriptPatch { path } => {
+                let entries: Vec<ScriptEntry> = serde_json::from_slice(&read_bounded_bundle_file(
+                    bundle_dir,
+                    &Path::new(path).join("manifest.json"),
+                    "script manifest",
+                    limits.max_manifest_bytes,
+                )?)?;
+                for entry in entries {
+                    if entry.op != "add" && entry.op != "edit" {
+                        return Err(ModError::Other(format!(
+                            "invalid script op {:?} for module {:?}",
+                            entry.op, entry.module
+                        )));
+                    }
+                    let remaining = crate::MAX_SCRIPT_MINI_TOTAL_BYTES
+                        .checked_sub(script_total)
+                        .ok_or_else(|| {
+                            ModError::Other("script mini-cache total byte budget exhausted".into())
+                        })?;
+                    let mini = read_bounded_bundle_file(
+                        bundle_dir,
+                        Path::new(&entry.mini),
+                        "script mini-cache payload",
+                        crate::MAX_SCRIPT_MINI_BYTES.min(remaining),
+                    )?;
+                    script_total =
+                        script_total.checked_add(mini.len() as u64).ok_or_else(|| {
+                            ModError::Other("script mini-cache byte count overflowed".into())
+                        })?;
+                    gore_as::cache::splice::validate_standalone_script_cache(&mini).map_err(
+                        |error| {
+                            ModError::Other(format!(
+                                "invalid script mini-cache {:?}: {error}",
+                                entry.mini
+                            ))
+                        },
+                    )?;
+                    let module_names =
+                        gore_as::cache::walk_modules::module_names(&mini).map_err(|error| {
+                            ModError::Other(format!(
+                                "reading module name from script mini-cache {:?}: {error}",
+                                entry.mini
+                            ))
+                        })?;
+                    if module_names.as_slice() != [entry.module.as_str()] {
+                        return Err(ModError::Other(format!(
+                            "script mini-cache {:?} declares modules {module_names:?}, but its manifest names {:?}",
+                            entry.mini, entry.module
+                        )));
+                    }
+                }
+            }
+            Component::FilePatch { path, .. } | Component::PakFilePatch { path, .. } => {
+                let map: BTreeMap<String, String> =
+                    serde_json::from_slice(&read_bounded_bundle_file(
+                        bundle_dir,
+                        &Path::new(path).join("manifest.json"),
+                        "file payload manifest",
+                        limits.max_manifest_bytes,
+                    )?)?;
+                for payload_path in map.into_values() {
+                    // Opaque by design: byte presence, size, path safety and exact tree identity
+                    // are the complete offline contract for loose/pak file payloads.
+                    read_bounded_bundle_file(
+                        bundle_dir,
+                        Path::new(&payload_path),
+                        "file payload",
+                        crate::MAX_LOOSE_FILE_BYTES,
+                    )?;
+                }
+            }
+            Component::VoiceArchivePatch { .. } => {
+                // `goremod_components` already validates the complete versioned manifest, every
+                // referenced Ogg, aggregate limits, portable archive/member paths and payload seals.
+            }
+        }
+    }
+    Ok(())
+}
+
+fn require_bundle_directory(
+    bundle_root: &SecureDirectory,
+    relative: &str,
+    label: &str,
+) -> crate::Result<()> {
+    if !crate::is_safe_rel_path(relative) {
+        return Err(ModError::Other(format!("unsafe {label} path {relative:?}")));
+    }
+    match bundle_root.open_relative_node(Path::new(relative), label)? {
+        SecureNode::Directory(_) => Ok(()),
+        SecureNode::File(file) => Err(ModError::Other(format!(
+            "{label} must be a directory: {}",
+            file.path().display()
+        ))),
+    }
+}
+
 /// Read one regular bundle file through a hard byte cap. Metadata is checked before opening, and
 /// `take(limit + 1)` keeps a concurrent growth race from allocating beyond the configured limit.
 fn read_bounded_bundle_file(
@@ -6227,8 +6704,8 @@ mod tests {
     use super::*;
     use crate::mgr::FootprintCoverage;
     use crate::{
-        build_bundle, write_bundle, BuildSpec, LooseFileReplacement, ModMeta, ScriptModule,
-        VoiceArchiveEdit, VoicePatchOp,
+        build_bundle, write_bundle, AudioReplacement, BuildSpec, LooseFileReplacement, ModMeta,
+        ScriptModule, TextureReplacement, VoiceArchiveEdit, VoicePatchOp,
     };
     use gore_modgen::gen::{OverrideValue, SingleOverride};
     use std::fs;
@@ -6417,6 +6894,115 @@ mod tests {
         let bdir = root.join("Target Probe");
         write_bundle(&bdir, &bundle).unwrap();
         bdir
+    }
+
+    fn empty_build_spec(name: &str) -> BuildSpec {
+        BuildSpec {
+            meta: ModMeta {
+                name: name.into(),
+                version: "test".into(),
+                author: "test".into(),
+            },
+            delay_ms: 0,
+            overrides: vec![],
+            loc_edits: BTreeMap::new(),
+            audio: vec![],
+            texture: vec![],
+            files: vec![],
+            pak_files: vec![],
+            scripts: vec![],
+            dialog_topics: vec![],
+            voice: vec![],
+        }
+    }
+
+    fn write_spec_bundle(root: &Path, spec: &BuildSpec) -> PathBuf {
+        let bundle = root.join(&spec.meta.name);
+        write_bundle(&bundle, &build_bundle(spec).unwrap()).unwrap();
+        bundle
+    }
+
+    #[test]
+    fn bundle_inspector_checks_each_decodable_component_payload() {
+        let temp = tempfile::tempdir().unwrap();
+
+        let invalid_wav = temp.path().join("invalid.wav");
+        fs::write(&invalid_wav, b"not a wav").unwrap();
+        let mut audio = empty_build_spec("InspectAudio");
+        audio.audio.push(AudioReplacement {
+            bank: "SFX.bank".into(),
+            sample: "Click".into(),
+            wav_path: invalid_wav.display().to_string(),
+        });
+        let error = inspect_gore_bundle(&write_spec_bundle(temp.path(), &audio))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("audio") || error.contains("WAV"), "{error}");
+
+        let invalid_png = temp.path().join("invalid.png");
+        fs::write(&invalid_png, b"not an image").unwrap();
+        let mut texture = empty_build_spec("InspectTexture");
+        texture.texture.push(TextureReplacement {
+            asset: "/Game/UI/T_Inspect".into(),
+            image_path: invalid_png.display().to_string(),
+        });
+        let error = inspect_gore_bundle(&write_spec_bundle(temp.path(), &texture))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("texture image"), "{error}");
+
+        let invalid_mini = temp.path().join("invalid.cache");
+        fs::write(&invalid_mini, b"not a script cache").unwrap();
+        let mut script = empty_build_spec("InspectScript");
+        script.scripts.push(ScriptModule {
+            op: "add".into(),
+            module_name: "Inspect.Script".into(),
+            mini_cache: invalid_mini.display().to_string(),
+        });
+        let error = inspect_gore_bundle(&write_spec_bundle(temp.path(), &script))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("invalid script mini-cache"), "{error}");
+
+        let valid_ogg = temp.path().join("voice.ogg");
+        fs::write(&valid_ogg, crate::tests::test_ogg(48_000)).unwrap();
+        let mut voice = empty_build_spec("InspectVoice");
+        voice.voice.push(VoiceArchiveEdit {
+            archive: "German.zip".into(),
+            op: VoicePatchOp::Replace,
+            archive_path: "NPC/Hero/inspect.ogg".into(),
+            ogg_path: valid_ogg.display().to_string(),
+            observation: None,
+        });
+        let voice_bundle = write_spec_bundle(temp.path(), &voice);
+        let voice_manifest: VoicePatchManifest =
+            serde_json::from_slice(&fs::read(voice_bundle.join("voice/manifest.json")).unwrap())
+                .unwrap();
+        fs::write(
+            voice_bundle.join(&voice_manifest.edits[0].ogg),
+            b"not an Ogg stream",
+        )
+        .unwrap();
+        let error = inspect_gore_bundle(&voice_bundle).unwrap_err().to_string();
+        assert!(error.contains("voice archive"), "{error}");
+    }
+
+    #[test]
+    fn bundle_inspector_requires_a_ue4ss_main_script() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut spec = empty_build_spec("InspectLua");
+        spec.overrides.push(SingleOverride {
+            class: "ItFo_Apple".into(),
+            field: "m_Value".into(),
+            module: "Angelscript".into(),
+            value: OverrideValue::Int(500),
+        });
+        let bundle = write_spec_bundle(temp.path(), &spec);
+        inspect_gore_bundle(&bundle).unwrap();
+
+        fs::remove_file(bundle.join("ue4ss/InspectLua/Scripts/main.lua")).unwrap();
+        let error = inspect_gore_bundle(&bundle).unwrap_err().to_string();
+        assert!(error.contains("UE4SS main script"), "{error}");
     }
 
     /// A real format-2 bundle carrying both loose replacement mechanisms. Keeping the two

@@ -28,8 +28,12 @@ pub const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
 /// The handshake shape is unchanged across all of these; later revisions only add features we do
 /// not use (tasks, elicitation, icons). Echoing the client's own version back therefore costs
 /// nothing and avoids a needless disconnect on the client side.
-pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] =
-    &[LATEST_PROTOCOL_VERSION, "2025-06-18", "2025-03-26", "2024-11-05"];
+pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
+    LATEST_PROTOCOL_VERSION,
+    "2025-06-18",
+    "2025-03-26",
+    "2024-11-05",
+];
 
 pub const SERVER_NAME: &str = "gore";
 pub const SERVER_TITLE: &str = "GORE — Gothic 1 Remake modding toolkit";
@@ -112,11 +116,14 @@ pub fn instructions(opts: &Options, policy: Policy) -> String {
         "- Changing the game installation, or rewriting a file in place: {}.\n",
         will_be(&WRITES, opts, policy)
     ));
-    // Compiling is not merely a launch: it drives the game to regenerate the cache and then stages
-    // the result, so it needs the write pre-approval too.
+    // Strict standalone is genuinely offline. The other policies are not merely a possible launch:
+    // they may drive the game to regenerate the cache and stage sources in the installation, so
+    // they need write pre-approval too.
     text.push_str(&format!(
-        "- Starting the game to compile AngelScript (`gore_as` compile, compile-module): {}. It \
-         opens a real game window and takes minutes.\n",
+        "- `gore_as_compile` and `gore_as_compile_module` always run offline without consent. \
+         The mixed `gore_as` tool does the same with explicit `backend: standalone`. \
+         A `game` or `standalone-then-game` backend, including the omitted default, may open a real \
+         game window and stage sources in the installation: {}.\n",
         will_be(&LAUNCHES, opts, policy)
     ));
     text.push_str(match policy {
@@ -168,8 +175,14 @@ fn always_gated() -> Vec<String> {
 }
 
 /// The two tiers the primer reports on, as the gate itself would describe them.
-const WRITES: Needs = Needs { write: true, game_launch: false };
-const LAUNCHES: Needs = Needs { write: true, game_launch: true };
+const WRITES: Needs = Needs {
+    write: true,
+    game_launch: false,
+};
+const LAUNCHES: Needs = Needs {
+    write: true,
+    game_launch: true,
+};
 
 /// What becomes of a call in one tier, in one phrase.
 ///
@@ -189,7 +202,8 @@ fn will_be(needs: &Needs, opts: &Options, policy: Policy) -> String {
     }
 }
 
-const CONSENT_ASK: &str = "\nWhat is not pre-approved is not forbidden. This server puts it to the \
+const CONSENT_ASK: &str =
+    "\nWhat is not pre-approved is not forbidden. This server puts it to the \
 client, which is meant to show it to the user, so such a call takes longer while they decide. Do \
 not read that delay as a hang and do not send the call again. A refusal comes back as an ordinary \
 tool error naming the exact answer the client gave. Read it rather than assuming a person chose: \
@@ -208,8 +222,9 @@ refusal names the flag the user would have to restart this server with; you cann
 /// send a model round a loop it cannot leave.
 const CONSENT_RELAY: &str = "\nWhen such a call is refused, you still have a move: ask the user \
 yourself, in the conversation, showing them the command line from the refusal. If they agree, send \
-the same call again with `user_approved` set to their own words. Never set that field without \
-having asked — it is recorded in the result as your claim, and nothing here can check it.\n";
+the exact same call again with both the refusal's opaque `approval_request_id` and `user_approved` \
+set to their own words. The id expires, works once, and is bound to the normalized command; never \
+invent it, change the retry, or fill the words without having asked.\n";
 
 const CONSENT_NEVER_ASK: &str = "\nThis server was started with --no-consent-prompts, so anything \
 not pre-approved is refused without asking. The refusal names the flag the user would have to \
@@ -240,12 +255,18 @@ TOOLS
   gore_voice     Voice-over archives. Strictly copy-on-write; recorded audio is never overwritten.
   gore_texture   Textures in the IoStore containers: list, extract, replace, pack, deploy.
   gore_asset     Cooked DataAssets: receipt-sealed, byte-exact edits.
-  gore_mod       Build one unified mod bundle and deploy or undeploy it as a single unit.
+  gore_mod       Build, inspect, deploy, or undeploy one unified mod bundle.
+  gore_mod_inspect  Read-only bundle validation; pass the directory or ZIP directly on this tool.
   gore_mgr       Manage a loadout end to end: import, order, preflight, recover, apply, status, reset.
+  gore_mgr_preflight  Read-only Manager readiness check; arguments go directly on this tool.
+  gore_as_compile  Strict standalone full-tree compilation. No game launch and no consent.
+  gore_as_compile_module  Strict standalone one-module compilation. No game launch and no consent.
   gore_as        AngelScript cache: inspect, decompile, patch defaults, recompile modules.
 
-Each of the last fourteen wraps a family of subcommands. Choose one with `subcommand` and put its
-arguments in `args`; the tool description lists every subcommand and what it accepts.
+`gore_doctor`, `gore_find`, `gore_mod_inspect`, `gore_mgr_preflight`, `gore_as_compile`, and
+`gore_as_compile_module` each select one command
+already: pass their typed arguments directly, with no redundant `subcommand`. The other CLI tools
+wrap command families: choose a `subcommand` and put that command's arguments in `args`.
 
 BEFORE YOU ACT
 Read the guide page for whatever you are about to touch. These commands have sharp edges that a
@@ -300,11 +321,17 @@ mod tests {
     fn the_primer_states_what_becomes_of_each_tier() {
         let asked = asking(false, false);
         assert!(asked.contains("CONFIRMED WITH THE USER"), "{asked}");
-        assert!(!asked.contains("REFUSED"), "nothing is refused when the user can be asked");
+        assert!(
+            !asked.contains("REFUSED"),
+            "nothing is refused when the user can be asked"
+        );
 
         let pre_approved = asking(true, true);
         assert!(pre_approved.contains("PRE-APPROVED"), "{pre_approved}");
-        assert!(!pre_approved.contains("CONFIRMED WITH THE USER"), "{pre_approved}");
+        assert!(
+            !pre_approved.contains("CONFIRMED WITH THE USER"),
+            "{pre_approved}"
+        );
 
         for policy in [Policy::CannotAsk, Policy::NeverAsk] {
             let text = instructions(&options(false, false), policy);
@@ -338,7 +365,10 @@ mod tests {
         // And the other half of the same truth, added when four commands stopped being in that
         // group: aiming a write somewhere new is the way past the question, and a primer that only
         // ever warns teaches a model to ask permission it does not need.
-        assert!(text.contains("somewhere new and they cost nothing"), "{text}");
+        assert!(
+            text.contains("somewhere new and they cost nothing"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -377,10 +407,16 @@ mod tests {
             .collect();
 
         assert_eq!(named, expected, "the primer's list drifted from the gate");
-        assert!(!named.is_empty(), "an empty list would make the sentence nonsense");
+        assert!(
+            !named.is_empty(),
+            "an empty list would make the sentence nonsense"
+        );
 
         for command in &named {
-            assert!(text.contains(command.as_str()), "{command} is missing from: {text}");
+            assert!(
+                text.contains(command.as_str()),
+                "{command} is missing from: {text}"
+            );
         }
 
         // And the four that moved must not have come back. Named individually because they are the
@@ -401,10 +437,11 @@ mod tests {
         // enough. The primer used to report compiling as unlocked on that flag by itself, which
         // told the model it could do something every attempt then refused.
         assert!(
-            asking(false, true).contains("compile-module): CONFIRMED WITH THE USER"),
+            asking(false, true).contains("installation: CONFIRMED WITH THE USER"),
             "one flag is not enough and the primer must say so"
         );
-        assert!(asking(true, true).contains("compile-module): PRE-APPROVED"));
+        assert!(asking(true, true).contains("installation: PRE-APPROVED"));
+        assert!(asking(false, false).contains("always run offline without consent"));
 
         // What the primer claims and what the gate does must agree in every combination. The gate
         // is consulted here rather than restated, so a change to `Safety` that the primer does not
@@ -421,8 +458,8 @@ mod tests {
                 write: required.write,
                 game_launch: required.game_launch,
             });
-            let claims_unattended = instructions(&opts, Policy::Ask)
-                .contains("compile-module): PRE-APPROVED");
+            let claims_unattended =
+                instructions(&opts, Policy::Ask).contains("installation: PRE-APPROVED");
             assert_eq!(
                 claims_unattended, gate_stays_silent,
                 "mismatch at (write={write}, launch={launch})"
@@ -438,6 +475,8 @@ mod tests {
         for policy in [Policy::Ask, Policy::CannotAsk] {
             let text = instructions(&options(false, false), policy);
             assert!(text.contains("user_approved"), "{policy:?}: {text}");
+            assert!(text.contains("approval_request_id"), "{policy:?}: {text}");
+            assert!(text.contains("works once"), "{policy:?}: {text}");
         }
 
         // Not under --no-consent-prompts: there the field is refused too, and offering it would
@@ -496,10 +535,16 @@ mod tests {
 
     #[test]
     fn an_unknown_version_falls_back_to_our_latest() {
-        assert_eq!(negotiate_protocol_version(Some("1900-01-01")), LATEST_PROTOCOL_VERSION);
+        assert_eq!(
+            negotiate_protocol_version(Some("1900-01-01")),
+            LATEST_PROTOCOL_VERSION
+        );
         // A modern-era request would arrive without an `initialize` at all, but a client that asks
         // for it through the handshake still gets a usable legacy answer rather than a hang.
-        assert_eq!(negotiate_protocol_version(Some("2026-07-28")), LATEST_PROTOCOL_VERSION);
+        assert_eq!(
+            negotiate_protocol_version(Some("2026-07-28")),
+            LATEST_PROTOCOL_VERSION
+        );
         assert_eq!(negotiate_protocol_version(None), LATEST_PROTOCOL_VERSION);
     }
 

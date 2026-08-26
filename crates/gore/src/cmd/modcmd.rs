@@ -97,6 +97,56 @@ pub fn build(spec_path: PathBuf, out: PathBuf, model: Option<PathBuf>) -> Result
     Ok(())
 }
 
+/// `gore mod inspect BUNDLE_OR_ZIP` → validate and summarize a built GORE bundle offline.
+pub fn inspect(bundle: PathBuf, json: bool) -> Result<()> {
+    let report = gore_mod::mgr::import::inspect_gore_bundle(&bundle)
+        .map_err(|error| anyhow::anyhow!("{error}"))
+        .with_context(|| format!("inspecting GORE bundle '{}'", bundle.display()))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    let version = if report.mod_meta.version.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", report.mod_meta.version)
+    };
+    let author = if report.mod_meta.author.is_empty() {
+        String::new()
+    } else {
+        format!(" by {}", report.mod_meta.author)
+    };
+    println!(
+        "valid GORE bundle: {}{version}{author}",
+        report.mod_meta.name
+    );
+    println!(
+        "format {}, {} component(s), {} file(s), {} byte(s)",
+        report.bundle_format, report.component_count, report.file_count, report.total_file_bytes
+    );
+    for component in &report.components {
+        let name = component
+            .name
+            .as_deref()
+            .map(|name| format!(" name={name}"))
+            .unwrap_or_default();
+        println!(
+            "  - {} path={} targets={} coverage={:?}{name}",
+            component.component_type,
+            component.path,
+            component.target_count,
+            component.footprint_coverage
+        );
+    }
+    println!("manifest sha256: {}", report.manifest_sha256);
+    println!("tree sha256: {}", report.tree_sha256);
+    println!(
+        "not proven: game-install compatibility, cross-mod/load-order behavior, or runtime effect"
+    );
+    Ok(())
+}
+
 /// `gore mod deploy --bundle DIR --game ROOT` → apply to the game install.
 pub fn deploy(bundle: PathBuf, game: Option<PathBuf>) -> Result<()> {
     let game = gore_loc::config::game_root(game)?;
@@ -134,9 +184,7 @@ pub fn deploy(bundle: PathBuf, game: Option<PathBuf>) -> Result<()> {
         }
     }
     if !rec.loc_skipped.is_empty() || !rec.loc_shadowed.is_empty() {
-        eprintln!(
-            "See the text-and-dialogs guide page on which language key to write."
-        );
+        eprintln!("See the text-and-dialogs guide page on which language key to write.");
     }
     Ok(())
 }
@@ -172,10 +220,16 @@ mod validation_message_tests {
 
         assert!(message.contains("class and field name(s)"), "{message}");
         assert!(message.contains("NOT checked"), "{message}");
-        assert!(message.contains("/Script/<module>.Default__<class>"), "{message}");
+        assert!(
+            message.contains("/Script/<module>.Default__<class>"),
+            "{message}"
+        );
 
         // Named, deduplicated and sorted, so a typo stands next to the correct spelling.
-        assert!(message.ends_with("In use: Angelscript, Angelscrpt"), "{message}");
+        assert!(
+            message.ends_with("In use: Angelscript, Angelscrpt"),
+            "{message}"
+        );
 
         // And no run of spaces from a mangled line continuation, because this is the one line a
         // reader is meant to actually read.

@@ -76,7 +76,7 @@ files are version-, length-, and SHA-256-pinned.
 The final signed bytes must pass the complete canonical qualification corpus
 against the embedded compiler from the authorized private game copy. Use fresh
 output directories. The standalone and game-backed runs must contain the same
-26 cases, the same accepted cache artifacts, and no unexplained diagnostic,
+27 cases, including the Diego dialog-authoring example, the same accepted cache artifacts, and no unexplained diagnostic,
 frontend, bytecode, module-graph, invocation, or whole-cache difference.
 
 After both captures pass, create the qualified profile through the typed Rust

@@ -43,7 +43,7 @@ FText MyModCaption(const FName Text)
     return FText::FromString(Text.ToString());
 }
 
-class UChoiceMyModViper : UTopic_Hero__OM_STT_VIPER_302
+class UChoiceMyModDiego : UTopic_Hero__OC_STT_DIEGO
 {
     default Caption = MyModCaption(n"My test option");
     default PriorityRank = 2;
@@ -85,6 +85,9 @@ gore as compile-module `
 ```
 
 `--allow-new-symbols` is mandatory for a genuinely new class-bearing module.
+For `--op add`, the module identity is derived from `--rel-path`
+(`MyMod/Dialog.as` becomes `MyMod.Dialog`); `--module` remains a compatibility
+hint and cannot silently give the new module a conflicting identity.
 It retains only the new reference-table rows and remaps all existing symbols to
 the selected vanilla cache. Declare that cache and the topic registration in a
 bundle build spec:
@@ -97,10 +100,10 @@ bundle build spec:
   ],
   "dialog_topics": [
     {
-      "id": "viper-test",
-      "participant_name": "om_stt_viper_302",
-      "topic_class": "/Script/Angelscript.ChoiceMyModViper",
-      "sentinel_class": "/Script/Angelscript.ChoiceStt302ViperExit"
+      "id": "diego-test",
+      "participant_name": "oc_stt_diego",
+      "topic_class": "/Script/Angelscript.ChoiceMyModDiego",
+      "sentinel_class": "/Script/Angelscript.ChoiceDiegoExitGamestart"
     }
   ]
 }
