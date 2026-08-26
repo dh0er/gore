@@ -27,7 +27,6 @@ use gore_as::compile::{
 use gore_as::compiler_backend::{CompilerBackendDiagnosticSeverityV1, CompilerBackendFailureV1};
 use gore_as::diagnostics::DiagnosticsOptions;
 use gore_as::standalone_package_resolver::ProductStandaloneCompilerPackageIdentityV1;
-use gore_as::standalone_sidecar::{StandaloneSidecarConfigV1, StandaloneSidecarRunnerV1};
 use gore_authoring::{
     AssetVerification, ContentSeal, EntityId, ProjectRevision3, Revision3EntityKind,
     Revision3EntityPayload, Revision3OriginRef, Revision3ScriptModule, Revision3TypedRef,
@@ -430,14 +429,7 @@ fn check_revision3_project_compiler_v2_inner(input: &str) -> Result<Value, Failu
     let mut target = None;
     let mut runner_unavailable = None;
     if let Some(package) = available_package.take() {
-        let config = StandaloneSidecarConfigV1::new(
-            package.sidecar_path().to_path_buf(),
-            package.sidecar_seal(),
-            package.profile_manifest_path().to_path_buf(),
-            package.profile_root().to_path_buf(),
-            private_workspace.scratch_dir.clone(),
-        );
-        let runner = StandaloneSidecarRunnerV1::new(config);
+        let runner = package.sidecar_runner(private_workspace.scratch_dir.clone());
         let (package_authority, target_inputs) = package.into_execution_parts();
         authority = Some(package_authority);
         target = Some(target_inputs);

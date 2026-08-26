@@ -757,14 +757,7 @@ fn compile_report_with_available_product_package(
             );
         }
     };
-    let config = gore_as::standalone_sidecar::StandaloneSidecarConfigV1::new(
-        package.sidecar_path().to_path_buf(),
-        package.sidecar_seal(),
-        package.profile_manifest_path().to_path_buf(),
-        package.profile_root().to_path_buf(),
-        staging.path().to_path_buf(),
-    );
-    let runner = gore_as::standalone_sidecar::StandaloneSidecarRunnerV1::new(config);
+    let runner = package.sidecar_runner(staging.path().to_path_buf());
     let (authority, target) = package.into_execution_parts();
     let mut runner_unavailable = None;
     let mut runner = match runner {

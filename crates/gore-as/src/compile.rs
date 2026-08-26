@@ -70,10 +70,11 @@ pub struct CompileOpts {
 /// implicit live-install reads.
 #[derive(Debug, Clone, Copy)]
 pub struct StandaloneCompilerInputsV1<'a> {
+    /// Private tree containing every authored overlay. Game-capable adapters may also include
+    /// decompiled compatibility sources; a standalone compiler must use `overlays` as the exact
+    /// authoritative source inventory and must never recompile unrelated base reconstructions.
     pub source_tree: &'a Path,
-    /// Exact authored modules which differ from the sealed base cache. The source tree also
-    /// contains decompiled compatibility sources for the game backend; a standalone compiler
-    /// must not mistake those lossy reconstructions for authoritative base-module input.
+    /// Exact authored modules which differ from the sealed base cache.
     pub overlays: &'a [StandaloneCompilerOverlayV1<'a>],
     pub base_cache: Option<&'a [u8]>,
     pub binds_cache: Option<&'a [u8]>,
@@ -102,6 +103,9 @@ pub struct StandaloneFullGraphChangeV1<'a> {
 /// Complete retained-graph request at the injected standalone boundary.
 #[derive(Debug, Clone, Copy)]
 pub struct StandaloneFullGraphCompilerInputsV1<'a> {
+    /// Private tree containing the Add/Edit source bytes. Game-capable adapters may additionally
+    /// include decompiled compatibility sources; a standalone compiler must use `changes` as the
+    /// exact authoritative source inventory. Delete changes deliberately have no source file.
     pub source_tree: &'a Path,
     pub changes: &'a [StandaloneFullGraphChangeV1<'a>],
     pub final_manifest: &'a [FullGraphFinalModuleV1],
@@ -1810,7 +1814,7 @@ where
     let mut standalone_attempt = standalone.as_deref_mut().map(|runner| {
         || {
             let retained_output = std::cell::RefCell::new(None);
-            let result = compile_module(opts, |_, source_tree| {
+            let result = compile_module_with_source_tree(opts, false, |_, source_tree| {
                 standalone_runner_called.set(true);
                 let operation = match opts.op.as_str() {
                     "add" => StandaloneCompilerOverlayOperationV1::Add,
@@ -2248,7 +2252,8 @@ where
                 ));
             }
         }
-        let prepared = prepare_full_graph_request_v1(opts)?;
+        let prepared =
+            prepare_full_graph_request_v1(opts, mode != CompilerBackendModeV1::Standalone)?;
         let tree_seal = ProjectSourceTreeSeal::capture(&prepared.source_tree).map_err(|error| {
             CompileError::Other(format!(
                 "sealing the prepared full-graph source tree: {error}"
@@ -3437,6 +3442,7 @@ struct PreparedFullGraphRequestV1 {
 
 fn prepare_full_graph_request_v1(
     opts: &FullGraphCompileOptsV1,
+    emit_game_source_tree: bool,
 ) -> Result<PreparedFullGraphRequestV1, CompileError> {
     validate_full_graph_compile_bounds_v1(opts)?;
     validate_generated_cache(&opts.base_cache)
@@ -3704,9 +3710,11 @@ fn prepare_full_graph_request_v1(
     // preflight cannot authorize a work directory that was replaced by a junction in between.
     preflight_full_graph_path_layout_v1(opts)?;
     let source_tree = reset_compile_tree(&opts.work_dir).map_err(CompileError::Other)?;
-    prepared
-        .emit_tree(&source_tree)
-        .map_err(|error| CompileError::Other(format!("emit tree: {error}")))?;
+    if emit_game_source_tree {
+        prepared
+            .emit_tree(&source_tree)
+            .map_err(|error| CompileError::Other(format!("emit tree: {error}")))?;
+    }
     for (base_index, (relative_path, source)) in &prepared_edits {
         let expected = &base_manifest[*base_index];
         if expected.relative_path != *relative_path {
@@ -3715,23 +3723,36 @@ fn prepare_full_graph_request_v1(
             ));
         }
         let path = source_tree.join(relative_path);
-        let mut file = open_compiled_artifact_existing(&path)
-            .map_err(|error| CompileError::Io(format!("opening full-graph edit: {error}")))?;
-        file.set_len(0)
-            .and_then(|_| file.seek(SeekFrom::Start(0)).map(|_| ()))
-            .and_then(|_| file.write_all(source.as_bytes()))
+        if let Some(parent) = path.parent() {
+            ensure_real_directory(parent).map_err(io("creating full-graph edit parent"))?;
+        }
+        let mut file = if emit_game_source_tree {
+            open_compiled_artifact_existing(&path)
+                .map_err(|error| CompileError::Io(format!("opening full-graph edit: {error}")))?
+        } else {
+            open_compiled_artifact_create_new(&path)
+                .map_err(|error| CompileError::Io(format!("creating full-graph edit: {error}")))?
+        };
+        if emit_game_source_tree {
+            file.set_len(0)
+                .and_then(|_| file.seek(SeekFrom::Start(0)).map(|_| ()))
+                .map_err(io("resetting full-graph edit"))?;
+        }
+        file.write_all(source.as_bytes())
             .and_then(|_| file.sync_all())
             .map_err(io("writing full-graph edit"))?;
     }
-    for deleted in deleted_indices.values() {
-        let path = source_tree.join(&deleted.relative_path);
-        let file = open_compiled_artifact_existing(&path)
-            .map_err(|error| CompileError::Io(format!("opening full-graph delete: {error}")))?;
-        file.set_len(0)
-            .and_then(|_| file.sync_all())
-            .map_err(io("neutralizing full-graph deleted source"))?;
-        drop(file);
-        std::fs::remove_file(&path).map_err(io("removing full-graph deleted source"))?;
+    if emit_game_source_tree {
+        for deleted in deleted_indices.values() {
+            let path = source_tree.join(&deleted.relative_path);
+            let file = open_compiled_artifact_existing(&path)
+                .map_err(|error| CompileError::Io(format!("opening full-graph delete: {error}")))?;
+            file.set_len(0)
+                .and_then(|_| file.sync_all())
+                .map_err(io("neutralizing full-graph deleted source"))?;
+            drop(file);
+            std::fs::remove_file(&path).map_err(io("removing full-graph deleted source"))?;
+        }
     }
     for module in &prepared_adds {
         let path = source_tree.join(&module.relative_path);
@@ -7641,6 +7662,17 @@ pub fn compile_module<R>(opts: &CompileOpts, run_regen: R) -> Result<CompileOutp
 where
     R: FnOnce(&Path, &Path) -> Result<PathBuf, String>,
 {
+    compile_module_with_source_tree(opts, true, run_regen)
+}
+
+fn compile_module_with_source_tree<R>(
+    opts: &CompileOpts,
+    emit_base_tree: bool,
+    run_regen: R,
+) -> Result<CompileOutput, CompileError>
+where
+    R: FnOnce(&Path, &Path) -> Result<PathBuf, String>,
+{
     if opts.op != "add" && opts.op != "edit" {
         return Err(CompileError::Other(format!(
             "invalid script op {:?} for module {:?} (want \"add\" or \"edit\")",
@@ -7718,9 +7750,11 @@ where
 
     // 1. Only after all base and authored target checks succeed, clear and rebuild the tree.
     let tree = reset_compile_tree(&opts.work_dir).map_err(CompileError::Other)?;
-    prepared
-        .emit_tree(&tree)
-        .map_err(|e| CompileError::Other(format!("emit tree: {e}")))?;
+    if emit_base_tree {
+        prepared
+            .emit_tree(&tree)
+            .map_err(|e| CompileError::Other(format!("emit tree: {e}")))?;
+    }
 
     // 2. Overlay the user's .as at its rel path.
     let dst = tree.join(&overlay_rel_path);
@@ -12800,7 +12834,7 @@ mod tests {
                 ("Added.as".to_owned(), b"void AddedFn() {}\n".to_vec()),
                 ("EditMe.as".to_owned(), b"void EditedFn() {}\n".to_vec()),
             ],
-            expected_absent: vec!["DeleteMe.as".to_owned()],
+            expected_absent: vec!["DeleteMe.as".to_owned(), "Keep.as".to_owned()],
             create_raced_destination: None,
             calls,
         }
@@ -13244,7 +13278,7 @@ mod tests {
         let mut runner = |inputs: StandaloneCompilerInputsV1<'_>| {
             calls.set(calls.get().saturating_add(1));
             assert_eq!(inputs.overlays.len(), 1);
-            assert!(inputs.source_tree.join("Module07308.as").is_file());
+            assert!(!inputs.source_tree.join("Module07308.as").exists());
             std::fs::write(&private, &base_cache).unwrap();
             let cleanup = cleanup.clone();
             Ok(StandaloneCompilerOutputV1::with_cleanup(
@@ -16185,7 +16219,12 @@ mod tests {
         };
         let generated =
             cache_with_empty_modules(&[("Base", "Base.as"), ("NewModule", "NewModule.as")]);
-        let mut standalone = |_: StandaloneCompilerInputsV1<'_>| {
+        let mut standalone = |inputs: StandaloneCompilerInputsV1<'_>| {
+            assert!(!inputs.source_tree.join("Base.as").exists());
+            assert_eq!(
+                std::fs::read(inputs.source_tree.join("NewModule.as")).unwrap(),
+                b"// standalone source\n"
+            );
             let path = root.join("standalone.cache");
             std::fs::write(&path, &generated).unwrap();
             let cleanup = path.clone();

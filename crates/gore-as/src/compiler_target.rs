@@ -58,6 +58,10 @@ impl CompilerTargetOwnedPathsV1 {
         &self.shipping_cache
     }
 
+    pub(crate) fn binds_cache(&self) -> &Path {
+        &self.binds_cache
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(
         executable: PathBuf,
@@ -268,6 +272,14 @@ impl ValidatedCompilerTargetInputsV1 {
 
     pub fn binds_handle(&self) -> &File {
         &self.binds
+    }
+
+    pub(crate) fn shipping_cache_path(&self) -> &Path {
+        self.paths.shipping_cache()
+    }
+
+    pub(crate) fn binds_cache_path(&self) -> &Path {
+        self.paths.binds_cache()
     }
 
     /// Temporarily release only the parent-directory handles before GORE publishes its own

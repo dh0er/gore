@@ -723,15 +723,8 @@ where
         );
     }
 
-    let config = gore_as::standalone_sidecar::StandaloneSidecarConfigV1::new(
-        package.sidecar_path().to_path_buf(),
-        package.sidecar_seal(),
-        package.profile_manifest_path().to_path_buf(),
-        package.profile_root().to_path_buf(),
-        staging.path().to_path_buf(),
-    );
     let mut runner_unavailable = None;
-    let mut runner = match gore_as::standalone_sidecar::StandaloneSidecarRunnerV1::new(config) {
+    let mut runner = match package.sidecar_runner(staging.path().to_path_buf()) {
         Ok(runner) => Some(runner),
         Err(failure) if requested == CompilerBackendWireV2::Standalone => {
             let mut detail = Value::String(failure.to_string());

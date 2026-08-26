@@ -228,6 +228,23 @@ impl AvailableProductStandaloneCompilerPackageV1 {
         .with_product_target_inputs(
             self.target_inputs.shipping_cache(),
             self.target_inputs.binds_cache(),
+            self.target_inputs.shipping_cache_path(),
+            self.target_inputs.binds_cache_path(),
+        )
+    }
+
+    /// Build the product runner from the package state the resolver already authenticated.
+    /// This avoids parsing the same large profile payloads a second time before every compile.
+    pub fn sidecar_runner(
+        &self,
+        scratch_root: PathBuf,
+    ) -> Result<
+        crate::standalone_sidecar::StandaloneSidecarRunnerV1,
+        crate::compiler_backend::CompilerBackendFailureV1,
+    > {
+        crate::standalone_sidecar::StandaloneSidecarRunnerV1::new_product(
+            self.sidecar_config(scratch_root),
+            self.profile_package(),
         )
     }
 
