@@ -1789,6 +1789,28 @@ fn guarded_pristine_script_cache(
     }
 }
 
+fn require_qualified_target_pristine_base(
+    qualified_shipping: &[u8],
+    pristine: Vec<u8>,
+) -> Result<Vec<u8>> {
+    if qualified_shipping != pristine {
+        bail!(
+            "standalone compiler target uses the live Shipping cache, but the deployment-aware \
+             pristine script cache differs; reset or undeploy active script mods before compiling"
+        );
+    }
+    Ok(pristine)
+}
+
+fn qualified_target_pristine_script_cache(
+    game: &Path,
+    target: &gore_as::compiler_target::ValidatedCompilerTargetInputsV1,
+) -> Result<Vec<u8>> {
+    let pristine = gore_mod::pristine_script_cache(game)
+        .context("reading the deployment-aware pristine script cache")?;
+    require_qualified_target_pristine_base(target.shipping_cache(), pristine)
+}
+
 fn compiler_binds_path(game: &Path) -> PathBuf {
     let g1r = if game.file_name().is_some_and(|name| name == "G1R") {
         game.to_path_buf()
@@ -2008,10 +2030,16 @@ fn compile_full_graph_command(
         }
     }
     let (base_cache, binds_cache) = if let Some(target) = target.as_ref() {
-        (
-            target.shipping_cache().to_vec(),
-            target.binds_cache().to_vec(),
-        )
+        let base = match qualified_target_pristine_script_cache(&game, target) {
+            Ok(base) => base,
+            Err(error) => {
+                return match guard.take() {
+                    Some(guard) => Err(release_compile_guard_after_error(guard, error)),
+                    None => Err(error),
+                };
+            }
+        };
+        (base, target.binds_cache().to_vec())
     } else if requested_mode == CompilerBackendModeV1::Standalone {
         unreachable!("strict standalone availability was checked above")
     } else {
@@ -3190,7 +3218,16 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     }
                     Some(acquired)
                 };
-                (target.shipping_cache().to_vec(), guard)
+                let base = match qualified_target_pristine_script_cache(&game, target) {
+                    Ok(base) => base,
+                    Err(error) => {
+                        return match guard {
+                            Some(guard) => Err(release_compile_guard_after_error(guard, error)),
+                            None => Err(error),
+                        };
+                    }
+                };
+                (base, guard)
             } else if requested_mode == gore_as::compile::CompilerBackendModeV1::Standalone {
                 unreachable!("strict standalone availability was checked above")
             } else {
@@ -5628,6 +5665,22 @@ mod default_cli_tests {
         assert!(!dropped.load(std::sync::atomic::Ordering::SeqCst));
         drop(runner);
         assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn standalone_target_must_match_the_deployment_aware_pristine_base() {
+        let pristine = b"pristine-cache".to_vec();
+        assert_eq!(
+            require_qualified_target_pristine_base(b"pristine-cache", pristine.clone()).unwrap(),
+            pristine
+        );
+        let error = require_qualified_target_pristine_base(
+            b"live-cache-with-active-mod",
+            b"pristine-cache".to_vec(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("deployment-aware pristine script cache differs"));
     }
 
     #[test]
