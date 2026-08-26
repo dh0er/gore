@@ -1635,7 +1635,7 @@ fn parse_sidecar_response(
             CompilerBackendFailureKindV1::Unavailable,
             format!(
                 "{}{}",
-                diagnostics_detail(&response.diagnostics, private_root),
+                diagnostics_detail(&response.diagnostics, source_root, private_root),
                 stderr_suffix(&stderr)
             ),
             backend_diagnostics(&response.diagnostics, source_root, private_root),
@@ -1696,7 +1696,7 @@ fn parse_sidecar_response(
     }
     let detail = format!(
         "{}{}",
-        diagnostics_detail(&response.diagnostics, private_root),
+        diagnostics_detail(&response.diagnostics, source_root, private_root),
         stderr_suffix(&stderr)
     );
     let kind = match response.failure_kind {
@@ -1818,17 +1818,17 @@ fn parse_qualification_sidecar_response_v3(
         }
         Some(SidecarFailureKindV1::EngineUnavailable) => Err(unavailable(format!(
             "{}{}",
-            diagnostics_detail(&response.diagnostics, private_root),
+            diagnostics_detail(&response.diagnostics, source_root, private_root),
             stderr_suffix(&stderr)
         ))),
         Some(SidecarFailureKindV1::InvalidOutput) => Err(invalid_output(format!(
             "{}{}",
-            diagnostics_detail(&response.diagnostics, private_root),
+            diagnostics_detail(&response.diagnostics, source_root, private_root),
             stderr_suffix(&stderr)
         ))),
         Some(SidecarFailureKindV1::Internal) | None => Err(internal(format!(
             "{}{}",
-            diagnostics_detail(&response.diagnostics, private_root),
+            diagnostics_detail(&response.diagnostics, source_root, private_root),
             stderr_suffix(&stderr)
         ))),
     }
@@ -2078,13 +2078,38 @@ fn validate_diagnostics(
     Ok(())
 }
 
-fn diagnostics_detail(diagnostics: &[SidecarDiagnosticV1], private_root: &Path) -> String {
+fn diagnostics_detail(
+    diagnostics: &[SidecarDiagnosticV1],
+    source_root: &Path,
+    private_root: &Path,
+) -> String {
     if diagnostics.is_empty() {
         return "sidecar failed without diagnostics".to_owned();
     }
     let detail = diagnostics
         .iter()
-        .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
+        .map(|diagnostic| {
+            let source =
+                safe_sidecar_diagnostic_source_path(diagnostic.source_path.as_deref(), source_root);
+            let location = source.map(|mut source| {
+                if let Some(line) = diagnostic.line {
+                    source.push_str(&format!(":{line}"));
+                }
+                if let Some(column) = diagnostic.column {
+                    if diagnostic.line.is_none() {
+                        source.push_str(":?");
+                    }
+                    source.push_str(&format!(":{column}"));
+                }
+                format!("{source}: ")
+            });
+            format!(
+                "{}{}: {}",
+                location.as_deref().unwrap_or_default(),
+                diagnostic.code,
+                diagnostic.message
+            )
+        })
         .collect::<Vec<_>>()
         .join("; ");
     redact_private_path_variants(&detail, private_root)
@@ -4122,6 +4147,23 @@ mod tests {
         let (byte_len, sha256) =
             hash_regular_file(path, MAX_SIDECAR_EXECUTABLE_BYTES_V1, "test sidecar").unwrap();
         SidecarExecutableSealV1 { byte_len, sha256 }
+    }
+
+    #[test]
+    fn diagnostic_failure_detail_retains_safe_source_coordinates() {
+        let diagnostics = [SidecarDiagnosticV1 {
+            severity: SidecarDiagnosticSeverityV1::Error,
+            code: "GORE_AS_COMPILER_ERROR".to_owned(),
+            message: "Expected data type".to_owned(),
+            source_path: Some("Dialogs/Diego.as".to_owned()),
+            line: Some(12),
+            column: Some(7),
+        }];
+
+        assert_eq!(
+            diagnostics_detail(&diagnostics, Path::new("sources"), Path::new("private")),
+            "Dialogs/Diego.as:12:7: GORE_AS_COMPILER_ERROR: Expected data type"
+        );
     }
 
     #[cfg(windows)]
