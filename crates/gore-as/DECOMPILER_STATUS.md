@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 98.78% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 98.80% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **98.78%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **98.80%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**2,016 functions (1.22%) recompile to bytecode that differs semantically.** A semantic
+**1,971 functions (1.20%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -353,6 +353,30 @@ Two more wrong programs, both found by asking what vanilla NAMED:
   declaration when its only consumer is a pointer compare and nothing reassigns the slot.
 
 2,048 to 2,016, compile clean, no alignment loss.
+
+Then the constant-return fix again, wider, and a third wrong program:
+
+- **The constant is not always the instruction before the return read.** A return inside a scope
+  that owns a temporary has that temporary's destructor between the two, and the one-instruction
+  look-back missed it: 14 more functions returned the opposite value (`HasAnySensedFighter`
+  returned `false` where vanilla returns `true`). The scan now walks back to the start of the
+  block over the ops that cannot write the slot — an address push, a constructor or destructor
+  call, a `SUSPEND`, a release of a different slot — and stops at anything else.
+- **A test inside a then-arm that fails where the outer test fails.** That place is a shared
+  TAIL, not an else arm: the source nested two `if`s and wrote the tail once behind them. As an
+  `else` the middle path — outer true, inner false — runs nothing at all. An earlier revision
+  merged the pair into `A && B` instead; that is wrong too, and vanilla says so, because a
+  source-level `&&` consumed by a branch ALWAYS materialises a carrier slot, which these do not
+  have. The merge was taken back out and the tail is let fall through.
+
+Refused, measured: admitting a default-argument temporary by its constructor/destructor PAIRING
+(two or more matched pairs, the slot only ever pushed by address) rather than by the push in front
+of it. It reaches the 20 `IsVisible_Implementation` conversation functions — and it CRASHES the
+game's compiler, which exits without a single diagnostic. Two cycles were spent before the tree
+was bisected against it. The multi-reader half of the same change is kept: a default argument
+spelled out at two call sites is the same temporary twice, and that compiles.
+
+2,016 to 1,971, compile clean, no alignment loss.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern

@@ -1962,10 +1962,7 @@ fn emit_function_ctor(
         let rendered =
             spell_out_argument_temporaries(
                 &rendered,
-                &argument_constructed_slots(f, refs)
-                    .union(&paired_temporary_slots(f, refs))
-                    .copied()
-                    .collect(),
+                &argument_constructed_slots(f, refs),
                 refs,
             );
         let rendered = fold_widening_aliases(&rendered, &declared_locals, &path_roots, &widened);
@@ -7972,47 +7969,6 @@ fn argument_constructed_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         }
     }
     out
-}
-
-/// Slots whose constructions and destructions PAIR — the shape of a temporary built for one call
-/// and destroyed right after it, as many times as the call is made. A declared local is built once
-/// in the prologue and destroyed on every exit, which pairs only by accident at one exit; two or
-/// more matched pairs, with the slot never written and only ever pushed by address, is the
-/// argument temporary. This is the witness for the run's FIRST temporary, whose `$beh0` has
-/// control flow in front of it rather than another push.
-fn paired_temporary_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
-    let Ok(instrs) = disassemble(&f.bytecode) else {
-        return HashSet::new();
-    };
-    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
-    let mut ctors: HashMap<i32, usize> = HashMap::new();
-    let mut dtors: HashMap<i32, usize> = HashMap::new();
-    let mut impure: HashSet<i32> = HashSet::new();
-    for (at, pair) in instrs.windows(2).enumerate() {
-        if pair[0].op.name == "PSF" && pair[1].op.name == "CALLSYS" {
-            let ptr = pair[1].qwords.first().copied().unwrap_or(0) as i64;
-            match refs.func_by_ptr(ptr) {
-                Some("$beh0") => *ctors.entry(w0(&pair[0])).or_default() += 1,
-                Some("$beh2") => *dtors.entry(w0(&pair[0])).or_default() += 1,
-                _ => {}
-            }
-            continue;
-        }
-        // any use that is not an address push means the value is read or written, not handed on
-        let name = instrs[at].op.name;
-        if !matches!(name, "PSF" | "CALLSYS" | "CALL" | "CALLINTF" | "CALLBND") {
-            for slot in super::bytediff::addressed_slots(&instrs[at]) {
-                impure.insert(slot);
-            }
-        }
-    }
-    ctors
-        .into_iter()
-        .filter(|(slot, n)| {
-            *slot > 0 && *n >= 2 && dtors.get(slot) == Some(n) && !impure.contains(slot)
-        })
-        .map(|(slot, _)| slot)
-        .collect()
 }
 
 /// A declared temporary that vanilla built inside the argument list is written there.

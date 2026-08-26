@@ -6310,44 +6310,6 @@ impl Structurer<'_> {
                     i = (ret_idx + 1).max(i + 1);
                     continue;
                 }
-                // `A && B` compiles to two tests that jump to the SAME false target. Rendered
-                // as a nested `if`, the middle path — A true, B false — runs NOTHING where
-                // vanilla runs the `else` arm. Merge the chain back into one condition while the
-                // shape holds: the second test must be the block we fall into, must contribute no
-                // statement of its own, and must fail to the same place as the first.
-                let (cond, then_idx) = {
-                    let (mut cond, mut then_idx, mut head) = (cond, then_idx, i);
-                    while let (Some(t), Some(taken_off)) = (then_idx, taken) {
-                        if t != head + 1 || t >= stop || !self.is_cond(t) {
-                            break;
-                        }
-                        let tb = &self.g.blocks[t];
-                        if tb.succs.first().copied() != Some(taken_off) {
-                            break;
-                        }
-                        // Two guard clauses in a row fail to the same place as well — the
-                        // function's own epilogue — and merging THOSE only costs the carrier the
-                        // compiler builds for a real `&&` (measured: 9 functions). What needs the
-                        // merge is a pair that fails into an `else` arm, where a nested rendering
-                        // leaves the middle path — A true, B false — running nothing.
-                        if self.is_bare_ret_off(taken_off) {
-                            break;
-                        }
-                        let (inner_stmts, inner_cmp, _) =
-                            block_stmts_in(self.ctx, tb.instr_lo, tb.instr_hi, Vec::new(), false);
-                        if !inner_stmts.is_empty() {
-                            break;
-                        }
-                        let inner = self.fall_condition(&inner_cmp, self.jump_op(t));
-                        if inner.contains(UNRESOLVED) {
-                            break;
-                        }
-                        cond = format!("{cond} && {inner}");
-                        then_idx = tb.succs.get(1).and_then(|o| self.idx_of.get(o).copied());
-                        head = t;
-                    }
-                    (cond, then_idx)
-                };
                 let then_end = else_idx.unwrap_or(stop).min(stop).max(i + 1);
                 // A then-arm whose LAST block jumps unconditionally BACK to at-or-before this
                 // test is the latch of a loop the detectors could not take: they ask for a
@@ -6413,6 +6375,19 @@ impl Structurer<'_> {
                             .succs
                             .first()
                             .is_some_and(|&t| self.is_bare_ret_off(t));
+                    // A test INSIDE the then-arm that fails to the same place this one does makes
+                    // that place a shared TAIL, not an else arm: the source nested two `if`s and
+                    // wrote the tail once behind them. Rendered as an `else`, the middle path — the
+                    // outer test true, the inner false — runs nothing at all, and rendered as
+                    // `A && B` it costs the carrier the compiler builds for a real `&&` (which
+                    // vanilla always has where the source wrote one). Let it fall through.
+                    let shares_the_tail = taken.is_some_and(|t| {
+                        (then_idx.unwrap_or(i + 1)..then_end).any(|b| {
+                            b < self.g.blocks.len()
+                                && is_cond_op(self.jump_op(b))
+                                && self.g.blocks[b].succs.first().copied() == Some(t)
+                        })
+                    });
                     let after_idx = self.g.blocks[ei - 1]
                         .succs
                         .first()
@@ -6435,6 +6410,7 @@ impl Structurer<'_> {
                         && ei > 0
                         && self.jump_op(ei - 1) == "JMP"
                         && !then_exits_loop
+                        && !shares_the_tail
                         && !(then_returns && then_arm_returns && !else_tail_returns_from_a_block)
                     {
                         if after_idx > ei {
@@ -6775,18 +6751,36 @@ impl Structurer<'_> {
         if slot.map(|s| self.ctx.slot_name(s)).as_deref() != Some(name) {
             return exit;
         }
-        let prev = &self.ctx.instrs[read - 1];
-        if prev.op.name != "SetV1" || prev.words.first().copied().map(s16) != slot {
+        // The constant is not always the instruction before the read: a return inside a scope
+        // that owns a temporary has that temporary's destructor between the two. Scan back to the
+        // start of the block over the ops that cannot write this slot, and stop at anything else.
+        let mut wrote = None;
+        for at in (b.instr_lo..read).rev() {
+            let ins = &self.ctx.instrs[at];
+            match ins.op.name {
+                "SetV1" if ins.words.first().copied().map(s16) == slot => {
+                    wrote = Some(ins);
+                    break;
+                }
+                "PSF" | "CALLSYS" | "SUSPEND" => {}
+                "FreeNullV8" if ins.words.first().copied().map(s16) != slot => {}
+                _ => break,
+            }
+        }
+        let Some(prev) = wrote else { return exit };
+        // A rendered store of the SAME constant already carries it; a rendered store of anything
+        // else carries the condition that was tested, which is not what this return returns.
+        let bits = prev.dwords.first().copied().unwrap_or(0);
+        let literal = self.ctx.return_stmt(Some((bits as i32).to_string()));
+        let rendered_constant = literal
+            .strip_prefix("return ")
+            .and_then(|v| v.strip_suffix(';'))
+            .map(|v| format!("{name} = {v};"))
+            .unwrap_or_default();
+        if stmts.iter().any(|s| s.trim() == rendered_constant) {
             return exit;
         }
-        if stmts
-            .iter()
-            .any(|s| s.trim().starts_with(&format!("{name} = ")))
-        {
-            return exit; // the store IS rendered — that line already carries the constant
-        }
-        let bits = prev.dwords.first().copied().unwrap_or(0);
-        self.ctx.return_stmt(Some((bits as i32).to_string()))
+        literal
     }
 
     /// The block at dword offset `off` is a bare `RET` row (exactly one instruction).
