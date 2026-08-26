@@ -1940,6 +1940,7 @@ fn emit_function_ctor(
         // for them to ask about.
         let rendered = fold_condition_temporaries(&rendered, &declared_locals, refs, fields);
         let rendered = fold_alias_copies(&rendered, &declared_locals);
+        let rendered = fold_assignment_receivers(&rendered, &immediately_consumed_slots(f));
         let rendered =
             fold_copy_out_temporaries(&rendered, &declared_locals, &const_result_slots, fields);
         let rendered = fold_cast_operands(&rendered, &declared_locals, &call_result_types);
@@ -8485,6 +8486,86 @@ fn enum_of_member_path(
             .to_owned();
     }
     ty.starts_with('E').then_some(ty)
+}
+
+/// Slots whose object value is consumed where it was produced: a `STOREOBJ` whose very next
+/// instruction pushes the same slot. A slot written any other way — a second `STOREOBJ` that is
+/// not consumed at once, a handle copy, a null store — is not one of these.
+fn immediately_consumed_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut consumed: HashSet<i32> = HashSet::new();
+    let mut disqualified: HashSet<i32> = HashSet::new();
+    for (i, ins) in instrs.iter().enumerate() {
+        let dst = match ins.op.name {
+            "STOREOBJ" | "RefCpyV" | "ClrVPtr" | "LOADOBJ" => w0(ins),
+            _ => continue,
+        };
+        if dst <= 0 {
+            continue;
+        }
+        let at_once = ins.op.name == "STOREOBJ"
+            && instrs
+                .get(i + 1)
+                .is_some_and(|next| next.op.name == "PshVPtr" && w0(next) == dst);
+        if at_once {
+            consumed.insert(dst);
+        } else {
+            disqualified.insert(dst);
+        }
+    }
+    consumed.retain(|slot| !disqualified.contains(slot));
+    consumed
+}
+
+/// `T local_N = <call>;` whose only other mention is the receiver of the assignment right below
+/// it. Vanilla did not name that call, and the ORDER is what says so: a receiver held in a
+/// declaration is evaluated BEFORE the right-hand side, a receiver spelled inside the assignment
+/// after it. Same statement, different bytecode — and the witness for which one vanilla wrote is
+/// its own `STOREOBJ`, which stands where the value is pushed.
+fn fold_assignment_receivers(body: &str, consumed: &HashSet<i32>) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut at = 0usize;
+    while at < lines.len() {
+        let folded = (|| {
+            let (indent, name, init) = declaration_with_initializer(lines[at])?;
+            if !init.ends_with(')') || init.contains(" = ") {
+                return None;
+            }
+            if !consumed.contains(&slot_of(&name)?) || count_ident(body, &name) != 2 {
+                return None;
+            }
+            let next = lines.get(at + 1)?;
+            if indent_of(next) != indent {
+                return None;
+            }
+            let rest = next.trim().strip_prefix(name.as_str())?;
+            let assigned = rest.strip_suffix(';')?;
+            let (target, _) = assigned.split_once(" = ")?;
+            if !target.starts_with('.') || target.contains('(') {
+                return None;
+            }
+            Some(format!("{indent}{init}{assigned};"))
+        })();
+        match folded {
+            Some(line) => {
+                out.push(line);
+                at += 2;
+            }
+            None => {
+                out.push(lines[at].to_owned());
+                at += 1;
+            }
+        }
+    }
+    let mut text = out.join("\n");
+    if body.ends_with('\n') {
+        text.push('\n');
+    }
+    text
 }
 
 /// Slots a direct member read (`RDR1`/`RDR2`/`RDR4`/`RDR8`) writes. The read puts the member's

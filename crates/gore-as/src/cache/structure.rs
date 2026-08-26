@@ -6347,24 +6347,47 @@ impl Structurer<'_> {
                             .succs
                             .first()
                             .is_some_and(|&t| self.is_bare_ret_off(t));
+                    let after_idx = self.g.blocks[ei - 1]
+                        .succs
+                        .first()
+                        .and_then(|o| self.idx_of.get(o).copied())
+                        .unwrap_or(stop)
+                        .min(stop);
+                    // ... unless vanilla WROTE the `else` after all. A `return` that is the last
+                    // statement of the function's outermost block compiles to nothing but the
+                    // `RET`; the same `return` one block deep compiles to a jump to the epilogue.
+                    // So an else region whose last block `JMP`s to the bare `RET` row is one
+                    // vanilla nested — flattening it drops that jump (measured: 94 functions,
+                    // nearly all generated dialog `Act_Implementation`).
+                    let else_tail_returns_from_a_block = after_idx > ei
+                        && self.jump_op(after_idx - 1) == "JMP"
+                        && self.g.blocks[after_idx - 1]
+                            .succs
+                            .first()
+                            .is_some_and(|&t| self.is_bare_ret_off(t));
                     if ei >= then_end
                         && ei > 0
                         && self.jump_op(ei - 1) == "JMP"
                         && !then_exits_loop
-                        && !(then_returns && then_arm_returns)
+                        && !(then_returns && then_arm_returns && !else_tail_returns_from_a_block)
                     {
-                        let after_idx = self.g.blocks[ei - 1]
-                            .succs
-                            .first()
-                            .and_then(|o| self.idx_of.get(o).copied())
-                            .unwrap_or(stop)
-                            .min(stop);
                         if after_idx > ei {
                             let _ = writeln!(out, "{ind}else");
                             let _ = writeln!(out, "{ind}{{");
                             self.emit_range(ei, after_idx, depth + 1, out);
                             let _ = writeln!(out, "{ind}}}");
                             next = after_idx;
+                            // Both arms left through a `return`, so the row they jump to is the
+                            // function's epilogue and not a statement of its own: rendering it
+                            // would put a `return;` after the `else` that no path can reach, and
+                            // this compiler treats unreachable code as an error.
+                            if then_returns
+                                && then_arm_returns
+                                && after_idx + 1 >= stop
+                                && self.is_bare_ret_off(self.g.blocks[after_idx].start_dw)
+                            {
+                                next = stop;
+                            }
                         }
                     }
                 }

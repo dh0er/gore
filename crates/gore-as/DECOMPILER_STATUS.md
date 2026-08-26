@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 98.41% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 98.72% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **98.41%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **98.72%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**2,231 functions (1.36%) recompile to bytecode that differs semantically.** A semantic
+**2,111 functions (1.28%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -267,6 +267,31 @@ form compiles and still does not match. What is left of that class is a codegen 
 missing rule. One collision is worth recording: the emitter marks an operand it could not resolve with
 ` ? `, which is also how a conditional expression reads — anything that emits one has to teach
 that check the difference.
+
+Two shapes came off that list by asking the bytecode where a statement STOOD rather than what it
+did. Both rest on the same fact: this fork's compiler emits a jump to the function's epilogue for
+every `return`, and only a `return` that is the last statement of the function's OUTERMOST block
+has that jump folded away.
+
+- **A tail that returns from inside an `else`.** When a then-arm returns, the emitter flattens the
+  else and writes the rest sequentially — right for most functions, and measured as such (writing
+  the `else` cost 301 extra jumps). But where the else region's last block jumps to the bare `RET`
+  row, vanilla NESTED it, and flattening drops that jump: 94 functions, nearly all generated
+  dialog `Act_Implementation`. The region's own terminator decides it. The shared `RET` row must
+  then not be rendered as a statement of its own — every path already returned, and this compiler
+  treats unreachable code as an error.
+- **A named receiver reorders its own statement.** `T local_N = <call>; local_N.Field = <rhs>;`
+  and `<call>().Field = <rhs>;` hold the same instructions in a different order: a receiver held
+  in a declaration is evaluated BEFORE the right-hand side, one spelled inside the assignment
+  after it. Vanilla's `STOREOBJ` says which it wrote — standing directly before the push that
+  consumes it means nothing was named. 56 sites.
+
+Together: 2,231 to 2,111, compile clean, no alignment loss.
+
+The failure in between is worth keeping: the first attempt compiled to ONE "Unreachable code"
+warning, which this compiler promotes to an error, and that cost a whole cycle. `scratchpad/
+unreach.py` now walks the emitted tree the way the compiler does (0 on a tree that compiled,
+exactly the compiler's line on the tree that failed), next to the scope and l-value checkers.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
