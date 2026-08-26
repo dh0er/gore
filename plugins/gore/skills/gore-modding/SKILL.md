@@ -26,6 +26,14 @@ Call `gore_guide` for the page that covers your domain: `textures`, `audio`,
 small. `gore_help` gives exact current flags; the guide gives the order to do
 things in and what breaks when a step is skipped.
 
+Do not preload every guide page or ask for help for every command in a planned
+workflow. Read one ranked section for the step in front of you, and call
+`gore_help` only when the tool schema leaves an argument unclear. `gore_help`
+takes one CLI command path: use `{"command":"loc export"}`, never a `gore_loc`
+tool name and never a separate `subcommand` field. For a broad smoke-test mod,
+run Doctor once, prove each chosen target, build once, inspect once, and leave
+Manager help/import/preflight until the user actually chooses installation.
+
 ## Manage a loadout as one declarative deployment
 
 For installing or managing mods, use `gore_mgr`, not a sequence of direct
@@ -109,15 +117,19 @@ a replaced sample lists as replaced, and `gore_mod_inspect` validates a built
 bundle and hashes its exact manifest plus complete normalized tree. Do that
 before reporting success, and say which items you could not check.
 
-## Never put a name in a spec that you have not seen in a listing
+## Never put an unproven name in a spec
 
 Every id in a bundle spec — a sample name, an archive path, a texture asset, a
-localization id — has to come from a listing you actually ran, not from the
-pattern the neighbouring names suggested. The naming looks regular enough to
-extrapolate from and is not: one session's spec named a Diego line that appeared
-in no listing, and it happened to exist. The failure mode when it does not is
-`mod build` accepting the spec and `mod deploy` refusing it afterwards, which
-costs you the whole build.
+localization id — has to be proved by an exact successful read or a listing you
+actually ran, not from the pattern the neighbouring names suggested. An exact
+texture extraction is proof; do not run the expensive full texture listing as a
+second proof. For a fast Diego visual smoke test, try the documented armor atlas
+`/Game/Assets/Characters/Humans/Clothes/OC_Shadow/Textures/T_HM_OC_Atlas_02_Diego_D`
+directly and list only if that exact extraction says it is absent. The naming
+looks regular enough to extrapolate from and is not: one session's spec named a
+Diego line that appeared in no listing, and it happened to exist. The failure
+mode when it does not is `mod build` accepting the spec and `mod deploy` refusing
+it afterwards, which costs you the whole build.
 
 ## Compile AngelScript offline unless the user chooses a game fallback
 
@@ -134,6 +146,17 @@ compiler and legitimately ask for both game-launch and install-write consent.
 If a dedicated standalone call is refused with a claim that it launches the
 game, do not relay that false question: report that the installed GORE MCP
 server is older than this workflow and needs updating.
+
+Compiler compatibility, one-module authoring feasibility, and default-patch
+qualification are three separate answers. A native diagnostic such as
+`Identifier 'UTopic_…' is not a data type in global namespace` means that the
+shipped AngelScript class is private to another script module; it is not a game
+version mismatch and does not make the standalone compiler generally
+incompatible. In particular, do not present a new Diego topic derived from
+`UTopic_Hero__OC_STT_DIEGO` as an isolated `compile-module --op add` recipe.
+Stop that script lane, explain the module-visibility limit, and omit it honestly
+from a mixed smoke-test bundle. Do not try an unrelated base class, a full-tree
+compile, or a game fallback unless the user separately asks for that work.
 
 ## The consent gate
 

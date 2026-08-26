@@ -88,7 +88,29 @@ pub struct StandaloneSidecarConfigV1 {
     pub termination_grace: Duration,
     /// Hard per-process and aggregate process-tree memory ceiling.
     pub memory_limit_bytes: u64,
+    product_target_inputs: Option<ProductTargetInputSealsV1>,
     fixed_args: Vec<OsString>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MemorySealV1 {
+    byte_len: u64,
+    sha256: Sha256Digest,
+}
+
+impl MemorySealV1 {
+    fn from_bytes(bytes: &[u8]) -> Self {
+        Self {
+            byte_len: bytes.len() as u64,
+            sha256: sha256_bytes(bytes),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProductTargetInputSealsV1 {
+    base_cache: MemorySealV1,
+    binds_cache: MemorySealV1,
 }
 
 /// Caller-supplied identity of the exact sidecar binary that may execute.
@@ -118,8 +140,24 @@ impl StandaloneSidecarConfigV1 {
             timeout: DEFAULT_SIDECAR_TIMEOUT,
             termination_grace: DEFAULT_TERMINATION_GRACE,
             memory_limit_bytes: DEFAULT_SIDECAR_MEMORY_LIMIT_BYTES,
+            product_target_inputs: None,
             fixed_args: Vec::new(),
         }
+    }
+
+    /// Bind product execution to the exact compatible target already authenticated by the
+    /// package resolver. Development and qualification runners deliberately keep the profile's
+    /// byte-exact oracle seals instead.
+    pub(crate) fn with_product_target_inputs(
+        mut self,
+        base_cache: &[u8],
+        binds_cache: &[u8],
+    ) -> Self {
+        self.product_target_inputs = Some(ProductTargetInputSealsV1 {
+            base_cache: MemorySealV1::from_bytes(base_cache),
+            binds_cache: MemorySealV1::from_bytes(binds_cache),
+        });
+        self
     }
 
     #[cfg(test)]
@@ -224,6 +262,41 @@ impl StandaloneSidecarRunnerV1 {
 
     pub fn profile_package(&self) -> &ValidatedCompilerProfilePackageV1 {
         &self.profile_package
+    }
+
+    fn verify_runtime_inputs(
+        &self,
+        base_cache: &[u8],
+        binds_cache: &[u8],
+    ) -> Result<(), CompilerBackendFailureV1> {
+        if let Some(target) = self.config.product_target_inputs {
+            verify_memory_seal_parts(
+                "base cache",
+                base_cache,
+                target.base_cache,
+                MAX_SIDECAR_BASE_BYTES_V1,
+            )?;
+            verify_memory_seal_parts(
+                "Binds.Cache",
+                binds_cache,
+                target.binds_cache,
+                MAX_SIDECAR_BINDS_BYTES_V1,
+            )?;
+        } else {
+            verify_memory_seal(
+                "base cache",
+                base_cache,
+                &self.profile().oracle.shipping_cache,
+                MAX_SIDECAR_BASE_BYTES_V1,
+            )?;
+            verify_memory_seal(
+                "Binds.Cache",
+                binds_cache,
+                &self.profile().oracle.binds_cache,
+                MAX_SIDECAR_BINDS_BYTES_V1,
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -712,18 +785,7 @@ impl StandaloneCompilerRunnerV1 for StandaloneSidecarRunnerV1 {
         let binds_cache = inputs.binds_cache.ok_or_else(|| {
             unavailable("standalone sidecar requires a sealed Binds.Cache snapshot")
         })?;
-        verify_memory_seal(
-            "base cache",
-            base_cache,
-            &self.profile().oracle.shipping_cache,
-            MAX_SIDECAR_BASE_BYTES_V1,
-        )?;
-        verify_memory_seal(
-            "Binds.Cache",
-            binds_cache,
-            &self.profile().oracle.binds_cache,
-            MAX_SIDECAR_BINDS_BYTES_V1,
-        )?;
+        self.verify_runtime_inputs(base_cache, binds_cache)?;
         self.profile().validate_complete().map_err(|error| {
             unavailable(format!("compiler profile is no longer valid: {error}"))
         })?;
@@ -910,18 +972,7 @@ impl StandaloneCompilerRunnerV1 for StandaloneSidecarRunnerV1 {
                 "standalone sidecar was not qualified for the FullGraph request-v2 contract",
             ));
         }
-        verify_memory_seal(
-            "base cache",
-            inputs.base_cache,
-            &self.profile().oracle.shipping_cache,
-            MAX_SIDECAR_BASE_BYTES_V1,
-        )?;
-        verify_memory_seal(
-            "Binds.Cache",
-            inputs.binds_cache,
-            &self.profile().oracle.binds_cache,
-            MAX_SIDECAR_BINDS_BYTES_V1,
-        )?;
+        self.verify_runtime_inputs(inputs.base_cache, inputs.binds_cache)?;
         self.profile().validate_complete().map_err(|error| {
             unavailable(format!("compiler profile is no longer valid: {error}"))
         })?;
@@ -2793,6 +2844,23 @@ fn verify_memory_seal(
     expected: &FileSealV1,
     max: u64,
 ) -> Result<(), CompilerBackendFailureV1> {
+    verify_memory_seal_parts(
+        label,
+        bytes,
+        MemorySealV1 {
+            byte_len: expected.byte_len,
+            sha256: expected.sha256,
+        },
+        max,
+    )
+}
+
+fn verify_memory_seal_parts(
+    label: &str,
+    bytes: &[u8],
+    expected: MemorySealV1,
+    max: u64,
+) -> Result<(), CompilerBackendFailureV1> {
     if bytes.len() as u64 > max {
         return Err(unavailable(format!(
             "sealed {label} has {} bytes; maximum is {max}",
@@ -2802,7 +2870,7 @@ fn verify_memory_seal(
     let actual = sha256_bytes(bytes);
     if bytes.len() as u64 != expected.byte_len || actual != expected.sha256 {
         return Err(unavailable(format!(
-            "sealed {label} does not match compiler profile identity"
+            "sealed {label} does not match its authenticated input identity"
         )));
     }
     Ok(())
@@ -4471,6 +4539,20 @@ print(json.dumps({"response_version":1,"ok":True,"output":{"cache_path":str(outp
         let error = plan_regen_full_graph_v2(&base, &drifted_path).unwrap_err();
         assert_eq!(error.kind(), CompilerBackendFailureKindV1::Preflight);
         assert!(error.detail().contains("does not exactly match"), "{error}");
+    }
+
+    #[test]
+    fn product_target_seals_accept_only_the_resolver_authenticated_bytes() {
+        let oracle = b"qualification-oracle";
+        let target = b"compatible-product-target";
+        let seal = MemorySealV1::from_bytes(target);
+
+        verify_memory_seal_parts("target", target, seal, 1024).unwrap();
+        let error = verify_memory_seal_parts("target", oracle, seal, 1024).unwrap_err();
+        assert_eq!(error.kind(), CompilerBackendFailureKindV1::Unavailable);
+        assert!(error
+            .detail()
+            .contains("does not match its authenticated input identity"));
     }
 
     #[test]

@@ -17,6 +17,12 @@ gore texture list --game "$GAME" --filter T_Hardware    # substring filter on th
 
 Asset paths look like `/Game/UI/Textures/Common/T_HardwareCursor`.
 
+For a quick Diego smoke test, the armor atlas observed in the shipped game is
+`/Game/Assets/Characters/Humans/Clothes/OC_Shadow/Textures/T_HM_OC_Atlas_02_Diego_D`.
+Try an exact `extract` first. A successful extraction proves the asset identity
+and avoids a slow full-container listing; use `list --filter Atlas_02_Diego`
+only if the exact path is absent on the installed game version.
+
 Resolving asset paths needs an asset→package-id index. It is built and cached
 automatically, but you can (re)build it explicitly:
 

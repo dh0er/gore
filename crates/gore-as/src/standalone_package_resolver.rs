@@ -211,6 +211,26 @@ impl AvailableProductStandaloneCompilerPackageV1 {
         &self.authority
     }
 
+    /// Construct the sidecar configuration while preserving the resolver's exact compatible
+    /// Shipping/Binds target seals. This is the only product path that relaxes the qualification
+    /// oracle's byte identity; development configurations remain byte-exact.
+    pub fn sidecar_config(
+        &self,
+        scratch_root: PathBuf,
+    ) -> crate::standalone_sidecar::StandaloneSidecarConfigV1 {
+        crate::standalone_sidecar::StandaloneSidecarConfigV1::new(
+            self.sidecar_path().to_path_buf(),
+            self.sidecar_seal(),
+            self.profile_manifest_path().to_path_buf(),
+            self.profile_root().to_path_buf(),
+            scratch_root,
+        )
+        .with_product_target_inputs(
+            self.target_inputs.shipping_cache(),
+            self.target_inputs.binds_cache(),
+        )
+    }
+
     /// Transfer the exact EXE/Shipping/Binds proof to the compile transaction without dropping the
     /// package handles or the non-forgeable authority needed by Receipt V2 afterwards.
     pub fn into_execution_parts(

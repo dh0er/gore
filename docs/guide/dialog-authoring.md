@@ -1,11 +1,11 @@
 # AngelScript dialog authoring
 
-GORE can compile a new dialog-topic class into an additive AngelScript module,
-carry its new symbols in a mini-cache, compose that mini-cache into the
-shipping script cache, and deploy or undeploy the result transactionally
-through the bundle engine. This page covers the minimal authoring template,
-the compile and packaging commands, conditional topic visibility, the
-production integration paths, and the safe validation order. The runtime
+GORE can deploy an already compiled dialog-topic class transactionally through
+the bundle engine, and the runtime adapter has rendered such a class in game.
+The currently shipped Diego root class is module-private, however, so the
+source shape below is **not** an isolated `compile-module --op add` recipe. This
+page records the runtime contract, current authoring boundary, conditional topic
+visibility, integration paths, and safe validation order. The runtime
 evidence, hook-order contract, and current limits behind dialog-topic
 insertion are documented in [Dialog runtime internals](../reference/dialog-runtime.md).
 
@@ -31,7 +31,7 @@ which is the thing above that is not certified for recorded voice. `gore voice
 replace`, against a line the game already speaks, is the deployment path with
 evidence behind it ([voice.md](voice.md)).
 
-## Minimal compiled topic
+## Diego source shape and current boundary
 
 Derive from the existing conversation root for the target NPC. This exact
 caption pattern avoids relying on the currently lossy decompilation of the
@@ -66,35 +66,29 @@ class UChoiceMyModDiego : UMyModDiegoTopicBase
 }
 ```
 
+Do not feed this file to isolated `compile-module --op add`. The shipped
+`UTopic_Hero__OC_STT_DIEGO` declaration belongs to another AngelScript module
+and is not a global data type. Strict standalone compilation therefore reports
+that the identifier is not a data type in the global namespace. That diagnostic
+is the correct module-visibility boundary, not evidence of a game-build or
+general compiler incompatibility. Substituting `UG1RDialogTopic` has the same
+problem; choosing an unrelated global base would compile the wrong runtime
+type.
+
 `FText::FromString` is suitable for an unlocalized smoke test. A distributable
 dialog should use a real localization ID and add it explicitly with
 `gore loc import --add-missing` or through the bundle/Mod Studio localization
 editor. Recorded voice-over remains a separate voice-ZIP edit.
 
-## Compile and package
+## Compile and package status
 
-Use the high-level one-module command instead of manually replacing live game
-files:
-
-```powershell
-gore as compile-module `
-  --op add `
-  --module MyMod.Dialog `
-  --rel-path MyMod/Dialog.as `
-  --source Dialog.as `
-  --work-dir .gore-as-work `
-  --allow-new-symbols `
-  -o MyMod.Dialog.mini.Cache `
-  --game $GAME
-```
-
-`--allow-new-symbols` is mandatory for a genuinely new class-bearing module.
-For `--op add`, the module identity is derived from `--rel-path`
-(`MyMod/Dialog.as` becomes `MyMod.Dialog`); `--module` remains a compatibility
-hint and cannot silently give the new module a conflicting identity.
-It retains only the new reference-table rows and remaps all existing symbols to
-the selected vanilla cache. Declare that cache and the topic registration in a
-bundle build spec:
+There is currently no supported isolated one-module command that turns the
+Diego source above into a deployable mini-cache. Do not retry it through the
+default `standalone-then-game` backend, silently fall back to the game compiler,
+or ship a whole regenerated source tree as a workaround. `--allow-new-symbols`
+and the module identity are not the blocker; cross-module superclass visibility
+is. Once a separately qualified authoring path supplies a valid mini-cache, its
+bundle declaration has this shape:
 
 ```json
 {
@@ -117,6 +111,10 @@ bundle build spec:
 gore mod build --spec spec.json -o build
 gore mod deploy --bundle build/MyDialogMod --game $GAME
 ```
+
+The JSON and bundle commands describe packaging, not a currently supported way
+to obtain `MyMod.Dialog.mini.Cache` from the Diego snippet. A guide or agent must
+not claim the end-to-end mod is ready while that input is missing.
 
 The builder composes generated CDO overrides and dialog registration into
 exactly one self-contained UE4SS Lua component. A spec that would introduce

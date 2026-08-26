@@ -1803,10 +1803,15 @@ sidecar_compile_result compile_sidecar_request(
             return failure(wire::ExitCode::unavailable, "engine_unavailable", "GORE_AS_PROFILE_IDENTITY_MISMATCH",
                 "request and compiler manifest identities differ");
         }
-        if (request.base_cache.byte_len != manifest.oracle_shipping_cache.byte_len ||
-            request.base_cache.sha256 != manifest.oracle_shipping_cache.sha256 ||
-            request.binds_cache.byte_len != manifest.oracle_binds_cache.byte_len ||
-            request.binds_cache.sha256 != manifest.oracle_binds_cache.sha256) {
+        // Qualification must remain byte-exact to its oracle. Product compilation has already
+        // authenticated a compatible target in the trusted Rust parent and carries exact seals for
+        // the staged files in this request; imposing the oracle again here would reject compatible
+        // Steam/GOG representations after that semantic target check succeeded.
+        if (request.qualification_mode &&
+            (request.base_cache.byte_len != manifest.oracle_shipping_cache.byte_len ||
+             request.base_cache.sha256 != manifest.oracle_shipping_cache.sha256 ||
+             request.binds_cache.byte_len != manifest.oracle_binds_cache.byte_len ||
+             request.binds_cache.sha256 != manifest.oracle_binds_cache.sha256)) {
             return failure(wire::ExitCode::unavailable, "engine_unavailable", "GORE_AS_ORACLE_INPUT_MISMATCH",
                 "base cache or Binds.Cache seal does not match the qualified profile");
         }

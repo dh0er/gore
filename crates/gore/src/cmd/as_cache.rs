@@ -1932,15 +1932,8 @@ fn compile_full_graph_command(
     let mut package_unavailable = None;
     match resolution {
         ProductStandaloneCompilerPackageResolutionV1::Available(available) => {
-            let runner_config = (requested_mode != CompilerBackendModeV1::Game).then(|| {
-                gore_as::standalone_sidecar::StandaloneSidecarConfigV1::new(
-                    available.sidecar_path().to_path_buf(),
-                    available.sidecar_seal(),
-                    available.profile_manifest_path().to_path_buf(),
-                    available.profile_root().to_path_buf(),
-                    work_dir.clone(),
-                )
-            });
+            let runner_config = (requested_mode != CompilerBackendModeV1::Game)
+                .then(|| available.sidecar_config(work_dir.clone()));
             let (authority, target_inputs) = available.into_execution_parts();
             receipt_authority = Some(authority);
             target = Some(target_inputs);
@@ -3097,15 +3090,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     ProductStandaloneCompilerPackageResolutionV1::Available(available) => {
                         let runner_config = (requested_mode
                             != gore_as::compile::CompilerBackendModeV1::Game)
-                            .then(|| {
-                                gore_as::standalone_sidecar::StandaloneSidecarConfigV1::new(
-                                    available.sidecar_path().to_path_buf(),
-                                    available.sidecar_seal(),
-                                    available.profile_manifest_path().to_path_buf(),
-                                    available.profile_root().to_path_buf(),
-                                    work_dir.clone(),
-                                )
-                            });
+                            .then(|| available.sidecar_config(work_dir.clone()));
                         let (authority, target) = available.into_execution_parts();
                         if let Some(config) = runner_config {
                             match gore_as::standalone_sidecar::StandaloneSidecarRunnerV1::new(

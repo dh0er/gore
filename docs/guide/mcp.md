@@ -413,6 +413,13 @@ to the server.
 | `gore_as_compile_module` | strict standalone `as compile-module` alias | [scripts](scripts.md) |
 | `gore_as` | `as` | [scripts](scripts.md) |
 
+`gore_help` is deliberately different from the namespace tools: it accepts one
+space-separated **CLI** path in `command`. For example, ask for
+`{"command":"loc export"}`. Do not pass the MCP tool name (`gore_loc`) and do
+not add a separate `subcommand` property. The tool schema already carries the
+ordinary arguments, so use help only when that schema is not specific enough;
+a blanket help call for every later step adds work without improving safety.
+
 Twenty tools rather than 89 leaves keeps a client's tool list navigable while
 still covering every command. The extra bundle-inspection and Manager-preflight
 routes exist because MCP annotations apply to a whole tool: mixed `gore_mod`
