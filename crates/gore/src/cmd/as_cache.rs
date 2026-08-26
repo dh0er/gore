@@ -2457,26 +2457,6 @@ fn prepare_development_standalone_runner(
         .context("initializing development standalone compiler override")
 }
 
-fn validate_profile_inputs_before_compile(
-    profile: &gore_as::compiler_profile::manifest::CompilerProfileV1,
-    base: &[u8],
-    binds: &[u8],
-) -> Result<()> {
-    let base = gore_as::generation_receipt::ArtifactSealV1::from_bytes(base);
-    let binds = gore_as::generation_receipt::ArtifactSealV1::from_bytes(binds);
-    if base.byte_len != profile.oracle.shipping_cache.byte_len
-        || base.sha256 != profile.oracle.shipping_cache.sha256
-    {
-        bail!("qualified compiler profile does not match the selected pristine Shipping cache");
-    }
-    if binds.byte_len != profile.oracle.binds_cache.byte_len
-        || binds.sha256 != profile.oracle.binds_cache.sha256
-    {
-        bail!("qualified compiler profile does not match the selected Binds.Cache");
-    }
-    Ok(())
-}
-
 pub fn run(cmd: AsCmd) -> Result<()> {
     match cmd {
         AsCmd::DecodeHeader { file } => {
@@ -3087,7 +3067,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let mut standalone_target = None;
             let mut product_authority = None;
             let mut package_unavailable = None;
-            let execution_profile = if compiler.has_development_override() {
+            if compiler.has_development_override() {
                 if compiler.backend == AsCompilerBackendV1::Game {
                     bail!(
                         "development standalone overrides cannot be combined with --backend game"
@@ -3095,7 +3075,6 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 }
                 let runner = prepare_development_standalone_runner(&compiler)?
                     .expect("a complete development override constructs one runner");
-                let profile = runner.profile().clone();
                 standalone_target = Some(
                     gore_as::compiler_target::ValidatedCompilerTargetInputsV1::load(
                         runner.profile_package(),
@@ -3105,7 +3084,6 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     .context("validating the exact development compiler target")?,
                 );
                 standalone_runner = Some(CompileModuleStandaloneRunnerV1::Development(runner));
-                Some(profile)
             } else {
                 use gore_as::standalone_package_resolver::ProductStandaloneCompilerPackageResolutionV1;
 
@@ -3115,7 +3093,6 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     &host_module,
                     target_paths,
                 );
-                let mut profile = None;
                 match resolution {
                     ProductStandaloneCompilerPackageResolutionV1::Available(available) => {
                         let runner_config = (requested_mode
@@ -3130,7 +3107,6 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                                 )
                             });
                         let (authority, target) = available.into_execution_parts();
-                        profile = Some(authority.profile_package().profile().clone());
                         if let Some(config) = runner_config {
                             match gore_as::standalone_sidecar::StandaloneSidecarRunnerV1::new(
                                 config,
@@ -3206,8 +3182,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                         }
                     }
                 }
-                profile
-            };
+            }
 
             let (base_override, guard) = if let Some(target) = standalone_target.as_mut() {
                 let guard = if requested_mode == gore_as::compile::CompilerBackendModeV1::Standalone
@@ -3242,20 +3217,6 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let binds_override = standalone_target
                 .as_ref()
                 .map(|target| target.binds_cache().to_vec());
-            if let Some(profile) = execution_profile.as_ref() {
-                if let Err(error) = validate_profile_inputs_before_compile(
-                    profile,
-                    &base_override,
-                    binds_override
-                        .as_deref()
-                        .expect("profile-bound compile has Binds snapshot"),
-                ) {
-                    return match guard {
-                        Some(guard) => Err(release_compile_guard_after_error(guard, error)),
-                        None => Err(error),
-                    };
-                }
-            }
             let opts = gore_as::compile::CompileOpts {
                 game_dir: game,
                 op,
@@ -3370,17 +3331,14 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 relative_path: &opts.rel_path,
                 bytes: &source_bytes,
             }];
-            let receipt_package = product_authority
-                .as_ref()
-                .map(|authority| authority.profile_package());
             let generation_receipt = match (
                 compiler.generation_receipt.as_ref(),
-                receipt_package,
+                product_authority.as_ref(),
                 binds_override.as_deref(),
             ) {
-                (Some(_), Some(package), Some(binds)) => Some(
-                    gore_as::generation_receipt::GenerationReceiptV1::build_for_compile_output(
-                        package,
+                (Some(_), Some(authority), Some(binds)) => Some(
+                    gore_as::generation_receipt::GenerationReceiptV1::build_for_product_compile_output(
+                        authority,
                         &sources,
                         &base_override,
                         binds,

@@ -20,6 +20,7 @@ use crate::compiler_backend::{
     CompilerBackendNameV1,
 };
 use crate::compiler_profile::manifest::{CompilerProfileV1, FileSealV1, Sha256Digest};
+use crate::standalone_package_resolver::ProductStandaloneCompilerReceiptAuthorityV1;
 use crate::standalone_sidecar::ValidatedCompilerProfilePackageV1;
 
 pub const GENERATION_RECEIPT_SCHEMA_V1: &str = "gore.as.generation-receipt";
@@ -56,8 +57,12 @@ impl ArtifactSealV1 {
         }
     }
 
-    fn matches_profile_file(&self, expected: &FileSealV1) -> bool {
+    fn matches_file_seal(&self, expected: &FileSealV1) -> bool {
         self.byte_len == expected.byte_len && self.sha256 == expected.sha256
+    }
+
+    pub(crate) fn matches_target_seal(&self, expected: (u64, Sha256Digest)) -> bool {
+        self.byte_len == expected.0 && self.sha256 == expected.1
     }
 }
 
@@ -352,6 +357,10 @@ impl GenerationReceiptV1 {
     ) -> Result<Self, GenerationReceiptError> {
         Self::build_from_profile_bytes(
             profile_package.profile(),
+            (
+                &profile_package.profile().oracle.shipping_cache,
+                &profile_package.profile().oracle.binds_cache,
+            ),
             sources,
             base_cache,
             binds_cache,
@@ -363,6 +372,7 @@ impl GenerationReceiptV1 {
 
     fn build_from_profile_bytes(
         profile: &CompilerProfileV1,
+        expected_inputs: (&FileSealV1, &FileSealV1),
         sources: &[GenerationSourceFileV1<'_>],
         base_cache: &[u8],
         binds_cache: &[u8],
@@ -402,13 +412,13 @@ impl GenerationReceiptV1 {
         })?;
         let base_seal = ArtifactSealV1::from_bytes(base_cache);
         let binds_seal = ArtifactSealV1::from_bytes(binds_cache);
-        if !base_seal.matches_profile_file(&profile.oracle.shipping_cache) {
+        if !base_seal.matches_file_seal(expected_inputs.0) {
             return invalid(
                 "inputs.base_cache",
                 "does not match the qualified profile's Shipping cache",
             );
         }
-        if !binds_seal.matches_profile_file(&profile.oracle.binds_cache) {
+        if !binds_seal.matches_file_seal(expected_inputs.1) {
             return invalid(
                 "inputs.binds_cache",
                 "does not match the qualified profile's Binds.Cache",
@@ -448,8 +458,9 @@ impl GenerationReceiptV1 {
             canonical_sha256: zero_digest(),
         };
         receipt.canonical_sha256 = receipt.computed_digest()?;
-        receipt.validate_against_profile(
+        receipt.validate_against_profile_and_input_seals(
             profile,
+            expected_inputs,
             sources,
             base_cache,
             binds_cache,
@@ -476,6 +487,42 @@ impl GenerationReceiptV1 {
         )
     }
 
+    /// Build a module receipt for the exact compatible target authenticated by the product
+    /// resolver. The installed Shipping/Binds bytes may differ from the qualification oracle;
+    /// their exact seals are still retained in the receipt.
+    pub fn build_for_product_compile_output(
+        authority: &ProductStandaloneCompilerReceiptAuthorityV1,
+        sources: &[GenerationSourceFileV1<'_>],
+        base_cache: &[u8],
+        binds_cache: &[u8],
+        output: &CompileOutput,
+        backend: ReceiptBackendSelectionV1,
+    ) -> Result<Self, GenerationReceiptError> {
+        let output_bytes = read_retained_output(output)?;
+        let shipping = authority.shipping_cache_seal();
+        let binds = authority.binds_cache_seal();
+        let expected_shipping = FileSealV1 {
+            byte_len: shipping.0,
+            sha256: shipping.1,
+            steam_content_sha1: None,
+        };
+        let expected_binds = FileSealV1 {
+            byte_len: binds.0,
+            sha256: binds.1,
+            steam_content_sha1: None,
+        };
+        Self::build_from_profile_bytes(
+            authority.profile_package().profile(),
+            (&expected_shipping, &expected_binds),
+            sources,
+            base_cache,
+            binds_cache,
+            &output_bytes,
+            &output.module_name,
+            backend,
+        )
+    }
+
     fn build_for_compile_output_profile(
         profile: &CompilerProfileV1,
         sources: &[GenerationSourceFileV1<'_>],
@@ -487,6 +534,7 @@ impl GenerationReceiptV1 {
         let output_bytes = read_retained_output(output)?;
         Self::build_from_profile_bytes(
             profile,
+            (&profile.oracle.shipping_cache, &profile.oracle.binds_cache),
             sources,
             base_cache,
             binds_cache,
@@ -570,9 +618,58 @@ impl GenerationReceiptV1 {
         )
     }
 
+    pub fn validate_against_product_authority(
+        &self,
+        authority: &ProductStandaloneCompilerReceiptAuthorityV1,
+        sources: &[GenerationSourceFileV1<'_>],
+        base_cache: &[u8],
+        binds_cache: &[u8],
+        output_cache: &[u8],
+    ) -> Result<(), GenerationReceiptError> {
+        let shipping = authority.shipping_cache_seal();
+        let binds = authority.binds_cache_seal();
+        let expected_shipping = FileSealV1 {
+            byte_len: shipping.0,
+            sha256: shipping.1,
+            steam_content_sha1: None,
+        };
+        let expected_binds = FileSealV1 {
+            byte_len: binds.0,
+            sha256: binds.1,
+            steam_content_sha1: None,
+        };
+        self.validate_against_profile_and_input_seals(
+            authority.profile_package().profile(),
+            (&expected_shipping, &expected_binds),
+            sources,
+            base_cache,
+            binds_cache,
+            output_cache,
+        )
+    }
+
     fn validate_against_profile(
         &self,
         profile: &CompilerProfileV1,
+        sources: &[GenerationSourceFileV1<'_>],
+        base_cache: &[u8],
+        binds_cache: &[u8],
+        output_cache: &[u8],
+    ) -> Result<(), GenerationReceiptError> {
+        self.validate_against_profile_and_input_seals(
+            profile,
+            (&profile.oracle.shipping_cache, &profile.oracle.binds_cache),
+            sources,
+            base_cache,
+            binds_cache,
+            output_cache,
+        )
+    }
+
+    fn validate_against_profile_and_input_seals(
+        &self,
+        profile: &CompilerProfileV1,
+        expected_inputs: (&FileSealV1, &FileSealV1),
         sources: &[GenerationSourceFileV1<'_>],
         base_cache: &[u8],
         binds_cache: &[u8],
@@ -595,14 +692,8 @@ impl GenerationReceiptV1 {
         {
             return invalid("artifacts", "one or more exact artifact seals changed");
         }
-        if !self
-            .inputs
-            .base_cache
-            .matches_profile_file(&profile.oracle.shipping_cache)
-            || !self
-                .inputs
-                .binds_cache
-                .matches_profile_file(&profile.oracle.binds_cache)
+        if !self.inputs.base_cache.matches_file_seal(expected_inputs.0)
+            || !self.inputs.binds_cache.matches_file_seal(expected_inputs.1)
         {
             return invalid(
                 "inputs",
@@ -1689,6 +1780,63 @@ mod tests {
         assert_eq!(
             decoded.backend.used_backend,
             ReceiptBackendNameV1::Standalone
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn product_module_receipt_accepts_compatible_target_bytes_different_from_oracle() {
+        use crate::standalone_package_resolver::test_support::SyntheticProductPackageFixtureV1;
+
+        let package = SyntheticProductPackageFixtureV1::create();
+        let (base, binds) = package.install_compatible_target_variants();
+        let authority = package.receipt_authority();
+        let guid: [u8; 16] = base[..16].try_into().unwrap();
+        let output_bytes = cache(guid, b"compatible target output");
+        let temp = tempfile::tempdir().unwrap();
+        let output_path = temp.path().join("module.cache");
+        std::fs::write(&output_path, &output_bytes).unwrap();
+        let output = CompileOutput::bind_existing(output_path, "Module".to_owned()).unwrap();
+        let sources = [GenerationSourceFileV1 {
+            relative_path: "Module.as",
+            bytes: b"void Main() {}",
+        }];
+
+        let receipt = GenerationReceiptV1::build_for_product_compile_output(
+            &authority,
+            &sources,
+            &base,
+            &binds,
+            &output,
+            selection(),
+        )
+        .unwrap();
+        receipt
+            .validate_against_product_authority(&authority, &sources, &base, &binds, &output_bytes)
+            .unwrap();
+
+        assert_eq!(receipt.inputs.base_cache, ArtifactSealV1::from_bytes(&base));
+        assert_eq!(
+            receipt.inputs.binds_cache,
+            ArtifactSealV1::from_bytes(&binds)
+        );
+        assert_ne!(
+            receipt.inputs.base_cache.sha256,
+            authority
+                .profile_package()
+                .profile()
+                .oracle
+                .shipping_cache
+                .sha256
+        );
+        assert_ne!(
+            receipt.inputs.binds_cache.sha256,
+            authority
+                .profile_package()
+                .profile()
+                .oracle
+                .binds_cache
+                .sha256
         );
     }
 

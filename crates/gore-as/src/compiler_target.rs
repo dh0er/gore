@@ -243,6 +243,20 @@ impl ValidatedCompilerTargetInputsV1 {
         &self.binds_bytes
     }
 
+    pub(crate) fn shipping_cache_seal(&self) -> (u64, Sha256Digest) {
+        (
+            self.shipping_bytes.len() as u64,
+            Sha256Digest::from_bytes(Sha256::digest(&self.shipping_bytes).into()),
+        )
+    }
+
+    pub(crate) fn binds_cache_seal(&self) -> (u64, Sha256Digest) {
+        (
+            self.binds_bytes.len() as u64,
+            Sha256Digest::from_bytes(Sha256::digest(&self.binds_bytes).into()),
+        )
+    }
+
     /// Keep the exact opened executable identity live without exposing its path.
     pub fn executable_handle(&self) -> &File {
         &self.executable

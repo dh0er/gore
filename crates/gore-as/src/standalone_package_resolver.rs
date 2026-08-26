@@ -107,6 +107,8 @@ impl ProductStandaloneCompilerPackageIdentityV1 {
 #[derive(Debug)]
 pub struct ProductStandaloneCompilerReceiptAuthorityV1 {
     identity: ProductStandaloneCompilerPackageIdentityV1,
+    shipping_cache_seal: (u64, Sha256Digest),
+    binds_cache_seal: (u64, Sha256Digest),
     sidecar_path: PathBuf,
     profile_manifest_path: PathBuf,
     profile_root: PathBuf,
@@ -123,6 +125,14 @@ impl ProductStandaloneCompilerReceiptAuthorityV1 {
 
     pub fn profile_package(&self) -> &ValidatedCompilerProfilePackageV1 {
         &self.profile_package
+    }
+
+    pub(crate) fn shipping_cache_seal(&self) -> (u64, Sha256Digest) {
+        self.shipping_cache_seal
+    }
+
+    pub(crate) fn binds_cache_seal(&self) -> (u64, Sha256Digest) {
+        self.binds_cache_seal
     }
 
     /// Exact pinned executable handle. Prefer passing this handle to execution over reopening its
@@ -594,8 +604,12 @@ fn try_resolve_authoritative_catalog_at_host_v1(
             profile_sha256: entry.profile_sha256(),
             target: target.clone(),
         };
+        let shipping_cache_seal = target_inputs.shipping_cache_seal();
+        let binds_cache_seal = target_inputs.binds_cache_seal();
         let authority = ProductStandaloneCompilerReceiptAuthorityV1 {
             identity,
+            shipping_cache_seal,
+            binds_cache_seal,
             sidecar_path,
             profile_manifest_path,
             profile_root,
@@ -1372,6 +1386,18 @@ pub(crate) mod test_support {
             }
         }
 
+        /// Replace only representation-specific target bytes while preserving compiler
+        /// compatibility: Shipping gets a different per-cache GUID and Binds uses wide strings.
+        pub(crate) fn install_compatible_target_variants(&self) -> (Vec<u8>, Vec<u8>) {
+            let mut shipping = self.shipping_bytes.clone();
+            shipping[0] ^= 0x5a; // Per-cache GUID, not compiler compatibility.
+            let binds = synthetic_binds_database(true);
+            assert_ne!(binds, self.binds_bytes);
+            std::fs::write(&self.shipping_path, &shipping).unwrap();
+            std::fs::write(&self.binds_path, &binds).unwrap();
+            (shipping, binds)
+        }
+
         /// Construct the non-forgeable Receipt V2 authority through the real resolver and model a
         /// compile transaction taking, then releasing, the exact target handles.
         pub(crate) fn receipt_authority(&self) -> ProductStandaloneCompilerReceiptAuthorityV1 {
@@ -1382,14 +1408,6 @@ pub(crate) mod test_support {
             let (authority, target_inputs) = available.into_execution_parts();
             drop(target_inputs);
             authority
-        }
-
-        pub(crate) fn base_cache_bytes(&self) -> &[u8] {
-            &self.shipping_bytes
-        }
-
-        pub(crate) fn binds_cache_bytes(&self) -> &[u8] {
-            &self.binds_bytes
         }
     }
 
