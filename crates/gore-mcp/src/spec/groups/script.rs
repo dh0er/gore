@@ -5,7 +5,8 @@
 //!
 //! - `compile` and `compile-module` expose an explicit standalone/game backend policy. Their
 //!   worst case remains a game launch, but the per-call gate lets explicit strict standalone run
-//!   without game-launch or install-write consent.
+//!   without game-launch consent. Ordinary build outputs need no install-write consent either;
+//!   an output explicitly aimed into the game installation remains protected.
 //! - `bytediff` spells `--json` as a *path* to write a report to, not as a switch that changes
 //!   stdout. It is therefore an ordinary argument and is never passed implicitly; passing it
 //!   automatically would create a file nobody asked for.
@@ -919,7 +920,8 @@ const AS_COMMANDS: &[CommandSpec] = &[
         "Compile one authored module into a deployable 1-module mini-cache. Wraps the complete \
          Studio pipeline with an explicit standalone/game policy.",
         COMPILE_MODULE_ARGS,
-        Safety::game_launch_except("backend", "standalone"),
+        Safety::game_launch_except("backend", "standalone")
+            .writes_into(&["out", "generation_receipt"]),
         T_COMPILE,
     )
     .at_most_one(DIAGNOSTICS_CONFLICT)
@@ -980,7 +982,8 @@ pub const AS: GroupSpec = GroupSpec {
     summary: "AngelScript precompiled-cache tooling: inspect and decompile the shipped script \
               cache, patch scalar defaults in place, and compile authored modules back in. \
               Compilation has an explicit standalone/game policy: strict standalone runs offline \
-              without consent; game and fallback-capable calls require game-launch and install-write consent.",
+              without game-launch consent, while outputs aimed into the installation remain protected; \
+              game and fallback-capable calls require game-launch and install-write consent.",
     shape: GroupShape::Nested,
     commands: AS_COMMANDS,
 };
@@ -1011,9 +1014,9 @@ pub const AS_COMPILE: GroupSpec = GroupSpec {
 
 const STANDALONE_COMPILE_MODULE_COMMANDS: &[CommandSpec] = &[CommandSpec::new(
     "compile-module",
-    "Compile one authored AngelScript module with GORE's bundled standalone compiler. This never starts the game or stages files in the installation.",
+    "Compile one authored AngelScript module with GORE's bundled standalone compiler. This never starts the game; ordinary build outputs need no consent, while outputs aimed into the installation remain protected.",
     STANDALONE_COMPILE_MODULE_ARGS,
-    Safety::write(),
+    Safety::write().writes_into(&["out", "generation_receipt"]),
     T_COMPILE,
 )
 .forced(&["--backend", "standalone"])
@@ -1033,7 +1036,7 @@ pub const AS_COMPILE_MODULE: GroupSpec = GroupSpec {
     tool: "gore_as_compile_module",
     title: "gore as compile-module (standalone)",
     cli: "as",
-    summary: "Strict standalone one-module AngelScript compilation with native diagnostics and no game-launch or install-write consent.",
+    summary: "Strict standalone one-module AngelScript compilation with native diagnostics, no game-launch consent, and install protection only when an output targets the game tree.",
     shape: GroupShape::Nested,
     commands: STANDALONE_COMPILE_MODULE_COMMANDS,
 };

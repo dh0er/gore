@@ -461,9 +461,17 @@ mod tests {
 
     #[test]
     fn dedicated_standalone_compilers_are_typed_and_not_destructive() {
-        for (tool_name, required) in [
-            ("gore_as_compile", "src"),
-            ("gore_as_compile_module", "source"),
+        for (tool_name, required, consent_promise) in [
+            (
+                "gore_as_compile",
+                "src",
+                "no game-launch or install-write consent",
+            ),
+            (
+                "gore_as_compile_module",
+                "source",
+                "install protection only when an output targets the game tree",
+            ),
         ] {
             let definition = tool(tool_name);
             assert_eq!(definition["annotations"]["readOnlyHint"], json!(false));
@@ -473,7 +481,8 @@ mod tests {
                 .get("backend")
                 .is_none());
             let description = definition["description"].as_str().unwrap();
-            assert!(description.contains("no game-launch or install-write consent"));
+            assert!(description.contains("no game-launch"));
+            assert!(description.contains(consent_promise));
             assert!(!description.contains("LAUNCHES THE GAME"));
         }
     }

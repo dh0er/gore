@@ -2151,7 +2151,7 @@ mod tests {
     }
 
     #[test]
-    fn dedicated_standalone_tools_force_the_backend_and_never_ask() {
+    fn dedicated_standalone_tools_force_the_backend_without_asking_for_scratch_outputs() {
         let full = json!({
             "src": "scripts",
             "out": "fresh-full.Cache",
@@ -2182,6 +2182,60 @@ mod tests {
             assert!(rendered
                 .windows(2)
                 .any(|pair| pair == ["--backend", "standalone"]));
+        }
+    }
+
+    #[test]
+    fn standalone_module_outputs_inside_the_game_keep_install_consent() {
+        let mixed = json!({
+            "op": "add",
+            "module": "MyMod.Dialog",
+            "rel_path": "MyMod/Dialog.as",
+            "source": "Dialog.as",
+            "work_dir": "compiler-work-module",
+            "out": "fresh-module.Cache",
+            "backend": "standalone",
+            "game": "D:/Games/G1R",
+        });
+        let dedicated = json!({
+            "op": "add",
+            "module": "MyMod.Dialog",
+            "rel_path": "MyMod/Dialog.as",
+            "source": "Dialog.as",
+            "work_dir": "compiler-work-module",
+            "out": "fresh-module.Cache",
+            "game": "D:/Games/G1R",
+        });
+
+        for output in ["out", "generation_receipt"] {
+            for (tool, args) in [
+                ("gore_as", mixed.clone()),
+                ("gore_as_compile_module", dedicated.clone()),
+            ] {
+                let mut args = args;
+                args.as_object_mut().expect("module arguments").insert(
+                    output.into(),
+                    json!(format!("D:/Games/G1R/Content/{output}.json")),
+                );
+                let raised = question(tool, "compile-module", args, &options())
+                    .unwrap_or_else(|| panic!("{tool} did not protect `{output}` in the game"));
+                assert_eq!(
+                    raised.needs,
+                    Needs {
+                        write: true,
+                        game_launch: false,
+                    },
+                    "{tool} `{output}`"
+                );
+                assert!(
+                    raised.reason.contains(output),
+                    "{tool} `{output}`: {raised:?}"
+                );
+                assert!(
+                    raised.reason.contains("inside the game installation"),
+                    "{tool} `{output}`: {raised:?}"
+                );
+            }
         }
     }
 
