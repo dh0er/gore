@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 98.80% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 98.83% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **98.80%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **98.83%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,971 functions (1.20%) recompile to bytecode that differs semantically.** A semantic
+**1,919 functions (1.17%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -377,6 +377,23 @@ was bisected against it. The multi-reader half of the same change is kept: a def
 spelled out at two call sites is the same temporary twice, and that compiles.
 
 2,016 to 1,971, compile clean, no alignment loss.
+
+The same witness answered the biggest ORDER group. A `STOREOBJ` whose very next instruction
+pushes the same slot produced its value where it is consumed, so the source wrote that call inside
+the expression; held in a local instead it is evaluated BEFORE the outer call's other arguments —
+the same instructions in a different order. 162 modules changed, and the largest single group of
+the order class went with them. The constant store joined the producers for the same reason a
+member read did: a named literal is the destination of the COPY (`bool b = false;` is
+`SetV1 vT,0; CpyVtoV4 vB,vT`), never of the constant store itself.
+
+1,971 to 1,919, compile clean, no alignment loss.
+
+One class is now understood and cannot be recovered: the 18 functions where vanilla carries one
+extra `JMP`. In all 18 that jump targets the instruction after it, and deleting it makes the two
+sides identical. It is what survives of an `if` whose condition folded to a constant and which had
+an `else`: the test and the dead arm are gone from the bytecode, the skip-else jump is not. The
+arm's text was never compiled, so nothing in the cache can reconstruct it — four of them also
+carry that arm's frame slots, which is where the AttackThrow shape's extra 8 bytes come from.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern

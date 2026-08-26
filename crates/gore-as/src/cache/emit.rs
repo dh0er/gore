@@ -1958,7 +1958,17 @@ fn emit_function_ctor(
         let rendered = inline_bool_chain_into_next_condition(&rendered);
         let rendered = fold_bool_member_comparisons(&rendered, fields, &path_roots, refs);
         let rendered = drop_redundant_conversions(&rendered, fields, &path_roots, refs);
-        let rendered = inline_unnamed_value_temporaries(&rendered, &unnamed_value_slots(f, refs));
+        // Object temporaries belong here too: a `STOREOBJ` whose very next instruction pushes the
+        // same slot produced the value where it is consumed, so the source wrote that call inside
+        // the expression. Held in a local instead, it is evaluated BEFORE the outer call's other
+        // arguments — the same instructions in a different order.
+        let rendered = inline_unnamed_value_temporaries(
+            &rendered,
+            &unnamed_value_slots(f, refs)
+                .union(&immediately_consumed_slots(f))
+                .copied()
+                .collect(),
+        );
         let rendered =
             spell_out_argument_temporaries(
                 &rendered,
@@ -1970,7 +1980,6 @@ fn emit_function_ctor(
             spell_out_default_temporaries(&rendered, &default_only_construction_counts(f, refs));
         let rendered =
             merge_copy_constructed_declarations(&rendered, &copy_constructed_slots(f, refs));
-        let rendered = drop_block_end_handle_releases(&rendered);
         let rendered = drop_unused_declarations(&rendered);
         let rendered = fold_member_read_temporaries(
             &rendered,
@@ -1981,6 +1990,9 @@ fn emit_function_ctor(
             refs,
             &member_read_slots(f),
         );
+        // Last: the pass looks for a release standing directly before the closing brace, and the
+        // folds above can delete the statement that stood between the two.
+        let rendered = drop_block_end_handle_releases(&rendered);
         s.truncate(declarations_at);
         s.push_str(&rendered);
     } else {
@@ -8628,6 +8640,12 @@ fn unnamed_value_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
                 | "CpyRtoV4"
                 | "CpyRtoV8"
                 | "NOT"
+                // A named literal is the destination of the COPY, not of the constant store:
+                // `bool b = false;` is `SetV1 vT,0; CpyVtoV4 vB,vT`. So a constant store with no
+                // copy behind it is a literal the source wrote where it is used.
+                | "SetV1"
+                | "SetV4"
+                | "SetV8"
         )
     };
     let mut produced: HashMap<i32, usize> = HashMap::new();
@@ -8636,7 +8654,7 @@ fn unnamed_value_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
     for (i, ins) in instrs.iter().enumerate() {
         let name = ins.op.name;
         let dst = w0(ins);
-        if dst > 0 && (name == "PSF" || name.starts_with("CpyVtoV") || name.starts_with("SetV")) {
+        if dst > 0 && (name == "PSF" || name.starts_with("CpyVtoV")) {
             refused.insert(dst);
         }
         if produces(name) && dst > 0 {
