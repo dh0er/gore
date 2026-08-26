@@ -1967,7 +1967,10 @@ fn emit_function_ctor(
             &unnamed_value_slots(f, refs)
                 .union(&immediately_consumed_slots(f))
                 .copied()
+                .chain(rvo_temporary_slots(f, refs))
                 .collect(),
+            &rvo_temporary_slots(f, refs),
+            refs,
         );
         let rendered =
             spell_out_argument_temporaries(
@@ -1980,6 +1983,7 @@ fn emit_function_ctor(
             spell_out_default_temporaries(&rendered, &default_only_construction_counts(f, refs));
         let rendered =
             merge_copy_constructed_declarations(&rendered, &copy_constructed_slots(f, refs));
+        let rendered = drop_default_arguments(&rendered, refs);
         let rendered = drop_unused_declarations(&rendered);
         let rendered = fold_member_read_temporaries(
             &rendered,
@@ -8622,6 +8626,189 @@ fn sink_declarations_to_first_use(body: &str, late: &HashSet<i32>) -> String {
     text
 }
 
+/// A trailing argument that IS the callee's declared default was not written at the call site.
+///
+/// The emitter renders every argument the bytecode pushes, and a defaulted one is pushed like any
+/// other — so a call whose last arguments are default-constructed temporaries comes back spelled
+/// out, and each of those costs a construction in the prologue and a destruction on every exit
+/// where vanilla built one per call. Written the way the source had it, the compiler materialises
+/// the same default in the same place.
+///
+/// Only free functions: a method's defaults would have to be resolved through the receiver's type,
+/// which this text does not know.
+fn drop_default_arguments(body: &str, refs: &RefResolver) -> String {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let declared: HashMap<String, String> = lines
+        .iter()
+        .filter_map(|line| {
+            let (_, name) = bare_declaration(line)?;
+            let head = line.trim().strip_suffix(';')?;
+            Some((name.clone(), head[..head.len() - name.len()].trim().to_owned()))
+        })
+        .collect();
+    for at in 0..lines.len() {
+        let mut line = lines[at].clone();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (callee, open) in free_call_sites(&line) {
+                let Some(defaults) = refs.param_defaults("", &callee) else {
+                    continue;
+                };
+                let Some((args, close)) = argument_list(&line, open) else {
+                    continue;
+                };
+                if args.len() != defaults.len() || args.is_empty() {
+                    continue;
+                }
+                let mut keep = args.len();
+                while keep > 0 {
+                    let index = keep - 1;
+                    let argument = args[index].trim();
+                    let Some(ty) = declared.get(argument) else {
+                        break;
+                    };
+                    if defaults[index] != format!("{ty}()") {
+                        break;
+                    }
+                    // A defaulted parameter can still be a NON-const reference
+                    // (`FVector &inout EndPosition = FVector()`). Omitting the argument makes the
+                    // compiler bind its own temporary to that reference, which it refuses.
+                    if refs.arg_position_is_written_through(&callee, args.len(), index) {
+                        break;
+                    }
+                    keep -= 1;
+                }
+                if keep < args.len() {
+                    let rendered = args[..keep].join(", ");
+                    line = format!("{}{rendered}{}", &line[..open + 1], &line[close..]);
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        lines[at] = line;
+    }
+    let mut text = lines.join("\n");
+    if body.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
+/// `(name, index of its `(`)` for every call in `line` whose callee is a bare identifier — not a
+/// member call, not a constructor of a known type spelled `T(`.
+fn free_call_sites(line: &str) -> Vec<(String, usize)> {
+    let bytes = line.as_bytes();
+    let is_id = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut out = Vec::new();
+    for (at, b) in bytes.iter().enumerate() {
+        if *b != b'(' || at == 0 {
+            continue;
+        }
+        let mut start = at;
+        while start > 0 && is_id(bytes[start - 1]) {
+            start -= 1;
+        }
+        if start == at {
+            continue;
+        }
+        if start > 0 && matches!(bytes[start - 1], b'.' | b':' | b'>') {
+            continue;
+        }
+        out.push((line[start..at].to_owned(), at));
+    }
+    out
+}
+
+/// The top-level arguments of the list opening at `open`, and the index of its `)`.
+fn argument_list(line: &str, open: usize) -> Option<(Vec<String>, usize)> {
+    let bytes = line.as_bytes();
+    let (mut depth, mut start) = (0i32, open + 1);
+    let mut args: Vec<String> = Vec::new();
+    for at in open..bytes.len() {
+        match bytes[at] {
+            b'(' | b'[' | b'<' => depth += 1,
+            b')' | b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    if at > start {
+                        args.push(line[start..at].trim().to_owned());
+                    }
+                    return Some((args, at));
+                }
+            }
+            b'>' => depth -= 1,
+            b',' if depth == 1 => {
+                args.push(line[start..at].trim().to_owned());
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Slots that carry a by-value call result the source never named.
+///
+/// A function returning a struct writes it through a hidden out-pointer: the caller pushes the
+/// destination slot's ADDRESS before the call and pushes it again straight after, to hand the
+/// value on. Where those two pushes bracket the call with nothing else claiming the slot, the
+/// value is consumed where it was produced — `Self.GetActorLocation().Dist2D(...)`, not
+/// `FVector v = Self.GetActorLocation(); v.Dist2D(...)`. The general rule refuses any slot whose
+/// address is taken, because a callee can write through it; here the callee IS the producer.
+fn rvo_temporary_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let behaviour = |ins: &super::disasm::Instr| {
+        (ins.op.name == "CALLSYS")
+            .then(|| refs.func_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64))
+            .flatten()
+    };
+    let mut out = HashSet::new();
+    for (i, ins) in instrs.iter().enumerate() {
+        if !matches!(ins.op.name, "CALL" | "CALLSYS" | "CALLINTF" | "CALLBND") {
+            continue;
+        }
+        let Some(after) = instrs.get(i + 1).filter(|n| n.op.name == "PSF") else {
+            continue;
+        };
+        let slot = w0(after);
+        if slot <= 0 {
+            continue;
+        }
+        // the push right after must hand the value ON, not destroy it
+        if instrs
+            .get(i + 2)
+            .is_some_and(|n| behaviour(n).is_some_and(|b| b.starts_with("$beh")))
+        {
+            continue;
+        }
+        // the same address was pushed to open the call's out-pointer
+        let opened = instrs[i.saturating_sub(24)..i]
+            .iter()
+            .any(|prev| prev.op.name == "PSF" && w0(prev) == slot);
+        if !opened {
+            continue;
+        }
+        // nothing else may claim the slot: a second producer, a copy, a store
+        let claimed = instrs.iter().enumerate().any(|(j, other)| {
+            j != i + 1
+                && w0(other) == slot
+                && matches!(
+                    other.op.name,
+                    "CpyVtoV4" | "CpyVtoV8" | "STOREOBJ" | "RefCpyV" | "SetV1" | "SetV4" | "SetV8"
+                )
+        });
+        if !claimed {
+            out.insert(slot);
+        }
+    }
+    out
+}
+
 /// Value slots the source never NAMED. This compiler cannot write a scalar local directly: even
 /// `bool b = false;` goes `SetV1 vT, 0; CpyVtoV4 vB, vT`, and a named `float` is the destination
 /// of a copy, never of the widening itself. So a slot that is PRODUCED — a member read, a
@@ -8663,20 +8850,109 @@ fn unnamed_value_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
         )
     };
     // Every op that leaves a new value in its first operand. The compiler reuses a frame slot for
-    // unrelated values, and the emitter names each of those separately (`local_8`, `local_8_2`),
-    // so a value's life ends at the next write and the reads after it belong to someone else.
+    // unrelated values, and the emitter names each of those separately (`local_8`, `local_8_2`), so
+    // a value's life ends at the next write and the reads after it belong to someone else. The
+    // list is spelled out: a name this MISSES lets a later life's read count as this one's single
+    // reader, which is not a byte difference but a wrong program.
     let writes = |op: &str| {
         produces(op)
-            || op.starts_with("CpyVtoV")
             || matches!(
                 op,
-                "STOREOBJ" | "RefCpyV" | "ClrVPtr" | "LOADOBJ" | "FreeNullV8"
-            )
-            || matches!(
-                op.trim_end_matches(|c: char| c.is_ascii_digit() || c == 'f' || c == 'd'),
-                "ADDI" | "SUBI" | "MULI" | "DIVI" | "MODI" | "NEGI" | "INCI" | "DECI" | "ADD"
-                    | "SUB" | "MUL" | "DIV" | "MOD" | "NEG" | "INC" | "DEC" | "BAND" | "BOR"
-                    | "BXOR" | "BSLL" | "BSRL" | "BSRA" | "POW"
+                "CpyVtoV4"
+                    | "CpyVtoV8"
+                    | "CpyGtoV4"
+                    | "STOREOBJ"
+                    | "RefCpyV"
+                    | "REFCPY"
+                    | "ClrVPtr"
+                    | "LOADOBJ"
+                    | "FreeNullV8"
+                    | "SetV2"
+                    | "ADDIf"
+                    | "ADDIi"
+                    | "ADDd"
+                    | "ADDf"
+                    | "ADDi"
+                    | "ADDi64"
+                    | "SUBIf"
+                    | "SUBIi"
+                    | "SUBd"
+                    | "SUBf"
+                    | "SUBi"
+                    | "SUBi64"
+                    | "MULIf"
+                    | "MULIi"
+                    | "MULd"
+                    | "MULf"
+                    | "MULi"
+                    | "MULi64"
+                    | "DIVd"
+                    | "DIVf"
+                    | "DIVi"
+                    | "DIVi64"
+                    | "DIVu"
+                    | "DIVu64"
+                    | "MODd"
+                    | "MODf"
+                    | "MODi"
+                    | "MODi64"
+                    | "MODu"
+                    | "MODu64"
+                    | "NEGd"
+                    | "NEGf"
+                    | "NEGi"
+                    | "NEGi64"
+                    | "INCd"
+                    | "INCf"
+                    | "INCi"
+                    | "INCi8"
+                    | "INCi16"
+                    | "INCi64"
+                    | "DECd"
+                    | "DECf"
+                    | "DECi"
+                    | "DECi8"
+                    | "DECi16"
+                    | "DECi64"
+                    | "IncVi"
+                    | "DecVi"
+                    | "BAND"
+                    | "BAND64"
+                    | "BOR"
+                    | "BOR64"
+                    | "BXOR"
+                    | "BXOR64"
+                    | "BSLL"
+                    | "BSLL64"
+                    | "BSRA"
+                    | "BSRA64"
+                    | "BSRL"
+                    | "BSRL64"
+                    | "POWd"
+                    | "POWdi"
+                    | "POWf"
+                    | "POWi"
+                    | "POWi64"
+                    | "POWu"
+                    | "POWu64"
+                    | "sbTOi"
+                    | "swTOi"
+                    | "ubTOi"
+                    | "uwTOi"
+                    | "iTOb"
+                    | "iTOw"
+                    | "i64TOi"
+                    | "iTOi64"
+                    | "u64TOi"
+                    | "iTOu64"
+                    | "dTOi"
+                    | "dTOu"
+                    | "dTOi64"
+                    | "dTOu64"
+                    | "fTOi"
+                    | "fTOu"
+                    | "fTOi64"
+                    | "fTOu64"
             )
     };
     let mut first: HashMap<i32, usize> = HashMap::new();
@@ -8736,10 +9012,16 @@ fn unnamed_value_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
 /// directly below it, for a slot [`unnamed_value_slots`] proves the source never named. The name
 /// costs the copy vanilla does not have — and where the value is a branch condition it also costs
 /// the constant that branch's `return` was carrying.
-fn inline_unnamed_value_temporaries(body: &str, unnamed: &HashSet<i32>) -> String {
+fn inline_unnamed_value_temporaries(
+    body: &str,
+    unnamed: &HashSet<i32>,
+    receiver_only: &HashSet<i32>,
+    refs: &RefResolver,
+) -> String {
     let mut lines: Vec<String> = body.lines().map(|l| l.to_owned()).collect();
     let mut at = 0usize;
     while at < lines.len() {
+        let at_decl = at;
         let folded = (|| {
             let (indent, name, init) = declaration_with_initializer(&lines[at]).or_else(|| {
                 let (target, value) = slot_store(&lines[at])?;
@@ -8770,6 +9052,32 @@ fn inline_unnamed_value_temporaries(body: &str, unnamed: &HashSet<i32>) -> Strin
             let consumer = lines.get(reader)?;
             if indent_of(consumer) != indent || count_ident(consumer, &name) != 1 {
                 return None;
+            }
+            // A by-value call result may only be inlined where it is the RECEIVER. As an
+            // argument it is a temporary, and this compiler refuses a temporary for a non-const
+            // reference parameter — which is what most of these positions are.
+            if receiver_only.contains(&slot_of(&name)?) {
+                // An operator result is a temporary the compiler builds for the expression, and
+                // handing it on as a receiver binds it to the method's non-const `this`. A call
+                // chain is what vanilla wrote inline; a bracketed operand is not.
+                if init.starts_with('(') || !init.ends_with(')') {
+                    return None;
+                }
+                let at = consumer.find(name.as_str())?;
+                let method = consumer[at + name.len()..]
+                    .strip_prefix('.')?
+                    .split(['(', '.', ' ', ')', ',', ';'])
+                    .next()?
+                    .to_owned();
+                // A NON-const method takes its receiver by non-const reference, so calling one on
+                // a temporary is the same refusal as passing one to a `T&` parameter.
+                let head = lines[at_decl].trim().trim_end_matches(';');
+                let ty = head[..head.len().saturating_sub(name.len())].trim();
+                if ty.is_empty()
+                    || refs.calls_non_const_method(super::structure::bare_type_name(ty), &method)
+                {
+                    return None;
+                }
             }
             // A plain copy into another local carries the source's TYPE as well as its value, and
             // the destination's recovered type is not always the one the literal has: this

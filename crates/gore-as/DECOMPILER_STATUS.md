@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 98.85% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 98.93% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **98.85%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **98.93%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,895 functions (1.15%) recompile to bytecode that differs semantically.** A semantic
+**1,764 functions (1.07%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -413,6 +413,26 @@ refused most of the copy class. Worth only 2 net — most of the 83 modules it c
 byte-identical — and it exposed one real asymmetry worth recording: this compiler accepts
 `intSlot = boolLocal;` and refuses `intSlot = false;`, so a literal is not folded into a plain
 copy whose destination carries a recovered type of its own.
+
+The by-value twin of the same rule, and the largest single step so far. A function returning a
+struct writes it through a hidden out-pointer: the caller pushes the destination slot's ADDRESS
+before the call and pushes it again straight after, to hand the value on. Where those two pushes
+bracket the call and nothing else claims the slot, the value was consumed where it was produced —
+`Self.GetActorLocation().Dist2D(...)`, not a named `FVector`. The general rule refuses any slot
+whose address is taken, because a callee can write through it; here the callee IS the producer.
+
+Two guards it needs, both measured as compile failures first: such a value may only be inlined
+where it is the RECEIVER (as an argument it is a temporary, and this compiler refuses a temporary
+for a non-const reference parameter), and its initializer must be a call chain rather than a
+bracketed operator result (whose temporary binds to the method's own non-const `this`).
+
+Beside it, the trailing argument that IS the callee's declared default is not written at the call
+site. The defaults are in the cache and already round-trip into the emitted declaration, so a call
+whose last arguments are default-constructed temporaries can be written the way the source had it
+— except where the parameter is a non-const reference (`FVector &inout EndPosition = FVector()`),
+where omitting it makes the compiler bind its own temporary to that reference and refuse.
+
+1,895 to 1,764, compile clean, no alignment loss.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
