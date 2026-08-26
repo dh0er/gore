@@ -106,9 +106,17 @@ fn collision_plan_matches_emitted_functions_and_reference_modifiers() {
 #[test]
 fn collision_targets_are_unique_and_overlay_calls_fail_closed() {
     let get = || function("Get", "", vec![parameter(primitive(0x44), 0)]);
+    let get_pair = || {
+        function(
+            "Get",
+            "",
+            vec![parameter(primitive(0x44), 0), parameter(primitive(0x44), 0)],
+        )
+    };
     let modules = vec![
         module("A", vec![get()], Vec::new()),
         module("B", vec![get()], Vec::new()),
+        module("UniqueArity", vec![get_pair()], Vec::new()),
         module(
             "Reserved",
             vec![function("Get_g0", "", Vec::new())],
@@ -146,6 +154,13 @@ fn collision_targets_are_unique_and_overlay_calls_fail_closed() {
         .prepare_overlay(
             "add",
             "NewModule",
+            "void Caller() { ::Get(\"comma, stays\", Nested(1, 2)); }"
+        )
+        .is_ok());
+    assert!(prepared
+        .prepare_overlay(
+            "add",
+            "NewModule",
             "void Caller() { Callback@ Cb = @::Get; }"
         )
         .unwrap_err()
@@ -155,6 +170,10 @@ fn collision_targets_are_unique_and_overlay_calls_fail_closed() {
         .prepare_overlay("edit", "A", global_edit)
         .unwrap_err()
         .contains("collision-ambiguous"));
+    let safe_global_edit = "void Get(int Value)\n{\n}\nvoid Caller()\n{\n    ::Get(1, 2);\n}\n";
+    assert!(prepared
+        .prepare_overlay("edit", "A", safe_global_edit)
+        .is_ok());
     // Explicit member calls are not global free-function references and remain legal.
     assert!(prepared
         .prepare_overlay(

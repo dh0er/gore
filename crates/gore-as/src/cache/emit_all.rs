@@ -43,6 +43,10 @@ struct FreeFunctionRenamePlan {
     /// the same deduplicated signatures `emit_module` writes, without the function name.
     required_signatures: Vec<BTreeMap<String, BTreeSet<ParameterSignature>>>,
     original_names: BTreeSet<String>,
+    /// Arity is enough to prove these global calls cannot bind one of the renamed overloads. A
+    /// renamed overload with N parameters is conservatively treated as callable with 0..=N
+    /// arguments because cache metadata does not retain its default-argument boundary.
+    safe_global_call_arities: BTreeMap<String, BTreeSet<usize>>,
 }
 
 impl FreeFunctionRenamePlan {
@@ -68,9 +72,10 @@ impl FreeFunctionRenamePlan {
     }
 
     /// Make an authored overlay consistent with the collision-renamed vanilla tree. Existing edit
-    /// declarations can be rewritten safely because their declaring module is known. Any remaining
-    /// bare/global call using an original colliding name is ambiguous in authored source, so reject
-    /// it before starting the compiler instead of guessing an overload/module target.
+    /// declarations can be rewritten safely because their declaring module is known. Bare calls
+    /// and global calls that could bind a renamed overload are ambiguous in authored source, so
+    /// reject them before starting the compiler. A globally qualified call remains safe only when
+    /// its arity can bind an unchanged overload but no renamed one.
     fn prepare_overlay(
         &self,
         mods: &[Module],
@@ -104,7 +109,11 @@ impl FreeFunctionRenamePlan {
             source.to_owned()
         };
 
-        let unresolved = unresolved_collision_calls(&rewritten, &self.original_names);
+        let unresolved = unresolved_collision_calls(
+            &rewritten,
+            &self.original_names,
+            &self.safe_global_call_arities,
+        );
         if !unresolved.is_empty() {
             return Err(format!(
                 "authored overlay contains collision-ambiguous free call(s): {}; use the deterministic renamed function or remove the call",
@@ -355,6 +364,7 @@ fn free_function_rename_plan(
         per_module: vec![BTreeMap::new(); mods.len()],
         required_signatures: vec![BTreeMap::new(); mods.len()],
         original_names: BTreeSet::new(),
+        safe_global_call_arities: BTreeMap::new(),
     };
     for (module_index, names) in colliding.into_iter().enumerate() {
         for name in names {
@@ -374,6 +384,43 @@ fn free_function_rename_plan(
                 .collect::<BTreeSet<_>>();
             plan.required_signatures[module_index].insert(name.clone(), signatures);
             plan.per_module[module_index].insert(name, target);
+        }
+    }
+
+    // The bytecode emitter explicitly qualifies calls that retain an original collision-family
+    // name. Such a call is safe only when its arity names an unrenamed overload and no renamed
+    // overload could accept that many arguments. This keeps emitted-source round trips usable
+    // without allowing `::Name(...)` to bind a different cached collision in the sparse compiler.
+    let mut renamed_max_arities = BTreeMap::<String, usize>::new();
+    let mut unrenamed_arities = BTreeMap::<String, BTreeSet<usize>>::new();
+    for (module_index, functions) in emitted.iter().enumerate() {
+        for (function, _) in functions {
+            if !plan.original_names.contains(&function.name) {
+                continue;
+            }
+            if plan.renamed(module_index, &function.name).is_some() {
+                renamed_max_arities
+                    .entry(function.name.clone())
+                    .and_modify(|arity| *arity = (*arity).max(function.params.len()))
+                    .or_insert(function.params.len());
+            } else {
+                unrenamed_arities
+                    .entry(function.name.clone())
+                    .or_default()
+                    .insert(function.params.len());
+            }
+        }
+    }
+    for (name, arities) in unrenamed_arities {
+        let Some(renamed_max_arity) = renamed_max_arities.get(&name) else {
+            continue;
+        };
+        let safe = arities
+            .into_iter()
+            .filter(|arity| arity > renamed_max_arity)
+            .collect::<BTreeSet<_>>();
+        if !safe.is_empty() {
+            plan.safe_global_call_arities.insert(name, safe);
         }
     }
 
@@ -829,7 +876,11 @@ fn validate_collision_bound_declarations(
     }
 }
 
-fn unresolved_collision_calls(source: &str, originals: &BTreeSet<String>) -> BTreeSet<String> {
+fn unresolved_collision_calls(
+    source: &str,
+    originals: &BTreeSet<String>,
+    safe_global_call_arities: &BTreeMap<String, BTreeSet<usize>>,
+) -> BTreeSet<String> {
     let tokens = code_tokens(source);
     let declarations = function_declarations(source, &tokens);
     let declaration_names = declarations
@@ -859,15 +910,135 @@ fn unresolved_collision_calls(source: &str, originals: &BTreeSet<String>) -> BTr
         if index > 0 && token_text(source, &tokens[index - 1]) == "." {
             continue; // explicit object/this/super member, with arbitrary trivia around `.`
         }
+        let leading_global = index >= 2
+            && token_text(source, &tokens[index - 1]) == ":"
+            && token_text(source, &tokens[index - 2]) == ":"
+            && (index == 2 || !tokens[index - 3].identifier);
+        if call
+            && leading_global
+            && call_argument_count(source, tokens[index + 1].start).is_some_and(|arity| {
+                safe_global_call_arities
+                    .get(name)
+                    .is_some_and(|safe| safe.contains(&arity))
+            })
+        {
+            continue;
+        }
         unresolved.insert(name.to_owned());
     }
     unresolved
 }
 
+/// Count top-level arguments in one call without mistaking commas in strings, comments, nested
+/// calls, indexing, or initializer lists for separators.
+fn call_argument_count(source: &str, open_paren: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    if bytes.get(open_paren) != Some(&b'(') {
+        return None;
+    }
+    let mut state = LexState::Code;
+    let mut parens = 1usize;
+    let mut brackets = 0usize;
+    let mut braces = 0usize;
+    let mut complete_arguments = 0usize;
+    let mut current_argument = false;
+    let mut index = open_paren + 1;
+    while index < bytes.len() {
+        match state {
+            LexState::Code => {
+                let top_level = parens == 1 && brackets == 0 && braces == 0;
+                if bytes[index..].starts_with(b"//") {
+                    state = LexState::LineComment;
+                    index += 2;
+                } else if bytes[index..].starts_with(b"/*") {
+                    state = LexState::BlockComment;
+                    index += 2;
+                } else if matches!(bytes[index], b'\'' | b'"') {
+                    if top_level {
+                        current_argument = true;
+                    }
+                    state = LexState::Quoted(bytes[index]);
+                    index += 1;
+                } else {
+                    match bytes[index] {
+                        b'(' => {
+                            if top_level {
+                                current_argument = true;
+                            }
+                            parens += 1;
+                        }
+                        b')' if top_level => {
+                            return if current_argument {
+                                Some(complete_arguments + 1)
+                            } else if complete_arguments == 0 {
+                                Some(0)
+                            } else {
+                                None
+                            };
+                        }
+                        b')' => parens = parens.checked_sub(1)?,
+                        b'[' => {
+                            if top_level {
+                                current_argument = true;
+                            }
+                            brackets += 1;
+                        }
+                        b']' => brackets = brackets.checked_sub(1)?,
+                        b'{' => {
+                            if top_level {
+                                current_argument = true;
+                            }
+                            braces += 1;
+                        }
+                        b'}' => braces = braces.checked_sub(1)?,
+                        b',' if top_level => {
+                            if !current_argument {
+                                return None;
+                            }
+                            complete_arguments += 1;
+                            current_argument = false;
+                        }
+                        byte if top_level && !byte.is_ascii_whitespace() => {
+                            current_argument = true;
+                        }
+                        _ => {}
+                    }
+                    index += 1;
+                }
+            }
+            LexState::LineComment => {
+                if bytes[index] == b'\n' {
+                    state = LexState::Code;
+                }
+                index += 1;
+            }
+            LexState::BlockComment => {
+                if bytes[index..].starts_with(b"*/") {
+                    state = LexState::Code;
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+            }
+            LexState::Quoted(quote) => {
+                if bytes[index] == b'\\' {
+                    index = (index + 2).min(bytes.len());
+                } else {
+                    if bytes[index] == quote {
+                        state = LexState::Code;
+                    }
+                    index += 1;
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Mark bare collision-bound calls in bytecode-derived output as explicitly global. Unlike an
 /// authored overlay, the emitter already resolved these call sites by function id/pointer, so this
-/// does not guess an overload. The qualifier also lets the overlay scanner distinguish a prepared
-/// emitted module from an ambiguous handwritten bare call.
+/// does not guess an overload. The overlay scanner retains the qualifier only for an arity that
+/// cannot bind one of the renamed overloads.
 fn qualify_emitted_collision_calls(source: &str, originals: &BTreeSet<String>) -> String {
     let tokens = code_tokens(source);
     let declarations = function_declarations(source, &tokens);
@@ -1142,9 +1313,9 @@ impl<'a> PreparedEmit<'a> {
             )
     }
 
-    /// Validate and rewrite an authored overlay against this prepared cache. Bare, global, or
-    /// namespace-qualified calls and handles to a collision-bound name fail closed; only explicit
-    /// `receiver.Name` access is safe.
+    /// Validate and rewrite an authored overlay against this prepared cache. Ambiguous bare,
+    /// global, or namespace-qualified calls and handles to a collision-bound name fail closed.
+    /// Explicit `receiver.Name` access and arity-disjoint emitted global calls remain safe.
     pub fn prepare_overlay(
         &self,
         op: &str,
