@@ -8076,6 +8076,10 @@ fn fold_widening_aliases(
                 ("float" | "double", Some("float32" | "int" | "uint"))
                     | ("float32", Some("int" | "uint" | "int8" | "uint8" | "int16" | "uint16"))
             );
+            // An EXPRESSION source was tried and refused: `this.Radius * 2.0f` really is a
+            // float32, but so is `A - B` on two FVectors by the same bracket-free test, and that
+            // one reaches a float parameter as "No conversion from 'FVector' to math type"
+            // (measured, 10 errors). Typing an expression needs more than its punctuation.
             if !widens {
                 continue;
             }
