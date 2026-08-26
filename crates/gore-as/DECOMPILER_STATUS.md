@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**2,239 functions (1.36%) recompile to bytecode that differs semantically.** A semantic
+**2,235 functions (1.36%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -109,12 +109,6 @@ Some things measured and REFUSED, so they are not tried again:
 * Treating a name wrapped in a CONVERSION as a movable argument candidate. Vanilla really does
   evaluate such a call inside the argument list — `TSubclassOf<T>(StaticClass())` rather than a
   statement above the call — but moving it there cost more elsewhere than it paid: 2,286 -> 2,307.
-* Merging a hoisted declaration with the write vanilla COPY-CONSTRUCTS (`T X; X = v;` ->
-  `T X = v;`, 80 functions). The merge itself is right — the diagnostic shows it taking exactly the
-  pair it should. What breaks is what comes after: a later fold sees a declaration-with-initializer
-  where it saw a bare one before, treats it as movable, and takes it away — leaving three reads of
-  a name that no longer exists. The scope check caught it twice, in both the loose and the strict
-  form. It needs the passes to agree about who owns a declaration, not another guard.
 * Letting the widening-alias fold take an EXPRESSION rather than a name. `this.Radius * 2.0f`
   really is a float32 — but so is `A - B` on two FVectors by the same bracket-free test, and that
   one reaches a float parameter as "No conversion from 'FVector' to math type available" (10

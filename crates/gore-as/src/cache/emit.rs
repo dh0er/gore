@@ -6611,9 +6611,13 @@ fn read_once_by_the_next_line(lines: &[&str], at: usize, name: &str) -> bool {
 /// The same question where the reader is not the next line: the store at `at` is read by
 /// `reader` and by nothing else before the slot is written again.
 fn read_once_at(lines: &[&str], at: usize, reader: usize, name: &str) -> bool {
-    // Forward, from past the reader to the next write of the same slot.
+    // Forward, from past the reader to the next write of the same slot. Only a write at the
+    // store's own depth ends the value's life: one inside a branch happens on ONE path, and on
+    // the other the reads that follow still want what this store put there. Folding the store
+    // away then loses the value those reads were meant to see.
+    let store_indent = indent_of(lines[at]).len();
     for line in &lines[reader + 1..] {
-        if is_definition_line(line, name) {
+        if is_definition_line(line, name) && indent_of(line).len() <= store_indent {
             break;
         }
         if count_ident(line, name) > 0 {
@@ -7734,7 +7738,9 @@ fn fold_bool_member_comparisons(
             if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != 2 {
                 continue;
             }
-            let comparison = format!("({name} != 0)");
+            // Without the brackets: `if (local_1 != 0)` wears the `if`'s own pair, and taking
+            // those with the comparison leaves `if this.Field` — which does not parse.
+            let comparison = format!("{name} != 0");
             let Some(reader) = (index + 1..lines.len()).find(|at| lines[*at].contains(&comparison))
             else {
                 continue;
