@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,720 functions (1.04%) recompile to bytecode that differs semantically.** A semantic
+**1,708 functions (1.04%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -451,8 +451,15 @@ inlined; something in that wider set is more than the compiler can parse.
 
 1,743 to 1,720, compile clean, no alignment loss.
 
-Three separate widenings of the inline-where-produced rule were measured and all three end the
-same way — the game's compiler dies with exit 3 and no diagnostic at all:
+**A compile that fails with no diagnostic is a MEMORY failure, not a verdict.** The generator peaks
+at 4.6 GB on this corpus (the machine has 68 GB, so the ceiling is the compiler's own), and near
+that ceiling it dies nondeterministically: the same tree failed twice with exit 3 and no
+diagnostic, then compiled on the third run and measured 12 functions BETTER. Every conclusion of
+the form "this widening crashes the compiler" below was drawn from one or two such runs and has to
+be re-tested with retries before it is believed. What a real source error looks like is a
+`file:line:column: error:` line — those are deterministic and reproduce.
+
+With that caveat, three widenings of the inline-where-produced rule were tried:
 
 - keying the rule by the LIFE of a slot (`local_8_2`), for value and object temporaries alike;
 - admitting a default-argument temporary by its constructor/destructor pairing;
@@ -460,10 +467,11 @@ same way — the game's compiler dies with exit 3 and no diagnostic at all:
   (the object temporary "consumed where produced" window), with and without an added guard that
   the argument position provably takes a temporary.
 
-Each of them is right about the SOURCE — the emitted trees read like vanilla and pass the scope,
-l-value and unreachable-code checkers — so what they hit is a limit of the compiler, not of the
-witness. Finding it needs a bisection of the tree itself (30 changed modules, one compile each),
-which is the next thing to try for this class; together the three reach about 200 functions.
+The bisection was run for the third of them: every subset of its 31 changed modules compiles —
+16, 14, 1, and 30 of them — while all 31 together do not, and a single folded statement compiles
+where four of the same shape do not. That is not a construct the compiler refuses; it is the
+memory ceiling above. The same widening also measures WORSE where it does compile (1,736 / 1,728 /
+1,744 against 1,720), so it is dropped on its own merits. The other two are open again.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern

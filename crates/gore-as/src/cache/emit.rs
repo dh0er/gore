@@ -8887,6 +8887,19 @@ fn slot_and_life(name: &str) -> Option<(i32, usize)> {
     (parts.next().is_none()).then_some((slot, life))
 }
 
+/// Like [`slot_and_life`], but a LATER life is allowed. The general inline rule may not use this;
+/// the assignment-receiver fold is narrow enough — it rewrites one statement pair into one
+/// statement and moves nothing else.
+fn slot_and_life_any(name: &str) -> Option<(i32, usize)> {
+    let mut parts = name.strip_prefix("local_")?.split('_');
+    let slot: i32 = parts.next()?.parse().ok()?;
+    let life = match parts.next() {
+        Some(n) => n.parse().ok()?,
+        None => 1,
+    };
+    (parts.next().is_none()).then_some((slot, life))
+}
+
 /// The declared type of `name` as this text spells it, from its declaration line.
 fn declared_type(lines: &[String], name: &str) -> Option<String> {
     lines.iter().find_map(|line| {
@@ -9246,7 +9259,7 @@ fn fold_assignment_receivers(body: &str, consumed: &HashSet<(i32, usize)>) -> St
             if !init.ends_with(')') || init.contains(" = ") {
                 return None;
             }
-            if !consumed.contains(&slot_and_life(&name)?) || count_ident(body, &name) != 2 {
+            if !consumed.contains(&slot_and_life_any(&name)?) || count_ident(body, &name) != 2 {
                 return None;
             }
             let next = lines.get(at + 1)?;
