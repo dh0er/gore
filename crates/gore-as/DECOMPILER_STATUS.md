@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,691 functions (1.03%) recompile to bytecode that differs semantically.** A semantic
+**1,695 functions (1.03%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -472,6 +472,12 @@ The bisection was run for the third of them: every subset of its 31 changed modu
 where four of the same shape do not. That is not a construct the compiler refuses; it is the
 memory ceiling above. The same widening also measures WORSE where it does compile (1,736 / 1,728 /
 1,744 against 1,720), so it is dropped on its own merits. The other two are open again.
+
+One change was kept although it costs four functions: a producer standing before a loop is no
+longer inlined into the loop's condition. A loop header is evaluated once per ITERATION, and
+vanilla computes such a bound once and compares against the slot — `while (i < Math::Max(a, b))`
+recomputes the maximum every time round. That is not a byte difference but a different program,
+in 67 functions, and the four it costs are byte shape.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern

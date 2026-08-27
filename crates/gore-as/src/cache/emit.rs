@@ -5920,6 +5920,15 @@ fn inline_temporary_into(
     aliased: &HashSet<i32>,
 ) -> bool {
     let receiver = position == Position::Receiver;
+    // A loop header is evaluated once per ITERATION, and this producer stands before the loop.
+    // Vanilla computes such a bound once and compares against the slot; moving it into the
+    // condition recomputes it every time round — not a byte difference but a different program.
+    if lines[index].trim_start().starts_with("while (")
+        || lines[index].trim_start().starts_with("for (")
+    {
+        inline_reject("loop-condition", callee, temp, &lines[index]);
+        return false;
+    }
     // The element of a range-for lives for one iteration and the compiler releases it at the end
     // of each; moving it into its reader takes away what the range-for fold matches on.
     if temp
@@ -9200,6 +9209,13 @@ fn inline_unnamed_value_temporaries(
             }
             let consumer = lines.get(reader)?;
             if indent_of(consumer) != indent || count_ident(consumer, &name) != 1 {
+                return None;
+            }
+            // A loop header is evaluated once per ITERATION. Vanilla computes the bound before
+            // the loop and compares against the slot; inlining the producer into the condition
+            // recomputes it every time round — not a byte difference but a different program.
+            let head = consumer.trim_start();
+            if head.starts_with("while (") || head.starts_with("for (") {
                 return None;
             }
             // A by-value call result may only be inlined where it is the RECEIVER. As an
