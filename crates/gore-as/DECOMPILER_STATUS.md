@@ -521,6 +521,27 @@ takes a value and when it knows nothing at all, and the calls this reaches are t
 nothing about (`SendGameplayEvent`, `OnBeginOverlap` — whose last parameter is an out-parameter).
 The return form of the same rule is safe and is in: a returned value has no parameter to bind to.
 
+**A wrong program that is still open, and older than any of the work above.** Where a slot is
+re-defined while a reference to its PREVIOUS value is still pending as an argument, the pending
+reference is rendered with the new life's name. `UChoiceDiego107920::Act_Implementation` comes back
+as
+
+    AGothicCharacterState local_6 = this.GetIan();      // never read
+    AGothicCharacterState local_6_2 = this.GetDiego();
+    ::Say(local_6_2.GetAI(), …, local_6_2.GetCharacter(), …);
+
+where vanilla pushes Ian's character as the listener and Diego as the speaker: the compiler stores
+Ian in slot 6, pushes it, then stores Diego in the same slot for the receiver. Our renderer names
+both uses after the second life, so the line says Diego twice and the first store is dead. About
+35 functions carry this shape, most of them generated dialog, where it makes an NPC address
+itself.
+
+The fix belongs in the structurer, not in a text pass: a pending operand that names a slot has to
+be pinned to the life it was pushed from when a later instruction overwrites that slot. Writing it
+as one inlined expression — `Say(GetDiego().GetAI(), …, GetIan().GetCharacter(), …)` — would also
+be right, and is what vanilla wrote, but the inline rules cannot reach it while the first store
+looks dead.
+
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
 vanilla holds, where the largest finite float came back one ULP low every time. The belief that
