@@ -34,7 +34,7 @@ const MAX_DECODED_ICON_BYTES: u64 = MAX_ICON_DIMENSION as u64 * MAX_ICON_DIMENSI
 // well below 100 MiB. Bound both cumulative proof work and published disk use.
 const MAX_CACHE_PNG_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_CACHE_DECODED_BYTES: u64 = 512 * 1024 * 1024;
-const MAX_RETAINED_COMPLETE_GENERATIONS: usize = 2;
+const MAX_RETAINED_GENERATIONS: usize = 2;
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -767,6 +767,24 @@ impl GenerationLock {
         }
         Ok(Self { _file: file })
     }
+
+    fn try_acquire(cache_root: &Path, generation: &Path) -> Result<Option<Self>> {
+        let generation_name = owned_generation_name(cache_root, generation)?;
+        let lock_path = cache_root.join(format!(".{generation_name}.lock"));
+        let file = open_generation_lock(&lock_path, true)?;
+        let held_identity = generation_lock_identity(&file)?;
+        if !try_lock_generation_file(&file)? {
+            return Ok(None);
+        }
+
+        let named = open_generation_lock(&lock_path, false)?;
+        if generation_lock_identity(&named)? != held_identity {
+            return Err(invalid_data(
+                "item icon cache lock changed while acquiring it",
+            ));
+        }
+        Ok(Some(Self { _file: file }))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -884,6 +902,37 @@ fn lock_generation_file(file: &File) -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn try_lock_generation_file(file: &File) -> Result<bool> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        LockFileEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
+    };
+    use windows_sys::Win32::System::IO::OVERLAPPED;
+
+    let mut overlapped = OVERLAPPED::default();
+    // SAFETY: same one-byte range as the blocking lock, with a live handle and
+    // an `OVERLAPPED` value that remains valid through this synchronous call.
+    if unsafe {
+        LockFileEx(
+            file.as_raw_handle(),
+            LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+            0,
+            1,
+            0,
+            &mut overlapped,
+        )
+    } != 0
+    {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(33) {
+        return Ok(false);
+    }
+    Err(error.into())
+}
+
 #[cfg(unix)]
 fn lock_generation_file(file: &File) -> Result<()> {
     use std::os::fd::AsRawFd as _;
@@ -900,8 +949,33 @@ fn lock_generation_file(file: &File) -> Result<()> {
     }
 }
 
+#[cfg(unix)]
+fn try_lock_generation_file(file: &File) -> Result<bool> {
+    use std::os::fd::AsRawFd as _;
+
+    loop {
+        // SAFETY: `file` owns this descriptor for the returned lock guard.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(true);
+        }
+        let error = std::io::Error::last_os_error();
+        match error.kind() {
+            std::io::ErrorKind::Interrupted => continue,
+            std::io::ErrorKind::WouldBlock => return Ok(false),
+            _ => return Err(error.into()),
+        }
+    }
+}
+
 #[cfg(not(any(windows, unix)))]
 fn lock_generation_file(_file: &File) -> Result<()> {
+    Err(invalid_data(
+        "item icon cache locking is unsupported on this platform",
+    ))
+}
+
+#[cfg(not(any(windows, unix)))]
+fn try_lock_generation_file(_file: &File) -> Result<bool> {
     Err(invalid_data(
         "item icon cache locking is unsupported on this platform",
     ))
@@ -959,7 +1033,7 @@ fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) 
         return;
     };
 
-    let mut complete = Vec::<(SystemTime, String, PathBuf)>::new();
+    let mut generations = Vec::<(SystemTime, String, PathBuf)>::new();
     let mut owned_names = BTreeSet::new();
     owned_names.insert(current_name.clone());
     for entry in entries.flatten() {
@@ -973,11 +1047,8 @@ fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) 
             let Ok(metadata) = std::fs::symlink_metadata(&path) else {
                 continue;
             };
-            if metadata.file_type().is_dir()
-                && !metadata.file_type().is_symlink()
-                && complete_cache_is_owned(&path).unwrap_or(false)
-            {
-                complete.push((
+            if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
+                generations.push((
                     metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
                     name.to_string(),
                     path,
@@ -988,15 +1059,18 @@ fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) 
         }
     }
 
-    complete.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
+    // The ready current generation was already fully verified. Select the one
+    // recent fallback by cheap directory metadata; only generations selected
+    // for deletion pay the bounded manifest/PNG seal validation below.
+    generations.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
     let mut retained = BTreeSet::from([current_name]);
-    for (_, name, _) in &complete {
-        if retained.len() >= MAX_RETAINED_COMPLETE_GENERATIONS {
+    for (_, name, _) in &generations {
+        if retained.len() >= MAX_RETAINED_GENERATIONS {
             break;
         }
         retained.insert(name.clone());
     }
-    let prunable: BTreeMap<_, _> = complete
+    let prunable: BTreeMap<_, _> = generations
         .into_iter()
         .filter(|(_, name, _)| !retained.contains(name))
         .map(|(modified, name, _)| (name, modified))
@@ -1004,7 +1078,7 @@ fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) 
 
     for name in owned_names {
         let generation = cache_root.join(&name);
-        let Ok(lock) = GenerationLock::acquire(cache_root, &generation) else {
+        let Ok(Some(lock)) = GenerationLock::try_acquire(cache_root, &generation) else {
             continue;
         };
         remove_owned_auxiliary_directories(cache_root, &name);
@@ -1436,7 +1510,7 @@ mod tests {
         let third_directory = third_manifest.parent().unwrap().to_path_buf();
 
         let published = published_generations(temp.path());
-        assert_eq!(published.len(), MAX_RETAINED_COMPLETE_GENERATIONS);
+        assert_eq!(published.len(), MAX_RETAINED_GENERATIONS);
         assert!(published.contains(&third_directory));
         assert!(
             published
@@ -1567,6 +1641,9 @@ mod tests {
         let catalog = PreparedCatalog::from_specs(&specs()).unwrap();
         let generation = generation_directory(temp.path(), "build-a", &catalog.digest);
         let first = GenerationLock::acquire(temp.path(), &generation).unwrap();
+        assert!(GenerationLock::try_acquire(temp.path(), &generation)
+            .unwrap()
+            .is_none());
         let (started_tx, started_rx) = mpsc::channel();
         let (acquired_tx, acquired_rx) = mpsc::channel();
         let root = temp.path().to_path_buf();
@@ -1583,6 +1660,45 @@ mod tests {
         drop(first);
         acquired_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         waiter.join().unwrap();
+        assert!(GenerationLock::try_acquire(temp.path(), &generation)
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn pruning_skips_a_busy_generation_without_blocking() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let temp = tempfile::tempdir().unwrap();
+        let mut source = FakeSource::stable("build-a");
+        let current_manifest =
+            prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut source).unwrap();
+        let current = current_manifest.parent().unwrap().to_path_buf();
+
+        let catalog = PreparedCatalog::from_specs(&specs()).unwrap();
+        let busy = generation_directory(temp.path(), "build-b", &catalog.digest);
+        let busy_name = busy.file_name().unwrap().to_string_lossy();
+        let staging = temp.path().join(format!(".{busy_name}.tmp-999-7"));
+        std::fs::create_dir(&staging).unwrap();
+        let busy_lock = GenerationLock::acquire(temp.path(), &busy).unwrap();
+
+        let (done_tx, done_rx) = mpsc::channel();
+        let root = temp.path().to_path_buf();
+        let current_for_thread = current.clone();
+        let pruner = std::thread::spawn(move || {
+            prune_obsolete_item_icon_cache(&root, &current_for_thread);
+            done_tx.send(()).unwrap();
+        });
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("best-effort pruning must not wait for a busy generation");
+        pruner.join().unwrap();
+        assert!(staging.exists());
+
+        drop(busy_lock);
+        prune_obsolete_item_icon_cache(temp.path(), &current);
+        assert!(!staging.exists());
     }
 
     #[test]
