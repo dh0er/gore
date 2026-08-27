@@ -1936,6 +1936,7 @@ fn emit_function_ctor(
         // that happened. The outer arm then still stands as an if/else over a bool carrier.
         let rendered = fold_short_circuits(&rendered, &proven_locals, refs, fields, &path_roots);
         let rendered = join_short_circuit_chains(&rendered);
+        let rendered = rejoin_short_circuit_chains(&rendered);
         let rendered =
             fold_returned_temporaries(&rendered, &declared_locals, refs, &ret, returns_by_reference);
         let rendered = recover_condition_loops(&rendered);
@@ -9027,6 +9028,97 @@ fn slot_store_any(line: &str) -> Option<(String, String)> {
     (is_local_ident(target) && !value.is_empty()).then(|| (target.to_owned(), value.to_owned()))
 }
 
+/// `X = <expr>; return X || <rest>;` is `return <expr> || <rest>;`.
+///
+/// An `||` or `&&` chain of three or more operands is computed into one carrier slot, and the
+/// emitter cuts the chain where the carrier is written. The cut is only ever at the LEFT: the
+/// leftmost operand is evaluated first either way, so putting it back changes no order. An operand
+/// further right would move a computation behind a short circuit that may skip it.
+fn rejoin_short_circuit_chains(body: &str) -> String {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut at = 0usize;
+    while at + 1 < lines.len() {
+        let folded = (|| {
+            let (name, value) = slot_store(&lines[at])?;
+            if !is_decompiler_local(&name) || value.chars().any(char::is_control) {
+                return None;
+            }
+            let declaration = lines
+                .iter()
+                .position(|line| bare_declaration(line).is_some_and(|(_, n)| n == name));
+            let mentions = 2 + usize::from(declaration.is_some());
+            if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != mentions {
+                return None;
+            }
+            let consumer = &lines[at + 1];
+            if indent_of(consumer) != indent_of(&lines[at]) {
+                return None;
+            }
+            let head = consumer.trim();
+            // The carrier may be read by a `return`, by a test, or by the NEXT carrier in a longer
+            // chain — the emitter cuts a long chain more than once.
+            let (chain, keyword) = head
+                .strip_prefix("return ")
+                .map(|r| (r, "return ".to_owned()))
+                .or_else(|| head.strip_prefix("if (").map(|r| (r, "if (".to_owned())))
+                // A store consumer is refused: its target carries a recovered type of its own,
+                // and a bool chain dropped into an int carrier is the conversion this compiler
+                // will not make (measured: the tree stops compiling).
+                ?;
+            let tail = chain.strip_prefix(name.as_str())?;
+            if !tail.starts_with(" || ") && !tail.starts_with(" && ") {
+                return None;
+            }
+            // `(A) || (B)` STARTS with a bracket and ENDS with one without being wrapped by a
+            // single pair; dropped into a chain unbracketed it re-binds — `A || B && C` is not
+            // `(A || B) && C`. Only a pair that spans the whole expression may be trusted.
+            let value = match wraps_whole_expression(&value) {
+                true => value,
+                false => format!("({value})"),
+            };
+            Some((
+                format!("{}{keyword}{value}{tail}", indent_of(consumer)),
+                declaration,
+            ))
+        })();
+        match folded {
+            Some((line, declaration)) => {
+                lines[at + 1] = line;
+                lines.remove(at);
+                if let Some(declaration) = declaration {
+                    lines.remove(declaration);
+                }
+            }
+            None => at += 1,
+        }
+    }
+    let mut text = lines.join("\n");
+    if body.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
+/// True when the expression's outermost brackets enclose ALL of it — `(a || b)` yes, `(a) || (b)`
+/// no. A fold that drops an expression into a larger one has to know the difference.
+fn wraps_whole_expression(expr: &str) -> bool {
+    if !expr.starts_with('(') || !expr.ends_with(')') {
+        return false;
+    }
+    let mut depth = 0i32;
+    for (at, b) in expr.bytes().enumerate() {
+        match b {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            _ => {}
+        }
+        if depth == 0 && at + 1 != expr.len() {
+            return false;
+        }
+    }
+    depth == 0
+}
+
 /// The declared type of `name` as this text spells it, from its declaration line.
 fn declared_type(lines: &[String], name: &str) -> Option<String> {
     lines.iter().find_map(|line| {
@@ -9367,10 +9459,12 @@ fn immediately_consumed_defs(f: &Func) -> HashSet<(i32, usize)> {
         }
         let life = lives.entry(dst).or_default();
         *life += 1;
+        // Consumed where produced: pushed as an operand, or dereferenced for a member the very
+        // next instruction — `LoadRObjR` is how a member read-modify-write takes its receiver.
         let at_once = ins.op.name == "STOREOBJ"
-            && instrs
-                .get(i + 1)
-                .is_some_and(|next| next.op.name == "PshVPtr" && w0(next) == dst);
+            && instrs.get(i + 1).is_some_and(|next| {
+                matches!(next.op.name, "PshVPtr" | "LoadRObjR") && w0(next) == dst
+            });
         if at_once {
             out.insert((dst, *life));
         }
@@ -9403,6 +9497,10 @@ fn fold_assignment_receivers(body: &str, consumed: &HashSet<(i32, usize)>) -> St
             let declaration = lines
                 .iter()
                 .position(|line| bare_declaration(line).is_some_and(|(_, n)| n == name));
+            // Reusing the slot elsewhere is none of this fold's business in principle — the store
+            // kills whatever it held — but folding EVERY such receiver at once pushes the whole
+            // tree past the compiler's memory ceiling (four runs, no diagnostic, while subsets of
+            // the same tree compile). Kept to a name this function mentions nowhere else.
             let mentions = 2 + usize::from(declaration.is_some());
             if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != mentions {
                 return None;
@@ -9412,7 +9510,24 @@ fn fold_assignment_receivers(body: &str, consumed: &HashSet<(i32, usize)>) -> St
                 return None;
             }
             let assigned = next.trim().strip_prefix(name.as_str())?.strip_suffix(';')?;
-            let (target, _) = assigned.split_once(" = ")?;
+            // `= ` or any compound form: the receiver is evaluated once either way.
+            let (target, compound) = [" += ", " -= ", " *= ", " /= ", " |= ", " &= ", " ^= "]
+                .iter()
+                .find_map(|op| assigned.split_once(op).map(|(target, _)| (target, true)))
+                .or_else(|| assigned.split_once(" = ").map(|(target, _)| (target, false)))?;
+            // A compound assignment reads the receiver back, so the receiver must be a HANDLE:
+            // through a value-returning getter it would read and write a temporary.
+            if compound {
+                let head = lines[at].trim().trim_end_matches(';');
+                let declared = head[..head.len().saturating_sub(name.len() + init.len() + 3)].trim();
+                let declared = match declared.is_empty() {
+                    true => declared_type(&lines, &name).unwrap_or_default(),
+                    false => declared.to_owned(),
+                };
+                if !is_object_handle_type(&declared) {
+                    return None;
+                }
+            }
             if !target.starts_with('.') || target.contains('(') {
                 return None;
             }

@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,687 functions (1.02%) recompile to bytecode that differs semantically.** A semantic
+**1,670 functions (1.01%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -478,6 +478,21 @@ longer inlined into the loop's condition. A loop header is evaluated once per IT
 vanilla computes such a bound once and compares against the slot — `while (i < Math::Max(a, b))`
 recomputes the maximum every time round. That is not a byte difference but a different program,
 in 67 functions, and the four it costs are byte shape.
+
+An `||`/`&&` chain of three or more operands is computed into one carrier slot, and the emitter
+cut the chain where the carrier was written. Putting the left half back is safe — the leftmost
+operand is evaluated first either way — and two things had to be got right for it: `(A) || (B)`
+starts with a bracket and ends with one WITHOUT being wrapped by a single pair, so dropping it
+into a chain unbracketed re-binds it (`A || B && C` is not `(A || B) && C`); and a carrier that is
+read by a STORE rather than by a `return` or a test may not be folded at all, because the store's
+target carries a recovered type of its own and a bool chain in an int carrier is a conversion this
+compiler refuses.
+
+The receiver of a member read-modify-write joins it: `STOREOBJ` followed by `LoadRObjR` of the same
+slot is the same "consumed where produced" witness as a push, so `X = GetG1R(); X.Field += 1;`
+becomes `GetG1R().Field += 1;`.
+
+1,687 to 1,670, compile clean, no alignment loss.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
