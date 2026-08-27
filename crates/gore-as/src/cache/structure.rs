@@ -5515,20 +5515,49 @@ fn branch_cond(cmp: &Option<Cmp>, jump: &str) -> String {
 }
 
 fn negate(cond: &str) -> String {
-    // cheap structural negation for the common relational forms
-    for (op, neg) in [
-        (" <= ", " > "),
-        (" >= ", " < "),
-        (" < ", " >= "),
-        (" > ", " <= "),
-        (" == ", " != "),
-        (" != ", " == "),
-    ] {
-        if let Some(p) = cond.find(op) {
-            return format!("{}{}{}", &cond[..p], neg, &cond[p + op.len()..]);
+    // `!` is a VALUE operator in this language: it cannot fold into the jump, so every one that
+    // survives costs the compiler a spill — `CpyRtoV4; NOT; CpyVtoR1` in front of the branch that
+    // would otherwise have tested the result where it stood. Turning the comparison around is what
+    // vanilla wrote, and a `!(X)` that is already there comes off instead of doubling.
+    if let Some(inner) = cond.strip_prefix("!(").and_then(|c| c.strip_suffix(')')) {
+        if wraps_the_whole_condition(inner) {
+            return inner.to_owned();
+        }
+    }
+    // Not inside a short circuit: turning one relation of `a == b && c` negates only that half,
+    // and De Morgan would change which operand is evaluated first.
+    if !cond.contains("&&") && !cond.contains("||") {
+        for (op, neg) in [
+            (" <= ", " > "),
+            (" >= ", " < "),
+            (" < ", " >= "),
+            (" > ", " <= "),
+            (" == ", " != "),
+            (" != ", " == "),
+        ] {
+            if let Some(p) = cond.find(op) {
+                return format!("{}{}{}", &cond[..p], neg, &cond[p + op.len()..]);
+            }
         }
     }
     format!("!({cond})")
+}
+
+/// True when stripping one leading `!(` and its trailing `)` left a balanced expression — so the
+/// pair really wrapped the whole condition and did not close something inside it.
+fn wraps_the_whole_condition(inner: &str) -> bool {
+    let mut depth = 0i32;
+    for b in inner.bytes() {
+        match b {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            _ => {}
+        }
+        if depth < 0 {
+            return false;
+        }
+    }
+    depth == 0
 }
 
 struct Structurer<'a> {

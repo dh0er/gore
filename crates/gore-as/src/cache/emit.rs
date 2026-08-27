@@ -9119,6 +9119,40 @@ fn wraps_whole_expression(expr: &str) -> bool {
     depth == 0
 }
 
+/// Slots whose destruction stands in a RUN of destructions — two or more `PSF; CALLSYS ::$beh2`
+/// pairs back to back. That run is a scope leaving, and a value destroyed there was alive to the
+/// end of its block: a declared local. A temporary built inside an expression is destroyed on its
+/// own, right after the call that consumed it.
+fn scope_exit_destroyed_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let destructs = |at: usize| -> Option<i32> {
+        let pair = instrs.get(at..at + 2)?;
+        (pair[0].op.name == "PSF" && pair[1].op.name == "CALLSYS").then_some(())?;
+        let ptr = pair[1].qwords.first().copied().unwrap_or(0) as i64;
+        (refs.func_by_ptr(ptr) == Some("$beh2")).then(|| w0(&pair[0]))
+    };
+    let mut out = HashSet::new();
+    let mut at = 0usize;
+    while at + 1 < instrs.len() {
+        let mut run: Vec<i32> = Vec::new();
+        let mut scan = at;
+        while let Some(slot) = destructs(scan) {
+            run.push(slot);
+            scan += 2;
+        }
+        if run.len() >= 2 {
+            out.extend(run.iter().filter(|slot| **slot > 0));
+            at = scan;
+        } else {
+            at += 1;
+        }
+    }
+    out
+}
+
 /// The declared type of `name` as this text spells it, from its declaration line.
 fn declared_type(lines: &[String], name: &str) -> Option<String> {
     lines.iter().find_map(|line| {
@@ -9275,6 +9309,7 @@ fn unnamed_value_defs(f: &Func, refs: &RefResolver) -> HashSet<(i32, usize)> {
                     | "fTOu64"
             )
     };
+    let scope_exit = scope_exit_destroyed_slots(f, refs);
     // every definition of every slot, in program order — each is its own life
     let mut lives: HashMap<i32, usize> = HashMap::new();
     let mut defs: Vec<(i32, usize, usize)> = Vec::new();
@@ -9313,6 +9348,9 @@ fn unnamed_value_defs(f: &Func, refs: &RefResolver) -> HashSet<(i32, usize)> {
             .any(|other| other.op.name == "PSF" && w0(other) == slot)
         {
             continue;
+        }
+        if scope_exit.contains(&slot) {
+            continue; // destroyed in a scope-leaving run: a declared local, not a temporary
         }
         // exactly one read, and it must come before the slot holds anything else
         let mut reads = 0usize;

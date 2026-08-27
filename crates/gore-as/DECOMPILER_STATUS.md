@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,670 functions (1.01%) recompile to bytecode that differs semantically.** A semantic
+**1,657 functions (1.01%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -493,6 +493,20 @@ slot is the same "consumed where produced" witness as a push, so `X = GetG1R(); 
 becomes `GetG1R().Field += 1;`.
 
 1,687 to 1,670, compile clean, no alignment loss.
+
+`!` is a VALUE operator in this language: it cannot fold into a branch, so every one that survives
+costs a spill — `CpyRtoV4; NOT; CpyVtoR1` in front of the jump that would otherwise have tested
+the result where it stood. `negate` turned a relation around but never took a `!(X)` off, so
+`negate(branch_cond(...))` doubled it: `if (!((x != nullptr)))` for what vanilla wrote as
+`if (x == nullptr)`. It now strips a `!` that wraps the WHOLE condition, and refuses to turn a
+relation inside a short circuit, where negating one half is simply wrong.
+
+Method note, learned the hard way: a compile that fails with no diagnostic needs THREE OR FOUR
+attempts before it means anything. This tree failed twice and compiled on the third run; both of
+its halves compiled first time. Every "the compiler refuses this" conclusion in this file was
+drawn from too few runs and should be re-tested the same way.
+
+1,670 to 1,657, compile clean, no alignment loss.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
