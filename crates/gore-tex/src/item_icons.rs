@@ -418,6 +418,12 @@ fn prepare_item_icon_cache_with_source_and_lease(
     }
     match std::fs::symlink_metadata(&final_directory) {
         Ok(_) => {
+            let generation_name = owned_generation_name(cache_root, &final_directory)?;
+            if generation_has_live_lease(cache_root, generation_name) {
+                return Err(invalid_data(
+                    "item icon cache generation needs repair but is currently in use",
+                ));
+            }
             quarantine_incomplete_generation(cache_root, &final_directory)?;
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1772,6 +1778,41 @@ mod tests {
                 path.file_name()
                     .is_none_or(|name| !name.to_string_lossy().contains(".quarantine-"))
             }));
+    }
+
+    #[test]
+    fn live_catalog_is_not_moved_when_its_generation_needs_repair() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut first = FakeSource::stable("build-a");
+        let manifest_path = prepare_item_icon_cache_with_source_and_lease(
+            temp.path(),
+            &specs(),
+            &mut first,
+            true,
+        )
+        .unwrap();
+        let manifest: ItemIconManifest =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        let generation = manifest_path.parent().unwrap();
+        std::fs::remove_file(generation.join(&manifest.items["ItMi_One"])).unwrap();
+
+        let mut blocked = FakeSource::stable("build-a");
+        let error = prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut blocked)
+            .unwrap_err();
+        assert!(error.to_string().contains("currently in use"));
+        assert!(manifest_path.exists());
+        assert!(std::fs::read_dir(temp.path())
+            .unwrap()
+            .flatten()
+            .all(|entry| !entry.file_name().to_string_lossy().contains(".quarantine-")));
+
+        assert!(release_item_icon_cache(&manifest_path).unwrap());
+        let mut repair = FakeSource::stable("build-a");
+        assert_eq!(
+            prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut repair).unwrap(),
+            manifest_path,
+        );
+        assert!(!repair.calls.is_empty());
     }
 
     #[test]
