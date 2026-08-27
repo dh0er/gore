@@ -1929,6 +1929,7 @@ fn emit_function_ctor(
         // only whole once the two are joined.
         let rendered = collapse_single_use_accumulators(&rendered, &widened);
         let rendered = fold_enum_call_round_trips(&rendered, &call_result_types, fields, &path_roots, refs, returns_by_reference, has_enum_conversions(f));
+        let rendered = fold_member_read_modify_write(&rendered);
         let rendered = fold_compound_assignments(&rendered, fields, &path_roots, refs);
         // Again on the joined text: a short circuit whose CONDITION is itself a short circuit is
         // only one condition once the inner one has folded, and the pass that folds it ran before
@@ -8951,6 +8952,79 @@ fn fold_returned_empty_values(body: &str, refs: &RefResolver) -> String {
         text.push('\n');
     }
     text
+}
+
+/// `A = P.F; A = A <op> k; P.F = A;` is `P.F = P.F <op> k;` — which the compound fold behind this
+/// one then writes as `P.F <op>= k;`.
+///
+/// The compiler loads the member's reference once and reads, adds and writes back through it; the
+/// emitter renders each step as its own statement with a temporary in the middle. The temporary is
+/// the compiler's, not the source's: it is written twice and read twice, all three lines running
+/// together, and nothing else ever mentions it.
+fn fold_member_read_modify_write(body: &str) -> String {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut at = 0usize;
+    while at + 2 < lines.len() {
+        let folded = (|| {
+            let indent = indent_of(&lines[at]);
+            let (temp, path) = slot_store(&lines[at])?;
+            if !is_decompiler_local(&temp) || !path.contains('.') || path.contains('(') {
+                return None;
+            }
+            let (update_target, update) = slot_store_any(&lines[at + 1])?;
+            if update_target != temp || !update.starts_with(&format!("{temp} ")) {
+                return None;
+            }
+            let (write_target, write_value) = lines[at + 2]
+                .trim()
+                .strip_suffix(';')?
+                .split_once(" = ")?;
+            if write_target != path || write_value != temp {
+                return None;
+            }
+            if indent_of(&lines[at + 1]) != indent || indent_of(&lines[at + 2]) != indent {
+                return None;
+            }
+            // The three lines stand together and the first one KILLS whatever the slot held, so
+            // other groups elsewhere are none of this fold's business. What matters is that
+            // nothing reads the value after the write-back, before something else fills the slot.
+            for line in &lines[at + 3..] {
+                if count_ident(line, &temp) == 0 {
+                    continue;
+                }
+                if slot_store_any(line).is_some_and(|(target, value)| {
+                    target == temp && count_ident(&value, &temp) == 0
+                }) {
+                    break; // written afresh: a new value, not this one
+                }
+                return None;
+            }
+            let rest = update.strip_prefix(temp.as_str())?;
+            Some((format!("{indent}{path} = {path}{rest};"), None))
+        })();
+        match folded {
+            Some((line, declaration)) => {
+                lines[at] = line;
+                lines.drain(at + 1..at + 3);
+                if let Some(declaration) = declaration {
+                    lines.remove(declaration);
+                }
+            }
+            None => at += 1,
+        }
+    }
+    let mut text = lines.join("\n");
+    if body.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
+/// `X = <value>;` where the value MAY mention `X` — [`slot_store`] refuses that on purpose, and a
+/// read-modify-write is exactly the shape it refuses.
+fn slot_store_any(line: &str) -> Option<(String, String)> {
+    let (target, value) = line.trim().strip_suffix(';')?.split_once(" = ")?;
+    (is_local_ident(target) && !value.is_empty()).then(|| (target.to_owned(), value.to_owned()))
 }
 
 /// The declared type of `name` as this text spells it, from its declaration line.
