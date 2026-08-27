@@ -8628,6 +8628,9 @@ fn late_constructed_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
 /// change the scope, and a first use one level in is the other pass's business.
 fn sink_declarations_to_first_use(body: &str, late: &HashSet<i32>) -> String {
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    // Indentation is not the same thing as scope here: a hoisted declaration is written one step
+    // deeper than the code around it, so the line that LOOKS like its level can be inside a block.
+    // The brace depth is what decides where a declaration may stand.
     // Each declaration moves at most once. Two of them that share a reader would otherwise
     // leapfrog: the first moves below the second, the second below the first, forever.
     let mut already: HashSet<String> = HashSet::new();
@@ -8648,7 +8651,32 @@ fn sink_declarations_to_first_use(body: &str, late: &HashSet<i32>) -> String {
                     return None; // the block ends before the value is used
                 }
                 if count_ident(line, &name) > 0 {
-                    use_at = (indent_of(line) == indent).then_some(at + 1 + offset);
+                    let mention = at + 1 + offset;
+                    use_at = match indent_of(line) == indent {
+                        true => Some(mention),
+                        // The first mention sits INSIDE a block — one arm of an if/else, say,
+                        // while the other arm writes it too, so it cannot move in with either.
+                        // It belongs in front of the statement that opens that block, which is
+                        // the last line at the declaration's own level.
+                        false => {
+                            let depths = block_depths(&lines);
+                            (at + 1..mention).rev().find(|line| {
+                                let text = lines[*line].trim();
+                                // `else` continues the statement above it: a declaration between
+                                // the two closes the `if` and leaves the `else` dangling.
+                                !text.is_empty()
+                                    && text != "{"
+                                    && !text.starts_with('}')
+                                    && text != "else"
+                                    && !text.starts_with("else ")
+                                    && lines
+                                        .get(line.wrapping_sub(1))
+                                        .map(|prev| prev.trim())
+                                        .is_none_or(|prev| prev != "else")
+                                    && depths[*line] == depths[at]
+                            })
+                        }
+                    };
                     break;
                 }
             }

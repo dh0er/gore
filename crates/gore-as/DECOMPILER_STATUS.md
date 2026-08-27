@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 99.02% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 99.03% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.02%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.03%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,613 functions (0.98%) recompile to bytecode that differs semantically.** A semantic
+**1,594 functions (0.97%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -542,6 +542,23 @@ definition handed it to the wrong life once the split happened. The inliner now 
 value past a line that re-defines a name the value reads. What it writes instead is what vanilla
 wrote: `Say(GetDiego().GetAI(), …, GetIan().GetCharacter(), …)`, both calls inline. 1,648 to
 1,613 — the byte count and the 35 wrong programs were the same defect.
+
+**A declaration whose first use is inside a block stands in front of that block.** The sink
+could already move a declaration down to a later statement in the same block, and down into a
+deeper block when the whole life fitted there. What it could not do is the ordinary case in
+between: the value is read inside an `if`, but its constructor has to stay outside because the
+`else` arm or a later statement reads it too. Vanilla puts the declaration on the line above the
+block header, and the byte evidence is the same as for the sink itself — the constructor call
+stands after the guard, not in the prologue. `AI.CharacterAI_Gothic::IsCharacterInCombatRadius`
+is the shape: `FVector local_10;` directly above `if (this.InitialConflictPosition.IsSet())`.
+
+Two placement rules had to be measured rather than assumed. The insertion point is chosen by
+BRACE DEPTH, not by indentation — the first attempt used the rendered indent and put a
+declaration inside a block it was then out of scope for. And an `else` continues the statement
+above it, so nothing may be inserted between a closing brace and its `else`; the compiler answers
+that with `Expected expression value / Instead found reserved keyword 'else'`, and it took a
+diagnostic-bearing attempt to see it, three prior attempts having died with no message at all.
+1,613 to 1,594.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
