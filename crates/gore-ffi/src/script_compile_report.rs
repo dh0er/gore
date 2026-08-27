@@ -844,7 +844,7 @@ fn compile_report_with_available_product_package(
             }
         }
     };
-    let base_override = match qualified_target_pristine_script_cache(
+    let (base_override, target_matches_pristine) = match qualified_target_pristine_script_cache(
         &game_dir,
         strict_target
             .as_ref()
@@ -874,6 +874,29 @@ fn compile_report_with_available_product_package(
             );
         }
     };
+    if !target_matches_pristine {
+        if requested == CompilerBackendWireV2::Standalone {
+            return attach_backend_evidence(
+                standalone_target_not_pristine_failure(),
+                backend_evidence_with_package(
+                    requested,
+                    None,
+                    false,
+                    false,
+                    Some(authority.identity()),
+                    None,
+                ),
+            );
+        }
+        runner_unavailable.get_or_insert_with(|| {
+            json!({
+                "failed_backend": CompilerBackendNameV1::Standalone.as_str(),
+                "failure_kind": "preflight",
+                "detail": "the authenticated standalone compiler target is the live deployed Shipping cache, not the deployment-aware pristine base; using the explicitly allowed game fallback",
+            })
+        });
+        runner = None;
+    }
     let opts = CompileOpts {
         game_dir: game_dir.clone(),
         op: payload.op,
@@ -974,7 +997,7 @@ fn attach_backend_evidence(mut response: Value, evidence: Value) -> Value {
 fn qualified_target_pristine_script_cache(
     game_dir: &Path,
     qualified_shipping: &[u8],
-) -> Result<Vec<u8>, Value> {
+) -> Result<(Vec<u8>, bool), Value> {
     let pristine = gore_mod::pristine_script_cache(game_dir).map_err(|error| {
         let message = error.to_string();
         if message.contains("RECOVERY_REQUIRED") {
@@ -990,14 +1013,16 @@ fn qualified_target_pristine_script_cache(
             )
         }
     })?;
-    if qualified_shipping != pristine.as_slice() {
-        return Err(preflight_failure(
-            "COMPILE_STANDALONE_TARGET_NOT_PRISTINE",
-            "the authenticated standalone compiler target uses the live Shipping cache, but the deployment-aware pristine cache differs; reset or undeploy active script mods before compiling"
-                .to_owned(),
-        ));
-    }
-    Ok(pristine)
+    let target_matches_pristine = qualified_shipping == pristine.as_slice();
+    Ok((pristine, target_matches_pristine))
+}
+
+fn standalone_target_not_pristine_failure() -> Value {
+    preflight_failure(
+        "COMPILE_STANDALONE_TARGET_NOT_PRISTINE",
+        "the authenticated standalone compiler target uses the live Shipping cache, but the deployment-aware pristine cache differs; reset or undeploy active script mods before compiling"
+            .to_owned(),
+    )
 }
 
 fn compile_report_v1_payload(payload: CompileWirePayload) -> Value {
@@ -1801,10 +1826,17 @@ mod tests {
         fs::create_dir_all(&script).unwrap();
         fs::write(script.join("PrecompiledScript_Shipping.Cache"), b"pristine").unwrap();
 
-        let accepted = qualified_target_pristine_script_cache(&game, b"pristine").unwrap();
+        let (accepted, accepted_matches) =
+            qualified_target_pristine_script_cache(&game, b"pristine").unwrap();
         assert_eq!(accepted, b"pristine");
+        assert!(accepted_matches);
 
-        let rejected = qualified_target_pristine_script_cache(&game, b"deployed").unwrap_err();
+        let (fallback_base, fallback_matches) =
+            qualified_target_pristine_script_cache(&game, b"deployed").unwrap();
+        assert_eq!(fallback_base, b"pristine");
+        assert!(!fallback_matches);
+
+        let rejected = standalone_target_not_pristine_failure();
         assert_eq!(
             rejected["compile_error"]["code"],
             "COMPILE_STANDALONE_TARGET_NOT_PRISTINE"
