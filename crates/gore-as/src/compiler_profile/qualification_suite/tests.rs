@@ -620,11 +620,11 @@ fn full_corpus_has_stable_seal_ids_sources_and_required_dimensions() {
     let first = full_qualification_corpus_v1().unwrap();
     let second = full_qualification_corpus_v1().unwrap();
     assert_eq!(first, second);
-    assert_eq!(first.cases.len(), 26);
+    assert_eq!(first.cases.len(), 27);
     assert_eq!(first.canonical_sha256, second.canonical_sha256);
     assert_eq!(
         first.canonical_sha256,
-        Sha256Digest::from_hex("e2de4cdaa0347ec24dbc02c9a6e4e3721e0cddf8a28b11d9d8c67a7f3704de22")
+        Sha256Digest::from_hex("6220f1671c42a771e4895e55ded4bad49247140f00a7d77ba7857fe4c6fe2761")
             .unwrap()
     );
     let ids: Vec<_> = first
@@ -654,6 +654,7 @@ fn full_corpus_has_stable_seal_ids_sources_and_required_dimensions() {
             "positive.model.globals-classes-all-tails",
             "negative.templates.validator",
             "positive.preprocessor.import-closure",
+            "positive.game.dialog-diego-authoring",
             "positive.fname.non-ascii-equivalence",
             "positive.fname.name-none-canonical",
             "positive.strings.factory-roundtrip",
@@ -663,8 +664,30 @@ fn full_corpus_has_stable_seal_ids_sources_and_required_dimensions() {
             "negative.unsupported.try-catch",
         ]
     );
+    let diego = first
+        .cases
+        .iter()
+        .find(|case| case.case_id == "positive.game.dialog-diego-authoring")
+        .unwrap();
+    assert_eq!(diego.sections.len(), 2);
+    assert_eq!(
+        diego.sections[0].module,
+        "Story.Dialogs.Diego.GoreDiegoQualificationBase"
+    );
+    assert_eq!(
+        diego.sections[0].relative_path,
+        "Story/Dialogs/Diego/GoreDiegoQualificationBase.as"
+    );
+    assert_eq!(
+        diego.sections[1].module,
+        "Story.Dialogs.Diego.GoreDiegoDialogSmoke"
+    );
+    assert_eq!(
+        diego.sections[1].relative_path,
+        "Story/Dialogs/Diego/GoreDiegoDialogSmoke.as"
+    );
     validate_full_qualification_coverage_v1(&first).unwrap();
-    assert_eq!(FULL_QUALIFICATION_COVERAGE_V1.len(), 43);
+    assert_eq!(FULL_QUALIFICATION_COVERAGE_V1.len(), 44);
     for requirement in FULL_QUALIFICATION_COVERAGE_V1 {
         let case = first
             .cases
@@ -720,6 +743,16 @@ fn full_corpus_has_stable_seal_ids_sources_and_required_dimensions() {
         ),
         Err(OfflineQualificationErrorV1::CorpusMismatch)
     ));
+}
+
+#[test]
+fn qualification_source_sections_are_checkout_line_ending_independent() {
+    let lf = section("Fixture", "Fixture.as", "int A;\nint B;\n");
+    let crlf = section("Fixture", "Fixture.as", "int A;\r\nint B;\r\n");
+    let cr = section("Fixture", "Fixture.as", "int A;\rint B;\r");
+
+    assert_eq!(lf, crlf);
+    assert_eq!(lf, cr);
 }
 
 #[test]

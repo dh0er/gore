@@ -60,7 +60,9 @@ pub fn definition() -> Value {
 pub fn call(arguments: &Map<String, Value>, spawn: &dyn Spawn) -> Result<Value, String> {
     for key in arguments.keys() {
         if key != "command" {
-            return Ok(to_error_result(format!("`{key}` is not an argument of {NAME}.")));
+            return Ok(to_error_result(format!(
+                "`{key}` is not an argument of {NAME}."
+            )));
         }
     }
 
@@ -78,8 +80,11 @@ pub fn call(arguments: &Map<String, Value>, spawn: &dyn Spawn) -> Result<Value, 
     // `gore help as compile` and `gore as compile --help` print the same thing, and this tool
     // always uses the second form. Keeping the prefix and appending `--help` would ask clap's help
     // subcommand for *its* help instead of the command that was asked about.
-    let path: Vec<&str> =
-        requested.iter().skip_while(|token| **token == "help").copied().collect();
+    let path: Vec<&str> = requested
+        .iter()
+        .skip_while(|token| **token == "help")
+        .copied()
+        .collect();
 
     let program = spawn.display_exe();
     let display = if path.is_empty() {
@@ -87,8 +92,7 @@ pub fn call(arguments: &Map<String, Value>, spawn: &dyn Spawn) -> Result<Value, 
     } else {
         format!("{program} {} --help", path.join(" "))
     };
-    let mut argv: Vec<std::ffi::OsString> =
-        path.iter().map(std::ffi::OsString::from).collect();
+    let mut argv: Vec<std::ffi::OsString> = path.iter().map(std::ffi::OsString::from).collect();
     argv.push("--help".into());
 
     // `--help` prints and exits. There is nothing here for a person to agree to.
@@ -97,15 +101,24 @@ pub fn call(arguments: &Map<String, Value>, spawn: &dyn Spawn) -> Result<Value, 
         path: path.join(" "),
         timeout: TIMEOUT,
         display: display.clone(),
+        may_launch_game: false,
         consent: None,
     };
     match spawn.run(&invocation) {
         Ok(outcome) => {
             // clap prints help to stdout on success; when a path is wrong it goes to stderr.
             let (body, clipped, total) = if outcome.stdout.trim().is_empty() {
-                (outcome.stderr.clone(), outcome.stderr_truncated, outcome.stderr_total)
+                (
+                    outcome.stderr.clone(),
+                    outcome.stderr_truncated,
+                    outcome.stderr_total,
+                )
             } else {
-                (outcome.stdout.clone(), outcome.stdout_truncated, outcome.stdout_total)
+                (
+                    outcome.stdout.clone(),
+                    outcome.stdout_truncated,
+                    outcome.stdout_total,
+                )
             };
 
             // The spawn layer applies the server's own --max-output-kib cap before this tool ever
@@ -152,11 +165,17 @@ pub fn call(arguments: &Map<String, Value>, spawn: &dyn Spawn) -> Result<Value, 
 /// it goes stale the moment the CLI grows a subcommand here, silently, and the symptom is this tool
 /// telling a model that a command it read in the guide does not exist. `guide search` was missing
 /// for exactly as long as it took someone to notice. Keep it against `crates/gore/src/main.rs`.
-const META_COMMANDS: &[(&str, &[&str])] =
-    &[("mcp", &["serve", "tools"]), ("guide", &["search", "html"]), ("help", &[])];
+const META_COMMANDS: &[(&str, &[&str])] = &[
+    ("mcp", &["serve", "tools"]),
+    ("guide", &["search", "html"]),
+    ("help", &[]),
+];
 
 fn meta_command(name: &str) -> Option<&'static [&'static str]> {
-    META_COMMANDS.iter().find(|(command, _)| *command == name).map(|(_, subs)| *subs)
+    META_COMMANDS
+        .iter()
+        .find(|(command, _)| *command == name)
+        .map(|(_, subs)| *subs)
 }
 
 /// Accept only paths that exist in the command table.
@@ -194,17 +213,19 @@ fn validate(path: &[&str]) -> Result<(), String> {
                     ))
                 };
             }
-            let Some(group) =
-                spec::GROUPS.iter().find(|group| group.cli == *first && !group.cli.is_empty())
-            else {
+            let groups: Vec<_> = spec::GROUPS
+                .iter()
+                .filter(|group| group.cli == *first && !group.cli.is_empty())
+                .collect();
+            if groups.is_empty() {
                 // Two different mistakes end up here and they need different answers. `catalog`
                 // and `gen` are real top-level commands that simply take no subcommand. `project`
                 // is not a command at all — it only exists as the `gore_project` tool name, and an
                 // agent mapping tool names onto the CLI will write `project gen` and be told the
                 // command "has no subcommands", which implies it exists.
-                let is_flat_command = spec::GROUPS.iter().any(|group| {
-                    group.shape == GroupShape::Flat && group.command(first).is_some()
-                });
+                let is_flat_command = spec::GROUPS
+                    .iter()
+                    .any(|group| group.shape == GroupShape::Flat && group.command(first).is_some());
                 return Err(if is_flat_command {
                     format!(
                         "`gore {first}` takes no subcommand — ask for `{first}` on its own. \
@@ -214,18 +235,27 @@ fn validate(path: &[&str]) -> Result<(), String> {
                 } else {
                     format!("`gore {first}` is not a command. {}", available())
                 });
-            };
+            }
             // Aliases count here, and only here. `gore voice --help` prints
             // `list [aliases: index]`, so a model that read it will ask this tool about
             // `voice index` — and refusing to explain a name the CLI just showed it sends it
             // hunting for a typo in something it read correctly. A tool *call* still resolves
             // through the canonical name alone, which keeps the subcommand enum a closed set.
-            if group.command_or_alias(second).is_some() {
+            if groups
+                .iter()
+                .any(|group| group.command_or_alias(second).is_some())
+            {
                 Ok(())
             } else {
+                let mut subcommands: Vec<_> = groups
+                    .iter()
+                    .flat_map(|group| group.subcommands())
+                    .collect();
+                subcommands.sort_unstable();
+                subcommands.dedup();
                 Err(format!(
                     "`gore {first}` has no subcommand `{second}`. It accepts: {}.",
-                    group.subcommands().join(", ")
+                    subcommands.join(", ")
                 ))
             }
         }
@@ -246,6 +276,7 @@ fn available() -> String {
     }
     names.extend(META_COMMANDS.iter().map(|(command, _)| *command));
     names.sort_unstable();
+    names.dedup();
     format!("Available commands: {}.", names.join(", "))
 }
 
@@ -275,7 +306,10 @@ mod tests {
         }
 
         fn run(&self, _: &Invocation) -> std::io::Result<crate::exec::Outcome> {
-            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no such file"))
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no such file",
+            ))
         }
     }
 
@@ -284,12 +318,17 @@ mod tests {
     }
 
     fn try_call(arguments: Value, spawn: &dyn Spawn) -> Result<Value, String> {
-        let Value::Object(map) = arguments else { panic!("test arguments must be an object") };
+        let Value::Object(map) = arguments else {
+            panic!("test arguments must be an object")
+        };
         call(&map, spawn)
     }
 
     fn text_of(result: &Value, index: usize) -> String {
-        result["content"][index]["text"].as_str().expect("a text block").to_string()
+        result["content"][index]["text"]
+            .as_str()
+            .expect("a text block")
+            .to_string()
     }
 
     #[test]
@@ -316,10 +355,18 @@ mod tests {
         // A flat group's subcommand is a top-level command in the CLI.
         call_with(json!({ "command": "scaffold" }), &spawn);
 
-        let paths: Vec<String> = spawn.calls().iter().map(|call| call.display.clone()).collect();
+        let paths: Vec<String> = spawn
+            .calls()
+            .iter()
+            .map(|call| call.display.clone())
+            .collect();
         assert_eq!(
             paths,
-            vec!["gore as --help", "gore as patch-default --help", "gore scaffold --help"]
+            vec![
+                "gore as --help",
+                "gore as patch-default --help",
+                "gore scaffold --help"
+            ]
         );
     }
 
@@ -341,7 +388,9 @@ mod tests {
         // make one broken binary look like two different failures depending on the tool used.
         let spawn = FailingSpawn;
         let outcome = try_call(json!({ "command": "mgr" }), &spawn);
-        let Err(message) = outcome else { panic!("a failed spawn must not be a tool result") };
+        let Err(message) = outcome else {
+            panic!("a failed spawn must not be a tool result")
+        };
         assert!(message.contains("could not run"), "{message}");
     }
 
@@ -361,7 +410,10 @@ mod tests {
         assert_eq!(result["isError"], json!(false));
         let body = text_of(&result, 1);
         assert!(body.contains("truncated"), "{body}");
-        assert!(body.contains("40000"), "the real size belongs in the message: {body}");
+        assert!(
+            body.contains("40000"),
+            "the real size belongs in the message: {body}"
+        );
         assert!(body.contains("--max-output-kib"), "{body}");
     }
 
@@ -400,29 +452,31 @@ mod tests {
         // `gore --help` lists `mcp` and `guide`, and this tool promises the exact help for any
         // command. Refusing them would send a model hunting for a typo in something it read right.
         let spawn = FakeSpawn::new(Outcome::success("Usage: gore guide html"));
-        for path in
-            [
-                "mcp",
-                "mcp serve",
-                "mcp tools",
-                "guide",
-                "guide html",
-                "help",
-                "help mgr",
-                "help gen",
-                // clap's explorer takes a whole path, not one token.
-                "help as compile",
-                "help mgr reset",
-                "help guide html",
-            ]
-        {
+        for path in [
+            "mcp",
+            "mcp serve",
+            "mcp tools",
+            "guide",
+            "guide html",
+            "help",
+            "help mgr",
+            "help gen",
+            // clap's explorer takes a whole path, not one token.
+            "help as compile",
+            "help mgr reset",
+            "help guide html",
+        ] {
             let result = call_with(json!({ "command": path }), &spawn);
             assert_eq!(result["isError"], json!(false), "`{path}` should resolve");
         }
 
         // `gore help <path>` takes any command path, so a bogus one is still rejected — at either
         // depth.
-        for bogus in ["help frobnicate", "help as frobnicate", "help mgr reset extra"] {
+        for bogus in [
+            "help frobnicate",
+            "help as frobnicate",
+            "help mgr reset extra",
+        ] {
             let bad = call_with(json!({ "command": bogus }), &spawn);
             assert_eq!(bad["isError"], json!(true), "`{bogus}` should be rejected");
         }
@@ -430,7 +484,11 @@ mod tests {
         // A wrong subcommand under one of them still lists the real ones.
         let result = call_with(json!({ "command": "guide pdf" }), &spawn);
         assert_eq!(result["isError"], json!(true));
-        assert!(text_of(&result, 0).contains("html"), "{}", text_of(&result, 0));
+        assert!(
+            text_of(&result, 0).contains("html"),
+            "{}",
+            text_of(&result, 0)
+        );
     }
 
     #[test]
@@ -444,7 +502,10 @@ mod tests {
         assert_eq!(result["isError"], json!(true));
         let message = text_of(&result, 0);
         assert!(message.contains("is not a command"), "{message}");
-        assert!(message.contains("gen"), "the real command list must be offered: {message}");
+        assert!(
+            message.contains("gen"),
+            "the real command list must be offered: {message}"
+        );
         assert!(spawn.calls().is_empty());
     }
 
@@ -458,7 +519,10 @@ mod tests {
         assert_eq!(result["isError"], json!(true));
         let message = text_of(&result, 0);
         assert!(message.contains("takes no subcommand"), "{message}");
-        assert!(!message.contains("is not a command"), "catalog does exist: {message}");
+        assert!(
+            !message.contains("is not a command"),
+            "catalog does exist: {message}"
+        );
         assert!(spawn.calls().is_empty());
     }
 

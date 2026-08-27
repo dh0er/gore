@@ -70,7 +70,10 @@ const MIN_SIDECAR_MEMORY_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_SIDECAR_MEMORY_LIMIT_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const ENGINE_UNAVAILABLE_CODE: &str = "GORE_AS_STANDALONE_ENGINE_UNAVAILABLE";
-const SCRATCH_PREFIX: &str = "gore-as-sidecar-v1-";
+// Keep the private child deliberately short. The complete game source tree contains relative
+// paths over 140 UTF-16 units; a descriptive scratch name pushes otherwise ordinary Windows work
+// roots over the legacy path limit enforced by already-qualified sidecars.
+const SCRATCH_PREFIX: &str = ".g-";
 static SCRATCH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Paths and process bounds for one standalone sidecar instance.
@@ -85,7 +88,31 @@ pub struct StandaloneSidecarConfigV1 {
     pub termination_grace: Duration,
     /// Hard per-process and aggregate process-tree memory ceiling.
     pub memory_limit_bytes: u64,
+    product_target_inputs: Option<ProductTargetInputSealsV1>,
     fixed_args: Vec<OsString>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MemorySealV1 {
+    byte_len: u64,
+    sha256: Sha256Digest,
+}
+
+impl MemorySealV1 {
+    fn from_bytes(bytes: &[u8]) -> Self {
+        Self {
+            byte_len: bytes.len() as u64,
+            sha256: sha256_bytes(bytes),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ProductTargetInputSealsV1 {
+    base_cache: MemorySealV1,
+    binds_cache: MemorySealV1,
+    base_cache_path: PathBuf,
+    binds_cache_path: PathBuf,
 }
 
 /// Caller-supplied identity of the exact sidecar binary that may execute.
@@ -115,8 +142,28 @@ impl StandaloneSidecarConfigV1 {
             timeout: DEFAULT_SIDECAR_TIMEOUT,
             termination_grace: DEFAULT_TERMINATION_GRACE,
             memory_limit_bytes: DEFAULT_SIDECAR_MEMORY_LIMIT_BYTES,
+            product_target_inputs: None,
             fixed_args: Vec::new(),
         }
+    }
+
+    /// Bind product execution to the exact compatible target already authenticated by the
+    /// package resolver. Development and qualification runners deliberately keep the profile's
+    /// byte-exact oracle seals instead.
+    pub(crate) fn with_product_target_inputs(
+        mut self,
+        base_cache: &[u8],
+        binds_cache: &[u8],
+        base_cache_path: &Path,
+        binds_cache_path: &Path,
+    ) -> Self {
+        self.product_target_inputs = Some(ProductTargetInputSealsV1 {
+            base_cache: MemorySealV1::from_bytes(base_cache),
+            binds_cache: MemorySealV1::from_bytes(binds_cache),
+            base_cache_path: base_cache_path.to_path_buf(),
+            binds_cache_path: binds_cache_path.to_path_buf(),
+        });
+        self
     }
 
     #[cfg(test)]
@@ -133,7 +180,7 @@ impl StandaloneSidecarConfigV1 {
 /// identity; it does not authenticate who authored the package. Product code must additionally
 /// match `profile().profile_sha256` and the sidecar seal against its trusted embedded catalog before
 /// treating this handle as authority-bearing generation evidence.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ValidatedCompilerProfilePackageV1 {
     profile: CompilerProfileV1,
     standalone_compiler: QualifiedSidecarIdentityV1,
@@ -180,27 +227,7 @@ pub struct StandaloneSidecarRunnerV1 {
 
 impl StandaloneSidecarRunnerV1 {
     pub fn new(config: StandaloneSidecarConfigV1) -> Result<Self, CompilerBackendFailureV1> {
-        #[cfg(all(unix, not(test)))]
-        return Err(unavailable(
-            "authoritative G1R sidecar execution requires Windows Job Object isolation",
-        ));
-
-        require_absolute(&config.sidecar_path, "sidecar executable")?;
-        require_absolute(&config.profile_manifest_path, "compiler profile manifest")?;
-        require_absolute(&config.profile_root, "compiler profile root")?;
-        require_absolute(&config.scratch_root, "sidecar scratch root")?;
-        if !(MIN_SIDECAR_MEMORY_LIMIT_BYTES..=MAX_SIDECAR_MEMORY_LIMIT_BYTES)
-            .contains(&config.memory_limit_bytes)
-        {
-            return Err(unavailable(format!(
-                "sidecar memory limit must be between {MIN_SIDECAR_MEMORY_LIMIT_BYTES} and \
-                 {MAX_SIDECAR_MEMORY_LIMIT_BYTES} bytes"
-            )));
-        }
-        ensure_real_directory(&config.scratch_root, "sidecar scratch root")?;
-        let mut sidecar = open_regular_no_follow(&config.sidecar_path, "sidecar executable")
-            .map_err(unavailable)?;
-        verify_open_sidecar_seal(&mut sidecar, config.sidecar_seal)?;
+        validate_runner_config(&config)?;
         let profile_package = ValidatedCompilerProfilePackageV1::load(
             &config.profile_manifest_path,
             &config.profile_root,
@@ -215,6 +242,26 @@ impl StandaloneSidecarRunnerV1 {
         })
     }
 
+    pub(crate) fn new_product(
+        config: StandaloneSidecarConfigV1,
+        profile_package: &ValidatedCompilerProfilePackageV1,
+    ) -> Result<Self, CompilerBackendFailureV1> {
+        validate_runner_config(&config)?;
+        if config.product_target_inputs.is_none() {
+            return Err(unavailable(
+                "product standalone runner requires authenticated target inputs",
+            ));
+        }
+        validate_qualified_sidecar_seal(
+            config.sidecar_seal,
+            profile_package.standalone_compiler_identity(),
+        )?;
+        Ok(Self {
+            config,
+            profile_package: profile_package.clone(),
+        })
+    }
+
     pub fn profile(&self) -> &CompilerProfileV1 {
         self.profile_package.profile()
     }
@@ -222,6 +269,72 @@ impl StandaloneSidecarRunnerV1 {
     pub fn profile_package(&self) -> &ValidatedCompilerProfilePackageV1 {
         &self.profile_package
     }
+
+    fn verify_runtime_inputs(
+        &self,
+        base_cache: &[u8],
+        binds_cache: &[u8],
+    ) -> Result<(), CompilerBackendFailureV1> {
+        if let Some(target) = &self.config.product_target_inputs {
+            verify_memory_seal_parts(
+                "base cache",
+                base_cache,
+                target.base_cache,
+                MAX_SIDECAR_BASE_BYTES_V1,
+            )?;
+            verify_memory_seal_parts(
+                "Binds.Cache",
+                binds_cache,
+                target.binds_cache,
+                MAX_SIDECAR_BINDS_BYTES_V1,
+            )?;
+        } else {
+            verify_memory_seal(
+                "base cache",
+                base_cache,
+                &self.profile().oracle.shipping_cache,
+                MAX_SIDECAR_BASE_BYTES_V1,
+            )?;
+            verify_memory_seal(
+                "Binds.Cache",
+                binds_cache,
+                &self.profile().oracle.binds_cache,
+                MAX_SIDECAR_BINDS_BYTES_V1,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_runner_config(
+    config: &StandaloneSidecarConfigV1,
+) -> Result<(), CompilerBackendFailureV1> {
+    #[cfg(all(unix, not(test)))]
+    return Err(unavailable(
+        "authoritative G1R sidecar execution requires Windows Job Object isolation",
+    ));
+
+    require_absolute(&config.sidecar_path, "sidecar executable")?;
+    require_absolute(&config.profile_manifest_path, "compiler profile manifest")?;
+    require_absolute(&config.profile_root, "compiler profile root")?;
+    require_absolute(&config.scratch_root, "sidecar scratch root")?;
+    if !(MIN_SIDECAR_MEMORY_LIMIT_BYTES..=MAX_SIDECAR_MEMORY_LIMIT_BYTES)
+        .contains(&config.memory_limit_bytes)
+    {
+        return Err(unavailable(format!(
+            "sidecar memory limit must be between {MIN_SIDECAR_MEMORY_LIMIT_BYTES} and \
+             {MAX_SIDECAR_MEMORY_LIMIT_BYTES} bytes"
+        )));
+    }
+    ensure_real_directory(&config.scratch_root, "sidecar scratch root")?;
+    let mut sidecar =
+        open_regular_no_follow(&config.sidecar_path, "sidecar executable").map_err(unavailable)?;
+    verify_open_sidecar_seal(&mut sidecar, config.sidecar_seal)?;
+    if let Some(target) = &config.product_target_inputs {
+        require_absolute(&target.base_cache_path, "product base cache")?;
+        require_absolute(&target.binds_cache_path, "product Binds.Cache")?;
+    }
+    Ok(())
 }
 
 fn validate_qualified_sidecar_seal(
@@ -709,18 +822,7 @@ impl StandaloneCompilerRunnerV1 for StandaloneSidecarRunnerV1 {
         let binds_cache = inputs.binds_cache.ok_or_else(|| {
             unavailable("standalone sidecar requires a sealed Binds.Cache snapshot")
         })?;
-        verify_memory_seal(
-            "base cache",
-            base_cache,
-            &self.profile().oracle.shipping_cache,
-            MAX_SIDECAR_BASE_BYTES_V1,
-        )?;
-        verify_memory_seal(
-            "Binds.Cache",
-            binds_cache,
-            &self.profile().oracle.binds_cache,
-            MAX_SIDECAR_BINDS_BYTES_V1,
-        )?;
+        self.verify_runtime_inputs(base_cache, binds_cache)?;
         self.profile().validate_complete().map_err(|error| {
             unavailable(format!("compiler profile is no longer valid: {error}"))
         })?;
@@ -738,26 +840,52 @@ impl StandaloneCompilerRunnerV1 for StandaloneSidecarRunnerV1 {
             let staged_sources = scratch.path.join("sources");
             let staged_inputs = scratch.path.join("inputs");
             let staged_output = scratch.path.join("output");
-            for directory in [
-                &staged_profile_root,
-                &staged_sources,
-                &staged_inputs,
-                &staged_output,
-            ] {
+            for directory in [&staged_sources, &staged_output] {
                 std::fs::create_dir(directory).map_err(|error| {
                     internal(format!("creating {}: {error}", directory.display()))
                 })?;
             }
 
-            let staged_manifest = stage_profile(
-                self.profile(),
-                &self.config.profile_root,
-                &staged_profile_root,
-            )?;
-            let staged_base = staged_inputs.join("PrecompiledScript_Shipping.Cache");
-            write_new_readonly(&staged_base, base_cache, "staged base cache")?;
-            let staged_binds = staged_inputs.join("Binds.Cache");
-            write_new_readonly(&staged_binds, binds_cache, "staged Binds.Cache")?;
+            let (request_manifest, request_profile_root, request_base, request_binds) =
+                if let Some(target) = &self.config.product_target_inputs {
+                    (
+                        self.config.profile_manifest_path.clone(),
+                        self.config.profile_root.clone(),
+                        sealed_path_with_seal(
+                            &target.base_cache_path,
+                            target.base_cache,
+                            "product base cache",
+                        )?,
+                        sealed_path_with_seal(
+                            &target.binds_cache_path,
+                            target.binds_cache,
+                            "product Binds.Cache",
+                        )?,
+                    )
+                } else {
+                    for directory in [&staged_profile_root, &staged_inputs] {
+                        std::fs::create_dir(directory).map_err(|error| {
+                            internal(format!("creating {}: {error}", directory.display()))
+                        })?;
+                    }
+                    let manifest = stage_profile(
+                        self.profile(),
+                        &self.config.profile_root,
+                        &staged_profile_root,
+                    )?;
+                    let base = staged_inputs.join("PrecompiledScript_Shipping.Cache");
+                    write_new_readonly(&base, base_cache, "staged base cache")?;
+                    let binds = staged_inputs.join("Binds.Cache");
+                    write_new_readonly(&binds, binds_cache, "staged Binds.Cache")?;
+                    let sealed_base = sealed_path(&base, base_cache, "staged base cache")?;
+                    let sealed_binds = sealed_path(&binds, binds_cache, "staged Binds.Cache")?;
+                    (
+                        manifest,
+                        staged_profile_root.clone(),
+                        sealed_base,
+                        sealed_binds,
+                    )
+                };
             let source_files =
                 stage_source_tree(inputs.source_tree, &staged_sources, inputs.overlays)?;
             let output_path = staged_output.join("PrecompiledScript.Cache");
@@ -768,8 +896,8 @@ impl StandaloneCompilerRunnerV1 for StandaloneSidecarRunnerV1 {
             }
 
             let profile = SidecarProfileIdentityV1 {
-                manifest_path: json_path(&staged_manifest, "staged profile manifest")?,
-                profile_root: json_path(&staged_profile_root, "staged profile root")?,
+                manifest_path: json_path(&request_manifest, "compiler profile manifest")?,
+                profile_root: json_path(&request_profile_root, "compiler profile root")?,
                 profile_sha256: self.profile().profile_sha256,
                 steam_build_id: self.profile().target.steam_build_id,
                 depot_id: self.profile().target.depot_id,
@@ -780,8 +908,8 @@ impl StandaloneCompilerRunnerV1 for StandaloneSidecarRunnerV1 {
                     .required_probe_suite_version
                     .clone(),
             };
-            let base_cache = sealed_path(&staged_base, base_cache, "staged base cache")?;
-            let binds_cache = sealed_path(&staged_binds, binds_cache, "staged Binds.Cache")?;
+            let base_cache = request_base;
+            let binds_cache = request_binds;
             let source_root = json_path(&staged_sources, "staged source root")?;
             let (request_bytes, request_name, request_label) = match qualified_request_version {
                 SIDECAR_REQUEST_VERSION_V1 => {
@@ -907,18 +1035,7 @@ impl StandaloneCompilerRunnerV1 for StandaloneSidecarRunnerV1 {
                 "standalone sidecar was not qualified for the FullGraph request-v2 contract",
             ));
         }
-        verify_memory_seal(
-            "base cache",
-            inputs.base_cache,
-            &self.profile().oracle.shipping_cache,
-            MAX_SIDECAR_BASE_BYTES_V1,
-        )?;
-        verify_memory_seal(
-            "Binds.Cache",
-            inputs.binds_cache,
-            &self.profile().oracle.binds_cache,
-            MAX_SIDECAR_BINDS_BYTES_V1,
-        )?;
+        self.verify_runtime_inputs(inputs.base_cache, inputs.binds_cache)?;
         self.profile().validate_complete().map_err(|error| {
             unavailable(format!("compiler profile is no longer valid: {error}"))
         })?;
@@ -933,26 +1050,53 @@ impl StandaloneCompilerRunnerV1 for StandaloneSidecarRunnerV1 {
             let staged_sources = scratch.path.join("sources");
             let staged_inputs = scratch.path.join("inputs");
             let staged_output = scratch.path.join("output");
-            for directory in [
-                &staged_profile_root,
-                &staged_sources,
-                &staged_inputs,
-                &staged_output,
-            ] {
+            for directory in [&staged_sources, &staged_output] {
                 std::fs::create_dir(directory).map_err(|error| {
                     internal(format!("creating {}: {error}", directory.display()))
                 })?;
             }
 
-            let staged_manifest = stage_profile(
-                self.profile(),
-                &self.config.profile_root,
-                &staged_profile_root,
-            )?;
-            let staged_base = staged_inputs.join("PrecompiledScript_Shipping.Cache");
-            write_new_readonly(&staged_base, inputs.base_cache, "staged base cache")?;
-            let staged_binds = staged_inputs.join("Binds.Cache");
-            write_new_readonly(&staged_binds, inputs.binds_cache, "staged Binds.Cache")?;
+            let (request_manifest, request_profile_root, request_base, request_binds) =
+                if let Some(target) = &self.config.product_target_inputs {
+                    (
+                        self.config.profile_manifest_path.clone(),
+                        self.config.profile_root.clone(),
+                        sealed_path_with_seal(
+                            &target.base_cache_path,
+                            target.base_cache,
+                            "product base cache",
+                        )?,
+                        sealed_path_with_seal(
+                            &target.binds_cache_path,
+                            target.binds_cache,
+                            "product Binds.Cache",
+                        )?,
+                    )
+                } else {
+                    for directory in [&staged_profile_root, &staged_inputs] {
+                        std::fs::create_dir(directory).map_err(|error| {
+                            internal(format!("creating {}: {error}", directory.display()))
+                        })?;
+                    }
+                    let manifest = stage_profile(
+                        self.profile(),
+                        &self.config.profile_root,
+                        &staged_profile_root,
+                    )?;
+                    let base = staged_inputs.join("PrecompiledScript_Shipping.Cache");
+                    write_new_readonly(&base, inputs.base_cache, "staged base cache")?;
+                    let binds = staged_inputs.join("Binds.Cache");
+                    write_new_readonly(&binds, inputs.binds_cache, "staged Binds.Cache")?;
+                    let sealed_base = sealed_path(&base, inputs.base_cache, "staged base cache")?;
+                    let sealed_binds =
+                        sealed_path(&binds, inputs.binds_cache, "staged Binds.Cache")?;
+                    (
+                        manifest,
+                        staged_profile_root.clone(),
+                        sealed_base,
+                        sealed_binds,
+                    )
+                };
 
             let source_overlays = inputs
                 .changes
@@ -992,8 +1136,8 @@ impl StandaloneCompilerRunnerV1 for StandaloneSidecarRunnerV1 {
                 request_version: SIDECAR_REQUEST_VERSION_V2,
                 operation: SidecarOperationV1::Compile,
                 profile: SidecarProfileIdentityV1 {
-                    manifest_path: json_path(&staged_manifest, "staged profile manifest")?,
-                    profile_root: json_path(&staged_profile_root, "staged profile root")?,
+                    manifest_path: json_path(&request_manifest, "compiler profile manifest")?,
+                    profile_root: json_path(&request_profile_root, "compiler profile root")?,
                     profile_sha256: self.profile().profile_sha256,
                     steam_build_id: self.profile().target.steam_build_id,
                     depot_id: self.profile().target.depot_id,
@@ -1005,12 +1149,8 @@ impl StandaloneCompilerRunnerV1 for StandaloneSidecarRunnerV1 {
                         .clone(),
                 },
                 inputs: SidecarInputsV2 {
-                    base_cache: sealed_path(&staged_base, inputs.base_cache, "staged base cache")?,
-                    binds_cache: sealed_path(
-                        &staged_binds,
-                        inputs.binds_cache,
-                        "staged Binds.Cache",
-                    )?,
+                    base_cache: request_base,
+                    binds_cache: request_binds,
                     source_tree: SidecarSourceTreeV1 {
                         root: json_path(&staged_sources, "staged source root")?,
                         files: source_files,
@@ -1632,7 +1772,7 @@ fn parse_sidecar_response(
             CompilerBackendFailureKindV1::Unavailable,
             format!(
                 "{}{}",
-                diagnostics_detail(&response.diagnostics, private_root),
+                diagnostics_detail(&response.diagnostics, source_root, private_root),
                 stderr_suffix(&stderr)
             ),
             backend_diagnostics(&response.diagnostics, source_root, private_root),
@@ -1693,7 +1833,7 @@ fn parse_sidecar_response(
     }
     let detail = format!(
         "{}{}",
-        diagnostics_detail(&response.diagnostics, private_root),
+        diagnostics_detail(&response.diagnostics, source_root, private_root),
         stderr_suffix(&stderr)
     );
     let kind = match response.failure_kind {
@@ -1815,17 +1955,17 @@ fn parse_qualification_sidecar_response_v3(
         }
         Some(SidecarFailureKindV1::EngineUnavailable) => Err(unavailable(format!(
             "{}{}",
-            diagnostics_detail(&response.diagnostics, private_root),
+            diagnostics_detail(&response.diagnostics, source_root, private_root),
             stderr_suffix(&stderr)
         ))),
         Some(SidecarFailureKindV1::InvalidOutput) => Err(invalid_output(format!(
             "{}{}",
-            diagnostics_detail(&response.diagnostics, private_root),
+            diagnostics_detail(&response.diagnostics, source_root, private_root),
             stderr_suffix(&stderr)
         ))),
         Some(SidecarFailureKindV1::Internal) | None => Err(internal(format!(
             "{}{}",
-            diagnostics_detail(&response.diagnostics, private_root),
+            diagnostics_detail(&response.diagnostics, source_root, private_root),
             stderr_suffix(&stderr)
         ))),
     }
@@ -2075,13 +2215,38 @@ fn validate_diagnostics(
     Ok(())
 }
 
-fn diagnostics_detail(diagnostics: &[SidecarDiagnosticV1], private_root: &Path) -> String {
+fn diagnostics_detail(
+    diagnostics: &[SidecarDiagnosticV1],
+    source_root: &Path,
+    private_root: &Path,
+) -> String {
     if diagnostics.is_empty() {
         return "sidecar failed without diagnostics".to_owned();
     }
     let detail = diagnostics
         .iter()
-        .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
+        .map(|diagnostic| {
+            let source =
+                safe_sidecar_diagnostic_source_path(diagnostic.source_path.as_deref(), source_root);
+            let location = source.map(|mut source| {
+                if let Some(line) = diagnostic.line {
+                    source.push_str(&format!(":{line}"));
+                }
+                if let Some(column) = diagnostic.column {
+                    if diagnostic.line.is_none() {
+                        source.push_str(":?");
+                    }
+                    source.push_str(&format!(":{column}"));
+                }
+                format!("{source}: ")
+            });
+            format!(
+                "{}{}: {}",
+                location.as_deref().unwrap_or_default(),
+                diagnostic.code,
+                diagnostic.message
+            )
+        })
         .collect::<Vec<_>>()
         .join("; ");
     redact_private_path_variants(&detail, private_root)
@@ -2752,10 +2917,18 @@ fn sealed_path(
     bytes: &[u8],
     label: &str,
 ) -> Result<SidecarSealedPathV1, CompilerBackendFailureV1> {
+    sealed_path_with_seal(path, MemorySealV1::from_bytes(bytes), label)
+}
+
+fn sealed_path_with_seal(
+    path: &Path,
+    seal: MemorySealV1,
+    label: &str,
+) -> Result<SidecarSealedPathV1, CompilerBackendFailureV1> {
     Ok(SidecarSealedPathV1 {
         path: json_path(path, label)?,
-        byte_len: bytes.len() as u64,
-        sha256: sha256_bytes(bytes),
+        byte_len: seal.byte_len,
+        sha256: seal.sha256,
     })
 }
 
@@ -2763,6 +2936,23 @@ fn verify_memory_seal(
     label: &str,
     bytes: &[u8],
     expected: &FileSealV1,
+    max: u64,
+) -> Result<(), CompilerBackendFailureV1> {
+    verify_memory_seal_parts(
+        label,
+        bytes,
+        MemorySealV1 {
+            byte_len: expected.byte_len,
+            sha256: expected.sha256,
+        },
+        max,
+    )
+}
+
+fn verify_memory_seal_parts(
+    label: &str,
+    bytes: &[u8],
+    expected: MemorySealV1,
     max: u64,
 ) -> Result<(), CompilerBackendFailureV1> {
     if bytes.len() as u64 > max {
@@ -2774,7 +2964,7 @@ fn verify_memory_seal(
     let actual = sha256_bytes(bytes);
     if bytes.len() as u64 != expected.byte_len || actual != expected.sha256 {
         return Err(unavailable(format!(
-            "sealed {label} does not match compiler profile identity"
+            "sealed {label} does not match its authenticated input identity"
         )));
     }
     Ok(())
@@ -3084,10 +3274,7 @@ impl ScratchDirectory {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_nanos();
-            let path = root.join(format!(
-                "{SCRATCH_PREFIX}{}-{nanos}-{sequence}",
-                std::process::id()
-            ));
+            let path = root.join(format!("{SCRATCH_PREFIX}{nanos:x}-{sequence:x}"));
             match std::fs::create_dir(&path) {
                 Ok(()) => {
                     return Ok(Self {
@@ -4124,6 +4311,23 @@ mod tests {
         SidecarExecutableSealV1 { byte_len, sha256 }
     }
 
+    #[test]
+    fn diagnostic_failure_detail_retains_safe_source_coordinates() {
+        let diagnostics = [SidecarDiagnosticV1 {
+            severity: SidecarDiagnosticSeverityV1::Error,
+            code: "GORE_AS_COMPILER_ERROR".to_owned(),
+            message: "Expected data type".to_owned(),
+            source_path: Some("Dialogs/Diego.as".to_owned()),
+            line: Some(12),
+            column: Some(7),
+        }];
+
+        assert_eq!(
+            diagnostics_detail(&diagnostics, Path::new("sources"), Path::new("private")),
+            "Dialogs/Diego.as:12:7: GORE_AS_COMPILER_ERROR: Expected data type"
+        );
+    }
+
     #[cfg(windows)]
     #[test]
     fn private_path_redaction_covers_case_slash_and_device_variants() {
@@ -4268,6 +4472,62 @@ print(json.dumps({"response_version":1,"ok":True,"output":{"cache_path":str(outp
         assert_eq!(diagnostic.line(), Some(3));
         assert_eq!(diagnostic.column(), Some(7));
         assert_eq!(std::fs::read_dir(&fixture.scratch).unwrap().count(), 1);
+        drop(output);
+        fixture.assert_scratch_empty();
+    }
+
+    #[test]
+    fn product_runner_reuses_authenticated_package_and_target_paths_without_scratch_copies() {
+        let fixture = TestFixture::create("product-direct-inputs");
+        let Some(python) = fixture.python.clone() else {
+            eprintln!("python unavailable; product direct-input test skipped");
+            return;
+        };
+        let base_path = fixture.root.join("product-shipping.cache");
+        let binds_path = fixture.root.join("product-binds.cache");
+        std::fs::write(&base_path, &fixture.base).unwrap();
+        std::fs::write(&binds_path, &fixture.binds).unwrap();
+        let script_path = fixture.root.join("product-direct-inputs.py");
+        std::fs::write(
+            &script_path,
+            r#"
+import hashlib, json, pathlib, sys
+request_path = pathlib.Path(sys.argv[3])
+request = json.loads(request_path.read_text(encoding="utf-8"))
+scratch = request_path.parent
+assert pathlib.Path(request["profile"]["manifest_path"]).name == "profile.json"
+assert pathlib.Path(request["profile"]["profile_root"]).name == "profile-source"
+assert pathlib.Path(request["inputs"]["base_cache"]["path"]).name == "product-shipping.cache"
+assert pathlib.Path(request["inputs"]["binds_cache"]["path"]).name == "product-binds.cache"
+assert not (scratch / "profile").exists()
+assert not (scratch / "inputs").exists()
+data = b"fake-product-direct-cache"
+output = pathlib.Path(request["output"]["cache_path"])
+output.write_bytes(data)
+print(json.dumps({"response_version":1,"ok":True,"output":{"cache_path":str(output),"byte_len":len(data),"sha256":hashlib.sha256(data).hexdigest(),"profile_sha256":request["profile"]["profile_sha256"]},"diagnostics":[]}))
+"#,
+        )
+        .unwrap();
+        let profile_package =
+            ValidatedCompilerProfilePackageV1::load(&fixture.manifest, &fixture.profile_root)
+                .unwrap();
+        let mut config = StandaloneSidecarConfigV1::new(
+            python.clone(),
+            executable_seal(&python),
+            fixture.manifest.clone(),
+            fixture.profile_root.clone(),
+            fixture.scratch.clone(),
+        )
+        .with_product_target_inputs(&fixture.base, &fixture.binds, &base_path, &binds_path)
+        .with_test_fixed_args([script_path.into_os_string()]);
+        config.timeout = Duration::from_secs(5);
+        let mut runner = StandaloneSidecarRunnerV1::new_product(config, &profile_package).unwrap();
+
+        let output = runner.run_regen(fixture.inputs()).unwrap();
+        assert_eq!(
+            std::fs::read(output.path()).unwrap(),
+            b"fake-product-direct-cache"
+        );
         drop(output);
         fixture.assert_scratch_empty();
     }
@@ -4429,6 +4689,20 @@ print(json.dumps({"response_version":1,"ok":True,"output":{"cache_path":str(outp
         let error = plan_regen_full_graph_v2(&base, &drifted_path).unwrap_err();
         assert_eq!(error.kind(), CompilerBackendFailureKindV1::Preflight);
         assert!(error.detail().contains("does not exactly match"), "{error}");
+    }
+
+    #[test]
+    fn product_target_seals_accept_only_the_resolver_authenticated_bytes() {
+        let oracle = b"qualification-oracle";
+        let target = b"compatible-product-target";
+        let seal = MemorySealV1::from_bytes(target);
+
+        verify_memory_seal_parts("target", target, seal, 1024).unwrap();
+        let error = verify_memory_seal_parts("target", oracle, seal, 1024).unwrap_err();
+        assert_eq!(error.kind(), CompilerBackendFailureKindV1::Unavailable);
+        assert!(error
+            .detail()
+            .contains("does not match its authenticated input identity"));
     }
 
     #[test]

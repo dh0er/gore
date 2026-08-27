@@ -57,10 +57,14 @@ fn declared_flags(help: &str) -> BTreeSet<String> {
         // `  -o, --out <OUT>  Output path` or `      --json  Emit JSON`. Only the first long form
         // on the line is the declaration; anything later is help text.
         for token in trimmed.split_whitespace() {
-            let Some(name) = token.strip_prefix("--") else { continue };
+            let Some(name) = token.strip_prefix("--") else {
+                continue;
+            };
             let name = name.trim_end_matches(',');
             if !name.is_empty()
-                && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
             {
                 flags.insert(name.to_string());
             }
@@ -78,7 +82,10 @@ fn declared_flags(help: &str) -> BTreeSet<String> {
 /// `<SDK_DIR>` is positional. A placeholder is therefore skipped when the token before it was a
 /// flag.
 fn usage_positionals(help: &str) -> Vec<String> {
-    let Some(usage) = help.lines().map(str::trim_start).find(|line| line.starts_with("Usage:"))
+    let Some(usage) = help
+        .lines()
+        .map(str::trim_start)
+        .find(|line| line.starts_with("Usage:"))
     else {
         return Vec::new();
     };
@@ -110,22 +117,38 @@ fn usage_positionals(help: &str) -> Vec<String> {
 
 /// Every long flag the table is responsible for, including the ones it passes implicitly.
 fn table_flags(command: &spec::CommandSpec) -> BTreeSet<String> {
-    let mut flags: BTreeSet<String> =
-        command.args.iter().filter_map(|arg| arg.form.flag()).map(str::to_string).collect();
+    let mut flags: BTreeSet<String> = command
+        .args
+        .iter()
+        .filter_map(|arg| arg.form.flag())
+        .map(str::to_string)
+        .collect();
 
     if command.json == JsonSupport::Stdout {
         flags.insert("json".to_string());
     }
+    let mut previous_was_flag = false;
     for forced in command.forced_argv {
         // Forced arguments are written in long form precisely so this comparison works; a short
         // flag cannot be mapped back to the long name clap reports.
-        assert!(
-            forced.starts_with("--"),
-            "{}: forced argument {forced:?} must use its long form so it can be verified here",
-            command.sub
-        );
-        flags.insert(forced.trim_start_matches("--").to_string());
+        if forced.starts_with("--") {
+            flags.insert(forced.trim_start_matches("--").to_string());
+            previous_was_flag = true;
+        } else {
+            assert!(
+                previous_was_flag,
+                "{}: forced value {forced:?} does not follow a long flag",
+                command.sub
+            );
+            previous_was_flag = false;
+        }
     }
+    flags.extend(
+        command
+            .cli_only_flags
+            .iter()
+            .map(|flag| (*flag).to_string()),
+    );
 
     flags
 }
@@ -179,8 +202,11 @@ fn positional_counts_match_the_cli() {
         for command in group.commands {
             let path = path(group, command.sub);
             let expected = usage_positionals(&help(&path));
-            let actual =
-                command.args.iter().filter(|arg| arg.form.positional_order().is_some()).count();
+            let actual = command
+                .args
+                .iter()
+                .filter(|arg| arg.form.positional_order().is_some())
+                .count();
 
             assert_eq!(
                 actual,
@@ -205,7 +231,9 @@ fn positional_order_matches_the_cli() {
                 .args
                 .iter()
                 .filter_map(|arg| {
-                    arg.form.positional_order().map(|order| (order, arg.name.to_uppercase()))
+                    arg.form
+                        .positional_order()
+                        .map(|order| (order, arg.name.to_uppercase()))
                 })
                 .collect();
             ours.sort_by_key(|(order, _)| *order);
@@ -235,7 +263,11 @@ fn positional_order_matches_the_cli() {
 fn mcp_tools_prints_the_whole_advertised_surface_as_json() {
     // `gore mcp tools` exists so the exposed surface can be reviewed, and a client integration
     // debugged, without speaking JSON-RPC to a running server.
-    let assert = Command::cargo_bin("gore").unwrap().args(["mcp", "tools"]).assert().success();
+    let assert = Command::cargo_bin("gore")
+        .unwrap()
+        .args(["mcp", "tools"])
+        .assert()
+        .success();
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
 
     let tools: Vec<serde_json::Value> =
@@ -246,7 +278,10 @@ fn mcp_tools_prints_the_whole_advertised_surface_as_json() {
         "one tool per group, plus gore_guide and gore_help"
     );
 
-    let names: Vec<&str> = tools.iter().map(|tool| tool["name"].as_str().unwrap()).collect();
+    let names: Vec<&str> = tools
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
     for group in spec::GROUPS {
         assert!(names.contains(&group.tool), "{} is missing", group.tool);
     }
@@ -255,7 +290,9 @@ fn mcp_tools_prints_the_whole_advertised_surface_as_json() {
 
     for tool in &tools {
         assert_eq!(tool["inputSchema"]["type"], "object", "{}", tool["name"]);
-        assert!(tool["description"].as_str().is_some_and(|text| !text.is_empty()));
+        assert!(tool["description"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty()));
     }
 }
 
@@ -341,7 +378,10 @@ fn no_top_level_command_family_is_missing_from_the_table() {
             }
         }
     }
-    assert!(!cli_commands.is_empty(), "could not parse the Commands: section of `gore --help`");
+    assert!(
+        !cli_commands.is_empty(),
+        "could not parse the Commands: section of `gore --help`"
+    );
 
     let mut covered: BTreeSet<String> = BTreeSet::new();
     for group in spec::GROUPS {

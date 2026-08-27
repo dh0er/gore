@@ -7,6 +7,10 @@
 
 namespace standalone = gore::as::standalone;
 
+static_assert(
+    standalone::max_preprocessor_sources == standalone::protocol::kMaxSourceFiles,
+    "frontend and sidecar source bounds must not drift apart");
+
 namespace {
 
 int fail(const char* message) {
@@ -298,6 +302,8 @@ class AHero : AActor
 {
     UPROPERTY(BlueprintReadOnly, VisibleDefaultsOnly, ReplicatedUsing=OnRep_Health, SaveGame, Meta=(ClampMin="0"))
     int32 Health = 10;
+
+    void QuoteProbe() { FString Text = "Say \"hello\""; }
 
     UFUNCTION(BlueprintCallable, BlueprintEvent, Category="Demo")
     int32 Compute(int32 Value, const FString& Label) const { return Value; }

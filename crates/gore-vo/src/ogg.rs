@@ -1073,6 +1073,13 @@ fn validate_vorbis_timing(serial: u32, timeline: &DecodedVorbisTimeline) -> Resu
             .map(i128::from)
             .ok_or_else(|| malformed("Vorbis page packet count exceeds the decoded timeline"))
     };
+    let lapping_slack = timeline
+        .packet_end_frames
+        .windows(2)
+        .map(|pair| pair[1] - pair[0])
+        .max()
+        .map(i128::from)
+        .ok_or_else(|| malformed("Vorbis decoded timeline has no audio packet"))?;
 
     if first.eos {
         let decoded_end = decoded_at(first.audio_packets_after)?;
@@ -1118,22 +1125,35 @@ fn validate_vorbis_timing(serial: u32, timeline: &DecodedVorbisTimeline) -> Resu
             }
         }
         let nominal_end = origin + decoded_at(page.audio_packets_after)?;
-        if page.eos {
-            if i128::from(page.granule) > nominal_end {
-                return Err(malformed(
-                    "Vorbis EOS granule exceeds the decoded PCM frame bound",
-                ));
-            }
-            let final_packet_start = origin + decoded_at(total_packets - 1)?;
-            if i128::from(page.granule) < final_packet_start {
-                return Err(malformed(
-                    "Vorbis EOS granule trims beyond the final decoded packet",
-                ));
-            }
-        } else if i128::from(page.granule) != nominal_end {
-            return Err(malformed(
-                "Vorbis intermediate granule disagrees with decoded packet timing",
-            ));
+        let upper_bound = if page.eos {
+            nominal_end
+        } else {
+            nominal_end + lapping_slack
+        };
+        if i128::from(page.granule) > upper_bound {
+            return Err(malformed(if page.eos {
+                "Vorbis EOS granule exceeds the decoded PCM frame bound"
+            } else {
+                "Vorbis intermediate granule exceeds the decoded PCM frame bound"
+            }));
+        }
+        // A Vorbis page granule is the PCM location after the last packet completed on that page.
+        // Packet decoders expose lapped windows, so summing their returned frame counts is not an
+        // exact page clock: ordinary FFmpeg streams can place it on either side of that naive sum
+        // at block-size transitions. One largest decoded packet bounds that lapping uncertainty;
+        // anything farther away is not backed by this stream's decoded packet timeline.
+        let final_packet_start = origin + decoded_at(page.audio_packets_after - 1)?;
+        let lower_bound = if page.eos {
+            final_packet_start
+        } else {
+            final_packet_start - lapping_slack
+        };
+        if i128::from(page.granule) < lower_bound {
+            return Err(malformed(if page.eos {
+                "Vorbis EOS granule trims beyond the final decoded packet"
+            } else {
+                "Vorbis intermediate granule precedes its final decoded packet"
+            }));
         }
         previous_granule = Some(page.granule);
     }
@@ -1631,6 +1651,23 @@ pub(crate) mod tests {
                 ..
             })
         ));
+
+        let data = vorbis_ogg(48_000);
+        let decoded_ends = decoded_vorbis_packet_ends(&data);
+        let original_eos = decoded_ends.last().copied().unwrap();
+        let mut one_frame_beyond_decode = split_final_vorbis_audio_page(
+            &data,
+            &[2, 4, 6],
+            &[decoded_ends[2], decoded_ends[4], original_eos + 1],
+        );
+        rewrite_page_checksums(&mut one_frame_beyond_decode);
+        assert!(matches!(
+            validate_ogg_with_timing(&one_frame_beyond_decode, &Limits::default()),
+            Err(OggError::AudioStructure {
+                reason: "Vorbis EOS granule exceeds the decoded PCM frame bound",
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -1711,16 +1748,41 @@ pub(crate) mod tests {
                 .try_into()
                 .unwrap(),
         );
+        let lapping_slack = decoded_ends
+            .windows(2)
+            .map(|pair| pair[1] - pair[0])
+            .max()
+            .unwrap();
         bad_intermediate[middle_page + 6..middle_page + 14]
-            .copy_from_slice(&(middle_granule + 1).to_le_bytes());
+            .copy_from_slice(&(middle_granule + lapping_slack + 1).to_le_bytes());
         rewrite_page_checksums(&mut bad_intermediate);
         assert!(matches!(
             validate_ogg_with_timing(&bad_intermediate, &Limits::default()),
             Err(OggError::AudioStructure {
-                reason: "Vorbis intermediate granule disagrees with decoded packet timing",
+                reason: "Vorbis intermediate granule exceeds the decoded PCM frame bound",
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn accepts_vorbis_intermediate_granule_inside_lapped_final_packet() {
+        let data = vorbis_ogg(48_000);
+        let final_page = *page_offsets(&data).last().expect("fixture has pages");
+        let original_eos =
+            u64::from_le_bytes(data[final_page + 6..final_page + 14].try_into().unwrap());
+        let decoded_ends = decoded_vorbis_packet_ends(&data);
+        let lapped_middle = decoded_ends[4] - 1;
+        assert!(lapped_middle >= decoded_ends[3]);
+        let split = split_final_vorbis_audio_page(
+            &data,
+            &[2, 4, 6],
+            &[decoded_ends[2], lapped_middle, original_eos],
+        );
+
+        let validation = validate_ogg_with_timing(&split, &Limits::default()).unwrap();
+        assert_eq!(validation.timing.duration_sample_frames, original_eos);
+        assert!(validation.timing.pcm_decode_complete);
     }
 
     #[test]

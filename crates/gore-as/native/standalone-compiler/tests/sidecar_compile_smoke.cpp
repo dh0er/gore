@@ -71,6 +71,13 @@ std::string source_file(const std::string& path, const std::vector<std::uint8_t>
             standalone::sha256_bytes(bytes.data(), bytes.size())) + "\"}";
 }
 
+bool replace_once(std::string& text, const std::string& from, const std::string& to) {
+    const auto position = text.find(from);
+    if (position == std::string::npos) return false;
+    text.replace(position, from.size(), to);
+    return true;
+}
+
 precompiled::map_string module_key(const std::string& name) {
     precompiled::map_string key;
     key.payload.assign(name.begin(), name.end());
@@ -185,6 +192,11 @@ int main() {
     precompiled::codec_error codec_error;
     if (!precompiled::encode(empty_cache, base, codec_error)) return 5;
     const std::vector<std::uint8_t> binds{'b', 'i', 'n', 'd', 's'};
+    empty_cache.data_guid[0] = 0x5aU;
+    std::vector<std::uint8_t> compatible_base;
+    if (!precompiled::encode(empty_cache, compatible_base, codec_error)) return 72;
+    const std::vector<std::uint8_t> compatible_binds{
+        'b', 0U, 'i', 0U, 'n', 0U, 'd', 0U, 's', 0U};
     const std::string dependency_source =
         "struct FAnswerInput { int Value; }\n";
     const std::string source =
@@ -224,6 +236,8 @@ int main() {
         "],\"canonical_sha256\":\"" + std::string(64U, '1') + "\"}";
     const std::filesystem::path base_path = root / "base.cache";
     const std::filesystem::path binds_path = root / "binds.cache";
+    const std::filesystem::path compatible_base_path = root / "compatible-base.cache";
+    const std::filesystem::path compatible_binds_path = root / "compatible-binds.cache";
     const std::filesystem::path source_path = source_root / "Module.as";
     const std::filesystem::path dependency_path = source_root / "Dependency.as";
     const std::filesystem::path editor_path = source_root / "Editor" / "Ignored.as";
@@ -232,6 +246,8 @@ int main() {
     const std::filesystem::path add_c_path = source_root / "C.as";
     const std::filesystem::path full_graph_output_path = output_root / "full-graph.cache";
     if (!write_bytes(base_path, base) || !write_bytes(binds_path, binds) ||
+        !write_bytes(compatible_base_path, compatible_base) ||
+        !write_bytes(compatible_binds_path, compatible_binds) ||
         !write_bytes(dependency_path, dependency_bytes) ||
         !write_bytes(editor_path, editor_bytes) ||
         !write_bytes(source_path, source_bytes) ||
@@ -367,6 +383,28 @@ int main() {
         return 11;
     }
 
+    // Product execution trusts the parent resolver's semantic compatibility decision and still
+    // seals the exact staged bytes. A different cache GUID and a different Binds representation
+    // must therefore reach the compiler instead of being re-bound to the qualification oracle.
+    const std::filesystem::path compatible_output_path = output_root / "compatible.cache";
+    std::string compatible_request = request;
+    if (!replace_once(compatible_request, path_seal(base_path, base),
+            path_seal(compatible_base_path, compatible_base)) ||
+        !replace_once(compatible_request, path_seal(binds_path, binds),
+            path_seal(compatible_binds_path, compatible_binds)) ||
+        !replace_once(compatible_request, json_path(output_path),
+            json_path(compatible_output_path))) return 73;
+    const std::filesystem::path compatible_request_path = root / "compatible-request.json";
+    if (!write_text(compatible_request_path, compatible_request)) return 74;
+    const auto compatible_result =
+        standalone::compile_sidecar_request(compatible_request_path.native());
+    if (compatible_result.exit_code != standalone::protocol::ExitCode::success ||
+        compatible_result.response_json.find("\"ok\":true") == std::string::npos) {
+        std::cerr << compatible_result.response_json;
+        std::filesystem::remove_all(root, filesystem_error);
+        return 75;
+    }
+
 
     const std::string request_prefix_v2 =
         "{\"request_version\":2,\"operation\":\"compile\",\"profile\":{"
@@ -472,6 +510,23 @@ int main() {
         body += "}}";
         return body;
     };
+    std::string incompatible_qualification = qualification_request(
+        output_root / "qualification-compatible-target.cache", "", false);
+    if (!replace_once(incompatible_qualification, path_seal(base_path, base),
+            path_seal(compatible_base_path, compatible_base)) ||
+        !replace_once(incompatible_qualification, path_seal(binds_path, binds),
+            path_seal(compatible_binds_path, compatible_binds))) return 76;
+    const auto incompatible_qualification_path = root / "qualification-compatible-target.json";
+    if (!write_text(incompatible_qualification_path, incompatible_qualification)) return 77;
+    const auto incompatible_qualification_result = standalone::compile_sidecar_request(
+        incompatible_qualification_path.native(), true);
+    if (incompatible_qualification_result.exit_code ==
+            standalone::protocol::ExitCode::success ||
+        incompatible_qualification_result.response_json.find("GORE_AS_ORACLE_INPUT_MISMATCH") ==
+            std::string::npos) {
+        std::filesystem::remove_all(root, filesystem_error);
+        return 78;
+    }
     const auto qualification_path = root / "qualification-v3.json";
     if (!write_text(qualification_path,
             qualification_request(

@@ -27,7 +27,7 @@ use crate::cache::semantic_observer::{
     WholeCacheSemanticObservationV1,
 };
 
-pub const FULL_QUALIFICATION_SUITE_ID_V1: &str = "gore.as.full-differential-qualification/v1";
+pub const FULL_QUALIFICATION_SUITE_ID_V1: &str = "gore.as.full-differential-qualification/v2";
 pub const OFFLINE_PROBE_ARTIFACT_SCHEMA_V1: &str = "gore.as.offline-probe-artifacts";
 pub const OFFLINE_PROBE_ARTIFACT_SCHEMA_VERSION_V1: u32 = 1;
 
@@ -126,6 +126,11 @@ pub const FULL_QUALIFICATION_COVERAGE_V1: &[QualificationCoverageRequirementV1] 
     requirement(
         "preprocessor-flags-automatic-import-closure",
         "positive.preprocessor.import-closure",
+        true,
+    ),
+    requirement(
+        "game-dialog-diego-authoring",
+        "positive.game.dialog-diego-authoring",
         true,
     ),
     requirement(
@@ -517,6 +522,24 @@ pub fn full_qualification_corpus_v1() -> Result<CompilerProbeCorpusV1, Qualifica
             ],
         ),
         case(
+            "positive.game.dialog-diego-authoring",
+            "requires_captured_profile/game-dialog-diego-authoring;coverage=game-dialog-diego-authoring",
+            ProbeOutcomeV1::Accepted,
+            ProbeModeV1::CompileOnly,
+            &[
+                section(
+                    "Story.Dialogs.Diego.GoreDiegoQualificationBase",
+                    "Story/Dialogs/Diego/GoreDiegoQualificationBase.as",
+                    "class UGoreDiegoTopicBase : UObject { FText Caption; int32 PriorityRank; void EndConversation() {} }",
+                ),
+                section(
+                    "Story.Dialogs.Diego.GoreDiegoDialogSmoke",
+                    "Story/Dialogs/Diego/GoreDiegoDialogSmoke.as",
+                    include_str!("../../tests/fixtures/diego_dialog_smoke.as"),
+                ),
+            ],
+        ),
+        case(
             "positive.fname.non-ascii-equivalence",
             "requires_captured_profile/fname-unicode;coverage=non-ascii-fname-equivalence",
             ProbeOutcomeV1::Accepted,
@@ -658,11 +681,14 @@ pub(crate) fn validate_canonical_full_qualification_corpus_v1(
 }
 
 fn section(module: &str, relative_path: &str, source_utf8: &str) -> ProbeSourceSectionV1 {
+    // Git may materialize a checked-in fixture with CRLF on Windows. The qualification corpus is
+    // a protocol artifact, so its source bytes must not depend on checkout settings or host OS.
+    let source_utf8 = source_utf8.replace("\r\n", "\n").replace('\r', "\n");
     ProbeSourceSectionV1 {
         ordinal: 0,
         module: module.into(),
         relative_path: relative_path.into(),
-        source_utf8: source_utf8.into(),
+        source_utf8: source_utf8.clone(),
         source_sha256: Sha256Digest::from_bytes(Sha256::digest(source_utf8.as_bytes()).into()),
     }
 }

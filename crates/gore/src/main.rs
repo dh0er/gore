@@ -189,7 +189,7 @@ enum Commands {
         #[command(subcommand)]
         action: cmd::voice::VoiceAction,
     },
-    /// Build/deploy a unified bundle (overrides + loc + audio + voice ZIPs + textures + scripts)
+    /// Build, inspect, deploy, and undeploy a unified mod bundle
     Mod {
         #[command(subcommand)]
         action: ModAction,
@@ -263,7 +263,8 @@ enum McpAction {
         /// Also settable as GORE_MCP_ALLOW_WRITE=1, which is the only route a plugin has
         #[arg(long)]
         allow_write: bool,
-        /// Pre-approve commands that launch the game executable (`as compile`, `as compile-module`).
+        /// Pre-approve compiler backends that may launch the game (`game` and
+        /// `standalone-then-game`). Explicit strict `standalone` is offline and never needs this.
         /// Also settable as GORE_MCP_ALLOW_GAME_LAUNCH=1
         #[arg(long)]
         allow_game_launch: bool,
@@ -296,6 +297,14 @@ enum ModAction {
         /// Path to model.json for validation (optional; skips validation if absent)
         #[arg(long)]
         model: Option<PathBuf>,
+    },
+    /// Validate and summarize a built GORE bundle without importing or deploying it
+    Inspect {
+        /// Bundle directory or ZIP containing one GORE bundle
+        bundle: PathBuf,
+        /// Emit one bounded JSON report instead of human-readable text
+        #[arg(long)]
+        json: bool,
     },
     /// Deploy a built bundle to the game install
     Deploy {
@@ -571,6 +580,7 @@ fn run_cli() {
         Commands::Voice { action } => cmd::voice::run(action),
         Commands::Mod { action } => match action {
             ModAction::Build { spec, out, model } => cmd::modcmd::build(spec, out, model),
+            ModAction::Inspect { bundle, json } => cmd::modcmd::inspect(bundle, json),
             ModAction::Deploy { bundle, game } => cmd::modcmd::deploy(bundle, game),
             ModAction::Undeploy { game } => cmd::modcmd::undeploy(game),
         },

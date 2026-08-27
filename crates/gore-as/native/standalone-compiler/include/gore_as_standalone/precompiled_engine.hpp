@@ -75,6 +75,7 @@ engine_bridge_result compile_mixed_cache_checkpoint(
     const lexical_preprocess_result& source,
     registry_runtime* registry,
     frontend_compile_runtime& frontend_runtime,
+    bool initialize_source_globals,
     std::vector<asIScriptModule*>& modules);
 
 // Apply the Shipping StaticJIT analysis that runs immediately before the game serializes

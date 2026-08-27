@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use crate::argv::Invocation;
-use crate::spec::{Class, CommandSpec};
+use crate::spec::CommandSpec;
 
 /// How often we check whether the child has finished.
 ///
@@ -31,7 +31,8 @@ const PIPE_CHUNK_BYTES: usize = 16 * 1024;
 /// How long to keep waiting for the output readers once the child itself is gone.
 ///
 /// Killing a process does not kill its children, and a grandchild inherits the pipe handles. So a
-/// killed `gore as compile` can leave the game holding our stdout pipe open, and a reader thread
+/// killed game-capable `gore as compile` can leave the game holding our stdout pipe open, and a
+/// reader thread
 /// blocked on it would never return. Waiting for the readers unconditionally would turn that into a
 /// hung MCP session — the exact failure the timeout exists to prevent. Instead we give them a short
 /// grace period and then take whatever they have captured so far.
@@ -64,19 +65,33 @@ impl Outcome {
     pub fn success(stdout: impl Into<String>) -> Self {
         let stdout = stdout.into();
         let stdout_total = stdout.len();
-        Self { status: Some(0), stdout, stdout_total, ..Self::default() }
+        Self {
+            status: Some(0),
+            stdout,
+            stdout_total,
+            ..Self::default()
+        }
     }
 
     /// A failed run that printed `stderr`. For tests.
     pub fn failure(code: i32, stderr: impl Into<String>) -> Self {
         let stderr = stderr.into();
         let stderr_total = stderr.len();
-        Self { status: Some(code), stderr, stderr_total, ..Self::default() }
+        Self {
+            status: Some(code),
+            stderr,
+            stderr_total,
+            ..Self::default()
+        }
     }
 
     /// A run that hit its deadline and was killed. For tests.
     pub fn timed_out() -> Self {
-        Self { status: None, timed_out: true, ..Self::default() }
+        Self {
+            status: None,
+            timed_out: true,
+            ..Self::default()
+        }
     }
 }
 
@@ -116,7 +131,13 @@ pub struct ProcessSpawn {
 
 impl ProcessSpawn {
     pub fn new(exe: PathBuf, max_stdout_bytes: usize) -> Self {
-        Self { exe, limits: Limits { max_stdout_bytes, max_stderr_bytes: MAX_STDERR_BYTES } }
+        Self {
+            exe,
+            limits: Limits {
+                max_stdout_bytes,
+                max_stderr_bytes: MAX_STDERR_BYTES,
+            },
+        }
     }
 }
 
@@ -201,9 +222,16 @@ struct Capture {
 
 impl Capture {
     fn harvest(&self) -> (String, bool, usize) {
-        let kept = self.kept.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let kept = self
+            .kept
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let total = self.total.load(Ordering::Relaxed);
-        (String::from_utf8_lossy(&kept).into_owned(), total > kept.len(), total)
+        (
+            String::from_utf8_lossy(&kept).into_owned(),
+            total > kept.len(),
+            total,
+        )
     }
 }
 
@@ -238,7 +266,10 @@ fn drain_into(mut reader: impl Read, cap: usize, capture: &Capture) {
 fn await_readers(captures: &[&Arc<Capture>]) {
     let deadline = Instant::now() + READER_GRACE;
     while Instant::now() < deadline {
-        if captures.iter().all(|capture| capture.finished.load(Ordering::Acquire)) {
+        if captures
+            .iter()
+            .all(|capture| capture.finished.load(Ordering::Acquire))
+        {
             return;
         }
         thread::sleep(POLL_INTERVAL);
@@ -262,7 +293,10 @@ pub struct FakeSpawn {
 
 impl FakeSpawn {
     pub fn new(outcome: Outcome) -> Self {
-        Self { outcome, calls: Mutex::new(Vec::new()) }
+        Self {
+            outcome,
+            calls: Mutex::new(Vec::new()),
+        }
     }
 
     pub fn calls(&self) -> Vec<Invocation> {
@@ -276,7 +310,10 @@ impl Spawn for FakeSpawn {
     }
 
     fn run(&self, invocation: &Invocation) -> io::Result<Outcome> {
-        self.calls.lock().expect("fake spawn lock").push(invocation.clone());
+        self.calls
+            .lock()
+            .expect("fake spawn lock")
+            .push(invocation.clone());
         Ok(self.outcome.clone())
     }
 }
@@ -286,11 +323,7 @@ impl Spawn for FakeSpawn {
 /// A failed command is reported as a *successful* response carrying `isError: true`. That is the
 /// specification's design: the model has to be able to read the failure and adapt, which a
 /// JSON-RPC error does not reliably allow.
-pub fn to_call_result(
-    invocation: &Invocation,
-    command: &CommandSpec,
-    outcome: &Outcome,
-) -> Value {
+pub fn to_call_result(invocation: &Invocation, command: &CommandSpec, outcome: &Outcome) -> Value {
     let mut content = vec![text_block(&invocation.display)];
 
     if !outcome.succeeded() {
@@ -299,10 +332,17 @@ pub fn to_call_result(
             outcome,
             invocation.timeout,
             &invocation.path,
+            invocation.may_launch_game,
         )));
     }
 
-    content.push(text_block(&stream_block("stdout", &outcome.stdout, outcome.stdout_truncated, outcome.stdout_total, true)));
+    content.push(text_block(&stream_block(
+        "stdout",
+        &outcome.stdout,
+        outcome.stdout_truncated,
+        outcome.stdout_total,
+        true,
+    )));
 
     if !outcome.stderr.trim().is_empty() {
         content.push(text_block(&stream_block(
@@ -348,6 +388,7 @@ fn failure_summary(
     outcome: &Outcome,
     timeout: Duration,
     path: &str,
+    may_launch_game: bool,
 ) -> String {
     let mut summary = if outcome.timed_out {
         let mut text = format!(
@@ -357,7 +398,7 @@ fn failure_summary(
         );
         // Killing the CLI does not kill anything it started. Saying so matters here: the user may
         // have a game window open that nobody is going to close for them.
-        if command.safety.base == Class::GameLaunch {
+        if may_launch_game {
             text.push_str(
                 " This command starts the game, and that process is not stopped by the timeout — \
                  check for a running game before trying again.",
@@ -388,10 +429,18 @@ fn stream_block(
     show_when_empty: bool,
 ) -> String {
     if body.trim().is_empty() {
-        return if show_when_empty { format!("({name} was empty)") } else { String::new() };
+        return if show_when_empty {
+            format!("({name} was empty)")
+        } else {
+            String::new()
+        };
     }
 
-    let mut block = if name == "stdout" { body.to_string() } else { format!("{name}:\n{body}") };
+    let mut block = if name == "stdout" {
+        body.to_string()
+    } else {
+        format!("{name}:\n{body}")
+    };
     if truncated {
         block.push_str(&format!(
             "\n\n… [truncated: {name} produced {total} bytes and only the first part is shown. \
@@ -441,11 +490,17 @@ mod tests {
     #[test]
     fn a_non_zero_exit_is_a_tool_error_that_surfaces_stderr() {
         let (inv, command) = invocation("gore_config", "get", json!({ "key": "game-path" }));
-        let result =
-            to_call_result(&inv, command, &Outcome::failure(1, "error: game-path is not set\n"));
+        let result = to_call_result(
+            &inv,
+            command,
+            &Outcome::failure(1, "error: game-path is not set\n"),
+        );
 
         assert_eq!(result["isError"], json!(true));
-        assert!(result["content"][1]["text"].as_str().unwrap().contains("exit code 1"));
+        assert!(result["content"][1]["text"]
+            .as_str()
+            .unwrap()
+            .contains("exit code 1"));
         let stderr = result["content"][3]["text"].as_str().unwrap();
         assert!(stderr.contains("game-path is not set"), "{stderr}");
     }
@@ -470,6 +525,44 @@ mod tests {
         // The text is the only channel, so "it was killed" has to be readable in it rather than
         // inferable from a null exit code in a member no model may ever see.
         assert!(summary.contains("did not finish within 60s"), "{summary}");
+    }
+
+    #[test]
+    fn timeout_warning_uses_the_exact_compiler_backend_not_the_commands_worst_case() {
+        let args = |backend: Option<&str>| {
+            let mut value = json!({
+                "src": "scripts",
+                "out": "fresh-timeout.Cache",
+                "work_dir": "fresh-timeout-work",
+            });
+            if let Some(backend) = backend {
+                value
+                    .as_object_mut()
+                    .expect("object")
+                    .insert("backend".into(), json!(backend));
+            }
+            value
+        };
+
+        let (standalone, command) = invocation("gore_as", "compile", args(Some("standalone")));
+        let standalone_result = to_call_result(&standalone, command, &Outcome::timed_out());
+        let standalone_summary = standalone_result["content"][1]["text"]
+            .as_str()
+            .expect("summary");
+        assert!(
+            !standalone_summary.contains("starts the game"),
+            "{standalone_summary}"
+        );
+
+        let (fallback, command) = invocation("gore_as", "compile", args(None));
+        let fallback_result = to_call_result(&fallback, command, &Outcome::timed_out());
+        let fallback_summary = fallback_result["content"][1]["text"]
+            .as_str()
+            .expect("summary");
+        assert!(
+            fallback_summary.contains("starts the game"),
+            "{fallback_summary}"
+        );
     }
 
     #[test]
@@ -543,6 +636,7 @@ mod tests {
                 path: "shell".into(),
                 timeout,
                 display: format!("cmd /C {command}"),
+                may_launch_game: false,
                 consent: None,
             };
             (spawn, invocation)
@@ -592,10 +686,14 @@ mod tests {
             // it would block on a full pipe and this test would hang rather than fail.
             let spawn = ProcessSpawn::new(PathBuf::from("cmd"), 256);
             let invocation = Invocation {
-                argv: vec!["/C".into(), "for /L %i in (1,1,2000) do @echo aaaaaaaaaaaaaaaaaaaa".into()],
+                argv: vec![
+                    "/C".into(),
+                    "for /L %i in (1,1,2000) do @echo aaaaaaaaaaaaaaaaaaaa".into(),
+                ],
                 path: "shell".into(),
                 timeout: Duration::from_secs(60),
                 display: "cmd /C …".into(),
+                may_launch_game: false,
                 consent: None,
             };
             let outcome = spawn.run(&invocation).expect("spawn");
@@ -603,7 +701,11 @@ mod tests {
             assert!(outcome.succeeded(), "{outcome:?}");
             assert!(outcome.stdout_truncated);
             assert!(outcome.stdout.len() <= 256);
-            assert!(outcome.stdout_total > 10_000, "total was {}", outcome.stdout_total);
+            assert!(
+                outcome.stdout_total > 10_000,
+                "total was {}",
+                outcome.stdout_total
+            );
         }
 
         #[test]
@@ -612,7 +714,10 @@ mod tests {
             // what stops `loc extract`'s confirmation prompt from deadlocking the session.
             let (spawn, invocation) = shell("set /p answer=", Duration::from_secs(10));
             let outcome = spawn.run(&invocation).expect("spawn");
-            assert!(!outcome.timed_out, "the child blocked on stdin instead of seeing EOF");
+            assert!(
+                !outcome.timed_out,
+                "the child blocked on stdin instead of seeing EOF"
+            );
         }
 
         #[test]
@@ -623,6 +728,7 @@ mod tests {
                 path: "shell".into(),
                 timeout: Duration::from_secs(5),
                 display: "…".into(),
+                may_launch_game: false,
                 consent: None,
             };
             assert!(spawn.run(&invocation).is_err());

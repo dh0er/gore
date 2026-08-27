@@ -21,7 +21,7 @@ Write a `spec.json`:
   "files":   [ { "game_path": "G1R/Content/Splash/Splash.bmp", "source_path": "Splash.bmp" } ],
   "pak_files": [ { "game_path": "G1R/Content/Slate/Cursors/Normal/Normal.PNG", "source_path": "Normal.PNG" } ],
   "scripts": [ { "op": "add", "module_name": "MyModule", "mini_cache": "MyModule.cache" } ],
-  "dialog_topics": [ { "id": "viper-test", "participant_name": "om_stt_viper_302", "topic_class": "/Script/Angelscript.ChoiceMyViper", "sentinel_class": "/Script/Angelscript.ChoiceStt302ViperExit" } ]
+  "dialog_topics": [ { "id": "diego-test", "participant_name": "oc_stt_diego", "topic_class": "/Script/Angelscript.ChoiceMyModDiego", "sentinel_class": "/Script/Angelscript.ChoiceDiegoExitGamestart" } ]
 }
 ```
 
@@ -94,10 +94,38 @@ declared format, or rebuild from the source spec; do not hand-edit the format
 number. The version inside `voice/manifest.json` is an independent
 voice-payload contract.
 
+## Validate a built bundle before installing it
+
+`inspect` is the canonical read-only check for a built GORE bundle. It accepts
+the bundle directory or a ZIP containing one supported bundle root, performs
+the same bounded materialization and component parsing as Manager import, then
+opens every declared payload. WAV, image, AngelScript mini-cache, and Ogg
+payloads use their existing offline structural validators. Nothing is imported,
+no game path is resolved, and the selected source is not changed.
+
+```powershell
+gore mod inspect build\MyMod
+gore mod inspect MyMod.zip --json
+```
+
+The bounded report includes root mod metadata, manifest format, component type,
+path, target count and footprint coverage, file/byte totals, the exact
+`gore-mod.json` SHA-256, and a SHA-256 over the complete normalized bundle tree.
+It deliberately does not print unbounded target lists. A directory and a ZIP
+containing the same bundle tree produce the same tree hash.
+
+This proves the selected package is internally readable and structurally valid
+under the current offline GORE contracts. It does **not** prove that its named
+assets, samples, localization ids, or script edit targets exist in a particular
+installation; that other enabled mods do not conflict; or that the game will
+display, play, or execute the intended effect. Those limits are also carried in
+the JSON report's `evidence.not_verified` field.
+
 ## Build, deploy, undeploy
 
 ```powershell
 gore mod build    --spec spec.json -o build      # → build\MyMod\ (manifest + payloads)
+gore mod inspect  build\MyMod                     # validate offline; no install or consent
 gore mod deploy   --bundle build\MyMod --game "$GAME"
 gore mod undeploy --game "$GAME"                 # restore everything
 ```

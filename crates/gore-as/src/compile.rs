@@ -1,9 +1,10 @@
 //! Compile a staged `.as` into a 1-module mini-cache by driving the game's precompiled-data
 //! generation, then extracting (add) / extract-remapping (edit) the target module.
 
+use std::borrow::Cow;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use sha2::{Digest as _, Sha256};
 
@@ -69,10 +70,11 @@ pub struct CompileOpts {
 /// implicit live-install reads.
 #[derive(Debug, Clone, Copy)]
 pub struct StandaloneCompilerInputsV1<'a> {
+    /// Private tree containing every authored overlay. Game-capable adapters may also include
+    /// decompiled compatibility sources; a standalone compiler must use `overlays` as the exact
+    /// authoritative source inventory and must never recompile unrelated base reconstructions.
     pub source_tree: &'a Path,
-    /// Exact authored modules which differ from the sealed base cache. The source tree also
-    /// contains decompiled compatibility sources for the game backend; a standalone compiler
-    /// must not mistake those lossy reconstructions for authoritative base-module input.
+    /// Exact authored modules which differ from the sealed base cache.
     pub overlays: &'a [StandaloneCompilerOverlayV1<'a>],
     pub base_cache: Option<&'a [u8]>,
     pub binds_cache: Option<&'a [u8]>,
@@ -101,6 +103,9 @@ pub struct StandaloneFullGraphChangeV1<'a> {
 /// Complete retained-graph request at the injected standalone boundary.
 #[derive(Debug, Clone, Copy)]
 pub struct StandaloneFullGraphCompilerInputsV1<'a> {
+    /// Private tree containing the Add/Edit source bytes. Game-capable adapters may additionally
+    /// include decompiled compatibility sources; a standalone compiler must use `changes` as the
+    /// exact authoritative source inventory. Delete changes deliberately have no source file.
     pub source_tree: &'a Path,
     pub changes: &'a [StandaloneFullGraphChangeV1<'a>],
     pub final_manifest: &'a [FullGraphFinalModuleV1],
@@ -447,6 +452,17 @@ pub fn module_name_from_relative_path_v1(
         )));
     }
     Ok((module_name, relative_path.to_owned()))
+}
+
+fn effective_compile_module_name_v1<'a>(
+    opts: &'a CompileOpts,
+) -> Result<Cow<'a, str>, CompileError> {
+    if opts.op == "add" {
+        module_name_from_relative_path_v1(&opts.rel_path)
+            .map(|(module_name, _)| Cow::Owned(module_name))
+    } else {
+        Ok(Cow::Borrowed(&opts.module_name))
+    }
 }
 
 #[derive(Debug)]
@@ -1552,9 +1568,9 @@ pub fn compile_module_with_backend_v1_with_guard(
 /// Guard-aware backend selection with one exact, qualified game-target capability.
 ///
 /// The target pins remain live across the standalone attempt. If explicit fallback selects the
-/// game, duplicate handles move into the compile transaction while the originals remain in the
-/// returned report for response/evidence construction. This prevents a fallback artifact or its
-/// qualified identity evidence from crossing an EXE/Shipping/Binds replacement window.
+/// game, ownership moves into the compile transaction. Shipping is released only for the exact
+/// confirmed-process restore, then reopened and verified before the returned report can build
+/// qualified identity evidence.
 pub fn compile_module_with_backend_v1_with_guard_and_target(
     opts: &CompileOpts,
     diagnostics: &crate::diagnostics::DiagnosticsOptions,
@@ -1583,7 +1599,6 @@ fn compile_module_with_backend_v1_with_guard_and_optional_target(
 ) -> CompileModuleReport {
     let guard = std::cell::RefCell::new(Some(guard));
     let target = std::cell::RefCell::new(target);
-    let retained_target_pins = std::cell::RefCell::new(None);
     let mut report = compile_module_report_with_backend_runner_v1(
         opts,
         mode,
@@ -1595,19 +1610,12 @@ fn compile_module_with_backend_v1_with_guard_and_optional_target(
                 .ok_or_else(|| "pre-held compiler guard was consumed more than once".to_owned())?;
             match target.borrow_mut().take() {
                 Some(target) => {
-                    let retained = ProjectGameInputPins::from_compiler_target(target);
-                    *retained_target_pins.borrow_mut() = Some(retained);
-                    let execution = retained_target_pins
-                        .borrow()
-                        .as_ref()
-                        .expect("qualified target pins were retained above")
-                        .try_clone_for_execution()?;
                     game_run_regen_with_extended_diagnostics_report_with_guard_and_pins(
                         game_dir,
                         source_tree,
                         diagnostics,
                         guard,
-                        execution,
+                        ProjectGameInputPins::from_compiler_target(target),
                     )
                 }
                 None => game_run_regen_with_extended_diagnostics_report_with_guard(
@@ -1649,11 +1657,11 @@ fn compile_module_with_backend_v1_with_guard_and_optional_target(
             report.install_restore = InstallRestoreDisposition::RecoveryRequiredRestoreFailed;
         }
     }
-    report.target_pins = retained_target_pins.into_inner().or_else(|| {
-        target
+    if report.target_pins.is_none() {
+        report.target_pins = target
             .into_inner()
-            .map(ProjectGameInputPins::from_compiler_target)
-    });
+            .map(ProjectGameInputPins::from_compiler_target);
+    }
     report
 }
 
@@ -1778,6 +1786,23 @@ fn compile_module_report_with_backend_runner_v1<G>(
 where
     G: FnOnce(&Path, &Path) -> Result<GameRunRegenExtendedReport, String>,
 {
+    let effective_module_name = match effective_compile_module_name_v1(opts) {
+        Ok(module_name) => module_name,
+        Err(error) => {
+            return CompileModuleReport {
+                outcome: CompileModuleReportOutcome::Failed(error),
+                diagnostics: None,
+                backend_diagnostics: Vec::new(),
+                install_restore: InstallRestoreDisposition::NotStarted,
+                backend: None,
+                fallback_reason: None,
+                standalone_attempted: false,
+                game_attempted: false,
+                output_recovery_required: false,
+                target_pins: None,
+            };
+        }
+    };
     let standalone_runner_called = std::cell::Cell::new(false);
     let standalone_runner_failure = std::cell::RefCell::new(None);
     let standalone_compile_error = std::cell::RefCell::new(None);
@@ -1789,7 +1814,7 @@ where
     let mut standalone_attempt = standalone.as_deref_mut().map(|runner| {
         || {
             let retained_output = std::cell::RefCell::new(None);
-            let result = compile_module(opts, |_, source_tree| {
+            let result = compile_module_with_source_tree(opts, false, |_, source_tree| {
                 standalone_runner_called.set(true);
                 let operation = match opts.op.as_str() {
                     "add" => StandaloneCompilerOverlayOperationV1::Add,
@@ -1803,7 +1828,7 @@ where
                 };
                 let overlays = [StandaloneCompilerOverlayV1 {
                     operation,
-                    module_name: &opts.module_name,
+                    module_name: &effective_module_name,
                     relative_path: &opts.rel_path,
                 }];
                 runner
@@ -1889,8 +1914,9 @@ where
                 result,
                 diagnostics,
                 install_restore,
+                target_pins,
             } = generated;
-            *game_metadata.borrow_mut() = Some((diagnostics, install_restore));
+            *game_metadata.borrow_mut() = Some((diagnostics, install_restore, target_pins));
             result
         });
         match result {
@@ -1943,12 +1969,12 @@ where
             CompileModuleReportOutcome::Failed(error)
         }
     };
-    let (diagnostics, install_restore) = if backend == CompilerBackendNameV1::Game {
+    let (diagnostics, install_restore, target_pins) = if backend == CompilerBackendNameV1::Game {
         game_metadata
             .into_inner()
-            .unwrap_or((None, InstallRestoreDisposition::NotStarted))
+            .unwrap_or((None, InstallRestoreDisposition::NotStarted, None))
     } else {
-        (None, InstallRestoreDisposition::NotStarted)
+        (None, InstallRestoreDisposition::NotStarted, None)
     };
     CompileModuleReport {
         outcome,
@@ -1962,7 +1988,7 @@ where
         game_attempted: game_runner_called.get(),
         output_recovery_required: terminal_kind
             == Some(CompilerBackendFailureKindV1::RecoveryRequired),
-        target_pins: None,
+        target_pins,
     }
 }
 
@@ -1973,6 +1999,7 @@ struct ProjectCompilerRunnerReport {
     install_restore: InstallRestoreDisposition,
     output_disposition: ProjectCompilerOutputDisposition,
     closing_audit: ProjectCompilerClosingAuditDisposition,
+    target_pins: Option<ProjectGameInputPins>,
 }
 
 /// Qualification-only retained result from the real embedded compiler. This is crate-private so
@@ -2182,7 +2209,7 @@ where
     let guard = std::cell::RefCell::new(guard);
     let closing_audit = std::cell::RefCell::new(Some(closing_audit));
     let target = std::cell::RefCell::new(target);
-    let retained_target_pins = std::cell::RefCell::new(None);
+    let returned_target_pins = std::cell::RefCell::new(None);
     let diagnostics_report = std::cell::RefCell::new(None);
     let install_restore = std::cell::Cell::new(InstallRestoreDisposition::NotStarted);
     let closing_disposition = std::cell::Cell::new(ProjectCompilerClosingAuditDisposition::NotRun);
@@ -2225,7 +2252,8 @@ where
                 ));
             }
         }
-        let prepared = prepare_full_graph_request_v1(opts)?;
+        let prepared =
+            prepare_full_graph_request_v1(opts, mode != CompilerBackendModeV1::Standalone)?;
         let tree_seal = ProjectSourceTreeSeal::capture(&prepared.source_tree).map_err(|error| {
             CompileError::Other(format!(
                 "sealing the prepared full-graph source tree: {error}"
@@ -2347,22 +2375,7 @@ where
                 )
             })?;
             let input_pins = match target.borrow_mut().take() {
-                Some(target) => {
-                    let retained = ProjectGameInputPins::from_compiler_target(target);
-                    *retained_target_pins.borrow_mut() = Some(retained);
-                    let execution = retained_target_pins
-                        .borrow()
-                        .as_ref()
-                        .expect("qualified target pins were retained above")
-                        .try_clone_for_execution()
-                        .map_err(|error| {
-                            CompilerBackendFailureV1::new(
-                                CompilerBackendFailureKindV1::Preflight,
-                                error,
-                            )
-                        })?;
-                    execution
-                }
+                Some(target) => ProjectGameInputPins::from_compiler_target(target),
                 None => pin_game_input_seals(&opts.game_dir, &opts.base_cache, &opts.binds_cache)
                     .map_err(|error| {
                     CompilerBackendFailureV1::new(CompilerBackendFailureKindV1::Preflight, error)
@@ -2400,6 +2413,7 @@ where
                     diagnostic.severity == crate::diagnostics::DiagnosticSeverity::Error
                 })
             });
+            *returned_target_pins.borrow_mut() = report.target_pins;
             *diagnostics_report.borrow_mut() = report.diagnostics;
             install_restore.set(report.install_restore);
             closing_disposition.set(report.closing_audit);
@@ -2551,7 +2565,7 @@ where
         } else {
             Vec::new()
         };
-    let target_pins = retained_target_pins.into_inner().or_else(|| {
+    let target_pins = returned_target_pins.into_inner().or_else(|| {
         target
             .into_inner()
             .map(ProjectGameInputPins::from_compiler_target)
@@ -3098,28 +3112,6 @@ impl ProjectGameInputPins {
         }
     }
 
-    fn try_clone_for_execution(&self) -> Result<Self, String> {
-        let clone = |file: &std::fs::File, label: &str| {
-            file.try_clone()
-                .map_err(|error| format!("duplicating qualified target {label} pin: {error}"))
-        };
-        Ok(Self {
-            _executable: self
-                ._executable
-                .as_ref()
-                .map(|file| clone(file, "executable"))
-                .transpose()?,
-            shipping: clone(&self.shipping, "Shipping cache")?,
-            _binds: clone(&self._binds, "Binds cache")?,
-            _directory_pins: self
-                ._directory_pins
-                .iter()
-                .map(|file| clone(file, "directory"))
-                .collect::<Result<Vec<_>, _>>()?,
-            target_paths: self.target_paths.clone(),
-        })
-    }
-
     /// Windows parent-directory pins intentionally deny delete sharing so an attacker cannot swap
     /// an already validated target path. The same share mode also blocks our own rename of the
     /// sibling `AS_JITTED_CODE` directory. Keep all three exact target files open, release only the
@@ -3150,6 +3142,58 @@ impl ProjectGameInputPins {
             format!("qualified target path identity changed during generation isolation: {error}")
         })?;
         Ok(())
+    }
+
+    /// Drop the Shipping and directory handles that would block our own exact restore. Keep the
+    /// qualified executable and Binds objects live, then reopen and byte-check Shipping after the
+    /// restore. The complete directory chain is re-pinned only after transaction-owned locks and
+    /// recovery paths have been retired.
+    fn into_target_restore_repin(self) -> Option<ProjectTargetRestoreRepin> {
+        let Self {
+            _executable,
+            shipping,
+            _binds,
+            _directory_pins,
+            target_paths,
+        } = self;
+        drop(shipping);
+        drop(_directory_pins);
+        target_paths.map(|paths| ProjectTargetRestoreRepin {
+            executable: _executable
+                .expect("qualified target pins always retain the executable handle"),
+            binds: _binds,
+            paths,
+        })
+    }
+}
+
+struct ProjectTargetRestoreRepin {
+    executable: std::fs::File,
+    binds: std::fs::File,
+    paths: crate::compiler_target::CompilerTargetOwnedPathsV1,
+}
+
+impl ProjectTargetRestoreRepin {
+    fn reopen_shipping(self, expected_shipping: &[u8]) -> Result<ProjectGameInputPins, String> {
+        let mut shipping = open_regular_file_no_follow_read(self.paths.shipping_cache())?;
+        let restored = read_open_regular_file_bounded(
+            &mut shipping,
+            MAX_PROJECT_COMPILER_CHECK_BASE_BYTES as u64,
+            "restored live Shipping cache",
+        )?;
+        if restored != expected_shipping {
+            return Err(
+                "restored live Shipping cache no longer matches the sealed compiler snapshot"
+                    .to_owned(),
+            );
+        }
+        Ok(ProjectGameInputPins {
+            _executable: Some(self.executable),
+            shipping,
+            _binds: self.binds,
+            _directory_pins: Vec::new(),
+            target_paths: Some(self.paths),
+        })
     }
 }
 
@@ -3398,6 +3442,7 @@ struct PreparedFullGraphRequestV1 {
 
 fn prepare_full_graph_request_v1(
     opts: &FullGraphCompileOptsV1,
+    emit_game_source_tree: bool,
 ) -> Result<PreparedFullGraphRequestV1, CompileError> {
     validate_full_graph_compile_bounds_v1(opts)?;
     validate_generated_cache(&opts.base_cache)
@@ -3665,9 +3710,11 @@ fn prepare_full_graph_request_v1(
     // preflight cannot authorize a work directory that was replaced by a junction in between.
     preflight_full_graph_path_layout_v1(opts)?;
     let source_tree = reset_compile_tree(&opts.work_dir).map_err(CompileError::Other)?;
-    prepared
-        .emit_tree(&source_tree)
-        .map_err(|error| CompileError::Other(format!("emit tree: {error}")))?;
+    if emit_game_source_tree {
+        prepared
+            .emit_tree(&source_tree)
+            .map_err(|error| CompileError::Other(format!("emit tree: {error}")))?;
+    }
     for (base_index, (relative_path, source)) in &prepared_edits {
         let expected = &base_manifest[*base_index];
         if expected.relative_path != *relative_path {
@@ -3676,23 +3723,36 @@ fn prepare_full_graph_request_v1(
             ));
         }
         let path = source_tree.join(relative_path);
-        let mut file = open_compiled_artifact_existing(&path)
-            .map_err(|error| CompileError::Io(format!("opening full-graph edit: {error}")))?;
-        file.set_len(0)
-            .and_then(|_| file.seek(SeekFrom::Start(0)).map(|_| ()))
-            .and_then(|_| file.write_all(source.as_bytes()))
+        if let Some(parent) = path.parent() {
+            ensure_real_directory(parent).map_err(io("creating full-graph edit parent"))?;
+        }
+        let mut file = if emit_game_source_tree {
+            open_compiled_artifact_existing(&path)
+                .map_err(|error| CompileError::Io(format!("opening full-graph edit: {error}")))?
+        } else {
+            open_compiled_artifact_create_new(&path)
+                .map_err(|error| CompileError::Io(format!("creating full-graph edit: {error}")))?
+        };
+        if emit_game_source_tree {
+            file.set_len(0)
+                .and_then(|_| file.seek(SeekFrom::Start(0)).map(|_| ()))
+                .map_err(io("resetting full-graph edit"))?;
+        }
+        file.write_all(source.as_bytes())
             .and_then(|_| file.sync_all())
             .map_err(io("writing full-graph edit"))?;
     }
-    for deleted in deleted_indices.values() {
-        let path = source_tree.join(&deleted.relative_path);
-        let file = open_compiled_artifact_existing(&path)
-            .map_err(|error| CompileError::Io(format!("opening full-graph delete: {error}")))?;
-        file.set_len(0)
-            .and_then(|_| file.sync_all())
-            .map_err(io("neutralizing full-graph deleted source"))?;
-        drop(file);
-        std::fs::remove_file(&path).map_err(io("removing full-graph deleted source"))?;
+    if emit_game_source_tree {
+        for deleted in deleted_indices.values() {
+            let path = source_tree.join(&deleted.relative_path);
+            let file = open_compiled_artifact_existing(&path)
+                .map_err(|error| CompileError::Io(format!("opening full-graph delete: {error}")))?;
+            file.set_len(0)
+                .and_then(|_| file.sync_all())
+                .map_err(io("neutralizing full-graph deleted source"))?;
+            drop(file);
+            std::fs::remove_file(&path).map_err(io("removing full-graph deleted source"))?;
+        }
     }
     for module in &prepared_adds {
         let path = source_tree.join(&module.relative_path);
@@ -4869,29 +4929,35 @@ fn install_mutation_initialization_candidates(game_dir: &Path) -> Result<Vec<Pat
 }
 
 #[cfg(windows)]
-fn publish_install_mutation_initialization(init: &Path, path: &Path) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt as _;
-    use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
-
-    let init: Vec<u16> = init
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let path: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    if unsafe { MoveFileExW(init.as_ptr(), path.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
+fn publish_install_mutation_initialization(
+    file: &std::fs::File,
+    init: &Path,
+    path: &Path,
+) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "install-mutation lock has no parent directory",
+        )
+    })?;
+    let destination_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "install-mutation lock has no destination name",
+        )
+    })?;
+    // Pin the already-resolved parent directory and rename relative to that handle. An absolute
+    // SetFileInformationByHandle rename can fail with ERROR_SHARING_VIOLATION when an indexer holds
+    // the install root without delete sharing, even though this file itself stays exclusive.
+    publish_full_graph_pending_no_clobber_v1(file, parent, destination_name, init, path)
 }
 
 #[cfg(target_os = "linux")]
-fn publish_install_mutation_initialization(init: &Path, path: &Path) -> std::io::Result<()> {
+fn publish_install_mutation_initialization(
+    _file: &std::fs::File,
+    init: &Path,
+    path: &Path,
+) -> std::io::Result<()> {
     use std::os::unix::ffi::OsStrExt as _;
 
     let init = std::ffi::CString::new(init.as_os_str().as_bytes()).map_err(|_| {
@@ -4923,7 +4989,11 @@ fn publish_install_mutation_initialization(init: &Path, path: &Path) -> std::io:
 }
 
 #[cfg(target_vendor = "apple")]
-fn publish_install_mutation_initialization(init: &Path, path: &Path) -> std::io::Result<()> {
+fn publish_install_mutation_initialization(
+    _file: &std::fs::File,
+    init: &Path,
+    path: &Path,
+) -> std::io::Result<()> {
     use std::os::unix::ffi::OsStrExt as _;
 
     let init = std::ffi::CString::new(init.as_os_str().as_bytes()).map_err(|_| {
@@ -4955,7 +5025,11 @@ fn publish_install_mutation_initialization(init: &Path, path: &Path) -> std::io:
 }
 
 #[cfg(not(any(windows, target_os = "linux", target_vendor = "apple")))]
-fn publish_install_mutation_initialization(_init: &Path, _path: &Path) -> std::io::Result<()> {
+fn publish_install_mutation_initialization(
+    _file: &std::fs::File,
+    _init: &Path,
+    _path: &Path,
+) -> std::io::Result<()> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "atomic no-clobber install-mutation publication is unsupported on this platform",
@@ -5041,40 +5115,6 @@ fn remove_install_mutation_file_by_handle(
     _path: &Path,
 ) -> Result<(), String> {
     Err("identity-bound install-mutation lock release is unsupported on this platform".to_owned())
-}
-
-fn remove_install_mutation_initialization_if_owned(
-    init_path: &Path,
-    expected_payload: &[u8],
-) -> Result<(), String> {
-    let mut file = install_mutation_open_existing_options()
-        .open(init_path)
-        .map_err(|error| {
-            format!(
-                "opening failed install-mutation initialization {}: {error}",
-                init_path.display()
-            )
-        })?;
-    lock_install_mutation_handle(&file).map_err(|error| {
-        format!(
-            "locking failed install-mutation initialization {}: {error}",
-            init_path.display()
-        )
-    })?;
-    if !install_mutation_handle_still_names_path(&file, init_path)? {
-        return Err(format!(
-            "refusing changed install-mutation initialization {}",
-            init_path.display()
-        ));
-    }
-    let actual = read_install_mutation_payload(&mut file, init_path)?;
-    if actual != expected_payload {
-        return Err(format!(
-            "refusing changed install-mutation initialization payload {}",
-            init_path.display()
-        ));
-    }
-    remove_install_mutation_file_by_handle(&file, init_path)
 }
 
 fn take_over_abandoned_initialization(
@@ -5322,11 +5362,9 @@ impl InstallMutationGuard {
             };
             return Err(bounded_probe_text(&message, INSTALL_COMPILE_PROBE_MESSAGE_LIMIT).0);
         }
-        drop(init_file);
-        if let Err(error) = publish_install_mutation_initialization(&init_path, &path) {
-            let cleanup =
-                remove_install_mutation_initialization_if_owned(&init_path, payload.as_bytes())
-                    .err();
+        if let Err(error) = publish_install_mutation_initialization(&init_file, &init_path, &path) {
+            let cleanup = remove_install_mutation_file_by_handle(&init_file, &init_path).err();
+            drop(init_file);
             let message = match cleanup {
                 Some(cleanup) => format!(
                     "publishing install-mutation lock {}: {error}; additionally failed to remove \
@@ -5349,28 +5387,7 @@ impl InstallMutationGuard {
                 )
             })?;
         }
-        let mut file = install_mutation_open_existing_options()
-            .open(&path)
-            .map_err(|error| {
-                bounded_probe_text(
-                    &format!(
-                        "opening published install-mutation lock {}: {error}",
-                        path.display()
-                    ),
-                    INSTALL_COMPILE_PROBE_MESSAGE_LIMIT,
-                )
-                .0
-            })?;
-        lock_install_mutation_handle(&file).map_err(|error| {
-            bounded_probe_text(
-                &format!(
-                    "locking published install-mutation record {}: {error}",
-                    path.display()
-                ),
-                INSTALL_COMPILE_PROBE_MESSAGE_LIMIT,
-            )
-            .0
-        })?;
+        let mut file = init_file;
         if !install_mutation_handle_still_names_path(&file, &path)? {
             return Err(format!(
                 "published install-mutation record changed filesystem identity: {}",
@@ -6198,13 +6215,82 @@ impl Drop for CompileLock {
 }
 
 #[derive(Debug)]
+struct FileSnapshot {
+    bytes: Vec<u8>,
+    modified: SystemTime,
+}
+
+fn write_snapshot_to_open_file(
+    file: &mut std::fs::File,
+    snapshot: &FileSnapshot,
+    label: &str,
+) -> Result<(), String> {
+    file.set_len(0)
+        .map_err(|error| format!("truncating {label}: {error}"))?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| format!("seeking {label}: {error}"))?;
+    file.write_all(&snapshot.bytes)
+        .and_then(|_| file.sync_all())
+        .map_err(|error| format!("writing {label}: {error}"))?;
+    file.set_times(std::fs::FileTimes::new().set_modified(snapshot.modified))
+        .and_then(|_| file.sync_all())
+        .map_err(|error| format!("restoring modification time for {label}: {error}"))?;
+    let restored = file
+        .metadata()
+        .map_err(|error| format!("checking restored {label}: {error}"))?;
+    if restored.len() != snapshot.bytes.len() as u64 {
+        return Err(format!(
+            "restored {label} has {} bytes; expected {}",
+            restored.len(),
+            snapshot.bytes.len()
+        ));
+    }
+    if restored
+        .modified()
+        .map_err(|error| format!("checking modification time for restored {label}: {error}"))?
+        != snapshot.modified
+    {
+        return Err(format!(
+            "restored {label} does not retain its original modification time"
+        ));
+    }
+    Ok(())
+}
+
+fn restore_file_snapshot(path: &Path, snapshot: &FileSnapshot) -> Result<(), String> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+        };
+        options
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    }
+    let file = options
+        .open(path)
+        .map_err(|error| format!("opening restore target {}: {error}", path.display()))?;
+    let mut file = validate_opened_compiled_artifact(file)
+        .map_err(|error| format!("validating restore target {}: {error}", path.display()))?;
+    write_snapshot_to_open_file(&mut file, snapshot, &path.display().to_string())
+}
+
+#[derive(Debug)]
 struct ShippingRecovery {
     path: PathBuf,
     active: bool,
 }
 
 impl ShippingRecovery {
-    fn create(live: &Path, bytes: &[u8]) -> Result<Self, String> {
+    fn create(live: &Path, snapshot: &FileSnapshot) -> Result<Self, String> {
         let path = compile_bak_path(live);
         let mut file = std::fs::OpenOptions::new()
             .write(true)
@@ -6220,7 +6306,11 @@ impl ShippingRecovery {
                     format!("creating compile backup {}: {e}", path.display())
                 }
             })?;
-        if let Err(e) = file.write_all(bytes).and_then(|_| file.sync_all()) {
+        if let Err(e) = write_snapshot_to_open_file(
+            &mut file,
+            snapshot,
+            &format!("compile backup {}", path.display()),
+        ) {
             drop(file);
             let cleanup = std::fs::remove_file(&path).err();
             return Err(match cleanup {
@@ -6263,7 +6353,7 @@ fn validate_existing_deploy_backup(path: &Path, meta: &std::fs::Metadata) -> Res
     Ok(())
 }
 
-fn create_deploy_backup_if_absent(live: &Path, bytes: &[u8]) -> Result<bool, String> {
+fn create_deploy_backup_if_absent(live: &Path, snapshot: &FileSnapshot) -> Result<bool, String> {
     let path = deploy_bak_path(live);
     match std::fs::symlink_metadata(&path) {
         Ok(meta) => {
@@ -6294,7 +6384,11 @@ fn create_deploy_backup_if_absent(live: &Path, bytes: &[u8]) -> Result<bool, Str
         }
         Err(e) => return Err(format!("creating deploy backup {}: {e}", path.display())),
     };
-    if let Err(e) = file.write_all(bytes).and_then(|_| file.sync_all()) {
+    if let Err(e) = write_snapshot_to_open_file(
+        &mut file,
+        snapshot,
+        &format!("deploy backup {}", path.display()),
+    ) {
         drop(file);
         let cleanup = std::fs::remove_file(&path).err();
         return Err(match cleanup {
@@ -6401,11 +6495,57 @@ fn reset_compile_tree(work_dir: &Path) -> Result<PathBuf, String> {
 /// Snapshot a file that may legitimately be absent. Generation writes
 /// `PrecompiledScript.Cache`, and a developer may already have one there; callers must put that
 /// exact prior state back instead of leaving the newly generated development cache installed.
-fn snapshot_optional(path: &Path) -> Result<Option<Vec<u8>>, String> {
-    match std::fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(format!("reading {}: {e}", path.display())),
+fn snapshot_open_file(
+    file: &mut std::fs::File,
+    max_bytes: u64,
+    label: &str,
+) -> Result<FileSnapshot, String> {
+    let before = file
+        .metadata()
+        .map_err(|error| format!("inspecting {label}: {error}"))?;
+    let modified = before
+        .modified()
+        .map_err(|error| format!("reading modification time for {label}: {error}"))?;
+    let bytes = read_open_regular_file_bounded(file, max_bytes, label)?;
+    let after = file
+        .metadata()
+        .map_err(|error| format!("rechecking {label}: {error}"))?;
+    if after.len() != before.len()
+        || after
+            .modified()
+            .map_err(|error| format!("rechecking modification time for {label}: {error}"))?
+            != modified
+    {
+        return Err(format!("{label} changed while being snapshotted"));
+    }
+    Ok(FileSnapshot { bytes, modified })
+}
+
+fn snapshot_required(path: &Path, max_bytes: u64, label: &str) -> Result<FileSnapshot, String> {
+    let mut file = open_regular_file_no_follow_read(path)
+        .map_err(|error| format!("opening {label} {}: {error}", path.display()))?;
+    snapshot_open_file(&mut file, max_bytes, label)
+}
+
+fn snapshot_optional(path: &Path) -> Result<Option<FileSnapshot>, String> {
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("inspecting {}: {error}", path.display())),
+        Ok(metadata) => {
+            if !metadata.is_file() || metadata_is_link_or_reparse(&metadata) {
+                return Err(format!(
+                    "refusing to snapshot {} because it is not a regular non-reparse file",
+                    path.display()
+                ));
+            }
+            let max_bytes = metadata.len();
+            snapshot_required(
+                path,
+                max_bytes,
+                &format!("optional file {}", path.display()),
+            )
+            .map(Some)
+        }
     }
 }
 
@@ -6419,11 +6559,9 @@ fn remove_if_exists(path: &Path) -> Result<(), String> {
 
 /// Restore an optional file snapshot exactly: rewrite the old bytes when it existed, otherwise
 /// remove whatever generation created.
-fn restore_optional(path: &Path, saved: &Option<Vec<u8>>) -> Result<(), String> {
+fn restore_optional(path: &Path, saved: &Option<FileSnapshot>) -> Result<(), String> {
     match saved {
-        Some(bytes) => {
-            std::fs::write(path, bytes).map_err(|e| format!("restoring {}: {e}", path.display()))
-        }
+        Some(snapshot) => restore_file_snapshot(path, snapshot),
         None => remove_if_exists(path).map_err(|e| format!("restoring absent file: {e}")),
     }
 }
@@ -7524,12 +7662,28 @@ pub fn compile_module<R>(opts: &CompileOpts, run_regen: R) -> Result<CompileOutp
 where
     R: FnOnce(&Path, &Path) -> Result<PathBuf, String>,
 {
+    compile_module_with_source_tree(opts, true, run_regen)
+}
+
+fn compile_module_with_source_tree<R>(
+    opts: &CompileOpts,
+    emit_base_tree: bool,
+    run_regen: R,
+) -> Result<CompileOutput, CompileError>
+where
+    R: FnOnce(&Path, &Path) -> Result<PathBuf, String>,
+{
     if opts.op != "add" && opts.op != "edit" {
         return Err(CompileError::Other(format!(
             "invalid script op {:?} for module {:?} (want \"add\" or \"edit\")",
             opts.op, opts.module_name
         )));
     }
+    // The game and standalone source discovery both derive a newly added module's identity from
+    // its Script-relative filename. Do that before preparing or running either backend so a stale
+    // caller-supplied hint cannot create a late SOURCE_DISCOVERY_MISMATCH. Edits keep the exact
+    // existing cache identity supplied by the caller.
+    let effective_module_name = effective_compile_module_name_v1(opts)?;
     // Read the overlay before clearing work_dir/tree. This also makes an input that intentionally
     // lives below that old tree safe: its bytes survive the clean rebuild, never its stale siblings.
     // Managed callers instead supply an already sealed byte snapshot and never reopen a
@@ -7582,13 +7736,13 @@ where
     let overlay = std::str::from_utf8(&overlay)
         .map_err(|error| CompileError::Other(format!("source .as is not valid UTF-8: {error}")))?;
     let (overlay, overlay_rel_path) = prepared
-        .prepare_compile_overlay(&opts.op, &opts.module_name, &opts.rel_path, overlay)
+        .prepare_compile_overlay(&opts.op, &effective_module_name, &opts.rel_path, overlay)
         .map_err(|error| CompileError::Other(format!("preparing authored overlay: {error}")))?;
 
     let generated_defaults = prepare_generated_defaults_edit(
         &opts.op,
         &mods,
-        &opts.module_name,
+        &effective_module_name,
         &base,
         &overlay,
         opts.allow_new_symbols,
@@ -7596,16 +7750,19 @@ where
 
     // 1. Only after all base and authored target checks succeed, clear and rebuild the tree.
     let tree = reset_compile_tree(&opts.work_dir).map_err(CompileError::Other)?;
-    prepared
-        .emit_tree(&tree)
-        .map_err(|e| CompileError::Other(format!("emit tree: {e}")))?;
+    if emit_base_tree {
+        prepared
+            .emit_tree(&tree)
+            .map_err(|e| CompileError::Other(format!("emit tree: {e}")))?;
+    }
 
     // 2. Overlay the user's .as at its rel path.
     let dst = tree.join(&overlay_rel_path);
-    if let Some(parent) = dst.parent() {
-        std::fs::create_dir_all(parent).map_err(io("mkdir overlay"))?;
-    }
-    std::fs::write(&dst, overlay.as_bytes()).map_err(io("overlay .as"))?;
+    write_compile_overlay(
+        &dst,
+        overlay.as_bytes(),
+        emit_base_tree && opts.op == "edit",
+    )?;
 
     // 3. Drive the game to regenerate the precompiled cache from `tree`.
     let regen_path = run_regen(&opts.game_dir, &tree).map_err(CompileError::Regen)?;
@@ -7632,13 +7789,13 @@ where
                     .filter(|n| !base_set.contains(n.as_str()));
                 match (added.next(), added.next()) {
                     (Some(only), None) => only.clone(),
-                    _ => opts.module_name.clone(),
+                    _ => effective_module_name.to_string(),
                 }
             }
-            _ => opts.module_name.clone(),
+            _ => effective_module_name.to_string(),
         }
     } else {
-        opts.module_name.clone()
+        effective_module_name.to_string()
     };
 
     // 4. Extract + remap the target module against the vanilla base, for BOTH ops. Strict mode
@@ -7663,7 +7820,7 @@ where
         mini = plan.apply(&mini).map_err(|reason| {
             CompileError::Other(format!(
                 "refusing generated-default carry for edit module {:?}: {reason}",
-                opts.module_name
+                effective_module_name
             ))
         })?;
     }
@@ -7672,6 +7829,33 @@ where
     let mini_path = opts.work_dir.join("module.cache");
     let artifact = write_compiled_artifact(mini_path.clone(), &mini)?;
     Ok(CompileOutput::retained(mini_path, target, artifact))
+}
+
+/// Write one prepared overlay without following a linked/reparse parent or final file. The game
+/// backend replaces the emitted base file; the standalone backend creates a new sparse-tree file.
+fn write_compile_overlay(
+    path: &Path,
+    source: &[u8],
+    replace_existing: bool,
+) -> Result<(), CompileError> {
+    if let Some(parent) = path.parent() {
+        ensure_real_directory(parent).map_err(io("creating overlay parent"))?;
+    }
+    let mut file = if replace_existing {
+        open_compiled_artifact_existing(path)
+            .map_err(|error| CompileError::Io(format!("opening overlay: {error}")))?
+    } else {
+        open_compiled_artifact_create_new(path)
+            .map_err(|error| CompileError::Io(format!("creating overlay: {error}")))?
+    };
+    if replace_existing {
+        file.set_len(0)
+            .and_then(|_| file.seek(SeekFrom::Start(0)).map(|_| ()))
+            .map_err(io("resetting overlay"))?;
+    }
+    file.write_all(source)
+        .and_then(|_| file.sync_all())
+        .map_err(io("writing overlay"))
 }
 
 /// Load native arities from the `GORE_AS_BINDS` env path if set, else a `Binds.Cache` sitting next
@@ -7979,7 +8163,7 @@ struct RecoveryJournal {
 }
 
 impl RecoveryJournal {
-    fn create(game_dir: &Path, saved_dev: &Option<Vec<u8>>) -> Result<Self, String> {
+    fn create(game_dir: &Path, saved_dev: &Option<FileSnapshot>) -> Result<Self, String> {
         let root = recovery_journal_path(game_dir);
         match std::fs::create_dir(&root) {
             Ok(()) => {}
@@ -8007,12 +8191,21 @@ Only after the process is dead and every path is restored, remove .gore-as-compi
             std::fs::write(root.join("README.txt"), instructions)
                 .map_err(|e| format!("writing recovery instructions: {e}"))?;
             match saved_dev {
-                Some(bytes) => {
+                Some(snapshot) => {
                     let dev_dir = root.join("development-cache");
                     std::fs::create_dir(&dev_dir)
                         .map_err(|e| format!("creating dev-cache recovery directory: {e}"))?;
-                    std::fs::write(dev_dir.join("PrecompiledScript.Cache"), bytes)
-                        .map_err(|e| format!("writing dev-cache recovery snapshot: {e}"))?;
+                    let recovery = dev_dir.join("PrecompiledScript.Cache");
+                    let mut file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&recovery)
+                        .map_err(|e| format!("creating dev-cache recovery snapshot: {e}"))?;
+                    write_snapshot_to_open_file(
+                        &mut file,
+                        snapshot,
+                        "development-cache recovery snapshot",
+                    )?;
                 }
                 None => {
                     std::fs::write(root.join("development-cache.absent"), b"")
@@ -8038,7 +8231,7 @@ Only after the process is dead and every path is restored, remove .gore-as-compi
 
     fn record_staged(
         &self,
-        staged: &[(PathBuf, Option<Vec<u8>>)],
+        staged: &[(PathBuf, Option<FileSnapshot>)],
         script_dir: &Path,
     ) -> Result<(), String> {
         for (path, prior) in staged {
@@ -8060,12 +8253,28 @@ Only after the process is dead and every path is restored, remove .gore-as-compi
                     format!("creating recovery directory {}: {e}", parent.display())
                 })?;
             }
-            std::fs::write(&recovery, prior.as_deref().unwrap_or_default()).map_err(|e| {
-                format!(
-                    "writing staged recovery snapshot {}: {e}",
-                    recovery.display()
-                )
-            })?;
+            match prior {
+                Some(snapshot) => {
+                    let mut file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&recovery)
+                        .map_err(|e| {
+                            format!(
+                                "creating staged recovery snapshot {}: {e}",
+                                recovery.display()
+                            )
+                        })?;
+                    write_snapshot_to_open_file(
+                        &mut file,
+                        snapshot,
+                        &format!("staged recovery snapshot {}", recovery.display()),
+                    )?;
+                }
+                None => std::fs::write(&recovery, b"").map_err(|e| {
+                    format!("writing staged recovery marker {}: {e}", recovery.display())
+                })?,
+            }
         }
         Ok(())
     }
@@ -8090,9 +8299,9 @@ struct CompileTransaction {
     script_dir: PathBuf,
     shipping_cache: PathBuf,
     dev_cache: PathBuf,
-    saved_shipping: Vec<u8>,
-    saved_dev: Option<Vec<u8>>,
-    staged: Vec<(PathBuf, Option<Vec<u8>>)>,
+    saved_shipping: FileSnapshot,
+    saved_dev: Option<FileSnapshot>,
+    staged: Vec<(PathBuf, Option<FileSnapshot>)>,
     isolation: Option<GenerationIsolation>,
     recovery: ShippingRecovery,
     journal: RecoveryJournal,
@@ -8229,6 +8438,14 @@ impl CompileTransaction {
                 vec![error],
             ));
         }
+        // The caller briefly released and identity-repinned qualified target directories to
+        // publish the shared mutation guard. Release only those directory handles once more while
+        // this owned transaction creates its compile lock, recovery files and JIT quarantine.
+        // Exact EXE/Shipping/Binds handles remain pinned; begin_isolation re-pins and verifies every
+        // parent before source staging or game launch.
+        if let Some(pins) = project_input_pins.as_mut() {
+            pins.release_target_directories_for_isolation();
+        }
         let mut lock = match CompileLock::acquire(game_dir) {
             Ok(lock) => lock,
             Err(error) => {
@@ -8242,16 +8459,19 @@ impl CompileTransaction {
         let shipping_cache = script_dir.join("PrecompiledScript_Shipping.Cache");
         let dev_cache = script_dir.join("PrecompiledScript.Cache");
         let saved_shipping = match &mut project_input_pins {
-            Some(pins) => read_open_regular_file_bounded(
+            Some(pins) => snapshot_open_file(
                 &mut pins.shipping,
                 MAX_PROJECT_COMPILER_CHECK_BASE_BYTES as u64,
                 "pinned live Shipping cache",
             ),
-            None => std::fs::read(&shipping_cache)
-                .map_err(|error| format!("reading live shipping cache: {error}")),
+            None => snapshot_required(
+                &shipping_cache,
+                MAX_PROJECT_COMPILER_CHECK_BASE_BYTES as u64,
+                "live Shipping cache",
+            ),
         };
         let saved_shipping = match saved_shipping {
-            Ok(bytes) => bytes,
+            Ok(snapshot) => snapshot,
             Err(error) => {
                 let mut errors = vec![format!(
                     "reading live shipping cache {}: {e}",
@@ -8389,9 +8609,13 @@ impl CompileTransaction {
             };
         }
         // Project compiler pins deny write/delete sharing until the generator has exited. Release
-        // them only at the start of confirmed-process restoration; unconfirmed paths leak the
-        // complete transaction and therefore keep both authoritative inputs pinned.
-        self.project_input_pins.take();
+        // Shipping and the directory handles only at the start of confirmed-process restoration;
+        // keep the qualified EXE and Binds objects open. Unconfirmed paths leak the complete
+        // transaction and therefore keep every authoritative input pinned.
+        let target_restore_repin = self
+            .project_input_pins
+            .take()
+            .and_then(ProjectGameInputPins::into_target_restore_repin);
         let mut errors = Vec::new();
         if let Some(isolation) = &mut self.isolation {
             if let Err(e) = isolation.restore() {
@@ -8404,18 +8628,29 @@ impl CompileTransaction {
                 Err(e) => errors.push(format!("failed to clean staged sources: {e}")),
             }
         }
-        let shipping_restored = match std::fs::write(&self.shipping_cache, &self.saved_shipping) {
-            Ok(()) => true,
-            Err(e) => {
-                errors.push(format!(
-                    "FAILED to restore the live shipping cache ({e}); restore it from {}",
-                    self.recovery.path.display()
-                ));
-                false
-            }
-        };
+        let shipping_restored =
+            match restore_file_snapshot(&self.shipping_cache, &self.saved_shipping) {
+                Ok(()) => true,
+                Err(e) => {
+                    errors.push(format!(
+                        "FAILED to restore the live shipping cache ({e}); restore it from {}",
+                        self.recovery.path.display()
+                    ));
+                    false
+                }
+            };
         if let Err(e) = restore_optional(&self.dev_cache, &self.saved_dev) {
             errors.push(format!("failed to restore development cache: {e}"));
+        }
+        if errors.is_empty() {
+            if let Some(repin) = target_restore_repin {
+                match repin.reopen_shipping(&self.saved_shipping.bytes) {
+                    Ok(pins) => self.project_input_pins = Some(pins),
+                    Err(error) => errors.push(format!(
+                        "failed to re-pin the restored qualified target: {error}"
+                    )),
+                }
+            }
         }
         if errors.is_empty() {
             self.rollback_needed = false;
@@ -8424,6 +8659,17 @@ impl CompileTransaction {
             errors,
             shipping_restored,
         }
+    }
+
+    fn finalize_target_pins_for_response(&mut self) -> Result<(), String> {
+        if let Some(pins) = self.project_input_pins.as_mut() {
+            pins.repin_target_directories_after_isolation()?;
+        }
+        Ok(())
+    }
+
+    fn take_target_pins_for_response(&mut self) -> Option<ProjectGameInputPins> {
+        self.project_input_pins.take()
     }
 
     /// Call immediately before an intentional in-place Shipping write, so a panic or partial write
@@ -8611,6 +8857,7 @@ struct GameRunRegenExtendedReport {
     result: Result<PathBuf, String>,
     diagnostics: Option<crate::diagnostics::CompilerDiagnosticsReport>,
     install_restore: InstallRestoreDisposition,
+    target_pins: Option<ProjectGameInputPins>,
 }
 
 /// Same transactional compiler path as [`game_run_regen`], with explicit diagnostics discovery /
@@ -8640,6 +8887,7 @@ pub fn game_run_regen_with_diagnostics_report(
         result,
         diagnostics,
         install_restore,
+        target_pins: _,
     } = extended;
     let Some(diagnostics) = diagnostics else {
         return Err(result.err().unwrap_or_else(|| {
@@ -8677,6 +8925,7 @@ fn game_run_regen_with_extended_diagnostics_report(
         result: generated.result,
         diagnostics: diagnostic_report.into_inner(),
         install_restore: generated.install_restore,
+        target_pins: generated.target_pins,
     })
 }
 
@@ -8710,6 +8959,7 @@ fn game_run_regen_with_extended_diagnostics_report_with_guard(
         result: generated.result,
         diagnostics: diagnostic_report.into_inner(),
         install_restore: generated.install_restore,
+        target_pins: generated.target_pins,
     })
 }
 
@@ -8746,6 +8996,7 @@ fn game_run_regen_with_extended_diagnostics_report_with_guard_and_pins(
         result: generated.result,
         diagnostics: diagnostic_report.into_inner(),
         install_restore: generated.install_restore,
+        target_pins: generated.target_pins,
     })
 }
 
@@ -8927,9 +9178,9 @@ where
         ),
     };
 
-    let (common_result, install_restore) = match generated {
-        Ok(report) => (report.result, report.install_restore),
-        Err(error) => (Err(error), InstallRestoreDisposition::NotStarted),
+    let (common_result, install_restore, target_pins) = match generated {
+        Ok(report) => (report.result, report.install_restore, report.target_pins),
+        Err(error) => (Err(error), InstallRestoreDisposition::NotStarted, None),
     };
     let diagnostics = diagnostic_report.into_inner();
     let mut output_disposition = output_disposition.get();
@@ -8983,6 +9234,7 @@ where
         install_restore,
         output_disposition,
         closing_audit,
+        target_pins,
     }
 }
 
@@ -9233,6 +9485,7 @@ where
 struct GameRunInstallReport {
     result: Result<PathBuf, String>,
     install_restore: InstallRestoreDisposition,
+    target_pins: Option<ProjectGameInputPins>,
 }
 
 fn game_run_regen_with_install_report<G>(
@@ -9288,6 +9541,7 @@ where
         Err(message) if begin_recovery_required.get() => Ok(GameRunInstallReport {
             result: Err(message),
             install_restore: InstallRestoreDisposition::RecoveryRequiredRestoreFailed,
+            target_pins: None,
         }),
         other => other,
     }
@@ -9434,6 +9688,7 @@ where
             return Ok(GameRunInstallReport {
                 result: Err(failure.message),
                 install_restore: InstallRestoreDisposition::RecoveryRequiredRestoreFailed,
+                target_pins: None,
             });
         }
         return Err(failure.message);
@@ -9443,6 +9698,7 @@ where
         Err(message) if begin_recovery_required.get() => Ok(GameRunInstallReport {
             result: Err(message),
             install_restore: InstallRestoreDisposition::RecoveryRequiredRestoreFailed,
+            target_pins: None,
         }),
         other => other,
     }
@@ -9524,6 +9780,7 @@ where
         return Ok(GameRunInstallReport {
             result: Err(txn.preserve_for_unconfirmed_generator(error)),
             install_restore: InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed,
+            target_pins: None,
         });
     }
 
@@ -9537,7 +9794,19 @@ where
             cleanup_errors.push(error);
         }
         cleanup_errors.extend(txn.finish());
+        if cleanup_errors.is_empty() {
+            if let Err(error) = txn.finalize_target_pins_for_response() {
+                cleanup_errors.push(format!(
+                    "failed to re-pin the qualified target after transaction cleanup: {error}"
+                ));
+            }
+        }
     }
+
+    let target_pins = cleanup_errors
+        .is_empty()
+        .then(|| txn.take_target_pins_for_response())
+        .flatten();
 
     let result = match result {
         Ok(p) if cleanup_errors.is_empty() => Ok(p),
@@ -9554,11 +9823,13 @@ where
         return Ok(GameRunInstallReport {
             result,
             install_restore: InstallRestoreDisposition::RecoveryRequiredRestoreFailed,
+            target_pins: None,
         });
     }
     Ok(GameRunInstallReport {
         result,
         install_restore: InstallRestoreDisposition::RestoredExact,
+        target_pins,
     })
 }
 
@@ -10863,14 +11134,15 @@ fn request_process_tree_termination(_pid: u32, _deadline: Instant) -> TreeTermin
 }
 
 /// Recursively copy `src` into `dst`, recording every destination FILE path written into `out`
-/// together with its PRIOR bytes (`None` if it didn't exist, `Some(bytes)` if the copy overwrote a
-/// pre-existing file) — so the caller can delete what it created and RESTORE what it overwrote.
+/// together with its PRIOR state (`None` if it didn't exist, `Some(snapshot)` if the copy
+/// overwrote a pre-existing file) — so the caller can delete what it created and RESTORE what it
+/// overwrote, including its original modification time.
 /// Directories created are not recorded individually — empty ones are pruned bottom-up by
 /// [`restore_or_remove`].
 fn copy_tree(
     src: &Path,
     dst: &Path,
-    out: &mut Vec<(PathBuf, Option<Vec<u8>>)>,
+    out: &mut Vec<(PathBuf, Option<FileSnapshot>)>,
 ) -> std::io::Result<()> {
     copy_tree_with(src, dst, out, &mut |from, to| {
         std::fs::copy(from, to).map(|_| ())
@@ -10880,7 +11152,7 @@ fn copy_tree(
 fn copy_tree_with<C>(
     src: &Path,
     dst: &Path,
-    out: &mut Vec<(PathBuf, Option<Vec<u8>>)>,
+    out: &mut Vec<(PathBuf, Option<FileSnapshot>)>,
     copy_file: &mut C,
 ) -> std::io::Result<()>
 where
@@ -10916,7 +11188,15 @@ where
                             to.display()
                         )));
                     }
-                    Some(std::fs::read(&to)?)
+                    let max_bytes = meta.len();
+                    Some(
+                        snapshot_required(
+                            &to,
+                            max_bytes,
+                            &format!("staging destination {}", to.display()),
+                        )
+                        .map_err(std::io::Error::other)?,
+                    )
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
                 Err(e) => return Err(e),
@@ -11008,15 +11288,18 @@ fn ensure_real_directory(path: &Path) -> std::io::Result<()> {
 /// file restore/delete failures into the returned `Err` so a caller can report a polluted install.
 /// Directory-prune failures are NOT errors: a dir staying non-empty (e.g. it holds a restored file)
 /// is the expected, correct outcome, so empty-dir removal stays best-effort.
-fn restore_or_remove(written: &[(PathBuf, Option<Vec<u8>>)], root: &Path) -> Result<(), String> {
+fn restore_or_remove(
+    written: &[(PathBuf, Option<FileSnapshot>)],
+    root: &Path,
+) -> Result<(), String> {
     use std::collections::BTreeSet;
     // Restore-or-remove the files first, collecting (not short-circuiting on) failures so every
     // file is attempted before we report.
     let mut errs: Vec<String> = Vec::new();
     for (f, prior) in written {
         match prior {
-            Some(bytes) => {
-                if let Err(e) = std::fs::write(f, bytes) {
+            Some(snapshot) => {
+                if let Err(e) = restore_file_snapshot(f, snapshot) {
                     errs.push(format!("restore {}: {e}", f.display()));
                 }
             }
@@ -11322,6 +11605,49 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn install_mutation_publication_keeps_one_exclusive_handle() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+
+        let root = unique_test_root("mutation-publish-exclusive-handle");
+        std::fs::create_dir_all(&root).unwrap();
+        let init = root.join("initializing.lock");
+        let published = root.join("published.lock");
+        let parent_observer = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&root)
+            .unwrap();
+        let mut file = install_mutation_open_options().open(&init).unwrap();
+        file.write_all(b"owner").unwrap();
+        file.sync_all().unwrap();
+
+        let observer_error = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(&init)
+            .unwrap_err();
+        assert!(install_mutation_lock_busy(&observer_error));
+
+        publish_install_mutation_initialization(&file, &init, &published).unwrap();
+        assert!(!init.exists());
+        assert!(install_mutation_handle_still_names_path(&file, &published).unwrap());
+        assert_eq!(
+            read_install_mutation_payload(&mut file, &published).unwrap(),
+            b"owner"
+        );
+        remove_install_mutation_file_by_handle(&file, &published).unwrap();
+        drop(file);
+        drop(parent_observer);
+        assert!(!published.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn precompile_errors_when_exe_missing() {
         // No shipping exe: the guard fires and the generator is NEVER invoked.
@@ -11349,6 +11675,18 @@ mod tests {
         (base.to_path_buf(), cache)
     }
 
+    fn set_test_modified(path: &Path, seconds_since_epoch: u64) -> SystemTime {
+        let modified = std::time::UNIX_EPOCH + Duration::from_secs(seconds_since_epoch);
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert_eq!(
+            std::fs::metadata(path).unwrap().modified().unwrap(),
+            modified
+        );
+        modified
+    }
+
     fn unique_test_root(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
             "gore-as-{label}-{}-{}",
@@ -11358,6 +11696,32 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    fn compile_overlay_write_rejects_linked_parent() {
+        let root = unique_test_root("overlay-linked-parent");
+        let tree = root.join("tree");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let linked = tree.join("AI");
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &linked).unwrap();
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_dir(&outside, &linked).is_err() {
+            // The production guard also rejects junctions through their reparse attribute. Some
+            // Windows test hosts cannot create the equivalent symlink without Developer Mode.
+            let _ = std::fs::remove_dir_all(&root);
+            return;
+        }
+
+        let error = write_compile_overlay(&linked.join("Mod.as"), b"NEW", false)
+            .expect_err("overlay write must not traverse a linked parent");
+        assert!(error.to_string().contains("linked/reparse"), "{error}");
+        assert!(!outside.join("Mod.as").exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -12524,7 +12888,7 @@ mod tests {
                 ("Added.as".to_owned(), b"void AddedFn() {}\n".to_vec()),
                 ("EditMe.as".to_owned(), b"void EditedFn() {}\n".to_vec()),
             ],
-            expected_absent: vec!["DeleteMe.as".to_owned()],
+            expected_absent: vec!["DeleteMe.as".to_owned(), "Keep.as".to_owned()],
             create_raced_destination: None,
             calls,
         }
@@ -12968,7 +13332,7 @@ mod tests {
         let mut runner = |inputs: StandaloneCompilerInputsV1<'_>| {
             calls.set(calls.get().saturating_add(1));
             assert_eq!(inputs.overlays.len(), 1);
-            assert!(inputs.source_tree.join("Module07308.as").is_file());
+            assert!(!inputs.source_tree.join("Module07308.as").exists());
             std::fs::write(&private, &base_cache).unwrap();
             let cleanup = cleanup.clone();
             Ok(StandaloneCompilerOutputV1::with_cleanup(
@@ -13012,6 +13376,7 @@ mod tests {
             install_restore: InstallRestoreDisposition::RestoredExact,
             output_disposition: ProjectCompilerOutputDisposition::Discarded,
             closing_audit: ProjectCompilerClosingAuditDisposition::Passed,
+            target_pins: None,
         }
     }
 
@@ -13515,6 +13880,7 @@ mod tests {
                     install_restore: InstallRestoreDisposition::RestoredExact,
                     output_disposition: ProjectCompilerOutputDisposition::NotCreated,
                     closing_audit: ProjectCompilerClosingAuditDisposition::Passed,
+                    target_pins: None,
                 }
             },
         );
@@ -13842,6 +14208,7 @@ mod tests {
                     install_restore: InstallRestoreDisposition::RestoredExact,
                     output_disposition: ProjectCompilerOutputDisposition::Discarded,
                     closing_audit: ProjectCompilerClosingAuditDisposition::Passed,
+                    target_pins: None,
                 }
             },
         );
@@ -13891,6 +14258,7 @@ mod tests {
                         install_restore: InstallRestoreDisposition::RestoredExact,
                         output_disposition: ProjectCompilerOutputDisposition::Discarded,
                         closing_audit: ProjectCompilerClosingAuditDisposition::Passed,
+                        target_pins: None,
                     }
                 },
             );
@@ -13930,6 +14298,7 @@ mod tests {
                     install_restore: InstallRestoreDisposition::RestoredExact,
                     output_disposition: ProjectCompilerOutputDisposition::Discarded,
                     closing_audit: ProjectCompilerClosingAuditDisposition::Passed,
+                    target_pins: None,
                 }
             },
         );
@@ -13974,6 +14343,7 @@ mod tests {
                         install_restore: InstallRestoreDisposition::RestoredExact,
                         output_disposition: ProjectCompilerOutputDisposition::Discarded,
                         closing_audit: ProjectCompilerClosingAuditDisposition::Passed,
+                        target_pins: None,
                     }
                 },
             );
@@ -14111,6 +14481,7 @@ mod tests {
                         InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed,
                     output_disposition: ProjectCompilerOutputDisposition::Discarded,
                     closing_audit: ProjectCompilerClosingAuditDisposition::NotRun,
+                    target_pins: None,
                 }
             },
         );
@@ -14275,13 +14646,12 @@ mod tests {
                 "Wrong.as",
                 "does not match",
             ),
-            (valid_cache(), "add", "testmodule", "New.as", "module name"),
             (
                 valid_cache(),
                 "add",
                 "NewModule",
                 "testmodule.AS",
-                "add path",
+                "module name",
             ),
             (
                 valid_cache(),
@@ -14302,7 +14672,7 @@ mod tests {
                 "add",
                 "NewModule",
                 "EXISTING",
-                "file/directory ancestor",
+                "donor-compatible relative .as path",
             ),
         ];
 
@@ -14537,6 +14907,69 @@ mod tests {
         assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn qualified_target_shipping_pin_is_handed_across_exact_restore() {
+        let base = unique_test_root("qualified-target-shipping-restore");
+        let (game, shipping) = fake_install(&base);
+        let _game_process = StatedGameProcess::not_running();
+        let script = shipping.parent().unwrap();
+        let binds = script.join("Binds.Cache");
+        std::fs::write(&binds, b"BINDS").unwrap();
+        let executable = game
+            .join("G1R")
+            .join("Binaries")
+            .join("Win64")
+            .join("G1R-Win64-Shipping.exe");
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+
+        let pins = ProjectGameInputPins {
+            _executable: Some(open_regular_file_no_follow_read(&executable).unwrap()),
+            shipping: open_regular_file_no_follow_read(&shipping).unwrap(),
+            _binds: open_regular_file_no_follow_read(&binds).unwrap(),
+            _directory_pins: Vec::new(),
+            target_paths: Some(
+                crate::compiler_target::CompilerTargetOwnedPathsV1::for_test(
+                    executable,
+                    shipping.clone(),
+                    binds,
+                ),
+            ),
+        };
+        let guard = InstallMutationGuard::acquire(&game, "gore-as:compile").unwrap();
+        let report = game_run_regen_with_install_report_with_guard_and_pins_and_after_restore(
+            &game,
+            &src,
+            guard,
+            pins,
+            |_, _, dev| {
+                let bytes = valid_cache();
+                std::fs::write(dev, &bytes).unwrap();
+                GeneratorRunResult::confirmed(Ok(bytes))
+            },
+            |_, _| Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.install_restore,
+            InstallRestoreDisposition::RestoredExact
+        );
+        assert!(report.result.is_ok());
+        assert!(
+            report.target_pins.is_some(),
+            "the restored qualified target must remain pinned for response construction"
+        );
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+        assert!(!compile_bak_path(&shipping).exists());
+        assert!(!compile_lock_path(&game).exists());
+        assert!(!install_mutation_lock_path(&game).exists());
+        drop(report);
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
@@ -15094,6 +15527,9 @@ mod tests {
         // A matching loose path is safe: staging overwrites it, then cleanup must restore it.
         let live_mod = shipping.parent().unwrap().join("Mod.as");
         std::fs::write(&live_mod, b"LIVE-OLD").unwrap();
+        let shipping_modified = set_test_modified(&shipping, 1_600_000_001);
+        let dev_modified = set_test_modified(&dev, 1_600_000_002);
+        let live_mod_modified = set_test_modified(&live_mod, 1_600_000_003);
         let src = base.join("src");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("Mod.as"), b"STAGED-NEW").unwrap();
@@ -15134,6 +15570,21 @@ mod tests {
             std::fs::read(&live_mod).unwrap(),
             b"LIVE-OLD",
             "colliding source restored"
+        );
+        assert_eq!(
+            std::fs::metadata(&shipping).unwrap().modified().unwrap(),
+            shipping_modified,
+            "Shipping modification time restored exactly"
+        );
+        assert_eq!(
+            std::fs::metadata(&dev).unwrap().modified().unwrap(),
+            dev_modified,
+            "development-cache modification time restored exactly"
+        );
+        assert_eq!(
+            std::fs::metadata(&live_mod).unwrap().modified().unwrap(),
+            live_mod_modified,
+            "colliding source modification time restored exactly"
         );
         assert!(!shipping.with_extension("Cache.gore-compile-bak").exists());
 
@@ -15666,6 +16117,7 @@ mod tests {
                     .unwrap(),
                 ),
                 install_restore: InstallRestoreDisposition::RestoredExact,
+                target_pins: None,
             };
             assert_eq!(
                 report.install_restore,
@@ -15706,6 +16158,7 @@ mod tests {
                     .unwrap(),
                 ),
                 install_restore: InstallRestoreDisposition::RestoredExact,
+                target_pins: None,
             })
         });
         assert!(matches!(
@@ -15729,6 +16182,7 @@ mod tests {
                     crate::diagnostics::DiagnosticsCaptureDisposition::ProcessExitUnconfirmed,
                 )),
                 install_restore: InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed,
+                target_pins: None,
             })
         });
         assert!(matches!(
@@ -15745,6 +16199,7 @@ mod tests {
                 result: Err("isolation setup failed and its rollback also failed".to_owned()),
                 diagnostics: None,
                 install_restore: InstallRestoreDisposition::RecoveryRequiredRestoreFailed,
+                target_pins: None,
             })
         });
         assert!(matches!(
@@ -15818,7 +16273,12 @@ mod tests {
         };
         let generated =
             cache_with_empty_modules(&[("Base", "Base.as"), ("NewModule", "NewModule.as")]);
-        let mut standalone = |_: StandaloneCompilerInputsV1<'_>| {
+        let mut standalone = |inputs: StandaloneCompilerInputsV1<'_>| {
+            assert!(!inputs.source_tree.join("Base.as").exists());
+            assert_eq!(
+                std::fs::read(inputs.source_tree.join("NewModule.as")).unwrap(),
+                b"// standalone source\n"
+            );
             let path = root.join("standalone.cache");
             std::fs::write(&path, &generated).unwrap();
             let cleanup = path.clone();
@@ -15862,6 +16322,58 @@ mod tests {
         );
 
         drop(report);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compile_module_add_derives_identity_from_relative_path_before_backend() {
+        let root = unique_test_root("backend-v1-derived-add-identity");
+        std::fs::create_dir_all(&root).unwrap();
+        let opts = CompileOpts {
+            game_dir: root.join("game"),
+            op: "add".to_owned(),
+            module_name: "Stale.CallerHint".to_owned(),
+            rel_path: "GoreVisibleTest/VisibleTestDialog.as".to_owned(),
+            as_path: root.join("must-not-be-opened.as"),
+            source_override: Some(b"// standalone source\n".to_vec()),
+            work_dir: root.join("work"),
+            allow_new_symbols: true,
+            base_override: Some(cache_with_empty_modules(&[("Base", "Base.as")])),
+            binds_override: None,
+        };
+        let generated = cache_with_empty_modules(&[
+            ("Base", "Base.as"),
+            (
+                "GoreVisibleTest.VisibleTestDialog",
+                "GoreVisibleTest/VisibleTestDialog.as",
+            ),
+        ]);
+        let mut standalone = |inputs: StandaloneCompilerInputsV1<'_>| {
+            assert_eq!(inputs.overlays.len(), 1);
+            assert_eq!(
+                inputs.overlays[0].module_name,
+                "GoreVisibleTest.VisibleTestDialog"
+            );
+            assert_eq!(
+                inputs.overlays[0].relative_path,
+                "GoreVisibleTest/VisibleTestDialog.as"
+            );
+            let path = root.join("standalone.cache");
+            std::fs::write(&path, &generated).unwrap();
+            Ok(StandaloneCompilerOutputV1::detached(path))
+        };
+
+        let report = compile_module_report_with_backend_runner_v1(
+            &opts,
+            CompilerBackendModeV1::Standalone,
+            Some(&mut standalone),
+            |_, _| panic!("strict standalone mode must not enter the game backend"),
+        );
+        let CompileModuleReportOutcome::Compiled(output) = report.outcome else {
+            panic!("derived add identity did not compile")
+        };
+        assert_eq!(output.module_name, "GoreVisibleTest.VisibleTestDialog");
+        drop(output);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -16020,6 +16532,7 @@ mod tests {
                         crate::diagnostics::DiagnosticsCaptureDisposition::Disabled,
                     )),
                     install_restore: InstallRestoreDisposition::RestoredExact,
+                    target_pins: None,
                 })
             },
         );
@@ -16081,6 +16594,7 @@ mod tests {
                         crate::diagnostics::DiagnosticsCaptureDisposition::Disabled,
                     )),
                     install_restore: InstallRestoreDisposition::RestoredExact,
+                    target_pins: None,
                 })
             },
         );
@@ -16858,7 +17372,13 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("injected copy failure"));
         assert_eq!(written.len(), 1, "rollback entry registered before copy");
-        assert_eq!(written[0].1.as_deref(), Some(b"OLD".as_slice()));
+        assert_eq!(
+            written[0]
+                .1
+                .as_ref()
+                .map(|snapshot| snapshot.bytes.as_slice()),
+            Some(b"OLD".as_slice())
+        );
         assert_eq!(std::fs::read(&target).unwrap(), b"PARTIAL");
 
         restore_or_remove(&written, &dst).unwrap();
@@ -17077,9 +17597,8 @@ mod tests {
         assert!(written.iter().any(|(p, _)| p == &nested));
         // The collision was overwritten with the new bytes, and its prior bytes were captured.
         assert_eq!(std::fs::read(&over).unwrap(), b"new");
-        assert!(written
-            .iter()
-            .any(|(p, prior)| p == &over && prior.as_deref() == Some(b"old")));
+        assert!(written.iter().any(|(p, prior)| p == &over
+            && prior.as_ref().map(|snapshot| snapshot.bytes.as_slice()) == Some(b"old")));
 
         // Cleanup succeeds: the colliding file restores and the copied-only files delete cleanly.
         restore_or_remove(&written, &dst).expect("cleanup should succeed in a writable tmp tree");

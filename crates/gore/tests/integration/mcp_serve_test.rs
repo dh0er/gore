@@ -59,7 +59,11 @@ impl Server {
             }
         });
 
-        Self { child, stdin: Some(stdin), lines }
+        Self {
+            child,
+            stdin: Some(stdin),
+            lines,
+        }
     }
 
     fn send(&mut self, message: Value) {
@@ -70,8 +74,9 @@ impl Server {
 
     fn recv(&mut self) -> Value {
         match self.lines.recv_timeout(REPLY_TIMEOUT) {
-            Ok(line) => serde_json::from_str(&line)
-                .unwrap_or_else(|error| panic!("stdout must carry only JSON-RPC: {error} in {line:?}")),
+            Ok(line) => serde_json::from_str(&line).unwrap_or_else(|error| {
+                panic!("stdout must carry only JSON-RPC: {error} in {line:?}")
+            }),
             Err(RecvTimeoutError::Timeout) => panic!("no reply within {REPLY_TIMEOUT:?}"),
             Err(RecvTimeoutError::Disconnected) => panic!("the server closed stdout unexpectedly"),
         }
@@ -80,8 +85,14 @@ impl Server {
     /// Close stdin — the stdio shutdown handshake — and report how the server exited.
     fn shutdown(mut self) -> (Option<i32>, String) {
         drop(self.stdin.take());
-        let output = self.child.wait_with_output().expect("wait for the server to exit");
-        (output.status.code(), String::from_utf8_lossy(&output.stderr).into_owned())
+        let output = self
+            .child
+            .wait_with_output()
+            .expect("wait for the server to exit");
+        (
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
     }
 
     fn initialize(&mut self) -> Value {
@@ -133,6 +144,16 @@ fn a_gated_call(id: u32, tmp: &Path) -> Value {
     })
 }
 
+fn relayed_approval_id(refusal: &Value) -> String {
+    let text = refusal["content"][0]["text"]
+        .as_str()
+        .expect("refusal text");
+    let marker = "`approval_request_id` set to `";
+    text.split_once(marker)
+        .and_then(|(_, tail)| tail.split_once('`').map(|(id, _)| id.to_owned()))
+        .unwrap_or_else(|| panic!("refusal carries no bound approval request id: {text}"))
+}
+
 #[test]
 fn initialize_negotiates_and_identifies_the_server() {
     let tmp = TempDir::new().unwrap();
@@ -145,12 +166,16 @@ fn initialize_negotiates_and_identifies_the_server() {
     assert_eq!(result["protocolVersion"], "2025-11-25");
     assert_eq!(result["serverInfo"]["name"], "gore");
     assert!(
-        result["serverInfo"]["version"].as_str().is_some_and(|v| !v.is_empty()),
+        result["serverInfo"]["version"]
+            .as_str()
+            .is_some_and(|v| !v.is_empty()),
         "serverInfo.version should report the gore CLI version"
     );
     assert!(result["capabilities"].get("tools").is_some());
     assert!(
-        result["instructions"].as_str().is_some_and(|text| text.contains("gore_guide")),
+        result["instructions"]
+            .as_str()
+            .is_some_and(|text| text.contains("gore_guide")),
         "the primer must point at the guide"
     );
 
@@ -186,10 +211,18 @@ fn tools_list_advertises_every_group_in_the_table() {
     let response = server.recv();
     assert_eq!(response["id"], 3);
 
-    let tools = response["result"]["tools"].as_array().expect("an array of tools").clone();
-    let names: Vec<&str> = tools.iter().map(|tool| tool["name"].as_str().unwrap()).collect();
+    let tools = response["result"]["tools"]
+        .as_array()
+        .expect("an array of tools")
+        .clone();
+    let names: Vec<&str> = tools
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
     assert!(names.contains(&"gore_config"), "{names:?}");
     assert!(names.contains(&"gore_as"), "{names:?}");
+    assert!(names.contains(&"gore_as_compile"), "{names:?}");
+    assert!(names.contains(&"gore_as_compile_module"), "{names:?}");
     assert!(names.contains(&"gore_mgr"), "{names:?}");
     assert!(
         names.len() >= 11,
@@ -221,7 +254,9 @@ fn a_tool_call_runs_the_real_cli_and_returns_its_output() {
     assert_eq!(result["isError"], json!(false), "{result}");
     // The line names the binary the server re-execs, which under test is the built `gore.exe`
     // by absolute path rather than a bare `gore` — that is the point of showing it.
-    let shown = result["content"][0]["text"].as_str().expect("a command line");
+    let shown = result["content"][0]["text"]
+        .as_str()
+        .expect("a command line");
     assert!(shown.ends_with(" config path"), "{shown}");
     assert!(shown.contains("gore"), "{shown}");
     let stdout = result["content"][1]["text"].as_str().unwrap();
@@ -295,7 +330,10 @@ fn a_failing_command_is_reported_as_a_tool_error_with_its_message() {
     }));
     let response = server.recv();
 
-    assert!(response.get("error").is_none(), "a failing command is not a protocol error");
+    assert!(
+        response.get("error").is_none(),
+        "a failing command is not a protocol error"
+    );
     let result = &response["result"];
     assert_eq!(result["isError"], json!(true), "{result}");
     let rendered = result["content"].to_string();
@@ -321,10 +359,16 @@ fn a_client_that_can_be_asked_gets_a_question_and_the_command_runs_on_yes() {
     assert_eq!(question["method"], "elicitation/create", "{question}");
     assert_eq!(question["jsonrpc"], "2.0");
     let question_id = question["id"].clone();
-    assert!(question_id.is_string(), "the server has to correlate our answer: {question}");
+    assert!(
+        question_id.is_string(),
+        "the server has to correlate our answer: {question}"
+    );
     let message = question["params"]["message"].as_str().expect("a message");
     assert!(message.contains("gore loc import"), "{message}");
-    assert!(message.contains("overwrite its input in place"), "{message}");
+    assert!(
+        message.contains("overwrite its input in place"),
+        "{message}"
+    );
     // Which file it would overwrite is the one thing this arm's reason cannot say — it is
     // identified by the argument that was left out — so the command line has to carry it.
     assert!(message.contains("absent.lcache"), "{message}");
@@ -344,9 +388,17 @@ fn a_client_that_can_be_asked_gets_a_question_and_the_command_runs_on_yes() {
     // model can put it in front of the user — and `loc import` appears in a refusal's opening
     // sentence as well. What is left is that a refusal never reaches a process: it opens with
     // `refused:` and carries no exit code.
-    let ran = result["content"][0]["text"].as_str().expect("a first block");
-    assert!(!ran.starts_with("refused:"), "the answer was yes, so nothing was refused: {result}");
-    assert!(ran.contains("loc import"), "a run leads with the command line: {result}");
+    let ran = result["content"][0]["text"]
+        .as_str()
+        .expect("a first block");
+    assert!(
+        !ran.starts_with("refused:"),
+        "the answer was yes, so nothing was refused: {result}"
+    );
+    assert!(
+        ran.contains("loc import"),
+        "a run leads with the command line: {result}"
+    );
     assert!(
         result["content"].to_string().contains("exit code 1"),
         "the command should have run and failed: {result}"
@@ -373,12 +425,18 @@ fn saying_no_leaves_the_command_unrun_and_the_session_healthy() {
     }));
 
     let response = server.recv();
-    assert_eq!(response["id"], 31, "the answer settles the call it belonged to");
+    assert_eq!(
+        response["id"], 31,
+        "the answer settles the call it belonged to"
+    );
     let result = &response["result"];
     assert_eq!(result["isError"], json!(true), "{result}");
     let text = result["content"][0]["text"].as_str().unwrap();
     assert!(text.starts_with("refused:"), "nothing ran: {text}");
-    assert!(!text.contains("exit code"), "nothing ran, so there is no exit code: {text}");
+    assert!(
+        !text.contains("exit code"),
+        "nothing ran, so there is no exit code: {text}"
+    );
     // The answer is reported as what it was — an action on the wire — and not as a decision some
     // person is claimed to have made, which from this side of the socket is unknowable.
     assert!(text.contains("`decline`"), "{text}");
@@ -418,8 +476,16 @@ fn a_client_that_answers_for_the_user_is_not_reported_as_the_user_deciding() {
 
     assert!(text.contains("`cancel`"), "the raw answer is named: {text}");
     assert!(text.contains("dismissed"), "{text}");
-    for claim in ["the user was asked", "the user said", "said no", "the user declined"] {
-        assert!(!text.contains(claim), "{claim:?} is not something this server can know: {text}");
+    for claim in [
+        "the user was asked",
+        "the user said",
+        "said no",
+        "the user declined",
+    ] {
+        assert!(
+            !text.contains(claim),
+            "{claim:?} is not something this server can know: {text}"
+        );
     }
     // And it has to leave a way forward, because a dismissal may mean nobody was ever asked.
     assert!(text.contains("gore mcp serve --allow-write"), "{text}");
@@ -433,29 +499,52 @@ fn a_relayed_approval_runs_the_command_without_putting_a_question() {
     // The way out of the case above. A client that answers its own dialogs leaves the model one
     // move: ask the user in the conversation, then send the call again carrying their words. No
     // dialog is put — the point is precisely that a dialog reaches nobody here — and the result
-    // records that it ran on a claim.
+    // records the exact one-time binding and the relayed words.
     let tmp = TempDir::new().unwrap();
     let mut server = Server::spawn(tmp.path());
     server.initialize_able_to_answer();
 
-    let mut call = a_gated_call(36, tmp.path());
+    server.send(a_gated_call(36, tmp.path()));
+    let question = server.recv();
+    assert_eq!(question["method"], "elicitation/create");
+    server.send(json!({
+        "jsonrpc": "2.0",
+        "id": question["id"].clone(),
+        "result": { "action": "cancel" },
+    }));
+    let refusal = server.recv()["result"].clone();
+    let approval_request_id = relayed_approval_id(&refusal);
+
+    let mut call = a_gated_call(37, tmp.path());
+    call["params"]["arguments"]["approval_request_id"] = json!(approval_request_id);
     call["params"]["arguments"]["user_approved"] = json!("ja, überschreib die Datei");
     server.send(call);
 
     // The next frame is the reply, not a question: had the server asked, this would be an
     // `elicitation/create` and the id would not match.
     let response = server.recv();
-    assert_eq!(response["id"], 36, "no question may precede this: {response}");
+    assert_eq!(
+        response["id"], 37,
+        "no question may precede this: {response}"
+    );
     let result = &response["result"];
 
-    let ran = result["content"][0]["text"].as_str().expect("a first block");
-    assert!(ran.contains("loc import"), "a run leads with the command line: {result}");
+    let ran = result["content"][0]["text"]
+        .as_str()
+        .expect("a first block");
+    assert!(
+        ran.contains("loc import"),
+        "a run leads with the command line: {result}"
+    );
     assert!(
         result["content"].to_string().contains("exit code 1"),
         "the command should have run and failed on its missing input: {result}"
     );
     let recorded = result["content"].to_string();
-    assert!(recorded.contains("assertion"), "the result must record the claim: {recorded}");
+    assert!(
+        recorded.contains("one-time approval request"),
+        "the result must record the binding: {recorded}"
+    );
     assert!(recorded.contains("ja, überschreib die Datei"), "{recorded}");
 
     let (code, stderr) = server.shutdown();
@@ -487,7 +576,10 @@ fn what_the_client_says_while_a_question_is_open_is_answered_afterwards() {
     let first = server.recv();
     assert_eq!(first["id"], 33, "the call that was in flight: {first}");
     let second = server.recv();
-    assert_eq!(second["id"], 34, "the deferred ping still gets its reply: {second}");
+    assert_eq!(
+        second["id"], 34,
+        "the deferred ping still gets its reply: {second}"
+    );
 
     let (code, stderr) = server.shutdown();
     assert_eq!(code, Some(0), "stderr was: {stderr}");
@@ -565,7 +657,11 @@ fn an_unknown_method_is_reported_without_ending_the_session() {
     assert_eq!(response["error"]["code"], -32601);
 
     server.send(json!({ "jsonrpc": "2.0", "id": 5, "method": "ping" }));
-    assert_eq!(server.recv()["id"], 5, "the session survives an unknown method");
+    assert_eq!(
+        server.recv()["id"],
+        5,
+        "the session survives an unknown method"
+    );
 
     let (code, stderr) = server.shutdown();
     assert_eq!(code, Some(0), "stderr was: {stderr}");
@@ -578,8 +674,15 @@ fn the_guide_is_served_as_resources_and_reads_back() {
     server.initialize();
 
     server.send(json!({ "jsonrpc": "2.0", "id": 20, "method": "resources/list" }));
-    let listed = server.recv()["result"]["resources"].as_array().unwrap().clone();
-    assert!(listed.len() >= 21, "expected the whole guide, got {}", listed.len());
+    let listed = server.recv()["result"]["resources"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(
+        listed.len() >= 21,
+        "expected the whole guide, got {}",
+        listed.len()
+    );
 
     let uri = listed[0]["uri"].as_str().unwrap().to_string();
     server.send(json!({
@@ -619,7 +722,10 @@ fn the_guide_tool_finds_a_page_without_touching_the_filesystem() {
     // Read out of the text, because that is the only channel every client passes to the model.
     let hits = result["content"][0]["text"].as_str().expect("a text block");
     assert!(hits.contains("read with:"), "{hits}");
-    assert!(hits.contains("textures#"), "the top hit is the textures page: {hits}");
+    assert!(
+        hits.contains("textures#"),
+        "the top hit is the textures page: {hits}"
+    );
     assert!(result.get("structuredContent").is_none(), "{result}");
 
     let (code, stderr) = server.shutdown();
@@ -641,7 +747,9 @@ fn the_help_tool_returns_the_cli_own_help() {
     let result = server.recv()["result"].clone();
 
     assert_eq!(result["isError"], json!(false), "{result}");
-    let shown = result["content"][0]["text"].as_str().expect("a command line");
+    let shown = result["content"][0]["text"]
+        .as_str()
+        .expect("a command line");
     assert!(shown.ends_with(" as patch-default --help"), "{shown}");
     let help = result["content"][1]["text"].as_str().unwrap();
     assert!(help.contains("--expected-hex"), "{help}");
@@ -660,5 +768,8 @@ fn closing_stdin_exits_cleanly_without_writing_to_stderr() {
 
     let (code, stderr) = server.shutdown();
     assert_eq!(code, Some(0));
-    assert!(stderr.trim().is_empty(), "a clean shutdown must be silent, got: {stderr}");
+    assert!(
+        stderr.trim().is_empty(),
+        "a clean shutdown must be silent, got: {stderr}"
+    );
 }

@@ -13,13 +13,17 @@
 //! wire and set aside rather than handled — otherwise a second tool call could start underneath the
 //! first. [`TransportPeer`] holds that queue; the loop drains it before reading further.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::VecDeque;
+use std::ffi::OsString;
+use std::hash::{Hash, Hasher};
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
 
-use crate::consent::{self, Decision, Needs, Peer, Policy, APPROVAL_FIELD};
+use crate::consent::{self, Decision, Needs, Peer, Policy, APPROVAL_FIELD, APPROVAL_REQUEST_FIELD};
 use crate::exec::{self, ProcessSpawn, Spawn};
 use crate::rpc::{errors, Frame, OutRequest, Request, Response, Transport, MAX_FRAME_BYTES};
 use crate::{argv, capabilities, resources, spec, tools};
@@ -53,6 +57,22 @@ pub struct Options {
 /// 256 KiB: enough for any human-shaped listing, small enough that a runaway scan cannot flood a
 /// model's context.
 pub const DEFAULT_MAX_STDOUT_BYTES: usize = 256 * 1024;
+const APPROVAL_REQUEST_TTL: Duration = Duration::from_secs(15 * 60);
+const MAX_PENDING_APPROVALS: usize = 32;
+
+#[derive(Debug)]
+struct PendingApproval {
+    id: String,
+    path: String,
+    argv: Vec<OsString>,
+    expires_at: Instant,
+}
+
+impl PendingApproval {
+    fn matches(&self, invocation: &argv::Invocation) -> bool {
+        self.path == invocation.path && self.argv == invocation.argv
+    }
+}
 
 impl Options {
     pub fn new(exe: PathBuf, server_version: impl Into<String>) -> Self {
@@ -85,6 +105,10 @@ pub struct Session {
     /// Asking a client that never advertised it is a protocol violation, and in practice it also
     /// hangs: nothing on the other side is listening for the question, so nothing ever answers.
     client_can_elicit: bool,
+    /// One-time conversation-approval requests. Each entry is bound to the normalized argv that
+    /// was actually refused, not merely to a tool or subcommand name.
+    pending_approvals: VecDeque<PendingApproval>,
+    next_approval_id: u64,
 }
 
 impl Session {
@@ -102,7 +126,81 @@ impl Session {
             protocol_version: capabilities::LATEST_PROTOCOL_VERSION,
             initialized: false,
             client_can_elicit: false,
+            pending_approvals: VecDeque::new(),
+            next_approval_id: 0,
         }
+    }
+
+    fn issue_approval_request(&mut self, invocation: &argv::Invocation) -> String {
+        self.prune_expired_approvals();
+        self.next_approval_id = self.next_approval_id.wrapping_add(1);
+
+        // The id is deliberately opaque. It is not a secret — the refusal gives it to the caller —
+        // but a hashed per-session value avoids exposing counters as a protocol clients start to
+        // interpret. Authority comes from the server-side argv binding and one-time consumption.
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let mut first = DefaultHasher::new();
+        std::process::id().hash(&mut first);
+        now.hash(&mut first);
+        self.next_approval_id.hash(&mut first);
+        invocation.path.hash(&mut first);
+        invocation.argv.hash(&mut first);
+        let mut second = DefaultHasher::new();
+        first.finish().hash(&mut second);
+        invocation.display.hash(&mut second);
+        now.rotate_left(41).hash(&mut second);
+        let id = format!(
+            "gore-consent-{:016x}{:016x}",
+            first.finish(),
+            second.finish()
+        );
+
+        if self.pending_approvals.len() == MAX_PENDING_APPROVALS {
+            self.pending_approvals.pop_front();
+        }
+        self.pending_approvals.push_back(PendingApproval {
+            id: id.clone(),
+            path: invocation.path.clone(),
+            argv: invocation.argv.clone(),
+            expires_at: Instant::now() + APPROVAL_REQUEST_TTL,
+        });
+        id
+    }
+
+    fn consume_approval_request(
+        &mut self,
+        id: &str,
+        invocation: &argv::Invocation,
+    ) -> Result<(), String> {
+        self.prune_expired_approvals();
+        let Some(index) = self
+            .pending_approvals
+            .iter()
+            .position(|pending| pending.id == id)
+        else {
+            return Err(format!(
+                "`{APPROVAL_REQUEST_FIELD}` is unknown, expired, or already used. Send this exact \
+                 call once without approval fields to obtain a fresh request id."
+            ));
+        };
+        if !self.pending_approvals[index].matches(invocation) {
+            return Err(format!(
+                "`{APPROVAL_REQUEST_FIELD}` belongs to a different exact command. Do not change \
+                 any argument on an approval retry; send this call once without approval fields \
+                 to obtain its own request id."
+            ));
+        }
+        self.pending_approvals.remove(index);
+        Ok(())
+    }
+
+    fn prune_expired_approvals(&mut self) {
+        let now = Instant::now();
+        self.pending_approvals
+            .retain(|pending| pending.expires_at > now);
     }
 
     /// How this session may treat a call that needs a person to agree.
@@ -182,7 +280,10 @@ impl Session {
 
             "ping" => Some(Response::ok(id, json!({}))),
 
-            "tools/list" => Some(Response::ok(id, json!({ "tools": self.tool_definitions() }))),
+            "tools/list" => Some(Response::ok(
+                id,
+                json!({ "tools": self.tool_definitions() }),
+            )),
             // A tool call with no id is a malformed request, not a fire-and-forget notification.
             // JSON-RPC forbids answering it, so running it would spawn a child, change whatever it
             // changes, and throw the outcome away. There is nothing for a `notifications/cancelled`
@@ -191,9 +292,10 @@ impl Session {
             "tools/call" => Some(self.call_tool(id, &params, peer)),
 
             "resources/list" => Some(Response::ok(id, json!({ "resources": self.resources() }))),
-            "resources/templates/list" => {
-                Some(Response::ok(id, json!({ "resourceTemplates": self.resource_templates() })))
-            }
+            "resources/templates/list" => Some(Response::ok(
+                id,
+                json!({ "resourceTemplates": self.resource_templates() }),
+            )),
             "resources/read" => Some(self.read_resource(id, &params)),
 
             other => Some(Response::error(
@@ -245,7 +347,12 @@ impl Session {
     /// missing argument, a refusal, a command that exits non-zero — comes back as a successful
     /// response carrying `isError: true`, because those are exactly the failures a model can read
     /// and correct.
-    fn call_tool(&mut self, id: Value, params: &Map<String, Value>, peer: &mut dyn Peer) -> Response {
+    fn call_tool(
+        &mut self,
+        id: Value,
+        params: &Map<String, Value>,
+        peer: &mut dyn Peer,
+    ) -> Response {
         let Some(name) = params.get("name").and_then(Value::as_str) else {
             return Response::error(id, errors::INVALID_PARAMS, "`name` is required");
         };
@@ -274,18 +381,10 @@ impl Session {
         }
         let group = spec::group(name).expect("checked above");
 
-        for key in arguments.keys() {
-            if key != "subcommand" && key != "args" && key != APPROVAL_FIELD {
-                return Response::ok(
-                    id,
-                    exec::to_error_result(format!(
-                        "`{key}` is not accepted here. Pass `subcommand`, put the command's own \
-                         arguments inside `args`, and use `{APPROVAL_FIELD}` only to relay \
-                         approval the user has already given you."
-                    )),
-                );
-            }
-        }
+        let (subcommand, args) = match normalize_group_arguments(group, &arguments) {
+            Ok(call) => call,
+            Err(message) => return Response::ok(id, exec::to_error_result(message)),
+        };
 
         // A claim quoting nobody is not a claim. A missing or null field is simply absent — some
         // clients serialise an omitted optional that way — but anything else present and unusable
@@ -299,44 +398,80 @@ impl Session {
                     id,
                     exec::to_error_result(format!(
                         "`{APPROVAL_FIELD}` must be the user's own words approving this call, as a \
-                         non-empty string. Leave it out unless they answered you."
+                         non-empty string. Leave it and `{APPROVAL_REQUEST_FIELD}` out unless they \
+                         answered you."
                     )),
                 )
             }
         };
-
-        let Some(subcommand) = arguments.get("subcommand").and_then(Value::as_str) else {
+        let approval_request_id = match arguments.get(APPROVAL_REQUEST_FIELD) {
+            None | Some(Value::Null) => None,
+            Some(Value::String(id)) if !id.trim().is_empty() => Some(id.clone()),
+            Some(_) => {
+                return Response::ok(
+                    id,
+                    exec::to_error_result(format!(
+                        "`{APPROVAL_REQUEST_FIELD}` must be the non-empty opaque id from the \
+                         refusal for this exact call."
+                    )),
+                )
+            }
+        };
+        if approval.is_some() != approval_request_id.is_some() {
             return Response::ok(
                 id,
                 exec::to_error_result(format!(
-                    "`subcommand` is required and must be a string. {name} accepts: {}.",
-                    group.subcommands().join(", ")
+                    "`{APPROVAL_REQUEST_FIELD}` and `{APPROVAL_FIELD}` must be supplied together. \
+                     First send the protected call without either field; if it is refused, relay \
+                     the user's answer with both values exactly as instructed."
                 )),
             );
-        };
+        }
 
-        let args = arguments.get("args").cloned().unwrap_or(Value::Null);
-        let invocation = match argv::build(group, subcommand, &args, &self.opts) {
+        let invocation = match argv::build(group, &subcommand, &args, &self.opts) {
             Ok(invocation) => invocation,
             Err(error) => return Response::ok(id, exec::to_error_result(error.to_string())),
         };
-        let command = group.command(subcommand).expect("argv::build validated the subcommand");
+        let command = group
+            .command(&subcommand)
+            .expect("argv::build validated the subcommand");
 
         // Between a complete command line and running it: the one question a person gets to answer.
         // Nothing has been spawned yet, so a "no" here leaves every file exactly as it was.
         let mut asserted = None;
         if let Some(request) = &invocation.consent {
+            if self.consent_policy() != Policy::NeverAsk {
+                if let (Some(request_id), Some(_)) = (&approval_request_id, &approval) {
+                    if let Err(message) = self.consume_approval_request(request_id, &invocation) {
+                        return Response::ok(id, exec::to_error_result(message));
+                    }
+                }
+            }
             let decision =
                 consent::decide(request, self.consent_policy(), approval.as_deref(), peer);
             if !decision.allows() {
+                let approval_request_id = (self.consent_policy() != Policy::NeverAsk)
+                    .then(|| self.issue_approval_request(&invocation));
                 return Response::ok(
                     id,
-                    exec::to_error_result(consent::refusal(request, &decision)),
+                    exec::to_error_result(consent::refusal(
+                        request,
+                        &decision,
+                        approval_request_id.as_deref(),
+                    )),
                 );
             }
             if let Decision::AllowedByAssertion(words) = decision {
                 asserted = Some(words);
             }
+        } else if approval.is_some() {
+            return Response::ok(
+                id,
+                exec::to_error_result(format!(
+                    "`{APPROVAL_REQUEST_FIELD}` and `{APPROVAL_FIELD}` were supplied, but this \
+                     exact call does not need consent. Remove both fields and run it normally."
+                )),
+            );
         }
 
         match self.spawn.run(&invocation) {
@@ -383,9 +518,105 @@ impl Session {
     }
 }
 
+/// Normalize the two MCP call shapes without changing the CLI contract.
+///
+/// Namespace tools keep `subcommand` plus `args`. A tool that selects exactly one command accepts
+/// its typed arguments directly, while retaining the old envelope for cached clients. Mixing the
+/// two argument locations is refused rather than guessing which value wins.
+fn normalize_group_arguments(
+    group: &'static spec::GroupSpec,
+    arguments: &Map<String, Value>,
+) -> Result<(String, Value), String> {
+    let is_meta = |key: &str| {
+        matches!(
+            key,
+            "subcommand" | "args" | APPROVAL_FIELD | APPROVAL_REQUEST_FIELD
+        )
+    };
+
+    if let [command] = group.commands {
+        for key in arguments.keys() {
+            if !is_meta(key) && command.arg(key).is_none() {
+                let accepted = command
+                    .args
+                    .iter()
+                    .map(|arg| arg.name)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let accepted = if accepted.is_empty() {
+                    "no command arguments".to_owned()
+                } else {
+                    format!("these command arguments: {accepted}")
+                };
+                return Err(format!(
+                    "`{key}` is not accepted by {}. Pass {accepted} directly at the top level; \
+                     the old `subcommand`/`args` envelope is accepted only for compatibility.",
+                    group.tool
+                ));
+            }
+        }
+
+        if let Some(subcommand) = arguments.get("subcommand") {
+            match subcommand.as_str() {
+                Some(given) if given == command.sub => {}
+                Some(given) => {
+                    return Err(format!(
+                        "{} already selects `{}` and has no subcommand `{given}`.",
+                        group.tool, command.sub
+                    ));
+                }
+                None => return Err("`subcommand` must be a string when supplied.".into()),
+            }
+        }
+
+        let mut direct = Map::new();
+        for (key, value) in arguments {
+            if command.arg(key).is_some() {
+                direct.insert(key.clone(), value.clone());
+            }
+        }
+        if arguments.contains_key("args") && !direct.is_empty() {
+            return Err(format!(
+                "{} received command arguments both directly and inside `args`. Use the direct \
+                 typed fields only, or the old envelope only; nothing ran.",
+                group.tool
+            ));
+        }
+        let args = arguments
+            .get("args")
+            .cloned()
+            .unwrap_or_else(|| Value::Object(direct));
+        return Ok((command.sub.to_owned(), args));
+    }
+
+    for key in arguments.keys() {
+        if !is_meta(key) {
+            return Err(format!(
+                "`{key}` is not accepted here. Pass `subcommand`, put the command's own arguments \
+                 inside `args`, and use `{APPROVAL_REQUEST_FIELD}` plus `{APPROVAL_FIELD}` only to \
+                 relay approval for a previously refused exact call."
+            ));
+        }
+    }
+    let Some(subcommand) = arguments.get("subcommand").and_then(Value::as_str) else {
+        return Err(format!(
+            "`subcommand` is required and must be a string. {} accepts: {}.",
+            group.tool,
+            group.subcommands().join(", ")
+        ));
+    };
+    Ok((
+        subcommand.to_owned(),
+        arguments.get("args").cloned().unwrap_or(Value::Null),
+    ))
+}
+
 /// Comma-separated slugs of one documentation body, for an error that has to say what *is* valid.
 fn slugs_of(kind: crate::guide::Kind) -> String {
-    crate::guide::pages_of(kind).map(|page| page.slug).collect::<Vec<_>>().join(", ")
+    crate::guide::pages_of(kind)
+        .map(|page| page.slug)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Run the server until the client closes our input.
@@ -499,26 +730,6 @@ impl<R: BufRead, W: Write> Peer for TransportPeer<'_, R, W> {
                 Err(error) => return Err(format!("the connection failed while waiting: {error}")),
             };
 
-            if let Frame::Answer { id: answered, result, error, version_ok } = &frame {
-                if *answered == id {
-                    // Failed closed, before the payload is looked at. A peer that answers a "may I
-                    // change your game installation?" question in a protocol revision it did not
-                    // negotiate is not one whose "run it" this server should act on, and treating
-                    // the failure as a refusal costs nothing but a question asked again.
-                    if !version_ok {
-                        return Err("the answer declared a JSON-RPC version this server does not \
-                                    speak, so it was not read as consent"
-                            .into());
-                    }
-                    if let Some(error) = error {
-                        return Err(describe_error(error));
-                    }
-                    return result
-                        .clone()
-                        .ok_or_else(|| "the answer carried neither a result nor an error".into());
-                }
-            }
-
             if cancels(&frame, &self.call_id) {
                 // A batch is put back rather than dropped. The cancellation itself earns no reply,
                 // but its fellow members may be requests, and an unanswered request leaves the
@@ -529,13 +740,77 @@ impl<R: BufRead, W: Write> Peer for TransportPeer<'_, R, W> {
                 return Err("the client cancelled the call with the question open".into());
             }
 
-            if self.deferred.len() >= MAX_DEFERRED_FRAMES {
-                return Err(format!(
-                    "the client sent more than {MAX_DEFERRED_FRAMES} messages without answering"
-                ));
+            let (answer, remainder) = split_matching_answer(frame, &id);
+            if let Some(remainder) = remainder {
+                if self.deferred.len() >= MAX_DEFERRED_FRAMES {
+                    return Err(format!(
+                        "the client sent more than {MAX_DEFERRED_FRAMES} messages without answering"
+                    ));
+                }
+                self.deferred.push_back(remainder);
             }
-            self.deferred.push_back(frame);
+            if let Some(Frame::Answer {
+                result,
+                error,
+                version_ok,
+                ..
+            }) = answer
+            {
+                // Failed closed, before the payload is looked at. A peer that answers a "may I
+                // change your game installation?" question in a protocol revision it did not
+                // negotiate is not one whose "run it" this server should act on, and treating
+                // the failure as a refusal costs nothing but a question asked again.
+                if !version_ok {
+                    return Err(
+                        "the answer declared a JSON-RPC version this server does not \
+                                speak, so it was not read as consent"
+                            .into(),
+                    );
+                }
+                if let Some(error) = error {
+                    return Err(describe_error(&error));
+                }
+                return result
+                    .ok_or_else(|| "the answer carried neither a result nor an error".into());
+            }
         }
+    }
+}
+
+/// Remove the answer to the open server request from a top-level frame or one batch. Other batch
+/// members remain queued for the main loop in their original order.
+fn split_matching_answer(frame: Frame, id: &Value) -> (Option<Frame>, Option<Frame>) {
+    match frame {
+        Frame::Answer {
+            id: answered,
+            result,
+            error,
+            version_ok,
+        } => {
+            let matches = &answered == id;
+            let answer = Frame::Answer {
+                id: answered,
+                result,
+                error,
+                version_ok,
+            };
+            if matches {
+                (Some(answer), None)
+            } else {
+                (None, Some(answer))
+            }
+        }
+        Frame::Batch(mut members) => {
+            let Some(index) = members.iter().position(
+                |member| matches!(member, Frame::Answer { id: answered, .. } if answered == id),
+            ) else {
+                return (None, Some(Frame::Batch(members)));
+            };
+            let answer = members.remove(index);
+            let remainder = (!members.is_empty()).then_some(Frame::Batch(members));
+            (Some(answer), remainder)
+        }
+        other => (None, Some(other)),
     }
 }
 
@@ -588,7 +863,10 @@ fn notification_reply(request: &Request, id: Value) -> Option<Response> {
     Some(Response::error(
         id,
         errors::INVALID_REQUEST,
-        format!("`{}` is a notification and must not carry an `id`", request.method),
+        format!(
+            "`{}` is a notification and must not carry an `id`",
+            request.method
+        ),
     ))
 }
 
@@ -655,11 +933,17 @@ mod tests {
 
     impl Canned {
         fn allowing() -> Self {
-            Self { answer: json!({ "action": "accept", "content": { "decision": "run" } }), asked: 0 }
+            Self {
+                answer: json!({ "action": "accept", "content": { "decision": "run" } }),
+                asked: 0,
+            }
         }
 
         fn declining() -> Self {
-            Self { answer: json!({ "action": "decline" }), asked: 0 }
+            Self {
+                answer: json!({ "action": "decline" }),
+                asked: 0,
+            }
         }
     }
 
@@ -684,7 +968,12 @@ mod tests {
     /// Drive `serve` over in-memory pipes and return one parsed response per written line.
     fn exchange(input: &str) -> Vec<Value> {
         let mut output = Vec::new();
-        serve(options(), Cursor::new(input.as_bytes().to_vec()), &mut output).expect("serve");
+        serve(
+            options(),
+            Cursor::new(input.as_bytes().to_vec()),
+            &mut output,
+        )
+        .expect("serve");
         String::from_utf8(output)
             .expect("utf-8")
             .lines()
@@ -720,7 +1009,10 @@ mod tests {
     fn initialize_reports_a_version_capabilities_identity_and_instructions() {
         let mut session = Session::new(options());
         let response = session
-            .handle_unasked(&request("initialize", json!({ "protocolVersion": "2025-11-25" })))
+            .handle_unasked(&request(
+                "initialize",
+                json!({ "protocolVersion": "2025-11-25" }),
+            ))
             .expect("initialize is answered");
         let result = response.result.expect("result");
 
@@ -729,7 +1021,9 @@ mod tests {
         assert_eq!(result["serverInfo"]["version"], "0.1.0");
         assert!(result["capabilities"].get("tools").is_some());
         assert!(
-            result["instructions"].as_str().is_some_and(|text| !text.trim().is_empty()),
+            result["instructions"]
+                .as_str()
+                .is_some_and(|text| !text.trim().is_empty()),
             "clients load `instructions` automatically; an empty one wastes the slot"
         );
     }
@@ -738,7 +1032,10 @@ mod tests {
     fn an_unsupported_protocol_version_is_answered_with_ours() {
         let mut session = Session::new(options());
         let response = session
-            .handle_unasked(&request("initialize", json!({ "protocolVersion": "1900-01-01" })))
+            .handle_unasked(&request(
+                "initialize",
+                json!({ "protocolVersion": "1900-01-01" }),
+            ))
             .expect("initialize is answered");
         assert_eq!(
             response.result.unwrap()["protocolVersion"],
@@ -776,14 +1073,18 @@ mod tests {
     #[test]
     fn ping_answers_with_an_empty_result() {
         let mut session = Session::new(options());
-        let response = session.handle_unasked(&request("ping", json!({}))).expect("ping is answered");
+        let response = session
+            .handle_unasked(&request("ping", json!({})))
+            .expect("ping is answered");
         assert_eq!(response.result.unwrap(), json!({}));
     }
 
     #[test]
     fn an_unknown_method_is_a_protocol_error() {
         let mut session = Session::new(options());
-        let response = session.handle_unasked(&request("prompts/list", json!({}))).expect("answered");
+        let response = session
+            .handle_unasked(&request("prompts/list", json!({})))
+            .expect("answered");
         assert_eq!(response.error.unwrap().code, errors::METHOD_NOT_FOUND);
     }
 
@@ -797,21 +1098,35 @@ mod tests {
     #[test]
     fn tools_list_advertises_every_group_with_a_schema_and_annotations() {
         let mut session = Session::new(options());
-        let response = session.handle_unasked(&request("tools/list", json!({}))).expect("answered");
-        let listed = response.result.unwrap()["tools"].as_array().unwrap().clone();
+        let response = session
+            .handle_unasked(&request("tools/list", json!({})))
+            .expect("answered");
+        let listed = response.result.unwrap()["tools"]
+            .as_array()
+            .unwrap()
+            .clone();
 
         // One tool per command group, plus the tools that only exist inside the server.
-        assert_eq!(listed.len(), spec::GROUPS.len() + tools::definitions().len());
+        assert_eq!(
+            listed.len(),
+            spec::GROUPS.len() + tools::definitions().len()
+        );
         for tool in &listed {
             assert!(tool["name"].as_str().unwrap().starts_with("gore_"));
             assert_eq!(tool["inputSchema"]["type"], "object");
             assert!(tool["annotations"]["readOnlyHint"].is_boolean());
         }
 
-        let names: Vec<&str> =
-            listed.iter().map(|tool| tool["name"].as_str().unwrap()).collect();
+        let names: Vec<&str> = listed
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
         for group in spec::GROUPS {
-            assert!(names.contains(&group.tool), "{} is not advertised", group.tool);
+            assert!(
+                names.contains(&group.tool),
+                "{} is not advertised",
+                group.tool
+            );
         }
         assert!(names.contains(&tools::guide::NAME));
     }
@@ -831,8 +1146,14 @@ mod tests {
 
         let result = response.result.expect("a result");
         assert_eq!(result["isError"], json!(false));
-        assert!(result["content"][0]["text"].as_str().unwrap().contains("textures"));
-        assert!(spawn.calls().is_empty(), "the guide is embedded; nothing is spawned");
+        assert!(result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("textures"));
+        assert!(
+            spawn.calls().is_empty(),
+            "the guide is embedded; nothing is spawned"
+        );
     }
 
     #[test]
@@ -845,7 +1166,9 @@ mod tests {
             ))
             .expect("answered");
 
-        let result = response.result.expect("a tool call is answered with a result");
+        let result = response
+            .result
+            .expect("a tool call is answered with a result");
         assert_eq!(result["isError"], json!(false));
         assert_eq!(result["content"][0]["text"], "gore config path");
         assert_eq!(result["content"][1]["text"], "C:/x/gore/config.json\n");
@@ -860,6 +1183,148 @@ mod tests {
     }
 
     #[test]
+    fn single_command_tools_accept_typed_arguments_directly() {
+        let (mut session, spawn) = faked(exec::Outcome::success("{}\n"));
+
+        let doctor = session
+            .handle_unasked(&request(
+                "tools/call",
+                json!({ "name": "gore_doctor", "arguments": {} }),
+            ))
+            .expect("answered")
+            .result
+            .expect("result");
+        assert_eq!(doctor["isError"], json!(false));
+
+        let find = session
+            .handle_unasked(&request(
+                "tools/call",
+                json!({
+                    "name": "gore_find",
+                    "arguments": { "query": ["diego", "dialog"], "max": 3 },
+                }),
+            ))
+            .expect("answered")
+            .result
+            .expect("result");
+        assert_eq!(find["isError"], json!(false));
+
+        let calls = spawn.calls();
+        let doctor_argv: Vec<String> = calls[0]
+            .argv
+            .iter()
+            .map(|token| token.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(doctor_argv, vec!["doctor", "--json"]);
+        let find_argv: Vec<String> = calls[1]
+            .argv
+            .iter()
+            .map(|token| token.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            find_argv,
+            vec!["find", "--max", "3", "--json", "--", "diego", "dialog"]
+        );
+    }
+
+    #[test]
+    fn old_single_command_envelopes_remain_accepted_but_mixing_shapes_is_refused() {
+        let (mut session, spawn) = faked(exec::Outcome::success("{}\n"));
+        let legacy = session
+            .handle_unasked(&request(
+                "tools/call",
+                json!({
+                    "name": "gore_find",
+                    "arguments": {
+                        "subcommand": "find",
+                        "args": { "query": ["diego"] },
+                    },
+                }),
+            ))
+            .expect("answered")
+            .result
+            .expect("result");
+        assert_eq!(legacy["isError"], json!(false));
+
+        let mixed = session
+            .handle_unasked(&request(
+                "tools/call",
+                json!({
+                    "name": "gore_find",
+                    "arguments": {
+                        "query": ["diego"],
+                        "args": { "query": ["viper"] },
+                    },
+                }),
+            ))
+            .expect("answered")
+            .result
+            .expect("result");
+        assert_eq!(mixed["isError"], json!(true));
+        assert!(mixed["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("both directly and inside `args`"));
+        assert_eq!(spawn.calls().len(), 1, "mixed call must not spawn");
+    }
+
+    #[test]
+    fn dedicated_manager_preflight_is_direct_and_read_only() {
+        let (mut session, spawn) = faked(exec::Outcome::success("{}\n"));
+        let result = session
+            .handle_unasked(&request(
+                "tools/call",
+                json!({
+                    "name": "gore_mgr_preflight",
+                    "arguments": { "game": "C:/Game" },
+                }),
+            ))
+            .expect("answered")
+            .result
+            .expect("result");
+        assert_eq!(result["isError"], json!(false));
+        assert_eq!(spawn.calls().len(), 1);
+        assert!(spawn.calls()[0].consent.is_none());
+        let argv: Vec<String> = spawn.calls()[0]
+            .argv
+            .iter()
+            .map(|token| token.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            argv,
+            vec!["mgr", "preflight", "--game", "C:/Game", "--json"]
+        );
+    }
+
+    #[test]
+    fn dedicated_bundle_inspection_is_direct_read_only_and_forces_json() {
+        let (mut session, spawn) = faked(exec::Outcome::success("{}\n"));
+        let result = session
+            .handle_unasked(&request(
+                "tools/call",
+                json!({
+                    "name": "gore_mod_inspect",
+                    "arguments": { "bundle": "C:/Mods/Diego.zip" },
+                }),
+            ))
+            .expect("answered")
+            .result
+            .expect("result");
+        assert_eq!(result["isError"], json!(false));
+        assert_eq!(spawn.calls().len(), 1);
+        assert!(spawn.calls()[0].consent.is_none());
+        let argv: Vec<String> = spawn.calls()[0]
+            .argv
+            .iter()
+            .map(|token| token.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            argv,
+            vec!["mod", "inspect", "--json", "--", "C:/Mods/Diego.zip"]
+        );
+    }
+
+    #[test]
     fn a_refused_command_is_a_tool_error_and_never_reaches_a_process() {
         let (mut session, spawn) = faked(exec::Outcome::success(""));
         let response = session
@@ -869,11 +1334,16 @@ mod tests {
             ))
             .expect("answered");
 
-        let result = response.result.expect("a refusal is a result, not a protocol error");
+        let result = response
+            .result
+            .expect("a refusal is a result, not a protocol error");
         assert_eq!(result["isError"], json!(true));
         let message = result["content"][0]["text"].as_str().unwrap();
         assert!(message.contains("--allow-write"), "{message}");
-        assert!(spawn.calls().is_empty(), "a refused command must not be spawned");
+        assert!(
+            spawn.calls().is_empty(),
+            "a refused command must not be spawned"
+        );
     }
 
     #[test]
@@ -906,7 +1376,10 @@ mod tests {
             ))
             .expect("answered");
 
-        let message = response.result.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
+        let message = response.result.unwrap()["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(message.contains("no subcommand `reset`"), "{message}");
         assert!(message.contains("detect"), "{message}");
     }
@@ -915,12 +1388,18 @@ mod tests {
     fn a_missing_subcommand_says_which_ones_exist() {
         let (mut session, _) = faked(exec::Outcome::success(""));
         let response = session
-            .handle_unasked(&request("tools/call", json!({ "name": "gore_config", "arguments": {} })))
+            .handle_unasked(&request(
+                "tools/call",
+                json!({ "name": "gore_config", "arguments": {} }),
+            ))
             .expect("answered");
 
         let result = response.result.unwrap();
         assert_eq!(result["isError"], json!(true));
-        assert!(result["content"][0]["text"].as_str().unwrap().contains("`subcommand` is required"));
+        assert!(result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("`subcommand` is required"));
     }
 
     #[test]
@@ -936,7 +1415,10 @@ mod tests {
             ))
             .expect("answered");
 
-        let message = response.result.unwrap()["content"][0]["text"].as_str().unwrap().to_string();
+        let message = response.result.unwrap()["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(message.contains("inside `args`"), "{message}");
     }
 
@@ -956,7 +1438,10 @@ mod tests {
         let result = response.result.expect("still a result");
         assert_eq!(result["isError"], json!(true));
         assert!(
-            result["content"][1]["text"].as_str().unwrap().contains("exit code 1"),
+            result["content"][1]["text"]
+                .as_str()
+                .unwrap()
+                .contains("exit code 1"),
             "{result}"
         );
     }
@@ -966,13 +1451,18 @@ mod tests {
         // With an id it is a request, whatever the method is called. Staying silent would leave the
         // caller waiting on a reply that is never coming.
         for method in ["notifications/initialized", "notifications/cancelled"] {
-            let line = format!("{{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"{method}\"}}
-");
+            let line = format!(
+                "{{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"{method}\"}}
+"
+            );
             let mut output = Vec::new();
             serve(options(), Cursor::new(line.into_bytes()), &mut output).expect("clean shutdown");
 
             let text = String::from_utf8(output).expect("utf-8");
-            assert!(!text.trim().is_empty(), "{method} with an id must be answered");
+            assert!(
+                !text.trim().is_empty(),
+                "{method} with an id must be answered"
+            );
             let reply: Value = serde_json::from_str(text.trim()).expect("json");
             assert_eq!(reply["id"], json!(7));
             assert_eq!(reply["error"]["code"], json!(errors::INVALID_REQUEST));
@@ -982,10 +1472,15 @@ mod tests {
         let mut session = Session::new(options());
         let request = request_with_id("notifications/initialized", json!({}), json!(7));
         assert!(session.handle_unasked(&request).is_some());
-        assert!(!session.is_initialized(), "state must not come from a malformed request");
+        assert!(
+            !session.is_initialized(),
+            "state must not come from a malformed request"
+        );
 
         // The real notification still advances it, silently.
-        assert!(session.handle_unasked(&notification("notifications/initialized", json!({}))).is_none());
+        assert!(session
+            .handle_unasked(&notification("notifications/initialized", json!({})))
+            .is_none());
         assert!(session.is_initialized());
     }
 
@@ -996,21 +1491,32 @@ mod tests {
         // client to wait and very likely retry.
         let input = Cursor::new(
             "{\"jsonrpc\":\"2.0\",\"id\":null,\"method\":\"ping\"}
-".as_bytes().to_vec(),
+"
+            .as_bytes()
+            .to_vec(),
         );
         let mut output = Vec::new();
         serve(options(), input, &mut output).expect("clean shutdown");
 
         let text = String::from_utf8(output).expect("utf-8");
-        assert!(!text.trim().is_empty(), "a null-id request must be answered");
+        assert!(
+            !text.trim().is_empty(),
+            "a null-id request must be answered"
+        );
         let reply: Value = serde_json::from_str(text.trim()).expect("json");
-        assert!(reply["id"].is_null(), "the answer echoes the null id: {reply}");
+        assert!(
+            reply["id"].is_null(),
+            "the answer echoes the null id: {reply}"
+        );
         assert!(reply["result"].is_object());
 
         // An omitted id is still a notification, and still silent.
-        let notification =
-            Cursor::new("{\"jsonrpc\":\"2.0\",\"method\":\"ping\"}
-".as_bytes().to_vec());
+        let notification = Cursor::new(
+            "{\"jsonrpc\":\"2.0\",\"method\":\"ping\"}
+"
+            .as_bytes()
+            .to_vec(),
+        );
         let mut silent = Vec::new();
         serve(options(), notification, &mut silent).expect("clean shutdown");
         assert!(silent.is_empty(), "an omitted id means no reply");
@@ -1034,7 +1540,11 @@ mod tests {
         serve(options(), input, &mut output).expect("clean shutdown");
 
         let text = String::from_utf8(output).expect("utf-8");
-        assert_eq!(text.lines().count(), 1, "a batch answers in one frame: {text}");
+        assert_eq!(
+            text.lines().count(),
+            1,
+            "a batch answers in one frame: {text}"
+        );
         let replies: Vec<Value> = serde_json::from_str(text.trim()).expect("an array");
         assert_eq!(replies.len(), 2);
         assert_eq!(replies[0]["id"], json!(1));
@@ -1046,18 +1556,25 @@ mod tests {
         let input = Cursor::new(
             "[{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}]
 "
-                .as_bytes()
-                .to_vec(),
+            .as_bytes()
+            .to_vec(),
         );
         let mut output = Vec::new();
         serve(options(), input, &mut output).expect("clean shutdown");
-        assert!(output.is_empty(), "an empty array reply is a protocol violation");
+        assert!(
+            output.is_empty(),
+            "an empty array reply is a protocol violation"
+        );
     }
 
     #[test]
     fn an_empty_batch_is_an_invalid_request() {
-        let input = Cursor::new("[]
-".as_bytes().to_vec());
+        let input = Cursor::new(
+            "[]
+"
+            .as_bytes()
+            .to_vec(),
+        );
         let mut output = Vec::new();
         serve(options(), input, &mut output).expect("clean shutdown");
 
@@ -1120,7 +1637,10 @@ mod tests {
     fn a_guide_resource_reads_back_its_page() {
         let mut session = Session::new(options());
         let response = session
-            .handle_unasked(&request("resources/read", json!({ "uri": "gore://guide/bundles" })))
+            .handle_unasked(&request(
+                "resources/read",
+                json!({ "uri": "gore://guide/bundles" }),
+            ))
             .expect("answered");
 
         let contents = response.result.expect("a result")["contents"].clone();
@@ -1133,10 +1653,15 @@ mod tests {
     fn an_unknown_resource_is_a_protocol_error_that_lists_the_real_pages() {
         let mut session = Session::new(options());
         let response = session
-            .handle_unasked(&request("resources/read", json!({ "uri": "gore://guide/nope" })))
+            .handle_unasked(&request(
+                "resources/read",
+                json!({ "uri": "gore://guide/nope" }),
+            ))
             .expect("answered");
 
-        let error = response.error.expect("unknown resources are protocol errors");
+        let error = response
+            .error
+            .expect("unknown resources are protocol errors");
         assert_eq!(error.code, errors::INVALID_PARAMS);
         assert!(error.message.contains("bundles"), "{}", error.message);
     }
@@ -1145,7 +1670,10 @@ mod tests {
     fn an_unknown_tool_is_a_protocol_error_not_a_tool_error() {
         let mut session = Session::new(options());
         let response = session
-            .handle_unasked(&request("tools/call", json!({ "name": "gore_nonexistent" })))
+            .handle_unasked(&request(
+                "tools/call",
+                json!({ "name": "gore_nonexistent" }),
+            ))
             .expect("answered");
         let error = response.error.expect("unknown tools are protocol errors");
         assert_eq!(error.code, errors::INVALID_PARAMS);
@@ -1155,7 +1683,10 @@ mod tests {
     #[test]
     fn notifications_produce_no_output_at_all_over_the_transport() {
         let written = exchange("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n");
-        assert!(written.is_empty(), "a notification must not be answered, got {written:?}");
+        assert!(
+            written.is_empty(),
+            "a notification must not be answered, got {written:?}"
+        );
     }
 
     #[test]
@@ -1234,25 +1765,41 @@ mod tests {
         // Sending a question to a client that never declared the capability is not merely impolite:
         // nothing over there is listening for it, so the call would block until something times out.
         let mut session = Session::new(options());
-        assert_eq!(session.consent_policy(), Policy::CannotAsk, "before initialize");
+        assert_eq!(
+            session.consent_policy(),
+            Policy::CannotAsk,
+            "before initialize"
+        );
 
         initialize_with(&mut session, json!({ "elicitation": {} }));
         assert_eq!(session.consent_policy(), Policy::Ask);
 
         let mut session = Session::new(options());
         initialize_with(&mut session, json!({ "roots": { "listChanged": true } }));
-        assert_eq!(session.consent_policy(), Policy::CannotAsk, "a different capability is not this one");
+        assert_eq!(
+            session.consent_policy(),
+            Policy::CannotAsk,
+            "a different capability is not this one"
+        );
 
         let mut session = Session::new(options());
         initialize_with(&mut session, json!({ "elicitation": null }));
-        assert_eq!(session.consent_policy(), Policy::CannotAsk, "an explicit null is not a declaration");
+        assert_eq!(
+            session.consent_policy(),
+            Policy::CannotAsk,
+            "an explicit null is not a declaration"
+        );
 
         // The other way a client says no. Reading it as yes is the expensive direction: the
         // question goes out, nothing over there answers it, and the call waits on a round trip
         // that fails instead of being refused outright.
         let mut session = Session::new(options());
         initialize_with(&mut session, json!({ "elicitation": false }));
-        assert_eq!(session.consent_policy(), Policy::CannotAsk, "`false` is a refusal, not a declaration");
+        assert_eq!(
+            session.consent_policy(),
+            Policy::CannotAsk,
+            "`false` is a refusal, not a declaration"
+        );
     }
 
     #[test]
@@ -1264,7 +1811,9 @@ mod tests {
         let mut session = Session::new(options());
         let malformed = request_with_id("initialize", json!([1, 2, 3]), json!(7));
 
-        let response = session.handle_unasked(&malformed).expect("a request is answered");
+        let response = session
+            .handle_unasked(&malformed)
+            .expect("a request is answered");
         let error = response.error.expect("an error, not a result");
         assert_eq!(error.code, errors::INVALID_PARAMS, "{}", error.message);
         assert_eq!(
@@ -1296,7 +1845,9 @@ mod tests {
         assert_eq!(session.consent_policy(), Policy::Ask);
 
         assert!(
-            session.handle_unasked(&notification("notifications/initialized", json!({}))).is_none(),
+            session
+                .handle_unasked(&notification("notifications/initialized", json!({})))
+                .is_none(),
             "a notification must not be answered"
         );
 
@@ -1325,7 +1876,10 @@ mod tests {
             "initialize",
             json!({ "protocolVersion": "2025-11-25", "capabilities": { "elicitation": {} } }),
         );
-        assert!(session.handle_unasked(&handshake).is_none(), "no reply to a notification");
+        assert!(
+            session.handle_unasked(&handshake).is_none(),
+            "no reply to a notification"
+        );
         assert_eq!(
             session.consent_policy(),
             Policy::CannotAsk,
@@ -1333,14 +1887,16 @@ mod tests {
         );
 
         let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("done\n")));
-        let mut session =
-            Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        let mut session = Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
         initialize_with(&mut session, json!({ "elicitation": {} }));
         let call = notification(
             "tools/call",
             json!({ "name": "gore_guide", "arguments": { "action": "list" } }),
         );
-        assert!(session.handle_unasked(&call).is_none(), "no reply to a notification");
+        assert!(
+            session.handle_unasked(&call).is_none(),
+            "no reply to a notification"
+        );
         assert!(spawn.calls().is_empty(), "and nothing ran");
     }
 
@@ -1350,7 +1906,10 @@ mod tests {
         // get to overrule that by advertising a dialog.
         let mut opts = options();
         opts.never_ask = true;
-        let mut session = Session::with_spawn(opts, Box::new(exec::FakeSpawn::new(exec::Outcome::success(""))));
+        let mut session = Session::with_spawn(
+            opts,
+            Box::new(exec::FakeSpawn::new(exec::Outcome::success(""))),
+        );
         initialize_with(&mut session, json!({ "elicitation": {} }));
         assert_eq!(session.consent_policy(), Policy::NeverAsk);
     }
@@ -1358,12 +1917,15 @@ mod tests {
     #[test]
     fn a_gated_call_runs_only_after_the_user_agrees() {
         let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("done\n")));
-        let mut session =
-            Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        let mut session = Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
         initialize_with(&mut session, json!({ "elicitation": {} }));
 
         let mut peer = Canned::allowing();
-        let result = session.handle(&a_gated_call(), &mut peer).expect("answered").result.unwrap();
+        let result = session
+            .handle(&a_gated_call(), &mut peer)
+            .expect("answered")
+            .result
+            .unwrap();
 
         assert_eq!(peer.asked, 1, "exactly one question for one call");
         assert_eq!(result["isError"], json!(false));
@@ -1375,31 +1937,46 @@ mod tests {
         // The whole promise: saying no leaves every file exactly as it was. Nothing is spawned,
         // so there is nothing to undo.
         let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("done\n")));
-        let mut session =
-            Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        let mut session = Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
         initialize_with(&mut session, json!({ "elicitation": {} }));
 
         let mut peer = Canned::declining();
-        let result = session.handle(&a_gated_call(), &mut peer).expect("answered").result.unwrap();
+        let result = session
+            .handle(&a_gated_call(), &mut peer)
+            .expect("answered")
+            .result
+            .unwrap();
 
         assert_eq!(peer.asked, 1);
-        assert!(spawn.calls().is_empty(), "a refusal must not run the command");
-        assert_eq!(result["isError"], json!(true), "the model has to see this as a failure");
+        assert!(
+            spawn.calls().is_empty(),
+            "a refusal must not run the command"
+        );
+        assert_eq!(
+            result["isError"],
+            json!(true),
+            "the model has to see this as a failure"
+        );
         let text = result["content"][0]["text"].as_str().expect("text");
         assert!(text.contains("`decline`"), "{text}");
-        assert!(!text.contains("the user was asked"), "the answer's author is unknowable: {text}");
+        assert!(
+            !text.contains("the user was asked"),
+            "the answer's author is unknowable: {text}"
+        );
     }
 
     #[test]
     fn a_client_that_cannot_be_asked_gets_the_flag_it_would_take_instead() {
         let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("")));
-        let mut session =
-            Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        let mut session = Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
         initialize_with(&mut session, json!({}));
 
         // `NoOneToAsk` panics if reached, which is the assertion: no capability, no question.
-        let result =
-            session.handle_unasked(&a_gated_call()).expect("answered").result.unwrap();
+        let result = session
+            .handle_unasked(&a_gated_call())
+            .expect("answered")
+            .result
+            .unwrap();
 
         assert!(spawn.calls().is_empty());
         let text = result["content"][0]["text"].as_str().expect("text");
@@ -1416,13 +1993,17 @@ mod tests {
         let mut session = Session::with_spawn(opts, Box::new(std::sync::Arc::clone(&spawn)));
         initialize_with(&mut session, json!({ "elicitation": {} }));
 
-        let result = session.handle_unasked(&a_gated_call()).expect("answered").result.unwrap();
+        let result = session
+            .handle_unasked(&a_gated_call())
+            .expect("answered")
+            .result
+            .unwrap();
         assert_eq!(result["isError"], json!(false));
         assert_eq!(spawn.calls().len(), 1);
     }
 
     /// The same call, carrying what the caller says the user already answered.
-    fn an_approved_call(words: &str) -> Request {
+    fn an_approved_call(words: &str, approval_request_id: &str) -> Request {
         request(
             "tools/call",
             json!({
@@ -1430,6 +2011,7 @@ mod tests {
                 "arguments": {
                     "subcommand": "import",
                     "args": { "lcache": "Alkimia.lcache", "edits": "edits.json" },
+                    "approval_request_id": approval_request_id,
                     "user_approved": words,
                 },
             }),
@@ -1443,24 +2025,171 @@ mod tests {
         // its own dialogs in four milliseconds.
         let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("done\n")));
         let mut session = Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
-        initialize_with(&mut session, json!({ "elicitation": {} }));
+        initialize_with(&mut session, json!({}));
+
+        let refused = session
+            .handle_unasked(&a_gated_call())
+            .expect("initial refusal is answered")
+            .result
+            .unwrap();
+        assert_eq!(refused["isError"], json!(true));
+        let request_id = session
+            .pending_approvals
+            .back()
+            .expect("refusal issued an approval request")
+            .id
+            .clone();
+        assert!(
+            refused["content"][0]["text"]
+                .as_str()
+                .expect("refusal text")
+                .contains(&request_id),
+            "the caller must receive the id it is meant to relay"
+        );
 
         let result = session
-            .handle_unasked(&an_approved_call("ja, überschreib die Datei"))
+            .handle_unasked(&an_approved_call(
+                "hör auf jedes mal zu fragen und mach endlich fertig",
+                &request_id,
+            ))
             .expect("answered")
             .result
             .unwrap();
 
         assert_eq!(result["isError"], json!(false), "{result}");
-        assert_eq!(spawn.calls().len(), 1, "the command ran");
+        assert_eq!(spawn.calls().len(), 1, "the exact command ran once");
+        assert!(
+            session.pending_approvals.is_empty(),
+            "the request id was consumed"
+        );
 
         let blocks = result["content"].as_array().expect("content");
-        let spoken = blocks.iter().filter_map(|block| block["text"].as_str()).collect::<Vec<_>>();
+        let spoken = blocks
+            .iter()
+            .filter_map(|block| block["text"].as_str())
+            .collect::<Vec<_>>();
         let note = spoken
             .iter()
-            .find(|text| text.contains("assertion"))
+            .find(|text| text.contains("one-time approval request"))
             .unwrap_or_else(|| panic!("no block records the claim: {spoken:?}"));
-        assert!(note.contains("ja, überschreib die Datei"), "{note}");
+        assert!(
+            note.contains("hör auf jedes mal zu fragen und mach endlich fertig"),
+            "{note}"
+        );
+    }
+
+    #[test]
+    fn a_relay_id_is_bound_to_the_exact_invocation_and_works_only_once() {
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("done\n")));
+        let mut session = Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({}));
+
+        session
+            .handle_unasked(&a_gated_call())
+            .expect("refused once");
+        let request_id = session
+            .pending_approvals
+            .back()
+            .expect("request id")
+            .id
+            .clone();
+
+        let changed = request(
+            "tools/call",
+            json!({
+                "name": "gore_loc",
+                "arguments": {
+                    "subcommand": "import",
+                    "args": { "lcache": "Other.lcache", "edits": "edits.json" },
+                    "approval_request_id": request_id,
+                    "user_approved": "ja",
+                },
+            }),
+        );
+        let changed_result = session
+            .handle_unasked(&changed)
+            .expect("answered")
+            .result
+            .unwrap();
+        assert_eq!(changed_result["isError"], json!(true));
+        assert!(changed_result["content"][0]["text"]
+            .as_str()
+            .expect("text")
+            .contains("different exact command"));
+        assert!(spawn.calls().is_empty(), "a changed retry must not run");
+
+        let exact = an_approved_call("ja", &request_id);
+        let exact_result = session
+            .handle_unasked(&exact)
+            .expect("answered")
+            .result
+            .unwrap();
+        assert_eq!(exact_result["isError"], json!(false));
+        assert_eq!(spawn.calls().len(), 1);
+
+        let replay = session
+            .handle_unasked(&exact)
+            .expect("answered")
+            .result
+            .unwrap();
+        assert_eq!(replay["isError"], json!(true));
+        assert!(replay["content"][0]["text"]
+            .as_str()
+            .expect("text")
+            .contains("expired, or already used"));
+        assert_eq!(spawn.calls().len(), 1, "reusing the id must not run again");
+    }
+
+    #[test]
+    fn approval_words_without_the_bound_request_id_are_never_enough() {
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("done\n")));
+        let mut session = Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({}));
+
+        let call = request(
+            "tools/call",
+            json!({
+                "name": "gore_loc",
+                "arguments": {
+                    "subcommand": "import",
+                    "args": { "lcache": "Alkimia.lcache", "edits": "edits.json" },
+                    "user_approved": "ja",
+                },
+            }),
+        );
+        let result = session
+            .handle_unasked(&call)
+            .expect("answered")
+            .result
+            .unwrap();
+        assert_eq!(result["isError"], json!(true));
+        let text = result["content"][0]["text"].as_str().expect("text");
+        assert!(text.contains("must be supplied together"), "{text}");
+        assert!(spawn.calls().is_empty());
+    }
+
+    #[test]
+    fn an_expired_relay_id_cannot_run_its_former_command() {
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("done\n")));
+        let mut session = Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({}));
+
+        session
+            .handle_unasked(&a_gated_call())
+            .expect("refused once");
+        let pending = session.pending_approvals.back_mut().expect("request id");
+        let request_id = pending.id.clone();
+        pending.expires_at = Instant::now() - Duration::from_secs(1);
+
+        let result = session
+            .handle_unasked(&an_approved_call("ja", &request_id))
+            .expect("answered")
+            .result
+            .unwrap();
+        assert_eq!(result["isError"], json!(true));
+        let text = result["content"][0]["text"].as_str().expect("text");
+        assert!(text.contains("expired"), "{text}");
+        assert!(spawn.calls().is_empty());
     }
 
     #[test]
@@ -1471,11 +2200,17 @@ mod tests {
         let mut session = Session::with_spawn(opts, Box::new(std::sync::Arc::clone(&spawn)));
         initialize_with(&mut session, json!({ "elicitation": {} }));
 
-        let result =
-            session.handle_unasked(&an_approved_call("go ahead")).expect("answered").result.unwrap();
+        let result = session
+            .handle_unasked(&an_approved_call("go ahead", "invented"))
+            .expect("answered")
+            .result
+            .unwrap();
 
         assert_eq!(result["isError"], json!(true));
-        assert!(spawn.calls().is_empty(), "nothing may run under --no-consent-prompts");
+        assert!(
+            spawn.calls().is_empty(),
+            "nothing may run under --no-consent-prompts"
+        );
         let text = result["content"][0]["text"].as_str().expect("text");
         assert!(text.contains("--no-consent-prompts"), "{text}");
     }
@@ -1500,13 +2235,24 @@ mod tests {
                     },
                 }),
             );
-            let result = session.handle_unasked(&call).expect("answered").result.unwrap();
+            let result = session
+                .handle_unasked(&call)
+                .expect("answered")
+                .result
+                .unwrap();
 
-            assert_eq!(result["isError"], json!(true), "{bogus} was accepted: {result}");
+            assert_eq!(
+                result["isError"],
+                json!(true),
+                "{bogus} was accepted: {result}"
+            );
             let text = result["content"][0]["text"].as_str().expect("text");
             assert!(text.contains("user_approved"), "{bogus}: {text}");
         }
-        assert!(spawn.calls().is_empty(), "nothing may run on a malformed claim");
+        assert!(
+            spawn.calls().is_empty(),
+            "nothing may run on a malformed claim"
+        );
     }
 
     #[test]
@@ -1529,7 +2275,11 @@ mod tests {
             }),
         );
         let mut peer = Canned::declining();
-        let result = session.handle(&call, &mut peer).expect("answered").result.unwrap();
+        let result = session
+            .handle(&call, &mut peer)
+            .expect("answered")
+            .result
+            .unwrap();
 
         assert_eq!(peer.asked, 1, "the question is still put");
         assert_eq!(result["isError"], json!(true));
@@ -1539,16 +2289,84 @@ mod tests {
     #[test]
     fn an_ordinary_read_asks_nobody() {
         let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("ok\n")));
-        let mut session =
-            Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        let mut session = Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
         initialize_with(&mut session, json!({ "elicitation": {} }));
 
         let response = session.handle_unasked(&request(
             "tools/call",
             json!({ "name": "gore_config", "arguments": { "subcommand": "path" } }),
         ));
-        assert_eq!(response.expect("answered").result.unwrap()["isError"], json!(false));
+        assert_eq!(
+            response.expect("answered").result.unwrap()["isError"],
+            json!(false)
+        );
         assert_eq!(spawn.calls().len(), 1);
+    }
+
+    #[test]
+    fn explicit_strict_standalone_compile_runs_without_any_consent_channel() {
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("compiled\n")));
+        let mut session = Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({}));
+
+        let response = session
+            .handle_unasked(&request(
+                "tools/call",
+                json!({
+                    "name": "gore_as",
+                    "arguments": {
+                        "subcommand": "compile",
+                        "args": {
+                            "src": "scripts",
+                            "out": "fresh.Cache",
+                            "work_dir": "compiler-work",
+                            "backend": "standalone",
+                            "game": "G"
+                        }
+                    }
+                }),
+            ))
+            .expect("answered")
+            .result
+            .unwrap();
+
+        assert_eq!(response["isError"], json!(false), "{response}");
+        assert_eq!(spawn.calls().len(), 1);
+        assert!(!spawn.calls()[0].may_launch_game);
+        assert!(spawn.calls()[0].consent.is_none());
+    }
+
+    #[test]
+    fn dedicated_standalone_compile_runs_without_any_consent_channel() {
+        let spawn = std::sync::Arc::new(exec::FakeSpawn::new(exec::Outcome::success("compiled\n")));
+        let mut session = Session::with_spawn(options(), Box::new(std::sync::Arc::clone(&spawn)));
+        initialize_with(&mut session, json!({}));
+
+        let response = session
+            .handle_unasked(&request(
+                "tools/call",
+                json!({
+                    "name": "gore_as_compile_module",
+                    "arguments": {
+                        "op": "add",
+                        "module": "MyMod.Dialog",
+                        "rel_path": "MyMod/Dialog.as",
+                        "source": "Dialog.as",
+                        "work_dir": "compiler-work",
+                        "out": "fresh.Cache",
+                        "game": "G"
+                    }
+                }),
+            ))
+            .expect("answered")
+            .result
+            .unwrap();
+        assert_eq!(response["isError"], json!(false));
+        assert_eq!(spawn.calls().len(), 1);
+        assert!(spawn.calls()[0]
+            .argv
+            .iter()
+            .any(|value| value == "standalone"));
     }
 
     // ----------------------------------------------------------------------------------------- //
@@ -1597,6 +2415,21 @@ mod tests {
     }
 
     #[test]
+    fn a_question_accepts_its_answer_inside_a_batch_and_defers_the_rest() {
+        let (answer, _, deferred) = ask_over(
+            concat!(
+                "[{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"},",
+                "{\"jsonrpc\":\"2.0\",\"id\":\"gore-consent-1\",",
+                "\"result\":{\"action\":\"accept\"}}]\n",
+            ),
+            json!(1),
+        );
+
+        assert_eq!(answer.expect("an answer")["action"], "accept");
+        assert_eq!(deferred, 1, "the ping remains queued for the main loop");
+    }
+
+    #[test]
     fn whatever_the_client_says_meanwhile_is_set_aside_rather_than_handled() {
         // Handling it here would start a second tool call underneath the first — one game
         // installation, two writers — so it waits its turn in the queue the loop drains.
@@ -1623,7 +2456,11 @@ mod tests {
             json!(1),
         );
 
-        assert_eq!(answer.expect("an answer")["action"], "decline", "ours is the second one");
+        assert_eq!(
+            answer.expect("an answer")["action"],
+            "decline",
+            "ours is the second one"
+        );
         assert_eq!(deferred, 1);
     }
 
@@ -1680,12 +2517,17 @@ mod tests {
     fn a_flood_of_unrelated_frames_ends_the_wait_instead_of_growing_without_bound() {
         let mut input = String::new();
         for id in 0..MAX_DEFERRED_FRAMES + 10 {
-            input.push_str(&format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"ping\"}}\n"));
+            input.push_str(&format!(
+                "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"ping\"}}\n"
+            ));
         }
         let (answer, _, deferred) = ask_over(&input, json!("call"));
 
         assert!(answer.is_err(), "the wait has to end somewhere");
-        assert!(deferred <= MAX_DEFERRED_FRAMES, "the queue stayed bounded: {deferred}");
+        assert!(
+            deferred <= MAX_DEFERRED_FRAMES,
+            "the queue stayed bounded: {deferred}"
+        );
     }
 
     #[test]

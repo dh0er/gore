@@ -106,32 +106,70 @@ mod result_shape {
             path: "config path".into(),
             timeout: std::time::Duration::from_secs(60),
             display: "gore config path".into(),
+            may_launch_game: false,
             consent: None,
         };
 
         let results = [
-            ("a command that succeeded", crate::exec::to_call_result(
-                &invocation, command, &crate::exec::Outcome::success("C:/x/config.json\n"),
-            )),
-            ("a command that failed", crate::exec::to_call_result(
-                &invocation, command, &crate::exec::Outcome::failure(1, "boom"),
-            )),
+            (
+                "a command that succeeded",
+                crate::exec::to_call_result(
+                    &invocation,
+                    command,
+                    &crate::exec::Outcome::success("C:/x/config.json\n"),
+                ),
+            ),
+            (
+                "a command that failed",
+                crate::exec::to_call_result(
+                    &invocation,
+                    command,
+                    &crate::exec::Outcome::failure(1, "boom"),
+                ),
+            ),
             ("an argument error", crate::exec::to_error_result("nope")),
-            ("guide list", crate::tools::guide::call(&json!({ "action": "list" }).as_object().unwrap().clone())),
-            ("guide read", crate::tools::guide::call(
-                &json!({ "action": "read", "page": "mcp" }).as_object().unwrap().clone(),
-            )),
-            ("guide read one section", crate::tools::guide::call(
-                &json!({ "action": "read", "page": "mcp", "section": "the-tools" })
-                    .as_object().unwrap().clone(),
-            )),
-            ("guide search", crate::tools::guide::call(
-                &json!({ "action": "search", "query": "texture" }).as_object().unwrap().clone(),
-            )),
-            ("guide search with no hits", crate::tools::guide::call(
-                &json!({ "action": "search", "query": "zzzznothingmatchesthis" })
-                    .as_object().unwrap().clone(),
-            )),
+            (
+                "guide list",
+                crate::tools::guide::call(
+                    &json!({ "action": "list" }).as_object().unwrap().clone(),
+                ),
+            ),
+            (
+                "guide read",
+                crate::tools::guide::call(
+                    &json!({ "action": "read", "page": "mcp" })
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            ),
+            (
+                "guide read one section",
+                crate::tools::guide::call(
+                    &json!({ "action": "read", "page": "mcp", "section": "the-tools" })
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            ),
+            (
+                "guide search",
+                crate::tools::guide::call(
+                    &json!({ "action": "search", "query": "texture" })
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            ),
+            (
+                "guide search with no hits",
+                crate::tools::guide::call(
+                    &json!({ "action": "search", "query": "zzzznothingmatchesthis" })
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ),
+            ),
         ];
 
         for (what, result) in results {
@@ -139,10 +177,14 @@ mod result_shape {
                 !mentions_structured_content(&result),
                 "{what} carries structuredContent: {result}"
             );
-            let content = result["content"].as_array().unwrap_or_else(|| panic!("{what}: {result}"));
+            let content = result["content"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{what}: {result}"));
             assert!(!content.is_empty(), "{what} has no content blocks");
             assert!(
-                content.iter().any(|block| block["text"].as_str().is_some_and(|t| !t.is_empty())),
+                content
+                    .iter()
+                    .any(|block| block["text"].as_str().is_some_and(|t| !t.is_empty())),
                 "{what} has no text for the model to read: {result}"
             );
         }
@@ -154,14 +196,20 @@ mod result_shape {
             "Usage: gore config path\n\nOptions:\n  -h, --help  Print help\n",
         ));
         let result = crate::tools::help::call(
-            &json!({ "command": "config path" }).as_object().unwrap().clone(),
+            &json!({ "command": "config path" })
+                .as_object()
+                .unwrap()
+                .clone(),
             &spawn,
         )
         .expect("the fake spawn always starts");
 
         assert!(!mentions_structured_content(&result), "{result}");
         assert!(
-            result["content"][1]["text"].as_str().unwrap().contains("Print help"),
+            result["content"][1]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Print help"),
             "the help text is the whole tool: {result}"
         );
     }

@@ -45,15 +45,19 @@ next to the input cache, or from the path in `GORE_AS_BINDS`.
 
 ## Recompiling: standalone first, game fallback
 
-GORE ships a standalone compiler package for each exactly qualified game build.
-The normal product commands find that package automatically beside the GORE
-executable and authenticate its sidecar, profile, target executable,
-`PrecompiledScript_Shipping.Cache`, and `Binds.Cache` against GORE's embedded
-catalog. Users do not provide sidecar paths or hashes.
+GORE ships its standalone compiler as an internal part of GORE CLI and Mod
+Studio. The normal product commands authenticate the sidecar and profile, then
+check the installed game's cache format and ordered AngelScript API. Users do
+not provide sidecar paths or hashes.
+
+This check is deliberately independent of Steam or GOG packaging. Whole-file
+EXE/cache hashes, Steam build numbers and depot metadata document the build used
+for qualification, but they are not runtime locks. A differently packed AMD64
+EXE remains usable when its Shipping format and complete Binds API match.
 
 The default policy is `standalone-then-game`: GORE tries the qualified
-standalone compiler first. If the package is absent, does not match the selected
-game build, or the standalone result is rejected, the reason is retained and
+standalone compiler first. If the package is absent, the selected game's cache
+format or API is incompatible, or the standalone result is rejected, the reason is retained and
 shown before GORE uses the game's embedded compiler as a fallback. That fallback
 launches the shipping executable with **`-as-generate-precompiled-data`** and
 temporarily stages loose `.as` files under `<install>\G1R\Script\`.
@@ -79,7 +83,7 @@ published without overwriting an existing file.
 Choose the policy explicitly when needed:
 
 ```powershell
-# Never launch or modify the game; fail if the exact standalone package is unavailable.
+# Never launch or modify the game; fail if no compatible standalone package is available.
 gore as compile out_as -o regen.Cache --work-dir .gore-as-work `
   --backend standalone --game "$GAME"
 
@@ -90,6 +94,13 @@ gore as compile out_as -o regen.Cache --work-dir .gore-as-work `
 
 `--backend standalone-then-game` is the default. `standalone` and `game` never
 fall back silently.
+
+Through the GORE MCP plugin, use `gore_as_compile` or
+`gore_as_compile_module` for normal authoring. Those dedicated tools force the
+strict standalone backend and run without a consent question because they
+cannot launch the game or touch the installation. The mixed `gore_as` routes
+remain available only for a deliberately selected game-capable backend and
+correctly ask before a call that may use the game compiler.
 
 ### Safety rules around compilation
 

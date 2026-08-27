@@ -3,9 +3,11 @@
 //!
 //! Two things here are unlike anything else in the table:
 //!
-//! - `compile` and `compile-module` expose an explicit standalone/game backend policy. The MCP
-//!   boundary conservatively keeps both behind [`Safety::game_launch`] because `game` and
-//!   `standalone-then-game` may launch the executable; strict standalone itself never does.
+//! - `compile` and `compile-module` expose an explicit standalone/game backend policy. Their
+//!   worst case remains a game launch, but the per-call gate lets explicit strict standalone run
+//!   without game-launch consent. A fresh workspace and ordinary build outputs need no
+//!   install-write consent either; an existing generated work tree or an output explicitly aimed
+//!   into the game installation remains protected.
 //! - `bytediff` spells `--json` as a *path* to write a report to, not as a switch that changes
 //!   stdout. It is therefore an ordinary argument and is never passed implicitly; passing it
 //!   automatically would create a file nobody asked for.
@@ -15,15 +17,25 @@
 use crate::spec::{
     ArgForm::{Long, LongRepeated, Positional, PositionalRepeated, Switch},
     ArgKind::{Bool, Enum, Hex, Int, IntList, Path, Str, StrList},
-    ArgSpec, CommandSpec, GroupShape, GroupSpec, JsonSupport, Safety, T_COMPILE, T_FAST, T_LONG,
-    T_NORMAL,
+    ArgSpec, CommandSpec, Derived, GroupShape, GroupSpec, JsonSupport, Safety, T_COMPILE, T_FAST,
+    T_LONG, T_NORMAL,
 };
 
-const CACHE_FILE: ArgSpec =
-    ArgSpec::new("file", Positional { order: 0 }, Path, "Precompiled cache file to read.", true);
+const CACHE_FILE: ArgSpec = ArgSpec::new(
+    "file",
+    Positional { order: 0 },
+    Path,
+    "Precompiled cache file to read.",
+    true,
+);
 
-const CACHE_POSITIONAL: ArgSpec =
-    ArgSpec::new("cache", Positional { order: 0 }, Path, "Cache to read or patch.", true);
+const CACHE_POSITIONAL: ArgSpec = ArgSpec::new(
+    "cache",
+    Positional { order: 0 },
+    Path,
+    "Cache to read or patch.",
+    true,
+);
 
 const NEEDLE: ArgSpec = ArgSpec::new(
     "needle",
@@ -59,19 +71,34 @@ const OUT_CACHE: ArgSpec = ArgSpec::new(
     true,
 );
 
-const MODULE_FILTER: ArgSpec =
-    ArgSpec::new("module", Long("module"), Str, "Exact module-name filter.", false);
-const CLASS_FILTER: ArgSpec =
-    ArgSpec::new("class", Long("class"), Str, "Exact class-name filter.", false);
-const FIELD_FILTER: ArgSpec =
-    ArgSpec::new("field", Long("field"), Str, "Exact field-name filter.", false);
+const MODULE_FILTER: ArgSpec = ArgSpec::new(
+    "module",
+    Long("module"),
+    Str,
+    "Exact module-name filter.",
+    false,
+);
+const CLASS_FILTER: ArgSpec = ArgSpec::new(
+    "class",
+    Long("class"),
+    Str,
+    "Exact class-name filter.",
+    false,
+);
+const FIELD_FILTER: ArgSpec = ArgSpec::new(
+    "field",
+    Long("field"),
+    Str,
+    "Exact field-name filter.",
+    false,
+);
 
 /// The diagnostics trio shared by `compile` and `compile-module`.
 ///
 /// The hook captures AngelScript compiler errors from the running game, which is the only way an
 /// agent gets to see why a compile failed — without it a failed compile returns no error text at
-/// all. It stays available; the command's own gate — `--allow-game-launch` plus `--allow-write` —
-/// is what decides whether it runs at all.
+/// all. It stays available; a game-capable backend is gated by `--allow-game-launch` plus
+/// `--allow-write`, while strict standalone never loads this runtime hook.
 const NO_DIAGNOSTICS: ArgSpec = ArgSpec::new(
     "no_diagnostics",
     Switch("no-diagnostics"),
@@ -90,7 +117,10 @@ const DIAGNOSTICS_HOOK: ArgSpec = ArgSpec::new(
 const DIAGNOSTICS_DELAY: ArgSpec = ArgSpec::new(
     "diagnostics_inject_delay_ms",
     Long("diagnostics-inject-delay-ms"),
-    Int { min: Some(0), max: Some(30_000) },
+    Int {
+        min: Some(0),
+        max: Some(30_000),
+    },
     "Delay between game launch and diagnostics injection (loader warm-up).",
     false,
 )
@@ -105,7 +135,10 @@ const WALK_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "max",
         Long("max"),
-        Int { min: Some(0), max: None },
+        Int {
+            min: Some(0),
+            max: None,
+        },
         "Maximum number of strings to print.",
         false,
     )
@@ -118,7 +151,10 @@ const DECOMPILE_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "max",
         Long("max"),
-        Int { min: Some(0), max: None },
+        Int {
+            min: Some(0),
+            max: None,
+        },
         "Max functions to print.",
         false,
     )
@@ -142,7 +178,10 @@ const EMIT_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "max",
         Long("max"),
-        Int { min: Some(0), max: None },
+        Int {
+            min: Some(0),
+            max: None,
+        },
         "Max modules to print.",
         false,
     )
@@ -167,7 +206,10 @@ const DISASM_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "max",
         Long("max"),
-        Int { min: Some(0), max: None },
+        Int {
+            min: Some(0),
+            max: None,
+        },
         "Max functions to print.",
         false,
     )
@@ -202,7 +244,13 @@ const TAG_MAP_SITES_ARGS: &[ArgSpec] = &[
     MODULE_FILTER,
     CLASS_FILTER,
     FIELD_FILTER,
-    ArgSpec::new("tag", Long("tag"), Str, "Exact GameplayTag global name filter.", false),
+    ArgSpec::new(
+        "tag",
+        Long("tag"),
+        Str,
+        "Exact GameplayTag global name filter.",
+        false,
+    ),
 ];
 
 const PATCH_TAG_MAP_ARGS: &[ArgSpec] = &[
@@ -423,9 +471,116 @@ const COMPILE_MODULE_ARGS: &[ArgSpec] = &[
     DIAGNOSTICS_DELAY,
 ];
 
+// Dedicated MCP routes expose the ordinary product-owned standalone workflow without a backend
+// selector. Besides making the useful arguments directly typed, this lets clients see truthful
+// non-destructive annotations instead of inheriting the game-launching worst case of `gore_as`.
+const STANDALONE_COMPILE_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "src",
+        Positional { order: 0 },
+        Path,
+        "Complete authoritative `.as` source tree. Missing base modules are explicit deletes.",
+        true,
+    ),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Publish the complete cache here with atomic no-clobber semantics. Must be outside the game installation.",
+        true,
+    ),
+    ArgSpec::new(
+        "work_dir",
+        Long("work-dir"),
+        Path,
+        "Existing private workspace outside the game installation.",
+        true,
+    ),
+    GAME,
+    ArgSpec::new(
+        "generation_receipt",
+        Long("generation-receipt"),
+        Path,
+        "Publish a product-authoritative full-graph receipt when the installed target matches the bundled compiler.",
+        false,
+    ),
+];
+
+const STANDALONE_COMPILE_MODULE_ARGS: &[ArgSpec] = &[
+    ArgSpec::new(
+        "op",
+        Long("op"),
+        Enum(&["add", "edit"]),
+        "`add` for a new module or `edit` for an existing module.",
+        true,
+    ),
+    ArgSpec::new(
+        "module",
+        Long("module"),
+        Str,
+        "Expected module name. For `add`, the compiler-detected module name is reported and used.",
+        true,
+    ),
+    ArgSpec::new(
+        "rel_path",
+        Long("rel-path"),
+        Str,
+        "Safe path of the authored file relative to the game's `Script/` tree.",
+        true,
+    ),
+    ArgSpec::new(
+        "source",
+        Long("source"),
+        Path,
+        "Authored `.as` source file to overlay.",
+        true,
+    ),
+    ArgSpec::new(
+        "work_dir",
+        Long("work-dir"),
+        Path,
+        "Existing persistent compiler workspace outside the game installation.",
+        true,
+    ),
+    ArgSpec::new(
+        "allow_new_symbols",
+        Switch("allow-new-symbols"),
+        Bool,
+        "Retain minimal rows for classes, functions, and names absent from the pristine cache.",
+        false,
+    ),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Output path for the remapped one-module mini-cache. Existing paths are refused.",
+        true,
+    ),
+    GAME,
+    ArgSpec::new(
+        "generation_receipt",
+        Long("generation-receipt"),
+        Path,
+        "Publish a local no-clobber receipt after bundled-compiler authentication.",
+        false,
+    ),
+];
+
 const REPLACE_ARGS: &[ArgSpec] = &[
-    ArgSpec::new("base", Positional { order: 0 }, Path, "Base cache to patch.", true),
-    ArgSpec::new("mini", Positional { order: 1 }, Path, "Mini-cache holding the new module.", true),
+    ArgSpec::new(
+        "base",
+        Positional { order: 0 },
+        Path,
+        "Base cache to patch.",
+        true,
+    ),
+    ArgSpec::new(
+        "mini",
+        Positional { order: 1 },
+        Path,
+        "Mini-cache holding the new module.",
+        true,
+    ),
     ArgSpec::new(
         "target",
         Positional { order: 2 },
@@ -433,7 +588,13 @@ const REPLACE_ARGS: &[ArgSpec] = &[
         "Name of the module in the base cache to replace.",
         true,
     ),
-    ArgSpec::new("out", Long("out"), Path, "Output path for the patched cache.", true),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Output path for the patched cache.",
+        true,
+    ),
 ];
 
 const SPLICE_ARGS: &[ArgSpec] = &[
@@ -451,7 +612,13 @@ const SPLICE_ARGS: &[ArgSpec] = &[
         "Mini-cache from -as-generate-precompiled-data (one primitive-only module).",
         true,
     ),
-    ArgSpec::new("out", Long("out"), Path, "Output path for the spliced cache.", true),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Output path for the spliced cache.",
+        true,
+    ),
 ];
 
 const EXTRACT_ARGS: &[ArgSpec] = &[
@@ -469,7 +636,13 @@ const EXTRACT_ARGS: &[ArgSpec] = &[
         "Module name (the Modules TMap key) to extract.",
         true,
     ),
-    ArgSpec::new("out", Long("out"), Path, "Output path for the 1-module mini-cache.", true),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Output path for the 1-module mini-cache.",
+        true,
+    ),
 ];
 
 const EXTRACT_REMAP_ARGS: &[ArgSpec] = &[
@@ -556,7 +729,10 @@ const BYTEDIFF_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "context",
         Long("context"),
-        Int { min: Some(0), max: None },
+        Int {
+            min: Some(0),
+            max: None,
+        },
         "Instruction window (±N) around each SEMANTIC divergence.",
         false,
     )
@@ -735,7 +911,8 @@ const AS_COMMANDS: &[CommandSpec] = &[
         "Compile a complete authoritative AngelScript tree into a new precompiled cache. Uses the \
          requested standalone/game policy; only game or explicit fallback may launch the game.",
         COMPILE_ARGS,
-        Safety::game_launch(),
+        Safety::game_launch_except("backend", "standalone")
+            .also_writes(&[("work_dir", Derived::Child("tree"))]),
         T_COMPILE,
     )
     .at_most_one(DIAGNOSTICS_CONFLICT)
@@ -745,7 +922,9 @@ const AS_COMMANDS: &[CommandSpec] = &[
         "Compile one authored module into a deployable 1-module mini-cache. Wraps the complete \
          Studio pipeline with an explicit standalone/game policy.",
         COMPILE_MODULE_ARGS,
-        Safety::game_launch(),
+        Safety::game_launch_except("backend", "standalone")
+            .also_writes(&[("work_dir", Derived::Child("tree"))])
+            .writes_into(&["out", "generation_receipt"]),
         T_COMPILE,
     )
     .at_most_one(DIAGNOSTICS_CONFLICT)
@@ -805,10 +984,67 @@ pub const AS: GroupSpec = GroupSpec {
     cli: "as",
     summary: "AngelScript precompiled-cache tooling: inspect and decompile the shipped script \
               cache, patch scalar defaults in place, and compile authored modules back in. \
-              Compilation has an explicit standalone/game policy; the MCP boundary \
-              conservatively requires both --allow-game-launch and --allow-write.",
+              Compilation has an explicit standalone/game policy: strict standalone runs offline \
+              without game-launch consent; fresh workspaces run without install-write consent, while \
+              occupied generated work trees and outputs aimed into the installation remain protected; \
+              game and fallback-capable calls require game-launch and install-write consent.",
     shape: GroupShape::Nested,
     commands: AS_COMMANDS,
+};
+
+const STANDALONE_COMPILE_COMMANDS: &[CommandSpec] = &[CommandSpec::new(
+    "compile",
+    "Compile a complete AngelScript tree with GORE's bundled standalone compiler. This never starts the game or stages files in the installation; a fresh workspace needs no consent, while replacing an existing generated work tree remains protected.",
+    STANDALONE_COMPILE_ARGS,
+    Safety::write().also_writes(&[("work_dir", Derived::Child("tree"))]),
+    T_COMPILE,
+)
+.forced(&["--backend", "standalone"])
+.hides_cli_flags(&[
+    "no-diagnostics",
+    "diagnostics-hook",
+    "diagnostics-inject-delay-ms",
+])
+.guide("scripts")];
+
+pub const AS_COMPILE: GroupSpec = GroupSpec {
+    tool: "gore_as_compile",
+    title: "gore as compile (standalone)",
+    cli: "as",
+    summary: "Strict standalone full-tree AngelScript compilation with native diagnostics, no game-launch consent, and install-write protection only for an occupied generated work tree.",
+    shape: GroupShape::Nested,
+    commands: STANDALONE_COMPILE_COMMANDS,
+};
+
+const STANDALONE_COMPILE_MODULE_COMMANDS: &[CommandSpec] = &[CommandSpec::new(
+    "compile-module",
+    "Compile one authored AngelScript module with GORE's bundled standalone compiler. This never starts the game; a fresh workspace and ordinary build outputs need no consent, while an occupied generated work tree or outputs aimed into the installation remain protected.",
+    STANDALONE_COMPILE_MODULE_ARGS,
+    Safety::write()
+        .also_writes(&[("work_dir", Derived::Child("tree"))])
+        .writes_into(&["out", "generation_receipt"]),
+    T_COMPILE,
+)
+.forced(&["--backend", "standalone"])
+.hides_cli_flags(&[
+    "development-standalone-sidecar",
+    "development-standalone-sidecar-sha256",
+    "development-compiler-profile-manifest",
+    "development-compiler-profile-root",
+    "development-standalone-scratch-root",
+    "no-diagnostics",
+    "diagnostics-hook",
+    "diagnostics-inject-delay-ms",
+])
+.guide("scripts")];
+
+pub const AS_COMPILE_MODULE: GroupSpec = GroupSpec {
+    tool: "gore_as_compile_module",
+    title: "gore as compile-module (standalone)",
+    cli: "as",
+    summary: "Strict standalone one-module AngelScript compilation with native diagnostics, no game-launch consent, and write protection only for an occupied generated work tree or output targeting the game tree.",
+    shape: GroupShape::Nested,
+    commands: STANDALONE_COMPILE_MODULE_COMMANDS,
 };
 
 #[cfg(test)]
@@ -830,6 +1066,38 @@ mod tests {
             .map(|command| command.sub)
             .collect();
         assert_eq!(launching, vec!["compile", "compile-module"]);
+    }
+
+    #[test]
+    fn strict_standalone_is_offline_but_game_capable_policies_keep_the_worst_case() {
+        for sub in ["compile", "compile-module"] {
+            let command = AS.command(sub).expect("compiler command");
+            let standalone = serde_json::json!({ "backend": "standalone" })
+                .as_object()
+                .expect("object")
+                .clone();
+            let game = serde_json::json!({ "backend": "game" })
+                .as_object()
+                .expect("object")
+                .clone();
+            let fallback = serde_json::json!({ "backend": "standalone-then-game" })
+                .as_object()
+                .expect("object")
+                .clone();
+
+            assert_eq!(command.safety.effective(&standalone), Class::Write, "{sub}");
+            assert_eq!(command.safety.effective(&game), Class::GameLaunch, "{sub}");
+            assert_eq!(
+                command.safety.effective(&fallback),
+                Class::GameLaunch,
+                "{sub}"
+            );
+            assert_eq!(
+                command.safety.effective(&serde_json::Map::new()),
+                Class::GameLaunch,
+                "{sub}"
+            );
+        }
     }
 
     #[test]
@@ -888,14 +1156,17 @@ mod tests {
     }
 
     #[test]
-    fn the_diagnostics_hook_stays_reachable_behind_the_game_launch_gate() {
+    fn the_diagnostics_hook_stays_reachable_for_game_capable_backends() {
         // Capturing AngelScript compiler errors is the only way an agent learns why a compile
-        // failed; forcing it off would leave every failure silent. `--allow-game-launch` is the
-        // gate, and it is not narrowed further here.
+        // failed; forcing it off would leave every game-backed failure silent. Strict standalone
+        // uses native diagnostics and never loads this hook.
         for sub in ["compile", "compile-module"] {
             let command = AS.command(sub).expect("command exists");
             assert!(command.arg("diagnostics_hook").is_some(), "{sub}");
-            assert!(command.forced_argv.is_empty(), "{sub} must not force diagnostics off");
+            assert!(
+                command.forced_argv.is_empty(),
+                "{sub} must not force diagnostics off"
+            );
         }
     }
 

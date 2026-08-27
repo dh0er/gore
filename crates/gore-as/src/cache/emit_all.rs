@@ -43,6 +43,10 @@ struct FreeFunctionRenamePlan {
     /// the same deduplicated signatures `emit_module` writes, without the function name.
     required_signatures: Vec<BTreeMap<String, BTreeSet<ParameterSignature>>>,
     original_names: BTreeSet<String>,
+    /// Arity is enough to prove these global calls cannot bind one of the renamed overloads. A
+    /// renamed overload with N parameters is conservatively treated as callable with 0..=N
+    /// arguments because cache metadata does not retain its default-argument boundary.
+    safe_global_call_arities: BTreeMap<String, BTreeSet<usize>>,
 }
 
 impl FreeFunctionRenamePlan {
@@ -62,13 +66,16 @@ impl FreeFunctionRenamePlan {
     /// are already renamed by `RefResolver::set_free_fn_renames`; touching arbitrary source tokens
     /// would also mutate methods, literals, globals, and comments.
     fn rewrite_emitted_module(&self, module_index: usize, source: &str) -> String {
-        rewrite_top_level_declarations(source, self.renames_for_module(module_index))
+        let declarations =
+            rewrite_top_level_declarations(source, self.renames_for_module(module_index));
+        qualify_emitted_collision_calls(&declarations, &self.original_names)
     }
 
     /// Make an authored overlay consistent with the collision-renamed vanilla tree. Existing edit
-    /// declarations can be rewritten safely because their declaring module is known. Any remaining
-    /// bare/global call using an original colliding name is ambiguous in authored source, so reject
-    /// it before starting the game compiler instead of guessing an overload/module target.
+    /// declarations can be rewritten safely because their declaring module is known. Bare calls
+    /// and global calls that could bind a renamed overload are ambiguous in authored source, so
+    /// reject them before starting the compiler. A globally qualified call remains safe only when
+    /// its arity can bind an unchanged overload but no renamed one.
     fn prepare_overlay(
         &self,
         mods: &[Module],
@@ -102,10 +109,14 @@ impl FreeFunctionRenamePlan {
             source.to_owned()
         };
 
-        let unresolved = unresolved_collision_calls(&rewritten, &self.original_names);
+        let unresolved = unresolved_collision_calls(
+            &rewritten,
+            &self.original_names,
+            &self.safe_global_call_arities,
+        );
         if !unresolved.is_empty() {
             return Err(format!(
-                "authored overlay contains collision-ambiguous free call(s): {}; use a prepared emitted module or remove/qualify the call",
+                "authored overlay contains collision-ambiguous free call(s): {}; use the deterministic renamed function or remove the call",
                 unresolved.into_iter().collect::<Vec<_>>().join(", ")
             ));
         }
@@ -353,6 +364,7 @@ fn free_function_rename_plan(
         per_module: vec![BTreeMap::new(); mods.len()],
         required_signatures: vec![BTreeMap::new(); mods.len()],
         original_names: BTreeSet::new(),
+        safe_global_call_arities: BTreeMap::new(),
     };
     for (module_index, names) in colliding.into_iter().enumerate() {
         for name in names {
@@ -372,6 +384,43 @@ fn free_function_rename_plan(
                 .collect::<BTreeSet<_>>();
             plan.required_signatures[module_index].insert(name.clone(), signatures);
             plan.per_module[module_index].insert(name, target);
+        }
+    }
+
+    // The bytecode emitter explicitly qualifies calls that retain an original collision-family
+    // name. Such a call is safe only when its arity names an unrenamed overload and no renamed
+    // overload could accept that many arguments. This keeps emitted-source round trips usable
+    // without allowing `::Name(...)` to bind a different cached collision in the sparse compiler.
+    let mut renamed_max_arities = BTreeMap::<String, usize>::new();
+    let mut unrenamed_arities = BTreeMap::<String, BTreeSet<usize>>::new();
+    for (module_index, functions) in emitted.iter().enumerate() {
+        for (function, _) in functions {
+            if !plan.original_names.contains(&function.name) {
+                continue;
+            }
+            if plan.renamed(module_index, &function.name).is_some() {
+                renamed_max_arities
+                    .entry(function.name.clone())
+                    .and_modify(|arity| *arity = (*arity).max(function.params.len()))
+                    .or_insert(function.params.len());
+            } else {
+                unrenamed_arities
+                    .entry(function.name.clone())
+                    .or_default()
+                    .insert(function.params.len());
+            }
+        }
+    }
+    for (name, arities) in unrenamed_arities {
+        let Some(renamed_max_arity) = renamed_max_arities.get(&name) else {
+            continue;
+        };
+        let safe = arities
+            .into_iter()
+            .filter(|arity| arity > renamed_max_arity)
+            .collect::<BTreeSet<_>>();
+        if !safe.is_empty() {
+            plan.safe_global_call_arities.insert(name, safe);
         }
     }
 
@@ -827,7 +876,11 @@ fn validate_collision_bound_declarations(
     }
 }
 
-fn unresolved_collision_calls(source: &str, originals: &BTreeSet<String>) -> BTreeSet<String> {
+fn unresolved_collision_calls(
+    source: &str,
+    originals: &BTreeSet<String>,
+    safe_global_call_arities: &BTreeMap<String, BTreeSet<usize>>,
+) -> BTreeSet<String> {
     let tokens = code_tokens(source);
     let declarations = function_declarations(source, &tokens);
     let declaration_names = declarations
@@ -846,16 +899,332 @@ fn unresolved_collision_calls(source: &str, originals: &BTreeSet<String>) -> BTr
         let call = tokens
             .get(index + 1)
             .is_some_and(|token| token_text(source, token) == "(");
-        let handle = index > 0 && token_text(source, &tokens[index - 1]) == "@";
+        let handle = (index > 0 && token_text(source, &tokens[index - 1]) == "@")
+            || (index >= 3
+                && token_text(source, &tokens[index - 1]) == ":"
+                && token_text(source, &tokens[index - 2]) == ":"
+                && token_text(source, &tokens[index - 3]) == "@");
         if !call && !handle {
             continue;
         }
         if index > 0 && token_text(source, &tokens[index - 1]) == "." {
             continue; // explicit object/this/super member, with arbitrary trivia around `.`
         }
+        let leading_global = index >= 2
+            && token_text(source, &tokens[index - 1]) == ":"
+            && token_text(source, &tokens[index - 2]) == ":"
+            && (index == 2
+                || !tokens[index - 3].identifier
+                || is_angelscript_keyword(token_text(source, &tokens[index - 3])));
+        if call
+            && leading_global
+            && call_argument_count(source, &tokens, tokens[index + 1].start).is_some_and(|arity| {
+                safe_global_call_arities
+                    .get(name)
+                    .is_some_and(|safe| safe.contains(&arity))
+            })
+        {
+            continue;
+        }
         unresolved.insert(name.to_owned());
     }
     unresolved
+}
+
+fn is_angelscript_keyword(value: &str) -> bool {
+    matches!(
+        value,
+        "abstract"
+            | "access"
+            | "and"
+            | "and_eq"
+            | "as"
+            | "auto"
+            | "bool"
+            | "break"
+            | "case"
+            | "cast"
+            | "catch"
+            | "class"
+            | "const"
+            | "continue"
+            | "default"
+            | "delegate"
+            | "do"
+            | "double"
+            | "else"
+            | "enum"
+            | "event"
+            | "explicit"
+            | "external"
+            | "false"
+            | "final"
+            | "float"
+            | "for"
+            | "from"
+            | "funcdef"
+            | "get"
+            | "if"
+            | "import"
+            | "in"
+            | "inout"
+            | "int"
+            | "int8"
+            | "int16"
+            | "int32"
+            | "int64"
+            | "interface"
+            | "is"
+            | "mixin"
+            | "namespace"
+            | "not"
+            | "not_eq"
+            | "null"
+            | "or"
+            | "or_eq"
+            | "out"
+            | "override"
+            | "private"
+            | "property"
+            | "protected"
+            | "return"
+            | "set"
+            | "shared"
+            | "super"
+            | "switch"
+            | "struct"
+            | "this"
+            | "true"
+            | "try"
+            | "typedef"
+            | "uint"
+            | "uint8"
+            | "uint16"
+            | "uint32"
+            | "uint64"
+            | "void"
+            | "while"
+            | "xor"
+            | "xor_eq"
+    )
+}
+
+/// Count top-level arguments in one call without mistaking commas in strings, comments, generic
+/// type lists, nested calls, indexing, or initializer lists for separators.
+fn probable_template_close(source: &str, tokens: &[CodeToken], open_angle: usize) -> Option<usize> {
+    let open = tokens
+        .binary_search_by_key(&open_angle, |token| token.start)
+        .ok()?;
+    if token_text(source, &tokens[open]) != "<"
+        || open == 0
+        || !tokens[open - 1].identifier
+        || tokens
+            .get(open + 1)
+            .is_none_or(|token| matches!(token_text(source, token), "<" | "="))
+    {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().skip(open) {
+        match token_text(source, token) {
+            "<" => {
+                if tokens
+                    .get(index + 1)
+                    .is_some_and(|next| matches!(token_text(source, next), "<" | "="))
+                {
+                    return None;
+                }
+                depth += 1;
+            }
+            ">" => {
+                depth = depth.checked_sub(1)?;
+                if depth != 0 {
+                    continue;
+                }
+                let next = tokens.get(index + 1)?;
+                let valid_suffix = matches!(token_text(source, next), "(" | "[" | "{" | "@" | ".")
+                    || (token_text(source, next) == ":"
+                        && tokens
+                            .get(index + 2)
+                            .is_some_and(|after| token_text(source, after) == ":"));
+                return valid_suffix.then_some(token.start);
+            }
+            "(" | ")" | "{" | "}" | ";" => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn call_argument_count(source: &str, tokens: &[CodeToken], open_paren: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    if bytes.get(open_paren) != Some(&b'(') {
+        return None;
+    }
+    let mut state = LexState::Code;
+    let mut parens = 1usize;
+    let mut brackets = 0usize;
+    let mut braces = 0usize;
+    let mut angles = 0usize;
+    let mut complete_arguments = 0usize;
+    let mut current_argument = false;
+    let mut index = open_paren + 1;
+    while index < bytes.len() {
+        match state {
+            LexState::Code => {
+                let call_level = parens == 1 && brackets == 0 && braces == 0;
+                let top_level = call_level && angles == 0;
+                if bytes[index..].starts_with(b"//") {
+                    state = LexState::LineComment;
+                    index += 2;
+                } else if bytes[index..].starts_with(b"/*") {
+                    state = LexState::BlockComment;
+                    index += 2;
+                } else if matches!(bytes[index], b'\'' | b'"') {
+                    if top_level {
+                        current_argument = true;
+                    }
+                    state = LexState::Quoted(bytes[index]);
+                    index += 1;
+                } else {
+                    match bytes[index] {
+                        b'(' => {
+                            if top_level {
+                                current_argument = true;
+                            }
+                            parens += 1;
+                        }
+                        b')' if call_level => {
+                            if angles != 0 {
+                                return None;
+                            }
+                            return if current_argument {
+                                Some(complete_arguments + 1)
+                            } else if complete_arguments == 0 {
+                                Some(0)
+                            } else {
+                                None
+                            };
+                        }
+                        b')' => parens = parens.checked_sub(1)?,
+                        b'[' => {
+                            if top_level {
+                                current_argument = true;
+                            }
+                            brackets += 1;
+                        }
+                        b']' => brackets = brackets.checked_sub(1)?,
+                        b'{' => {
+                            if top_level {
+                                current_argument = true;
+                            }
+                            braces += 1;
+                        }
+                        b'}' => braces = braces.checked_sub(1)?,
+                        b'<' if call_level
+                            && (angles > 0
+                                || probable_template_close(source, tokens, index).is_some()) =>
+                        {
+                            if top_level {
+                                current_argument = true;
+                            }
+                            angles += 1;
+                        }
+                        b'>' if call_level && angles > 0 => angles -= 1,
+                        b',' if top_level => {
+                            if !current_argument {
+                                return None;
+                            }
+                            complete_arguments += 1;
+                            current_argument = false;
+                        }
+                        byte if top_level && !byte.is_ascii_whitespace() => {
+                            current_argument = true;
+                        }
+                        _ => {}
+                    }
+                    index += 1;
+                }
+            }
+            LexState::LineComment => {
+                if bytes[index] == b'\n' {
+                    state = LexState::Code;
+                }
+                index += 1;
+            }
+            LexState::BlockComment => {
+                if bytes[index..].starts_with(b"*/") {
+                    state = LexState::Code;
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+            }
+            LexState::Quoted(quote) => {
+                if bytes[index] == b'\\' {
+                    index = (index + 2).min(bytes.len());
+                } else {
+                    if bytes[index] == quote {
+                        state = LexState::Code;
+                    }
+                    index += 1;
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Mark bare collision-bound calls in bytecode-derived output as explicitly global. Unlike an
+/// authored overlay, the emitter already resolved these call sites by function id/pointer, so this
+/// does not guess an overload. The overlay scanner retains the qualifier only for an arity that
+/// cannot bind one of the renamed overloads.
+fn qualify_emitted_collision_calls(source: &str, originals: &BTreeSet<String>) -> String {
+    let tokens = code_tokens(source);
+    let declarations = function_declarations(source, &tokens);
+    let declaration_names = declarations
+        .iter()
+        .map(|declaration| declaration.name_token)
+        .collect::<HashSet<_>>();
+    let mut insertions = Vec::new();
+    for (index, identifier) in tokens.iter().enumerate() {
+        if !identifier.identifier
+            || !originals.contains(token_text(source, identifier))
+            || declaration_names.contains(&index)
+        {
+            continue;
+        }
+        let call = tokens
+            .get(index + 1)
+            .is_some_and(|token| token_text(source, token) == "(");
+        let handle = index > 0 && token_text(source, &tokens[index - 1]) == "@";
+        if !call && !handle {
+            continue;
+        }
+        if index > 0 && token_text(source, &tokens[index - 1]) == "." {
+            continue;
+        }
+        if index >= 2
+            && token_text(source, &tokens[index - 1]) == ":"
+            && token_text(source, &tokens[index - 2]) == ":"
+        {
+            continue;
+        }
+        insertions.push(identifier.start);
+    }
+    if insertions.is_empty() {
+        return source.to_owned();
+    }
+    let mut output = String::with_capacity(source.len() + insertions.len() * 2);
+    let mut copied = 0usize;
+    for position in insertions {
+        output.push_str(&source[copied..position]);
+        output.push_str("::");
+        copied = position;
+    }
+    output.push_str(&source[copied..]);
+    output
 }
 
 #[derive(Debug, Clone)]
@@ -1085,8 +1454,9 @@ impl<'a> PreparedEmit<'a> {
             )
     }
 
-    /// Validate and rewrite an authored overlay against this prepared cache. Unqualified calls or
-    /// handles to a collision-bound name fail closed; only explicit `receiver.Name` access is safe.
+    /// Validate and rewrite an authored overlay against this prepared cache. Ambiguous bare,
+    /// global, or namespace-qualified calls and handles to a collision-bound name fail closed.
+    /// Explicit `receiver.Name` access and arity-disjoint emitted global calls remain safe.
     pub fn prepare_overlay(
         &self,
         op: &str,
@@ -1383,6 +1753,48 @@ const FName Label = n"Foo";
         assert!(rewritten.contains("class C { void Foo() { Foo(); } }"));
         assert!(rewritten.contains("// Foo stays"));
         assert!(rewritten.contains("n\"Foo\""));
+    }
+
+    #[test]
+    fn emitted_collision_calls_are_globally_qualified_without_touching_other_tokens() {
+        let source = r#"// Shared() stays
+void Shared(int Value) {}
+void Caller(bool Flag) {
+    Shared(1); Object.Shared(); Namespace::Shared(); ::Shared(2);
+    int Value = Flag ? Shared(3) : Shared(4);
+    switch (Value) { case 1: Shared(5); }
+    Callback@ Cb = @Shared;
+}
+const FName Label = n"Shared() @Shared";
+"#;
+        let qualified =
+            qualify_emitted_collision_calls(source, &BTreeSet::from(["Shared".to_owned()]));
+        assert!(qualified.contains("void Shared(int Value) {}"));
+        assert!(
+            qualified.contains("::Shared(1); Object.Shared(); Namespace::Shared(); ::Shared(2);")
+        );
+        assert!(qualified.contains("Flag ? ::Shared(3) : ::Shared(4)"));
+        assert!(qualified.contains("case 1: ::Shared(5);"));
+        assert!(qualified.contains("Callback@ Cb = @::Shared;"));
+        assert!(qualified.contains("// Shared() stays"));
+        assert!(qualified.contains("n\"Shared() @Shared\""));
+    }
+
+    #[test]
+    fn collision_call_arity_distinguishes_operators_from_template_arguments() {
+        let originals = BTreeSet::from(["Shared".to_owned()]);
+        let safe_arities = BTreeMap::from([("Shared".to_owned(), BTreeSet::from([1, 2]))]);
+        for source in [
+            "void Caller(int a, int b) { ::Shared(a < b); }",
+            "void Caller(int flags, int other) { ::Shared(flags << 1, other); }",
+            "void Caller(int a, int b, int c, int d) { ::Shared(a <= b, c >= d); }",
+            "void Caller() { ::Shared(TMap<int, TArray<float>>(), 1); }",
+        ] {
+            assert!(
+                unresolved_collision_calls(source, &originals, &safe_arities).is_empty(),
+                "safe global call was rejected in {source:?}"
+            );
+        }
     }
 
     #[test]

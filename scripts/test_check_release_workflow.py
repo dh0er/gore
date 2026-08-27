@@ -98,8 +98,9 @@ class DownloadTableContractTest(unittest.TestCase):
         self.assert_invalid(
             replace_once(
                 self.readme,
-                "releases/tag/gore-cli-v0.1.0)",
                 "releases/tag/gore-cli-v0.2.0)",
+                # Deliberately wrong test-only version: the checker must reject this link.
+                "releases/tag/gore-cli-v9.9.9)",
             ),
             None,
             "CLI must link to",
@@ -107,7 +108,7 @@ class DownloadTableContractTest(unittest.TestCase):
 
     def test_link_text_must_be_the_release_tag(self) -> None:
         self.assert_invalid(
-            replace_once(self.readme, "[gore-cli-v0.1.0]", "[latest]"),
+            replace_once(self.readme, "[gore-cli-v0.2.0]", "[latest]"),
             None,
             "link text must be the release tag",
         )
@@ -134,7 +135,7 @@ class DownloadTableContractTest(unittest.TestCase):
 
     def test_unreadable_and_unknown_rows_fail_closed(self) -> None:
         self.assert_invalid(
-            replace_once(self.readme, "| **CLI** | 0.1.0 |", "| **CLI** | v0.1.0 |"),
+            replace_once(self.readme, "| **CLI** | 0.2.0 |", "| **CLI** | v0.2.0 |"),
             None,
             "unreadable download row",
         )
@@ -194,9 +195,17 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
         )
         self.assert_invalid(ci=writable, mentions="must be read")
 
-    def test_promotion_requires_one_permanent_public_claim_and_one_signature(
-        self,
-    ) -> None:
+    def test_internal_signing_never_publishes_releases_or_tags(self) -> None:
+        for forbidden in (
+            "gh release",
+            "git/refs",
+            "contents: write",
+            "claim_tag",
+            "promotion_tag",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.promotion)
+
         wrong_dependency = mutate_job(
             self.promotion,
             "build-sign-candidate",
@@ -207,59 +216,28 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
 
         second_signature = replace_once(
             self.promotion,
-            "          $publishedSidecar = Join-Path $outputRoot 'gore-as-standalone-compiler.exe'\n",
+            "          $retainedSidecar = Join-Path $outputRoot 'gore-as-standalone-compiler.exe'\n",
             "          python scripts/standalone_compiler_bundle.py sign-sidecar-once --sidecar $sidecar --identity-output $identity.second\n"
-            "          $publishedSidecar = Join-Path $outputRoot 'gore-as-standalone-compiler.exe'\n",
+            "          $retainedSidecar = Join-Path $outputRoot 'gore-as-standalone-compiler.exe'\n",
         )
         self.assert_invalid(promotion=second_signature, mentions="sign.run")
 
-        draft_claim = replace_nth(
+        release_step = replace_once(
             self.promotion,
-            "            --prerelease `\n",
-            "            --draft `\n",
-            0,
+            "      - name: Retain the signed candidate as an internal workflow artifact\n",
+            "      - name: Publish forbidden compiler release\n"
+            "        shell: pwsh\n"
+            "        run: gh release create forbidden\n\n"
+            "      - name: Retain the signed candidate as an internal workflow artifact\n",
         )
-        self.assert_invalid(promotion=draft_claim, mentions="claim.run")
+        self.assert_invalid(promotion=release_step, mentions="exact step order")
 
-        nonexclusive_claim = replace_nth(
+        writable_contents = replace_once(
             self.promotion,
-            '          gh api --method POST "repos/$repo/git/refs" `\n',
-            '          gh api --method GET "repos/$repo/git/refs" `\n',
-            0,
+            "      contents: read\n      id-token: write\n",
+            "      contents: write\n      id-token: write\n",
         )
-        self.assert_invalid(promotion=nonexclusive_claim, mentions="claim.run")
-
-        movable_target = replace_nth(
-            self.promotion,
-            "            --verify-tag `\n",
-            "            --target main `\n",
-            0,
-        )
-        self.assert_invalid(promotion=movable_target, mentions="claim.run")
-
-        retry_cleanup = replace_nth(
-            self.promotion,
-            "          $tagSha = gh api \"repos/$repo/git/ref/tags/$claimTag\" --jq '.object.sha'\n",
-            "          gh release delete $claimTag --cleanup-tag --yes --repo $repo\n"
-            "          $tagSha = gh api \"repos/$repo/git/ref/tags/$claimTag\" --jq '.object.sha'\n",
-            0,
-        )
-        self.assert_invalid(promotion=retry_cleanup, mentions="claim.run")
-
-        mutable_claim = replace_nth(
-            self.promotion,
-            "              $release.draft -or -not $release.prerelease -or -not $release.immutable -or `\n",
-            "              $release.draft -or -not $release.prerelease -or `\n",
-            0,
-        )
-        self.assert_invalid(promotion=mutable_claim, mentions="claim.run")
-
-        claim_without_asset = replace_once(
-            self.promotion,
-            "          gh release create $claimTag $claimFile `\n",
-            "          gh release create $claimTag `\n",
-        )
-        self.assert_invalid(promotion=claim_without_asset, mentions="claim.run")
+        self.assert_invalid(promotion=writable_contents, mentions="permissions")
 
         retryable = replace_once(
             self.promotion,
@@ -325,10 +303,11 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
         )
         self.assert_invalid(promotion=wrong_action, mentions="attest.uses")
 
-        missing_provenance_subject = replace_once(
+        missing_provenance_subject = replace_nth(
             self.promotion,
-            "            ${{ runner.temp }}/gore-as-promotion-output/source-provenance.json\n",
+            "            ${{ runner.temp }}/gore-as-signing-output/source-provenance.json\n",
             "",
+            0,
         )
         self.assert_invalid(
             promotion=missing_provenance_subject, mentions="subject-path"
@@ -346,60 +325,51 @@ class ReleaseWorkflowContractTest(unittest.TestCase):
                     promotion=weakened, mentions="verify-attestation.run"
                 )
 
-        for provenance_field, occurrence in (
-            ("            workflow_sha = '${{ github.workflow_sha }}'\n", 1),
-            ("            claim_tag = 'gore-as-signing-claim-${{ github.sha }}'\n", 0),
+        for provenance_field in (
+            "            workflow_sha = '${{ github.workflow_sha }}'\n",
+            "            workflow_run_id = [UInt64]'${{ github.run_id }}'\n",
         ):
             with self.subTest(provenance_field=provenance_field.strip()):
-                missing_binding = replace_nth(
-                    self.promotion, provenance_field, "", occurrence
+                missing_binding = replace_once(
+                    self.promotion, provenance_field, ""
                 )
                 self.assert_invalid(promotion=missing_binding, mentions="sign.run")
 
-        unbound_published_copy = replace_once(
+        unbound_retained_copy = replace_once(
             self.promotion,
-            "              $identityRecord.signed.sha256 -ne $publishedSha256) {\n",
+            "              $identityRecord.signed.sha256 -ne $retainedSha256) {\n",
             "              $false) {\n",
         )
-        self.assert_invalid(promotion=unbound_published_copy, mentions="sign.run")
+        self.assert_invalid(promotion=unbound_retained_copy, mentions="sign.run")
 
-    def test_promotion_publication_is_complete_and_never_clobbers(self) -> None:
+    def test_internal_artifact_is_complete_and_immutable(self) -> None:
         missing_bundle = replace_once(
             self.promotion,
-            "            (Join-Path $outputRoot 'github-attestation.sigstore.json')\n",
+            "            ${{ runner.temp }}/gore-as-signing-output/github-attestation.sigstore.json\n",
             "",
         )
-        self.assert_invalid(promotion=missing_bundle, mentions="publish.run")
+        self.assert_invalid(promotion=missing_bundle, mentions="retain.with")
 
-        clobber = replace_nth(
+        wrong_action = replace_once(
             self.promotion,
-            "            --repo $repo `\n",
-            "            --repo $repo --clobber `\n",
-            1,
+            "        uses: actions/upload-artifact@v4",
+            "        uses: third-party/upload@v4",
         )
-        self.assert_invalid(promotion=clobber, mentions="publish.run")
+        self.assert_invalid(promotion=wrong_action, mentions="retain.uses")
 
-        upload_into_claim = replace_once(
+        overwrite = replace_once(
             self.promotion,
-            "          gh release create $promotionTag @files `\n",
-            "          gh release upload $claimTag @files `\n",
+            "          overwrite: false\n",
+            "          overwrite: true\n",
         )
-        self.assert_invalid(promotion=upload_into_claim, mentions="publish.run")
+        self.assert_invalid(promotion=overwrite, mentions="retain.with")
 
-        mutable_release = replace_nth(
+        missing_retention = replace_once(
             self.promotion,
-            "              $release.draft -or -not $release.prerelease -or -not $release.immutable -or `\n",
-            "              $release.draft -or -not $release.prerelease -or `\n",
-            1,
+            "          retention-days: 30\n",
+            "",
         )
-        self.assert_invalid(promotion=mutable_release, mentions="publish.run")
-
-        no_digest_check = replace_once(
-            self.promotion,
-            "            if ($asset.Count -ne 1 -or $asset[0].digest -ne $digest -or `\n",
-            "            if ($asset.Count -ne 1 -or `\n",
-        )
-        self.assert_invalid(promotion=no_digest_check, mentions="publish.run")
+        self.assert_invalid(promotion=missing_retention, mentions="retain.with")
 
     def test_ci_must_keep_the_contract_checks_as_its_last_step(self) -> None:
         changed = replace_once(

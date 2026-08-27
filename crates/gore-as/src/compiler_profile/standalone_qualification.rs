@@ -1,4 +1,4 @@
-//! Productive offline adapter for the sealed 26-case standalone qualification corpus.
+//! Productive offline adapter for the sealed 27-case standalone qualification corpus.
 //!
 //! The request contains only corpus-sealed source, target/profile identities, and an optional
 //! invoke declaration. Cache bytes, diagnostics, build flags, and frontend traces are emitted by
@@ -304,7 +304,7 @@ fn bind_profile_corpus(
     let digest = Sha256Digest::from_bytes(Sha256::digest(&json).into());
     if seal.byte_len != json.len() as u64 || seal.sha256 != digest {
         return Err(CompilerBackendFailureV1::unavailable(
-            "unqualified profile does not seal the executable canonical 26-case corpus",
+            "unqualified profile does not seal the executable canonical 27-case corpus",
         ));
     }
     Ok(())
@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn harness_corpus_is_closed_and_contains_all_product_cases() {
         let corpus = full_qualification_corpus_v1().unwrap();
-        assert_eq!(corpus.cases.len(), 26);
+        assert_eq!(corpus.cases.len(), 27);
         assert_eq!(corpus.suite_id, FULL_QUALIFICATION_SUITE_ID_V1);
     }
 

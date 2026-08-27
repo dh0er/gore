@@ -1,4 +1,4 @@
-//! Read-only, handle-pinned validation of the exact game artifacts selected by a compiler profile.
+//! Read-only, handle-pinned validation of game inputs against a qualified compiler API.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -8,7 +8,7 @@ use sha1::{Digest as _, Sha1};
 use sha2::Sha256;
 
 use crate::compiler_profile::manifest::{
-    CompilerProfileV1, FileSealV1, PeCodeViewV1, Sha1Digest, Sha256Digest,
+    BindsProfileV1, CompilerProfileV1, FileSealV1, PeCodeViewV1, Sha1Digest, Sha256Digest,
 };
 use crate::standalone_sidecar::ValidatedCompilerProfilePackageV1;
 
@@ -27,12 +27,13 @@ pub struct CompilerTargetInputPathsV1<'a> {
     pub binds_cache: &'a Path,
 }
 
-/// Opaque proof that EXE, Shipping and Binds all match one qualified profile.
+/// Opaque proof that EXE, Shipping and Binds are compatible with one qualified profile.
 ///
 /// The open handles and directory pins are retained for the complete compiler attempt. On Windows
-/// they deliberately omit delete sharing, closing the replace/rename window between validation and
-/// use. Shipping/Binds bytes come from those exact handles and require both profile SHA-256 and
-/// Steam content SHA-1.
+/// they deliberately omit delete sharing, closing the replace/rename window between validation
+/// and use. Product use is distribution-neutral: the executable must be a bounded AMD64 PE,
+/// Shipping must use the qualified cache format, and Binds must decode to the qualified ordered
+/// API database. Steam/GOG metadata and whole-file hashes are qualification provenance only.
 #[derive(Debug)]
 pub struct ValidatedCompilerTargetInputsV1 {
     profile_sha256: Sha256Digest,
@@ -52,6 +53,29 @@ pub(crate) struct CompilerTargetOwnedPathsV1 {
     binds_cache: PathBuf,
 }
 
+impl CompilerTargetOwnedPathsV1 {
+    pub(crate) fn shipping_cache(&self) -> &Path {
+        &self.shipping_cache
+    }
+
+    pub(crate) fn binds_cache(&self) -> &Path {
+        &self.binds_cache
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        executable: PathBuf,
+        shipping_cache: PathBuf,
+        binds_cache: PathBuf,
+    ) -> Self {
+        Self {
+            executable,
+            shipping_cache,
+            binds_cache,
+        }
+    }
+}
+
 pub(crate) struct CompilerTargetPinHandlesV1 {
     pub(crate) executable: File,
     pub(crate) shipping: File,
@@ -65,7 +89,7 @@ impl ValidatedCompilerTargetInputsV1 {
         package: &ValidatedCompilerProfilePackageV1,
         paths: CompilerTargetInputPathsV1<'_>,
     ) -> Result<Self, CompilerTargetInputError> {
-        Self::load_profile(package.profile(), paths)
+        Self::load_compatible_profile(package.profile(), paths)
     }
 
     /// Qualification-only target pin. An unqualified profile may select inputs for an
@@ -79,10 +103,74 @@ impl ValidatedCompilerTargetInputsV1 {
                 "qualification profile state",
             ));
         }
-        Self::load_profile(profile, paths)
+        Self::load_exact_profile_for_qualification(profile, paths)
     }
 
-    fn load_profile(
+    fn load_compatible_profile(
+        profile: &CompilerProfileV1,
+        paths: CompilerTargetInputPathsV1<'_>,
+    ) -> Result<Self, CompilerTargetInputError> {
+        #[cfg(not(windows))]
+        {
+            let _ = (profile, paths);
+            return Err(CompilerTargetInputError::UnsupportedPlatform);
+        }
+
+        #[cfg(windows)]
+        {
+            let mut directory_pins = Vec::new();
+            for path in [paths.executable, paths.shipping_cache, paths.binds_cache] {
+                directory_pins.extend(pin_absolute_parent_chain(path)?);
+            }
+
+            let mut executable = open_regular_no_follow(paths.executable, "executable")?;
+            verify_amd64_pe_image(&mut executable, MAX_EXECUTABLE_BYTES_V1)?;
+
+            let mut shipping = open_regular_no_follow(paths.shipping_cache, "Shipping cache")?;
+            let shipping_bytes = read_bounded_unsealed(
+                &mut shipping,
+                MAX_SHIPPING_CACHE_BYTES_V1,
+                "Shipping cache",
+            )?;
+            let shipping_header = crate::cache::header::CacheHeader::parse(&shipping_bytes)
+                .map_err(|_| CompilerTargetInputError::Mismatch("Shipping cache format"))?;
+            if shipping_header.magic != profile.cache_writer.build_identifier {
+                return Err(CompilerTargetInputError::Mismatch(
+                    "Shipping cache build identifier",
+                ));
+            }
+            crate::cache::model::parse_modules(&shipping_bytes)
+                .map_err(|_| CompilerTargetInputError::Mismatch("Shipping cache structure"))?;
+
+            let mut binds = open_regular_no_follow(paths.binds_cache, "Binds cache")?;
+            let binds_bytes =
+                read_bounded_unsealed(&mut binds, MAX_BINDS_CACHE_BYTES_V1, "Binds cache")?;
+            let binds_database = crate::compiler_profile::binds::BindsDatabase::parse(&binds_bytes)
+                .map_err(|_| CompilerTargetInputError::Mismatch("Binds API database"))?;
+            if BindsProfileV1::from_database(&binds_database) != profile.binds {
+                return Err(CompilerTargetInputError::Mismatch(
+                    "Binds API compatibility fingerprint",
+                ));
+            }
+
+            Ok(Self {
+                profile_sha256: profile.profile_sha256,
+                executable,
+                shipping,
+                binds,
+                shipping_bytes,
+                binds_bytes,
+                _directory_pins: directory_pins,
+                paths: CompilerTargetOwnedPathsV1 {
+                    executable: paths.executable.to_path_buf(),
+                    shipping_cache: paths.shipping_cache.to_path_buf(),
+                    binds_cache: paths.binds_cache.to_path_buf(),
+                },
+            })
+        }
+    }
+
+    fn load_exact_profile_for_qualification(
         profile: &CompilerProfileV1,
         paths: CompilerTargetInputPathsV1<'_>,
     ) -> Result<Self, CompilerTargetInputError> {
@@ -159,6 +247,20 @@ impl ValidatedCompilerTargetInputsV1 {
         &self.binds_bytes
     }
 
+    pub(crate) fn shipping_cache_seal(&self) -> (u64, Sha256Digest) {
+        (
+            self.shipping_bytes.len() as u64,
+            Sha256Digest::from_bytes(Sha256::digest(&self.shipping_bytes).into()),
+        )
+    }
+
+    pub(crate) fn binds_cache_seal(&self) -> (u64, Sha256Digest) {
+        (
+            self.binds_bytes.len() as u64,
+            Sha256Digest::from_bytes(Sha256::digest(&self.binds_bytes).into()),
+        )
+    }
+
     /// Keep the exact opened executable identity live without exposing its path.
     pub fn executable_handle(&self) -> &File {
         &self.executable
@@ -170,6 +272,35 @@ impl ValidatedCompilerTargetInputsV1 {
 
     pub fn binds_handle(&self) -> &File {
         &self.binds
+    }
+
+    pub(crate) fn shipping_cache_path(&self) -> &Path {
+        self.paths.shipping_cache()
+    }
+
+    pub(crate) fn binds_cache_path(&self) -> &Path {
+        self.paths.binds_cache()
+    }
+
+    /// Temporarily release only the parent-directory handles before GORE publishes its own
+    /// install-mutation lock. The exact executable, Shipping cache and Binds cache handles stay
+    /// open and non-replaceable throughout this handoff.
+    pub fn release_parent_directory_pins_for_install_mutation_v1(&mut self) {
+        self._directory_pins.clear();
+    }
+
+    /// Re-pin every target parent and prove that the retained target handles still name the same
+    /// files after GORE has published its install-mutation lock.
+    pub fn repin_parent_directories_after_install_mutation_v1(
+        &mut self,
+    ) -> Result<(), CompilerTargetInputError> {
+        self._directory_pins = repin_compiler_target_parent_chains_v1(
+            &self.paths,
+            &self.executable,
+            &self.shipping,
+            &self.binds,
+        )?;
+        Ok(())
     }
 
     pub(crate) fn into_pin_handles(self) -> CompilerTargetPinHandlesV1 {
@@ -240,8 +371,82 @@ pub enum CompilerTargetInputError {
     Changed(&'static str),
     #[error("compiler target {0} does not match the compiler profile")]
     Mismatch(&'static str),
+    #[error("compiler target executable is not a bounded Windows AMD64 PE image")]
+    InvalidExecutable,
     #[error("compiler target executable has an invalid PE CodeView directory")]
     InvalidCodeView,
+}
+
+fn read_bounded_unsealed(
+    file: &mut File,
+    max: u64,
+    label: &'static str,
+) -> Result<Vec<u8>, CompilerTargetInputError> {
+    let length = file
+        .metadata()
+        .map_err(|_| CompilerTargetInputError::UnsafeFile(label))?
+        .len();
+    if length == 0 || length > max {
+        return Err(CompilerTargetInputError::TooLarge(label));
+    }
+    let capacity =
+        usize::try_from(length).map_err(|_| CompilerTargetInputError::TooLarge(label))?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|_| CompilerTargetInputError::Changed(label))?;
+    let mut bytes = Vec::with_capacity(capacity);
+    file.take(max + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| CompilerTargetInputError::Changed(label))?;
+    if bytes.len() as u64 != length
+        || file
+            .metadata()
+            .map_err(|_| CompilerTargetInputError::Changed(label))?
+            .len()
+            != length
+    {
+        return Err(CompilerTargetInputError::Changed(label));
+    }
+    Ok(bytes)
+}
+
+fn verify_amd64_pe_image(file: &mut File, max: u64) -> Result<(), CompilerTargetInputError> {
+    let file_len = file
+        .metadata()
+        .map_err(|_| CompilerTargetInputError::InvalidExecutable)?
+        .len();
+    if file_len == 0 || file_len > max {
+        return Err(CompilerTargetInputError::InvalidExecutable);
+    }
+    let mut dos = [0u8; 0x40];
+    read_exact_at(file, 0, &mut dos, file_len)
+        .map_err(|_| CompilerTargetInputError::InvalidExecutable)?;
+    if &dos[..2] != b"MZ" {
+        return Err(CompilerTargetInputError::InvalidExecutable);
+    }
+    let pe_offset = u64::from(le_u32(&dos[0x3c..0x40]));
+    let mut pe = [0u8; 24];
+    read_exact_at(file, pe_offset, &mut pe, file_len)
+        .map_err(|_| CompilerTargetInputError::InvalidExecutable)?;
+    if &pe[..4] != b"PE\0\0" || le_u16(&pe[4..6]) != 0x8664 {
+        return Err(CompilerTargetInputError::InvalidExecutable);
+    }
+    let optional_size = usize::from(le_u16(&pe[20..22]));
+    if optional_size < 2 || optional_size > 4096 {
+        return Err(CompilerTargetInputError::InvalidExecutable);
+    }
+    let mut magic = [0u8; 2];
+    read_exact_at(file, pe_offset + 24, &mut magic, file_len)
+        .map_err(|_| CompilerTargetInputError::InvalidExecutable)?;
+    if le_u16(&magic) != 0x20b
+        || file
+            .metadata()
+            .map_err(|_| CompilerTargetInputError::InvalidExecutable)?
+            .len()
+            != file_len
+    {
+        return Err(CompilerTargetInputError::InvalidExecutable);
+    }
+    Ok(())
 }
 
 fn read_and_verify_seal(
@@ -856,5 +1061,63 @@ mod tests {
         );
         drop(repinned);
         std::fs::rename(&backup, &jitted).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn target_parent_pins_can_be_handed_across_install_lock_publication() {
+        let root = tempfile::tempdir().unwrap();
+        let install = root.path().join("install");
+        let win64 = install.join("G1R/Binaries/Win64");
+        let script = install.join("G1R/Script");
+        std::fs::create_dir_all(&win64).unwrap();
+        std::fs::create_dir_all(&script).unwrap();
+        let paths = CompilerTargetOwnedPathsV1 {
+            executable: win64.join("G1R-Win64-Shipping.exe"),
+            shipping_cache: script.join("PrecompiledScript_Shipping.Cache"),
+            binds_cache: script.join("Binds.Cache"),
+        };
+        std::fs::write(&paths.executable, b"exe").unwrap();
+        std::fs::write(&paths.shipping_cache, b"shipping").unwrap();
+        std::fs::write(&paths.binds_cache, b"binds").unwrap();
+
+        let mut directory_pins = Vec::new();
+        for path in [
+            paths.executable.as_path(),
+            paths.shipping_cache.as_path(),
+            paths.binds_cache.as_path(),
+        ] {
+            directory_pins.extend(pin_absolute_parent_chain(path).unwrap());
+        }
+        let mut target = ValidatedCompilerTargetInputsV1 {
+            profile_sha256: Sha256Digest::from_bytes([0; 32]),
+            executable: open_regular_no_follow(&paths.executable, "executable").unwrap(),
+            shipping: open_regular_no_follow(&paths.shipping_cache, "Shipping cache").unwrap(),
+            binds: open_regular_no_follow(&paths.binds_cache, "Binds cache").unwrap(),
+            shipping_bytes: b"shipping".to_vec(),
+            binds_bytes: b"binds".to_vec(),
+            _directory_pins: directory_pins,
+            paths,
+        };
+        let initializing = install.join("initializing.lock");
+        let published = install.join("published.lock");
+        let displaced = install.join("published.displaced");
+        std::fs::write(&initializing, b"owner").unwrap();
+        assert!(
+            std::fs::rename(&initializing, &published).is_err(),
+            "the selected target's install-root pin must explain the product lock conflict"
+        );
+
+        target.release_parent_directory_pins_for_install_mutation_v1();
+        std::fs::rename(&initializing, &published).unwrap();
+        target
+            .repin_parent_directories_after_install_mutation_v1()
+            .unwrap();
+        assert!(
+            std::fs::rename(&published, &displaced).is_err(),
+            "the verified re-pin must immediately close the install-root replacement window"
+        );
+        drop(target);
+        std::fs::rename(&published, &displaced).unwrap();
     }
 }

@@ -757,14 +757,7 @@ fn compile_report_with_available_product_package(
             );
         }
     };
-    let config = gore_as::standalone_sidecar::StandaloneSidecarConfigV1::new(
-        package.sidecar_path().to_path_buf(),
-        package.sidecar_seal(),
-        package.profile_manifest_path().to_path_buf(),
-        package.profile_root().to_path_buf(),
-        staging.path().to_path_buf(),
-    );
-    let runner = gore_as::standalone_sidecar::StandaloneSidecarRunnerV1::new(config);
+    let runner = package.sidecar_runner(staging.path().to_path_buf());
     let (authority, target) = package.into_execution_parts();
     let mut runner_unavailable = None;
     let mut runner = match runner {
@@ -817,18 +810,6 @@ fn compile_report_with_available_product_package(
             None
         }
     };
-    let opts = CompileOpts {
-        game_dir: game_dir.clone(),
-        op: payload.op,
-        module_name: payload.module_name,
-        rel_path: payload.rel_path,
-        as_path: PathBuf::from(payload.as_path),
-        source_override: None,
-        work_dir: staging.path().to_path_buf(),
-        allow_new_symbols: payload.allow_new_symbols,
-        base_override: Some(target.shipping_cache().to_vec()),
-        binds_override: Some(target.binds_cache().to_vec()),
-    };
     if let Err(message) = staging.verify_owned() {
         return attach_backend_evidence(
             preflight_failure("COMPILE_STAGING_CHANGED", message),
@@ -843,6 +824,97 @@ fn compile_report_with_available_product_package(
         );
     }
     let mut strict_target = Some(target);
+    let mut guard = if requested == CompilerBackendWireV2::Standalone {
+        None
+    } else {
+        match acquire_guard(&game_dir) {
+            Ok(guard) => Some(guard),
+            Err(message) => {
+                return attach_backend_evidence(
+                    install_guard_failure(&game_dir, message),
+                    backend_evidence_with_package(
+                        requested,
+                        None,
+                        false,
+                        false,
+                        Some(authority.identity()),
+                        runner_unavailable.clone(),
+                    ),
+                );
+            }
+        }
+    };
+    let (base_override, target_matches_pristine) = match qualified_target_pristine_script_cache(
+        &game_dir,
+        strict_target
+            .as_ref()
+            .expect("the authenticated target remains pinned before execution")
+            .shipping_cache(),
+    ) {
+        Ok(base) => base,
+        Err(failure) => {
+            let failure = match guard.take() {
+                Some(guard) => release_guard_after_preflight_failure(
+                    guard,
+                    failure,
+                    "compiler base selection failed before launch",
+                ),
+                None => failure,
+            };
+            return attach_backend_evidence(
+                failure,
+                backend_evidence_with_package(
+                    requested,
+                    None,
+                    false,
+                    false,
+                    Some(authority.identity()),
+                    runner_unavailable.clone(),
+                ),
+            );
+        }
+    };
+    if !target_matches_pristine {
+        if requested == CompilerBackendWireV2::Standalone {
+            return attach_backend_evidence(
+                standalone_target_not_pristine_failure(),
+                backend_evidence_with_package(
+                    requested,
+                    None,
+                    false,
+                    false,
+                    Some(authority.identity()),
+                    None,
+                ),
+            );
+        }
+        runner_unavailable.get_or_insert_with(|| {
+            json!({
+                "failed_backend": CompilerBackendNameV1::Standalone.as_str(),
+                "failure_kind": "preflight",
+                "detail": "the authenticated standalone compiler target is the live deployed Shipping cache, not the deployment-aware pristine base; using the explicitly allowed game fallback",
+            })
+        });
+        runner = None;
+    }
+    let opts = CompileOpts {
+        game_dir: game_dir.clone(),
+        op: payload.op,
+        module_name: payload.module_name,
+        rel_path: payload.rel_path,
+        as_path: PathBuf::from(payload.as_path),
+        source_override: None,
+        work_dir: staging.path().to_path_buf(),
+        allow_new_symbols: payload.allow_new_symbols,
+        base_override: Some(base_override),
+        binds_override: Some(
+            strict_target
+                .as_ref()
+                .expect("the authenticated target remains pinned before execution")
+                .binds_cache()
+                .to_vec(),
+        ),
+    };
     let report = if requested == CompilerBackendWireV2::Standalone {
         // `target` remains alive for the whole attempt and pins EXE/Shipping/Binds without ever
         // acquiring the install-mutation guard or touching the selected installation.
@@ -862,22 +934,6 @@ fn compile_report_with_available_product_package(
         );
         report
     } else {
-        let guard = match acquire_guard(&game_dir) {
-            Ok(guard) => guard,
-            Err(message) => {
-                return attach_backend_evidence(
-                    install_guard_failure(&game_dir, message),
-                    backend_evidence_with_package(
-                        requested,
-                        None,
-                        false,
-                        false,
-                        Some(authority.identity()),
-                        runner_unavailable.clone(),
-                    ),
-                );
-            }
-        };
         compile_module_with_backend_v1_with_guard_and_target(
             &opts,
             &DiagnosticsOptions {
@@ -887,7 +943,9 @@ fn compile_report_with_available_product_package(
             },
             CompilerBackendModeV1::StandaloneThenGame,
             runner.as_mut().map(|runner| runner as _),
-            guard,
+            guard
+                .take()
+                .expect("game fallback acquired one install-mutation guard"),
             strict_target
                 .take()
                 .expect("the authenticated target is transferred once"),
@@ -934,6 +992,37 @@ fn attach_backend_evidence(mut response: Value, evidence: Value) -> Value {
         fields.insert("compiler_backend".to_owned(), evidence);
     }
     response
+}
+
+fn qualified_target_pristine_script_cache(
+    game_dir: &Path,
+    qualified_shipping: &[u8],
+) -> Result<(Vec<u8>, bool), Value> {
+    let pristine = gore_mod::pristine_script_cache(game_dir).map_err(|error| {
+        let message = error.to_string();
+        if message.contains("RECOVERY_REQUIRED") {
+            preflight_failure_with_state(
+                "COMPILE_BASE_RECOVERY_REQUIRED",
+                format!("the deployment-aware pristine cache requires recovery: {message}"),
+                true,
+            )
+        } else {
+            preflight_failure(
+                "COMPILE_BASE_UNAVAILABLE",
+                format!("reading the drift-aware pristine script cache: {message}"),
+            )
+        }
+    })?;
+    let target_matches_pristine = qualified_shipping == pristine.as_slice();
+    Ok((pristine, target_matches_pristine))
+}
+
+fn standalone_target_not_pristine_failure() -> Value {
+    preflight_failure(
+        "COMPILE_STANDALONE_TARGET_NOT_PRISTINE",
+        "the authenticated standalone compiler target uses the live Shipping cache, but the deployment-aware pristine cache differs; reset or undeploy active script mods before compiling"
+            .to_owned(),
+    )
 }
 
 fn compile_report_v1_payload(payload: CompileWirePayload) -> Value {
@@ -1727,6 +1816,33 @@ mod tests {
 
         assert_eq!(response["qualified_evidence"], true);
         assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn product_target_must_match_the_deployment_aware_pristine_cache() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let script = game.join("G1R/Script");
+        fs::create_dir_all(&script).unwrap();
+        fs::write(script.join("PrecompiledScript_Shipping.Cache"), b"pristine").unwrap();
+
+        let (accepted, accepted_matches) =
+            qualified_target_pristine_script_cache(&game, b"pristine").unwrap();
+        assert_eq!(accepted, b"pristine");
+        assert!(accepted_matches);
+
+        let (fallback_base, fallback_matches) =
+            qualified_target_pristine_script_cache(&game, b"deployed").unwrap();
+        assert_eq!(fallback_base, b"pristine");
+        assert!(!fallback_matches);
+
+        let rejected = standalone_target_not_pristine_failure();
+        assert_eq!(
+            rejected["compile_error"]["code"],
+            "COMPILE_STANDALONE_TARGET_NOT_PRISTINE"
+        );
+        assert_eq!(rejected["install_restore"], "not_started");
+        assert_eq!(rejected["recovery_required"], false);
     }
 
     fn request(payload: Value) -> String {

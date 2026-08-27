@@ -32,6 +32,10 @@ pub struct Invocation {
     /// The command line as a person would type it, echoed in the tool result so the transcript is
     /// reproducible in a shell.
     pub display: String,
+    /// Whether this exact call may start the game. Kept after argument normalization so timeout
+    /// reporting does not describe strict standalone as a game launch merely because the command's
+    /// worst-case annotation is one.
+    pub may_launch_game: bool,
     /// Set when a person has to agree before this runs. `None` means the call is either harmless or
     /// already pre-approved by the flags the server was started with.
     ///
@@ -72,14 +76,48 @@ pub enum BuildError {
         /// The guide page for this command, when it has one.
         guide: Option<&'static str>,
     },
-    UnknownSubcommand { tool: &'static str, given: String, available: Vec<&'static str> },
-    ArgsNotAnObject { got: &'static str },
-    UnknownArgument { sub: &'static str, given: String, known: Vec<&'static str> },
-    MissingRequired { sub: &'static str, name: &'static str, kind: String },
-    WrongType { sub: &'static str, name: &'static str, expected: String, got: &'static str },
-    NotInEnum { sub: &'static str, name: &'static str, allowed: Vec<&'static str>, got: String },
-    NotHex { sub: &'static str, name: &'static str, got: String },
-    OutOfRange { sub: &'static str, name: &'static str, min: Option<i64>, max: Option<i64>, got: i64 },
+    UnknownSubcommand {
+        tool: &'static str,
+        given: String,
+        available: Vec<&'static str>,
+    },
+    ArgsNotAnObject {
+        got: &'static str,
+    },
+    UnknownArgument {
+        sub: &'static str,
+        given: String,
+        known: Vec<&'static str>,
+    },
+    MissingRequired {
+        sub: &'static str,
+        name: &'static str,
+        kind: String,
+    },
+    WrongType {
+        sub: &'static str,
+        name: &'static str,
+        expected: String,
+        got: &'static str,
+    },
+    NotInEnum {
+        sub: &'static str,
+        name: &'static str,
+        allowed: Vec<&'static str>,
+        got: String,
+    },
+    NotHex {
+        sub: &'static str,
+        name: &'static str,
+        got: String,
+    },
+    OutOfRange {
+        sub: &'static str,
+        name: &'static str,
+        min: Option<i64>,
+        max: Option<i64>,
+        got: i64,
+    },
     ExclusiveSet {
         sub: &'static str,
         set: Vec<&'static str>,
@@ -91,7 +129,14 @@ pub enum BuildError {
 impl fmt::Display for BuildError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            BuildError::UnusableSource { sub, arg, pointer, path, problem, guide } => {
+            BuildError::UnusableSource {
+                sub,
+                arg,
+                pointer,
+                path,
+                problem,
+                guide,
+            } => {
                 write!(
                     f,
                     "`{sub}` reads the name of the directory it writes from `{pointer}` in the \
@@ -128,12 +173,19 @@ impl fmt::Display for BuildError {
                 )?;
                 match guide {
                     Some(page) => {
-                        write!(f, " The shape this file has to have is in `gore://guide/{page}`.")
+                        write!(
+                            f,
+                            " The shape this file has to have is in `gore://guide/{page}`."
+                        )
                     }
                     None => Ok(()),
                 }
             }
-            BuildError::UnknownSubcommand { tool, given, available } => write!(
+            BuildError::UnknownSubcommand {
+                tool,
+                given,
+                available,
+            } => write!(
                 f,
                 "{tool} has no subcommand `{given}`. Available: {}.",
                 available.join(", ")
@@ -152,10 +204,23 @@ impl fmt::Display for BuildError {
             BuildError::MissingRequired { sub, name, kind } => {
                 write!(f, "`{sub}` requires the argument `{name}` ({kind}).")
             }
-            BuildError::WrongType { sub, name, expected, got } => {
-                write!(f, "`{sub}` argument `{name}` must be {expected}, got {got}.")
+            BuildError::WrongType {
+                sub,
+                name,
+                expected,
+                got,
+            } => {
+                write!(
+                    f,
+                    "`{sub}` argument `{name}` must be {expected}, got {got}."
+                )
             }
-            BuildError::NotInEnum { sub, name, allowed, got } => write!(
+            BuildError::NotInEnum {
+                sub,
+                name,
+                allowed,
+                got,
+            } => write!(
                 f,
                 "`{sub}` argument `{name}` must be one of {}, got `{got}`.",
                 allowed.join(", ")
@@ -165,7 +230,13 @@ impl fmt::Display for BuildError {
                 "`{sub}` argument `{name}` must be hex with an even number of digits, \
                  got `{got}`."
             ),
-            BuildError::OutOfRange { sub, name, min, max, got } => {
+            BuildError::OutOfRange {
+                sub,
+                name,
+                min,
+                max,
+                got,
+            } => {
                 write!(f, "`{sub}` argument `{name}` is out of range (got {got}")?;
                 match (min, max) {
                     (Some(min), Some(max)) => write!(f, ", allowed {min}..={max})."),
@@ -174,11 +245,19 @@ impl fmt::Display for BuildError {
                     (None, None) => write!(f, ")."),
                 }
             }
-            BuildError::ExclusiveSet { sub, set, given, exactly_one } => {
+            BuildError::ExclusiveSet {
+                sub,
+                set,
+                given,
+                exactly_one,
+            } => {
                 let names = set.join(" or ");
                 if *exactly_one {
                     if given.is_empty() {
-                        write!(f, "`{sub}` requires exactly one of {names}; neither was given.")
+                        write!(
+                            f,
+                            "`{sub}` requires exactly one of {names}; neither was given."
+                        )
                     } else {
                         write!(
                             f,
@@ -216,7 +295,11 @@ pub fn build(
     let args = match args {
         Value::Object(map) => map.clone(),
         Value::Null => Map::new(),
-        other => return Err(BuildError::ArgsNotAnObject { got: type_name(other) }),
+        other => {
+            return Err(BuildError::ArgsNotAnObject {
+                got: type_name(other),
+            })
+        }
     };
 
     let path = match group.shape {
@@ -227,11 +310,12 @@ pub fn build(
     reject_unknown_arguments(command, &args)?;
     check_argument_sets(command, &args)?;
     check_derived_sources(command, &args)?;
+    let may_launch_game = command.safety.requirements(&args).game_launch;
     // Dropped rather than never computed, so that turning a flag on cannot change which arm the
     // gate would have matched — only whether anyone is asked about it. The command line it shows is
     // filled in below, once there is one.
-    let mut consent = consent_for(command, &args, &path)
-        .filter(|consent| !opts.pre_approves(&consent.needs));
+    let mut consent =
+        consent_for(command, &args, &path).filter(|consent| !opts.pre_approves(&consent.needs));
 
     let mut flags: Vec<OsString> = Vec::new();
     let mut positionals: Vec<(u8, Vec<OsString>)> = Vec::new();
@@ -277,8 +361,10 @@ pub fn build(
                 positionals.push((order, vec![scalar(command, spec, value)?.into()]));
             }
             ArgForm::PositionalRepeated { order } => {
-                let elements =
-                    list(command, spec, value)?.into_iter().map(OsString::from).collect();
+                let elements = list(command, spec, value)?
+                    .into_iter()
+                    .map(OsString::from)
+                    .collect();
                 positionals.push((order, elements));
             }
         }
@@ -319,7 +405,14 @@ pub fn build(
         consent.command_line = display.clone();
     }
 
-    Ok(Invocation { display, argv, path, timeout, consent })
+    Ok(Invocation {
+        display,
+        argv,
+        path,
+        timeout,
+        may_launch_game,
+        consent,
+    })
 }
 
 fn reject_unknown_arguments(
@@ -340,10 +433,7 @@ fn reject_unknown_arguments(
 
 /// Enforce the "exactly one of" / "at most one of" constraints clap declares with
 /// `required_unless_present` and `conflicts_with`.
-fn check_argument_sets(
-    command: &CommandSpec,
-    args: &Map<String, Value>,
-) -> Result<(), BuildError> {
+fn check_argument_sets(command: &CommandSpec, args: &Map<String, Value>) -> Result<(), BuildError> {
     // A switch counts as given only when it is `true`. The argv builder omits a `false` switch
     // entirely, so `{"no_diagnostics": false, "diagnostics_hook": "x"}` produces a command line
     // carrying only `--diagnostics-hook`, which clap accepts — rejecting it here would refuse a
@@ -399,11 +489,7 @@ fn check_argument_sets(
 /// The arms are ordered most-specific-first and the first match wins. A command that trips arm two
 /// would also trip arm four, but what the command itself does is the truer sentence than "the
 /// output file already exists", and only one question gets asked.
-fn consent_for(
-    command: &CommandSpec,
-    args: &Map<String, Value>,
-    path: &str,
-) -> Option<Consent> {
+fn consent_for(command: &CommandSpec, args: &Map<String, Value>, path: &str) -> Option<Consent> {
     let required = command.safety.requirements(args);
     let question = |reason: String, remedy: Option<String>, needs: Needs| {
         Some(Consent {
@@ -428,12 +514,18 @@ fn consent_for(
         return question(
             reason.into(),
             None,
-            Needs { write: required.write, game_launch: true },
+            Needs {
+                write: required.write,
+                game_launch: true,
+            },
         );
     }
 
     if required.write {
-        let needs = Needs { write: true, game_launch: false };
+        let needs = Needs {
+            write: true,
+            game_launch: false,
+        };
         if required.rewrites_in_place {
             let escape = command.safety.in_place_without.unwrap_or("out");
             return question(
@@ -462,7 +554,10 @@ fn consent_for(
             Some(format!(
                 "Point `{name}` outside the installation to produce a file to deploy later"
             )),
-            Needs { write: true, game_launch: false },
+            Needs {
+                write: true,
+                game_launch: false,
+            },
         );
     }
 
@@ -470,7 +565,10 @@ fn consent_for(
     // there, it does not create anything — it truncates — so the promise that made it harmless no
     // longer holds and the call has to be treated as a mutation.
     if let Some((name, occupancy)) = occupied_target(command, args) {
-        let needs = Needs { write: true, game_launch: false };
+        let needs = Needs {
+            write: true,
+            game_launch: false,
+        };
         return match occupancy {
             Occupancy::Existing(target) => question(
                 format!(
@@ -489,7 +587,9 @@ fn consent_for(
                      and that path already exists — so this command replaces it rather than \
                      refusing"
                 ),
-                Some(format!("Point `{name}` somewhere that does not hold it yet")),
+                Some(format!(
+                    "Point `{name}` somewhere that does not hold it yet"
+                )),
                 needs,
             ),
             Occupancy::NonEmptyDir(target) => question(
@@ -506,7 +606,9 @@ fn consent_for(
                     "writes into `{target}` under a name it reads out of `{source}`, and that name \
                      could not be read from here — so what it would replace cannot be checked first"
                 ),
-                Some(format!("Make `{source}` readable, or check `{target}` yourself")),
+                Some(format!(
+                    "Make `{source}` readable, or check `{target}` yourself"
+                )),
                 needs,
             ),
         };
@@ -537,21 +639,25 @@ fn installs_into_game_tree(
     // Derived paths are computed before they are checked. Mapping them back to the argument name
     // would test the base path — and `texture extract`'s sidecar is a different file, which may be
     // a link into the installation while the PNG beside it is not.
-    output_paths(command, args).into_iter().find_map(|(name, path)| {
-        // Resolved first, always. A relative output is resolved by the *child* against this
-        // process's working directory, so comparing it lexically would miss `--out .` run from
-        // inside the installation — which is the same deployment by a shorter name.
-        let Some(path) = resolve(&path) else {
-            // Too many links to follow. Where the write lands is unknown, so it is gated.
-            return Some((name, "a symlink chain too deep to follow".to_string()));
-        };
+    output_paths(command, args)
+        .into_iter()
+        .find_map(|(name, path)| {
+            // Resolved first, always. A relative output is resolved by the *child* against this
+            // process's working directory, so comparing it lexically would miss `--out .` run from
+            // inside the installation — which is the same deployment by a shorter name.
+            let Some(path) = resolve(&path) else {
+                // Too many links to follow. Where the write lands is unknown, so it is gated.
+                return Some((name, "a symlink chain too deep to follow".to_string()));
+            };
 
-        let under_game = game.as_ref().is_some_and(|root| path.starts_with(root));
-        let names_the_game_folder =
-            path.components().any(|part| part.as_os_str().eq_ignore_ascii_case("G1R"));
+            let under_game = game.as_ref().is_some_and(|root| path.starts_with(root));
+            let names_the_game_folder = path
+                .components()
+                .any(|part| part.as_os_str().eq_ignore_ascii_case("G1R"));
 
-        (under_game || names_the_game_folder).then(|| (name, path.to_string_lossy().into_owned()))
-    })
+            (under_game || names_the_game_folder)
+                .then(|| (name, path.to_string_lossy().into_owned()))
+        })
 }
 
 /// Every path this call writes: the ones an argument names, and the ones it derives from them.
@@ -636,7 +742,10 @@ fn resolve_following_links(path: &std::path::Path, hops: u8) -> Option<std::path
                         let followed = if target.is_absolute() {
                             target
                         } else {
-                            resolved.parent().unwrap_or(std::path::Path::new("")).join(target)
+                            resolved
+                                .parent()
+                                .unwrap_or(std::path::Path::new(""))
+                                .join(target)
                         };
                         return resolve_following_links(&followed, hops + 1);
                     }
@@ -688,41 +797,59 @@ fn occupied_target(
 
     // A derived path is written just as unconditionally as the one the caller named, and the
     // caller cannot avoid it by choosing a different argument value for something else.
-    let derived = command.safety.derives.iter().copied().find_map(|(name, how)| {
-        let given = args.get(name)?.as_str()?;
-        match derived_target(args, std::path::Path::new(given), how) {
-            DerivedTarget::At(path) => path
-                .exists()
-                .then(|| (name, Occupancy::ExistingDerived(path.to_string_lossy().into_owned()))),
-            DerivedTarget::Unknown { source } => Some((
-                name,
-                Occupancy::Unreadable { source, target: given.to_string() },
-            )),
-        }
-    });
+    let derived = command
+        .safety
+        .derives
+        .iter()
+        .copied()
+        .find_map(|(name, how)| {
+            let given = args.get(name)?.as_str()?;
+            match derived_target(args, std::path::Path::new(given), how) {
+                DerivedTarget::At(path) => path.exists().then(|| {
+                    (
+                        name,
+                        Occupancy::ExistingDerived(path.to_string_lossy().into_owned()),
+                    )
+                }),
+                DerivedTarget::Unknown { source } => Some((
+                    name,
+                    Occupancy::Unreadable {
+                        source,
+                        target: given.to_string(),
+                    },
+                )),
+            }
+        });
     if derived.is_some() {
         return derived;
     }
 
     // Last, because it is the weakest claim of the three: something is in the way, but which file
     // the command will collide with is exactly what cannot be known before it runs.
-    command.safety.clobbers_dir.iter().copied().find_map(|name| {
-        let given = args.get(name)?.as_str()?;
-        let entries = std::fs::read_dir(given).ok()?;
-        // `read_dir` failing is not occupancy: a directory that is not there yet is the ordinary
-        // case this whole check exists to let through ungated.
-        entries
-            .flatten()
-            .next()
-            .map(|_| (name, Occupancy::NonEmptyDir(given.to_string())))
-    })
+    command
+        .safety
+        .clobbers_dir
+        .iter()
+        .copied()
+        .find_map(|name| {
+            let given = args.get(name)?.as_str()?;
+            let entries = std::fs::read_dir(given).ok()?;
+            // `read_dir` failing is not occupancy: a directory that is not there yet is the ordinary
+            // case this whole check exists to let through ungated.
+            entries
+                .flatten()
+                .next()
+                .map(|_| (name, Occupancy::NonEmptyDir(given.to_string())))
+        })
 }
 
 /// Where a derived output lands, or why the gate could not work it out.
 enum DerivedTarget {
     At(std::path::PathBuf),
     /// Names the file that was supposed to supply the missing component.
-    Unknown { source: String },
+    Unknown {
+        source: String,
+    },
 }
 
 /// Resolve one [`Derived`] shape against the arguments it may need.
@@ -738,7 +865,11 @@ fn derived_target(
             None => DerivedTarget::At(base.to_path_buf()),
         },
         Derived::ChildNamedInJson { arg, pointer } => {
-            let source = args.get(arg).and_then(Value::as_str).unwrap_or(arg).to_string();
+            let source = args
+                .get(arg)
+                .and_then(Value::as_str)
+                .unwrap_or(arg)
+                .to_string();
             match name_in_json(&source, pointer) {
                 Ok(name) => DerivedTarget::At(base.join(name)),
                 // Still fails closed. By the time the gate runs, `check_derived_sources` has
@@ -798,7 +929,9 @@ fn is_safe_mod_name(name: &str) -> bool {
     }
     if name.contains(['/', '\\', ':', '\0'])
         || name.chars().any(char::is_control)
-        || name.chars().any(|c| matches!(c, '<' | '>' | '"' | '|' | '?' | '*'))
+        || name
+            .chars()
+            .any(|c| matches!(c, '<' | '>' | '"' | '|' | '?' | '*'))
     {
         return false;
     }
@@ -831,7 +964,17 @@ fn is_windows_reserved(name: &str) -> bool {
         .is_some_and(|suffix| {
             matches!(
                 suffix,
-                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "\u{b9}" | "\u{b2}" | "\u{b3}"
+                "1" | "2"
+                    | "3"
+                    | "4"
+                    | "5"
+                    | "6"
+                    | "7"
+                    | "8"
+                    | "9"
+                    | "\u{b9}"
+                    | "\u{b2}"
+                    | "\u{b3}"
             )
         })
 }
@@ -996,14 +1139,17 @@ fn list(command: &CommandSpec, spec: &ArgSpec, value: &Value) -> Result<Vec<Stri
         .iter()
         .map(|element| match spec.kind {
             ArgKind::StrList => text(command, spec, element).map(str::to_string),
-            ArgKind::IntList => element.as_i64().map(|n| n.to_string()).ok_or_else(|| {
-                BuildError::WrongType {
-                    sub: command.sub,
-                    name: spec.name,
-                    expected: "an array of integers".into(),
-                    got: type_name(element),
-                }
-            }),
+            ArgKind::IntList => {
+                element
+                    .as_i64()
+                    .map(|n| n.to_string())
+                    .ok_or_else(|| BuildError::WrongType {
+                        sub: command.sub,
+                        name: spec.name,
+                        expected: "an array of integers".into(),
+                        got: type_name(element),
+                    })
+            }
             _ => Err(BuildError::WrongType {
                 sub: command.sub,
                 name: spec.name,
@@ -1156,7 +1302,13 @@ mod tests {
 
     /// Whether a call asks about a write - the shape all but one gate arm produces.
     fn asks_about_a_write(raised: Option<Consent>) -> bool {
-        raised.is_some_and(|consent| consent.needs == Needs { write: true, game_launch: false })
+        raised.is_some_and(|consent| {
+            consent.needs
+                == Needs {
+                    write: true,
+                    game_launch: false,
+                }
+        })
     }
 
     fn argv_of(tool: &str, sub: &str, args: Value) -> Vec<String> {
@@ -1178,16 +1330,20 @@ mod tests {
         let occupied = dir.path().join("precious.json");
         std::fs::write(&occupied, b"{}").expect("write fixture");
 
-        let call = |out: &std::path::Path| {
-            json!({ "sdk_dir": "SDK", "out": out.to_string_lossy() })
-        };
+        let call =
+            |out: &std::path::Path| json!({ "sdk_dir": "SDK", "out": out.to_string_lossy() });
 
         assert!(
             question("gore_catalog", "dump", call(&fresh), &options()).is_none(),
             "a path that does not exist yet is nobody's business"
         );
         assert!(
-            asks_about_a_write(question("gore_catalog", "dump", call(&occupied), &options())),
+            asks_about_a_write(question(
+                "gore_catalog",
+                "dump",
+                call(&occupied),
+                &options()
+            )),
             "an existing target must be put to the user"
         );
         assert!(
@@ -1213,7 +1369,12 @@ mod tests {
 
         std::fs::write(&sidecar, b"{}").expect("write sidecar");
         assert!(
-            asks_about_a_write(question("gore_texture", "extract", call.clone(), &options())),
+            asks_about_a_write(question(
+                "gore_texture",
+                "extract",
+                call.clone(),
+                &options()
+            )),
             "the sidecar exists and would be overwritten"
         );
         assert!(question("gore_texture", "extract", call, &permissive()).is_none());
@@ -1223,15 +1384,13 @@ mod tests {
     fn packing_into_the_game_tree_is_a_deployment_and_is_gated() {
         // `texture pack -o ./build` is an artifact; `texture pack -o <game>/G1R/Content/Paks/~mods`
         // is the live override the game mounts, which is what `texture deploy` needs a flag for.
-        let call = |out: &str| {
-            json!({ "game": "D:/Games/G1R", "mod_dir": "mod", "name": "zzz_Mine_P", "out": out })
-        };
+        let call = |out: &str| json!({ "game": "D:/Games/G1R", "mod_dir": "mod", "name": "zzz_Mine_P", "out": out });
 
         assert!(question("gore_texture", "pack", call("build/triplet"), &options()).is_none());
 
         for inside in [
             "D:/Games/G1R/G1R/Content/Paks/~mods",
-            "D:/Games/G1R/anything",              // under the explicitly passed `game`
+            "D:/Games/G1R/anything", // under the explicitly passed `game`
             "E:/elsewhere/G1R/Content/Paks/~mods", // names the game folder outright
         ] {
             assert!(
@@ -1261,8 +1420,16 @@ mod tests {
                 available: vec!["compile"],
             },
             BuildError::ArgsNotAnObject { got: "a string" },
-            BuildError::UnknownArgument { sub: "dump", given: "x".into(), known: vec!["out"] },
-            BuildError::MissingRequired { sub: "dump", name: "out", kind: "a path".into() },
+            BuildError::UnknownArgument {
+                sub: "dump",
+                given: "x".into(),
+                known: vec!["out"],
+            },
+            BuildError::MissingRequired {
+                sub: "dump",
+                name: "out",
+                kind: "a path".into(),
+            },
             BuildError::WrongType {
                 sub: "dump",
                 name: "out",
@@ -1275,7 +1442,11 @@ mod tests {
                 allowed: vec!["item"],
                 got: "x".into(),
             },
-            BuildError::NotHex { sub: "patch-fixed", name: "expected_hex", got: "zz".into() },
+            BuildError::NotHex {
+                sub: "patch-fixed",
+                name: "expected_hex",
+                got: "zz".into(),
+            },
             BuildError::OutOfRange {
                 sub: "inspect",
                 name: "export_index",
@@ -1324,17 +1495,27 @@ mod tests {
         .expect("extracting over files already in the directory is asked about");
 
         assert!(
-            !raised.reason.contains("changes the game installation or the shared catalogs"),
+            !raised
+                .reason
+                .contains("changes the game installation or the shared catalogs"),
             "the one-size-fits-all reason is back: {}",
             raised.reason
         );
         assert!(raised.reason.contains("is not empty"), "{}", raised.reason);
-        assert!(raised.reason.contains(&*occupied.to_string_lossy()), "{}", raised.reason);
+        assert!(
+            raised.reason.contains(&*occupied.to_string_lossy()),
+            "{}",
+            raised.reason
+        );
 
         // And a command that really does touch the installation still says so, in its own terms.
         let deploy = question("gore_mod", "deploy", json!({ "bundle": "b" }), &options())
             .expect("deploying is asked about");
-        assert!(deploy.reason.contains("installs the bundle into the game"), "{}", deploy.reason);
+        assert!(
+            deploy.reason.contains("installs the bundle into the game"),
+            "{}",
+            deploy.reason
+        );
         assert_ne!(deploy.reason, raised.reason, "two commands, two reasons");
     }
 
@@ -1386,11 +1567,13 @@ mod tests {
         // is JSON, so the gate reads it: a first build destroys nothing and says nothing.
         let dir = tempfile::tempdir().expect("tempdir");
         let spec = dir.path().join("spec.json");
-        std::fs::write(&spec, br#"{"meta":{"name":"DaniTestMod","version":"1.0.0"}}"#).expect("write");
+        std::fs::write(
+            &spec,
+            br#"{"meta":{"name":"DaniTestMod","version":"1.0.0"}}"#,
+        )
+        .expect("write");
         let out = dir.path().join("build");
-        let call = || {
-            json!({ "spec": spec.to_string_lossy(), "out": out.to_string_lossy() })
-        };
+        let call = || json!({ "spec": spec.to_string_lossy(), "out": out.to_string_lossy() });
 
         assert!(
             question("gore_mod", "build", call(), &options()).is_none(),
@@ -1409,7 +1592,11 @@ mod tests {
             "the derived path is being described as the argument's own: {}",
             raised.reason
         );
-        assert!(raised.reason.contains("derives from `out`"), "{}", raised.reason);
+        assert!(
+            raised.reason.contains("derives from `out`"),
+            "{}",
+            raised.reason
+        );
 
         // A different mod name in the same output directory is a different folder, and untouched.
         std::fs::write(&spec, br#"{"meta":{"name":"Other","version":"1.0.0"}}"#).expect("write");
@@ -1479,7 +1666,13 @@ mod tests {
         assert!(rendered.contains("at least one value"), "{rendered}");
 
         // One value is enough, and an optional list may still be empty.
-        assert!(build_with("gore_find", "find", json!({ "query": ["apple"] }), &options()).is_ok());
+        assert!(build_with(
+            "gore_find",
+            "find",
+            json!({ "query": ["apple"] }),
+            &options()
+        )
+        .is_ok());
     }
 
     #[test]
@@ -1493,12 +1686,18 @@ mod tests {
 
         for (args, name) in [
             (json!({ "spec": 42, "out": out.to_string_lossy() }), "spec"),
-            (json!({ "spec": dir.path().join("spec.json").to_string_lossy(), "out": [] }), "out"),
+            (
+                json!({ "spec": dir.path().join("spec.json").to_string_lossy(), "out": [] }),
+                "out",
+            ),
         ] {
             let rendered = build_with("gore_mod", "build", args, &options())
                 .expect_err("a wrong-typed argument must not build a command line")
                 .to_string();
-            assert!(rendered.contains(&format!("argument `{name}`")), "{rendered}");
+            assert!(
+                rendered.contains(&format!("argument `{name}`")),
+                "{rendered}"
+            );
             assert!(rendered.contains("must be a string"), "{rendered}");
         }
     }
@@ -1512,7 +1711,9 @@ mod tests {
         let out = dir.path().join("build");
         let spec = dir.path().join("spec.json");
 
-        for name in ["MyMod", "My_Mod-2", "Mod.v2", "console", "COM", "CONFIG", "aux2"] {
+        for name in [
+            "MyMod", "My_Mod-2", "Mod.v2", "console", "COM", "CONFIG", "aux2",
+        ] {
             std::fs::write(
                 &spec,
                 format!(r#"{{"meta":{{"name":"{name}","version":"1.0.0"}}}}"#),
@@ -1595,8 +1796,13 @@ mod tests {
         let call = |out: String| json!({ "bank": "SFX.bank", "out": out });
 
         assert!(
-            question("gore_audio", "extract", call(outside.to_string_lossy().into_owned()), &options())
-                .is_none(),
+            question(
+                "gore_audio",
+                "extract",
+                call(outside.to_string_lossy().into_owned()),
+                &options()
+            )
+            .is_none(),
             "a scratch directory is still nobody's business"
         );
 
@@ -1618,9 +1824,8 @@ mod tests {
         // however new the path is. The check covers every declared output, not a hand-kept list.
         let dir = tempfile::tempdir().expect("tempdir");
         let outside = dir.path().join("edited.lcache");
-        let call = |out: String| {
-            json!({ "lcache": "in.lcache", "edits": "edits.json", "out": out })
-        };
+        let call =
+            |out: String| json!({ "lcache": "in.lcache", "edits": "edits.json", "out": out });
 
         assert!(question(
             "gore_loc",
@@ -1651,7 +1856,11 @@ mod tests {
         let live = "D:/Games/G1R/G1R/Binaries/Win64/ue4ss/Mods";
 
         for (tool, sub, extra) in [
-            ("gore_catalog", "dump-mod", json!({ "model": "m.json", "catalog": "c.json" })),
+            (
+                "gore_catalog",
+                "dump-mod",
+                json!({ "model": "m.json", "catalog": "c.json" }),
+            ),
             ("gore_project", "scaffold", json!({ "mod_name": "MyMod" })),
         ] {
             let call = |out: &str| {
@@ -1735,7 +1944,10 @@ mod tests {
             eprintln!("skipping: this platform/user cannot create symlinks");
             return;
         }
-        assert!(!link.exists(), "the link must be dangling for this to mean anything");
+        assert!(
+            !link.exists(),
+            "the link must be dangling for this to mean anything"
+        );
 
         let call = json!({ "sdk_dir": "SDK", "out": link.to_string_lossy() });
         assert!(
@@ -1761,7 +1973,12 @@ mod tests {
         // The child resolves a relative path against this process's working directory, so judging
         // it lexically would wave through `--out .` run from inside the installation.
         let dir = tempfile::tempdir().expect("tempdir");
-        let inside = dir.path().join("G1R").join("Content").join("Paks").join("~mods");
+        let inside = dir
+            .path()
+            .join("G1R")
+            .join("Content")
+            .join("Paks")
+            .join("~mods");
         std::fs::create_dir_all(&inside).expect("create install-like tree");
 
         let call = |out: &str| json!({ "mod_dir": "mod", "name": "zzz_Mine_P", "out": out });
@@ -1795,7 +2012,12 @@ mod tests {
 
         std::fs::create_dir(dir.path().join("Existing")).expect("create mod dir");
         assert!(
-            asks_about_a_write(question("gore_project", "scaffold", call("Existing"), &options())),
+            asks_about_a_write(question(
+                "gore_project",
+                "scaffold",
+                call("Existing"),
+                &options()
+            )),
             "an occupied mod folder must be asked about"
         );
         assert!(question("gore_project", "scaffold", call("Existing"), &permissive()).is_none());
@@ -1859,10 +2081,11 @@ mod tests {
     }
 
     #[test]
-    fn compiling_asks_about_the_launch_and_the_write_together() {
-        // Compiling drives the game to regenerate its cache and then stages the result, so it is
-        // both. Naming only the launch would send someone off to restart with a flag set that
-        // still does not cover the call.
+    fn a_game_capable_compile_asks_about_the_launch_and_the_write_together() {
+        // The omitted backend keeps the default standalone-then-game policy. Its fallback drives
+        // the game to regenerate its cache and stages sources in the installation, so it is both.
+        // Naming only the launch would send someone off to restart with a flag set that still does
+        // not cover the call.
         let call = || {
             json!({
                 "src": "scripts",
@@ -1872,7 +2095,13 @@ mod tests {
             })
         };
         let raised = question("gore_as", "compile", call(), &options()).expect("must be asked");
-        assert_eq!(raised.needs, Needs { write: true, game_launch: true });
+        assert_eq!(
+            raised.needs,
+            Needs {
+                write: true,
+                game_launch: true
+            }
+        );
         assert_eq!(raised.needs.flags(), "--allow-game-launch --allow-write");
 
         // With write pre-approved the launch is still outstanding, so the question is still put —
@@ -1888,6 +2117,226 @@ mod tests {
     }
 
     #[test]
+    fn strict_standalone_compilers_run_without_launch_or_install_consent() {
+        let compile = json!({
+            "src": "scripts",
+            "out": "fresh-full.Cache",
+            "work_dir": "compiler-work-full",
+            "backend": "standalone",
+            "game": "G",
+        });
+        let module = json!({
+            "op": "add",
+            "module": "MyMod.Dialog",
+            "rel_path": "MyMod/Dialog.as",
+            "source": "Dialog.as",
+            "work_dir": "compiler-work-module",
+            "out": "fresh-module.Cache",
+            "backend": "standalone",
+            "game": "G",
+        });
+
+        for (sub, args) in [("compile", compile), ("compile-module", module)] {
+            let invocation = build_with("gore_as", sub, args, &options())
+                .unwrap_or_else(|error| panic!("strict standalone {sub} did not build: {error}"));
+            assert!(
+                invocation.consent.is_none(),
+                "strict standalone {sub} asked for consent"
+            );
+            assert!(
+                invocation.argv.iter().any(|value| value == "standalone"),
+                "strict standalone backend was not preserved for {sub}"
+            );
+        }
+    }
+
+    #[test]
+    fn dedicated_standalone_tools_force_the_backend_without_asking_for_scratch_outputs() {
+        let full = json!({
+            "src": "scripts",
+            "out": "fresh-full.Cache",
+            "work_dir": "compiler-work-full",
+            "game": "G",
+        });
+        let module = json!({
+            "op": "add",
+            "module": "MyMod.Dialog",
+            "rel_path": "MyMod/Dialog.as",
+            "source": "Dialog.as",
+            "work_dir": "compiler-work-module",
+            "out": "fresh-module.Cache",
+            "game": "G",
+        });
+
+        for (tool, sub, args) in [
+            ("gore_as_compile", "compile", full),
+            ("gore_as_compile_module", "compile-module", module),
+        ] {
+            let invocation = build_with(tool, sub, args, &options()).unwrap();
+            assert!(invocation.consent.is_none(), "{tool} asked for consent");
+            let rendered: Vec<_> = invocation
+                .argv
+                .iter()
+                .map(|value| value.to_string_lossy().into_owned())
+                .collect();
+            assert!(rendered
+                .windows(2)
+                .any(|pair| pair == ["--backend", "standalone"]));
+        }
+    }
+
+    #[test]
+    fn standalone_module_outputs_inside_the_game_keep_install_consent() {
+        let mixed = json!({
+            "op": "add",
+            "module": "MyMod.Dialog",
+            "rel_path": "MyMod/Dialog.as",
+            "source": "Dialog.as",
+            "work_dir": "compiler-work-module",
+            "out": "fresh-module.Cache",
+            "backend": "standalone",
+            "game": "D:/Games/G1R",
+        });
+        let dedicated = json!({
+            "op": "add",
+            "module": "MyMod.Dialog",
+            "rel_path": "MyMod/Dialog.as",
+            "source": "Dialog.as",
+            "work_dir": "compiler-work-module",
+            "out": "fresh-module.Cache",
+            "game": "D:/Games/G1R",
+        });
+
+        for output in ["out", "generation_receipt"] {
+            for (tool, args) in [
+                ("gore_as", mixed.clone()),
+                ("gore_as_compile_module", dedicated.clone()),
+            ] {
+                let mut args = args;
+                args.as_object_mut().expect("module arguments").insert(
+                    output.into(),
+                    json!(format!("D:/Games/G1R/Content/{output}.json")),
+                );
+                let raised = question(tool, "compile-module", args, &options())
+                    .unwrap_or_else(|| panic!("{tool} did not protect `{output}` in the game"));
+                assert_eq!(
+                    raised.needs,
+                    Needs {
+                        write: true,
+                        game_launch: false,
+                    },
+                    "{tool} `{output}`"
+                );
+                assert!(
+                    raised.reason.contains(output),
+                    "{tool} `{output}`: {raised:?}"
+                );
+                assert!(
+                    raised.reason.contains("inside the game installation"),
+                    "{tool} `{output}`: {raised:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn standalone_compilers_protect_only_an_existing_generated_work_tree() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let cases = [
+            (
+                "gore_as",
+                "compile",
+                json!({ "src": "scripts", "backend": "standalone", "game": "G" }),
+            ),
+            (
+                "gore_as",
+                "compile-module",
+                json!({
+                    "op": "add",
+                    "module": "MyMod.Dialog",
+                    "rel_path": "MyMod/Dialog.as",
+                    "source": "Dialog.as",
+                    "backend": "standalone",
+                    "game": "G",
+                }),
+            ),
+            (
+                "gore_as_compile",
+                "compile",
+                json!({ "src": "scripts", "game": "G" }),
+            ),
+            (
+                "gore_as_compile_module",
+                "compile-module",
+                json!({
+                    "op": "add",
+                    "module": "MyMod.Dialog",
+                    "rel_path": "MyMod/Dialog.as",
+                    "source": "Dialog.as",
+                    "game": "G",
+                }),
+            ),
+        ];
+
+        for (index, (tool, sub, mut args)) in cases.into_iter().enumerate() {
+            let work_dir = root.path().join(format!("work-{index}"));
+            let out = root.path().join(format!("out-{index}.Cache"));
+            let object = args.as_object_mut().expect("compiler arguments");
+            object.insert("work_dir".into(), json!(work_dir.to_string_lossy()));
+            object.insert("out".into(), json!(out.to_string_lossy()));
+
+            assert!(
+                question(tool, sub, args.clone(), &options()).is_none(),
+                "{tool} asked about a fresh work tree"
+            );
+
+            let tree = work_dir.join("tree");
+            std::fs::create_dir_all(&tree).expect("occupied generated tree");
+            std::fs::write(tree.join("stale.as"), b"stale").expect("stale generated source");
+            let raised = question(tool, sub, args, &options())
+                .unwrap_or_else(|| panic!("{tool} did not protect its occupied work tree"));
+            assert_eq!(
+                raised.needs,
+                Needs {
+                    write: true,
+                    game_launch: false,
+                },
+                "{tool}"
+            );
+            assert!(
+                raised.reason.contains("derives from `work_dir`"),
+                "{raised:?}"
+            );
+            assert!(raised.reason.contains("tree"), "{raised:?}");
+        }
+    }
+
+    #[test]
+    fn explicit_game_fallback_and_omitted_backend_all_keep_consent() {
+        for backend in [None, Some("game"), Some("standalone-then-game")] {
+            let mut args = compile_args();
+            if let Some(backend) = backend {
+                args.as_object_mut()
+                    .expect("compile args are an object")
+                    .insert("backend".into(), json!(backend));
+            }
+            let raised = question("gore_as", "compile", args, &options())
+                .unwrap_or_else(|| panic!("backend {backend:?} ran without consent"));
+            assert_eq!(
+                raised.needs,
+                Needs {
+                    write: true,
+                    game_launch: true
+                }
+            );
+            assert!(
+                raised.reason.contains("launches the game executable"),
+                "{raised:?}"
+            );
+        }
+    }
+
+    #[test]
     fn every_gate_arm_asks_a_question_a_person_can_read() {
         // These reasons are written across source lines with a trailing `\`. Dropping one folds the
         // continuation's indentation into the middle of a sentence — and unlike the other messages
@@ -1897,20 +2346,32 @@ mod tests {
         std::fs::write(&occupied, b"{}").expect("write fixture");
 
         let arms = [
-            // may launch the game and publishes a new result
+            // omitted backend may launch the game and stages sources in the installation
             ("gore_as", "compile", compile_args()),
             // rewrites its input in place
-            ("gore_loc", "import", json!({ "lcache": "a.lcache", "edits": "e.json" })),
+            (
+                "gore_loc",
+                "import",
+                json!({ "lcache": "a.lcache", "edits": "e.json" }),
+            ),
             // changes the installation outright
             ("gore_mgr", "reset", json!({})),
             // lands inside the game tree
-            ("gore_texture", "pack", json!({
-                "mod_dir": "m", "name": "zzz_P", "out": "D:/Games/G1R/G1R/Content/Paks/~mods",
-            })),
+            (
+                "gore_texture",
+                "pack",
+                json!({
+                    "mod_dir": "m", "name": "zzz_P", "out": "D:/Games/G1R/G1R/Content/Paks/~mods",
+                }),
+            ),
             // its output is already there
-            ("gore_catalog", "dump", json!({
-                "sdk_dir": "SDK", "out": occupied.to_string_lossy(),
-            })),
+            (
+                "gore_catalog",
+                "dump",
+                json!({
+                    "sdk_dir": "SDK", "out": occupied.to_string_lossy(),
+                }),
+            ),
         ];
 
         for (tool, sub, args) in arms {
@@ -1922,9 +2383,15 @@ mod tests {
             for line in message.lines() {
                 assert!(!line.contains("  "), "{sub} double-spaces {line:?}");
             }
-            assert!(message.contains(&format!("gore {}", raised.path)), "{sub}: {message}");
+            assert!(
+                message.contains(&format!("gore {}", raised.path)),
+                "{sub}: {message}"
+            );
             // Whatever the arm, the line that would run is in front of the person deciding.
-            assert!(!raised.command_line.is_empty(), "{sub} shows no command line");
+            assert!(
+                !raised.command_line.is_empty(),
+                "{sub} shows no command line"
+            );
             assert!(message.contains(&raised.command_line), "{sub}: {message}");
             assert!(message.ends_with("Run it?"), "{sub}: {message}");
         }
@@ -1986,9 +2453,16 @@ mod tests {
 
     #[test]
     fn a_nested_group_emits_its_cli_token_and_a_flat_group_does_not() {
-        assert_eq!(argv_of("gore_config", "path", json!({})), vec!["config", "path"]);
         assert_eq!(
-            argv_of("gore_catalog", "dump", json!({ "sdk_dir": "SDK", "out": "model.json" })),
+            argv_of("gore_config", "path", json!({})),
+            vec!["config", "path"]
+        );
+        assert_eq!(
+            argv_of(
+                "gore_catalog",
+                "dump",
+                json!({ "sdk_dir": "SDK", "out": "model.json" })
+            ),
             vec!["dump", "--out", "model.json", "--", "SDK"]
         );
     }
@@ -2037,7 +2511,11 @@ mod tests {
     #[test]
     fn multiple_positionals_keep_their_declared_order() {
         assert_eq!(
-            argv_of("gore_config", "set", json!({ "key": "game-path", "value": "D:/G1R" })),
+            argv_of(
+                "gore_config",
+                "set",
+                json!({ "key": "game-path", "value": "D:/G1R" })
+            ),
             vec!["config", "set", "--", "game-path", "D:/G1R"]
         );
     }
@@ -2045,16 +2523,28 @@ mod tests {
     #[test]
     fn omitted_optional_arguments_are_simply_absent() {
         assert_eq!(
-            argv_of("gore_catalog", "stubs", json!({ "model": "m.json", "out": "stubs" })),
+            argv_of(
+                "gore_catalog",
+                "stubs",
+                json!({ "model": "m.json", "out": "stubs" })
+            ),
             vec!["stubs", "--out", "stubs", "--", "m.json"]
         );
     }
 
     #[test]
     fn a_missing_required_argument_names_it_and_its_type() {
-        let error = build_with("gore_catalog", "dump", json!({ "sdk_dir": "SDK" }), &permissive())
-            .unwrap_err();
-        assert!(matches!(error, BuildError::MissingRequired { name: "out", .. }));
+        let error = build_with(
+            "gore_catalog",
+            "dump",
+            json!({ "sdk_dir": "SDK" }),
+            &permissive(),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            BuildError::MissingRequired { name: "out", .. }
+        ));
         assert!(error.to_string().contains("`out`"));
     }
 
@@ -2064,15 +2554,19 @@ mod tests {
             build_with("gore_config", "path", json!({ "nope": 1 }), &permissive()).unwrap_err();
         assert!(error.to_string().contains("takes no arguments"), "{error}");
 
-        let error = build_with("gore_catalog", "dump", json!({ "sdkdir": "x" }), &permissive())
-            .unwrap_err();
+        let error = build_with(
+            "gore_catalog",
+            "dump",
+            json!({ "sdkdir": "x" }),
+            &permissive(),
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("sdk_dir"), "{error}");
     }
 
     #[test]
     fn an_unknown_subcommand_lists_the_available_ones() {
-        let error =
-            build_with("gore_config", "delete", json!({}), &permissive()).unwrap_err();
+        let error = build_with("gore_config", "delete", json!({}), &permissive()).unwrap_err();
         let message = error.to_string();
         assert!(message.contains("delete"));
         assert!(message.contains("unset"), "{message}");
@@ -2107,8 +2601,7 @@ mod tests {
     #[test]
     fn args_must_be_an_object_but_may_be_omitted() {
         assert!(build_with("gore_config", "path", Value::Null, &permissive()).is_ok());
-        let error =
-            build_with("gore_config", "path", json!([1, 2]), &permissive()).unwrap_err();
+        let error = build_with("gore_config", "path", json!([1, 2]), &permissive()).unwrap_err();
         assert!(matches!(error, BuildError::ArgsNotAnObject { .. }));
     }
 
@@ -2116,16 +2609,26 @@ mod tests {
     fn an_install_mutating_command_asks_and_names_the_flag_when_it_cannot() {
         let raised =
             question("gore_project", "deploy-shared", json!({}), &options()).expect("must ask");
-        assert_eq!(raised.needs, Needs { write: true, game_launch: false });
+        assert_eq!(
+            raised.needs,
+            Needs {
+                write: true,
+                game_launch: false
+            }
+        );
 
         // On a client that cannot show a dialog the question becomes the old refusal, which has to
         // carry a command line the user can act on — there is no other route to yes.
         let message = crate::consent::refusal(
             &raised,
             &crate::consent::Decision::NotAsked(crate::consent::Policy::CannotAsk),
+            Some("request-1"),
         );
         assert!(message.starts_with("refused:"), "{message}");
-        assert!(message.contains("gore mcp serve --allow-write"), "{message}");
+        assert!(
+            message.contains("gore mcp serve --allow-write"),
+            "{message}"
+        );
     }
 
     #[test]
@@ -2141,13 +2644,23 @@ mod tests {
             &options(),
         )
         .expect("the command line itself is valid");
-        let raised = invocation.consent.as_ref().expect("a rewrite in place must be asked about");
+        let raised = invocation
+            .consent
+            .as_ref()
+            .expect("a rewrite in place must be asked about");
 
-        let message = crate::consent::refusal(raised, &crate::consent::Decision::Dismissed);
+        let message = crate::consent::refusal(
+            raised,
+            &crate::consent::Decision::Dismissed,
+            Some("request-1"),
+        );
         assert!(message.starts_with("refused:"), "{message}");
         // Whole and on a line of its own: a `display` folded into a sentence is one the user cannot
         // select and paste, which is the only reason it is relayed at all.
-        assert!(message.lines().any(|line| line == invocation.display), "{message}");
+        assert!(
+            message.lines().any(|line| line == invocation.display),
+            "{message}"
+        );
     }
 
     #[test]
@@ -2167,10 +2680,9 @@ mod tests {
     }
 
     #[test]
-    fn a_game_launching_compile_asks_about_both_permissions() {
-        // The MCP boundary conservatively covers the explicit game/fallback policies. One
-        // question covers both launch and generated-output writes, and it stays outstanding until
-        // both flags pre-approve it.
+    fn a_game_capable_compile_asks_about_both_permissions() {
+        // The default fallback-capable policy may launch the game. One question covers both launch
+        // and installation writes, and it stays outstanding until both flags pre-approve it.
         let raised = question("gore_as", "compile", compile_args(), &options()).expect("must ask");
         assert_eq!(
             raised.needs,
@@ -2210,8 +2722,13 @@ mod tests {
         .unwrap();
         assert_eq!(nested.path, "config set");
 
-        let flat = build_with("gore_catalog", "dump", json!({ "sdk_dir": "S", "out": "m.json" }), &permissive())
-            .unwrap();
+        let flat = build_with(
+            "gore_catalog",
+            "dump",
+            json!({ "sdk_dir": "S", "out": "m.json" }),
+            &permissive(),
+        )
+        .unwrap();
         assert_eq!(flat.path, "dump");
     }
 
@@ -2257,7 +2774,10 @@ mod tests {
             &permissive(),
         )
         .unwrap();
-        assert_eq!(invocation.display, "gore config set -- game-path 'D:/Program Files/G1R'");
+        assert_eq!(
+            invocation.display,
+            "gore config set -- game-path 'D:/Program Files/G1R'"
+        );
 
         // The documented setup launches an unpacked binary by absolute path, which need not be on
         // PATH. A line beginning with a bare `gore` would not run when pasted.
@@ -2278,7 +2798,11 @@ mod tests {
         );
 
         // A bare program name is already an invocation and gains nothing from the operator.
-        assert!(!invocation.display.starts_with('&'), "{}", invocation.display);
+        assert!(
+            !invocation.display.starts_with('&'),
+            "{}",
+            invocation.display
+        );
 
         // The guide is PowerShell throughout and this line is presented as something to re-run, so
         // a token carrying shell syntax must not end the command when it is pasted.
@@ -2289,7 +2813,10 @@ mod tests {
             &permissive(),
         )
         .unwrap();
-        assert_eq!(dangerous.display, "gore config set -- game-path 'C:/mods;whoami'");
+        assert_eq!(
+            dangerous.display,
+            "gore config set -- game-path 'C:/mods;whoami'"
+        );
 
         // A single quote is the only character a PowerShell literal string escapes, by doubling.
         let quoted = build_with(
@@ -2304,11 +2831,24 @@ mod tests {
         // Ordinary paths and flags stay bare; quoting everything would make the line unreadable.
         assert_eq!(quote_for_powershell("--out"), "--out");
         assert_eq!(quote_for_powershell(r"D:\Games\G1R"), r"D:\Games\G1R");
-        for hostile in
-            ["", "a b", "a;b", "a|b", "a&b", "$env:PATH", "a`b", "a(b)", "a\"b", "@args", "user@host"]
-        {
+        for hostile in [
+            "",
+            "a b",
+            "a;b",
+            "a|b",
+            "a&b",
+            "$env:PATH",
+            "a`b",
+            "a(b)",
+            "a\"b",
+            "@args",
+            "user@host",
+        ] {
             let rendered = quote_for_powershell(hostile);
-            assert!(rendered.starts_with('\'') && rendered.ends_with('\''), "{hostile:?} -> {rendered}");
+            assert!(
+                rendered.starts_with('\'') && rendered.ends_with('\''),
+                "{hostile:?} -> {rendered}"
+            );
         }
     }
 

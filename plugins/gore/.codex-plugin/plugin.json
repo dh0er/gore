@@ -1,7 +1,7 @@
 {
   "name": "gore",
-  "version": "0.3.0",
-  "description": "Author Gothic 1 Remake mods or safely import, enable, order, analyze, preflight, apply, check status, recover, remove, and reset GORE or external mods.",
+  "version": "0.3.2",
+  "description": "Author and inspect Gothic 1 Remake mod bundles, compile AngelScript offline, validate voice assets, or safely manage GORE and external mods.",
   "author": {
     "name": "Daniel Hoer",
     "url": "https://github.com/dh0er"
@@ -21,8 +21,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "GORE",
-    "shortDescription": "Author and safely manage Gothic 1 Remake mods",
-    "longDescription": "Guides an agent through authoring Gothic 1 Remake mods and through the complete Mod Manager lifecycle for GORE and external mods: import, enable, order, analyze, preflight, apply, status, recovery, removal and reset. It relays the consent gate and keeps runtime claims honest. The plugin bundles the MCP server configuration; current facts live in the guide shipped inside gore.exe. Needs the gore CLI installed and on PATH.",
+    "shortDescription": "Author, compile, inspect, and safely manage G1R mods",
+    "longDescription": "Guides an agent through authoring and read-only validation of Gothic 1 Remake bundles and through the complete Mod Manager lifecycle for GORE and external mods: import, enable, order, analyze, preflight, apply, status, recovery, removal and reset. Strict standalone AngelScript compilation and bundle inspection run offline without game-launch consent; occupied work trees, protected outputs, and real game or install mutations remain confirmed. The plugin bundles the MCP server configuration; current facts live in the guide shipped inside gore.exe. Needs the gore CLI installed and on PATH.",
     "developerName": "Daniel Hoer",
     "category": "Coding",
     "capabilities": [

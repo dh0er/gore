@@ -10,9 +10,9 @@ new full cache with create-new atomic rename semantics.
 
 No target links or loads Unreal Engine or a game DLL. Nothing launches the game.
 CMake performs no downloads and the source tree contains no generated SDK or
-game artifacts. A real G1R compile is still unavailable until the concrete
-current-build registry and remaining external hook facts are captured and the
-profile is qualified; unknown or incomplete profiles fail closed.
+game artifacts. Productive G1R compilation requires a completely qualified,
+signed internal profile package; unknown, incomplete, or incompatible profiles
+fail closed.
 
 ## What the core checkpoint proves
 
@@ -314,11 +314,12 @@ Given a checkout of the recorded revision, verify every upstream hash, exact or
 explicitly modified vendored canonical text, and inventory/tree membership mechanically with
 `tools/verify-source-inventory.ps1 -UpstreamRoot C:\\path\\to\\UNREANGEL`.
 
-## Product promotion and packaging
+## Internal product packaging
 
-The source build is not itself a product bundle. The final executable is signed once, differential
-qualification is bound to those signed bytes, and the resulting sidecar/profile set is frozen as
-an immutable release input. Ordinary CLI/Studio releases only verify and copy that input and
-explicitly exclude the sidecar from later directory signing. The exact offline order, commands,
-absent-state behavior, verifier contract, and remaining real-qualification gate are documented in
-[`docs/standalone-compiler-release.md`](../../../../docs/standalone-compiler-release.md).
+The source build is not itself a product bundle. The final executable is signed once through an
+internal workflow artifact, differential qualification is bound to those signed bytes, and the
+resulting sidecar/profile set is compressed into GORE's checked-in internal package. No compiler
+GitHub release or tag exists. Ordinary CLI/Studio builds only verify and copy that package and
+explicitly exclude the sidecar from later directory signing. The exact order, commands, verifier
+contract, compatibility selection and game-compiler fallback are documented in
+[`docs/standalone-compiler-internal-bundle.md`](../../../../docs/standalone-compiler-internal-bundle.md).

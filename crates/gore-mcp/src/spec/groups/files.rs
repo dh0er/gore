@@ -54,7 +54,13 @@ const LOC_IMPORT_ARGS: &[ArgSpec] = &[
         false,
     )
     .with_default("auto-detect from the configured game path"),
-    ArgSpec::new("edits", Long("edits"), Path, "Path to edits JSON ({id:{language:value}})", true),
+    ArgSpec::new(
+        "edits",
+        Long("edits"),
+        Path,
+        "Path to edits JSON ({id:{language:value}})",
+        true,
+    ),
     ArgSpec::new(
         "out",
         Long("out"),
@@ -178,7 +184,10 @@ const AUDIO_LIST_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "max",
         Long("max"),
-        Int { min: Some(0), max: None },
+        Int {
+            min: Some(0),
+            max: None,
+        },
         "Max samples to print. The result states how many matched when it stops here; 0 lists \
          nothing and reports only the counts",
         false,
@@ -189,9 +198,21 @@ const AUDIO_LIST_ARGS: &[ArgSpec] = &[
 
 const AUDIO_EXTRACT_ARGS: &[ArgSpec] = &[
     ArgSpec::new("bank", Long("bank"), Path, "Path to a .bank file", true),
-    ArgSpec::new("out", Long("out"), Path, "Output directory for .wav files", true),
-    ArgSpec::new("sample", Long("sample"), Str, "A single sample name, or \"all\"", false)
-        .with_default("all"),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Output directory for .wav files",
+        true,
+    ),
+    ArgSpec::new(
+        "sample",
+        Long("sample"),
+        Str,
+        "A single sample name, or \"all\"",
+        false,
+    )
+    .with_default("all"),
     ArgSpec::new(
         "filter",
         Long("filter"),
@@ -210,7 +231,13 @@ const AUDIO_REPLACE_ARGS: &[ArgSpec] = &[
         "Path to map JSON: { \"SampleName\": \"path/to/new.wav\", … } (WAV paths relative to it)",
         true,
     ),
-    ArgSpec::new("bank", Long("bank"), Path, "Path to the .bank to modify", true),
+    ArgSpec::new(
+        "bank",
+        Long("bank"),
+        Path,
+        "Path to the .bank to modify",
+        true,
+    ),
     ArgSpec::new(
         "out",
         Long("out"),
@@ -221,8 +248,13 @@ const AUDIO_REPLACE_ARGS: &[ArgSpec] = &[
     AUDIO_KEY,
 ];
 
-const AUDIO_RESTORE_ARGS: &[ArgSpec] =
-    &[ArgSpec::new("bank", Long("bank"), Path, "Path to the .bank to restore", true)];
+const AUDIO_RESTORE_ARGS: &[ArgSpec] = &[ArgSpec::new(
+    "bank",
+    Long("bank"),
+    Path,
+    "Path to the .bank to restore",
+    true,
+)];
 
 const AUDIO_EXPORT_PATCH_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
@@ -237,7 +269,13 @@ const AUDIO_EXPORT_PATCH_ARGS: &[ArgSpec] = &[
 
 const AUDIO_APPLY_PATCH_ARGS: &[ArgSpec] = &[
     ArgSpec::new("patch", Long("patch"), Path, "Path to the patch .zip", true),
-    ArgSpec::new("bank", Long("bank"), Path, "Path to the .bank to modify", true),
+    ArgSpec::new(
+        "bank",
+        Long("bank"),
+        Path,
+        "Path to the .bank to modify",
+        true,
+    ),
     ArgSpec::new(
         "out",
         Long("out"),
@@ -339,8 +377,13 @@ pub const AUDIO: GroupSpec = GroupSpec {
 // gore_voice
 // ---------------------------------------------------------------------------------------------
 
-const VOICE_ARCHIVE: ArgSpec =
-    ArgSpec::new("archive", Long("archive"), Path, "Input voice ZIP (never modified)", true);
+const VOICE_ARCHIVE: ArgSpec = ArgSpec::new(
+    "archive",
+    Long("archive"),
+    Path,
+    "Input voice ZIP (never modified)",
+    true,
+);
 
 /// The `--basename` / `--path` selector, shared by `extract` and `replace`.
 ///
@@ -366,8 +409,21 @@ const VOICE_SELECTOR_PATH: ArgSpec = ArgSpec::new(
 
 const VOICE_SELECTOR: &[&[&str]] = &[&["basename", "path"]];
 
-const VOICE_OUT_ZIP: ArgSpec =
-    ArgSpec::new("out", Long("out"), Path, "New output ZIP; must not already exist", true);
+const VOICE_OUT_ZIP: ArgSpec = ArgSpec::new(
+    "out",
+    Long("out"),
+    Path,
+    "New output ZIP; must not already exist",
+    true,
+);
+
+const VOICE_VALIDATE_ARGS: &[ArgSpec] = &[ArgSpec::new(
+    "ogg",
+    Long("ogg"),
+    Path,
+    "Ogg file to validate — Vorbis or Opus",
+    true,
+)];
 
 /// `list` is bounded by `--max` in the CLI itself, which is what keeps a 33,000-entry archive from
 /// being clipped mid-array into a JSON document that no longer parses. The bound is only useful if
@@ -384,7 +440,10 @@ const VOICE_LIST_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "max",
         Long("max"),
-        Int { min: Some(0), max: None },
+        Int {
+            min: Some(0),
+            max: None,
+        },
         "Max entries to print. The result states how many matched when it stops here; 0 lists \
          nothing and reports only the counts",
         false,
@@ -472,6 +531,15 @@ const VOICE_APPLY_MANIFEST_ARGS: &[ArgSpec] = &[
 
 const VOICE_COMMANDS: &[CommandSpec] = &[
     CommandSpec::new(
+        "validate",
+        "Validate one Ogg voice file and report its codec, shape, and exact duration",
+        VOICE_VALIDATE_ARGS,
+        Safety::read(),
+        T_FAST,
+    )
+    .json(JsonSupport::Stdout)
+    .guide("voice"),
+    CommandSpec::new(
         "list",
         "Index a voice archive and list a bounded page of its entries",
         VOICE_LIST_ARGS,
@@ -552,7 +620,7 @@ mod tests {
     fn the_group_sizes_match_the_cli() {
         assert_eq!(LOC.commands.len(), 4);
         assert_eq!(AUDIO.commands.len(), 7);
-        assert_eq!(VOICE.commands.len(), 6);
+        assert_eq!(VOICE.commands.len(), 7);
     }
 
     #[test]

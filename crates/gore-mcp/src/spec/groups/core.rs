@@ -52,8 +52,14 @@ const CONFIG_SET_ARGS: &[ArgSpec] = &[
 const CONFIG_KEY_ONLY: &[ArgSpec] = &[CONFIG_KEY];
 
 const CONFIG_COMMANDS: &[CommandSpec] = &[
-    CommandSpec::new("set", "Set a config value", CONFIG_SET_ARGS, Safety::write(), T_FAST)
-        .guide("getting-started"),
+    CommandSpec::new(
+        "set",
+        "Set a config value",
+        CONFIG_SET_ARGS,
+        Safety::write(),
+        T_FAST,
+    )
+    .guide("getting-started"),
     CommandSpec::new(
         "get",
         "Print a single config value (exit non-zero if unset)",
@@ -62,8 +68,14 @@ const CONFIG_COMMANDS: &[CommandSpec] = &[
         T_FAST,
     )
     .guide("getting-started"),
-    CommandSpec::new("unset", "Clear a single config value", CONFIG_KEY_ONLY, Safety::write(), T_FAST)
-        .guide("getting-started"),
+    CommandSpec::new(
+        "unset",
+        "Clear a single config value",
+        CONFIG_KEY_ONLY,
+        Safety::write(),
+        T_FAST,
+    )
+    .guide("getting-started"),
     CommandSpec::new(
         "list",
         "Print all config values and, for the game path, the resolved root + source",
@@ -72,7 +84,13 @@ const CONFIG_COMMANDS: &[CommandSpec] = &[
         T_FAST,
     )
     .guide("getting-started"),
-    CommandSpec::new("path", "Print the path of the config.json file", &[], Safety::read(), T_FAST),
+    CommandSpec::new(
+        "path",
+        "Print the path of the config.json file",
+        &[],
+        Safety::read(),
+        T_FAST,
+    ),
     CommandSpec::new(
         "detect",
         "Auto-detect the game via Steam and save it as game-path",
@@ -126,7 +144,8 @@ pub const DOCTOR: GroupSpec = GroupSpec {
     tool: "gore_doctor",
     title: "gore doctor",
     cli: "",
-    summary: "One read-only pass over the setup: where the game is and where that came from, \
+    summary: "One read-only pass over the setup, including whether the bundled standalone \
+              AngelScript compiler is ready without launching the game: where the game is and where that came from, \
               whether UE4SS is installed (item and stat overrides silently do nothing without \
               it), which UE4SS mods are enabled, what is deployed, what is left over from an \
               interrupted run, and whether the shared text catalog still matches the install.",
@@ -156,7 +175,10 @@ const FIND_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "max",
         Long("max"),
-        Int { min: Some(0), max: None },
+        Int {
+            min: Some(0),
+            max: None,
+        },
         "Max hits to print. The result says how many matched when it stops here",
         false,
     )
@@ -207,8 +229,20 @@ const DUMP_ARGS: &[ArgSpec] = &[
 ];
 
 const STUBS_ARGS: &[ArgSpec] = &[
-    ArgSpec::new("model", Positional { order: 0 }, Path, "Path to model.json", true),
-    ArgSpec::new("out", Long("out"), Path, "Output directory for .lua stub files", true),
+    ArgSpec::new(
+        "model",
+        Positional { order: 0 },
+        Path,
+        "Path to model.json",
+        true,
+    ),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Output directory for .lua stub files",
+        true,
+    ),
     ArgSpec::new(
         "filter",
         Long("filter"),
@@ -219,8 +253,20 @@ const STUBS_ARGS: &[ArgSpec] = &[
 ];
 
 const CATALOG_ARGS: &[ArgSpec] = &[
-    ArgSpec::new("kind", Long("kind"), Enum(CATALOG_KINDS), "Catalog kind to generate", true),
-    ArgSpec::new("dump", Positional { order: 0 }, Path, "Path to UE4SS_ObjectDump.txt", true),
+    ArgSpec::new(
+        "kind",
+        Long("kind"),
+        Enum(CATALOG_KINDS),
+        "Catalog kind to generate",
+        true,
+    ),
+    ArgSpec::new(
+        "dump",
+        Positional { order: 0 },
+        Path,
+        "Path to UE4SS_ObjectDump.txt",
+        true,
+    ),
     ArgSpec::new(
         "script_cache",
         Long("script-cache"),
@@ -246,8 +292,20 @@ const STORY_CATALOG_ARGS: &[ArgSpec] = &[
         "Exact Shipping precompiled AngelScript cache.",
         true,
     ),
-    ArgSpec::new("binds", Long("binds"), Path, "Exact Binds precompiled AngelScript cache.", true),
-    ArgSpec::new("out", Long("out"), Path, "Output story_catalog.v1 JSON path.", true),
+    ArgSpec::new(
+        "binds",
+        Long("binds"),
+        Path,
+        "Exact Binds precompiled AngelScript cache.",
+        true,
+    ),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Output story_catalog.v1 JSON path.",
+        true,
+    ),
 ];
 
 const LOCATION_CATALOG_ARGS: &[ArgSpec] = &[
@@ -259,12 +317,30 @@ const LOCATION_CATALOG_ARGS: &[ArgSpec] = &[
         false,
     )
     .with_default("the InteractionSpots.json of the resolved game install"),
-    ArgSpec::new("out", Long("out"), Path, "Output location_catalog.json path", true),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Output location_catalog.json path",
+        true,
+    ),
 ];
 
 const GUI_MODEL_ARGS: &[ArgSpec] = &[
-    ArgSpec::new("model", Long("model"), Path, "Path to model.json (output of `dump`)", true),
-    ArgSpec::new("catalog", Long("catalog"), Path, "Path to item_catalog.json", true),
+    ArgSpec::new(
+        "model",
+        Long("model"),
+        Path,
+        "Path to model.json (output of `dump`)",
+        true,
+    ),
+    ArgSpec::new(
+        "catalog",
+        Long("catalog"),
+        Path,
+        "Path to item_catalog.json",
+        true,
+    ),
     ArgSpec::new("out", Long("out"), Path, "Output GUI model JSON path", true),
 ];
 
@@ -301,7 +377,13 @@ const DUMP_MOD_ARGS: &[ArgSpec] = &[
         "Path to item_catalog.json (the item allow-list)",
         true,
     ),
-    ArgSpec::new("out", Long("out"), Path, "Mods directory to write the gore-dump/ folder into", true),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Mods directory to write the gore-dump/ folder into",
+        true,
+    ),
 ];
 
 const CATALOG_COMMANDS: &[CommandSpec] = &[
@@ -371,7 +453,8 @@ const CATALOG_COMMANDS: &[CommandSpec] = &[
          gore_game_data.json, the input to `sync`)",
         DUMP_MOD_ARGS,
         // Always writes the fixed `gore-dump/` folder inside the directory it is given.
-        Safety::write().also_writes(&[("out", Derived::Child("gore-dump"))])
+        Safety::write()
+            .also_writes(&[("out", Derived::Child("gore-dump"))])
             .installs_via(&["out"]),
         T_NORMAL,
     )
@@ -419,7 +502,10 @@ const LOCATION_LIST_ARGS: &[ArgSpec] = &[
     ArgSpec::new(
         "max",
         Long("max"),
-        Int { min: Some(0), max: None },
+        Int {
+            min: Some(0),
+            max: None,
+        },
         "Max names to print. The result says how many matched when it stops here",
         false,
     )
@@ -471,12 +557,30 @@ const SCAFFOLD_ARGS: &[ArgSpec] = &[
         "Mod name (becomes the directory name under mods-dir). Must be a single path component.",
         true,
     ),
-    ArgSpec::new("out", Long("out"), Path, "Mods directory (e.g. ue4ss/Mods/)", true),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Mods directory (e.g. ue4ss/Mods/)",
+        true,
+    ),
 ];
 
 const GEN_ARGS: &[ArgSpec] = &[
-    ArgSpec::new("overrides", Positional { order: 0 }, Path, "Path to overrides.toml", true),
-    ArgSpec::new("out", Long("out"), Path, "Mods directory to write the mod folder into", true),
+    ArgSpec::new(
+        "overrides",
+        Positional { order: 0 },
+        Path,
+        "Path to overrides.toml",
+        true,
+    ),
+    ArgSpec::new(
+        "out",
+        Long("out"),
+        Path,
+        "Mods directory to write the mod folder into",
+        true,
+    ),
     ArgSpec::new(
         "model",
         Long("model"),
@@ -487,7 +591,13 @@ const GEN_ARGS: &[ArgSpec] = &[
 ];
 
 const PACKAGE_ARGS: &[ArgSpec] = &[
-    ArgSpec::new("mod_dir", Positional { order: 0 }, Path, "Path to the mod directory", true),
+    ArgSpec::new(
+        "mod_dir",
+        Positional { order: 0 },
+        Path,
+        "Path to the mod directory",
+        true,
+    ),
     ArgSpec::new("out", Long("out"), Path, "Output zip path", true),
 ];
 
@@ -519,7 +629,8 @@ const PROJECT_COMMANDS: &[CommandSpec] = &[
         // non-Lua UE4SS mod under the same name is entered and its `enabled.txt` truncated.
         // Unlike `gen`, the folder is fully derivable -- `<out>/<mod_name>` -- so a fresh name
         // still needs no flag and only the collision is gated.
-        Safety::write().also_writes(&[("out", Derived::ChildOfArg("mod_name"))])
+        Safety::write()
+            .also_writes(&[("out", Derived::ChildOfArg("mod_name"))])
             .installs_via(&["out"]),
         T_FAST,
     )
@@ -568,7 +679,8 @@ pub const PROJECT: GroupSpec = GroupSpec {
     tool: "gore_project",
     title: "gore Lua mod project",
     cli: "",
-    summary: "Author and ship a UE4SS Lua mod: scaffold a skeleton, compile overrides.toml into \
+    summary:
+        "Author and ship a UE4SS Lua mod: scaffold a skeleton, compile overrides.toml into \
               Lua, zip it for distribution, and install the shared Lua SDK the generated mods need.",
     shape: GroupShape::Flat,
     commands: PROJECT_COMMANDS,

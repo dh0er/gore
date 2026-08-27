@@ -134,8 +134,9 @@ pub struct AsProductCompilerBackendArgsV1 {
         default_value_t = AsCompilerBackendV1::StandaloneThenGame
     )]
     pub backend: AsCompilerBackendV1,
-    /// Publish a product-authoritative full-graph receipt. This is available only when the exact
-    /// installed target matches one profile in GORE's embedded compiler-package catalog.
+    /// Publish a product-authoritative full-graph receipt. This is available when the installed
+    /// game's parsed cache format and AngelScript API match a qualified compiler package; store,
+    /// build number and whole-file hashes are not compatibility gates.
     #[arg(long, value_name = "RECEIPT.json")]
     pub generation_receipt: Option<PathBuf>,
 }
@@ -1788,6 +1789,28 @@ fn guarded_pristine_script_cache(
     }
 }
 
+fn require_qualified_target_pristine_base(
+    qualified_shipping: &[u8],
+    pristine: Vec<u8>,
+) -> Result<Vec<u8>> {
+    if qualified_shipping != pristine {
+        bail!(
+            "standalone compiler target uses the live Shipping cache, but the deployment-aware \
+             pristine script cache differs; reset or undeploy active script mods before compiling"
+        );
+    }
+    Ok(pristine)
+}
+
+fn qualified_target_pristine_script_cache(
+    game: &Path,
+    target: &gore_as::compiler_target::ValidatedCompilerTargetInputsV1,
+) -> Result<Vec<u8>> {
+    let pristine = gore_mod::pristine_script_cache(game)
+        .context("reading the deployment-aware pristine script cache")?;
+    require_qualified_target_pristine_base(target.shipping_cache(), pristine)
+}
+
 fn compiler_binds_path(game: &Path) -> PathBuf {
     let g1r = if game.file_name().is_some_and(|name| name == "G1R") {
         game.to_path_buf()
@@ -1931,20 +1954,13 @@ fn compile_full_graph_command(
     let mut package_unavailable = None;
     match resolution {
         ProductStandaloneCompilerPackageResolutionV1::Available(available) => {
-            let runner_config = (requested_mode != CompilerBackendModeV1::Game).then(|| {
-                gore_as::standalone_sidecar::StandaloneSidecarConfigV1::new(
-                    available.sidecar_path().to_path_buf(),
-                    available.sidecar_seal(),
-                    available.profile_manifest_path().to_path_buf(),
-                    available.profile_root().to_path_buf(),
-                    work_dir.clone(),
-                )
-            });
+            let runner = (requested_mode != CompilerBackendModeV1::Game)
+                .then(|| available.sidecar_runner(work_dir.clone()));
             let (authority, target_inputs) = available.into_execution_parts();
             receipt_authority = Some(authority);
             target = Some(target_inputs);
-            if let Some(config) = runner_config {
-                match gore_as::standalone_sidecar::StandaloneSidecarRunnerV1::new(config) {
+            if let Some(runner) = runner {
+                match runner {
                     Ok(runner) => {
                         standalone_runner = Some(ProductStandaloneRunnerV1::Available(runner))
                     }
@@ -1995,11 +2011,35 @@ fn compile_full_graph_command(
     }
 
     let mut guard = None;
+    if requested_mode != CompilerBackendModeV1::Standalone {
+        if let Some(target) = target.as_mut() {
+            // Target validation pins every parent directory without delete sharing. Keep the exact
+            // EXE/Shipping/Binds file handles open, release only those directory handles while the
+            // product publishes its own cross-tool lock, then identity-check the complete chain
+            // again before planning or launching anything.
+            target.release_parent_directory_pins_for_install_mutation_v1();
+            let acquired = acquire_compile_guard(&game)
+                .map_err(anyhow::Error::msg)
+                .context("acquiring the full-graph install-mutation guard")?;
+            if let Err(error) = target.repin_parent_directories_after_install_mutation_v1() {
+                let primary = anyhow::Error::new(error)
+                    .context("re-pinning compiler target directories after lock publication");
+                return Err(release_compile_guard_after_error(acquired, primary));
+            }
+            guard = Some(acquired);
+        }
+    }
     let (base_cache, binds_cache) = if let Some(target) = target.as_ref() {
-        (
-            target.shipping_cache().to_vec(),
-            target.binds_cache().to_vec(),
-        )
+        let base = match qualified_target_pristine_script_cache(&game, target) {
+            Ok(base) => base,
+            Err(error) => {
+                return match guard.take() {
+                    Some(guard) => Err(release_compile_guard_after_error(guard, error)),
+                    None => Err(error),
+                };
+            }
+        };
+        (base, target.binds_cache().to_vec())
     } else if requested_mode == CompilerBackendModeV1::Standalone {
         unreachable!("strict standalone availability was checked above")
     } else {
@@ -2018,14 +2058,6 @@ fn compile_full_graph_command(
             };
         (base, binds)
     };
-    if requested_mode != CompilerBackendModeV1::Standalone && guard.is_none() {
-        guard = Some(
-            acquire_compile_guard(&game)
-                .map_err(anyhow::Error::msg)
-                .context("acquiring the full-graph install-mutation guard")?,
-        );
-    }
-
     let plan = match gore_as::full_graph_plan::plan_complete_source_tree_v1(&base_cache, &src) {
         Ok(plan) => plan,
         Err(error) => {
@@ -2444,26 +2476,6 @@ fn prepare_development_standalone_runner(
         .map(Some)
         .map_err(anyhow::Error::msg)
         .context("initializing development standalone compiler override")
-}
-
-fn validate_profile_inputs_before_compile(
-    profile: &gore_as::compiler_profile::manifest::CompilerProfileV1,
-    base: &[u8],
-    binds: &[u8],
-) -> Result<()> {
-    let base = gore_as::generation_receipt::ArtifactSealV1::from_bytes(base);
-    let binds = gore_as::generation_receipt::ArtifactSealV1::from_bytes(binds);
-    if base.byte_len != profile.oracle.shipping_cache.byte_len
-        || base.sha256 != profile.oracle.shipping_cache.sha256
-    {
-        bail!("qualified compiler profile does not match the selected pristine Shipping cache");
-    }
-    if binds.byte_len != profile.oracle.binds_cache.byte_len
-        || binds.sha256 != profile.oracle.binds_cache.sha256
-    {
-        bail!("qualified compiler profile does not match the selected Binds.Cache");
-    }
-    Ok(())
 }
 
 pub fn run(cmd: AsCmd) -> Result<()> {
@@ -3076,7 +3088,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let mut standalone_target = None;
             let mut product_authority = None;
             let mut package_unavailable = None;
-            let execution_profile = if compiler.has_development_override() {
+            if compiler.has_development_override() {
                 if compiler.backend == AsCompilerBackendV1::Game {
                     bail!(
                         "development standalone overrides cannot be combined with --backend game"
@@ -3084,7 +3096,6 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 }
                 let runner = prepare_development_standalone_runner(&compiler)?
                     .expect("a complete development override constructs one runner");
-                let profile = runner.profile().clone();
                 standalone_target = Some(
                     gore_as::compiler_target::ValidatedCompilerTargetInputsV1::load(
                         runner.profile_package(),
@@ -3094,7 +3105,6 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     .context("validating the exact development compiler target")?,
                 );
                 standalone_runner = Some(CompileModuleStandaloneRunnerV1::Development(runner));
-                Some(profile)
             } else {
                 use gore_as::standalone_package_resolver::ProductStandaloneCompilerPackageResolutionV1;
 
@@ -3104,26 +3114,14 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     &host_module,
                     target_paths,
                 );
-                let mut profile = None;
                 match resolution {
                     ProductStandaloneCompilerPackageResolutionV1::Available(available) => {
-                        let runner_config = (requested_mode
+                        let runner = (requested_mode
                             != gore_as::compile::CompilerBackendModeV1::Game)
-                            .then(|| {
-                                gore_as::standalone_sidecar::StandaloneSidecarConfigV1::new(
-                                    available.sidecar_path().to_path_buf(),
-                                    available.sidecar_seal(),
-                                    available.profile_manifest_path().to_path_buf(),
-                                    available.profile_root().to_path_buf(),
-                                    work_dir.clone(),
-                                )
-                            });
+                            .then(|| available.sidecar_runner(work_dir.clone()));
                         let (authority, target) = available.into_execution_parts();
-                        profile = Some(authority.profile_package().profile().clone());
-                        if let Some(config) = runner_config {
-                            match gore_as::standalone_sidecar::StandaloneSidecarRunnerV1::new(
-                                config,
-                            ) {
+                        if let Some(runner) = runner {
+                            match runner {
                                 Ok(runner) => {
                                     standalone_runner =
                                         Some(CompileModuleStandaloneRunnerV1::Product(
@@ -3195,21 +3193,41 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                         }
                     }
                 }
-                profile
-            };
+            }
 
-            let (base_override, guard) = if let Some(target) = standalone_target.as_ref() {
+            let (base_override, guard) = if let Some(target) = standalone_target.as_mut() {
                 let guard = if requested_mode == gore_as::compile::CompilerBackendModeV1::Standalone
                 {
                     None
                 } else {
-                    Some(
-                        acquire_compile_guard(&game)
-                            .map_err(anyhow::Error::msg)
-                            .context("acquiring the compile install-mutation guard")?,
-                    )
+                    // Match full-graph compilation's Windows lock handoff. Target validation pins
+                    // each parent directory without delete sharing, which would otherwise block
+                    // atomic publication of the install-mutation lock in the game root. The exact
+                    // target files stay pinned while only their parent chains are released, then
+                    // the complete chain is identity-checked again before either backend runs.
+                    target.release_parent_directory_pins_for_install_mutation_v1();
+                    let acquired = acquire_compile_guard(&game)
+                        .map_err(anyhow::Error::msg)
+                        .context("acquiring the compile-module install-mutation guard")?;
+                    if let Err(error) = target.repin_parent_directories_after_install_mutation_v1()
+                    {
+                        let primary = anyhow::Error::new(error).context(
+                            "re-pinning compiler target directories after lock publication",
+                        );
+                        return Err(release_compile_guard_after_error(acquired, primary));
+                    }
+                    Some(acquired)
                 };
-                (target.shipping_cache().to_vec(), guard)
+                let base = match qualified_target_pristine_script_cache(&game, target) {
+                    Ok(base) => base,
+                    Err(error) => {
+                        return match guard {
+                            Some(guard) => Err(release_compile_guard_after_error(guard, error)),
+                            None => Err(error),
+                        };
+                    }
+                };
+                (base, guard)
             } else if requested_mode == gore_as::compile::CompilerBackendModeV1::Standalone {
                 unreachable!("strict standalone availability was checked above")
             } else {
@@ -3219,20 +3237,6 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let binds_override = standalone_target
                 .as_ref()
                 .map(|target| target.binds_cache().to_vec());
-            if let Some(profile) = execution_profile.as_ref() {
-                if let Err(error) = validate_profile_inputs_before_compile(
-                    profile,
-                    &base_override,
-                    binds_override
-                        .as_deref()
-                        .expect("profile-bound compile has Binds snapshot"),
-                ) {
-                    return match guard {
-                        Some(guard) => Err(release_compile_guard_after_error(guard, error)),
-                        None => Err(error),
-                    };
-                }
-            }
             let opts = gore_as::compile::CompileOpts {
                 game_dir: game,
                 op,
@@ -3347,17 +3351,14 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 relative_path: &opts.rel_path,
                 bytes: &source_bytes,
             }];
-            let receipt_package = product_authority
-                .as_ref()
-                .map(|authority| authority.profile_package());
             let generation_receipt = match (
                 compiler.generation_receipt.as_ref(),
-                receipt_package,
+                product_authority.as_ref(),
                 binds_override.as_deref(),
             ) {
-                (Some(_), Some(package), Some(binds)) => Some(
-                    gore_as::generation_receipt::GenerationReceiptV1::build_for_compile_output(
-                        package,
+                (Some(_), Some(authority), Some(binds)) => Some(
+                    gore_as::generation_receipt::GenerationReceiptV1::build_for_product_compile_output(
+                        authority,
                         &sources,
                         &base_override,
                         binds,
@@ -5664,6 +5665,22 @@ mod default_cli_tests {
         assert!(!dropped.load(std::sync::atomic::Ordering::SeqCst));
         drop(runner);
         assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn standalone_target_must_match_the_deployment_aware_pristine_base() {
+        let pristine = b"pristine-cache".to_vec();
+        assert_eq!(
+            require_qualified_target_pristine_base(b"pristine-cache", pristine.clone()).unwrap(),
+            pristine
+        );
+        let error = require_qualified_target_pristine_base(
+            b"live-cache-with-active-mod",
+            b"pristine-cache".to_vec(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("deployment-aware pristine script cache differs"));
     }
 
     #[test]

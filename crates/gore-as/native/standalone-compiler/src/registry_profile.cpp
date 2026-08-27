@@ -2163,6 +2163,37 @@ registry_replay_result apply_final_state(
     return {};
 }
 
+registry_replay_result apply_registration_time_state(
+    const post_bind_state& state,
+    const std::size_t ordinal,
+    replay_maps& maps) {
+    switch (state.kind) {
+    case post_bind_state_kind::object_type: {
+        asCObjectType* type = object_type(maps, state.logical_id);
+        if (type == nullptr) {
+            return fail(
+                registry_replay_phase::apply_post_bind_state, ordinal,
+                "object type registration-time state is invalid");
+        }
+        // Template instances copy these switches when their declaration is first
+        // encountered. Waiting until all registrations have finished leaves those
+        // already-created instances with stale conversion/subtype semantics.
+        type->hasImplicitConstructors = state.has_implicit_constructors;
+        type->acceptValueSubType = state.accepts_value_subtype;
+        type->acceptRefSubType = state.accepts_reference_subtype;
+        break;
+    }
+    case post_bind_state_kind::function:
+        // Generated template functions copy traits and system-function metadata.
+        // Restore both before a later registration can instantiate the template.
+        return apply_final_state(state, ordinal, maps);
+    case post_bind_state_kind::object_property:
+    case post_bind_state_kind::global_property:
+        break;
+    }
+    return {};
+}
+
 bool verify_final_state(const post_bind_state& state, replay_maps& maps) {
     switch (state.kind) {
     case post_bind_state_kind::object_type: {
@@ -2713,6 +2744,22 @@ registry_replay_result replay_registry(
     }
 
     replay_maps maps;
+    std::unordered_map<std::uint32_t, std::pair<const post_bind_state*, std::size_t>>
+        registration_time_type_states;
+    std::unordered_map<std::uint32_t, std::pair<const post_bind_state*, std::size_t>>
+        registration_time_function_states;
+    registration_time_type_states.reserve(profile.final_states.size());
+    registration_time_function_states.reserve(profile.final_states.size());
+    for (std::size_t index = 0U; index < profile.final_states.size(); ++index) {
+        const post_bind_state& state = profile.final_states[index];
+        if (state.kind == post_bind_state_kind::object_type) {
+            registration_time_type_states.emplace(
+                state.logical_id, std::make_pair(&state, index));
+        } else if (state.kind == post_bind_state_kind::function) {
+            registration_time_function_states.emplace(
+                state.logical_id, std::make_pair(&state, index));
+        }
+    }
     for (std::size_t index = 0U; index < profile.registrations.size(); ++index) {
         const registration_entry& entry = profile.registrations[index];
         result = apply_context(engine, entry);
@@ -2736,6 +2783,35 @@ registry_replay_result replay_registry(
                     std::to_string(expected.index) + ",installed=" +
                     std::to_string(expected.installed) + ")");
         }
+        const auto apply_registration_time = [&](const auto& states) {
+            const auto state = states.find(entry.logical_id);
+            if (state == states.end()) return registry_replay_result{};
+            return apply_registration_time_state(
+                *state->second.first, state->second.second, maps);
+        };
+        switch (entry.kind) {
+        case registration_kind::object_type:
+        case registration_kind::interface_type:
+            result = apply_registration_time(registration_time_type_states);
+            break;
+        case registration_kind::interface_method:
+        case registration_kind::object_method:
+        case registration_kind::object_behaviour:
+        case registration_kind::global_function:
+            result = apply_registration_time(registration_time_function_states);
+            break;
+        case registration_kind::object_property:
+        case registration_kind::global_property:
+        case registration_kind::enum_type:
+        case registration_kind::enum_value:
+        case registration_kind::funcdef:
+        case registration_kind::typedef_type:
+        case registration_kind::string_factory:
+        case registration_kind::default_array_type:
+            result = {};
+            break;
+        }
+        if (!result.succeeded()) return result;
     }
 
     for (std::size_t index = 0U; index < profile.final_states.size(); ++index) {

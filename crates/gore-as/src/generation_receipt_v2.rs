@@ -227,10 +227,8 @@ impl GenerationReceiptV2 {
 
         let base_seal = ArtifactSealV1::from_bytes(base_cache);
         let binds_seal = ArtifactSealV1::from_bytes(binds_cache);
-        if base_seal.byte_len != profile.oracle.shipping_cache.byte_len
-            || base_seal.sha256 != profile.oracle.shipping_cache.sha256
-            || binds_seal.byte_len != profile.oracle.binds_cache.byte_len
-            || binds_seal.sha256 != profile.oracle.binds_cache.sha256
+        if !base_seal.matches_target_seal(authority.shipping_cache_seal())
+            || !binds_seal.matches_target_seal(authority.binds_cache_seal())
         {
             return invalid(
                 "inputs",
@@ -406,10 +404,8 @@ impl GenerationReceiptV2 {
         let binds_seal = ArtifactSealV1::from_bytes(binds_cache);
         if self.inputs.base_cache != base_seal
             || self.inputs.binds_cache != binds_seal
-            || base_seal.byte_len != profile.oracle.shipping_cache.byte_len
-            || base_seal.sha256 != profile.oracle.shipping_cache.sha256
-            || binds_seal.byte_len != profile.oracle.binds_cache.byte_len
-            || binds_seal.sha256 != profile.oracle.binds_cache.sha256
+            || !base_seal.matches_target_seal(authority.shipping_cache_seal())
+            || !binds_seal.matches_target_seal(authority.binds_cache_seal())
             || artifact.base_cache_sha256() != base_seal.sha256
         {
             return invalid("inputs", "base/Binds/profile/compiler seals changed");
@@ -832,9 +828,26 @@ mod tests {
     #[test]
     fn product_authority_retained_artifact_and_receipt_v2_are_one_closed_chain() {
         let package = SyntheticProductPackageFixtureV1::create();
+        let (base_cache, binds_cache) = package.install_compatible_target_variants();
         let authority = package.receipt_authority();
-        let base_cache = package.base_cache_bytes();
-        let binds_cache = package.binds_cache_bytes();
+        assert_ne!(
+            ArtifactSealV1::from_bytes(&base_cache).sha256,
+            authority
+                .profile_package()
+                .profile()
+                .oracle
+                .shipping_cache
+                .sha256
+        );
+        assert_ne!(
+            ArtifactSealV1::from_bytes(&binds_cache).sha256,
+            authority
+                .profile_package()
+                .profile()
+                .oracle
+                .binds_cache
+                .sha256
+        );
         let authored_source = b"void Test() {}\n";
         let final_manifest = vec![FullGraphSourceManifestEntryV1 {
             module_name: "Test.Module".into(),
@@ -854,7 +867,7 @@ mod tests {
         std::fs::write(&output_path, output_bytes).unwrap();
         let artifact = bind_full_graph_artifact_for_test(
             output_path,
-            digest(base_cache),
+            digest(&base_cache),
             final_manifest,
             Vec::new(),
         )
@@ -868,14 +881,14 @@ mod tests {
 
         let receipt = GenerationReceiptV2::build_for_full_graph_artifact(
             &authority,
-            base_cache,
-            binds_cache,
+            &base_cache,
+            &binds_cache,
             &artifact,
             backend,
         )
         .unwrap();
         receipt
-            .validate_against(&authority, base_cache, binds_cache, &artifact)
+            .validate_against(&authority, &base_cache, &binds_cache, &artifact)
             .unwrap();
 
         let receipt_path = temp.path().join("compiled.receipt.json");
@@ -883,7 +896,7 @@ mod tests {
         let loaded = read_generation_receipt_v2(&receipt_path).unwrap();
         assert_eq!(loaded, receipt);
         loaded
-            .validate_against(&authority, base_cache, binds_cache, &artifact)
+            .validate_against(&authority, &base_cache, &binds_cache, &artifact)
             .unwrap();
         assert!(publish_generation_receipt_v2(&receipt_path, &receipt).is_err());
 
@@ -898,7 +911,7 @@ mod tests {
         assert!(tampered.validate().is_err());
         assert!(GenerationReceiptV2::build_for_full_graph_artifact(
             &authority,
-            base_cache,
+            &base_cache,
             b"wrong-binds",
             &artifact,
             ReceiptBackendSelectionV1::from_compile_selection(
