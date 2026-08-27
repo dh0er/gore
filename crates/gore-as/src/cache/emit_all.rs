@@ -918,7 +918,7 @@ fn unresolved_collision_calls(
                 || is_angelscript_keyword(token_text(source, &tokens[index - 3])));
         if call
             && leading_global
-            && call_argument_count(source, tokens[index + 1].start).is_some_and(|arity| {
+            && call_argument_count(source, &tokens, tokens[index + 1].start).is_some_and(|arity| {
                 safe_global_call_arities
                     .get(name)
                     .is_some_and(|safe| safe.contains(&arity))
@@ -1011,7 +1011,53 @@ fn is_angelscript_keyword(value: &str) -> bool {
 
 /// Count top-level arguments in one call without mistaking commas in strings, comments, generic
 /// type lists, nested calls, indexing, or initializer lists for separators.
-fn call_argument_count(source: &str, open_paren: usize) -> Option<usize> {
+fn probable_template_close(source: &str, tokens: &[CodeToken], open_angle: usize) -> Option<usize> {
+    let open = tokens
+        .binary_search_by_key(&open_angle, |token| token.start)
+        .ok()?;
+    if token_text(source, &tokens[open]) != "<"
+        || open == 0
+        || !tokens[open - 1].identifier
+        || tokens
+            .get(open + 1)
+            .is_none_or(|token| matches!(token_text(source, token), "<" | "="))
+    {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().skip(open) {
+        match token_text(source, token) {
+            "<" => {
+                if tokens
+                    .get(index + 1)
+                    .is_some_and(|next| matches!(token_text(source, next), "<" | "="))
+                {
+                    return None;
+                }
+                depth += 1;
+            }
+            ">" => {
+                depth = depth.checked_sub(1)?;
+                if depth != 0 {
+                    continue;
+                }
+                let next = tokens.get(index + 1)?;
+                let valid_suffix = matches!(token_text(source, next), "(" | "[" | "{" | "@" | ".")
+                    || (token_text(source, next) == ":"
+                        && tokens
+                            .get(index + 2)
+                            .is_some_and(|after| token_text(source, after) == ":"));
+                return valid_suffix.then_some(token.start);
+            }
+            "(" | ")" | "{" | "}" | ";" => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn call_argument_count(source: &str, tokens: &[CodeToken], open_paren: usize) -> Option<usize> {
     let bytes = source.as_bytes();
     if bytes.get(open_paren) != Some(&b'(') {
         return None;
@@ -1076,7 +1122,10 @@ fn call_argument_count(source: &str, open_paren: usize) -> Option<usize> {
                             braces += 1;
                         }
                         b'}' => braces = braces.checked_sub(1)?,
-                        b'<' if call_level => {
+                        b'<' if call_level
+                            && (angles > 0
+                                || probable_template_close(source, tokens, index).is_some()) =>
+                        {
                             if top_level {
                                 current_argument = true;
                             }
@@ -1729,6 +1778,23 @@ const FName Label = n"Shared() @Shared";
         assert!(qualified.contains("Callback@ Cb = @::Shared;"));
         assert!(qualified.contains("// Shared() stays"));
         assert!(qualified.contains("n\"Shared() @Shared\""));
+    }
+
+    #[test]
+    fn collision_call_arity_distinguishes_operators_from_template_arguments() {
+        let originals = BTreeSet::from(["Shared".to_owned()]);
+        let safe_arities = BTreeMap::from([("Shared".to_owned(), BTreeSet::from([1, 2]))]);
+        for source in [
+            "void Caller(int a, int b) { ::Shared(a < b); }",
+            "void Caller(int flags, int other) { ::Shared(flags << 1, other); }",
+            "void Caller(int a, int b, int c, int d) { ::Shared(a <= b, c >= d); }",
+            "void Caller() { ::Shared(TMap<int, TArray<float>>(), 1); }",
+        ] {
+            assert!(
+                unresolved_collision_calls(source, &originals, &safe_arities).is_empty(),
+                "safe global call was rejected in {source:?}"
+            );
+        }
     }
 
     #[test]

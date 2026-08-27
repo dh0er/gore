@@ -99,7 +99,8 @@ class DownloadTableContractTest(unittest.TestCase):
             replace_once(
                 self.readme,
                 "releases/tag/gore-cli-v0.2.0)",
-                "releases/tag/gore-cli-v0.3.0)",
+                # Deliberately wrong test-only version: the checker must reject this link.
+                "releases/tag/gore-cli-v9.9.9)",
             ),
             None,
             "CLI must link to",
