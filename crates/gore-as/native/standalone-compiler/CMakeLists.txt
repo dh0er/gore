@@ -140,6 +140,10 @@ target_link_options(gore-as-standalone-compiler PRIVATE
     /DYNAMICBASE
     /NXCOMPAT
     /Brepro
+    "/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/sidecar.manifest"
+)
+set_property(TARGET gore-as-standalone-compiler APPEND PROPERTY
+    LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/sidecar.manifest"
 )
 
 include(CTest)

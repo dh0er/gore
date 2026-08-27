@@ -45,6 +45,29 @@ int main() {
     if (map_index != 3U || sparse_map.FindRef(4) != 40) {
         return fail("TMap sparse-slot reuse lost an entry");
     }
+    TMap<int, int> indexed_map;
+    for (int value = 0; value < 10'000; ++value) {
+        indexed_map.Add(value, value * 2);
+    }
+    for (int value = 0; value < 10'000; value += 97) {
+        if (indexed_map.FindRef(value) != value * 2) {
+            return fail("TMap hash index lost a bulk entry");
+        }
+    }
+    indexed_map.Reset();
+    if (indexed_map.Find(7) != nullptr || indexed_map.Remove(7) != 0) {
+        return fail("TMap empty hash lookup was not inert after Reset");
+    }
+    indexed_map.Add(7, 14);
+    if (indexed_map.FindRef(7) != 14) {
+        return fail("TMap hash index did not recover after Reset");
+    }
+
+    TMap<TPair<int, int>, int> pair_key_map;
+    pair_key_map.Add(TPair<int, int>{3, 5}, 8);
+    if (pair_key_map.FindRef(TPair<int, int>{3, 5}) != 8) {
+        return fail("TMap pair-key hashing disagreed with pair equality");
+    }
 
     TMultiMap<int, int> sparse_multimap;
     sparse_multimap.Add(7, 1);

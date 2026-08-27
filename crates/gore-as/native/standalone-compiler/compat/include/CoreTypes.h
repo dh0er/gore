@@ -13,6 +13,7 @@
 #include <iterator>
 #include <optional>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -60,6 +61,33 @@ struct TPair {
     }
 };
 
+inline uint32 HashCombineFast(const uint32 left, const uint32 right) noexcept {
+    return left ^ (right + 0x9e3779b9U + (left << 6U) + (left >> 2U));
+}
+
+template <typename ValueType>
+uint32 GetTypeHash(ValueType* value) noexcept {
+    const auto bits = reinterpret_cast<std::uintptr_t>(value);
+    return static_cast<uint32>(bits ^ (bits >> 32U));
+}
+
+template <typename ValueType>
+uint32 GetTypeHash(const ValueType& value) noexcept {
+    return static_cast<uint32>(std::hash<ValueType>{}(value));
+}
+
+template <typename KeyType, typename ValueType>
+uint32 GetTypeHash(const TPair<KeyType, ValueType>& value) noexcept {
+    return HashCombineFast(GetTypeHash(value.Key), GetTypeHash(value.Value));
+}
+
+template <typename KeyType>
+struct TCompatKeyHash {
+    std::size_t operator()(const KeyType& key) const noexcept {
+        return static_cast<std::size_t>(GetTypeHash(key));
+    }
+};
+
 // UE's TMap/TMultiMap store elements in a TSparseArray. Iteration therefore follows stable sparse
 // indices, and the next insertion reuses the most recently freed index. A plain std::vector erase
 // changes every later index, while append-after-remove changes observable iteration order (for
@@ -77,7 +105,43 @@ private:
         std::uint64_t hash_chain_order = 0U;
     };
 
+    struct IndexState {
+        std::uint32_t active_count = 0U;
+        std::uint32_t hash_bucket_count = 0U;
+        std::uint64_t newest_hash_chain_order = 0U;
+        std::unordered_map<KeyType, std::vector<std::size_t>, TCompatKeyHash<KeyType>>
+            hash_index;
+    };
+
 public:
+    TSparsePairStorage() = default;
+    ~TSparsePairStorage() { delete index_state_; }
+    TSparsePairStorage(const TSparsePairStorage& other)
+        : slots_(other.slots_),
+          free_indices_(other.free_indices_),
+          index_state_(other.index_state_ == nullptr
+              ? nullptr
+              : new IndexState(*other.index_state_)) {}
+    TSparsePairStorage& operator=(const TSparsePairStorage& other) {
+        if (this != &other) {
+            TSparsePairStorage replacement(other);
+            *this = std::move(replacement);
+        }
+        return *this;
+    }
+    TSparsePairStorage(TSparsePairStorage&& other) noexcept
+        : slots_(std::move(other.slots_)),
+          free_indices_(std::move(other.free_indices_)),
+          index_state_(std::exchange(other.index_state_, nullptr)) {}
+    TSparsePairStorage& operator=(TSparsePairStorage&& other) noexcept {
+        if (this != &other) {
+            delete index_state_;
+            slots_ = std::move(other.slots_);
+            free_indices_ = std::move(other.free_indices_);
+            index_state_ = std::exchange(other.index_state_, nullptr);
+        }
+        return *this;
+    }
 
     template <bool IsConst>
     class Iterator {
@@ -144,23 +208,22 @@ public:
         if (desired_hash_size > hash_bucket_count()) {
             set_hash_bucket_count(desired_hash_size);
             rebuild_hash_chain_order();
+            rebuild_hash_index();
         } else {
-            std::uint64_t newest = 0U;
-            for (const Slot& slot : slots_) {
-                if (slot.element.has_value()) {
-                    newest = (std::max)(newest, slot.hash_chain_order);
-                }
-            }
-            if (newest == (std::numeric_limits<std::uint64_t>::max)()) {
+            if (index_state_->newest_hash_chain_order ==
+                (std::numeric_limits<std::uint64_t>::max)()) {
                 std::abort();
             }
-            slots_[index].hash_chain_order = newest + 1U;
+            slots_[index].hash_chain_order = ++index_state_->newest_hash_chain_order;
+            auto& indices = index_state_->hash_index[slots_[index].element->Key];
+            indices.insert(indices.begin(), index);
         }
         return index;
     }
 
     void RemoveAt(const std::size_t index) {
         if (index >= slots_.size() || !slots_[index].element.has_value()) return;
+        remove_from_hash_index(slots_[index].element->Key, index);
         slots_[index].element.reset();
         slots_[index].hash_chain_order = 0U;
         free_indices_.push_back(index);
@@ -172,6 +235,19 @@ public:
         for (std::size_t index = 0U; index < slots_.size(); ++index) {
             if (slots_[index].element.has_value() &&
                 predicate(*slots_[index].element)) return index;
+        }
+        return npos;
+    }
+
+    [[nodiscard]] std::size_t FindHashChainIndex(
+        const KeyType& key,
+        const std::uint64_t before_order =
+            (std::numeric_limits<std::uint64_t>::max)()) const {
+        if (active_count() == 0U) return npos;
+        const auto found = index_state_->hash_index.find(key);
+        if (found == index_state_->hash_index.end()) return npos;
+        for (const std::size_t index : found->second) {
+            if (slots_[index].hash_chain_order < before_order) return index;
         }
         return npos;
     }
@@ -205,12 +281,14 @@ public:
         if (desired_hash_size > hash_bucket_count()) {
             set_hash_bucket_count(desired_hash_size);
             rebuild_hash_chain_order();
+            rebuild_hash_index();
         }
     }
     void Empty() {
         slots_.clear();
         free_indices_.clear();
-        packed_state_ = 0U;
+        delete index_state_;
+        index_state_ = nullptr;
     }
 
     iterator begin() { return iterator(this, 0U); }
@@ -240,30 +318,52 @@ private:
     }
 
     [[nodiscard]] std::size_t active_count() const noexcept {
-        return static_cast<std::uint32_t>(packed_state_ & 0xffffffffULL);
+        return index_state_ == nullptr ? 0U : index_state_->active_count;
     }
     [[nodiscard]] std::uint32_t hash_bucket_count() const noexcept {
-        return static_cast<std::uint32_t>(packed_state_ >> 32U);
+        return index_state_ == nullptr ? 0U : index_state_->hash_bucket_count;
     }
     void set_active_count(const std::size_t count) {
         if (count > (std::numeric_limits<std::uint32_t>::max)()) std::abort();
-        packed_state_ = (packed_state_ & 0xffffffff00000000ULL) |
-            static_cast<std::uint32_t>(count);
+        ensure_index_state().active_count = static_cast<std::uint32_t>(count);
     }
-    void set_hash_bucket_count(const std::uint32_t count) noexcept {
-        packed_state_ = (static_cast<std::uint64_t>(count) << 32U) |
-            (packed_state_ & 0xffffffffULL);
+    void set_hash_bucket_count(const std::uint32_t count) {
+        ensure_index_state().hash_bucket_count = count;
+    }
+    IndexState& ensure_index_state() {
+        if (index_state_ == nullptr) index_state_ = new IndexState();
+        return *index_state_;
     }
     void rebuild_hash_chain_order() {
         std::uint64_t order = 0U;
         for (Slot& slot : slots_) {
             if (slot.element.has_value()) slot.hash_chain_order = ++order;
         }
+        index_state_->newest_hash_chain_order = order;
+    }
+    void rebuild_hash_index() {
+        index_state_->hash_index.clear();
+        index_state_->hash_index.reserve(active_count());
+        for (std::size_t index = slots_.size(); index-- > 0U;) {
+            if (slots_[index].element.has_value()) {
+                index_state_->hash_index[slots_[index].element->Key].push_back(index);
+            }
+        }
+    }
+    void remove_from_hash_index(const KeyType& key, const std::size_t index) {
+        if (index_state_ == nullptr) std::abort();
+        const auto found = index_state_->hash_index.find(key);
+        if (found == index_state_->hash_index.end()) std::abort();
+        auto& indices = found->second;
+        const auto entry = std::find(indices.begin(), indices.end(), index);
+        if (entry == indices.end()) std::abort();
+        indices.erase(entry);
+        if (indices.empty()) index_state_->hash_index.erase(found);
     }
 
     std::vector<Slot> slots_;
     std::vector<std::size_t> free_indices_;
-    std::uint64_t packed_state_ = 0U;
+    IndexState* index_state_ = nullptr;
 };
 
 template <typename ValueType, typename Allocator = FDefaultAllocator>
@@ -480,8 +580,7 @@ public:
 
 private:
     std::size_t find_index(const KeyType& key) const {
-        return entries_.FindIndex(
-            [&key](const ElementType& element) { return element.Key == key; });
+        return entries_.FindHashChainIndex(key);
     }
 
     Storage entries_;
@@ -510,19 +609,7 @@ public:
 
     private:
         void seek() {
-            index_ = Storage::npos;
-            std::uint64_t newest = 0U;
-            for (std::size_t candidate = 0U;
-                 candidate < owner_->entries_.MaxIndex(); ++candidate) {
-                const auto* element = owner_->entries_.At(candidate);
-                if (element == nullptr || !(element->Key == key_)) continue;
-                const std::uint64_t sequence =
-                    owner_->entries_.HashChainOrderAt(candidate);
-                if (sequence < before_sequence_ && sequence > newest) {
-                    newest = sequence;
-                    index_ = candidate;
-                }
-            }
+            index_ = owner_->entries_.FindHashChainIndex(key_, before_sequence_);
         }
 
         const TMultiMap* owner_;
@@ -609,19 +696,4 @@ template <typename ValueType>
 constexpr ValueType Align(const ValueType value, const std::size_t alignment) {
     return static_cast<ValueType>((value + static_cast<ValueType>(alignment - 1U)) &
         ~static_cast<ValueType>(alignment - 1U));
-}
-
-inline uint32 HashCombineFast(const uint32 left, const uint32 right) noexcept {
-    return left ^ (right + 0x9e3779b9U + (left << 6U) + (left >> 2U));
-}
-
-template <typename ValueType>
-uint32 GetTypeHash(ValueType* value) noexcept {
-    const auto bits = reinterpret_cast<std::uintptr_t>(value);
-    return static_cast<uint32>(bits ^ (bits >> 32U));
-}
-
-template <typename ValueType>
-uint32 GetTypeHash(const ValueType& value) noexcept {
-    return static_cast<uint32>(std::hash<ValueType>{}(value));
 }

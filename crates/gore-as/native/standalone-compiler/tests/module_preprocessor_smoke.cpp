@@ -303,6 +303,8 @@ class AHero : AActor
     UPROPERTY(BlueprintReadOnly, VisibleDefaultsOnly, ReplicatedUsing=OnRep_Health, SaveGame, Meta=(ClampMin="0"))
     int32 Health = 10;
 
+    void QuoteProbe() { FString Text = "Say \"hello\""; }
+
     UFUNCTION(BlueprintCallable, BlueprintEvent, Category="Demo")
     int32 Compute(int32 Value, const FString& Label) const { return Value; }
 

@@ -117,6 +117,20 @@ std::string trim_quotes(std::string value) {
     return value;
 }
 
+bool escaped_string_quote(
+    const std::string_view code,
+    const std::size_t position,
+    const bool in_string) noexcept {
+    if (!in_string) return false;
+    bool escaped = false;
+    std::size_t check = position;
+    while (check > 0U && code[check - 1U] == '\\') {
+        escaped = !escaped;
+        --check;
+    }
+    return escaped;
+}
+
 std::vector<parsed_specifier> parse_specifiers(
     const std::string& value,
     std::size_t start,
@@ -1379,7 +1393,8 @@ void strip_comments_from_line(std::string& line) {
     bool in_block_comment = false;
     for (std::size_t index = 0U; index < line.size(); ++index) {
         const char character = line[index];
-        if (character == '"' && !in_line_comment && !in_block_comment) {
+        if (character == '"' && !in_line_comment && !in_block_comment &&
+            !escaped_string_quote(line, index, in_string)) {
             in_string = !in_string;
         }
         if (character == '/' && index + 1U < line.size() && !in_string &&
@@ -1436,7 +1451,8 @@ std::optional<reflection_macro> parse_reflection_macro(
                    in_block_comment && code[subject_end + 1U] == '/') {
             in_block_comment = false;
             ++subject_end;
-        } else if (character == '"' && !in_comment) {
+        } else if (character == '"' && !in_comment &&
+                   !escaped_string_quote(code, subject_end, in_string)) {
             in_string = !in_string;
         } else if (character == '\n') {
             in_line_comment = false;
@@ -2391,7 +2407,8 @@ void scan_function_macros_in_range(
                    in_block_comment && code[position + 1U] == '/') {
             in_block_comment = false;
             ++position;
-        } else if (character == '"' && !in_comment) {
+        } else if (character == '"' && !in_comment &&
+                   !escaped_string_quote(code, position, in_string)) {
             in_string = !in_string;
         } else if (!in_comment && !in_string && character == '{') {
             ++depth;
@@ -2529,7 +2546,8 @@ void process_function_macros(
                    in_block_comment && code[position + 1U] == '/') {
             in_block_comment = false;
             ++position;
-        } else if (character == '"' && !in_comment) {
+        } else if (character == '"' && !in_comment &&
+                   !escaped_string_quote(code, position, in_string)) {
             in_string = !in_string;
         } else if (!in_comment && !in_string && character == '{') {
             ++scope_count;
@@ -2765,7 +2783,8 @@ void process_delegates(
                    in_block_comment && code[position + 1U] == '/') {
             in_block_comment = false;
             ++position;
-        } else if (character == '"' && !in_comment) {
+        } else if (character == '"' && !in_comment &&
+                   !escaped_string_quote(code, position, in_string)) {
             in_string = !in_string;
         } else if (!in_comment && !in_string && character == '{') {
             ++scope_count;
@@ -2872,7 +2891,8 @@ void collect_enum_meta(
                    in_block_comment && code[position + 1U] == '/') {
             in_block_comment = false;
             ++position;
-        } else if (character == '"' && !in_comment) {
+        } else if (character == '"' && !in_comment &&
+                   !escaped_string_quote(code, position, in_string)) {
             in_string = !in_string;
         } else if (character == '\n') {
             in_line_comment = false;
