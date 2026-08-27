@@ -6072,6 +6072,25 @@ fn inline_temporary_into(
         inline_reject("wrapped", callee, &temp, &lines[index]);
         return false;
     }
+    // A value carried past a line that RE-DEFINES a name it reads changes which value it reads.
+    // The two definitions still share one name here — the pass that splits a reused slot into
+    // `local_6` and `local_6_2` runs later — so moving the read below the second definition hands
+    // it to the wrong life once the split happens: `Say(Ian.GetCharacter())` came back as
+    // `Say(Diego.GetCharacter())`, an NPC talking to itself.
+    let reads_a_reused_name = (definition + 1..index).any(|line| {
+        lines[line]
+            .trim()
+            .strip_suffix(';')
+            .and_then(|statement| statement.split_once(" = "))
+            .is_some_and(|(target, _)| {
+                let target = target.trim().rsplit(' ').next().unwrap_or(target.trim());
+                is_local_ident(target) && count_ident(&value, target) > 0
+            })
+    });
+    if reads_a_reused_name {
+        inline_reject("crosses-redefinition", callee, &temp, &lines[index]);
+        return false;
+    }
     // Everything between has to feed THIS call as well, or the order of a side effect would
     // change. "Feeds this call" is checked against the line as it stands, so a temporary that an
     // already-inlined argument still refers to counts.

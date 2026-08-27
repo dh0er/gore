@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 99.00% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 99.02% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.00%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.02%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,648 functions (1.00%) recompile to bytecode that differs semantically.** A semantic
+**1,613 functions (0.98%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -521,9 +521,9 @@ takes a value and when it knows nothing at all, and the calls this reaches are t
 nothing about (`SendGameplayEvent`, `OnBeginOverlap` — whose last parameter is an out-parameter).
 The return form of the same rule is safe and is in: a returned value has no parameter to bind to.
 
-**A wrong program that is still open, and older than any of the work above.** Where a slot is
-re-defined while a reference to its PREVIOUS value is still pending as an argument, the pending
-reference is rendered with the new life's name. `UChoiceDiego107920::Act_Implementation` comes back
+**A wrong program, found by the sweep and now closed.** Where a slot is re-defined while a
+reference to its PREVIOUS value is still pending as an argument, the pending reference ended up
+rendered with the new life's name. `UChoiceDiego107920::Act_Implementation` comes back
 as
 
     AGothicCharacterState local_6 = this.GetIan();      // never read
@@ -536,11 +536,12 @@ both uses after the second life, so the line says Diego twice and the first stor
 35 functions carry this shape, most of them generated dialog, where it makes an NPC address
 itself.
 
-The fix belongs in the structurer, not in a text pass: a pending operand that names a slot has to
-be pinned to the life it was pushed from when a later instruction overwrites that slot. Writing it
-as one inlined expression — `Say(GetDiego().GetAI(), …, GetIan().GetCharacter(), …)` — would also
-be right, and is what vanilla wrote, but the inline rules cannot reach it while the first store
-looks dead.
+The cause was one pass ahead of where it showed: the argument inliner runs BEFORE the pass that
+splits a reused slot into `local_6` and `local_6_2`, so carrying a read below the second
+definition handed it to the wrong life once the split happened. The inliner now refuses to move a
+value past a line that re-defines a name the value reads. What it writes instead is what vanilla
+wrote: `Say(GetDiego().GetAI(), …, GetIan().GetCharacter(), …)`, both calls inline. 1,648 to
+1,613 — the byte count and the 35 wrong programs were the same defect.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
