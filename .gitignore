@@ -37,9 +37,8 @@ work/
 
 # Local texture fixtures (Task 6): the cooked .uasset/.uexp/.ubulk/.usmap under
 # work/tex-fixtures/ are game-derived (copyrighted) bytes -- never commit them; they
-# regenerate on demand. The whole work/ tree is ignored above (so these binaries are
-# already untracked); these explicit lines document the intent. The provenance README
-# is force-added (git add -f work/tex-fixtures/README.md) since work/ is ignored.
+# regenerate on demand. The whole work/ tree is ignored above; never force-add files
+# from this local scratch tree.
 work/tex-fixtures/*.uasset
 work/tex-fixtures/*.uexp
 work/tex-fixtures/*.ubulk

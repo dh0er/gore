@@ -479,7 +479,7 @@ mod tests {
         let (Some(ua), Some(ue), Some(um)) =
             (fx("sample.uasset"), fx("sample.uexp"), fx("mappings.usmap"))
         else {
-            eprintln!("skip: fixture absent (regenerate per work/tex-fixtures/README.md)");
+            eprintln!("skip: fixture absent (regenerate per crates/gore-tex/LOCAL_FIXTURES.md)");
             return;
         };
         let ub = fx("sample.ubulk").unwrap_or_default();
