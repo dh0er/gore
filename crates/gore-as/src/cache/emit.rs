@@ -651,6 +651,7 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver, defaults: Option<&[
         );
     }
     let member_initializers = extract_member_initializers(&mut constructors);
+    let handle_nulls_are_the_compiler_s = null_stores_are_compiler_generated(&c.ctors);
     for f in &c.fields {
         // Drop a leading `const`: UE-AS UPROPERTY members aren't const-assignable, yet the
         // generated constructor assigns them — keeping `const` causes "Cannot assign" errors.
@@ -660,10 +661,16 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver, defaults: Option<&[
             let _ = writeln!(s, "    UPROPERTY()");
         }
         match member_initializers.get(&f.name) {
-            Some(value) => {
+            // A handle's null is the compiler's, not the source's, and the two lower
+            // differently: an explicit initializer is an assignment EXPRESSION whose discarded
+            // result costs a `PopPtr`, and it moves the member into the second init pass, behind
+            // every implicitly-defaulted one. Only the constructors' own bytecode says which it
+            // was — dropping every `= nullptr` without asking fixed 11 struct constructors and
+            // broke 11 class ones (measured).
+            Some(value) if value != "nullptr" || !handle_nulls_are_the_compiler_s => {
                 let _ = writeln!(s, "    {ty} {} = {value};", f.name);
             }
-            None => {
+            _ => {
                 let _ = writeln!(s, "    {ty} {};", f.name);
             }
         }
@@ -1971,6 +1978,7 @@ fn emit_function_ctor(
                 .copied()
                 .chain(rvo_temporary_slots(f, refs).into_iter().map(|slot| (slot, 1)))
                 .collect(),
+            &wholly_consumed_object_slots(f),
             &rvo_temporary_slots(f, refs),
             refs,
         );
@@ -1984,6 +1992,7 @@ fn emit_function_ctor(
                 .copied()
                 .chain(rvo_temporary_slots(f, refs).into_iter().map(|slot| (slot, 1)))
                 .collect(),
+            &wholly_consumed_object_slots(f),
             &rvo_temporary_slots(f, refs),
             refs,
         );
@@ -3894,12 +3903,70 @@ fn handle_alias_slots(f: &Func) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
+    let slot = |ins: &super::disasm::Instr| ins.words.first().map(|word| *word as i16 as i32);
     instrs
         .iter()
-        .filter(|ins| ins.op.name == "RefCpyV")
-        .filter_map(|ins| ins.words.first().map(|word| *word as i16 as i32))
+        .enumerate()
+        // An alias COPIED FROM A PARAMETER and compared by the very next instruction is the
+        // expression temporary of a null test, not a name — the structurer folds it back into the
+        // comparison, so what the text ends up calling `local_N` is the slot's NEXT life, which
+        // this set must not speak for. The source has to be a parameter: the same two rows also
+        // land a `Cast<T>` in the slot the source DID name and then tested, and dropping those
+        // from the set inlined the cast into its own null test (measured: 19 functions).
+        .filter(|(at, ins)| {
+            ins.op.name == "RefCpyV"
+                && !(instrs.get(at + 1).is_some_and(|next| {
+                    matches!(next.op.name, "CmpPtrNull" | "CmpPtr") && slot(next) == slot(ins)
+                }) && at
+                    .checked_sub(1)
+                    .and_then(|prev| instrs.get(prev))
+                    .is_some_and(|prev| {
+                        prev.op.name == "PshVPtr" && slot(prev).is_some_and(|src| src < 0)
+                    }))
+        })
+        .filter_map(|(_, ins)| slot(ins))
         .filter(|slot| *slot > 0)
         .collect()
+}
+
+/// Slots whose object value is consumed where it was produced for EVERY store the function makes
+/// into them. Unlike [`immediately_consumed_defs`] this is keyed by the slot alone: a life the
+/// structurer folded away shifts the text's life numbers off the bytecode's, and a slot with no
+/// loose store has nothing else the text's single name could mean.
+fn wholly_consumed_object_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let mut consumed: HashSet<i32> = HashSet::new();
+    let mut loose: HashSet<i32> = HashSet::new();
+    for (i, ins) in instrs.iter().enumerate() {
+        let dst = w0(ins);
+        if dst <= 0 {
+            continue;
+        }
+        // Any write that is NOT a store consumed where it stands makes the slot loose. A cast
+        // writes its destination twice — `CALLSYS ::opCast` on one arm and `ClrVPtr` on the other
+        // — and reading only the store called that slot a temporary when vanilla had named it
+        // (measured: it inlined a `Cast<T>(…)` into its own null test).
+        match ins.op.name {
+            "STOREOBJ" => {
+                let at_once = instrs.get(i + 1).is_some_and(|next| {
+                    matches!(next.op.name, "PshVPtr" | "LoadRObjR") && w0(next) == dst
+                });
+                if at_once {
+                    consumed.insert(dst);
+                } else {
+                    loose.insert(dst);
+                }
+            }
+            "ClrVPtr" | "RefCpyV" | "REFCPY" | "CpyVtoV4" | "CpyVtoV8" | "CpyGtoV4" | "SetV8" => {
+                loose.insert(dst);
+            }
+            _ => {}
+        }
+    }
+    consumed.difference(&loose).copied().collect()
 }
 
 /// The slots of a WIDENING that the source gave a NAME to.
@@ -6486,6 +6553,38 @@ fn call_of_expression(expression: &str) -> Option<(String, Vec<String>)> {
 ///
 /// Anything else in the body — a call, a branch, a local — means the constructor really is a
 /// constructor, and it keeps every statement.
+/// Whether EVERY null a class's constructors store into a member is the compiler's own zeroing.
+///
+/// The compiler writes `PshNull; PshVPtr w0; ADDSi wOFF,TID; REFCPY` and leaves nothing on the
+/// stack. A store the SOURCE wrote is an assignment expression: it either pops its discarded
+/// result (`PopPtr`) or goes through the member's own assignment operator (`CALLSYS`). One store
+/// of the second kind speaks for the whole class, because a declaration initializer runs in every
+/// constructor.
+fn null_stores_are_compiler_generated(ctors: &[Func]) -> bool {
+    let mut seen = false;
+    for ctor in ctors {
+        let Ok(instrs) = disassemble(&ctor.bytecode) else {
+            return false;
+        };
+        for (at, ins) in instrs.iter().enumerate() {
+            if ins.op.name != "PshNull" {
+                continue;
+            }
+            let zeroing = instrs
+                .get(at + 1)
+                .is_some_and(|next| next.op.name == "PshVPtr")
+                && instrs.get(at + 2).is_some_and(|next| next.op.name == "ADDSi")
+                && instrs.get(at + 3).is_some_and(|next| next.op.name == "REFCPY")
+                && !instrs.get(at + 4).is_some_and(|next| next.op.name == "PopPtr");
+            if !zeroing {
+                return false;
+            }
+            seen = true;
+        }
+    }
+    seen
+}
+
 fn extract_member_initializers(constructors: &mut String) -> HashMap<String, String> {
     let mut initializers = HashMap::new();
     let lines: Vec<&str> = constructors.lines().collect();
@@ -8902,7 +9001,10 @@ fn merge_self_assignments(body: &str) -> String {
                 return None;
             }
             // the whole initializer takes the name's place, bracketed unless it already is one
-            let operand = if init.contains(' ') && !(init.starts_with('(') && init.ends_with(')')) {
+            // `(A) || (B)` opens and closes with a bracket without being bracketed: spliced in
+            // unwrapped it re-binds against the `&&` around it, which this compiler refuses as an
+            // ambiguous order of operations.
+            let operand = if init.contains(' ') && !wraps_whole_expression(&init) {
                 format!("({init})")
             } else {
                 init.clone()
@@ -9421,6 +9523,7 @@ fn unnamed_value_defs(f: &Func, refs: &RefResolver) -> HashSet<(i32, usize)> {
 fn inline_unnamed_value_temporaries(
     body: &str,
     unnamed: &HashSet<(i32, usize)>,
+    consumed: &HashSet<i32>,
     receiver_only: &HashSet<i32>,
     refs: &RefResolver,
 ) -> String {
@@ -9433,9 +9536,31 @@ fn inline_unnamed_value_temporaries(
                 let (target, value) = slot_store(&lines[at])?;
                 is_decompiler_local(&target).then(|| (indent_of(&lines[at]), target, value))
             })?;
-            if !unnamed.contains(&slot_and_life(&name)?) || count_ident(body, &name) != 2 {
+            let key = slot_and_life(&name)?;
+            // A slot whose earlier lives were folded away carries ONE name in the text, and that
+            // name's life number cannot line up with the bytecode's. Where every object store to
+            // the slot is consumed where it is produced and the text holds no second life of it,
+            // the name belongs to that store and to nothing else.
+            // Ordered so the whole-body scan runs only on the rare path: one module is 24,000
+            // lines long and a per-line scan of it costs minutes.
+            let sole_life = || {
+                key.1 == 1 && consumed.contains(&key.0) && !body.contains(&format!("{name}_"))
+            };
+            if !unnamed.contains(&key) && !sole_life() {
+                inline_reject("not-unnamed", "", &name, &lines[at]);
                 return None;
             }
+            // The store may stand under a bare declaration hoisted above it, in which case the
+            // name is mentioned three times, not two. That declaration goes with the store.
+            let bare = match count_ident(body, &name) {
+                2 => None,
+                3 => Some(
+                    lines[..at]
+                        .iter()
+                        .rposition(|line| bare_declaration(line).is_some_and(|(_, n)| n == name))?,
+                ),
+                _ => return None,
+            };
             // The reader is not always the line below: several temporaries of ONE call stand in a
             // row, each holding an argument. Walk past those — anything else in between could
             // observe the value's computation moving, so refuse.
@@ -9484,8 +9609,12 @@ fn inline_unnamed_value_temporaries(
                     .to_owned();
                 // A NON-const method takes its receiver by non-const reference, so calling one on
                 // a temporary is the same refusal as passing one to a `T&` parameter.
+                let owned = bare.and_then(|_| declared_type(&lines, &name));
                 let head = lines[at_decl].trim().trim_end_matches(';');
-                let ty = head[..head.len().saturating_sub(name.len())].trim();
+                let ty = match owned.as_deref() {
+                    Some(ty) => ty,
+                    None => head[..head.len().saturating_sub(name.len())].trim(),
+                };
                 if ty.is_empty()
                     || refs.calls_non_const_method(super::structure::bare_type_name(ty), &method)
                 {
@@ -9503,18 +9632,23 @@ fn inline_unnamed_value_temporaries(
                     }
                 }
             }
-            let value = if init.contains(' ') && !(init.starts_with('(') && init.ends_with(')')) {
+            let value = if init.contains(' ') && !wraps_whole_expression(&init) {
                 format!("({init})")
             } else {
                 init.clone()
             };
             lines[reader] = rename_ident(consumer, &name, &value);
-            Some(())
+            Some(bare)
         })();
-        if folded.is_some() {
-            lines.remove(at);
-        } else {
-            at += 1;
+        match folded {
+            Some(bare) => {
+                lines.remove(at);
+                if let Some(bare) = bare {
+                    lines.remove(bare);
+                    at = at.saturating_sub(1);
+                }
+            }
+            None => at += 1,
         }
     }
     let mut text = lines.join("\n");

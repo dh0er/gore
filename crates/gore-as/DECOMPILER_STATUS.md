@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 99.03% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 99.05% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.03%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.05%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,594 functions (0.97%) recompile to bytecode that differs semantically.** A semantic
+**1,565 functions (0.95%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -559,6 +559,26 @@ above it, so nothing may be inserted between a closing brace and its `else`; the
 that with `Expected expression value / Instead found reserved keyword 'else'`, and it took a
 diagnostic-bearing attempt to see it, three prior attempts having died with no message at all.
 1,613 to 1,594.
+
+**A handle member's null is the compiler's, not the source's.** A `= nullptr` on a handle field
+is an assignment EXPRESSION: it pops its discarded result and it moves the member into the second
+init pass, behind every implicitly-defaulted one. The compiler's own zeroing does neither. Which
+one vanilla wrote is in the constructor's bytecode: `PshNull; PshVPtr w0; ADDSi wOFF,TID; REFCPY`
+with nothing behind it is the compiler's; a `PopPtr` behind it, or a store through the member's
+assignment operator, is the source's. Dropping every `= nullptr` without asking that question
+fixed 11 struct constructors and broke 11 class ones, so the witness is the whole lever.
+
+**A slot's earlier lives can be folded away, and then its name no longer counts.** The sets that
+say "vanilla never named this" are keyed by slot and life, but the pass that versions a reused
+slot works on the rendered text — so a life the structurer folded away shifts the text's numbers
+off the bytecode's, and a value vanilla never named kept its name. Two of those folds are now
+accounted for: a store consumed where it is produced, when NO other write touches the slot, and
+an alias built from a PARAMETER for an immediate null test. Both had to be bounded by measurement
+rather than by argument. Reading only the store called a `Cast<T>` destination a temporary — a
+cast writes its slot twice, `opCast` on one arm and `ClrVPtr` on the other — and dropping every
+compared alias inlined 19 casts into their own null tests.
+
+1,594 to 1,565.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
