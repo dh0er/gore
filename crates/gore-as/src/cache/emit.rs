@@ -8889,11 +8889,8 @@ fn merge_self_assignments(body: &str) -> String {
 fn slot_and_life(name: &str) -> Option<(i32, usize)> {
     let mut parts = name.strip_prefix("local_")?.split('_');
     let slot: i32 = parts.next()?.parse().ok()?;
-    // Admitting a LATER life — `local_8_2`, the second declaration the emitter made for a reused
-    // slot — crashes the game's compiler outright, with no diagnostic, for value and object
-    // temporaries alike. Measured twice; the mapping is right, the wider inlining is not.
     let life = match parts.next() {
-        Some(_) => return None,
+        Some(n) => n.parse().ok()?,
         None => 1,
     };
     (parts.next().is_none()).then_some((slot, life))

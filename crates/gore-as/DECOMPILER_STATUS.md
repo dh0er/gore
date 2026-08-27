@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,657 functions (1.01%) recompile to bytecode that differs semantically.** A semantic
+**1,648 functions (1.00%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -443,11 +443,10 @@ standing (the comparison fold behind it would write `path != 0`, which this comp
 bool field) and an int-carrier comparison `(carrier != 0)`, which that same fold rewrites through
 the declaration this one would be consuming.
 
-Refused, measured: keying the temporary rules by the LIFE of a slot rather than the slot — the
-emitter numbers a reused slot's declarations `local_8`, `local_8_2`, in program order, so the
-mapping exists and would reach 95 more functions. It crashes the game's compiler outright, with no
-diagnostic, exactly like the default-argument pairing did. Both admissions widen what may be
-inlined; something in that wider set is more than the compiler can parse.
+Keying the temporary rules by the LIFE of a slot — the emitter numbers a reused slot's
+declarations `local_8`, `local_8_2`, in program order — was recorded here as a refusal on the
+strength of two runs that died without a diagnostic. It is not one: on the third attempt the same
+tree compiled and measured nine functions better. The lesson is the method, not the rule.
 
 1,743 to 1,720, compile clean, no alignment loss.
 
