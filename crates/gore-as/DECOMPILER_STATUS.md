@@ -507,6 +507,13 @@ drawn from too few runs and should be re-tested the same way.
 
 1,670 to 1,657, compile clean, no alignment loss.
 
+The default-argument pairing was re-tested the same way and this one IS refused, for a reason the
+earlier note did not have: admitting those slots makes the argument-temporary pass spell out
+`FInGameTime()` in the very positions the default-argument pass had just dropped, and one of them
+is an `&inout` parameter — a temporary bound to a non-const reference, which this compiler will
+not take. Four runs, no diagnostic, and the diff says why. The two passes work against each other
+there; the drop is the one that pays.
+
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
 vanilla holds, where the largest finite float came back one ULP low every time. The belief that
