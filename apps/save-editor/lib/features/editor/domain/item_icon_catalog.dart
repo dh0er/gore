@@ -129,6 +129,7 @@ final _itemIconCatalogRetentionProvider = Provider(
 
 class _ItemIconCatalogRetention {
   ItemIconCatalog? value;
+  int requestSequence = 0;
 }
 
 /// Ensures the complete bundled item set is cached, then reads its small
@@ -136,6 +137,7 @@ class _ItemIconCatalogRetention {
 final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
   ref.watch(itemIconCatalogReloadProvider);
   final retention = ref.read(_itemIconCatalogRetentionProvider);
+  final requestSequence = ++retention.requestSequence;
   ItemIconCatalog retainedOrEmpty() =>
       retention.value ?? const ItemIconCatalog.empty();
   final core = ref.watch(itemIconCoreServiceProvider);
@@ -169,14 +171,20 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
       manifestPath: manifestPath,
       json: await file.readAsString(),
     );
+    if (requestSequence != retention.requestSequence) {
+      await _releaseItemIconCatalog(core, catalog.manifestPath);
+      return retainedOrEmpty();
+    }
     final previousManifestPath = retention.value?.manifestPath;
     retention.value = catalog;
     if (previousManifestPath != null &&
-        previousManifestPath.isNotEmpty &&
-        previousManifestPath != catalog.manifestPath) {
+        previousManifestPath.isNotEmpty) {
       // Publish the new catalog first. Widgets can still paint the retained
       // AsyncData for the rest of this event turn, so release its native lease
       // on the next turn rather than opening a deletion race with that paint.
+      // Native leases are reference-counted, so overlapping A -> B -> A loads
+      // remain safe regardless of request completion order. A same-generation
+      // reload also releases the redundant claim acquired by preparation.
       unawaited(
         Future<void>.delayed(
           Duration.zero,
@@ -186,9 +194,7 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
     }
     return catalog;
   } catch (_) {
-    final retainedManifestPath = retention.value?.manifestPath;
-    if (preparedManifestPath != null &&
-        preparedManifestPath != retainedManifestPath) {
+    if (preparedManifestPath != null) {
       await _releaseItemIconCatalog(core, preparedManifestPath);
     }
     // Images are enhancement-only. Every caller has a category-icon fallback,

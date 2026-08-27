@@ -38,7 +38,8 @@ const MAX_CACHE_DECODED_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_RETAINED_GENERATIONS: usize = 2;
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static LEASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-static GENERATION_LEASES: OnceLock<Mutex<BTreeMap<PathBuf, GenerationLease>>> = OnceLock::new();
+static GENERATION_LEASES: OnceLock<Mutex<BTreeMap<PathBuf, RetainedGenerationLease>>> =
+    OnceLock::new();
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ItemIconSpec {
@@ -109,7 +110,15 @@ pub fn release_item_icon_cache(manifest_path: &Path) -> Result<bool> {
     let mut leases = leases
         .lock()
         .map_err(|_| invalid_data("item icon cache lease registry is poisoned"))?;
-    Ok(leases.remove(generation).is_some())
+    let Some(retained) = leases.get_mut(generation) else {
+        return Ok(false);
+    };
+    if retained.references > 1 {
+        retained.references -= 1;
+    } else {
+        leases.remove(generation);
+    }
+    Ok(true)
 }
 
 struct PreparedCatalog {
@@ -894,6 +903,11 @@ struct GenerationLease {
     _file: File,
 }
 
+struct RetainedGenerationLease {
+    _lease: GenerationLease,
+    references: usize,
+}
+
 impl GenerationLease {
     fn acquire(cache_root: &Path, generation: &Path) -> Result<Self> {
         let generation_name = owned_generation_name(cache_root, generation)?;
@@ -934,11 +948,21 @@ fn retain_generation_lease(cache_root: &Path, generation: &Path) -> Result<()> {
     let mut leases = leases
         .lock()
         .map_err(|_| invalid_data("item icon cache lease registry is poisoned"))?;
-    if leases.contains_key(generation) {
+    if let Some(retained) = leases.get_mut(generation) {
+        retained.references = retained
+            .references
+            .checked_add(1)
+            .ok_or_else(|| invalid_data("item icon cache lease reference count overflow"))?;
         return Ok(());
     }
     let lease = GenerationLease::acquire(cache_root, generation)?;
-    leases.insert(generation.to_path_buf(), lease);
+    leases.insert(
+        generation.to_path_buf(),
+        RetainedGenerationLease {
+            _lease: lease,
+            references: 1,
+        },
+    );
     Ok(())
 }
 
@@ -1374,7 +1398,7 @@ fn generation_has_live_lease(cache_root: &Path, generation_name: &str) -> bool {
 }
 
 fn lease_registry_contains(
-    leases: &Mutex<BTreeMap<PathBuf, GenerationLease>>,
+    leases: &Mutex<BTreeMap<PathBuf, RetainedGenerationLease>>,
     generation: &Path,
 ) -> bool {
     match leases.lock() {
@@ -1903,6 +1927,29 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         assert!(release_item_icon_cache(&temp.path().join("image.png")).is_err());
         assert!(!release_item_icon_cache(&temp.path().join(MANIFEST_FILE_NAME)).unwrap());
+    }
+
+    #[test]
+    fn repeated_preparations_require_matching_lease_releases() {
+        let temp = tempfile::tempdir().unwrap();
+        let catalog = PreparedCatalog::from_specs(&specs()).unwrap();
+        let generation = generation_directory(temp.path(), "build-a", &catalog.digest);
+        std::fs::create_dir(&generation).unwrap();
+        retain_generation_lease(temp.path(), &generation).unwrap();
+        retain_generation_lease(temp.path(), &generation).unwrap();
+        let manifest = generation.join(MANIFEST_FILE_NAME);
+
+        assert!(release_item_icon_cache(&manifest).unwrap());
+        assert!(lease_registry_contains(
+            GENERATION_LEASES.get().unwrap(),
+            &generation,
+        ));
+        assert!(release_item_icon_cache(&manifest).unwrap());
+        assert!(!lease_registry_contains(
+            GENERATION_LEASES.get().unwrap(),
+            &generation,
+        ));
+        assert!(!release_item_icon_cache(&manifest).unwrap());
     }
 
     #[test]

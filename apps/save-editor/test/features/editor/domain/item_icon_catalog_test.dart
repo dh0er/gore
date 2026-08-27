@@ -194,6 +194,90 @@ void main() {
     ]);
     expect(core.payloads.last, {'manifestPath': firstManifest.path});
   });
+
+  test('same-generation reload releases its redundant lease claim', () async {
+    final root = Directory.systemTemp.createTempSync('gore_item_icons_repeat');
+    addTearDown(() => root.deleteSync(recursive: true));
+    final manifest = File(p.join(root.path, 'manifest.json'))
+      ..writeAsStringSync(
+        jsonEncode({
+          'schema': 1,
+          'buildId': 'generation-a',
+          'itemCount': 1,
+          'items': {'ItFo_Apple': 'ItFo_Apple.png'},
+        }),
+      );
+    final core = _ReplacingItemIconCore([manifest.path, manifest.path]);
+    final container = ProviderContainer(
+      overrides: [itemIconCoreServiceProvider.overrideWithValue(core)],
+    );
+    addTearDown(container.dispose);
+    final sub = container.listen(itemIconCatalogProvider, (_, _) {});
+    addTearDown(sub.close);
+
+    await container.read(itemIconCatalogProvider.future);
+    container.read(itemIconCatalogReloadProvider.notifier).state++;
+    await container.read(itemIconCatalogProvider.future);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(core.commands.last, 'item_icons_release');
+    expect(core.payloads.last, {'manifestPath': manifest.path});
+  });
+
+  test('an obsolete load cannot replace the latest retained catalog', () async {
+    final root = Directory.systemTemp.createTempSync('gore_item_icons_overlap');
+    addTearDown(() => root.deleteSync(recursive: true));
+    File manifest(String generation) =>
+        File(p.join(root.path, generation, 'manifest.json'))
+          ..createSync(recursive: true)
+          ..writeAsStringSync(
+            jsonEncode({
+              'schema': 1,
+              'buildId': generation,
+              'itemCount': 1,
+              'items': {'ItFo_Apple': 'ItFo_Apple.png'},
+            }),
+          );
+    final firstManifest = manifest('generation-a');
+    final secondManifest = manifest('generation-b');
+    final core = _OverlappingItemIconCore();
+    final container = ProviderContainer(
+      overrides: [itemIconCoreServiceProvider.overrideWithValue(core)],
+    );
+    addTearDown(container.dispose);
+    final sub = container.listen(itemIconCatalogProvider, (_, _) {});
+    addTearDown(sub.close);
+
+    final firstLoad = container.read(itemIconCatalogProvider.future);
+    await Future<void>.delayed(Duration.zero);
+    container.read(itemIconCatalogReloadProvider.notifier).state++;
+    await Future<void>.delayed(Duration.zero);
+
+    core.prepares[1].complete({
+      'ok': true,
+      'data': {'manifestPath': secondManifest.path},
+    });
+    expect(
+      (await container.read(itemIconCatalogProvider.future)).buildId,
+      'generation-b',
+    );
+    core.prepares[0].complete({
+      'ok': true,
+      'data': {'manifestPath': firstManifest.path},
+    });
+    await firstLoad;
+
+    container.read(itemIconCatalogReloadProvider.notifier).state++;
+    await Future<void>.delayed(Duration.zero);
+    core.prepares[2].complete({
+      'ok': false,
+      'error': {'message': 'transient native failure'},
+    });
+    expect(
+      (await container.read(itemIconCatalogProvider.future)).buildId,
+      'generation-b',
+    );
+  });
 }
 
 class _ItemIconCore implements GoresaveCoreService {
@@ -283,5 +367,31 @@ class _ReplacingItemIconCore implements GoresaveCoreService {
       'ok': true,
       'data': {'released': true},
     };
+  }
+}
+
+class _OverlappingItemIconCore implements GoresaveCoreService {
+  final List<Completer<Map<String, Object?>>> prepares = [];
+
+  @override
+  String get description => 'overlapping-item-icon-test-core';
+
+  @override
+  bool get isAvailable => true;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) {
+    if (command == 'item_icons_release') {
+      return Future.value({
+        'ok': true,
+        'data': {'released': true},
+      });
+    }
+    final response = Completer<Map<String, Object?>>();
+    prepares.add(response);
+    return response.future;
   }
 }
