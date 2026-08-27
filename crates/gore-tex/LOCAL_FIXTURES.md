@@ -61,6 +61,7 @@ not source.
    game path when necessary:
 
    ```sh
+   mkdir -p work/tex-fixtures
    cp "<temp>/T_HardwareCursor.uasset" work/tex-fixtures/sample.uasset
    cp "<temp>/T_HardwareCursor.uexp" work/tex-fixtures/sample.uexp
    cp "<game>/G1R/Binaries/Win64/ue4ss/<mappings>.usmap" \
