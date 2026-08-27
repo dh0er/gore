@@ -991,6 +991,7 @@ class _StockRow extends ConsumerWidget {
           )
         : null;
     final icon = InventoryItemVisual(
+      key: ValueKey(('trader-item-image', map, item.path, item.id)),
       itemId: item.id,
       itemPath: item.path,
       fallbackIcon: item.isOre
