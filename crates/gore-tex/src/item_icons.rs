@@ -5,6 +5,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
 
 use image::{ImageDecoder as _, ImageEncoder as _};
@@ -36,6 +37,8 @@ const MAX_CACHE_PNG_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_CACHE_DECODED_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_RETAINED_GENERATIONS: usize = 2;
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static LEASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static GENERATION_LEASES: OnceLock<Mutex<BTreeMap<PathBuf, GenerationLease>>> = OnceLock::new();
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ItemIconSpec {
@@ -85,7 +88,7 @@ pub fn prepare_item_icon_cache(game_root: &Path, items: &[ItemIconSpec]) -> Resu
     std::fs::create_dir_all(&cache_root)?;
     let utoc = crate::paths::main_container(game_root)?;
     let mut source = InstalledItemIconSource::open(&utoc, &cache_root)?;
-    prepare_item_icon_cache_with_source(&cache_root, items, &mut source)
+    prepare_item_icon_cache_with_source_and_lease(&cache_root, items, &mut source, true)
 }
 
 struct PreparedCatalog {
@@ -338,10 +341,20 @@ fn bounded_decoded_byte_length(width: u32, height: u32) -> Option<u64> {
         .filter(|bytes| *bytes <= MAX_DECODED_ICON_BYTES)
 }
 
+#[cfg(test)]
 fn prepare_item_icon_cache_with_source(
     cache_root: &Path,
     items: &[ItemIconSpec],
     source: &mut dyn ItemIconSource,
+) -> Result<PathBuf> {
+    prepare_item_icon_cache_with_source_and_lease(cache_root, items, source, false)
+}
+
+fn prepare_item_icon_cache_with_source_and_lease(
+    cache_root: &Path,
+    items: &[ItemIconSpec],
+    source: &mut dyn ItemIconSource,
+    retain_lease: bool,
 ) -> Result<PathBuf> {
     let catalog = PreparedCatalog::from_specs(items)?;
     let build_id_before = source.current_build_id()?;
@@ -365,12 +378,13 @@ fn prepare_item_icon_cache_with_source(
         if build_id_after != build_id_before {
             return Err(TexError::GenerationChanged);
         }
-        return Ok(finish_prepared_cache(
+        return finish_prepared_cache(
             cache_root,
             &final_directory,
             manifest_path,
             generation_lock,
-        ));
+            retain_lease,
+        );
     }
     match std::fs::symlink_metadata(&final_directory) {
         Ok(_) => {
@@ -425,23 +439,25 @@ fn prepare_item_icon_cache_with_source(
     match std::fs::rename(staging.path(), &final_directory) {
         Ok(()) => {
             staging.disarm();
-            Ok(finish_prepared_cache(
+            finish_prepared_cache(
                 cache_root,
                 &final_directory,
                 manifest_path,
                 generation_lock,
-            ))
+                retain_lease,
+            )
         }
         Err(publication_error) => {
             // Another process may have won the same immutable generation race.
             // Accept it only after validating the complete byte contract.
             if complete_cache_matches(&final_directory, &expected)? {
-                Ok(finish_prepared_cache(
+                finish_prepared_cache(
                     cache_root,
                     &final_directory,
                     manifest_path,
                     generation_lock,
-                ))
+                    retain_lease,
+                )
             } else {
                 Err(publication_error.into())
             }
@@ -454,12 +470,16 @@ fn finish_prepared_cache(
     current_generation: &Path,
     manifest_path: PathBuf,
     generation_lock: GenerationLock,
-) -> PathBuf {
+    retain_lease: bool,
+) -> Result<PathBuf> {
+    if retain_lease {
+        retain_generation_lease(cache_root, current_generation)?;
+    }
     drop(generation_lock);
     // Cleanup is deliberately best-effort: a ready current cache remains
     // usable even when an older generation is temporarily busy or protected.
     prune_obsolete_item_icon_cache(cache_root, current_generation);
-    manifest_path
+    Ok(manifest_path)
 }
 
 fn validate_build_id(build_id: &str) -> Result<()> {
@@ -849,6 +869,58 @@ impl GenerationLock {
     }
 }
 
+struct GenerationLease {
+    _file: File,
+}
+
+impl GenerationLease {
+    fn acquire(cache_root: &Path, generation: &Path) -> Result<Self> {
+        let generation_name = owned_generation_name(cache_root, generation)?;
+        for _ in 0..128 {
+            let sequence = LEASE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let timestamp = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let path = cache_root.join(format!(
+                ".{generation_name}.lease-{}-{}",
+                std::process::id(),
+                timestamp.saturating_add(u128::from(sequence))
+            ));
+            let file = match create_generation_lease_file(&path) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.into()),
+            };
+            let held_identity = generation_lock_identity(&file)?;
+            lock_generation_file(&file)?;
+            let named = open_generation_lock(&path, false)?;
+            if generation_lock_identity(&named)? != held_identity {
+                return Err(invalid_data(
+                    "item icon cache lease changed while acquiring it",
+                ));
+            }
+            return Ok(Self { _file: file });
+        }
+        Err(invalid_data(
+            "could not allocate an item icon cache generation lease",
+        ))
+    }
+}
+
+fn retain_generation_lease(cache_root: &Path, generation: &Path) -> Result<()> {
+    let leases = GENERATION_LEASES.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut leases = leases
+        .lock()
+        .map_err(|_| invalid_data("item icon cache lease registry is poisoned"))?;
+    if leases.contains_key(generation) {
+        return Ok(());
+    }
+    let lease = GenerationLease::acquire(cache_root, generation)?;
+    leases.insert(generation.to_path_buf(), lease);
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct GenerationLockIdentity {
     volume_or_device: u64,
@@ -869,6 +941,19 @@ fn open_generation_lock(path: &Path, create: bool) -> std::io::Result<File> {
     options.open(path)
 }
 
+#[cfg(windows)]
+fn create_generation_lease_file(path: &Path) -> std::io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
 #[cfg(unix)]
 fn open_generation_lock(path: &Path, create: bool) -> std::io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt as _;
@@ -882,12 +967,33 @@ fn open_generation_lock(path: &Path, create: bool) -> std::io::Result<File> {
     options.open(path)
 }
 
+#[cfg(unix)]
+fn create_generation_lease_file(path: &Path) -> std::io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+}
+
 #[cfg(not(any(windows, unix)))]
 fn open_generation_lock(path: &Path, create: bool) -> std::io::Result<File> {
     OpenOptions::new()
         .read(true)
         .write(true)
         .create(create)
+        .open(path)
+}
+
+#[cfg(not(any(windows, unix)))]
+fn create_generation_lease_file(path: &Path) -> std::io::Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
         .open(path)
 }
 
@@ -1082,6 +1188,22 @@ fn owned_auxiliary_directory_generation_name(name: &str) -> Option<&str> {
     None
 }
 
+fn owned_lease_generation_name(name: &str) -> Option<&str> {
+    let name = name.strip_prefix('.')?;
+    let (generation, suffix) = name.split_once(".lease-")?;
+    let (pid, nonce) = suffix.split_once('-')?;
+    if is_owned_generation_name(generation)
+        && !pid.is_empty()
+        && !nonce.is_empty()
+        && pid.bytes().all(|byte| byte.is_ascii_digit())
+        && nonce.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        Some(generation)
+    } else {
+        None
+    }
+}
+
 /// Keep the current complete cache and one recent fallback. Every cleanup
 /// target must use this module's exact grammar; published directories are
 /// deleted only after their complete manifest and PNG seals validate again
@@ -1125,7 +1247,9 @@ fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) 
                     path,
                 ));
             }
-        } else if let Some(generation) = owned_auxiliary_directory_generation_name(name) {
+        } else if let Some(generation) = owned_auxiliary_directory_generation_name(name)
+            .or_else(|| owned_lease_generation_name(name))
+        {
             owned_names.insert(generation.to_string());
         }
     }
@@ -1152,6 +1276,10 @@ fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) 
         let Ok(Some(lock)) = GenerationLock::try_acquire(cache_root, &generation) else {
             continue;
         };
+        if generation_has_live_lease(cache_root, &name) {
+            drop(lock);
+            continue;
+        }
         remove_owned_auxiliary_directories(cache_root, &name);
 
         if let Some(expected_modified) = prunable.get(&name) {
@@ -1171,6 +1299,50 @@ fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) 
 
         drop(lock);
     }
+}
+
+/// Check unique per-process lease sentinels while the generation lock is held.
+/// A busy sentinel protects a live catalog. An unlocked sentinel belongs to a
+/// terminated process and can be removed because consumers always create a new
+/// unique lease rather than reopening an existing one.
+fn generation_has_live_lease(cache_root: &Path, generation_name: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(cache_root) else {
+        return true;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name.to_str().and_then(owned_lease_generation_name) != Some(generation_name) {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            return true;
+        };
+        if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+            return true;
+        }
+        let Ok(file) = open_generation_lock(&path, false) else {
+            return true;
+        };
+        let Ok(identity) = generation_lock_identity(&file) else {
+            return true;
+        };
+        match try_lock_generation_file(&file) {
+            Ok(false) => return true,
+            Err(_) => return true,
+            Ok(true) => {}
+        }
+        let Ok(named) = open_generation_lock(&path, false) else {
+            return true;
+        };
+        if generation_lock_identity(&named).ok() != Some(identity) {
+            return true;
+        }
+        drop(named);
+        drop(file);
+        let _ = std::fs::remove_file(path);
+    }
+    false
 }
 
 fn remove_owned_auxiliary_directories(cache_root: &Path, generation_name: &str) {
@@ -1617,6 +1789,63 @@ mod tests {
                 .join(format!(".{generation_name}.lock"))
                 .is_file());
         }
+    }
+
+    #[test]
+    fn a_live_catalog_lease_preserves_an_obsolete_generation_until_exit() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut first = FakeSource::stable("build-a");
+        let first_directory =
+            prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut first)
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_path_buf();
+        let mut second = FakeSource::stable("build-b");
+        let second_directory =
+            prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut second)
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_path_buf();
+
+        let order_key = |path: &Path| {
+            (
+                std::fs::metadata(path)
+                    .unwrap()
+                    .modified()
+                    .unwrap_or(SystemTime::UNIX_EPOCH),
+                path.file_name().unwrap().to_os_string(),
+            )
+        };
+        let leased_directory = if order_key(&first_directory) < order_key(&second_directory) {
+            first_directory
+        } else {
+            second_directory
+        };
+        let lease = GenerationLease::acquire(temp.path(), &leased_directory).unwrap();
+
+        let mut third = FakeSource::stable("build-c");
+        let current = prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut third)
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        assert!(leased_directory.exists());
+
+        drop(lease);
+        prune_obsolete_item_icon_cache(temp.path(), &current);
+        assert!(!leased_directory.exists());
+        assert!(std::fs::read_dir(temp.path())
+            .unwrap()
+            .flatten()
+            .all(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .and_then(owned_lease_generation_name)
+                    .is_none()
+            }));
     }
 
     #[test]
