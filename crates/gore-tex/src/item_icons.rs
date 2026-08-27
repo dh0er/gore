@@ -746,7 +746,6 @@ fn inspect_cached_png(path: &Path, expected_len: u64) -> Result<Option<ItemIconF
 
 struct GenerationLock {
     _file: File,
-    identity: GenerationLockIdentity,
 }
 
 impl GenerationLock {
@@ -766,14 +765,7 @@ impl GenerationLock {
                 "item icon cache lock changed while acquiring it",
             ));
         }
-        Ok(Self {
-            _file: file,
-            identity: held_identity,
-        })
-    }
-
-    fn identity(&self) -> GenerationLockIdentity {
-        self.identity
+        Ok(Self { _file: file })
     }
 }
 
@@ -954,12 +946,6 @@ fn owned_auxiliary_directory_generation_name(name: &str) -> Option<&str> {
     None
 }
 
-fn owned_lock_generation_name(name: &str) -> Option<&str> {
-    name.strip_prefix('.')
-        .and_then(|name| name.strip_suffix(".lock"))
-        .filter(|name| is_owned_generation_name(name))
-}
-
 /// Keep the current complete cache and one recent fallback. Every cleanup
 /// target must use this module's exact grammar; published directories are
 /// deleted only after their complete manifest and PNG seals validate again
@@ -997,9 +983,7 @@ fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) 
                     path,
                 ));
             }
-        } else if let Some(generation) = owned_auxiliary_directory_generation_name(name)
-            .or_else(|| owned_lock_generation_name(name))
-        {
+        } else if let Some(generation) = owned_auxiliary_directory_generation_name(name) {
             owned_names.insert(generation.to_string());
         }
     }
@@ -1023,7 +1007,6 @@ fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) 
         let Ok(lock) = GenerationLock::acquire(cache_root, &generation) else {
             continue;
         };
-        let lock_identity = lock.identity();
         remove_owned_auxiliary_directories(cache_root, &name);
 
         if let Some(expected_modified) = prunable.get(&name) {
@@ -1042,12 +1025,6 @@ fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) 
         }
 
         drop(lock);
-        if !retained.contains(&name)
-            && std::fs::symlink_metadata(&generation).is_err()
-            && !has_owned_auxiliary_directories(cache_root, &name)
-        {
-            remove_generation_lock_if_unchanged(cache_root, &name, lock_identity);
-        }
     }
 }
 
@@ -1072,34 +1049,6 @@ fn remove_owned_auxiliary_directories(cache_root: &Path, generation_name: &str) 
             let _ = std::fs::remove_dir_all(path);
         }
     }
-}
-
-fn has_owned_auxiliary_directories(cache_root: &Path, generation_name: &str) -> bool {
-    std::fs::read_dir(cache_root).is_ok_and(|entries| {
-        entries.flatten().any(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .and_then(owned_auxiliary_directory_generation_name)
-                == Some(generation_name)
-        })
-    })
-}
-
-fn remove_generation_lock_if_unchanged(
-    cache_root: &Path,
-    generation_name: &str,
-    expected_identity: GenerationLockIdentity,
-) {
-    let lock_path = cache_root.join(format!(".{generation_name}.lock"));
-    let Ok(named) = open_generation_lock(&lock_path, false) else {
-        return;
-    };
-    if generation_lock_identity(&named).ok() != Some(expected_identity) {
-        return;
-    }
-    drop(named);
-    let _ = std::fs::remove_file(lock_path);
 }
 
 /// Preserve a broken cache for diagnostics/recovery, then free the exact
@@ -1445,7 +1394,7 @@ mod tests {
     }
 
     #[test]
-    fn obsolete_generations_auxiliary_directories_and_locks_are_pruned() {
+    fn obsolete_generations_and_auxiliary_directories_are_pruned_without_unlinking_locks() {
         let temp = tempfile::tempdir().unwrap();
         let mut first = FakeSource::stable("build-a");
         let first_manifest =
@@ -1506,18 +1455,12 @@ mod tests {
             }));
         assert!(unrelated.exists());
 
-        let lock_count = std::fs::read_dir(temp.path())
-            .unwrap()
-            .flatten()
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_str()
-                    .and_then(owned_lock_generation_name)
-                    .is_some()
-            })
-            .count();
-        assert!(lock_count <= MAX_RETAINED_COMPLETE_GENERATIONS);
+        for generation_name in [first_name, second_name] {
+            assert!(temp
+                .path()
+                .join(format!(".{generation_name}.lock"))
+                .is_file());
+        }
     }
 
     #[test]
