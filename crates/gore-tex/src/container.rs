@@ -318,8 +318,22 @@ impl Default for SnapshotMemoryLimits {
 /// Read-through IoStore snapshot. Every first read selects the exact composite
 /// winner, verifies its decompressed bytes against the TOC BLAKE3 chunk hash,
 /// and caches those bytes. All conversion re-reads then use the immutable cache.
+enum SnapshotStore<'a> {
+    Borrowed(&'a dyn iostore::IoStoreTrait),
+    Owned(Box<dyn iostore::IoStoreTrait>),
+}
+
+impl SnapshotStore<'_> {
+    fn as_ref(&self) -> &dyn iostore::IoStoreTrait {
+        match self {
+            Self::Borrowed(inner) => *inner,
+            Self::Owned(inner) => inner.as_ref(),
+        }
+    }
+}
+
 struct VerifiedSnapshotStore<'a> {
-    inner: &'a dyn iostore::IoStoreTrait,
+    inner: SnapshotStore<'a>,
     chunks: Mutex<std::collections::HashMap<FIoChunkId, CachedChunk>>,
     limits: SnapshotMemoryLimits,
 }
@@ -331,10 +345,14 @@ impl<'a> VerifiedSnapshotStore<'a> {
 
     fn with_limits(inner: &'a dyn iostore::IoStoreTrait, limits: SnapshotMemoryLimits) -> Self {
         Self {
-            inner,
+            inner: SnapshotStore::Borrowed(inner),
             chunks: Mutex::new(std::collections::HashMap::new()),
             limits,
         }
+    }
+
+    fn inner(&self) -> &dyn iostore::IoStoreTrait {
+        self.inner.as_ref()
     }
 
     fn receipts(&self) -> anyhow::Result<Vec<VerifiedChunkReceipt>> {
@@ -348,14 +366,15 @@ impl<'a> VerifiedSnapshotStore<'a> {
     }
 
     fn prime_container_metadata(&self) -> anyhow::Result<()> {
-        let header_ids: Vec<_> = if self.inner.opened_utoc_identity().is_some() {
-            self.inner
+        let inner = self.inner();
+        let header_ids: Vec<_> = if inner.opened_utoc_identity().is_some() {
+            inner
                 .chunks()
                 .filter(|chunk| chunk.id().get_chunk_type() == EIoChunkType::ContainerHeader)
                 .map(|chunk| chunk.id())
                 .collect()
         } else {
-            self.inner
+            inner
                 .child_containers()
                 .flat_map(|container| container.chunks())
                 .filter(|chunk| chunk.id().get_chunk_type() == EIoChunkType::ContainerHeader)
@@ -371,6 +390,25 @@ impl<'a> VerifiedSnapshotStore<'a> {
         Ok(())
     }
 
+    /// Drop package-specific bytes between members of a preview batch while
+    /// retaining the verified container headers and global script-object table.
+    /// Those shared metadata chunks are expensive to reread for every package,
+    /// whereas retaining hundreds of package exports/bulk chunks would turn the
+    /// per-preview memory limit into an unbounded batch cache.
+    fn retain_preview_batch_metadata(&self) -> anyhow::Result<()> {
+        let mut chunks = self
+            .chunks
+            .lock()
+            .map_err(|_| anyhow::anyhow!("verified chunk cache was poisoned"))?;
+        chunks.retain(|chunk_id, _| {
+            matches!(
+                chunk_id.get_chunk_type(),
+                EIoChunkType::ContainerHeader | EIoChunkType::ScriptObjects
+            )
+        });
+        Ok(())
+    }
+
     fn metadata_utoc_receipts(&self) -> anyhow::Result<Vec<VerifiedOpenedUtocReceipt>> {
         let mut receipts = Vec::new();
         let mut push_identity = |container: &dyn iostore::IoStoreTrait| -> anyhow::Result<()> {
@@ -383,10 +421,11 @@ impl<'a> VerifiedSnapshotStore<'a> {
             });
             Ok(())
         };
-        if self.inner.opened_utoc_identity().is_some() {
-            push_identity(self.inner)?;
+        let inner = self.inner();
+        if inner.opened_utoc_identity().is_some() {
+            push_identity(inner)?;
         } else {
-            for container in self.inner.child_containers() {
+            for container in inner.child_containers() {
                 push_identity(container)?;
             }
         }
@@ -409,7 +448,7 @@ impl<'a> VerifiedSnapshotStore<'a> {
 
     fn read_verified(&self, chunk_id: FIoChunkId) -> anyhow::Result<Vec<u8>> {
         let version = self
-            .inner
+            .inner()
             .container_file_version()
             .ok_or_else(|| anyhow::anyhow!("container has no TOC version"))?;
         let chunk_id = chunk_id.with_version(version);
@@ -424,7 +463,7 @@ impl<'a> VerifiedSnapshotStore<'a> {
         // `chunks()` applies the composite store's same first-winner precedence
         // as `read()`, but retains the concrete source container + TOC hash.
         let info = self
-            .inner
+            .inner()
             .chunks()
             .find(|info| info.id() == chunk_id)
             .ok_or_else(|| anyhow::anyhow!("{chunk_id:?} not found in composite IoStore"))?;
@@ -464,21 +503,34 @@ impl<'a> VerifiedSnapshotStore<'a> {
     }
 }
 
+impl VerifiedSnapshotStore<'static> {
+    fn with_owned_limits(
+        inner: Box<dyn iostore::IoStoreTrait>,
+        limits: SnapshotMemoryLimits,
+    ) -> Self {
+        Self {
+            inner: SnapshotStore::Owned(inner),
+            chunks: Mutex::new(std::collections::HashMap::new()),
+            limits,
+        }
+    }
+}
+
 impl iostore::IoStoreTrait for VerifiedSnapshotStore<'_> {
     fn container_name(&self) -> &str {
-        self.inner.container_name()
+        self.inner().container_name()
     }
 
     fn container_file_version(&self) -> Option<EIoStoreTocVersion> {
-        self.inner.container_file_version()
+        self.inner().container_file_version()
     }
 
     fn container_header_version(&self) -> Option<EIoContainerHeaderVersion> {
-        self.inner.container_header_version()
+        self.inner().container_header_version()
     }
 
     fn print_info(&self, depth: usize) {
-        self.inner.print_info(depth);
+        self.inner().print_info(depth);
     }
 
     fn read(&self, chunk_id: FIoChunkId) -> anyhow::Result<Vec<u8>> {
@@ -487,50 +539,50 @@ impl iostore::IoStoreTrait for VerifiedSnapshotStore<'_> {
 
     fn read_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> anyhow::Result<Vec<u8>> {
         let version = self
-            .inner
+            .inner()
             .container_file_version()
             .ok_or_else(|| anyhow::anyhow!("container has no TOC version"))?;
         self.read_verified(FIoChunkId::from_raw(chunk_id_raw, version))
     }
 
     fn has_chunk_id(&self, chunk_id: FIoChunkId) -> bool {
-        self.inner.has_chunk_id(chunk_id)
+        self.inner().has_chunk_id(chunk_id)
     }
 
     fn has_chunk_id_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> bool {
-        self.inner.has_chunk_id_raw(chunk_id_raw)
+        self.inner().has_chunk_id_raw(chunk_id_raw)
     }
 
     fn chunks(&self) -> Box<dyn Iterator<Item = iostore::ChunkInfo<'_>> + Send + '_> {
-        self.inner.chunks()
+        self.inner().chunks()
     }
 
     fn chunks_all(&self) -> Box<dyn Iterator<Item = iostore::ChunkInfo<'_>> + Send + '_> {
-        self.inner.chunks_all()
+        self.inner().chunks_all()
     }
 
     fn packages(&self) -> Box<dyn Iterator<Item = iostore::PackageInfo<'_>> + Send + '_> {
-        self.inner.packages()
+        self.inner().packages()
     }
 
     fn packages_all(&self) -> Box<dyn Iterator<Item = iostore::PackageInfo<'_>> + Send + '_> {
-        self.inner.packages_all()
+        self.inner().packages_all()
     }
 
     fn child_containers(&self) -> Box<dyn Iterator<Item = &dyn iostore::IoStoreTrait> + '_> {
-        self.inner.child_containers()
+        self.inner().child_containers()
     }
 
     fn chunk_path(&self, chunk_id: FIoChunkId) -> Option<String> {
-        self.inner.chunk_path(chunk_id)
+        self.inner().chunk_path(chunk_id)
     }
 
     fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntry> {
-        self.inner.package_store_entry(package_id)
+        self.inner().package_store_entry(package_id)
     }
 
     fn lookup_package_redirect(&self, source_package_id: FPackageId) -> Option<FPackageId> {
-        self.inner.lookup_package_redirect(source_package_id)
+        self.inner().lookup_package_redirect(source_package_id)
     }
 }
 
@@ -939,6 +991,10 @@ impl InstalledTextureComposite {
 
     pub(crate) fn store(&self) -> &dyn iostore::IoStoreTrait {
         self.store.as_ref()
+    }
+
+    fn into_store(self) -> Box<dyn iostore::IoStoreTrait> {
+        self.store
     }
 
     pub(crate) fn sources(&self) -> &[InstalledTextureSource] {
@@ -1706,6 +1762,64 @@ pub(crate) fn unpack_texture_preview_by_id_from_open_store(
     })
 }
 
+/// One exact-path texture-preview batch over a single already-open installed
+/// composite. Container headers are primed and verified exactly once. Shared
+/// script metadata remains cached, while target package/bulk chunks are dropped
+/// after each member so hundreds of item icons cannot accumulate in memory.
+pub(crate) struct OpenTexturePreviewBatch {
+    snapshot: VerifiedSnapshotStore<'static>,
+}
+
+impl OpenTexturePreviewBatch {
+    pub(crate) fn from_composite(composite: InstalledTextureComposite) -> Result<Self> {
+        let snapshot = VerifiedSnapshotStore::with_owned_limits(
+            composite.into_store(),
+            SnapshotMemoryLimits {
+                max_chunk_bytes: MAX_TEXTURE_PREVIEW_SNAPSHOT_CHUNK_BYTES,
+                max_total_bytes: MAX_TEXTURE_PREVIEW_SNAPSHOT_TOTAL_BYTES,
+            },
+        );
+        snapshot.prime_container_metadata()?;
+        Ok(Self { snapshot })
+    }
+
+    /// Exact-path counterpart to
+    /// [`unpack_texture_preview_by_id_from_open_store`]. The deserialized
+    /// virtual path is compared before conversion, allowing a caller to try one
+    /// explicitly-scoped spelling fallback only for a genuine `AssetNotFound`.
+    pub(crate) fn unpack(&self, asset_path: &str) -> Result<VerifiedUnpackedAssetBytes> {
+        let result = (|| {
+            let package_id = verified_package_id_in_snapshot(&self.snapshot, asset_path)?;
+            let leaf = asset_path.rsplit('/').next().unwrap_or(asset_path);
+            let converted = legacy_from_package_to_memory_with_limits(
+                &self.snapshot,
+                package_id,
+                leaf,
+                LegacyMemoryLimits {
+                    max_uasset_bytes: MAX_TEXTURE_PREVIEW_UASSET_BYTES,
+                    max_uexp_bytes: MAX_TEXTURE_PREVIEW_UEXP_BYTES,
+                    max_pair_bytes: MAX_TEXTURE_PREVIEW_PACKAGE_PAIR_BYTES,
+                    max_sidecar_bytes: MAX_TEXTURE_PREVIEW_SIDECAR_BYTES,
+                    max_total_bytes: MAX_TEXTURE_PREVIEW_LEGACY_TOTAL_BYTES,
+                },
+            )?;
+            Ok(VerifiedUnpackedAssetBytes {
+                uasset: converted.uasset,
+                uexp: converted.uexp,
+                sidecars: converted.sidecars,
+                consumed_chunks: self.snapshot.receipts()?,
+                metadata_utocs: self.snapshot.metadata_utoc_receipts()?,
+            })
+        })();
+
+        // Clear transient package bytes on success and every error path. A
+        // poisoned cache is a stronger failure than a decode error because this
+        // batch can no longer uphold its memory/generation contract.
+        self.snapshot.retain_preview_batch_metadata()?;
+        result
+    }
+}
+
 #[derive(Debug)]
 struct ReadbackSourceAuthority {
     primary: VerifiedOpenedUtocReceipt,
@@ -2177,9 +2291,24 @@ fn verified_package_snapshot<'a>(
     store: &'a dyn iostore::IoStoreTrait,
     asset_path: &str,
 ) -> Result<(VerifiedSnapshotStore<'a>, FPackageId)> {
-    let snapshot = VerifiedSnapshotStore::new(store);
-    snapshot.prime_container_metadata()?;
+    verified_package_snapshot_with_limits(store, asset_path, SnapshotMemoryLimits::default())
+}
 
+fn verified_package_snapshot_with_limits<'a>(
+    store: &'a dyn iostore::IoStoreTrait,
+    asset_path: &str,
+    limits: SnapshotMemoryLimits,
+) -> Result<(VerifiedSnapshotStore<'a>, FPackageId)> {
+    let snapshot = VerifiedSnapshotStore::with_limits(store, limits);
+    snapshot.prime_container_metadata()?;
+    let package_id = verified_package_id_in_snapshot(&snapshot, asset_path)?;
+    Ok((snapshot, package_id))
+}
+
+fn verified_package_id_in_snapshot(
+    snapshot: &VerifiedSnapshotStore<'_>,
+    asset_path: &str,
+) -> Result<FPackageId> {
     let container_version = snapshot
         .container_file_version()
         .ok_or_else(|| anyhow::anyhow!("container has no TOC version"))?;
@@ -2212,7 +2341,7 @@ fn verified_package_snapshot<'a>(
     if verified_name != asset_path {
         return Err(TexError::AssetNotFound(asset_path.into()));
     }
-    Ok((snapshot, package_id))
+    Ok(package_id)
 }
 
 /// Bind one virtual package to the concrete winning package/bulk chunks and all

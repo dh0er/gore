@@ -7,6 +7,7 @@ import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/item_categories.dart';
 import 'package:goresave/features/editor/domain/trader_models.dart';
 import 'package:goresave/features/editor/ui/add_inventory_item_dialog.dart';
+import 'package:goresave/features/editor/ui/inventory_item_visual.dart';
 import 'package:goresave/features/editor/ui/pending_structural_row.dart';
 import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/l10n/app_localizations.dart';
@@ -520,7 +521,12 @@ class _OreCard extends ConsumerWidget {
             return Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.savings_outlined, color: theme.colorScheme.primary),
+                InventoryItemVisual(
+                  itemId: 'ItMi_Orenugget',
+                  itemPath: kTraderOrePath,
+                  fallbackIcon: Icons.savings_outlined,
+                  fallbackColor: theme.colorScheme.primary,
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: stacked
@@ -984,9 +990,14 @@ class _StockRow extends ConsumerWidget {
             onPressed: onRemove,
           )
         : null;
-    final icon = item.isOre
-        ? Icon(Icons.savings_outlined, color: theme.colorScheme.primary)
-        : const Icon(Icons.inventory_2_outlined);
+    final icon = InventoryItemVisual(
+      itemId: item.id,
+      itemPath: item.path,
+      fallbackIcon: item.isOre
+          ? Icons.savings_outlined
+          : Icons.inventory_2_outlined,
+      fallbackColor: item.isOre ? theme.colorScheme.primary : null,
+    );
     final text = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,

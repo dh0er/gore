@@ -15,7 +15,7 @@
 4. Verify that search filtering still works across categories.
 5. Click the **"Add item"** button.
 6. In the item picker, search for an item not currently in the save (e.g., `ItMi_Sulfur`).
-7. Confirm the search returns results from the bundled catalog (798 total Gothic 1 Remake item IDs).
+7. Confirm the search returns results from the bundled catalog (831 total Gothic 1 Remake item IDs).
 8. Set the item count to `7`.
 9. Click **Add** to add the item to the inventory.
 10. Click **Save** to write the changes to the save file (backup is created automatically).
@@ -40,5 +40,5 @@
 ### Implementation Details
 
 - **Core operation**: `private.inventory.addItem` handles adding items with full payload validation before any write.
-- **Bundled catalog**: Generated from UE4SS object dump via `tools/build_item_catalog.py` (798 items).
+- **Bundled catalog**: Generated from the UE4SS object dump via `gore catalog --kind item` (831 items).
 - **Safety**: All inventory edits go through the standard backup-and-validate workflow; saves are rejected if validation fails.

@@ -12,10 +12,12 @@ import 'package:goresave/features/app/ui/window_chrome.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/game_time.dart';
+import 'package:goresave/features/editor/domain/item_icon_catalog.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/ui/characters_tab.dart';
 import 'package:goresave/features/editor/ui/profile_localization.dart';
 import 'package:goresave/features/editor/ui/slot_repair_banner.dart';
+import 'package:goresave/features/editor/ui/title_preparation_progress.dart';
 import 'package:goresave/features/localization/domain/localization_controller.dart';
 import 'package:goresave/features/localization/ui/localization_flow.dart';
 import 'package:goresave/features/localization/ui/localization_settings.dart';
@@ -64,6 +66,7 @@ class _EditorPageState extends ConsumerState<EditorPage>
     // item/NPC names pick up a catalog that appeared after first load.
     if (state == AppLifecycleState.resumed) {
       ref.read(locCatalogReloadProvider.notifier).state++;
+      ref.read(itemIconCatalogReloadProvider.notifier).state++;
     }
   }
 
@@ -148,7 +151,14 @@ class _EditorPageState extends ConsumerState<EditorPage>
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              const Expanded(child: SizedBox()),
+              const SizedBox(width: 16),
+              const Expanded(
+                flex: 2,
+                child: Align(
+                  alignment: Alignment.center,
+                  child: TitlePreparationProgress(),
+                ),
+              ),
             ],
           ),
         ),

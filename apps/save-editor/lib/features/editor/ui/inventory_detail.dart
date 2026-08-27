@@ -14,6 +14,7 @@ import 'package:goresave/loc/loc_catalog_provider.dart';
 
 import '../domain/editor_notifier.dart';
 import 'add_inventory_item_dialog.dart';
+import 'inventory_item_visual.dart';
 
 /// Resolves an inventory [PrivateInventorySummary] into the editable /
 /// addable / removable gates the card consumes. [typedVerified] and
@@ -1124,11 +1125,32 @@ class _PrivateInventorySummaryCardState
                                                             horizontal: 8,
                                                           ),
                                                       horizontalTitleGap: 8,
-                                                      leading: compactBrowser
+                                                      leading:
+                                                          ultraCompactBrowser
                                                           ? null
-                                                          : const Icon(
-                                                              Icons
-                                                                  .category_outlined,
+                                                          : InventoryItemVisual(
+                                                              key: ValueKey((
+                                                                'inventory-item-image',
+                                                                _inventoryItemKey(
+                                                                  item,
+                                                                ),
+                                                              )),
+                                                              itemId: item.id,
+                                                              itemPath:
+                                                                  item.path,
+                                                              fallbackIcon: iconForItemCategory(
+                                                                itemCategoryFromId(
+                                                                  item.id.isEmpty
+                                                                      ? _itemDisplayFromPath(
+                                                                          item.path,
+                                                                        )
+                                                                      : item.id,
+                                                                ),
+                                                              ),
+                                                              size:
+                                                                  compactBrowser
+                                                                  ? 32
+                                                                  : 40,
                                                             ),
                                                       title: Column(
                                                         crossAxisAlignment:
@@ -1137,6 +1159,33 @@ class _PrivateInventorySummaryCardState
                                                         children: [
                                                           Row(
                                                             children: [
+                                                              if (ultraCompactBrowser) ...[
+                                                                InventoryItemVisual(
+                                                                  key: ValueKey((
+                                                                    'inventory-item-image-compact',
+                                                                    _inventoryItemKey(
+                                                                      item,
+                                                                    ),
+                                                                  )),
+                                                                  itemId:
+                                                                      item.id,
+                                                                  itemPath:
+                                                                      item.path,
+                                                                  fallbackIcon: iconForItemCategory(
+                                                                    itemCategoryFromId(
+                                                                      item.id.isEmpty
+                                                                          ? _itemDisplayFromPath(
+                                                                              item.path,
+                                                                            )
+                                                                          : item.id,
+                                                                    ),
+                                                                  ),
+                                                                  size: 24,
+                                                                ),
+                                                                const SizedBox(
+                                                                  width: 4,
+                                                                ),
+                                                              ],
                                                               Flexible(
                                                                 child: Text(
                                                                   nameOf(item),
@@ -1146,8 +1195,8 @@ class _PrivateInventorySummaryCardState
                                                                           .ellipsis,
                                                                 ),
                                                               ),
-                                                              if (item
-                                                                  .equipped) ...[
+                                                              if (item.equipped &&
+                                                                  !ultraCompactBrowser) ...[
                                                                 const SizedBox(
                                                                   width: 8,
                                                                 ),
@@ -1183,6 +1232,45 @@ class _PrivateInventorySummaryCardState
                                                               ],
                                                             ],
                                                           ),
+                                                          if (ultraCompactBrowser &&
+                                                              item.equipped)
+                                                            Align(
+                                                              alignment: Alignment
+                                                                  .centerLeft,
+                                                              child: Container(
+                                                                margin:
+                                                                    const EdgeInsets.only(
+                                                                      top: 4,
+                                                                    ),
+                                                                padding:
+                                                                    const EdgeInsets.symmetric(
+                                                                      horizontal:
+                                                                          6,
+                                                                      vertical:
+                                                                          2,
+                                                                    ),
+                                                                decoration: BoxDecoration(
+                                                                  color: theme
+                                                                      .colorScheme
+                                                                      .primaryContainer,
+                                                                  borderRadius:
+                                                                      BorderRadius.circular(
+                                                                        4,
+                                                                      ),
+                                                                ),
+                                                                child: Text(
+                                                                  l10n.equippedBadge,
+                                                                  style: theme
+                                                                      .textTheme
+                                                                      .labelSmall
+                                                                      ?.copyWith(
+                                                                        color: theme
+                                                                            .colorScheme
+                                                                            .onPrimaryContainer,
+                                                                      ),
+                                                                ),
+                                                              ),
+                                                            ),
                                                           if (ultraCompactBrowser)
                                                             Padding(
                                                               padding:

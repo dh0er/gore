@@ -6,6 +6,14 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.2] - 2026-08-27
+
+### Added
+
+- Inventory and trader items now show their original in-game images, extracted
+  and cached from the user's own game installation; the add-item catalog shows
+  them too.
+
 ## [1.3.1] - 2026-08-26
 
 ### Changed

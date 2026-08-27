@@ -1509,6 +1509,18 @@ class AppLocalizationsEn extends AppLocalizations {
   String get gameTextTitle => 'Game text';
 
   @override
+  String get itemImagesTitle => 'Item images';
+
+  @override
+  String get loadingTexts => 'Loading texts…';
+
+  @override
+  String get loadingImages => 'Loading images…';
+
+  @override
+  String get preparing => 'Preparing…';
+
+  @override
   String gameTextExtractedWithCounts(int ids, int languages) {
     return 'Extracted: $ids ids across $languages languages.';
   }

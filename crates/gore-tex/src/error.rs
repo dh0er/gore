@@ -16,6 +16,10 @@ pub enum TexError {
     EncodeFailed(String),
     #[error("virtual textures are not supported in v1: {0}")]
     VirtualTexture(String),
+    #[error("installed texture generation changed while preparing item icons")]
+    GenerationChanged,
+    #[error("PNG encode failed: {0}")]
+    PngEncode(String),
     #[error("deploy record not found: {0}")]
     DeployRecordNotFound(PathBuf),
     #[error("io error: {0}")]

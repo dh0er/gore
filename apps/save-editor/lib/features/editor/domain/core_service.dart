@@ -25,9 +25,9 @@ abstract class GoresaveCoreService {
 class NativeGoresaveCoreService implements GoresaveCoreService {
   NativeGoresaveCoreService._(this.description);
 
-  /// Test-only: build a service pointed at a given library path without probing
-  /// it, so worker-failure/recovery behaviour can be exercised with an
-  /// unloadable path. Not used in production (see [tryCreate]).
+  /// Build a service pointed at a known library path without probing it. Used
+  /// both by tests and by independent production workers for long-running jobs
+  /// that must not queue ordinary save requests behind them.
   NativeGoresaveCoreService.withLibraryPath(this.description);
 
   static NativeGoresaveCoreService? tryCreate() {

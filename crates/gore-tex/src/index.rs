@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -189,12 +189,81 @@ pub fn build_id_for(utoc: &Path, usmap: &Path) -> Result<String> {
 
 fn build_id_for_in_cache_dir(utoc: &Path, usmap: &Path, cache_directory: &Path) -> Result<String> {
     let composite = crate::container::InstalledTextureComposite::open(utoc)?;
-    let sources = open_source_files(&composite, usmap)?;
-    fingerprint_open_sources(sources, cache_directory)
+    let mut sources = open_source_files(&composite, usmap)?;
+    fingerprint_open_sources(&mut sources, cache_directory)
+}
+
+/// One captured installed-texture generation whose source files stay open for
+/// an entire batch. This lets batch consumers load the mapping once and verify
+/// the same build before publication without reopening the IoStore composite.
+pub(crate) struct OpenTextureGeneration {
+    sources: Vec<OpenSourceFile>,
+    build_id: String,
+    cache_directory: PathBuf,
+}
+
+impl OpenTextureGeneration {
+    pub(crate) fn capture(
+        composite: &crate::container::InstalledTextureComposite,
+        usmap: &Path,
+        cache_directory: &Path,
+    ) -> Result<Self> {
+        let mut sources = open_source_files(composite, usmap)?;
+        let build_id = fingerprint_open_sources(&mut sources, cache_directory)?;
+        Ok(Self {
+            sources,
+            build_id,
+            cache_directory: cache_directory.to_path_buf(),
+        })
+    }
+
+    pub(crate) fn captured_build_id(&self) -> &str {
+        &self.build_id
+    }
+
+    /// Read the captured mapping through its already-open handle. The mapping
+    /// is always source zero (see `open_source_files`) and is read at most once
+    /// by the item-icon batch owner.
+    pub(crate) fn read_mapping_bounded(&mut self, maximum_bytes: u64) -> Result<Vec<u8>> {
+        let source = self
+            .sources
+            .first_mut()
+            .ok_or_else(|| invalid_data("texture generation has no mapping source"))?;
+        if source.identity.byte_len > maximum_bytes {
+            return Err(invalid_data(
+                "texture preview mapping is not a bounded regular file",
+            ));
+        }
+        let expected = usize::try_from(source.identity.byte_len)
+            .map_err(|_| invalid_data("texture preview mapping length is unsupported"))?;
+        source.file.seek(SeekFrom::Start(0))?;
+        let mut bytes = Vec::with_capacity(expected);
+        (&mut source.file)
+            .take(maximum_bytes.saturating_add(1))
+            .read_to_end(&mut bytes)?;
+        if bytes.len() != expected {
+            return Err(invalid_data(
+                "texture preview mapping changed while reading",
+            ));
+        }
+        revalidate_source_file(source)?;
+        Ok(bytes)
+    }
+
+    /// Recompute (or identity-cache) the fingerprint through the same captured
+    /// file handles after revalidating that every named source still resolves
+    /// to the captured file. A changed source either produces a different id or
+    /// fails closed; both prevent publication by the batch caller.
+    pub(crate) fn current_build_id(&mut self) -> Result<String> {
+        for source in &self.sources {
+            revalidate_source_file(source)?;
+        }
+        fingerprint_open_sources(&mut self.sources, &self.cache_directory)
+    }
 }
 
 fn fingerprint_open_sources(
-    sources: Vec<OpenSourceFile>,
+    sources: &mut [OpenSourceFile],
     cache_directory: &Path,
 ) -> Result<String> {
     let identity = SourceIdentity(
@@ -214,11 +283,11 @@ fn fingerprint_open_sources(
         let mut aggregate = blake3::Hasher::new();
         aggregate.update(SOURCE_FINGERPRINT_DOMAIN);
         aggregate.update(&(sources.len() as u64).to_le_bytes());
-        for mut source in sources {
+        for source in sources {
             aggregate.update(&(source.role.len() as u64).to_le_bytes());
             aggregate.update(source.role.as_bytes());
             aggregate.update(&source.identity.byte_len.to_le_bytes());
-            let digest = digest_source_file(&mut source, cache_directory)?;
+            let digest = digest_source_file(source, cache_directory)?;
             aggregate.update(&digest);
         }
         Ok(format!(
@@ -297,6 +366,7 @@ fn digest_source_file(source: &mut OpenSourceFile, cache_directory: &Path) -> Re
     }
     drop(cache);
 
+    source.file.seek(SeekFrom::Start(0))?;
     let mut content = blake3::Hasher::new();
     let copied = std::io::copy(&mut source.file, &mut content)?;
     if copied != source.identity.byte_len {
@@ -1387,7 +1457,7 @@ mod tests {
             .clear();
         SOURCE_FILE_HASHED_BYTES.store(0, Ordering::Relaxed);
 
-        let first = fingerprint_open_sources(sources(), &cache_root).unwrap();
+        let first = fingerprint_open_sources(&mut sources(), &cache_root).unwrap();
         let initial_hashed = SOURCE_FILE_HASHED_BYTES.load(Ordering::Relaxed);
         assert_eq!(
             initial_hashed,
@@ -1396,7 +1466,7 @@ mod tests {
                 + data.metadata().unwrap().len()
         );
         assert_eq!(
-            fingerprint_open_sources(sources(), &cache_root).unwrap(),
+            fingerprint_open_sources(&mut sources(), &cache_root).unwrap(),
             first
         );
         assert_eq!(
@@ -1443,7 +1513,7 @@ mod tests {
             original_identity.change_stamp
         );
 
-        let second = fingerprint_open_sources(sources(), &cache_root).unwrap();
+        let second = fingerprint_open_sources(&mut sources(), &cache_root).unwrap();
         assert_ne!(second, first);
         assert_eq!(
             SOURCE_FILE_HASHED_BYTES.load(Ordering::Relaxed) - initial_hashed,
@@ -1458,12 +1528,12 @@ mod tests {
             .lock()
             .unwrap()
             .clear();
-        let sealed = vec![
+        let mut sealed = vec![
             open_source_file(mapping, "mapping".into(), None).unwrap(),
             open_source_file(toc, "winner-000-utoc".into(), Some(wrong_utoc_seal)).unwrap(),
             open_source_file(data, "winner-000-ucas".into(), None).unwrap(),
         ];
-        assert!(fingerprint_open_sources(sealed, &cache_root).is_err());
+        assert!(fingerprint_open_sources(&mut sealed, &cache_root).is_err());
         let _ = std::fs::remove_dir_all(root);
     }
 

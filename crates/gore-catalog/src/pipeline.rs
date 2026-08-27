@@ -1,9 +1,10 @@
 //! Pipeline catalog builders — faithful Rust port of the three Python scripts.
 //!
 //! Each builder takes raw lines from a UE4SS `UE4SS_ObjectDump.txt` and
-//! produces a `Vec<serde_json::Value>` whose JSON representation is
-//! **byte-identical** to the output of the corresponding Python script
-//! (indent=2, sort_keys=True, trailing newline, same category strings).
+//! produces a `Vec<serde_json::Value>` whose JSON representation keeps the
+//! historical formatting contract (indent=2, alphabetic keys, trailing
+//! newline, same category strings). Item rows additionally carry their
+//! deterministic shipped-game icon suffix.
 //!
 //! # Localization hook (future)
 //!
@@ -152,13 +153,14 @@ fn item_explicit(id: &str) -> Option<&'static str> {
     }
 }
 
-/// One item catalog entry (id + path + category).
+/// One item catalog entry (category + icon + id + path).
 ///
 /// Field order in the struct must match the alphabetical JSON key order required
-/// by `sort_keys=True`: `category` < `id` < `path`.
+/// by `sort_keys=True`: `category` < `icon` < `id` < `path`.
 #[derive(Debug, Clone, Serialize)]
 pub struct ItemEntry {
     pub category: String,
+    pub icon: String,
     pub id: String,
     pub path: String,
     // Future: #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -201,6 +203,7 @@ pub fn build_item_catalog(lines: &[&str]) -> (Vec<ItemEntry>, Vec<String>) {
         };
         entries.push(ItemEntry {
             category,
+            icon: crate::resolve_item_icon(name),
             id: name.clone(),
             path: format!("/Script/Angelscript.{}", name),
         });
@@ -412,6 +415,7 @@ mod tests {
         let by_id: std::collections::HashMap<&str, &ItemEntry> =
             entries.iter().map(|e| (e.id.as_str(), e)).collect();
         assert_eq!(by_id["ItMi_Orenugget"].category, "misc");
+        assert_eq!(by_id["ItMi_Orenugget"].icon, "ItMi_Orenugget");
         assert_eq!(
             by_id["ItMi_Orenugget"].path,
             "/Script/Angelscript.ItMi_Orenugget"
@@ -647,10 +651,11 @@ mod tests {
         let json = to_catalog_json(&entries).unwrap();
         // Must end with trailing newline
         assert!(json.ends_with('\n'));
-        // Parse back and check field order (category before id before path)
+        // Parse back and check the generated icon field.
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
         let ore = parsed.iter().find(|e| e["id"] == "ItMi_Orenugget").unwrap();
         assert_eq!(ore["category"], "misc");
+        assert_eq!(ore["icon"], "ItMi_Orenugget");
         assert_eq!(ore["path"], "/Script/Angelscript.ItMi_Orenugget");
     }
 }

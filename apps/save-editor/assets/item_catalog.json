@@ -1,4156 +1,4987 @@
 [
   {
     "category": "armor",
+    "icon": "Vlk_Armor_M",
     "id": "Armor_BC_BAN_Arlin_852",
     "path": "/Script/Angelscript.Armor_BC_BAN_Arlin_852"
   },
   {
     "category": "armor",
+    "icon": "Org_Armor",
     "id": "Armor_BC_BAN_Arlin_852_02",
     "path": "/Script/Angelscript.Armor_BC_BAN_Arlin_852_02"
   },
   {
     "category": "armor",
+    "icon": "Vlk_Armor_M",
     "id": "Armor_OCR_GRD_Stone_219",
     "path": "/Script/Angelscript.Armor_OCR_GRD_Stone_219"
   },
   {
     "category": "armor",
+    "icon": "Vlk_Armor_M",
     "id": "Armor_OCR_GRD_Stone_219_03",
     "path": "/Script/Angelscript.Armor_OCR_GRD_Stone_219_03"
   },
   {
     "category": "armor",
+    "icon": "Ore_Armor_M",
     "id": "Armor_OC_EBR_Gomez_100",
     "path": "/Script/Angelscript.Armor_OC_EBR_Gomez_100"
   },
   {
     "category": "armor",
+    "icon": "Vlk_Armor_M",
     "id": "Armor_SC_VLK_Melvin_582",
     "path": "/Script/Angelscript.Armor_SC_VLK_Melvin_582"
   },
   {
     "category": "armor",
+    "icon": "Ore_Armor_M",
     "id": "Armor_SK_OC_WOC_Velaya_108_02",
     "path": "/Script/Angelscript.Armor_SK_OC_WOC_Velaya_108_02"
   },
   {
     "category": "armor",
+    "icon": "Crw_Armor_H",
     "id": "Crw_Armor_H",
     "path": "/Script/Angelscript.Crw_Armor_H"
   },
   {
     "category": "armor",
+    "icon": "Dmb_Armor_M",
     "id": "Dmb_Armor_M",
     "path": "/Script/Angelscript.Dmb_Armor_M"
   },
   {
     "category": "armor",
+    "icon": "Ebr_Armor_H_01",
     "id": "Ebr_Armor_H_01",
     "path": "/Script/Angelscript.Ebr_Armor_H_01"
   },
   {
     "category": "armor",
+    "icon": "Ebr_Armor_H_02",
     "id": "Ebr_Armor_H_02",
     "path": "/Script/Angelscript.Ebr_Armor_H_02"
   },
   {
     "category": "armor",
+    "icon": "Ebr_Armor_M",
     "id": "Ebr_Armor_M",
     "path": "/Script/Angelscript.Ebr_Armor_M"
   },
   {
     "category": "armor",
+    "icon": "Grd_Armor",
     "id": "Grd_Armor",
     "path": "/Script/Angelscript.Grd_Armor"
   },
   {
     "category": "armor",
+    "icon": "Gur_Armor_H",
     "id": "Gur_Armor_H",
     "path": "/Script/Angelscript.Gur_Armor_H"
   },
   {
     "category": "armor",
+    "icon": "Gur_Armor_M",
     "id": "Gur_Armor_M",
     "path": "/Script/Angelscript.Gur_Armor_M"
   },
   {
     "category": "ammunition",
+    "icon": "ItAm_Arrow",
     "id": "ItAm_Arrow",
     "path": "/Script/Angelscript.ItAm_Arrow"
   },
   {
     "category": "ammunition",
+    "icon": "ItAm_Bolt",
     "id": "ItAm_Bolt",
     "path": "/Script/Angelscript.ItAm_Bolt"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_BallLightning",
     "id": "ItAr_Rune_BallLightning",
     "path": "/Script/Angelscript.ItAr_Rune_BallLightning"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_BreathOfDeath",
     "id": "ItAr_Rune_BreathOfDeath",
     "path": "/Script/Angelscript.ItAr_Rune_BreathOfDeath"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_ChainLightning",
     "id": "ItAr_Rune_ChainLightning",
     "path": "/Script/Angelscript.ItAr_Rune_ChainLightning"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_Charm",
     "id": "ItAr_Rune_Charm",
     "path": "/Script/Angelscript.ItAr_Rune_Charm"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_Control",
     "id": "ItAr_Rune_Control",
     "path": "/Script/Angelscript.ItAr_Rune_Control"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_DeathToTheUndead",
     "id": "ItAr_Rune_DeathToTheUndead",
     "path": "/Script/Angelscript.ItAr_Rune_DeathToTheUndead"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_FireBall",
     "id": "ItAr_Rune_FireBall",
     "path": "/Script/Angelscript.ItAr_Rune_FireBall"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_FireBall",
     "id": "ItAr_Rune_FireBall_MiltenSleeper",
     "path": "/Script/Angelscript.ItAr_Rune_FireBall_MiltenSleeper"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_FireBall",
     "id": "ItAr_Rune_FireBall_MiltenSleeper_Player",
     "path": "/Script/Angelscript.ItAr_Rune_FireBall_MiltenSleeper_Player"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_FireBolt",
     "id": "ItAr_Rune_FireBolt",
     "path": "/Script/Angelscript.ItAr_Rune_FireBolt"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_FireRain",
     "id": "ItAr_Rune_FireRain",
     "path": "/Script/Angelscript.ItAr_Rune_FireRain"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_FistOfWind",
     "id": "ItAr_Rune_FistOfWind",
     "path": "/Script/Angelscript.ItAr_Rune_FistOfWind"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_Heal",
     "id": "ItAr_Rune_Heal",
     "path": "/Script/Angelscript.ItAr_Rune_Heal"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_IceBlock",
     "id": "ItAr_Rune_IceBlock",
     "path": "/Script/Angelscript.ItAr_Rune_IceBlock"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_IceBolt",
     "id": "ItAr_Rune_IceBolt",
     "path": "/Script/Angelscript.ItAr_Rune_IceBolt"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_IceWave",
     "id": "ItAr_Rune_IceWave",
     "path": "/Script/Angelscript.ItAr_Rune_IceWave"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_Light",
     "id": "ItAr_Rune_Light",
     "path": "/Script/Angelscript.ItAr_Rune_Light"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_Pyrokinesis",
     "id": "ItAr_Rune_Pyrokinesis",
     "path": "/Script/Angelscript.ItAr_Rune_Pyrokinesis"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_Sleep",
     "id": "ItAr_Rune_Sleep",
     "path": "/Script/Angelscript.ItAr_Rune_Sleep"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_StormFist",
     "id": "ItAr_Rune_StormFist",
     "path": "/Script/Angelscript.ItAr_Rune_StormFist"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_StormOfFire",
     "id": "ItAr_Rune_StormOfFire",
     "path": "/Script/Angelscript.ItAr_Rune_StormOfFire"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_Telekinesis",
     "id": "ItAr_Rune_Telekinesis",
     "path": "/Script/Angelscript.ItAr_Rune_Telekinesis"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_TeleportToMagiciansOfFire",
     "id": "ItAr_Rune_TeleportToMagiciansOfFire",
     "path": "/Script/Angelscript.ItAr_Rune_TeleportToMagiciansOfFire"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_TeleportToMagiciansOfWater",
     "id": "ItAr_Rune_TeleportToMagiciansOfWater",
     "path": "/Script/Angelscript.ItAr_Rune_TeleportToMagiciansOfWater"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_TeleportToNecromancer",
     "id": "ItAr_Rune_TeleportToNecromancer",
     "path": "/Script/Angelscript.ItAr_Rune_TeleportToNecromancer"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_TeleportToSunkenTower",
     "id": "ItAr_Rune_TeleportToSunkenTower",
     "path": "/Script/Angelscript.ItAr_Rune_TeleportToSunkenTower"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_TeleportToSwampCamp",
     "id": "ItAr_Rune_TeleportToSwampCamp",
     "path": "/Script/Angelscript.ItAr_Rune_TeleportToSwampCamp"
   },
   {
     "category": "rune",
+    "icon": "ItAr_Rune_UrizielWaveOfDeath",
     "id": "ItAr_Rune_UrizielWaveOfDeath",
     "path": "/Script/Angelscript.ItAr_Rune_UrizielWaveOfDeath"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_BallLightning",
     "id": "ItAr_Scroll_BallLightning",
     "path": "/Script/Angelscript.ItAr_Scroll_BallLightning"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_ChainLightning",
     "id": "ItAr_Scroll_ChainLightning",
     "path": "/Script/Angelscript.ItAr_Scroll_ChainLightning"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_Charm",
     "id": "ItAr_Scroll_Charm",
     "path": "/Script/Angelscript.ItAr_Scroll_Charm"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_Control",
     "id": "ItAr_Scroll_Control",
     "path": "/Script/Angelscript.ItAr_Scroll_Control"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_DeathToTheUndead",
     "id": "ItAr_Scroll_DeathToTheUndead",
     "path": "/Script/Angelscript.ItAr_Scroll_DeathToTheUndead"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_Fear",
     "id": "ItAr_Scroll_Fear",
     "path": "/Script/Angelscript.ItAr_Scroll_Fear"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_FireBall",
     "id": "ItAr_Scroll_FireBall",
     "path": "/Script/Angelscript.ItAr_Scroll_FireBall"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_FireBolt",
     "id": "ItAr_Scroll_FireBolt",
     "path": "/Script/Angelscript.ItAr_Scroll_FireBolt"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_FireRain",
     "id": "ItAr_Scroll_FireRain",
     "path": "/Script/Angelscript.ItAr_Scroll_FireRain"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_FistOfWind",
     "id": "ItAr_Scroll_FistOfWind",
     "path": "/Script/Angelscript.ItAr_Scroll_FistOfWind"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_Heal",
     "id": "ItAr_Scroll_Heal",
     "path": "/Script/Angelscript.ItAr_Scroll_Heal"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_IceBlock",
     "id": "ItAr_Scroll_IceBlock",
     "path": "/Script/Angelscript.ItAr_Scroll_IceBlock"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_IceBolt",
     "id": "ItAr_Scroll_IceBolt",
     "path": "/Script/Angelscript.ItAr_Scroll_IceBolt"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_IceWave",
     "id": "ItAr_Scroll_IceWave",
     "path": "/Script/Angelscript.ItAr_Scroll_IceWave"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_InnosPray",
     "id": "ItAr_Scroll_InnosPray",
     "path": "/Script/Angelscript.ItAr_Scroll_InnosPray"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_Light",
     "id": "ItAr_Scroll_Light",
     "path": "/Script/Angelscript.ItAr_Scroll_Light"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_Pyrokinesis",
     "id": "ItAr_Scroll_Pyrokinesis",
     "path": "/Script/Angelscript.ItAr_Scroll_Pyrokinesis"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_Shrink",
     "id": "ItAr_Scroll_Shrink",
     "path": "/Script/Angelscript.ItAr_Scroll_Shrink"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_Sleep",
     "id": "ItAr_Scroll_Sleep",
     "path": "/Script/Angelscript.ItAr_Scroll_Sleep"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_StormFist",
     "id": "ItAr_Scroll_StormFist",
     "path": "/Script/Angelscript.ItAr_Scroll_StormFist"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_StormOfFire",
     "id": "ItAr_Scroll_StormOfFire",
     "path": "/Script/Angelscript.ItAr_Scroll_StormOfFire"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_SummonArmyOfDarkness",
     "id": "ItAr_Scroll_SummonArmyOfDarkness",
     "path": "/Script/Angelscript.ItAr_Scroll_SummonArmyOfDarkness"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_SummonDemon",
     "id": "ItAr_Scroll_SummonDemon",
     "path": "/Script/Angelscript.ItAr_Scroll_SummonDemon"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_SummonGolem",
     "id": "ItAr_Scroll_SummonGolem",
     "path": "/Script/Angelscript.ItAr_Scroll_SummonGolem"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_SummonSkeletons",
     "id": "ItAr_Scroll_SummonSkeletons",
     "path": "/Script/Angelscript.ItAr_Scroll_SummonSkeletons"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_Telekinesis",
     "id": "ItAr_Scroll_Telekinesis",
     "path": "/Script/Angelscript.ItAr_Scroll_Telekinesis"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_TransformBiter",
     "id": "ItAr_Scroll_TransformBiter",
     "path": "/Script/Angelscript.ItAr_Scroll_TransformBiter"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_TransformBloodfly",
     "id": "ItAr_Scroll_TransformBloodfly",
     "path": "/Script/Angelscript.ItAr_Scroll_TransformBloodfly"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_TransformBloodhound",
     "id": "ItAr_Scroll_TransformBloodhound",
     "path": "/Script/Angelscript.ItAr_Scroll_TransformBloodhound"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_TransformFireLizard",
     "id": "ItAr_Scroll_TransformFireLizard",
     "path": "/Script/Angelscript.ItAr_Scroll_TransformFireLizard"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_TransformHarpy",
     "id": "ItAr_Scroll_TransformHarpy",
     "path": "/Script/Angelscript.ItAr_Scroll_TransformHarpy"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_TransformLizard",
     "id": "ItAr_Scroll_TransformLizard",
     "path": "/Script/Angelscript.ItAr_Scroll_TransformLizard"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_TransformLurker",
     "id": "ItAr_Scroll_TransformLurker",
     "path": "/Script/Angelscript.ItAr_Scroll_TransformLurker"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_TransformMeatbug",
     "id": "ItAr_Scroll_TransformMeatbug",
     "path": "/Script/Angelscript.ItAr_Scroll_TransformMeatbug"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_TransformMinecrawler",
     "id": "ItAr_Scroll_TransformMinecrawler",
     "path": "/Script/Angelscript.ItAr_Scroll_TransformMinecrawler"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_TransformMolerat",
     "id": "ItAr_Scroll_TransformMolerat",
     "path": "/Script/Angelscript.ItAr_Scroll_TransformMolerat"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_TransformOrcDog",
     "id": "ItAr_Scroll_TransformOrcDog",
     "path": "/Script/Angelscript.ItAr_Scroll_TransformOrcDog"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_TransformRazor",
     "id": "ItAr_Scroll_TransformRazor",
     "path": "/Script/Angelscript.ItAr_Scroll_TransformRazor"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_TransformScavenger",
     "id": "ItAr_Scroll_TransformScavenger",
     "path": "/Script/Angelscript.ItAr_Scroll_TransformScavenger"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_TransformShadowbeast",
     "id": "ItAr_Scroll_TransformShadowbeast",
     "path": "/Script/Angelscript.ItAr_Scroll_TransformShadowbeast"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_TransformSnapper",
     "id": "ItAr_Scroll_TransformSnapper",
     "path": "/Script/Angelscript.ItAr_Scroll_TransformSnapper"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_TransformSwampshark",
     "id": "ItAr_Scroll_TransformSwampshark",
     "path": "/Script/Angelscript.ItAr_Scroll_TransformSwampshark"
   },
   {
     "category": "scroll",
+    "icon": "ItAr_Scroll_TransformWolf",
     "id": "ItAr_Scroll_TransformWolf",
     "path": "/Script/Angelscript.ItAr_Scroll_TransformWolf"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Brotherhood",
     "id": "ItAt_Amulet_Brotherhood",
     "path": "/Script/Angelscript.ItAt_Amulet_Brotherhood"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Dexterity_01",
     "id": "ItAt_Amulet_Dexterity_01",
     "path": "/Script/Angelscript.ItAt_Amulet_Dexterity_01"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Dexterity_02",
     "id": "ItAt_Amulet_Dexterity_02",
     "path": "/Script/Angelscript.ItAt_Amulet_Dexterity_02"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Enlight",
     "id": "ItAt_Amulet_Enlight",
     "path": "/Script/Angelscript.ItAt_Amulet_Enlight"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Fire",
     "id": "ItAt_Amulet_Fire",
     "path": "/Script/Angelscript.ItAt_Amulet_Fire"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Innos",
     "id": "ItAt_Amulet_Innos",
     "path": "/Script/Angelscript.ItAt_Amulet_Innos"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Life",
     "id": "ItAt_Amulet_Life",
     "path": "/Script/Angelscript.ItAt_Amulet_Life"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Magic_01",
     "id": "ItAt_Amulet_Magic_01",
     "path": "/Script/Angelscript.ItAt_Amulet_Magic_01"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Magic_02",
     "id": "ItAt_Amulet_Magic_02",
     "path": "/Script/Angelscript.ItAt_Amulet_Magic_02"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Magicfire",
     "id": "ItAt_Amulet_Magicfire",
     "path": "/Script/Angelscript.ItAt_Amulet_Magicfire"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Neks",
     "id": "ItAt_Amulet_Neks",
     "path": "/Script/Angelscript.ItAt_Amulet_Neks"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Orc",
     "id": "ItAt_Amulet_Orc",
     "path": "/Script/Angelscript.ItAt_Amulet_Orc"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_OrcMummy",
     "id": "ItAt_Amulet_OrcMummy",
     "path": "/Script/Angelscript.ItAt_Amulet_OrcMummy"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Power",
     "id": "ItAt_Amulet_Power",
     "path": "/Script/Angelscript.ItAt_Amulet_Power"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Projectile",
     "id": "ItAt_Amulet_Projectile",
     "path": "/Script/Angelscript.ItAt_Amulet_Projectile"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Protection",
     "id": "ItAt_Amulet_Protection",
     "path": "/Script/Angelscript.ItAt_Amulet_Protection"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Ranged",
     "id": "ItAt_Amulet_Ranged",
     "path": "/Script/Angelscript.ItAt_Amulet_Ranged"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Strong_01",
     "id": "ItAt_Amulet_Strong_01",
     "path": "/Script/Angelscript.ItAt_Amulet_Strong_01"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Strong_02",
     "id": "ItAt_Amulet_Strong_02",
     "path": "/Script/Angelscript.ItAt_Amulet_Strong_02"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Ulu_Talisman",
     "id": "ItAt_Amulet_Ulu_Talisman",
     "path": "/Script/Angelscript.ItAt_Amulet_Ulu_Talisman"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Water",
     "id": "ItAt_Amulet_Water",
     "path": "/Script/Angelscript.ItAt_Amulet_Water"
   },
   {
     "category": "amulet",
+    "icon": "ItAt_Amulet_Weapon",
     "id": "ItAt_Amulet_Weapon",
     "path": "/Script/Angelscript.ItAt_Amulet_Weapon"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Biter_01",
     "id": "ItAt_Biter_01",
     "path": "/Script/Angelscript.ItAt_Biter_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Biter_02",
     "id": "ItAt_Biter_02",
     "path": "/Script/Angelscript.ItAt_Biter_02"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Biter_03",
     "id": "ItAt_Biter_03",
     "path": "/Script/Angelscript.ItAt_Biter_03"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Bloodfly_01",
     "id": "ItAt_Bloodfly_01",
     "path": "/Script/Angelscript.ItAt_Bloodfly_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Bloodfly_02",
     "id": "ItAt_Bloodfly_02",
     "path": "/Script/Angelscript.ItAt_Bloodfly_02"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Bloodfly_03",
     "id": "ItAt_Bloodfly_03",
     "path": "/Script/Angelscript.ItAt_Bloodfly_03"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Bloodhound_01",
     "id": "ItAt_Bloodhound_01",
     "path": "/Script/Angelscript.ItAt_Bloodhound_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Bloodhound_02",
     "id": "ItAt_Bloodhound_02",
     "path": "/Script/Angelscript.ItAt_Bloodhound_02"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Crawler_01",
     "id": "ItAt_Crawler_01",
     "path": "/Script/Angelscript.ItAt_Crawler_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Crawler_02",
     "id": "ItAt_Crawler_02",
     "path": "/Script/Angelscript.ItAt_Crawler_02"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Crawlerqueen",
     "id": "ItAt_Crawlerqueen",
     "path": "/Script/Angelscript.ItAt_Crawlerqueen"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Damlurker_01",
     "id": "ItAt_Damlurker_01",
     "path": "/Script/Angelscript.ItAt_Damlurker_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Firegolem_01",
     "id": "ItAt_Firegolem_01",
     "path": "/Script/Angelscript.ItAt_Firegolem_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Firegolem_02",
     "id": "ItAt_Firegolem_02",
     "path": "/Script/Angelscript.ItAt_Firegolem_02"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Firelizard_01",
     "id": "ItAt_Firelizard_01",
     "path": "/Script/Angelscript.ItAt_Firelizard_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Firelizard_02",
     "id": "ItAt_Firelizard_02",
     "path": "/Script/Angelscript.ItAt_Firelizard_02"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Firelizard_03",
     "id": "ItAt_Firelizard_03",
     "path": "/Script/Angelscript.ItAt_Firelizard_03"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Firelizard_04",
     "id": "ItAt_Firelizard_04",
     "path": "/Script/Angelscript.ItAt_Firelizard_04"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Firelizard_05",
     "id": "ItAt_Firelizard_05",
     "path": "/Script/Angelscript.ItAt_Firelizard_05"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Harpy_01",
     "id": "ItAt_Harpy_01",
     "path": "/Script/Angelscript.ItAt_Harpy_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Harpy_02",
     "id": "ItAt_Harpy_02",
     "path": "/Script/Angelscript.ItAt_Harpy_02"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Icegolem_01",
     "id": "ItAt_Icegolem_01",
     "path": "/Script/Angelscript.ItAt_Icegolem_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Icegolem_02",
     "id": "ItAt_Icegolem_02",
     "path": "/Script/Angelscript.ItAt_Icegolem_02"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Lizard_01",
     "id": "ItAt_Lizard_01",
     "path": "/Script/Angelscript.ItAt_Lizard_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Lizard_02",
     "id": "ItAt_Lizard_02",
     "path": "/Script/Angelscript.ItAt_Lizard_02"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Lizard_03",
     "id": "ItAt_Lizard_03",
     "path": "/Script/Angelscript.ItAt_Lizard_03"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Lurker_01",
     "id": "ItAt_Lurker_01",
     "path": "/Script/Angelscript.ItAt_Lurker_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Lurker_02",
     "id": "ItAt_Lurker_02",
     "path": "/Script/Angelscript.ItAt_Lurker_02"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Lurker_03",
     "id": "ItAt_Lurker_03",
     "path": "/Script/Angelscript.ItAt_Lurker_03"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Meatbug_01",
     "id": "ItAt_Meatbug_01",
     "path": "/Script/Angelscript.ItAt_Meatbug_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Minecrawlerqueen_01",
     "id": "ItAt_Minecrawlerqueen_01",
     "path": "/Script/Angelscript.ItAt_Minecrawlerqueen_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Orcdog_01",
     "id": "ItAt_Orcdog_01",
     "path": "/Script/Angelscript.ItAt_Orcdog_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Orcdog_02",
     "id": "ItAt_Orcdog_02",
     "path": "/Script/Angelscript.ItAt_Orcdog_02"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Razor_01",
     "id": "ItAt_Razor_01",
     "path": "/Script/Angelscript.ItAt_Razor_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Razor_02",
     "id": "ItAt_Razor_02",
     "path": "/Script/Angelscript.ItAt_Razor_02"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Enlight",
     "id": "ItAt_Ring_Enlight",
     "path": "/Script/Angelscript.ItAt_Ring_Enlight"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Fire_01",
     "id": "ItAt_Ring_Fire_01",
     "path": "/Script/Angelscript.ItAt_Ring_Fire_01"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Fire_02",
     "id": "ItAt_Ring_Fire_02",
     "path": "/Script/Angelscript.ItAt_Ring_Fire_02"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Life_01",
     "id": "ItAt_Ring_Life_01",
     "path": "/Script/Angelscript.ItAt_Ring_Life_01"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Life_02",
     "id": "ItAt_Ring_Life_02",
     "path": "/Script/Angelscript.ItAt_Ring_Life_02"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Magic_01",
     "id": "ItAt_Ring_Magic_01",
     "path": "/Script/Angelscript.ItAt_Ring_Magic_01"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Magic_02",
     "id": "ItAt_Ring_Magic_02",
     "path": "/Script/Angelscript.ItAt_Ring_Magic_02"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Magic_03",
     "id": "ItAt_Ring_Magic_03",
     "path": "/Script/Angelscript.ItAt_Ring_Magic_03"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Magicfire_01",
     "id": "ItAt_Ring_Magicfire_01",
     "path": "/Script/Angelscript.ItAt_Ring_Magicfire_01"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Magicfire_02",
     "id": "ItAt_Ring_Magicfire_02",
     "path": "/Script/Angelscript.ItAt_Ring_Magicfire_02"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Mordrag",
     "id": "ItAt_Ring_Mordrag",
     "path": "/Script/Angelscript.ItAt_Ring_Mordrag"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Power",
     "id": "ItAt_Ring_Power",
     "path": "/Script/Angelscript.ItAt_Ring_Power"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Projectile_01",
     "id": "ItAt_Ring_Projectile_01",
     "path": "/Script/Angelscript.ItAt_Ring_Projectile_01"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Projectile_02",
     "id": "ItAt_Ring_Projectile_02",
     "path": "/Script/Angelscript.ItAt_Ring_Projectile_02"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Ranged_01",
     "id": "ItAt_Ring_Ranged_01",
     "path": "/Script/Angelscript.ItAt_Ring_Ranged_01"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Ranged_02",
     "id": "ItAt_Ring_Ranged_02",
     "path": "/Script/Angelscript.ItAt_Ring_Ranged_02"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Scatty",
     "id": "ItAt_Ring_Scatty",
     "path": "/Script/Angelscript.ItAt_Ring_Scatty"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Skill_01",
     "id": "ItAt_Ring_Skill_01",
     "path": "/Script/Angelscript.ItAt_Ring_Skill_01"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Skill_02",
     "id": "ItAt_Ring_Skill_02",
     "path": "/Script/Angelscript.ItAt_Ring_Skill_02"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Strong_01",
     "id": "ItAt_Ring_Strong_01",
     "path": "/Script/Angelscript.ItAt_Ring_Strong_01"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Strong_02",
     "id": "ItAt_Ring_Strong_02",
     "path": "/Script/Angelscript.ItAt_Ring_Strong_02"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Total_01",
     "id": "ItAt_Ring_Total_01",
     "path": "/Script/Angelscript.ItAt_Ring_Total_01"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Total_02",
     "id": "ItAt_Ring_Total_02",
     "path": "/Script/Angelscript.ItAt_Ring_Total_02"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Weapon_01",
     "id": "ItAt_Ring_Weapon_01",
     "path": "/Script/Angelscript.ItAt_Ring_Weapon_01"
   },
   {
     "category": "ring",
+    "icon": "ItAt_Ring_Weapon_02",
     "id": "ItAt_Ring_Weapon_02",
     "path": "/Script/Angelscript.ItAt_Ring_Weapon_02"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Scavenger_01",
     "id": "ItAt_Scavenger_01",
     "path": "/Script/Angelscript.ItAt_Scavenger_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Scavenger_02",
     "id": "ItAt_Scavenger_02",
     "path": "/Script/Angelscript.ItAt_Scavenger_02"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Shadow_01",
     "id": "ItAt_Shadow_01",
     "path": "/Script/Angelscript.ItAt_Shadow_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Shadow_02",
     "id": "ItAt_Shadow_02",
     "path": "/Script/Angelscript.ItAt_Shadow_02"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Shadow_03",
     "id": "ItAt_Shadow_03",
     "path": "/Script/Angelscript.ItAt_Shadow_03"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Shadow_04",
     "id": "ItAt_Shadow_04",
     "path": "/Script/Angelscript.ItAt_Shadow_04"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Shadow_05",
     "id": "ItAt_Shadow_05",
     "path": "/Script/Angelscript.ItAt_Shadow_05"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Shadow_06",
     "id": "ItAt_Shadow_06",
     "path": "/Script/Angelscript.ItAt_Shadow_06"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Snapper_01",
     "id": "ItAt_Snapper_01",
     "path": "/Script/Angelscript.ItAt_Snapper_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Snapper_02",
     "id": "ItAt_Snapper_02",
     "path": "/Script/Angelscript.ItAt_Snapper_02"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Stonegolem_01",
     "id": "ItAt_Stonegolem_01",
     "path": "/Script/Angelscript.ItAt_Stonegolem_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Stonegolem_02",
     "id": "ItAt_Stonegolem_02",
     "path": "/Script/Angelscript.ItAt_Stonegolem_02"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Swampshark_01",
     "id": "ItAt_Swampshark_01",
     "path": "/Script/Angelscript.ItAt_Swampshark_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Swampshark_02",
     "id": "ItAt_Swampshark_02",
     "path": "/Script/Angelscript.ItAt_Swampshark_02"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Swampshark_03",
     "id": "ItAt_Swampshark_03",
     "path": "/Script/Angelscript.ItAt_Swampshark_03"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Swampshark_04",
     "id": "ItAt_Swampshark_04",
     "path": "/Script/Angelscript.ItAt_Swampshark_04"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Teeth_01",
     "id": "ItAt_Teeth_01",
     "path": "/Script/Angelscript.ItAt_Teeth_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Troll_01",
     "id": "ItAt_Troll_01",
     "path": "/Script/Angelscript.ItAt_Troll_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Troll_02",
     "id": "ItAt_Troll_02",
     "path": "/Script/Angelscript.ItAt_Troll_02"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Troll_03",
     "id": "ItAt_Troll_03",
     "path": "/Script/Angelscript.ItAt_Troll_03"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Wolf_01",
     "id": "ItAt_Wolf_01",
     "path": "/Script/Angelscript.ItAt_Wolf_01"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Wolf_02",
     "id": "ItAt_Wolf_02",
     "path": "/Script/Angelscript.ItAt_Wolf_02"
   },
   {
     "category": "trophy",
+    "icon": "ItAt_Wolf_03",
     "id": "ItAt_Wolf_03",
     "path": "/Script/Angelscript.ItAt_Wolf_03"
   },
   {
     "category": "key",
+    "icon": "ItKe_Dungeonkey",
     "id": "ItChestKey01",
     "path": "/Script/Angelscript.ItChestKey01"
   },
   {
     "category": "key",
+    "icon": "ItKe_Dungeonkey",
     "id": "ItDoorKey01",
     "path": "/Script/Angelscript.ItDoorKey01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Apple",
     "id": "ItFo_Apple",
     "path": "/Script/Angelscript.ItFo_Apple"
   },
   {
     "category": "food",
+    "icon": "ItFo_Cabbage",
     "id": "ItFo_Cabbage",
     "path": "/Script/Angelscript.ItFo_Cabbage"
   },
   {
     "category": "food",
+    "icon": "ItFo_Carrot",
     "id": "ItFo_Carrot",
     "path": "/Script/Angelscript.ItFo_Carrot"
   },
   {
     "category": "food",
+    "icon": "ItFo_Cheese",
     "id": "ItFo_Cheese",
     "path": "/Script/Angelscript.ItFo_Cheese"
   },
   {
     "category": "food",
+    "icon": "ItFo_Crawlersoup",
     "id": "ItFo_Crawlersoup",
     "path": "/Script/Angelscript.ItFo_Crawlersoup"
   },
   {
     "category": "food",
+    "icon": "ItFo_DragonsbreathStew",
     "id": "ItFo_DragonsbreathStew",
     "path": "/Script/Angelscript.ItFo_DragonsbreathStew"
   },
   {
     "category": "food",
+    "icon": "ItFo_Grilledscavenger",
     "id": "ItFo_Grilledscavenger",
     "path": "/Script/Angelscript.ItFo_Grilledscavenger"
   },
   {
     "category": "food",
+    "icon": "ItFo_Lemon",
     "id": "ItFo_Lemon",
     "path": "/Script/Angelscript.ItFo_Lemon"
   },
   {
     "category": "food",
+    "icon": "ItFo_Loaf",
     "id": "ItFo_Loaf",
     "path": "/Script/Angelscript.ItFo_Loaf"
   },
   {
     "category": "food",
+    "icon": "ItFo_Meatbugragout",
     "id": "ItFo_Meatbugragout",
     "path": "/Script/Angelscript.ItFo_Meatbugragout"
   },
   {
     "category": "food",
+    "icon": "ItFo_Meatbugsauteed",
     "id": "ItFo_Meatbugsauteed",
     "path": "/Script/Angelscript.ItFo_Meatbugsauteed"
   },
   {
     "category": "food",
+    "icon": "ItFo_MushroomStew",
     "id": "ItFo_MushroomStew",
     "path": "/Script/Angelscript.ItFo_MushroomStew"
   },
   {
     "category": "food",
+    "icon": "ItFo_Mutton_01",
     "id": "ItFo_Mutton_01",
     "path": "/Script/Angelscript.ItFo_Mutton_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Mutton_02",
     "id": "ItFo_Mutton_02",
     "path": "/Script/Angelscript.ItFo_Mutton_02"
   },
   {
     "category": "food",
+    "icon": "ItFo_Muttonraw",
     "id": "ItFo_Muttonraw",
     "path": "/Script/Angelscript.ItFo_Muttonraw"
   },
   {
     "category": "food",
+    "icon": "ItFo_Onion",
     "id": "ItFo_Onion",
     "path": "/Script/Angelscript.ItFo_Onion"
   },
   {
     "category": "food",
+    "icon": "ItFo_Ottostew",
     "id": "ItFo_Ottostew",
     "path": "/Script/Angelscript.ItFo_Ottostew"
   },
   {
     "category": "food",
+    "icon": "ItFo_Pear",
     "id": "ItFo_Pear",
     "path": "/Script/Angelscript.ItFo_Pear"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Berrys_01",
     "id": "ItFo_Plants_Berrys_01",
     "path": "/Script/Angelscript.ItFo_Plants_Berrys_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Bloodwood_01",
     "id": "ItFo_Plants_Bloodwood_01",
     "path": "/Script/Angelscript.ItFo_Plants_Bloodwood_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Coral",
     "id": "ItFo_Plants_Coral",
     "path": "/Script/Angelscript.ItFo_Plants_Coral"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Darkshade",
     "id": "ItFo_Plants_Darkshade",
     "path": "/Script/Angelscript.ItFo_Plants_Darkshade"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Dewleaf",
     "id": "ItFo_Plants_Dewleaf",
     "path": "/Script/Angelscript.ItFo_Plants_Dewleaf"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Duskbell",
     "id": "ItFo_Plants_Duskbell",
     "path": "/Script/Angelscript.ItFo_Plants_Duskbell"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Flameberry_01",
     "id": "ItFo_Plants_Flameberry_01",
     "path": "/Script/Angelscript.ItFo_Plants_Flameberry_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Herb_01",
     "id": "ItFo_Plants_Herb_01",
     "path": "/Script/Angelscript.ItFo_Plants_Herb_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Herb_02",
     "id": "ItFo_Plants_Herb_02",
     "path": "/Script/Angelscript.ItFo_Plants_Herb_02"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Herb_03",
     "id": "ItFo_Plants_Herb_03",
     "path": "/Script/Angelscript.ItFo_Plants_Herb_03"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Lobelia",
     "id": "ItFo_Plants_Lobelia",
     "path": "/Script/Angelscript.ItFo_Plants_Lobelia"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Mistcap",
     "id": "ItFo_Plants_Mistcap",
     "path": "/Script/Angelscript.ItFo_Plants_Mistcap"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Mountainmoss_01",
     "id": "ItFo_Plants_Mountainmoss_01",
     "path": "/Script/Angelscript.ItFo_Plants_Mountainmoss_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Mountainmoss_02",
     "id": "ItFo_Plants_Mountainmoss_02",
     "path": "/Script/Angelscript.ItFo_Plants_Mountainmoss_02"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Mushroom_01",
     "id": "ItFo_Plants_Mushroom_01",
     "path": "/Script/Angelscript.ItFo_Plants_Mushroom_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Mushroom_02",
     "id": "ItFo_Plants_Mushroom_02",
     "path": "/Script/Angelscript.ItFo_Plants_Mushroom_02"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Nightshadow_01",
     "id": "ItFo_Plants_Nightshadow_01",
     "path": "/Script/Angelscript.ItFo_Plants_Nightshadow_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Nightshadow_02",
     "id": "ItFo_Plants_Nightshadow_02",
     "path": "/Script/Angelscript.ItFo_Plants_Nightshadow_02"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_OrcSpore",
     "id": "ItFo_Plants_OrcSpore",
     "path": "/Script/Angelscript.ItFo_Plants_OrcSpore"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Orcherb_01",
     "id": "ItFo_Plants_Orcherb_01",
     "path": "/Script/Angelscript.ItFo_Plants_Orcherb_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Orcherb_02",
     "id": "ItFo_Plants_Orcherb_02",
     "path": "/Script/Angelscript.ItFo_Plants_Orcherb_02"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Ravenherb_01",
     "id": "ItFo_Plants_Ravenherb_01",
     "path": "/Script/Angelscript.ItFo_Plants_Ravenherb_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Ravenherb_02",
     "id": "ItFo_Plants_Ravenherb_02",
     "path": "/Script/Angelscript.ItFo_Plants_Ravenherb_02"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Seraphis_01",
     "id": "ItFo_Plants_Seraphis_01",
     "path": "/Script/Angelscript.ItFo_Plants_Seraphis_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Siren",
     "id": "ItFo_Plants_Siren",
     "path": "/Script/Angelscript.ItFo_Plants_Siren"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Stoneroot_01",
     "id": "ItFo_Plants_Stoneroot_01",
     "path": "/Script/Angelscript.ItFo_Plants_Stoneroot_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Stoneroot_02",
     "id": "ItFo_Plants_Stoneroot_02",
     "path": "/Script/Angelscript.ItFo_Plants_Stoneroot_02"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Trollbane",
     "id": "ItFo_Plants_Trollbane",
     "path": "/Script/Angelscript.ItFo_Plants_Trollbane"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Velayis_01",
     "id": "ItFo_Plants_Velayis_01",
     "path": "/Script/Angelscript.ItFo_Plants_Velayis_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Plants_Widow",
     "id": "ItFo_Plants_Widow",
     "path": "/Script/Angelscript.ItFo_Plants_Widow"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potato",
     "id": "ItFo_Potato",
     "path": "/Script/Angelscript.ItFo_Potato"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Beer",
     "id": "ItFo_Potion_Beer",
     "path": "/Script/Angelscript.ItFo_Potion_Beer"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Booze",
     "id": "ItFo_Potion_Booze",
     "path": "/Script/Angelscript.ItFo_Potion_Booze"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Dex_01",
     "id": "ItFo_Potion_Dex_01",
     "path": "/Script/Angelscript.ItFo_Potion_Dex_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Dex_02",
     "id": "ItFo_Potion_Dex_02",
     "path": "/Script/Angelscript.ItFo_Potion_Dex_02"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Dex_03",
     "id": "ItFo_Potion_Dex_03",
     "path": "/Script/Angelscript.ItFo_Potion_Dex_03"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Haste_01",
     "id": "ItFo_Potion_Haste_01",
     "path": "/Script/Angelscript.ItFo_Potion_Haste_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Haste_02",
     "id": "ItFo_Potion_Haste_02",
     "path": "/Script/Angelscript.ItFo_Potion_Haste_02"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Haste_03",
     "id": "ItFo_Potion_Haste_03",
     "path": "/Script/Angelscript.ItFo_Potion_Haste_03"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Health_01",
     "id": "ItFo_Potion_Health_01",
     "path": "/Script/Angelscript.ItFo_Potion_Health_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Health_02",
     "id": "ItFo_Potion_Health_02",
     "path": "/Script/Angelscript.ItFo_Potion_Health_02"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Health_03",
     "id": "ItFo_Potion_Health_03",
     "path": "/Script/Angelscript.ItFo_Potion_Health_03"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Health_Perma_01",
     "id": "ItFo_Potion_Health_Perma_01",
     "path": "/Script/Angelscript.ItFo_Potion_Health_Perma_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Health_Perma_02",
     "id": "ItFo_Potion_Health_Perma_02",
     "path": "/Script/Angelscript.ItFo_Potion_Health_Perma_02"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Health_Perma_03",
     "id": "ItFo_Potion_Health_Perma_03",
     "path": "/Script/Angelscript.ItFo_Potion_Health_Perma_03"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Health_Quick",
     "id": "ItFo_Potion_Health_Quick",
     "path": "/Script/Angelscript.ItFo_Potion_Health_Quick"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Mana_01",
     "id": "ItFo_Potion_Mana_01",
     "path": "/Script/Angelscript.ItFo_Potion_Mana_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Mana_02",
     "id": "ItFo_Potion_Mana_02",
     "path": "/Script/Angelscript.ItFo_Potion_Mana_02"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Mana_03",
     "id": "ItFo_Potion_Mana_03",
     "path": "/Script/Angelscript.ItFo_Potion_Mana_03"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Mana_Perma_01",
     "id": "ItFo_Potion_Mana_Perma_01",
     "path": "/Script/Angelscript.ItFo_Potion_Mana_Perma_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Mana_Perma_02",
     "id": "ItFo_Potion_Mana_Perma_02",
     "path": "/Script/Angelscript.ItFo_Potion_Mana_Perma_02"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Mana_Perma_03",
     "id": "ItFo_Potion_Mana_Perma_03",
     "path": "/Script/Angelscript.ItFo_Potion_Mana_Perma_03"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Master_01",
     "id": "ItFo_Potion_Master_01",
     "path": "/Script/Angelscript.ItFo_Potion_Master_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Master_02",
     "id": "ItFo_Potion_Master_02",
     "path": "/Script/Angelscript.ItFo_Potion_Master_02"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Orcmedicine",
     "id": "ItFo_Potion_Orcmedicine",
     "path": "/Script/Angelscript.ItFo_Potion_Orcmedicine"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Strength_01",
     "id": "ItFo_Potion_Strength_01",
     "path": "/Script/Angelscript.ItFo_Potion_Strength_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Strength_02",
     "id": "ItFo_Potion_Strength_02",
     "path": "/Script/Angelscript.ItFo_Potion_Strength_02"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Strength_03",
     "id": "ItFo_Potion_Strength_03",
     "path": "/Script/Angelscript.ItFo_Potion_Strength_03"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Strongbeer",
     "id": "ItFo_Potion_Strongbeer",
     "path": "/Script/Angelscript.ItFo_Potion_Strongbeer"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Strongbeer",
     "id": "ItFo_Potion_Strongbeer_Magic_EE",
     "path": "/Script/Angelscript.ItFo_Potion_Strongbeer_Magic_EE"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Water_01",
     "id": "ItFo_Potion_Water_01",
     "path": "/Script/Angelscript.ItFo_Potion_Water_01"
   },
   {
     "category": "food",
+    "icon": "ItFo_Potion_Wine",
     "id": "ItFo_Potion_Wine",
     "path": "/Script/Angelscript.ItFo_Potion_Wine"
   },
   {
     "category": "food",
+    "icon": "ItFo_Rice",
     "id": "ItFo_Rice",
     "path": "/Script/Angelscript.ItFo_Rice"
   },
   {
     "category": "food",
+    "icon": "ItFo_Sausage",
     "id": "ItFo_Sausage",
     "path": "/Script/Angelscript.ItFo_Sausage"
   },
   {
     "category": "food",
+    "icon": "ItFo_SeaforestBrew",
     "id": "ItFo_SeaforestBrew",
     "path": "/Script/Angelscript.ItFo_SeaforestBrew"
   },
   {
     "category": "food",
+    "icon": "ItFo_Soup",
     "id": "ItFo_Soup",
     "path": "/Script/Angelscript.ItFo_Soup"
   },
   {
     "category": "food",
+    "icon": "ItFo_SyraRecipe",
     "id": "ItFo_SyraRecipe",
     "path": "/Script/Angelscript.ItFo_SyraRecipe"
   },
   {
     "category": "food",
+    "icon": "ItFo_Whitemeat",
     "id": "ItFo_Whitemeat",
     "path": "/Script/Angelscript.ItFo_Whitemeat"
   },
   {
     "category": "food",
+    "icon": "ItFo_Wineberrys_01",
     "id": "ItFo_Wineberrys_01",
     "path": "/Script/Angelscript.ItFo_Wineberrys_01"
   },
   {
     "category": "special",
+    "icon": "ItMs_Focus_05",
     "id": "ItFocusStoneBridgeItem",
     "path": "/Script/Angelscript.ItFocusStoneBridgeItem"
   },
   {
     "category": "special",
+    "icon": "ItMs_Worldsplitter",
     "id": "ItIg_Worldsplitter",
     "path": "/Script/Angelscript.ItIg_Worldsplitter"
   },
   {
     "category": "key",
+    "icon": "ItKe_AbandonedGallery_01",
     "id": "ItKe_AbandonedGallery_01",
     "path": "/Script/Angelscript.ItKe_AbandonedGallery_01"
   },
   {
     "category": "key",
+    "icon": "ItKe_AbandonedMine_01",
     "id": "ItKe_AbandonedMine_01",
     "path": "/Script/Angelscript.ItKe_AbandonedMine_01"
   },
   {
     "category": "key",
+    "icon": "ItKe_BanditCell",
     "id": "ItKe_BanditCell",
     "path": "/Script/Angelscript.ItKe_BanditCell"
   },
   {
     "category": "key",
+    "icon": "ItKe_Berg_01",
     "id": "ItKe_Berg_01",
     "path": "/Script/Angelscript.ItKe_Berg_01"
   },
   {
     "category": "key",
+    "icon": "ItKe_CaptainShip",
     "id": "ItKe_CaptainShip",
     "path": "/Script/Angelscript.ItKe_CaptainShip"
   },
   {
     "category": "key",
+    "icon": "ItKe_Cavalorn_01",
     "id": "ItKe_Cavalorn_01",
     "path": "/Script/Angelscript.ItKe_Cavalorn_01"
   },
   {
     "category": "key",
+    "icon": "ItKe_CellarCages_01",
     "id": "ItKe_CellarCages_01",
     "path": "/Script/Angelscript.ItKe_CellarCages_01"
   },
   {
     "category": "key",
+    "icon": "ItKe_Dungeonkey",
     "id": "ItKe_Dungeonkey",
     "path": "/Script/Angelscript.ItKe_Dungeonkey"
   },
   {
     "category": "key",
+    "icon": "ItKe_FireMagesRoom",
     "id": "ItKe_FireMagesRoom",
     "path": "/Script/Angelscript.ItKe_FireMagesRoom"
   },
   {
     "category": "key",
+    "icon": "ItKe_FiskStorage",
     "id": "ItKe_FiskStorage",
     "path": "/Script/Angelscript.ItKe_FiskStorage"
   },
   {
     "category": "key",
+    "icon": "ItKe_Focus_04",
     "id": "ItKe_Focus_04",
     "path": "/Script/Angelscript.ItKe_Focus_04"
   },
   {
     "category": "key",
+    "icon": "ItKe_Focus_05",
     "id": "ItKe_Focus_05",
     "path": "/Script/Angelscript.ItKe_Focus_05"
   },
   {
     "category": "key",
+    "icon": "ItKe_Freemine",
     "id": "ItKe_Freemine",
     "path": "/Script/Angelscript.ItKe_Freemine"
   },
   {
     "category": "key",
+    "icon": "ItKe_GomezCastleMaster",
     "id": "ItKe_GomezCastleMaster",
     "path": "/Script/Angelscript.ItKe_GomezCastleMaster"
   },
   {
     "category": "key",
+    "icon": "ItKe_Gomez_01",
     "id": "ItKe_Gomez_01",
     "path": "/Script/Angelscript.ItKe_Gomez_01"
   },
   {
     "category": "key",
+    "icon": "ItKe_GraveyardLever",
     "id": "ItKe_GraveyardLever",
     "path": "/Script/Angelscript.ItKe_GraveyardLever"
   },
   {
     "category": "key",
+    "icon": "ItKe_Kalom_01",
     "id": "ItKe_Kalom_01",
     "path": "/Script/Angelscript.ItKe_Kalom_01"
   },
   {
     "category": "key",
+    "icon": "ItKe_LeeDoor",
     "id": "ItKe_LeeDoor",
     "path": "/Script/Angelscript.ItKe_LeeDoor"
   },
   {
     "category": "key",
+    "icon": "ItKe_Lockpick",
     "id": "ItKe_Lockpick",
     "path": "/Script/Angelscript.ItKe_Lockpick"
   },
   {
     "category": "key",
+    "icon": "ItKe_LootCage_01",
     "id": "ItKe_LootCage_01",
     "path": "/Script/Angelscript.ItKe_LootCage_01"
   },
   {
     "category": "key",
+    "icon": "ItKe_MerchantCellarDoor",
     "id": "ItKe_MerchantCellarDoor",
     "path": "/Script/Angelscript.ItKe_MerchantCellarDoor"
   },
   {
     "category": "key",
+    "icon": "ItKe_Om_02",
     "id": "ItKe_Om_02",
     "path": "/Script/Angelscript.ItKe_Om_02"
   },
   {
     "category": "key",
+    "icon": "ItKe_Om_03",
     "id": "ItKe_Om_03",
     "path": "/Script/Angelscript.ItKe_Om_03"
   },
   {
     "category": "key",
+    "icon": "ItKe_OrcGraveyard",
     "id": "ItKe_OrcGraveyard",
     "path": "/Script/Angelscript.ItKe_OrcGraveyard"
   },
   {
     "category": "key",
+    "icon": "ItKe_OrcGraveyardPiece_01",
     "id": "ItKe_OrcGraveyardPiece_01",
     "path": "/Script/Angelscript.ItKe_OrcGraveyardPiece_01"
   },
   {
     "category": "key",
+    "icon": "ItKe_OrcGraveyardPiece_02",
     "id": "ItKe_OrcGraveyardPiece_02",
     "path": "/Script/Angelscript.ItKe_OrcGraveyardPiece_02"
   },
   {
     "category": "key",
+    "icon": "ItKe_Quentin_01",
     "id": "ItKe_Quentin_01",
     "path": "/Script/Angelscript.ItKe_Quentin_01"
   },
   {
     "category": "key",
+    "icon": "ItKe_RavenTower",
     "id": "ItKe_RavenTower",
     "path": "/Script/Angelscript.ItKe_RavenTower"
   },
   {
     "category": "key",
+    "icon": "ItKe_Ricelord_01",
     "id": "ItKe_Ricelord_01",
     "path": "/Script/Angelscript.ItKe_Ricelord_01"
   },
   {
     "category": "key",
+    "icon": "ItKe_Smith_01",
     "id": "ItKe_Smith_01",
     "path": "/Script/Angelscript.ItKe_Smith_01"
   },
   {
     "category": "key",
+    "icon": "ItKe_Storage_01",
     "id": "ItKe_Storage_01",
     "path": "/Script/Angelscript.ItKe_Storage_01"
   },
   {
     "category": "key",
+    "icon": "ItKe_Sunkentower",
     "id": "ItKe_Sunkentower",
     "path": "/Script/Angelscript.ItKe_Sunkentower"
   },
   {
     "category": "key",
+    "icon": "ItKe_TavernDoor",
     "id": "ItKe_TavernDoor",
     "path": "/Script/Angelscript.ItKe_TavernDoor"
   },
   {
     "category": "key",
+    "icon": "ItKe_Tower_01",
     "id": "ItKe_Tower_01",
     "path": "/Script/Angelscript.ItKe_Tower_01"
   },
   {
     "category": "key",
+    "icon": "ItKe_Dungeonkey",
     "id": "ItKeyDefault",
     "path": "/Script/Angelscript.ItKeyDefault"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Alchemy_Alcohol_01",
     "id": "ItMi_Alchemy_Alcohol_01",
     "path": "/Script/Angelscript.ItMi_Alchemy_Alcohol_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Alchemy_Flask",
     "id": "ItMi_Alchemy_Flask",
     "path": "/Script/Angelscript.ItMi_Alchemy_Flask"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Alchemy_Moleratlubric_01",
     "id": "ItMi_Alchemy_Moleratlubric_01",
     "path": "/Script/Angelscript.ItMi_Alchemy_Moleratlubric_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Alchemy_Quicksilver_01",
     "id": "ItMi_Alchemy_Quicksilver_01",
     "path": "/Script/Angelscript.ItMi_Alchemy_Quicksilver_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Alchemy_Salt_01",
     "id": "ItMi_Alchemy_Salt_01",
     "path": "/Script/Angelscript.ItMi_Alchemy_Salt_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Alchemy_Sulphur_01",
     "id": "ItMi_Alchemy_Sulphur_01",
     "path": "/Script/Angelscript.ItMi_Alchemy_Sulphur_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Alchemy_Syranoil_01",
     "id": "ItMi_Alchemy_Syranoil_01",
     "path": "/Script/Angelscript.ItMi_Alchemy_Syranoil_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Candle_01",
     "id": "ItMi_Candle_01",
     "path": "/Script/Angelscript.ItMi_Candle_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Coop",
     "id": "ItMi_Coop",
     "path": "/Script/Angelscript.ItMi_Coop"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Hammer",
     "id": "ItMi_Hammer",
     "path": "/Script/Angelscript.ItMi_Hammer"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Inscription_Parchment",
     "id": "ItMi_Inscription_Parchment",
     "path": "/Script/Angelscript.ItMi_Inscription_Parchment"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Joint_01",
     "id": "ItMi_Joint_01",
     "path": "/Script/Angelscript.ItMi_Joint_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Joint_02",
     "id": "ItMi_Joint_02",
     "path": "/Script/Angelscript.ItMi_Joint_02"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Joint_03",
     "id": "ItMi_Joint_03",
     "path": "/Script/Angelscript.ItMi_Joint_03"
   },
   {
     "category": "misc",
+    "icon": "ItMi_JudgeHat",
     "id": "ItMi_JudgeHat",
     "path": "/Script/Angelscript.ItMi_JudgeHat"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Lute",
     "id": "ItMi_Lute",
     "path": "/Script/Angelscript.ItMi_Lute"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Oldcoin_01",
     "id": "ItMi_Meta_Pouch",
     "path": "/Script/Angelscript.ItMi_Meta_Pouch"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Oldcoin_01",
     "id": "ItMi_Oldcoin_01",
     "path": "/Script/Angelscript.ItMi_Oldcoin_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Orenugget",
     "id": "ItMi_Orenugget",
     "path": "/Script/Angelscript.ItMi_Orenugget"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Plants_Swampherb_01",
     "id": "ItMi_Plants_Swampherb_01",
     "path": "/Script/Angelscript.ItMi_Plants_Swampherb_01"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Axe_01",
     "id": "ItMi_Smith_1H_Axe_01",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Axe_01"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Axe_02",
     "id": "ItMi_Smith_1H_Axe_02",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Axe_02"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Axe_Hatchet_01",
     "id": "ItMi_Smith_1H_Axe_Hatchet_01",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Axe_Hatchet_01"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Axe_Old_01",
     "id": "ItMi_Smith_1H_Axe_Old_01",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Axe_Old_01"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Axe_Sickle_01",
     "id": "ItMi_Smith_1H_Axe_Sickle_01",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Axe_Sickle_01"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Mace_01",
     "id": "ItMi_Smith_1H_Mace_01",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Mace_01"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Mace_02",
     "id": "ItMi_Smith_1H_Mace_02",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Mace_02"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Mace_03",
     "id": "ItMi_Smith_1H_Mace_03",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Mace_03"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Mace_04",
     "id": "ItMi_Smith_1H_Mace_04",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Mace_04"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Mace_Light_01",
     "id": "ItMi_Smith_1H_Mace_Light_01",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Mace_Light_01"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Mace_Sledgehammer_01",
     "id": "ItMi_Smith_1H_Mace_Sledgehammer_01",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Mace_Sledgehammer_01"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Mace_War_01",
     "id": "ItMi_Smith_1H_Mace_War_01",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Mace_War_01"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Mace_War_02",
     "id": "ItMi_Smith_1H_Mace_War_02",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Mace_War_02"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Mace_War_03",
     "id": "ItMi_Smith_1H_Mace_War_03",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Mace_War_03"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Mace_Warhammer_02",
     "id": "ItMi_Smith_1H_Mace_Warhammer_02",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Mace_Warhammer_02"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Sword_01",
     "id": "ItMi_Smith_1H_Sword_01",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Sword_01"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Sword_02",
     "id": "ItMi_Smith_1H_Sword_02",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Sword_02"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Sword_03",
     "id": "ItMi_Smith_1H_Sword_03",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Sword_03"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Sword_04",
     "id": "ItMi_Smith_1H_Sword_04",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Sword_04"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Sword_05",
     "id": "ItMi_Smith_1H_Sword_05",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Sword_05"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Sword_Bastard_02",
     "id": "ItMi_Smith_1H_Sword_Bastard_02",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Sword_Bastard_02"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Sword_Broad_01",
     "id": "ItMi_Smith_1H_Sword_Broad_01",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Sword_Broad_01"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Sword_Broad_02",
     "id": "ItMi_Smith_1H_Sword_Broad_02",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Sword_Broad_02"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Sword_Long_01",
     "id": "ItMi_Smith_1H_Sword_Long_01",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Sword_Long_01"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Sword_Scythe_01",
     "id": "ItMi_Smith_1H_Sword_Scythe_01",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Sword_Scythe_01"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Sword_Short_01",
     "id": "ItMi_Smith_1H_Sword_Short_01",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Sword_Short_01"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Sword_Short_02",
     "id": "ItMi_Smith_1H_Sword_Short_02",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Sword_Short_02"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Sword_Short_03",
     "id": "ItMi_Smith_1H_Sword_Short_03",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Sword_Short_03"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Sword_Short_04",
     "id": "ItMi_Smith_1H_Sword_Short_04",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Sword_Short_04"
   },
   {
     "category": "misc",
+    "icon": "ItMw_1H_Sword_Short_05",
     "id": "ItMi_Smith_1H_Sword_Short_05",
     "path": "/Script/Angelscript.ItMi_Smith_1H_Sword_Short_05"
   },
   {
     "category": "misc",
+    "icon": "ItMw_2H_Axe_Heavy_02",
     "id": "ItMi_Smith_2H_Axe_Heavy_02",
     "path": "/Script/Angelscript.ItMi_Smith_2H_Axe_Heavy_02"
   },
   {
     "category": "misc",
+    "icon": "ItMw_2H_Axe_Light_01",
     "id": "ItMi_Smith_2H_Axe_Light_01",
     "path": "/Script/Angelscript.ItMi_Smith_2H_Axe_Light_01"
   },
   {
     "category": "misc",
+    "icon": "ItMw_2H_Axe_Light_02",
     "id": "ItMi_Smith_2H_Axe_Light_02",
     "path": "/Script/Angelscript.ItMi_Smith_2H_Axe_Light_02"
   },
   {
     "category": "misc",
+    "icon": "ItMw_2H_Axe_Old_02",
     "id": "ItMi_Smith_2H_Axe_Old_02",
     "path": "/Script/Angelscript.ItMi_Smith_2H_Axe_Old_02"
   },
   {
     "category": "misc",
+    "icon": "ItMw_2H_Axe_Pickaxe",
     "id": "ItMi_Smith_2H_Axe_Pickaxe",
     "path": "/Script/Angelscript.ItMi_Smith_2H_Axe_Pickaxe"
   },
   {
     "category": "misc",
+    "icon": "ItMw_2H_Sword_01",
     "id": "ItMi_Smith_2H_Sword_01",
     "path": "/Script/Angelscript.ItMi_Smith_2H_Sword_01"
   },
   {
     "category": "misc",
+    "icon": "ItMw_2H_Sword_Heavy_01",
     "id": "ItMi_Smith_2H_Sword_Heavy_01",
     "path": "/Script/Angelscript.ItMi_Smith_2H_Sword_Heavy_01"
   },
   {
     "category": "misc",
+    "icon": "ItMw_2H_Sword_Light_01",
     "id": "ItMi_Smith_2H_Sword_Light_01",
     "path": "/Script/Angelscript.ItMi_Smith_2H_Sword_Light_01"
   },
   {
     "category": "misc",
+    "icon": "ItMw_2H_Sword_Light_02",
     "id": "ItMi_Smith_2H_Sword_Light_02",
     "path": "/Script/Angelscript.ItMi_Smith_2H_Sword_Light_02"
   },
   {
     "category": "misc",
+    "icon": "ItMw_2H_Sword_Light_03",
     "id": "ItMi_Smith_2H_Sword_Light_03",
     "path": "/Script/Angelscript.ItMi_Smith_2H_Sword_Light_03"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Blade_Arming",
     "id": "ItMi_Smith_Blade_Arming",
     "path": "/Script/Angelscript.ItMi_Smith_Blade_Arming"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Blade_Flamberge",
     "id": "ItMi_Smith_Blade_Flamberge",
     "path": "/Script/Angelscript.ItMi_Smith_Blade_Flamberge"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Blade_Great",
     "id": "ItMi_Smith_Blade_Great",
     "path": "/Script/Angelscript.ItMi_Smith_Blade_Great"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Blade_Long",
     "id": "ItMi_Smith_Blade_Long",
     "path": "/Script/Angelscript.ItMi_Smith_Blade_Long"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Blade_Short",
     "id": "ItMi_Smith_Blade_Short",
     "path": "/Script/Angelscript.ItMi_Smith_Blade_Short"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Blade_Sickle",
     "id": "ItMi_Smith_Blade_Sickle",
     "path": "/Script/Angelscript.ItMi_Smith_Blade_Sickle"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Blade_Singleedge",
     "id": "ItMi_Smith_Blade_Singleedge",
     "path": "/Script/Angelscript.ItMi_Smith_Blade_Singleedge"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Gold",
     "id": "ItMi_Smith_Gold",
     "path": "/Script/Angelscript.ItMi_Smith_Gold"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Battleaxe",
     "id": "ItMi_Smith_Head_Battleaxe",
     "path": "/Script/Angelscript.ItMi_Smith_Head_Battleaxe"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Broadaxe",
     "id": "ItMi_Smith_Head_Broadaxe",
     "path": "/Script/Angelscript.ItMi_Smith_Head_Broadaxe"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Club",
     "id": "ItMi_Smith_Head_Club",
     "path": "/Script/Angelscript.ItMi_Smith_Head_Club"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Fledged",
     "id": "ItMi_Smith_Head_Fledged",
     "path": "/Script/Angelscript.ItMi_Smith_Head_Fledged"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Greatbattleaxe",
     "id": "ItMi_Smith_Head_Greatbattleaxe",
     "path": "/Script/Angelscript.ItMi_Smith_Head_Greatbattleaxe"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Hammer",
     "id": "ItMi_Smith_Head_Hammer",
     "path": "/Script/Angelscript.ItMi_Smith_Head_Hammer"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Morningstar",
     "id": "ItMi_Smith_Head_Morningstar",
     "path": "/Script/Angelscript.ItMi_Smith_Head_Morningstar"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Pickaxe",
     "id": "ItMi_Smith_Head_Pickaxe",
     "path": "/Script/Angelscript.ItMi_Smith_Head_Pickaxe"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Poleaxe",
     "id": "ItMi_Smith_Head_Poleaxe",
     "path": "/Script/Angelscript.ItMi_Smith_Head_Poleaxe"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Scythe",
     "id": "ItMi_Smith_Head_Scythe",
     "path": "/Script/Angelscript.ItMi_Smith_Head_Scythe"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Warhammer",
     "id": "ItMi_Smith_Head_Warhammer",
     "path": "/Script/Angelscript.ItMi_Smith_Head_Warhammer"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Blade_Arming",
     "id": "ItMi_Smith_Intermediate_Blade_Arming",
     "path": "/Script/Angelscript.ItMi_Smith_Intermediate_Blade_Arming"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Blade_Flamberge",
     "id": "ItMi_Smith_Intermediate_Blade_Flamberge",
     "path": "/Script/Angelscript.ItMi_Smith_Intermediate_Blade_Flamberge"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Blade_Great",
     "id": "ItMi_Smith_Intermediate_Blade_Great",
     "path": "/Script/Angelscript.ItMi_Smith_Intermediate_Blade_Great"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Blade_Long",
     "id": "ItMi_Smith_Intermediate_Blade_Long",
     "path": "/Script/Angelscript.ItMi_Smith_Intermediate_Blade_Long"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Blade_Short",
     "id": "ItMi_Smith_Intermediate_Blade_Short",
     "path": "/Script/Angelscript.ItMi_Smith_Intermediate_Blade_Short"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Blade_Sickle",
     "id": "ItMi_Smith_Intermediate_Blade_Sickle",
     "path": "/Script/Angelscript.ItMi_Smith_Intermediate_Blade_Sickle"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Blade_Singleedge",
     "id": "ItMi_Smith_Intermediate_Blade_Singleedge",
     "path": "/Script/Angelscript.ItMi_Smith_Intermediate_Blade_Singleedge"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Battleaxe",
     "id": "ItMi_Smith_Intermediate_Head_Battleaxe",
     "path": "/Script/Angelscript.ItMi_Smith_Intermediate_Head_Battleaxe"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Broadaxe",
     "id": "ItMi_Smith_Intermediate_Head_Broadaxe",
     "path": "/Script/Angelscript.ItMi_Smith_Intermediate_Head_Broadaxe"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Club",
     "id": "ItMi_Smith_Intermediate_Head_Club",
     "path": "/Script/Angelscript.ItMi_Smith_Intermediate_Head_Club"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Fledged",
     "id": "ItMi_Smith_Intermediate_Head_Fledged",
     "path": "/Script/Angelscript.ItMi_Smith_Intermediate_Head_Fledged"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Greatbattleaxe",
     "id": "ItMi_Smith_Intermediate_Head_Greatbattleaxe",
     "path": "/Script/Angelscript.ItMi_Smith_Intermediate_Head_Greatbattleaxe"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Hammer",
     "id": "ItMi_Smith_Intermediate_Head_Hammer",
     "path": "/Script/Angelscript.ItMi_Smith_Intermediate_Head_Hammer"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Morningstar",
     "id": "ItMi_Smith_Intermediate_Head_Morningstar",
     "path": "/Script/Angelscript.ItMi_Smith_Intermediate_Head_Morningstar"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Pickaxe",
     "id": "ItMi_Smith_Intermediate_Head_Pickaxe",
     "path": "/Script/Angelscript.ItMi_Smith_Intermediate_Head_Pickaxe"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Poleaxe",
     "id": "ItMi_Smith_Intermediate_Head_Poleaxe",
     "path": "/Script/Angelscript.ItMi_Smith_Intermediate_Head_Poleaxe"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Scythe",
     "id": "ItMi_Smith_Intermediate_Head_Scythe",
     "path": "/Script/Angelscript.ItMi_Smith_Intermediate_Head_Scythe"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Head_Warhammer",
     "id": "ItMi_Smith_Intermediate_Head_Warhammer",
     "path": "/Script/Angelscript.ItMi_Smith_Intermediate_Head_Warhammer"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Iron",
     "id": "ItMi_Smith_Iron",
     "path": "/Script/Angelscript.ItMi_Smith_Iron"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Ironwood",
     "id": "ItMi_Smith_Ironwood",
     "path": "/Script/Angelscript.ItMi_Smith_Ironwood"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Leatherstraps",
     "id": "ItMi_Smith_Leatherstraps",
     "path": "/Script/Angelscript.ItMi_Smith_Leatherstraps"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Oak",
     "id": "ItMi_Smith_Oak",
     "path": "/Script/Angelscript.ItMi_Smith_Oak"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Obsidian",
     "id": "ItMi_Smith_Obsidian",
     "path": "/Script/Angelscript.ItMi_Smith_Obsidian"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Petrifiedwood",
     "id": "ItMi_Smith_Petrifiedwood",
     "path": "/Script/Angelscript.ItMi_Smith_Petrifiedwood"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Ruby",
     "id": "ItMi_Smith_Ruby",
     "path": "/Script/Angelscript.ItMi_Smith_Ruby"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Steel",
     "id": "ItMi_Smith_Steel",
     "path": "/Script/Angelscript.ItMi_Smith_Steel"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Swordblade",
     "id": "ItMi_Smith_Swordblade",
     "path": "/Script/Angelscript.ItMi_Smith_Swordblade"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Swordbladehot",
     "id": "ItMi_Smith_Swordbladehot",
     "path": "/Script/Angelscript.ItMi_Smith_Swordbladehot"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Swordraw",
     "id": "ItMi_Smith_Swordraw",
     "path": "/Script/Angelscript.ItMi_Smith_Swordraw"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Swordrawhot",
     "id": "ItMi_Smith_Swordrawhot",
     "path": "/Script/Angelscript.ItMi_Smith_Swordrawhot"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Smith_Willow",
     "id": "ItMi_Smith_Willow",
     "path": "/Script/Angelscript.ItMi_Smith_Willow"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Specialjoint",
     "id": "ItMi_Specialjoint",
     "path": "/Script/Angelscript.ItMi_Specialjoint"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Stomper",
     "id": "ItMi_Stomper",
     "path": "/Script/Angelscript.ItMi_Stomper"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Stuff_Alarmhorn",
     "id": "ItMi_Stuff_Alarmhorn",
     "path": "/Script/Angelscript.ItMi_Stuff_Alarmhorn"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Stuff_Amphore_01",
     "id": "ItMi_Stuff_Amphore_01",
     "path": "/Script/Angelscript.ItMi_Stuff_Amphore_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Stuff_Barbknife_01",
     "id": "ItMi_Stuff_Barbknife_01",
     "path": "/Script/Angelscript.ItMi_Stuff_Barbknife_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Stuff_Brush",
     "id": "ItMi_Stuff_Brush",
     "path": "/Script/Angelscript.ItMi_Stuff_Brush"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Stuff_Candlestick_01",
     "id": "ItMi_Stuff_Candlestick_01",
     "path": "/Script/Angelscript.ItMi_Stuff_Candlestick_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Stuff_Cup_01",
     "id": "ItMi_Stuff_Cup_01",
     "path": "/Script/Angelscript.ItMi_Stuff_Cup_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Stuff_Cup_02",
     "id": "ItMi_Stuff_Cup_02",
     "path": "/Script/Angelscript.ItMi_Stuff_Cup_02"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Stuff_Gearwheel_01",
     "id": "ItMi_Stuff_Gearwheel_01",
     "path": "/Script/Angelscript.ItMi_Stuff_Gearwheel_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Stuff_Idologront_01",
     "id": "ItMi_Stuff_Idologront_01",
     "path": "/Script/Angelscript.ItMi_Stuff_Idologront_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Stuff_Idolsleeper_01",
     "id": "ItMi_Stuff_Idolsleeper_01",
     "path": "/Script/Angelscript.ItMi_Stuff_Idolsleeper_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Stuff_Mug_01",
     "id": "ItMi_Stuff_Mug_01",
     "path": "/Script/Angelscript.ItMi_Stuff_Mug_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Stuff_Pan_01",
     "id": "ItMi_Stuff_Pan_01",
     "path": "/Script/Angelscript.ItMi_Stuff_Pan_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Stuff_Pipe_01",
     "id": "ItMi_Stuff_Pipe_01",
     "path": "/Script/Angelscript.ItMi_Stuff_Pipe_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Stuff_Plate_01",
     "id": "ItMi_Stuff_Plate_01",
     "path": "/Script/Angelscript.ItMi_Stuff_Plate_01"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Stuff_Silverware_01",
     "id": "ItMi_Stuff_Silverware_01",
     "path": "/Script/Angelscript.ItMi_Stuff_Silverware_01"
   },
   {
     "category": "misc",
+    "icon": "ItMs_UrizielGem",
     "id": "ItMi_UrizielGem_01",
     "path": "/Script/Angelscript.ItMi_UrizielGem_01"
   },
   {
     "category": "misc",
+    "icon": "ItMs_UrizielGem",
     "id": "ItMi_UrizielGem_02",
     "path": "/Script/Angelscript.ItMi_UrizielGem_02"
   },
   {
     "category": "misc",
+    "icon": "ItMs_UrizielGem",
     "id": "ItMi_UrizielGem_03",
     "path": "/Script/Angelscript.ItMi_UrizielGem_03"
   },
   {
     "category": "misc",
+    "icon": "ItMs_UrizielGem",
     "id": "ItMi_UrizielGem_04",
     "path": "/Script/Angelscript.ItMi_UrizielGem_04"
   },
   {
     "category": "misc",
+    "icon": "ItMs_UrizielGem",
     "id": "ItMi_UrizielGem_05",
     "path": "/Script/Angelscript.ItMi_UrizielGem_05"
   },
   {
     "category": "misc",
+    "icon": "ItMi_Wedel",
     "id": "ItMi_Wedel",
     "path": "/Script/Angelscript.ItMi_Wedel"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Ashes",
     "id": "ItMs_Ashes",
     "path": "/Script/Angelscript.ItMs_Ashes"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Axe_Bran",
     "id": "ItMs_Axe_Bran",
     "path": "/Script/Angelscript.ItMs_Axe_Bran"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Book_Innos",
     "id": "ItMs_Book_Innos",
     "path": "/Script/Angelscript.ItMs_Book_Innos"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Book_WaterMages",
     "id": "ItMs_Book_WaterMages",
     "path": "/Script/Angelscript.ItMs_Book_WaterMages"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Demonprank",
     "id": "ItMs_Demonprank",
     "path": "/Script/Angelscript.ItMs_Demonprank"
   },
   {
     "category": "mission",
+    "icon": "ItMs_DraxHunterKnife",
     "id": "ItMs_DraxHunterKnife",
     "path": "/Script/Angelscript.ItMs_DraxHunterKnife"
   },
   {
     "category": "mission",
+    "icon": "ItMs_ExplosionBarrel",
     "id": "ItMs_ExplosionBarrel",
     "path": "/Script/Angelscript.ItMs_ExplosionBarrel"
   },
   {
     "category": "mission",
+    "icon": "ItMs_ExplosionScroll",
     "id": "ItMs_ExplosionScroll",
     "path": "/Script/Angelscript.ItMs_ExplosionScroll"
   },
   {
     "category": "mission",
+    "icon": "Vlk_Armor_L",
     "id": "ItMs_FakeDiggerClothes",
     "path": "/Script/Angelscript.ItMs_FakeDiggerClothes"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Focus_01",
     "id": "ItMs_Focus_01",
     "path": "/Script/Angelscript.ItMs_Focus_01"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Focus_02",
     "id": "ItMs_Focus_02",
     "path": "/Script/Angelscript.ItMs_Focus_02"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Focus_03",
     "id": "ItMs_Focus_03",
     "path": "/Script/Angelscript.ItMs_Focus_03"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Focus_04",
     "id": "ItMs_Focus_04",
     "path": "/Script/Angelscript.ItMs_Focus_04"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Focus_05",
     "id": "ItMs_Focus_05",
     "path": "/Script/Angelscript.ItMs_Focus_05"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Glossary",
     "id": "ItMs_Glossary",
     "path": "/Script/Angelscript.ItMs_Glossary"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Lightbringer",
     "id": "ItMs_Lightbringer",
     "path": "/Script/Angelscript.ItMs_Lightbringer"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Remedy",
     "id": "ItMs_Remedy",
     "path": "/Script/Angelscript.ItMs_Remedy"
   },
   {
     "category": "mission",
+    "icon": "ItMs_ScavengerWhistle",
     "id": "ItMs_ScavengerWhistle",
     "path": "/Script/Angelscript.ItMs_ScavengerWhistle"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Scroll_AbandonedGuy",
     "id": "ItMs_Scroll_AbandonedGuy",
     "path": "/Script/Angelscript.ItMs_Scroll_AbandonedGuy"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Scroll_InExtremo",
     "id": "ItMs_Scroll_InExtremo",
     "path": "/Script/Angelscript.ItMs_Scroll_InExtremo"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Scroll_LoveInterest",
     "id": "ItMs_Scroll_LoveInterest",
     "path": "/Script/Angelscript.ItMs_Scroll_LoveInterest"
   },
   {
     "category": "mission",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItMs_Scroll_LoveInterest_2",
     "path": "/Script/Angelscript.ItMs_Scroll_LoveInterest_2"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Scroll_LoveStoryFogTower",
     "id": "ItMs_Scroll_LoveStoryFogTower",
     "path": "/Script/Angelscript.ItMs_Scroll_LoveStoryFogTower"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Scroll_LoveStoryWomen",
     "id": "ItMs_Scroll_LoveStoryWomen",
     "path": "/Script/Angelscript.ItMs_Scroll_LoveStoryWomen"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Scroll_OldRecipe",
     "id": "ItMs_Scroll_OldRecipe",
     "path": "/Script/Angelscript.ItMs_Scroll_OldRecipe"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Scroll_PaintersCave",
     "id": "ItMs_Scroll_PaintersCave",
     "path": "/Script/Angelscript.ItMs_Scroll_PaintersCave"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Scroll_SerialKiller",
     "id": "ItMs_Scroll_SerialKiller",
     "path": "/Script/Angelscript.ItMs_Scroll_SerialKiller"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Scroll_SyraRecipe",
     "id": "ItMs_Scroll_SyraRecipe",
     "path": "/Script/Angelscript.ItMs_Scroll_SyraRecipe"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Scroll_ToyMaker",
     "id": "ItMs_Scroll_ToyMaker",
     "path": "/Script/Angelscript.ItMs_Scroll_ToyMaker"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Scroll_WeaponDesign",
     "id": "ItMs_Scroll_WeaponDesign",
     "path": "/Script/Angelscript.ItMs_Scroll_WeaponDesign"
   },
   {
     "category": "mission",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItMs_Scroll_WomensRevenge",
     "path": "/Script/Angelscript.ItMs_Scroll_WomensRevenge"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Spellblade",
     "id": "ItMs_Spellblade",
     "path": "/Script/Angelscript.ItMs_Spellblade"
   },
   {
     "category": "mission",
+    "icon": "ItMs_StoneSketch",
     "id": "ItMs_StoneSketch",
     "path": "/Script/Angelscript.ItMs_StoneSketch"
   },
   {
     "category": "mission",
+    "icon": "ItMs_SunkenTowerStone_01",
     "id": "ItMs_SunkenTowerStone_01",
     "path": "/Script/Angelscript.ItMs_SunkenTowerStone_01"
   },
   {
     "category": "mission",
+    "icon": "ItMs_SunkenTowerStone_02",
     "id": "ItMs_SunkenTowerStone_02",
     "path": "/Script/Angelscript.ItMs_SunkenTowerStone_02"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Timeblade",
     "id": "ItMs_Timeblade",
     "path": "/Script/Angelscript.ItMs_Timeblade"
   },
   {
     "category": "mission",
+    "icon": "ItMs_ToyMaker_000",
     "id": "ItMs_ToyMaker_000",
     "path": "/Script/Angelscript.ItMs_ToyMaker_000"
   },
   {
     "category": "mission",
+    "icon": "ItMs_ToyMaker_001",
     "id": "ItMs_ToyMaker_001",
     "path": "/Script/Angelscript.ItMs_ToyMaker_001"
   },
   {
     "category": "mission",
+    "icon": "ItMs_ToyMaker_005",
     "id": "ItMs_ToyMaker_005",
     "path": "/Script/Angelscript.ItMs_ToyMaker_005"
   },
   {
     "category": "mission",
+    "icon": "ItMs_ToyMaker_007",
     "id": "ItMs_ToyMaker_007",
     "path": "/Script/Angelscript.ItMs_ToyMaker_007"
   },
   {
     "category": "mission",
+    "icon": "ItMs_ToyMaker_009",
     "id": "ItMs_ToyMaker_009",
     "path": "/Script/Angelscript.ItMs_ToyMaker_009"
   },
   {
     "category": "mission",
+    "icon": "ItMs_ToyMaker_013",
     "id": "ItMs_ToyMaker_013",
     "path": "/Script/Angelscript.ItMs_ToyMaker_013"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Uriziel",
     "id": "ItMs_Uriziel",
     "path": "/Script/Angelscript.ItMs_Uriziel"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Winch",
     "id": "ItMs_Winch",
     "path": "/Script/Angelscript.ItMs_Winch"
   },
   {
     "category": "mission",
+    "icon": "ItMs_Worldsplitter",
     "id": "ItMs_Worldsplitter",
     "path": "/Script/Angelscript.ItMs_Worldsplitter"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Axe_01",
     "id": "ItMw_1H_Axe_01",
     "path": "/Script/Angelscript.ItMw_1H_Axe_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Axe_02",
     "id": "ItMw_1H_Axe_02",
     "path": "/Script/Angelscript.ItMw_1H_Axe_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Axe_03",
     "id": "ItMw_1H_Axe_03",
     "path": "/Script/Angelscript.ItMw_1H_Axe_03"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Axe_Bran",
     "id": "ItMw_1H_Axe_Bran",
     "path": "/Script/Angelscript.ItMw_1H_Axe_Bran"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Axe_Cord",
     "id": "ItMw_1H_Axe_Cord",
     "path": "/Script/Angelscript.ItMw_1H_Axe_Cord"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Axe_Hatchet_01",
     "id": "ItMw_1H_Axe_Hatchet_01",
     "path": "/Script/Angelscript.ItMw_1H_Axe_Hatchet_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Axe_Lares",
     "id": "ItMw_1H_Axe_Lares",
     "path": "/Script/Angelscript.ItMw_1H_Axe_Lares"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Axe_Old_01",
     "id": "ItMw_1H_Axe_Old_01",
     "path": "/Script/Angelscript.ItMw_1H_Axe_Old_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Axe_Sickle_01",
     "id": "ItMw_1H_Axe_Sickle_01",
     "path": "/Script/Angelscript.ItMw_1H_Axe_Sickle_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Axe_Silas",
     "id": "ItMw_1H_Axe_Silas",
     "path": "/Script/Angelscript.ItMw_1H_Axe_Silas"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_01",
     "id": "ItMw_1H_Mace_01",
     "path": "/Script/Angelscript.ItMw_1H_Mace_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_02",
     "id": "ItMw_1H_Mace_02",
     "path": "/Script/Angelscript.ItMw_1H_Mace_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_03",
     "id": "ItMw_1H_Mace_03",
     "path": "/Script/Angelscript.ItMw_1H_Mace_03"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_04",
     "id": "ItMw_1H_Mace_04",
     "path": "/Script/Angelscript.ItMw_1H_Mace_04"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_Club_01",
     "id": "ItMw_1H_Mace_Club_01",
     "path": "/Script/Angelscript.ItMw_1H_Mace_Club_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_Fortuno",
     "id": "ItMw_1H_Mace_Fortuno",
     "path": "/Script/Angelscript.ItMw_1H_Mace_Fortuno"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_Lester",
     "id": "ItMw_1H_Mace_Lester",
     "path": "/Script/Angelscript.ItMw_1H_Mace_Lester"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_Lester",
     "id": "ItMw_1H_Mace_Lester_Sleeper",
     "path": "/Script/Angelscript.ItMw_1H_Mace_Lester_Sleeper"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_Light_01",
     "id": "ItMw_1H_Mace_Light_01",
     "path": "/Script/Angelscript.ItMw_1H_Mace_Light_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_Nailmace_01",
     "id": "ItMw_1H_Mace_Nailmace_01",
     "path": "/Script/Angelscript.ItMw_1H_Mace_Nailmace_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_Namib",
     "id": "ItMw_1H_Mace_Namib",
     "path": "/Script/Angelscript.ItMw_1H_Mace_Namib"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_Orun",
     "id": "ItMw_1H_Mace_Orun",
     "path": "/Script/Angelscript.ItMw_1H_Mace_Orun"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_Poker_01",
     "id": "ItMw_1H_Mace_Poker_01",
     "path": "/Script/Angelscript.ItMw_1H_Mace_Poker_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_Sledgehammer_01",
     "id": "ItMw_1H_Mace_Sledgehammer_01",
     "path": "/Script/Angelscript.ItMw_1H_Mace_Sledgehammer_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_War_01",
     "id": "ItMw_1H_Mace_War_01",
     "path": "/Script/Angelscript.ItMw_1H_Mace_War_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_War_02",
     "id": "ItMw_1H_Mace_War_02",
     "path": "/Script/Angelscript.ItMw_1H_Mace_War_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_War_03",
     "id": "ItMw_1H_Mace_War_03",
     "path": "/Script/Angelscript.ItMw_1H_Mace_War_03"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_Warhammer_01",
     "id": "ItMw_1H_Mace_Warhammer_01",
     "path": "/Script/Angelscript.ItMw_1H_Mace_Warhammer_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_Warhammer_02",
     "id": "ItMw_1H_Mace_Warhammer_02",
     "path": "/Script/Angelscript.ItMw_1H_Mace_Warhammer_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Mace_Warhammer_03",
     "id": "ItMw_1H_Mace_Warhammer_03",
     "path": "/Script/Angelscript.ItMw_1H_Mace_Warhammer_03"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_01",
     "id": "ItMw_1H_Sword_01",
     "path": "/Script/Angelscript.ItMw_1H_Sword_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_01",
     "id": "ItMw_1H_Sword_01_Xardas_Sleeper",
     "path": "/Script/Angelscript.ItMw_1H_Sword_01_Xardas_Sleeper"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_02",
     "id": "ItMw_1H_Sword_02",
     "path": "/Script/Angelscript.ItMw_1H_Sword_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_03",
     "id": "ItMw_1H_Sword_03",
     "path": "/Script/Angelscript.ItMw_1H_Sword_03"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_04",
     "id": "ItMw_1H_Sword_04",
     "path": "/Script/Angelscript.ItMw_1H_Sword_04"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_04",
     "id": "ItMw_1H_Sword_04_Diego_Sleeper",
     "path": "/Script/Angelscript.ItMw_1H_Sword_04_Diego_Sleeper"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_05",
     "id": "ItMw_1H_Sword_05",
     "path": "/Script/Angelscript.ItMw_1H_Sword_05"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_05",
     "id": "ItMw_1H_Sword_05_Darrion",
     "path": "/Script/Angelscript.ItMw_1H_Sword_05_Darrion"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Arto",
     "id": "ItMw_1H_Sword_Arto",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Arto"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Bastard_01",
     "id": "ItMw_1H_Sword_Bastard_01",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Bastard_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Bastard_02",
     "id": "ItMw_1H_Sword_Bastard_02",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Bastard_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Bastard_03",
     "id": "ItMw_1H_Sword_Bastard_03",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Bastard_03"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Bastard_04",
     "id": "ItMw_1H_Sword_Bastard_04",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Bastard_04"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Broad_01",
     "id": "ItMw_1H_Sword_Broad_01",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Broad_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Broad_02",
     "id": "ItMw_1H_Sword_Broad_02",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Broad_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Broad_03",
     "id": "ItMw_1H_Sword_Broad_03",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Broad_03"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Broad_04",
     "id": "ItMw_1H_Sword_Broad_04",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Broad_04"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Kalom",
     "id": "ItMw_1H_Sword_Kalom",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Kalom"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Lightguard_01",
     "id": "ItMw_1H_Sword_Lightguard_01",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Lightguard_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Long_01",
     "id": "ItMw_1H_Sword_Long_01",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Long_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Long_02",
     "id": "ItMw_1H_Sword_Long_02",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Long_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Long_03",
     "id": "ItMw_1H_Sword_Long_03",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Long_03"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Long_04",
     "id": "ItMw_1H_Sword_Long_04",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Long_04"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Long_05",
     "id": "ItMw_1H_Sword_Long_05",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Long_05"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Old_01",
     "id": "ItMw_1H_Sword_Old_01",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Old_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Old_01",
     "id": "ItMw_1H_Sword_Old_01_PlayerPlayTest",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Old_01_PlayerPlayTest"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Old_02",
     "id": "ItMw_1H_Sword_Old_02",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Old_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Paw",
     "id": "ItMw_1H_Sword_Paw",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Paw"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Bastard_04",
     "id": "ItMw_1H_Sword_QA",
     "path": "/Script/Angelscript.ItMw_1H_Sword_QA"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Raven",
     "id": "ItMw_1H_Sword_Raven",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Raven"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Scar",
     "id": "ItMw_1H_Sword_Scar",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Scar"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Scythe_01",
     "id": "ItMw_1H_Sword_Scythe_01",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Scythe_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Short_01",
     "id": "ItMw_1H_Sword_Short_01",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Short_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Short_02",
     "id": "ItMw_1H_Sword_Short_02",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Short_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Short_03",
     "id": "ItMw_1H_Sword_Short_03",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Short_03"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Short_04",
     "id": "ItMw_1H_Sword_Short_04",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Short_04"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Short_05",
     "id": "ItMw_1H_Sword_Short_05",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Short_05"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Sword_Whistler",
     "id": "ItMw_1H_Sword_Whistler",
     "path": "/Script/Angelscript.ItMw_1H_Sword_Whistler"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Torch",
     "id": "ItMw_1H_Torch",
     "path": "/Script/Angelscript.ItMw_1H_Torch"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_1H_Torch",
     "id": "ItMw_1H_Torch_Gob",
     "path": "/Script/Angelscript.ItMw_1H_Torch_Gob"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Gorn",
     "id": "ItMw_2H_Axe_Gorn",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Gorn"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Gorn",
     "id": "ItMw_2H_Axe_Gorn_Sleeper",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Gorn_Sleeper"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Heavy_01",
     "id": "ItMw_2H_Axe_Heavy_01",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Heavy_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Heavy_02",
     "id": "ItMw_2H_Axe_Heavy_02",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Heavy_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Heavy_03",
     "id": "ItMw_2H_Axe_Heavy_03",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Heavy_03"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Heavy_04",
     "id": "ItMw_2H_Axe_Heavy_04",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Heavy_04"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Lee",
     "id": "ItMw_2H_Axe_Lee",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Lee"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Light_01",
     "id": "ItMw_2H_Axe_Light_01",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Light_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Light_02",
     "id": "ItMw_2H_Axe_Light_02",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Light_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Light_03",
     "id": "ItMw_2H_Axe_Light_03",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Light_03"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Old_01",
     "id": "ItMw_2H_Axe_Old_01",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Old_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Old_02",
     "id": "ItMw_2H_Axe_Old_02",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Old_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Old_03",
     "id": "ItMw_2H_Axe_Old_03",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Old_03"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Orc_01",
     "id": "ItMw_2H_Axe_Orc_01",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Orc_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Orc_01",
     "id": "ItMw_2H_Axe_Orc_01_vOrc",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Orc_01_vOrc"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Orc_01",
     "id": "ItMw_2H_Axe_Orc_01_vOrc_Sleeper",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Orc_01_vOrc_Sleeper"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Orc_02",
     "id": "ItMw_2H_Axe_Orc_02",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Orc_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Orc_02",
     "id": "ItMw_2H_Axe_Orc_02_vOrc",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Orc_02_vOrc"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Orc_02",
     "id": "ItMw_2H_Axe_Orc_02_vOrc_Sleeper",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Orc_02_vOrc_Sleeper"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Orc_03",
     "id": "ItMw_2H_Axe_Orc_03",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Orc_03"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Orc_03",
     "id": "ItMw_2H_Axe_Orc_03_vOrc",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Orc_03_vOrc"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Orc_03",
     "id": "ItMw_2H_Axe_Orc_03_vOrc_Sleeper",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Orc_03_vOrc_Sleeper"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Orc_04",
     "id": "ItMw_2H_Axe_Orc_04",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Orc_04"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Orc_04",
     "id": "ItMw_2H_Axe_Orc_04_vOrc",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Orc_04_vOrc"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Orc_04",
     "id": "ItMw_2H_Axe_Orc_04_vOrc_Sleeper",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Orc_04_vOrc_Sleeper"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Orik",
     "id": "ItMw_2H_Axe_Orik",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Orik"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Pickaxe",
     "id": "ItMw_2H_Axe_Pickaxe",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Pickaxe"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Axe_Torlof",
     "id": "ItMw_2H_Axe_Torlof",
     "path": "/Script/Angelscript.ItMw_2H_Axe_Torlof"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Mace_Orc_01",
     "id": "ItMw_2H_Mace_Orc_01",
     "path": "/Script/Angelscript.ItMw_2H_Mace_Orc_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Mace_Orc_01",
     "id": "ItMw_2H_Mace_Orc_01_vOrc",
     "path": "/Script/Angelscript.ItMw_2H_Mace_Orc_01_vOrc"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Mace_Orc_01",
     "id": "ItMw_2H_Mace_Orc_01_vOrc_Sleeper",
     "path": "/Script/Angelscript.ItMw_2H_Mace_Orc_01_vOrc_Sleeper"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Staff_Scepter",
     "id": "ItMw_2H_Scepter_Skeletonmage",
     "path": "/Script/Angelscript.ItMw_2H_Scepter_Skeletonmage"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Staff_02",
     "id": "ItMw_2H_Staff_02",
     "path": "/Script/Angelscript.ItMw_2H_Staff_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Staff_Orc",
     "id": "ItMw_2H_Staff_Orc",
     "path": "/Script/Angelscript.ItMw_2H_Staff_Orc"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Staff_Orc",
     "id": "ItMw_2H_Staff_Orc_vOrc",
     "path": "/Script/Angelscript.ItMw_2H_Staff_Orc_vOrc"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Staff_Orc",
     "id": "ItMw_2H_Staff_Orc_vOrc_Fireball",
     "path": "/Script/Angelscript.ItMw_2H_Staff_Orc_vOrc_Fireball"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Staff_Scepter",
     "id": "ItMw_2H_Staff_Scepter",
     "path": "/Script/Angelscript.ItMw_2H_Staff_Scepter"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Staff_Ulumulu",
     "id": "ItMw_2H_Staff_Ulumulu",
     "path": "/Script/Angelscript.ItMw_2H_Staff_Ulumulu"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Staff_Orc",
     "id": "ItMw_2H_Staff_Unorc",
     "path": "/Script/Angelscript.ItMw_2H_Staff_Unorc"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItAr_Rune_BreathOfDeath",
     "id": "ItMw_2H_Staff_Unorc_GVArushat_vOrc",
     "path": "/Script/Angelscript.ItMw_2H_Staff_Unorc_GVArushat_vOrc"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItAr_Rune_Pyrokinesis",
     "id": "ItMw_2H_Staff_Unorc_VHashor_vOrc",
     "path": "/Script/Angelscript.ItMw_2H_Staff_Unorc_VHashor_vOrc"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItAr_Rune_BallLightning",
     "id": "ItMw_2H_Staff_Unorc_VKasorg_vOrc",
     "path": "/Script/Angelscript.ItMw_2H_Staff_Unorc_VKasorg_vOrc"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItAr_Rune_StormOfFire",
     "id": "ItMw_2H_Staff_Unorc_VRuuushk_vOrc",
     "path": "/Script/Angelscript.ItMw_2H_Staff_Unorc_VRuuushk_vOrc"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItAr_Rune_ChainLightning",
     "id": "ItMw_2H_Staff_Unorc_VUnhilqt_vOrc",
     "path": "/Script/Angelscript.ItMw_2H_Staff_Unorc_VUnhilqt_vOrc"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Staff_Orc",
     "id": "ItMw_2H_Staff_Unorc_vOrc",
     "path": "/Script/Angelscript.ItMw_2H_Staff_Unorc_vOrc"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItAr_Rune_BallLightning",
     "id": "ItMw_2H_Staff_Unorc_vOrc_BallLighting",
     "path": "/Script/Angelscript.ItMw_2H_Staff_Unorc_vOrc_BallLighting"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItAr_Rune_BreathOfDeath",
     "id": "ItMw_2H_Staff_Unorc_vOrc_BreathOfDeath",
     "path": "/Script/Angelscript.ItMw_2H_Staff_Unorc_vOrc_BreathOfDeath"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItAr_Rune_ChainLightning",
     "id": "ItMw_2H_Staff_Unorc_vOrc_ChainLighting",
     "path": "/Script/Angelscript.ItMw_2H_Staff_Unorc_vOrc_ChainLighting"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItAr_Rune_Pyrokinesis",
     "id": "ItMw_2H_Staff_Unorc_vOrc_Pyrokinesis",
     "path": "/Script/Angelscript.ItMw_2H_Staff_Unorc_vOrc_Pyrokinesis"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItAr_Rune_StormOfFire",
     "id": "ItMw_2H_Staff_Unorc_vOrc_StormOfFire",
     "path": "/Script/Angelscript.ItMw_2H_Staff_Unorc_vOrc_StormOfFire"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_01",
     "id": "ItMw_2H_Sword_01",
     "path": "/Script/Angelscript.ItMw_2H_Sword_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_02",
     "id": "ItMw_2H_Sword_02",
     "path": "/Script/Angelscript.ItMw_2H_Sword_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_03",
     "id": "ItMw_2H_Sword_03",
     "path": "/Script/Angelscript.ItMw_2H_Sword_03"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Innos",
     "id": "ItMw_2H_Sword_Beliar",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Beliar"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Heavy_01",
     "id": "ItMw_2H_Sword_Heavy_01",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Heavy_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Heavy_02",
     "id": "ItMw_2H_Sword_Heavy_02",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Heavy_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Heavy_03",
     "id": "ItMw_2H_Sword_Heavy_03",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Heavy_03"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Heavy_04",
     "id": "ItMw_2H_Sword_Heavy_04",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Heavy_04"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Innos",
     "id": "ItMw_2H_Sword_Innos",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Innos"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Light_01",
     "id": "ItMw_2H_Sword_Light_01",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Light_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Light_01",
     "id": "ItMw_2H_Sword_Light_01_Stone",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Light_01_Stone"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Light_02",
     "id": "ItMw_2H_Sword_Light_02",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Light_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Light_03",
     "id": "ItMw_2H_Sword_Light_03",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Light_03"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Light_04",
     "id": "ItMw_2H_Sword_Light_04",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Light_04"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Light_05",
     "id": "ItMw_2H_Sword_Light_05",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Light_05"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Old_01",
     "id": "ItMw_2H_Sword_Old_01",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Old_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Orc_01",
     "id": "ItMw_2H_Sword_Orc_01",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Orc_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Orc_01",
     "id": "ItMw_2H_Sword_Orc_01_vOrc",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Orc_01_vOrc"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Orc_01",
     "id": "ItMw_2H_Sword_Orc_01_vOrc_Sleeper",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Orc_01_vOrc_Sleeper"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Thorus",
     "id": "ItMw_2H_Sword_Thorus",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Thorus"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Uriziel_01",
     "id": "ItMw_2H_Sword_Uriziel_01",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Uriziel_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Uriziel_02",
     "id": "ItMw_2H_Sword_Uriziel_02",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Uriziel_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Uriziel_03",
     "id": "ItMw_2H_Sword_Uriziel_03",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Uriziel_03"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMw_2H_Sword_Wind",
     "id": "ItMw_2H_Sword_Wind",
     "path": "/Script/Angelscript.ItMw_2H_Sword_Wind"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMi_Smith_Swordraw",
     "id": "ItMw_Smith_IntermediateSword_01",
     "path": "/Script/Angelscript.ItMw_Smith_IntermediateSword_01"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMi_Smith_Swordrawhot",
     "id": "ItMw_Smith_IntermediateSword_02",
     "path": "/Script/Angelscript.ItMw_Smith_IntermediateSword_02"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMi_Smith_Swordbladehot",
     "id": "ItMw_Smith_IntermediateSword_03",
     "path": "/Script/Angelscript.ItMw_Smith_IntermediateSword_03"
   },
   {
     "category": "melee_weapon",
+    "icon": "ItMi_Smith_Swordblade",
     "id": "ItMw_Smith_IntermediateSword_04",
     "path": "/Script/Angelscript.ItMw_Smith_IntermediateSword_04"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Diego",
     "id": "ItRw_Bow_Diego",
     "path": "/Script/Angelscript.ItRw_Bow_Diego"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Diego",
     "id": "ItRw_Bow_Diego_Sleeper",
     "path": "/Script/Angelscript.ItRw_Bow_Diego_Sleeper"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Long_01",
     "id": "ItRw_Bow_Long_01",
     "path": "/Script/Angelscript.ItRw_Bow_Long_01"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Long_02",
     "id": "ItRw_Bow_Long_02",
     "path": "/Script/Angelscript.ItRw_Bow_Long_02"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Long_03",
     "id": "ItRw_Bow_Long_03",
     "path": "/Script/Angelscript.ItRw_Bow_Long_03"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Long_04",
     "id": "ItRw_Bow_Long_04",
     "path": "/Script/Angelscript.ItRw_Bow_Long_04"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Long_05",
     "id": "ItRw_Bow_Long_05",
     "path": "/Script/Angelscript.ItRw_Bow_Long_05"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Long_06",
     "id": "ItRw_Bow_Long_06",
     "path": "/Script/Angelscript.ItRw_Bow_Long_06"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Long_07",
     "id": "ItRw_Bow_Long_07",
     "path": "/Script/Angelscript.ItRw_Bow_Long_07"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Long_08",
     "id": "ItRw_Bow_Long_08",
     "path": "/Script/Angelscript.ItRw_Bow_Long_08"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Long_09",
     "id": "ItRw_Bow_Long_09",
     "path": "/Script/Angelscript.ItRw_Bow_Long_09"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Long_10",
     "id": "ItRw_Bow_Long_10",
     "path": "/Script/Angelscript.ItRw_Bow_Long_10"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Long_11",
     "id": "ItRw_Bow_Long_11",
     "path": "/Script/Angelscript.ItRw_Bow_Long_11"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Long_12",
     "id": "ItRw_Bow_Long_12",
     "path": "/Script/Angelscript.ItRw_Bow_Long_12"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_War_05",
     "id": "ItRw_Bow_QA",
     "path": "/Script/Angelscript.ItRw_Bow_QA"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Small_01",
     "id": "ItRw_Bow_Small_01",
     "path": "/Script/Angelscript.ItRw_Bow_Small_01"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Small_02",
     "id": "ItRw_Bow_Small_02",
     "path": "/Script/Angelscript.ItRw_Bow_Small_02"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Small_03",
     "id": "ItRw_Bow_Small_03",
     "path": "/Script/Angelscript.ItRw_Bow_Small_03"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Small_04",
     "id": "ItRw_Bow_Small_04",
     "path": "/Script/Angelscript.ItRw_Bow_Small_04"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Small_05",
     "id": "ItRw_Bow_Small_05",
     "path": "/Script/Angelscript.ItRw_Bow_Small_05"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_War_01",
     "id": "ItRw_Bow_War_01",
     "path": "/Script/Angelscript.ItRw_Bow_War_01"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_War_02",
     "id": "ItRw_Bow_War_02",
     "path": "/Script/Angelscript.ItRw_Bow_War_02"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_War_03",
     "id": "ItRw_Bow_War_03",
     "path": "/Script/Angelscript.ItRw_Bow_War_03"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_War_04",
     "id": "ItRw_Bow_War_04",
     "path": "/Script/Angelscript.ItRw_Bow_War_04"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_War_05",
     "id": "ItRw_Bow_War_05",
     "path": "/Script/Angelscript.ItRw_Bow_War_05"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Bow_Wolf",
     "id": "ItRw_Bow_Wolf",
     "path": "/Script/Angelscript.ItRw_Bow_Wolf"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Crossbow_01",
     "id": "ItRw_Crossbow_01",
     "path": "/Script/Angelscript.ItRw_Crossbow_01"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Crossbow_02",
     "id": "ItRw_Crossbow_02",
     "path": "/Script/Angelscript.ItRw_Crossbow_02"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Crossbow_03",
     "id": "ItRw_Crossbow_03",
     "path": "/Script/Angelscript.ItRw_Crossbow_03"
   },
   {
     "category": "ranged_weapon",
+    "icon": "ItRw_Crossbow_04",
     "id": "ItRw_Crossbow_04",
     "path": "/Script/Angelscript.ItRw_Crossbow_04"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Arcanum",
     "id": "ItWr_Book_Arcanum",
     "path": "/Script/Angelscript.ItWr_Book_Arcanum"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Artfighting",
     "id": "ItWr_Book_Artfighting",
     "path": "/Script/Angelscript.ItWr_Book_Artfighting"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Astronomy",
     "id": "ItWr_Book_Astronomy",
     "path": "/Script/Angelscript.ItWr_Book_Astronomy"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Battle_Varant_01",
     "id": "ItWr_Book_Battle_Varant_01",
     "path": "/Script/Angelscript.ItWr_Book_Battle_Varant_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Battle_Varant_02",
     "id": "ItWr_Book_Battle_Varant_02",
     "path": "/Script/Angelscript.ItWr_Book_Battle_Varant_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Bestiary_01",
     "id": "ItWr_Book_Bestiary_01",
     "path": "/Script/Angelscript.ItWr_Book_Bestiary_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Bestiary_02",
     "id": "ItWr_Book_Bestiary_02",
     "path": "/Script/Angelscript.ItWr_Book_Bestiary_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Bestiary_03",
     "id": "ItWr_Book_Bestiary_03",
     "path": "/Script/Angelscript.ItWr_Book_Bestiary_03"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Bestiary_04",
     "id": "ItWr_Book_Bestiary_04",
     "path": "/Script/Angelscript.ItWr_Book_Bestiary_04"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Bestiary_05",
     "id": "ItWr_Book_Bestiary_05",
     "path": "/Script/Angelscript.ItWr_Book_Bestiary_05"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Bloodfly_01",
     "id": "ItWr_Book_Bloodfly_01",
     "path": "/Script/Angelscript.ItWr_Book_Bloodfly_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Chromanin_01",
     "id": "ItWr_Book_Chromanin_01",
     "path": "/Script/Angelscript.ItWr_Book_Chromanin_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Chromanin_02",
     "id": "ItWr_Book_Chromanin_02",
     "path": "/Script/Angelscript.ItWr_Book_Chromanin_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Chromanin_03",
     "id": "ItWr_Book_Chromanin_03",
     "path": "/Script/Angelscript.ItWr_Book_Chromanin_03"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Chromanin_04",
     "id": "ItWr_Book_Chromanin_04",
     "path": "/Script/Angelscript.ItWr_Book_Chromanin_04"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Chromanin_05",
     "id": "ItWr_Book_Chromanin_05",
     "path": "/Script/Angelscript.ItWr_Book_Chromanin_05"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Chromanin_06",
     "id": "ItWr_Book_Chromanin_06",
     "path": "/Script/Angelscript.ItWr_Book_Chromanin_06"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Circle_00",
     "id": "ItWr_Book_Circle_00",
     "path": "/Script/Angelscript.ItWr_Book_Circle_00"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Circle_01",
     "id": "ItWr_Book_Circle_01",
     "path": "/Script/Angelscript.ItWr_Book_Circle_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Circle_02",
     "id": "ItWr_Book_Circle_02",
     "path": "/Script/Angelscript.ItWr_Book_Circle_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Circle_03",
     "id": "ItWr_Book_Circle_03",
     "path": "/Script/Angelscript.ItWr_Book_Circle_03"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Circle_04",
     "id": "ItWr_Book_Circle_04",
     "path": "/Script/Angelscript.ItWr_Book_Circle_04"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Circle_05",
     "id": "ItWr_Book_Circle_05",
     "path": "/Script/Angelscript.ItWr_Book_Circle_05"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Circle_06",
     "id": "ItWr_Book_Circle_06",
     "path": "/Script/Angelscript.ItWr_Book_Circle_06"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Demon",
     "id": "ItWr_Book_Demon",
     "path": "/Script/Angelscript.ItWr_Book_Demon"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_FireLizards",
     "id": "ItWr_Book_FireLizards",
     "path": "/Script/Angelscript.ItWr_Book_FireLizards"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_FireMages",
     "id": "ItWr_Book_FireMages",
     "path": "/Script/Angelscript.ItWr_Book_FireMages"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Focus",
     "id": "ItWr_Book_Focus",
     "path": "/Script/Angelscript.ItWr_Book_Focus"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Gods_01",
     "id": "ItWr_Book_Gods_01",
     "path": "/Script/Angelscript.ItWr_Book_Gods_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Gods_02",
     "id": "ItWr_Book_Gods_02",
     "path": "/Script/Angelscript.ItWr_Book_Gods_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Gods_03",
     "id": "ItWr_Book_Gods_03",
     "path": "/Script/Angelscript.ItWr_Book_Gods_03"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Godsgift",
     "id": "ItWr_Book_Godsgift",
     "path": "/Script/Angelscript.ItWr_Book_Godsgift"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Golem_01",
     "id": "ItWr_Book_Golem_01",
     "path": "/Script/Angelscript.ItWr_Book_Golem_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Golem_02",
     "id": "ItWr_Book_Golem_02",
     "path": "/Script/Angelscript.ItWr_Book_Golem_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Hunt",
     "id": "ItWr_Book_Hunt",
     "path": "/Script/Angelscript.ItWr_Book_Hunt"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Lyric",
     "id": "ItWr_Book_Lyric",
     "path": "/Script/Angelscript.ItWr_Book_Lyric"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Magicore",
     "id": "ItWr_Book_Magicore",
     "path": "/Script/Angelscript.ItWr_Book_Magicore"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Powerfulart",
     "id": "ItWr_Book_Powerfulart",
     "path": "/Script/Angelscript.ItWr_Book_Powerfulart"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Recipes_01",
     "id": "ItWr_Book_Recipes_01",
     "path": "/Script/Angelscript.ItWr_Book_Recipes_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Recipes_02",
     "id": "ItWr_Book_Recipes_02",
     "path": "/Script/Angelscript.ItWr_Book_Recipes_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Secrets",
     "id": "ItWr_Book_Secrets",
     "path": "/Script/Angelscript.ItWr_Book_Secrets"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Slave",
     "id": "ItWr_Book_Slave",
     "path": "/Script/Angelscript.ItWr_Book_Slave"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Troll",
     "id": "ItWr_Book_Troll",
     "path": "/Script/Angelscript.ItWr_Book_Troll"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_True_Power",
     "id": "ItWr_Book_True_Power",
     "path": "/Script/Angelscript.ItWr_Book_True_Power"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Book_Zombie",
     "id": "ItWr_Book_Zombie",
     "path": "/Script/Angelscript.ItWr_Book_Zombie"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Map_Cliff",
     "id": "ItWr_Map_Cliff",
     "path": "/Script/Angelscript.ItWr_Map_Cliff"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Map_Focus",
     "id": "ItWr_Map_Focus",
     "path": "/Script/Angelscript.ItWr_Map_Focus"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Map_World",
     "id": "ItWr_Map_Lighthouse",
     "path": "/Script/Angelscript.ItWr_Map_Lighthouse"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Map_NewCamp",
     "id": "ItWr_Map_NewCamp",
     "path": "/Script/Angelscript.ItWr_Map_NewCamp"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Map_OldCamp",
     "id": "ItWr_Map_OldCamp",
     "path": "/Script/Angelscript.ItWr_Map_OldCamp"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Map_OldMine",
     "id": "ItWr_Map_OldMine",
     "path": "/Script/Angelscript.ItWr_Map_OldMine"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Map_OldMine",
     "id": "ItWr_Map_OldMineSC",
     "path": "/Script/Angelscript.ItWr_Map_OldMineSC"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Map_Orc",
     "id": "ItWr_Map_Orc",
     "path": "/Script/Angelscript.ItWr_Map_Orc"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Map_SwampCamp",
     "id": "ItWr_Map_SwampCamp",
     "path": "/Script/Angelscript.ItWr_Map_SwampCamp"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Map_Temple",
     "id": "ItWr_Map_Temple",
     "path": "/Script/Angelscript.ItWr_Map_Temple"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Map_World",
     "id": "ItWr_Map_World",
     "path": "/Script/Angelscript.ItWr_Map_World"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Map_WorldComplete",
     "id": "ItWr_Map_WorldComplete",
     "path": "/Script/Angelscript.ItWr_Map_WorldComplete"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_1H_Axe_01",
     "id": "ItWr_Scroll_1H_Axe_01",
     "path": "/Script/Angelscript.ItWr_Scroll_1H_Axe_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_1H_Axe_02",
     "id": "ItWr_Scroll_1H_Axe_02",
     "path": "/Script/Angelscript.ItWr_Scroll_1H_Axe_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_1H_Mace_02",
     "id": "ItWr_Scroll_1H_Mace_02",
     "path": "/Script/Angelscript.ItWr_Scroll_1H_Mace_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_1H_Mace_03",
     "id": "ItWr_Scroll_1H_Mace_03",
     "path": "/Script/Angelscript.ItWr_Scroll_1H_Mace_03"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_1H_Mace_04",
     "id": "ItWr_Scroll_1H_Mace_04",
     "path": "/Script/Angelscript.ItWr_Scroll_1H_Mace_04"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_1H_Mace_Light_01",
     "id": "ItWr_Scroll_1H_Mace_Light_01",
     "path": "/Script/Angelscript.ItWr_Scroll_1H_Mace_Light_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_1H_Mace_War_01",
     "id": "ItWr_Scroll_1H_Mace_War_01",
     "path": "/Script/Angelscript.ItWr_Scroll_1H_Mace_War_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_1H_Mace_War_02",
     "id": "ItWr_Scroll_1H_Mace_War_02",
     "path": "/Script/Angelscript.ItWr_Scroll_1H_Mace_War_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_1H_Mace_War_03",
     "id": "ItWr_Scroll_1H_Mace_War_03",
     "path": "/Script/Angelscript.ItWr_Scroll_1H_Mace_War_03"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_1H_Sword_02",
     "id": "ItWr_Scroll_1H_Sword_02",
     "path": "/Script/Angelscript.ItWr_Scroll_1H_Sword_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_1H_Sword_Bastard_02",
     "id": "ItWr_Scroll_1H_Sword_Bastard_02",
     "path": "/Script/Angelscript.ItWr_Scroll_1H_Sword_Bastard_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_1H_Sword_Broad_01",
     "id": "ItWr_Scroll_1H_Sword_Broad_01",
     "path": "/Script/Angelscript.ItWr_Scroll_1H_Sword_Broad_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_1H_Sword_Broad_02",
     "id": "ItWr_Scroll_1H_Sword_Broad_02",
     "path": "/Script/Angelscript.ItWr_Scroll_1H_Sword_Broad_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_1H_Sword_Long_01",
     "id": "ItWr_Scroll_1H_Sword_Long_01",
     "path": "/Script/Angelscript.ItWr_Scroll_1H_Sword_Long_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_1H_Sword_Short_02",
     "id": "ItWr_Scroll_1H_Sword_Short_02",
     "path": "/Script/Angelscript.ItWr_Scroll_1H_Sword_Short_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_1H_Sword_Short_04",
     "id": "ItWr_Scroll_1H_Sword_Short_04",
     "path": "/Script/Angelscript.ItWr_Scroll_1H_Sword_Short_04"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_1H_Sword_Short_05",
     "id": "ItWr_Scroll_1H_Sword_Short_05",
     "path": "/Script/Angelscript.ItWr_Scroll_1H_Sword_Short_05"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_2H_Axe_Heavy_02",
     "id": "ItWr_Scroll_2H_Axe_Heavy_02",
     "path": "/Script/Angelscript.ItWr_Scroll_2H_Axe_Heavy_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_2H_Axe_Light_02",
     "id": "ItWr_Scroll_2H_Axe_Light_02",
     "path": "/Script/Angelscript.ItWr_Scroll_2H_Axe_Light_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_2H_Axe_Old_02",
     "id": "ItWr_Scroll_2H_Axe_Old_02",
     "path": "/Script/Angelscript.ItWr_Scroll_2H_Axe_Old_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_2H_Sword_01",
     "id": "ItWr_Scroll_2H_Sword_01",
     "path": "/Script/Angelscript.ItWr_Scroll_2H_Sword_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_2H_Sword_Heavy_01",
     "id": "ItWr_Scroll_2H_Sword_Heavy_01",
     "path": "/Script/Angelscript.ItWr_Scroll_2H_Sword_Heavy_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_2H_Sword_Light_01",
     "id": "ItWr_Scroll_2H_Sword_Light_01",
     "path": "/Script/Angelscript.ItWr_Scroll_2H_Sword_Light_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_2H_Sword_Light_02",
     "id": "ItWr_Scroll_2H_Sword_Light_02",
     "path": "/Script/Angelscript.ItWr_Scroll_2H_Sword_Light_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_2H_Sword_Light_03",
     "id": "ItWr_Scroll_2H_Sword_Light_03",
     "path": "/Script/Angelscript.ItWr_Scroll_2H_Sword_Light_03"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_AbandonMineSketch",
     "id": "ItWr_Scroll_AbandonMineSketch",
     "path": "/Script/Angelscript.ItWr_Scroll_AbandonMineSketch"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_BallLightning",
     "path": "/Script/Angelscript.ItWr_Scroll_BallLightning"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Bran_01",
     "id": "ItWr_Scroll_Bran_01",
     "path": "/Script/Angelscript.ItWr_Scroll_Bran_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Certificate",
     "id": "ItWr_Scroll_Certificate",
     "path": "/Script/Angelscript.ItWr_Scroll_Certificate"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Crawlersoup",
     "id": "ItWr_Scroll_Crawlersoup",
     "path": "/Script/Angelscript.ItWr_Scroll_Crawlersoup"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_Cronos",
     "path": "/Script/Angelscript.ItWr_Scroll_Cronos"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_DragonsbreathStew",
     "id": "ItWr_Scroll_DragonsbreathStew",
     "path": "/Script/Angelscript.ItWr_Scroll_DragonsbreathStew"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_DreamUniverse",
     "id": "ItWr_Scroll_DreamUniverse",
     "path": "/Script/Angelscript.ItWr_Scroll_DreamUniverse"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_DreamWorld",
     "id": "ItWr_Scroll_DreamWorld",
     "path": "/Script/Angelscript.ItWr_Scroll_DreamWorld"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_FireBolt",
     "path": "/Script/Angelscript.ItWr_Scroll_FireBolt"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_FireRain",
     "path": "/Script/Angelscript.ItWr_Scroll_FireRain"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_FistOfWind",
     "path": "/Script/Angelscript.ItWr_Scroll_FistOfWind"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_Heal",
     "path": "/Script/Angelscript.ItWr_Scroll_Heal"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_IceBolt",
     "path": "/Script/Angelscript.ItWr_Scroll_IceBolt"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_IceWave",
     "path": "/Script/Angelscript.ItWr_Scroll_IceWave"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Jacko_01",
     "id": "ItWr_Scroll_Jacko_01",
     "path": "/Script/Angelscript.ItWr_Scroll_Jacko_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Kalom",
     "id": "ItWr_Scroll_Kalom",
     "path": "/Script/Angelscript.ItWr_Scroll_Kalom"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Letter_01",
     "id": "ItWr_Scroll_Letter_01",
     "path": "/Script/Angelscript.ItWr_Scroll_Letter_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Letter_02",
     "id": "ItWr_Scroll_Letter_02",
     "path": "/Script/Angelscript.ItWr_Scroll_Letter_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_List",
     "id": "ItWr_Scroll_List",
     "path": "/Script/Angelscript.ItWr_Scroll_List"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Listnc",
     "id": "ItWr_Scroll_Listnc",
     "path": "/Script/Angelscript.ItWr_Scroll_Listnc"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Meatbugsauteed",
     "id": "ItWr_Scroll_Meatbugsauteed",
     "path": "/Script/Angelscript.ItWr_Scroll_Meatbugsauteed"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Milten",
     "id": "ItWr_Scroll_Milten",
     "path": "/Script/Angelscript.ItWr_Scroll_Milten"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_MushroomStew",
     "id": "ItWr_Scroll_MushroomStew",
     "path": "/Script/Angelscript.ItWr_Scroll_MushroomStew"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Mysteriousnote",
     "id": "ItWr_Scroll_Mysteriousnote",
     "path": "/Script/Angelscript.ItWr_Scroll_Mysteriousnote"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_Orkparcment_01",
     "path": "/Script/Angelscript.ItWr_Scroll_Orkparcment_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_Orkparcment_02",
     "path": "/Script/Angelscript.ItWr_Scroll_Orkparcment_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Potion_Health_02",
     "id": "ItWr_Scroll_Potion_Health_02",
     "path": "/Script/Angelscript.ItWr_Scroll_Potion_Health_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Potion_Health_03",
     "id": "ItWr_Scroll_Potion_Health_03",
     "path": "/Script/Angelscript.ItWr_Scroll_Potion_Health_03"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Potion_Health_Perma_03",
     "id": "ItWr_Scroll_Potion_Health_Perma_03",
     "path": "/Script/Angelscript.ItWr_Scroll_Potion_Health_Perma_03"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Potion_Mana_02",
     "id": "ItWr_Scroll_Potion_Mana_02",
     "path": "/Script/Angelscript.ItWr_Scroll_Potion_Mana_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Potion_Mana_03",
     "id": "ItWr_Scroll_Potion_Mana_03",
     "path": "/Script/Angelscript.ItWr_Scroll_Potion_Mana_03"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Potion_Mana_Perma_03",
     "id": "ItWr_Scroll_Potion_Mana_Perma_03",
     "path": "/Script/Angelscript.ItWr_Scroll_Potion_Mana_Perma_03"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Potion_Master_01",
     "id": "ItWr_Scroll_Potion_Master_01",
     "path": "/Script/Angelscript.ItWr_Scroll_Potion_Master_01"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Potion_Master_02",
     "id": "ItWr_Scroll_Potion_Master_02",
     "path": "/Script/Angelscript.ItWr_Scroll_Potion_Master_02"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_Pyrokinesis",
     "path": "/Script/Angelscript.ItWr_Scroll_Pyrokinesis"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_RankWaterMages",
     "path": "/Script/Angelscript.ItWr_Scroll_RankWaterMages"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_SeaforestBrew",
     "id": "ItWr_Scroll_SeaforestBrew",
     "path": "/Script/Angelscript.ItWr_Scroll_SeaforestBrew"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Sketch",
     "id": "ItWr_Scroll_Sketch",
     "path": "/Script/Angelscript.ItWr_Scroll_Sketch"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Soup",
     "id": "ItWr_Scroll_Soup",
     "path": "/Script/Angelscript.ItWr_Scroll_Soup"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_StormFist",
     "path": "/Script/Angelscript.ItWr_Scroll_StormFist"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_StormOfFire",
     "path": "/Script/Angelscript.ItWr_Scroll_StormOfFire"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_SyraNote",
     "id": "ItWr_Scroll_SyraNote",
     "path": "/Script/Angelscript.ItWr_Scroll_SyraNote"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_Telekinesis",
     "path": "/Script/Angelscript.ItWr_Scroll_Telekinesis"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_TransformBiter",
     "path": "/Script/Angelscript.ItWr_Scroll_TransformBiter"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_TransformBloodfly",
     "path": "/Script/Angelscript.ItWr_Scroll_TransformBloodfly"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_TransformBloodhound",
     "path": "/Script/Angelscript.ItWr_Scroll_TransformBloodhound"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_TransformHarpy",
     "path": "/Script/Angelscript.ItWr_Scroll_TransformHarpy"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_TransformLizard",
     "path": "/Script/Angelscript.ItWr_Scroll_TransformLizard"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_TransformLurker",
     "path": "/Script/Angelscript.ItWr_Scroll_TransformLurker"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_TransformMinecrawler",
     "path": "/Script/Angelscript.ItWr_Scroll_TransformMinecrawler"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_TransformOrcDog",
     "path": "/Script/Angelscript.ItWr_Scroll_TransformOrcDog"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_TransformRazor",
     "path": "/Script/Angelscript.ItWr_Scroll_TransformRazor"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_TransformShadowbeast",
     "path": "/Script/Angelscript.ItWr_Scroll_TransformShadowbeast"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_TransformSnapper",
     "path": "/Script/Angelscript.ItWr_Scroll_TransformSnapper"
   },
   {
     "category": "writing",
+    "icon": "ItWr_Scroll_Generic",
     "id": "ItWr_Scroll_TransformSwampshark",
     "path": "/Script/Angelscript.ItWr_Scroll_TransformSwampshark"
   },
   {
     "category": "armor",
+    "icon": "Kdf_Armor_H",
     "id": "Kdf_Armor_H",
     "path": "/Script/Angelscript.Kdf_Armor_H"
   },
   {
     "category": "armor",
+    "icon": "Kdf_Armor_L",
     "id": "Kdf_Armor_L",
     "path": "/Script/Angelscript.Kdf_Armor_L"
   },
   {
     "category": "armor",
+    "icon": "Kdw_Armor_H",
     "id": "Kdw_Armor_H",
     "path": "/Script/Angelscript.Kdw_Armor_H"
   },
   {
     "category": "armor",
+    "icon": "Kdw_Armor_L",
     "id": "Kdw_Armor_L",
     "path": "/Script/Angelscript.Kdw_Armor_L"
   },
   {
     "category": "armor",
+    "icon": "Law_Armor",
     "id": "Law_Armor",
     "path": "/Script/Angelscript.Law_Armor"
   },
   {
     "category": "armor",
+    "icon": "NH_Armor",
     "id": "NH_Armor",
     "path": "/Script/Angelscript.NH_Armor"
   },
   {
     "category": "armor",
+    "icon": "Nov_Armor",
     "id": "Nov_Armor",
     "path": "/Script/Angelscript.Nov_Armor"
   },
   {
     "category": "armor",
+    "icon": "Ore_Armor_H",
     "id": "Ore_Armor_H",
     "path": "/Script/Angelscript.Ore_Armor_H"
   },
   {
     "category": "armor",
+    "icon": "Ore_Armor_M",
     "id": "Ore_Armor_M",
     "path": "/Script/Angelscript.Ore_Armor_M"
   },
   {
     "category": "armor",
+    "icon": "Org_Armor",
     "id": "Org_Armor",
     "path": "/Script/Angelscript.Org_Armor"
   },
   {
     "category": "armor",
+    "icon": "Ryl_Armor",
     "id": "QA_Armor",
     "path": "/Script/Angelscript.QA_Armor"
   },
   {
     "category": "armor",
+    "icon": "Ryl_Armor",
     "id": "Ryl_Armor",
     "path": "/Script/Angelscript.Ryl_Armor"
   },
   {
     "category": "armor",
+    "icon": "Sfb_Armor_L",
     "id": "Sfb_Armor_L",
     "path": "/Script/Angelscript.Sfb_Armor_L"
   },
   {
     "category": "armor",
+    "icon": "Sld_Armor",
     "id": "Sld_Armor",
     "path": "/Script/Angelscript.Sld_Armor"
   },
   {
     "category": "armor",
+    "icon": "Stt_Armor",
     "id": "Stt_Armor",
     "path": "/Script/Angelscript.Stt_Armor"
   },
   {
     "category": "armor",
+    "icon": "Tpl_Armor",
     "id": "Tpl_Armor",
     "path": "/Script/Angelscript.Tpl_Armor"
   },
   {
     "category": "armor",
+    "icon": "Vlk_Armor_L",
     "id": "Vlk_Armor_L",
     "path": "/Script/Angelscript.Vlk_Armor_L"
   },
   {
     "category": "armor",
+    "icon": "Vlk_Armor_M",
     "id": "Vlk_Armor_M",
     "path": "/Script/Angelscript.Vlk_Armor_M"
   }
