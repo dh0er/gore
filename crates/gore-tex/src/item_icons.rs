@@ -5,6 +5,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
 
 use image::{ImageDecoder as _, ImageEncoder as _};
 use serde::{Deserialize, Serialize};
@@ -28,12 +29,12 @@ const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
 // multi-megapixel textures or a multi-gigabyte cache through this narrow path.
 const MAX_ICON_DIMENSION: u32 = 512;
 const MAX_ICON_PNG_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_PREVIEW_USMAP_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_DECODED_ICON_BYTES: u64 = MAX_ICON_DIMENSION as u64 * MAX_ICON_DIMENSION as u64 * 4;
 // The current ~678 unique 256x256 icons decode to about 170 MiB and encode to
 // well below 100 MiB. Bound both cumulative proof work and published disk use.
 const MAX_CACHE_PNG_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_CACHE_DECODED_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_RETAINED_COMPLETE_GENERATIONS: usize = 2;
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -83,8 +84,7 @@ pub fn prepare_item_icon_cache(game_root: &Path, items: &[ItemIconSpec]) -> Resu
     let cache_root = gore_loc::paths::shared_data_dir();
     std::fs::create_dir_all(&cache_root)?;
     let utoc = crate::paths::main_container(game_root)?;
-    let usmap = crate::paths::usmap(game_root)?;
-    let mut source = InstalledItemIconSource::open(&utoc, &usmap, &cache_root)?;
+    let mut source = InstalledItemIconSource::open(&utoc, &cache_root)?;
     prepare_item_icon_cache_with_source(&cache_root, items, &mut source)
 }
 
@@ -237,32 +237,20 @@ struct InstalledItemIconSource {
     previews: OpenTexturePreviewBatch,
     generation: OpenTextureGeneration,
     initial_build_id: Option<String>,
-    usmap_bytes: Option<Vec<u8>>,
 }
 
 impl InstalledItemIconSource {
-    fn open(utoc: &Path, usmap: &Path, cache_root: &Path) -> Result<Self> {
+    fn open(utoc: &Path, cache_root: &Path) -> Result<Self> {
         // This is the one and only composite open for the entire batch.
         let composite = InstalledTextureComposite::open(utoc)?;
-        let generation = OpenTextureGeneration::capture(&composite, usmap, cache_root)?;
+        let generation = OpenTextureGeneration::capture(&composite, cache_root)?;
         let initial_build_id = Some(generation.captured_build_id().to_string());
         let previews = OpenTexturePreviewBatch::from_composite(composite)?;
         Ok(Self {
             previews,
             generation,
             initial_build_id,
-            usmap_bytes: None,
         })
-    }
-
-    fn ensure_mapping_loaded(&mut self) -> Result<()> {
-        if self.usmap_bytes.is_none() {
-            self.usmap_bytes = Some(
-                self.generation
-                    .read_mapping_bounded(MAX_PREVIEW_USMAP_BYTES)?,
-            );
-        }
-        Ok(())
     }
 }
 
@@ -275,12 +263,6 @@ impl ItemIconSource for InstalledItemIconSource {
     }
 
     fn write_png(&mut self, asset_path: &str, output: &Path) -> Result<()> {
-        // Load the bounded mapping exactly once, then reuse it for every decode.
-        self.ensure_mapping_loaded()?;
-        let usmap_bytes = self
-            .usmap_bytes
-            .as_deref()
-            .expect("mapping was initialized");
         let mut converted = self.previews.unpack(asset_path)?;
         let ubulk = converted
             .sidecars
@@ -288,8 +270,10 @@ impl ItemIconSource for InstalledItemIconSource {
             .find(|sidecar| sidecar.kind == VerifiedLegacySidecarKind::Bulk)
             .map(|sidecar| std::mem::take(&mut sidecar.bytes))
             .unwrap_or_default();
-        let mut info =
-            crate::decode::parse(&converted.uasset, &converted.uexp, &ubulk, usmap_bytes)?;
+        // The cooked Texture2D parser and zen-to-legacy conversion use package
+        // metadata, not property mappings. Item previews therefore work on a
+        // clean game installation without an external UE4SS `.usmap`.
+        let mut info = crate::decode::parse(&converted.uasset, &converted.uexp, &ubulk, &[])?;
         let decoded_byte_length = bounded_decoded_byte_length(info.width, info.height)
             .ok_or_else(|| invalid_data("item icon dimensions exceed their preview limit"))?;
         let pixels = crate::decode::to_rgba8(&info)?;
@@ -374,14 +358,19 @@ fn prepare_item_icon_cache_with_source(
     // Validation, corrupt-generation quarantine, rebuilding, and publication
     // are one cross-process critical section. A crashed process releases the OS
     // lock; the small sentinel remains for the next acquisition.
-    let _generation_lock = GenerationLock::acquire(cache_root, &final_directory)?;
+    let generation_lock = GenerationLock::acquire(cache_root, &final_directory)?;
     remove_stale_staging_directories(cache_root, &final_directory)?;
     if complete_cache_matches(&final_directory, &expected)? {
         let build_id_after = source.current_build_id()?;
         if build_id_after != build_id_before {
             return Err(TexError::GenerationChanged);
         }
-        return Ok(manifest_path);
+        return Ok(finish_prepared_cache(
+            cache_root,
+            &final_directory,
+            manifest_path,
+            generation_lock,
+        ));
     }
     match std::fs::symlink_metadata(&final_directory) {
         Ok(_) => {
@@ -436,18 +425,41 @@ fn prepare_item_icon_cache_with_source(
     match std::fs::rename(staging.path(), &final_directory) {
         Ok(()) => {
             staging.disarm();
-            Ok(manifest_path)
+            Ok(finish_prepared_cache(
+                cache_root,
+                &final_directory,
+                manifest_path,
+                generation_lock,
+            ))
         }
         Err(publication_error) => {
             // Another process may have won the same immutable generation race.
             // Accept it only after validating the complete byte contract.
             if complete_cache_matches(&final_directory, &expected)? {
-                Ok(manifest_path)
+                Ok(finish_prepared_cache(
+                    cache_root,
+                    &final_directory,
+                    manifest_path,
+                    generation_lock,
+                ))
             } else {
                 Err(publication_error.into())
             }
         }
     }
+}
+
+fn finish_prepared_cache(
+    cache_root: &Path,
+    current_generation: &Path,
+    manifest_path: PathBuf,
+    generation_lock: GenerationLock,
+) -> PathBuf {
+    drop(generation_lock);
+    // Cleanup is deliberately best-effort: a ready current cache remains
+    // usable even when an older generation is temporarily busy or protected.
+    prune_obsolete_item_icon_cache(cache_root, current_generation);
+    manifest_path
 }
 
 fn validate_build_id(build_id: &str) -> Result<()> {
@@ -576,6 +588,58 @@ fn complete_cache_matches(directory: &Path, expected: &ExpectedItemIconManifest)
     Ok(true)
 }
 
+fn complete_cache_is_owned(directory: &Path) -> Result<bool> {
+    let manifest_path = directory.join(MANIFEST_FILE_NAME);
+    let metadata = match std::fs::symlink_metadata(&manifest_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.file_type().is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() > MAX_MANIFEST_BYTES
+    {
+        return Ok(false);
+    }
+    let mut file = File::open(&manifest_path)?;
+    let opened_metadata = file.metadata()?;
+    if !opened_metadata.file_type().is_file()
+        || opened_metadata.len() != metadata.len()
+        || opened_metadata.len() > MAX_MANIFEST_BYTES
+    {
+        return Ok(false);
+    }
+    let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
+    (&mut file)
+        .take(MAX_MANIFEST_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 != opened_metadata.len() {
+        return Ok(false);
+    }
+    let manifest: ItemIconManifest = match serde_json::from_slice(&bytes) {
+        Ok(manifest) => manifest,
+        Err(_) => return Ok(false),
+    };
+    if manifest.schema != ITEM_ICON_CACHE_SCHEMA
+        || manifest.item_count == 0
+        || manifest.item_count > MAX_ITEMS
+        || manifest.item_count != manifest.items.len()
+        || manifest
+            .items
+            .keys()
+            .any(|item_id| validate_item_id(item_id).is_err())
+        || validate_build_id(&manifest.build_id).is_err()
+    {
+        return Ok(false);
+    }
+    let expected = ExpectedItemIconManifest {
+        build_id: manifest.build_id,
+        item_count: manifest.item_count,
+        items: manifest.items,
+    };
+    complete_cache_matches(directory, &expected)
+}
+
 /// Validate a previously sealed PNG without decoding its complete RGBA payload
 /// again. The initial generation decoded every pixel before recording both
 /// hashes. On reuse, an exact PNG hash plus the bounded decoder metadata proves
@@ -682,6 +746,7 @@ fn inspect_cached_png(path: &Path, expected_len: u64) -> Result<Option<ItemIconF
 
 struct GenerationLock {
     _file: File,
+    identity: GenerationLockIdentity,
 }
 
 impl GenerationLock {
@@ -701,7 +766,14 @@ impl GenerationLock {
                 "item icon cache lock changed while acquiring it",
             ));
         }
-        Ok(Self { _file: file })
+        Ok(Self {
+            _file: file,
+            identity: held_identity,
+        })
+    }
+
+    fn identity(&self) -> GenerationLockIdentity {
+        self.identity
     }
 }
 
@@ -852,13 +924,182 @@ fn owned_generation_name<'a>(cache_root: &Path, generation: &'a Path) -> Result<
     generation
         .file_name()
         .and_then(|name| name.to_str())
-        .filter(|name| {
-            name.strip_prefix(CACHE_DIRECTORY_PREFIX)
-                .is_some_and(|key| {
-                    key.len() == 64 && key.bytes().all(|byte| byte.is_ascii_hexdigit())
-                })
-        })
+        .filter(|name| is_owned_generation_name(name))
         .ok_or_else(|| invalid_data("item icon cache generation name is invalid"))
+}
+
+fn is_owned_generation_name(name: &str) -> bool {
+    name.strip_prefix(CACHE_DIRECTORY_PREFIX)
+        .is_some_and(|key| key.len() == 64 && key.bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
+
+fn owned_auxiliary_directory_generation_name(name: &str) -> Option<&str> {
+    let name = name.strip_prefix('.')?;
+    for marker in [".tmp-", ".quarantine-"] {
+        let Some((generation, suffix)) = name.split_once(marker) else {
+            continue;
+        };
+        let Some((pid, sequence)) = suffix.split_once('-') else {
+            continue;
+        };
+        if is_owned_generation_name(generation)
+            && !pid.is_empty()
+            && !sequence.is_empty()
+            && pid.bytes().all(|byte| byte.is_ascii_digit())
+            && sequence.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Some(generation);
+        }
+    }
+    None
+}
+
+fn owned_lock_generation_name(name: &str) -> Option<&str> {
+    name.strip_prefix('.')
+        .and_then(|name| name.strip_suffix(".lock"))
+        .filter(|name| is_owned_generation_name(name))
+}
+
+/// Keep the current complete cache and one recent fallback. Every cleanup
+/// target must use this module's exact grammar; published directories are
+/// deleted only after their complete manifest and PNG seals validate again
+/// while their generation lock is held.
+fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) {
+    let Ok(current_name) = owned_generation_name(cache_root, current_generation) else {
+        return;
+    };
+    let current_name = current_name.to_string();
+    let Ok(entries) = std::fs::read_dir(cache_root) else {
+        return;
+    };
+
+    let mut complete = Vec::<(SystemTime, String, PathBuf)>::new();
+    let mut owned_names = BTreeSet::new();
+    owned_names.insert(current_name.clone());
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if is_owned_generation_name(name) {
+            owned_names.insert(name.to_string());
+            let path = entry.path();
+            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if metadata.file_type().is_dir()
+                && !metadata.file_type().is_symlink()
+                && complete_cache_is_owned(&path).unwrap_or(false)
+            {
+                complete.push((
+                    metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+                    name.to_string(),
+                    path,
+                ));
+            }
+        } else if let Some(generation) = owned_auxiliary_directory_generation_name(name)
+            .or_else(|| owned_lock_generation_name(name))
+        {
+            owned_names.insert(generation.to_string());
+        }
+    }
+
+    complete.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
+    let mut retained = BTreeSet::from([current_name]);
+    for (_, name, _) in &complete {
+        if retained.len() >= MAX_RETAINED_COMPLETE_GENERATIONS {
+            break;
+        }
+        retained.insert(name.clone());
+    }
+    let prunable: BTreeMap<_, _> = complete
+        .into_iter()
+        .filter(|(_, name, _)| !retained.contains(name))
+        .map(|(modified, name, _)| (name, modified))
+        .collect();
+
+    for name in owned_names {
+        let generation = cache_root.join(&name);
+        let Ok(lock) = GenerationLock::acquire(cache_root, &generation) else {
+            continue;
+        };
+        let lock_identity = lock.identity();
+        remove_owned_auxiliary_directories(cache_root, &name);
+
+        if let Some(expected_modified) = prunable.get(&name) {
+            let removable = std::fs::symlink_metadata(&generation)
+                .ok()
+                .filter(|metadata| {
+                    metadata.file_type().is_dir()
+                        && !metadata.file_type().is_symlink()
+                        && metadata.modified().ok().as_ref() == Some(expected_modified)
+                })
+                .is_some()
+                && complete_cache_is_owned(&generation).unwrap_or(false);
+            if removable {
+                let _ = std::fs::remove_dir_all(&generation);
+            }
+        }
+
+        drop(lock);
+        if !retained.contains(&name)
+            && std::fs::symlink_metadata(&generation).is_err()
+            && !has_owned_auxiliary_directories(cache_root, &name)
+        {
+            remove_generation_lock_if_unchanged(cache_root, &name, lock_identity);
+        }
+    }
+}
+
+fn remove_owned_auxiliary_directories(cache_root: &Path, generation_name: &str) {
+    let Ok(entries) = std::fs::read_dir(cache_root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name
+            .to_str()
+            .and_then(owned_auxiliary_directory_generation_name)
+            != Some(generation_name)
+        {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+}
+
+fn has_owned_auxiliary_directories(cache_root: &Path, generation_name: &str) -> bool {
+    std::fs::read_dir(cache_root).is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .and_then(owned_auxiliary_directory_generation_name)
+                == Some(generation_name)
+        })
+    })
+}
+
+fn remove_generation_lock_if_unchanged(
+    cache_root: &Path,
+    generation_name: &str,
+    expected_identity: GenerationLockIdentity,
+) {
+    let lock_path = cache_root.join(format!(".{generation_name}.lock"));
+    let Ok(named) = open_generation_lock(&lock_path, false) else {
+        return;
+    };
+    if generation_lock_identity(&named).ok() != Some(expected_identity) {
+        return;
+    }
+    drop(named);
+    let _ = std::fs::remove_file(lock_path);
 }
 
 /// Preserve a broken cache for diagnostics/recovery, then free the exact
@@ -1181,7 +1422,7 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_existing_generation_is_quarantined_then_rebuilt() {
+    fn incomplete_existing_generation_is_quarantined_rebuilt_and_cleaned() {
         let temp = tempfile::tempdir().unwrap();
         let catalog = PreparedCatalog::from_specs(&specs()).unwrap();
         let directory = generation_directory(temp.path(), "build-a", &catalog.digest);
@@ -1193,19 +1434,90 @@ mod tests {
             prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut source).unwrap();
         assert_eq!(repaired, directory.join(MANIFEST_FILE_NAME));
         assert!(!source.calls.is_empty());
-        let quarantine = std::fs::read_dir(temp.path())
+        assert!(std::fs::read_dir(temp.path())
             .unwrap()
             .flatten()
             .map(|entry| entry.path())
-            .find(|path| {
+            .all(|path| {
                 path.file_name()
-                    .is_some_and(|name| name.to_string_lossy().contains(".quarantine-"))
-            })
-            .expect("invalid generation is preserved in quarantine");
-        assert_eq!(
-            std::fs::read(quarantine.join(MANIFEST_FILE_NAME)).unwrap(),
-            b"{}"
+                    .is_none_or(|name| !name.to_string_lossy().contains(".quarantine-"))
+            }));
+    }
+
+    #[test]
+    fn obsolete_generations_auxiliary_directories_and_locks_are_pruned() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut first = FakeSource::stable("build-a");
+        let first_manifest =
+            prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut first).unwrap();
+        let first_name = first_manifest
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let mut second = FakeSource::stable("build-b");
+        let second_manifest =
+            prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut second).unwrap();
+        let second_name = second_manifest
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        for generation_name in [&first_name, &second_name] {
+            let quarantine = temp
+                .path()
+                .join(format!(".{generation_name}.quarantine-999-7"));
+            std::fs::create_dir(&quarantine).unwrap();
+            std::fs::write(quarantine.join("partial"), b"stale").unwrap();
+        }
+        let unrelated = temp
+            .path()
+            .join(".item-icons-v1-unrelated.quarantine-999-7");
+        std::fs::create_dir(&unrelated).unwrap();
+
+        let mut third = FakeSource::stable("build-c");
+        let third_manifest =
+            prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut third).unwrap();
+        let third_directory = third_manifest.parent().unwrap().to_path_buf();
+
+        let published = published_generations(temp.path());
+        assert_eq!(published.len(), MAX_RETAINED_COMPLETE_GENERATIONS);
+        assert!(published.contains(&third_directory));
+        assert!(
+            published
+                .iter()
+                .any(|path| path == first_manifest.parent().unwrap())
+                || published
+                    .iter()
+                    .any(|path| path == second_manifest.parent().unwrap())
         );
+        assert!(std::fs::read_dir(temp.path())
+            .unwrap()
+            .flatten()
+            .all(|entry| {
+                !entry.file_name().to_string_lossy().contains(".quarantine-")
+                    || entry.path() == unrelated
+            }));
+        assert!(unrelated.exists());
+
+        let lock_count = std::fs::read_dir(temp.path())
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .and_then(owned_lock_generation_name)
+                    .is_some()
+            })
+            .count();
+        assert!(lock_count <= MAX_RETAINED_COMPLETE_GENERATIONS);
     }
 
     #[test]

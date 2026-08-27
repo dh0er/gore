@@ -193,9 +193,9 @@ fn build_id_for_in_cache_dir(utoc: &Path, usmap: &Path, cache_directory: &Path) 
     fingerprint_open_sources(&mut sources, cache_directory)
 }
 
-/// One captured installed-texture generation whose source files stay open for
-/// an entire batch. This lets batch consumers load the mapping once and verify
-/// the same build before publication without reopening the IoStore composite.
+/// One captured installed-container generation whose source files stay open
+/// for an entire batch. This lets batch consumers verify the same build before
+/// publication without reopening the IoStore composite.
 pub(crate) struct OpenTextureGeneration {
     sources: Vec<OpenSourceFile>,
     build_id: String,
@@ -205,10 +205,9 @@ pub(crate) struct OpenTextureGeneration {
 impl OpenTextureGeneration {
     pub(crate) fn capture(
         composite: &crate::container::InstalledTextureComposite,
-        usmap: &Path,
         cache_directory: &Path,
     ) -> Result<Self> {
-        let mut sources = open_source_files(composite, usmap)?;
+        let mut sources = open_composite_source_files(composite)?;
         let build_id = fingerprint_open_sources(&mut sources, cache_directory)?;
         Ok(Self {
             sources,
@@ -219,35 +218,6 @@ impl OpenTextureGeneration {
 
     pub(crate) fn captured_build_id(&self) -> &str {
         &self.build_id
-    }
-
-    /// Read the captured mapping through its already-open handle. The mapping
-    /// is always source zero (see `open_source_files`) and is read at most once
-    /// by the item-icon batch owner.
-    pub(crate) fn read_mapping_bounded(&mut self, maximum_bytes: u64) -> Result<Vec<u8>> {
-        let source = self
-            .sources
-            .first_mut()
-            .ok_or_else(|| invalid_data("texture generation has no mapping source"))?;
-        if source.identity.byte_len > maximum_bytes {
-            return Err(invalid_data(
-                "texture preview mapping is not a bounded regular file",
-            ));
-        }
-        let expected = usize::try_from(source.identity.byte_len)
-            .map_err(|_| invalid_data("texture preview mapping length is unsupported"))?;
-        source.file.seek(SeekFrom::Start(0))?;
-        let mut bytes = Vec::with_capacity(expected);
-        (&mut source.file)
-            .take(maximum_bytes.saturating_add(1))
-            .read_to_end(&mut bytes)?;
-        if bytes.len() != expected {
-            return Err(invalid_data(
-                "texture preview mapping changed while reading",
-            ));
-        }
-        revalidate_source_file(source)?;
-        Ok(bytes)
     }
 
     /// Recompute (or identity-cache) the fingerprint through the same captured
@@ -551,17 +521,30 @@ fn open_source_files(
         "mapping".to_string(),
         None,
     )?);
-    for source in composite.sources() {
-        sources.push(open_source_file(
-            source.path.clone(),
-            source.role.clone(),
-            source.parsed_blake3,
-        )?);
-    }
+    sources.extend(open_composite_source_files(composite)?);
     if sources.len() > MAX_SOURCE_FILES {
         return Err(invalid_data("too many installed texture source files"));
     }
     Ok(sources)
+}
+
+fn open_composite_source_files(
+    composite: &crate::container::InstalledTextureComposite,
+) -> Result<Vec<OpenSourceFile>> {
+    if composite.sources().len() > MAX_SOURCE_FILES {
+        return Err(invalid_data("too many installed texture source files"));
+    }
+    composite
+        .sources()
+        .iter()
+        .map(|source| {
+            open_source_file(
+                source.path.clone(),
+                source.role.clone(),
+                source.parsed_blake3,
+            )
+        })
+        .collect()
 }
 
 fn open_source_file(
