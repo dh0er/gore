@@ -122,12 +122,23 @@ final itemIconCoreServiceProvider = Provider<GoresaveCoreService>((ref) {
 /// is noticed without restarting the editor.
 final itemIconCatalogReloadProvider = StateProvider<int>((ref) => 0);
 
+final _itemIconCatalogRetentionProvider = Provider(
+  (ref) => _ItemIconCatalogRetention(),
+);
+
+class _ItemIconCatalogRetention {
+  ItemIconCatalog? value;
+}
+
 /// Ensures the complete bundled item set is cached, then reads its small
 /// manifest. PNG bytes stay on disk and are decoded at widget size by Flutter.
 final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
   ref.watch(itemIconCatalogReloadProvider);
+  final retention = ref.read(_itemIconCatalogRetentionProvider);
+  ItemIconCatalog retainedOrEmpty() =>
+      retention.value ?? const ItemIconCatalog.empty();
   final core = ref.watch(itemIconCoreServiceProvider);
-  if (!core.isAvailable) return const ItemIconCatalog.empty();
+  if (!core.isAvailable) return retainedOrEmpty();
 
   try {
     final gamePath = ref.watch(sharedConfigProvider).gamePath();
@@ -135,26 +146,28 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
       'item_icons_prepare',
       payload: {'gamePath': ?gamePath},
     );
-    if (response['ok'] != true) return const ItemIconCatalog.empty();
+    if (response['ok'] != true) return retainedOrEmpty();
     final data = (response['data'] as Map?)?.cast<String, Object?>();
     final manifestPath = data?['manifestPath'] as String?;
     if (manifestPath == null || manifestPath.isEmpty) {
-      return const ItemIconCatalog.empty();
+      return retainedOrEmpty();
     }
     final file = File(manifestPath);
-    if (!await file.exists()) return const ItemIconCatalog.empty();
+    if (!await file.exists()) return retainedOrEmpty();
     final manifestLength = await file.length();
     if (manifestLength < 1 || manifestLength > _maximumManifestBytes) {
-      return const ItemIconCatalog.empty();
+      return retainedOrEmpty();
     }
-    return ItemIconCatalog.fromManifestJson(
+    final catalog = ItemIconCatalog.fromManifestJson(
       manifestPath: manifestPath,
       json: await file.readAsString(),
     );
+    retention.value = catalog;
+    return catalog;
   } catch (_) {
     // Images are enhancement-only. Every caller has a category-icon fallback,
     // so a missing game, corrupt cache, or transient extraction error must not
-    // make the save editor unusable.
-    return const ItemIconCatalog.empty();
+    // make the save editor unusable or erase a previously loaded generation.
+    return retainedOrEmpty();
   }
 });

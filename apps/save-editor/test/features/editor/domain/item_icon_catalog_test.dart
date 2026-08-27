@@ -115,7 +115,7 @@ void main() {
     expect(catalog.pathFor(itemId: 'ItFo_Apple'), isNotNull);
   });
 
-  test('reload keeps the previous generation visible while checking', () async {
+  test('failed reload keeps the previous generation available', () async {
     final root = Directory.systemTemp.createTempSync('gore_item_icons_reload');
     addTearDown(() => root.deleteSync(recursive: true));
     final manifest = File(p.join(root.path, 'manifest.json'))
@@ -146,10 +146,11 @@ void main() {
     expect(mid.value?.pathFor(itemId: 'ItFo_Apple'), isNotNull);
 
     secondResponse.complete({
-      'ok': true,
-      'data': {'manifestPath': manifest.path},
+      'ok': false,
+      'error': {'message': 'transient native failure'},
     });
-    await container.read(itemIconCatalogProvider.future);
+    final afterFailure = await container.read(itemIconCatalogProvider.future);
+    expect(afterFailure.pathFor(itemId: 'ItFo_Apple'), isNotNull);
   });
 }
 
