@@ -24,6 +24,16 @@ not source.
 `SizeX`, `SizeY`, and the format were read from the cooked
 `FTexturePlatformData` header at the start of `sample.uexp`.
 
+## Captured game build
+
+- Gothic 1 Remake on Unreal Engine **5.4.3**, CL **169686**.
+- Mapping source: `G1R-5.4.3-168781-272ce2f8.usmap`.
+- Container: `G1R/Content/Paks/G1R-Windows.utoc` (IoStore/zen).
+
+The byte offsets and region boundaries asserted by the fixture tests are tied
+to this exact captured build. Do not regenerate the fixture from a different
+game build without updating and verifying those assertions.
+
 ## Local files
 
 | File | Expected | Size (bytes) | Notes |
@@ -35,7 +45,7 @@ not source.
 
 ## Regenerate the fixture locally
 
-1. From the repository root, unpack
+1. From the repository root, using the captured game build above, unpack
    `/Game/UI/Textures/Common/T_HardwareCursor` from a legally installed game
    with `gore_tex::container::unpack_asset` into a temporary directory.
 
