@@ -514,6 +514,13 @@ is an `&inout` parameter — a temporary bound to a non-const reference, which t
 not take. Four runs, no diagnostic, and the diff says why. The two passes work against each other
 there; the drop is the one that pays.
 
+One more refusal, measured three times: writing an anonymous `T()` in an ARGUMENT position where
+the cache has no signature for the callee. `T x; f(..., x);` with nothing ever writing `x` is
+`f(..., T())` — but `arg_position_is_written_through` answers "no" both when it knows the position
+takes a value and when it knows nothing at all, and the calls this reaches are the ones it knows
+nothing about (`SendGameplayEvent`, `OnBeginOverlap` — whose last parameter is an out-parameter).
+The return form of the same rule is safe and is in: a returned value has no parameter to bind to.
+
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
 vanilla holds, where the largest finite float came back one ULP low every time. The belief that

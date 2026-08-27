@@ -8721,6 +8721,34 @@ fn drop_default_arguments(body: &str, refs: &RefResolver) -> String {
     text
 }
 
+/// The call whose top-level argument list holds `name` as a whole argument, with the callee name,
+/// the rendered argument count and the position — for calls nested anywhere in the line, which is
+/// where most arguments actually stand.
+fn argument_position_of(line: &str, name: &str) -> Option<(String, usize, usize)> {
+    let bytes = line.as_bytes();
+    let is_id = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    for (at, b) in bytes.iter().enumerate() {
+        if *b != b'(' || at == 0 {
+            continue;
+        }
+        let mut start = at;
+        while start > 0 && is_id(bytes[start - 1]) {
+            start -= 1;
+        }
+        if start == at {
+            continue;
+        }
+        let callee = &line[start..at];
+        let Some((arguments, _)) = argument_list(line, at) else {
+            continue;
+        };
+        if let Some(position) = arguments.iter().position(|argument| argument == name) {
+            return Some((callee.to_owned(), arguments.len(), position));
+        }
+    }
+    None
+}
+
 /// `(name, index of its `(`)` for every call in `line` whose callee is a bare identifier — not a
 /// member call, not a constructor of a known type spelled `T(`.
 fn free_call_sites(line: &str) -> Vec<(String, usize)> {
