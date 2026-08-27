@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 99.05% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 99.06% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.05%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.06%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,565 functions (0.95%) recompile to bytecode that differs semantically.** A semantic
+**1,550 functions (0.94%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -579,6 +579,21 @@ cast writes its slot twice, `opCast` on one arm and `ClrVPtr` on the other — a
 compared alias inlined 19 casts into their own null tests.
 
 1,594 to 1,565.
+
+**A call result parked in a slot and read straight back is a NAME.** The compiler branches on
+the value register where it stands — 4,777 plain-`if` and 855 short-circuit sites in vanilla do
+exactly that, including 1,714 for the same `IsValid` that spills 27 times. So a `CALL; CpyRtoV4;
+CpyVtoR1; J*` run exists only because the source spent a `bool` on the result, and the slot is
+not a temporary to fold away. An operator overload is excluded: its own call path materialises
+the pair with no name involved.
+
+**A range-for element is released INSIDE the loop.** The set that protects loop elements from
+inlining took every `FreeNullV8` in the function, so a release standing after the loop's
+back-edge — which belongs to the CONTAINER temporary, and is the very evidence that the container
+was written inside the `for` header — was read as proof that the container had been named. It is
+now bounded by the back-edge's span.
+
+1,565 to 1,550.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern

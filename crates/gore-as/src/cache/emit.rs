@@ -4019,10 +4019,35 @@ fn loop_element_slots(f: &Func) -> HashSet<i32> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashSet::new();
     };
+    // A range-for element is released at the end of every ITERATION, so its release stands INSIDE
+    // the loop: between the target of a backward jump and that jump. A release standing after the
+    // back-edge belongs to the CONTAINER temporary, and reading that as an element protects a name
+    // vanilla never wrote — it is the instruction that proves the container was a temporary.
+    let spans: Vec<(usize, usize)> = instrs
+        .iter()
+        .enumerate()
+        .filter_map(|(at, ins)| {
+            if !ins.op.name.starts_with('J') {
+                return None;
+            }
+            let offset = *ins.dwords.first()? as i32;
+            let target: usize = (ins.offset_dw as i64 + 2 + offset as i64).try_into().ok()?;
+            (target < ins.offset_dw).then(|| {
+                instrs
+                    .iter()
+                    .position(|other| other.offset_dw == target)
+                    .map(|start| (start, at))
+            })?
+        })
+        .collect();
     instrs
         .iter()
-        .filter(|ins| matches!(ins.op.name, "FreeNullV8" | "FreeNullV4" | "FREE"))
-        .filter_map(|ins| ins.words.first().map(|word| *word as i16 as i32))
+        .enumerate()
+        .filter(|(at, ins)| {
+            matches!(ins.op.name, "FreeNullV8" | "FreeNullV4" | "FREE")
+                && spans.iter().any(|(start, end)| at > start && at < end)
+        })
+        .filter_map(|(_, ins)| ins.words.first().map(|word| *word as i16 as i32))
         .filter(|slot| *slot > 0)
         .collect()
 }
@@ -9486,6 +9511,32 @@ fn unnamed_value_defs(f: &Func, refs: &RefResolver) -> HashSet<(i32, usize)> {
             next.op.name.starts_with("CpyVtoV")
                 && next.words.get(1).map(|w| *w as i16 as i32) == Some(slot)
         }) {
+            continue;
+        }
+        // A call result parked in a slot and read straight BACK into the value register is a
+        // NAME. The compiler branches on the register where it stands — 4,777 plain-`if` and 855
+        // short-circuit sites in vanilla do exactly that, including 1,714 for the same `IsValid`
+        // that spills 27 times — so the store-and-reload pair exists only because the source
+        // spent a `bool` on it. An operator overload is excluded: its call path materialises the
+        // pair on its own, with no name involved.
+        if ins.op.name == "CpyRtoV4"
+            && at > 0
+            && matches!(
+                instrs[at - 1].op.name,
+                "CALL" | "CALLSYS" | "CALLINTF" | "CALLBND"
+            )
+            && !instrs[at - 1]
+                .qwords
+                .first()
+                .and_then(|ptr| refs.func_by_ptr(*ptr as i64))
+                .is_some_and(|callee| callee.starts_with("op"))
+            && instrs
+                .get(at + 1)
+                .is_some_and(|next| next.op.name == "CpyVtoR1" && w0(next) == slot)
+            && instrs
+                .get(at + 2)
+                .is_some_and(|next| next.op.name.starts_with('J'))
+        {
             continue;
         }
         // an address push is a real variable the callee writes through — anywhere, not just here
