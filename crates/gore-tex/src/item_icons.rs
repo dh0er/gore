@@ -1276,11 +1276,11 @@ fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) 
         let Ok(Some(lock)) = GenerationLock::try_acquire(cache_root, &generation) else {
             continue;
         };
+        remove_owned_auxiliary_directories(cache_root, &name);
         if generation_has_live_lease(cache_root, &name) {
             drop(lock);
             continue;
         }
-        remove_owned_auxiliary_directories(cache_root, &name);
 
         if let Some(expected_modified) = prunable.get(&name) {
             let removable = std::fs::symlink_metadata(&generation)
@@ -1306,6 +1306,13 @@ fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) 
 /// terminated process and can be removed because consumers always create a new
 /// unique lease rather than reopening an existing one.
 fn generation_has_live_lease(cache_root: &Path, generation_name: &str) -> bool {
+    let generation = cache_root.join(generation_name);
+    if GENERATION_LEASES
+        .get()
+        .is_some_and(|leases| lease_registry_contains(leases, &generation))
+    {
+        return true;
+    }
     let Ok(entries) = std::fs::read_dir(cache_root) else {
         return true;
     };
@@ -1343,6 +1350,18 @@ fn generation_has_live_lease(cache_root: &Path, generation_name: &str) -> bool {
         let _ = std::fs::remove_file(path);
     }
     false
+}
+
+fn lease_registry_contains(
+    leases: &Mutex<BTreeMap<PathBuf, GenerationLease>>,
+    generation: &Path,
+) -> bool {
+    match leases.lock() {
+        Ok(leases) => leases.contains_key(generation),
+        // A poisoned registry cannot safely prove that this process has no
+        // reader, so fail closed and preserve the generation.
+        Err(_) => true,
+    }
 }
 
 fn remove_owned_auxiliary_directories(cache_root: &Path, generation_name: &str) {
@@ -1823,7 +1842,15 @@ mod tests {
         } else {
             second_directory
         };
-        let lease = GenerationLease::acquire(temp.path(), &leased_directory).unwrap();
+        retain_generation_lease(temp.path(), &leased_directory).unwrap();
+        assert!(lease_registry_contains(
+            GENERATION_LEASES.get().unwrap(),
+            &leased_directory,
+        ));
+        let leased_name = leased_directory.file_name().unwrap().to_string_lossy();
+        let quarantine = temp.path().join(format!(".{leased_name}.quarantine-999-7"));
+        std::fs::create_dir(&quarantine).unwrap();
+        std::fs::write(quarantine.join("stale.png"), b"stale").unwrap();
 
         let mut third = FakeSource::stable("build-c");
         let current = prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut third)
@@ -1832,7 +1859,15 @@ mod tests {
             .unwrap()
             .to_path_buf();
         assert!(leased_directory.exists());
+        assert!(!quarantine.exists());
 
+        let lease = GENERATION_LEASES
+            .get()
+            .unwrap()
+            .lock()
+            .unwrap()
+            .remove(&leased_directory)
+            .unwrap();
         drop(lease);
         prune_obsolete_item_icon_cache(temp.path(), &current);
         assert!(!leased_directory.exists());
