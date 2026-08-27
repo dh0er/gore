@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -118,8 +119,8 @@ final itemIconCoreServiceProvider = Provider<GoresaveCoreService>((ref) {
   return MissingGoresaveCoreService();
 });
 
-/// Bumped on app resume so a game update or cache produced by another GORE tool
-/// is noticed without restarting the editor.
+/// Explicit reload hook. Do not bump this on ordinary app resume: native cache
+/// verification intentionally proves every PNG and is therefore not cheap.
 final itemIconCatalogReloadProvider = StateProvider<int>((ref) => 0);
 
 final _itemIconCatalogRetentionProvider = Provider(
@@ -140,6 +141,7 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
   final core = ref.watch(itemIconCoreServiceProvider);
   if (!core.isAvailable) return retainedOrEmpty();
 
+  String? preparedManifestPath;
   try {
     final gamePath = ref.watch(sharedConfigProvider).gamePath();
     final response = await core.execute(
@@ -152,22 +154,61 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
     if (manifestPath == null || manifestPath.isEmpty) {
       return retainedOrEmpty();
     }
+    preparedManifestPath = manifestPath;
     final file = File(manifestPath);
-    if (!await file.exists()) return retainedOrEmpty();
+    if (!await file.exists()) {
+      await _releaseItemIconCatalog(core, manifestPath);
+      return retainedOrEmpty();
+    }
     final manifestLength = await file.length();
     if (manifestLength < 1 || manifestLength > _maximumManifestBytes) {
+      await _releaseItemIconCatalog(core, manifestPath);
       return retainedOrEmpty();
     }
     final catalog = ItemIconCatalog.fromManifestJson(
       manifestPath: manifestPath,
       json: await file.readAsString(),
     );
+    final previousManifestPath = retention.value?.manifestPath;
     retention.value = catalog;
+    if (previousManifestPath != null &&
+        previousManifestPath.isNotEmpty &&
+        previousManifestPath != catalog.manifestPath) {
+      // Publish the new catalog first. Widgets can still paint the retained
+      // AsyncData for the rest of this event turn, so release its native lease
+      // on the next turn rather than opening a deletion race with that paint.
+      unawaited(
+        Future<void>.delayed(
+          Duration.zero,
+          () => _releaseItemIconCatalog(core, previousManifestPath),
+        ),
+      );
+    }
     return catalog;
   } catch (_) {
+    final retainedManifestPath = retention.value?.manifestPath;
+    if (preparedManifestPath != null &&
+        preparedManifestPath != retainedManifestPath) {
+      await _releaseItemIconCatalog(core, preparedManifestPath);
+    }
     // Images are enhancement-only. Every caller has a category-icon fallback,
     // so a missing game, corrupt cache, or transient extraction error must not
     // make the save editor unusable or erase a previously loaded generation.
     return retainedOrEmpty();
   }
 });
+
+Future<void> _releaseItemIconCatalog(
+  GoresaveCoreService core,
+  String manifestPath,
+) async {
+  try {
+    await core.execute(
+      'item_icons_release',
+      payload: {'manifestPath': manifestPath},
+    );
+  } catch (_) {
+    // The OS releases the lease when the editor exits. A failed best-effort
+    // release may retain one old cache generation, but must not hide images.
+  }
+}

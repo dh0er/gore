@@ -152,6 +152,48 @@ void main() {
     final afterFailure = await container.read(itemIconCatalogProvider.future);
     expect(afterFailure.pathFor(itemId: 'ItFo_Apple'), isNotNull);
   });
+
+  test('successful replacement releases the previous generation', () async {
+    final root = Directory.systemTemp.createTempSync('gore_item_icons_replace');
+    addTearDown(() => root.deleteSync(recursive: true));
+    File manifest(String generation) =>
+        File(p.join(root.path, generation, 'manifest.json'))
+          ..createSync(recursive: true)
+          ..writeAsStringSync(
+            jsonEncode({
+              'schema': 1,
+              'buildId': generation,
+              'itemCount': 1,
+              'items': {'ItFo_Apple': 'ItFo_Apple.png'},
+            }),
+          );
+    final firstManifest = manifest('generation-a');
+    final secondManifest = manifest('generation-b');
+    final core = _ReplacingItemIconCore([
+      firstManifest.path,
+      secondManifest.path,
+    ]);
+    final container = ProviderContainer(
+      overrides: [itemIconCoreServiceProvider.overrideWithValue(core)],
+    );
+    addTearDown(container.dispose);
+    final sub = container.listen(itemIconCatalogProvider, (_, _) {});
+    addTearDown(sub.close);
+
+    final first = await container.read(itemIconCatalogProvider.future);
+    expect(first.buildId, 'generation-a');
+
+    container.read(itemIconCatalogReloadProvider.notifier).state++;
+    final second = await container.read(itemIconCatalogProvider.future);
+    await Future<void>.delayed(Duration.zero);
+    expect(second.buildId, 'generation-b');
+    expect(core.commands, [
+      'item_icons_prepare',
+      'item_icons_prepare',
+      'item_icons_release',
+    ]);
+    expect(core.payloads.last, {'manifestPath': firstManifest.path});
+  });
 }
 
 class _ItemIconCore implements GoresaveCoreService {
@@ -207,5 +249,39 @@ class _ReloadItemIconCore implements GoresaveCoreService {
       });
     }
     return secondResponse.future;
+  }
+}
+
+class _ReplacingItemIconCore implements GoresaveCoreService {
+  _ReplacingItemIconCore(this.manifestPaths);
+
+  final List<String> manifestPaths;
+  final List<String> commands = [];
+  final List<Map<String, Object?>> payloads = [];
+  int prepares = 0;
+
+  @override
+  String get description => 'replacing-item-icon-test-core';
+
+  @override
+  bool get isAvailable => true;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    commands.add(command);
+    payloads.add(payload);
+    if (command == 'item_icons_prepare') {
+      return {
+        'ok': true,
+        'data': {'manifestPath': manifestPaths[prepares++]},
+      };
+    }
+    return {
+      'ok': true,
+      'data': {'released': true},
+    };
   }
 }

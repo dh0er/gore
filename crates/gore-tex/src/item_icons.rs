@@ -91,6 +91,27 @@ pub fn prepare_item_icon_cache(game_root: &Path, items: &[ItemIconSpec]) -> Resu
     prepare_item_icon_cache_with_source_and_lease(&cache_root, items, &mut source, true)
 }
 
+/// Release this process's read lease after the UI has stopped retaining the
+/// catalog. The path must exactly identify a manifest returned by preparation;
+/// arbitrary paths cannot remove leases or files.
+pub fn release_item_icon_cache(manifest_path: &Path) -> Result<bool> {
+    if manifest_path.file_name().and_then(|name| name.to_str()) != Some(MANIFEST_FILE_NAME) {
+        return Err(invalid_data(
+            "item icon cache release path is not a manifest",
+        ));
+    }
+    let generation = manifest_path
+        .parent()
+        .ok_or_else(|| invalid_data("item icon cache release path has no generation"))?;
+    let Some(leases) = GENERATION_LEASES.get() else {
+        return Ok(false);
+    };
+    let mut leases = leases
+        .lock()
+        .map_err(|_| invalid_data("item icon cache lease registry is poisoned"))?;
+    Ok(leases.remove(generation).is_some())
+}
+
 struct PreparedCatalog {
     item_to_png: BTreeMap<String, String>,
     icon_to_png: BTreeMap<String, String>,
@@ -1811,7 +1832,7 @@ mod tests {
     }
 
     #[test]
-    fn a_live_catalog_lease_preserves_an_obsolete_generation_until_exit() {
+    fn a_live_catalog_lease_preserves_an_obsolete_generation_until_released() {
         let temp = tempfile::tempdir().unwrap();
         let mut first = FakeSource::stable("build-a");
         let first_directory =
@@ -1861,14 +1882,8 @@ mod tests {
         assert!(leased_directory.exists());
         assert!(!quarantine.exists());
 
-        let lease = GENERATION_LEASES
-            .get()
-            .unwrap()
-            .lock()
-            .unwrap()
-            .remove(&leased_directory)
-            .unwrap();
-        drop(lease);
+        assert!(release_item_icon_cache(&leased_directory.join(MANIFEST_FILE_NAME)).unwrap());
+        assert!(!release_item_icon_cache(&leased_directory.join(MANIFEST_FILE_NAME)).unwrap());
         prune_obsolete_item_icon_cache(temp.path(), &current);
         assert!(!leased_directory.exists());
         assert!(std::fs::read_dir(temp.path())
@@ -1881,6 +1896,13 @@ mod tests {
                     .and_then(owned_lease_generation_name)
                     .is_none()
             }));
+    }
+
+    #[test]
+    fn release_rejects_paths_that_do_not_name_a_retained_manifest() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(release_item_icon_cache(&temp.path().join("image.png")).is_err());
+        assert!(!release_item_icon_cache(&temp.path().join(MANIFEST_FILE_NAME)).unwrap());
     }
 
     #[test]

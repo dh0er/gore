@@ -12,7 +12,6 @@ import 'package:goresave/features/app/ui/window_chrome.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/game_time.dart';
-import 'package:goresave/features/editor/domain/item_icon_catalog.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/ui/characters_tab.dart';
 import 'package:goresave/features/editor/ui/profile_localization.dart';
@@ -63,10 +62,11 @@ class _EditorPageState extends ConsumerState<EditorPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Another tool (or `gore-cli loc extract`) may have written the shared
     // loc_catalog.json while this app was backgrounded; reload it on resume so
-    // item/NPC names pick up a catalog that appeared after first load.
+    // item/NPC names pick up a catalog that appeared after first load. Item
+    // images are deliberately not refreshed here: verifying their cache reads
+    // and hashes hundreds of PNGs, so ordinary focus changes must stay cheap.
     if (state == AppLifecycleState.resumed) {
       ref.read(locCatalogReloadProvider.notifier).state++;
-      ref.read(itemIconCatalogReloadProvider.notifier).state++;
     }
   }
 

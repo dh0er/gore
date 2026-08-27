@@ -838,6 +838,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             }
         }
         "item_icons_prepare" => item_icons_prepare(&payload),
+        "item_icons_release" => item_icons_release(&payload),
         other => Err(CoreError::InvalidRequest(format!(
             "unknown command {other:?}"
         ))),
@@ -8773,6 +8774,23 @@ fn item_icons_prepare(payload: &Value) -> Result<Value, CoreError> {
     )
 }
 
+fn item_icons_release(payload: &Value) -> Result<Value, CoreError> {
+    let manifest_path = payload
+        .as_object()
+        .and_then(|request| request.get("manifestPath"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(
+                "payload.manifestPath must be a non-empty path string".to_string(),
+            )
+        })?;
+    let released = gore_tex::item_icons::release_item_icon_cache(&manifest_path)
+        .map_err(|error| CoreError::Io(error.to_string()))?;
+    Ok(json!({"released": released}))
+}
+
 /// Testable command seam: request/config resolution and native preparation can
 /// be faked independently, so unit tests never probe Steam or a real install.
 fn item_icons_prepare_with<Resolve, Prepare>(
@@ -15219,6 +15237,19 @@ mod tests {
             )
             .unwrap();
             assert_eq!(response["manifestPath"], "cache/manifest.json");
+        }
+    }
+
+    #[test]
+    fn item_icons_release_rejects_missing_or_invalid_manifest_paths() {
+        for payload in [
+            json!({}),
+            json!({"manifestPath": null}),
+            json!({"manifestPath": ""}),
+            json!({"manifestPath": "bad\npath"}),
+        ] {
+            let error = item_icons_release(&payload).unwrap_err();
+            assert!(error.to_string().contains("manifestPath"));
         }
     }
 
