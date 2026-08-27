@@ -589,17 +589,38 @@ fn complete_cache_matches(directory: &Path, expected: &ExpectedItemIconManifest)
 }
 
 fn complete_cache_is_owned(directory: &Path) -> Result<bool> {
+    let Some(manifest) = structurally_complete_owned_manifest(directory)? else {
+        return Ok(false);
+    };
+    let expected = ExpectedItemIconManifest {
+        build_id: manifest.build_id,
+        item_count: manifest.item_count,
+        items: manifest.items,
+    };
+    complete_cache_matches(directory, &expected)
+}
+
+fn structurally_complete_owned_manifest(directory: &Path) -> Result<Option<ItemIconManifest>> {
+    let directory_metadata = match std::fs::symlink_metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if !directory_metadata.file_type().is_dir() || directory_metadata.file_type().is_symlink() {
+        return Ok(None);
+    }
+
     let manifest_path = directory.join(MANIFEST_FILE_NAME);
     let metadata = match std::fs::symlink_metadata(&manifest_path) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
     if !metadata.file_type().is_file()
         || metadata.file_type().is_symlink()
         || metadata.len() > MAX_MANIFEST_BYTES
     {
-        return Ok(false);
+        return Ok(None);
     }
     let mut file = File::open(&manifest_path)?;
     let opened_metadata = file.metadata()?;
@@ -607,18 +628,18 @@ fn complete_cache_is_owned(directory: &Path) -> Result<bool> {
         || opened_metadata.len() != metadata.len()
         || opened_metadata.len() > MAX_MANIFEST_BYTES
     {
-        return Ok(false);
+        return Ok(None);
     }
     let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
     (&mut file)
         .take(MAX_MANIFEST_BYTES.saturating_add(1))
         .read_to_end(&mut bytes)?;
     if bytes.len() as u64 != opened_metadata.len() {
-        return Ok(false);
+        return Ok(None);
     }
     let manifest: ItemIconManifest = match serde_json::from_slice(&bytes) {
         Ok(manifest) => manifest,
-        Err(_) => return Ok(false),
+        Err(_) => return Ok(None),
     };
     if manifest.schema != ITEM_ICON_CACHE_SCHEMA
         || manifest.item_count == 0
@@ -630,14 +651,55 @@ fn complete_cache_is_owned(directory: &Path) -> Result<bool> {
             .any(|item_id| validate_item_id(item_id).is_err())
         || validate_build_id(&manifest.build_id).is_err()
     {
-        return Ok(false);
+        return Ok(None);
     }
-    let expected = ExpectedItemIconManifest {
-        build_id: manifest.build_id,
-        item_count: manifest.item_count,
-        items: manifest.items,
-    };
-    complete_cache_matches(directory, &expected)
+
+    let unique_paths: BTreeSet<_> = manifest.items.values().map(String::as_str).collect();
+    let sealed_paths: BTreeSet<_> = manifest.files.keys().map(String::as_str).collect();
+    if sealed_paths != unique_paths {
+        return Ok(None);
+    }
+    let mut budget = CacheBudget::default();
+    for relative in unique_paths {
+        if !relative.starts_with("images/")
+            || relative.contains('\\')
+            || relative.contains("..")
+            || !relative.ends_with(".png")
+        {
+            return Ok(None);
+        }
+        let seal = manifest
+            .files
+            .get(relative)
+            .expect("file-key equality was checked above");
+        if seal.byte_length == 0
+            || seal.byte_length > MAX_ICON_PNG_BYTES
+            || bounded_decoded_byte_length(seal.width, seal.height)
+                != Some(seal.decoded_byte_length)
+            || seal.png_blake3.len() != 64
+            || !seal.png_blake3.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || seal.rgba_blake3.len() != 64
+            || !seal
+                .rgba_blake3
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            || !budget.admit(seal)
+        {
+            return Ok(None);
+        }
+        let metadata = match std::fs::symlink_metadata(directory.join(relative)) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        if !metadata.file_type().is_file()
+            || metadata.file_type().is_symlink()
+            || metadata.len() != seal.byte_length
+        {
+            return Ok(None);
+        }
+    }
+    Ok(Some(manifest))
 }
 
 /// Validate a previously sealed PNG without decoding its complete RGBA payload
@@ -1043,11 +1105,20 @@ fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) 
         };
         if is_owned_generation_name(name) {
             owned_names.insert(name.to_string());
+            if name == current_name {
+                continue;
+            }
             let path = entry.path();
             let Ok(metadata) = std::fs::symlink_metadata(&path) else {
                 continue;
             };
-            if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
+            if metadata.file_type().is_dir()
+                && !metadata.file_type().is_symlink()
+                && structurally_complete_owned_manifest(&path)
+                    .ok()
+                    .flatten()
+                    .is_some()
+            {
                 generations.push((
                     metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
                     name.to_string(),
@@ -1059,9 +1130,9 @@ fn prune_obsolete_item_icon_cache(cache_root: &Path, current_generation: &Path) 
         }
     }
 
-    // The ready current generation was already fully verified. Select the one
-    // recent fallback by cheap directory metadata; only generations selected
-    // for deletion pay the bounded manifest/PNG seal validation below.
+    // The ready current generation was already fully verified. Select one
+    // recent structurally complete fallback without rereading PNG contents;
+    // only generations selected for deletion pay hash validation below.
     generations.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| right.1.cmp(&left.1)));
     let mut retained = BTreeSet::from([current_name]);
     for (_, name, _) in &generations {
@@ -1492,6 +1563,13 @@ mod tests {
             .to_string_lossy()
             .into_owned();
 
+        // A newer incomplete sibling must neither steal the fallback slot nor
+        // become eligible for deletion merely because its name is owned.
+        let catalog = PreparedCatalog::from_specs(&specs()).unwrap();
+        let incomplete = generation_directory(temp.path(), "build-incomplete", &catalog.digest);
+        std::fs::create_dir(&incomplete).unwrap();
+        std::fs::write(incomplete.join(MANIFEST_FILE_NAME), b"{}").unwrap();
+
         for generation_name in [&first_name, &second_name] {
             let quarantine = temp
                 .path()
@@ -1509,7 +1587,10 @@ mod tests {
             prepare_item_icon_cache_with_source(temp.path(), &specs(), &mut third).unwrap();
         let third_directory = third_manifest.parent().unwrap().to_path_buf();
 
-        let published = published_generations(temp.path());
+        let published: Vec<_> = published_generations(temp.path())
+            .into_iter()
+            .filter(|path| complete_cache_is_owned(path).unwrap())
+            .collect();
         assert_eq!(published.len(), MAX_RETAINED_GENERATIONS);
         assert!(published.contains(&third_directory));
         assert!(
@@ -1520,6 +1601,7 @@ mod tests {
                     .iter()
                     .any(|path| path == second_manifest.parent().unwrap())
         );
+        assert!(incomplete.exists());
         assert!(std::fs::read_dir(temp.path())
             .unwrap()
             .flatten()
