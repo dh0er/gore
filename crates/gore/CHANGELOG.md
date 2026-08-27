@@ -6,7 +6,7 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.2.0] - 2026-08-26
+## [0.2.0] - 2026-08-27
 
 - Bundle the qualified standalone AngelScript compiler with gore-cli. Script
   builds and `as compile-module` can now compile without starting the game.

@@ -98,8 +98,8 @@ class DownloadTableContractTest(unittest.TestCase):
         self.assert_invalid(
             replace_once(
                 self.readme,
-                "releases/tag/gore-cli-v0.1.0)",
                 "releases/tag/gore-cli-v0.2.0)",
+                "releases/tag/gore-cli-v0.3.0)",
             ),
             None,
             "CLI must link to",
@@ -107,7 +107,7 @@ class DownloadTableContractTest(unittest.TestCase):
 
     def test_link_text_must_be_the_release_tag(self) -> None:
         self.assert_invalid(
-            replace_once(self.readme, "[gore-cli-v0.1.0]", "[latest]"),
+            replace_once(self.readme, "[gore-cli-v0.2.0]", "[latest]"),
             None,
             "link text must be the release tag",
         )
@@ -134,7 +134,7 @@ class DownloadTableContractTest(unittest.TestCase):
 
     def test_unreadable_and_unknown_rows_fail_closed(self) -> None:
         self.assert_invalid(
-            replace_once(self.readme, "| **CLI** | 0.1.0 |", "| **CLI** | v0.1.0 |"),
+            replace_once(self.readme, "| **CLI** | 0.2.0 |", "| **CLI** | v0.2.0 |"),
             None,
             "unreadable download row",
         )

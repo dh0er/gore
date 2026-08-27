@@ -23,7 +23,7 @@ contracts into guided workflows instead of maintaining a second engine.
 
 | Tool | Version | Release page |
 |---|---|---|
-| **CLI** | 0.1.0 | [gore-cli-v0.1.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.1.0) |
+| **CLI** | 0.2.0 | [gore-cli-v0.2.0](https://github.com/dh0er/gore/releases/tag/gore-cli-v0.2.0) |
 | **Mod Manager** | 0.2.0 | [gore-mod-manager-v0.2.0](https://github.com/dh0er/gore/releases/tag/gore-mod-manager-v0.2.0) |
 | **Save Editor** | 1.3.0 | [gore-save-editor-v1.3.0](https://github.com/dh0er/gore/releases/tag/gore-save-editor-v1.3.0) |
 
