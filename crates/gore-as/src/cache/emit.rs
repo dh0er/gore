@@ -1997,6 +1997,7 @@ fn emit_function_ctor(
         let rendered =
             merge_copy_constructed_declarations(&rendered, &copy_constructed_slots(f, refs));
         let rendered = drop_default_arguments(&rendered, refs);
+        let rendered = fold_returned_empty_values(&rendered, refs);
         let rendered = drop_unused_declarations(&rendered);
         let rendered = fold_member_read_temporaries(
             &rendered,
@@ -8900,6 +8901,49 @@ fn slot_and_life_any(name: &str) -> Option<(i32, usize)> {
     (parts.next().is_none()).then_some((slot, life))
 }
 
+/// `T x; return x;` is `return T();`.
+///
+/// A declared local that is never written and only returned is the anonymous value the source
+/// returned. The difference is not the name but the ORDER: a declaration constructs at its own
+/// line, before the return slot; an anonymous value is constructed after it, which is what vanilla
+/// does — the return slot's `$beh0` comes first, then the temporary's.
+fn fold_returned_empty_values(body: &str, refs: &RefResolver) -> String {
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
+    let mut at = 0usize;
+    while at < lines.len() {
+        let folded = (|| {
+            let (indent, name) = bare_declaration(&lines[at])?;
+            if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != 2 {
+                return None;
+            }
+            let reader = lines
+                .iter()
+                .position(|line| line.trim() == format!("return {name};"))?;
+            let head = lines[at].trim().trim_end_matches(';');
+            let ty = head[..head.len() - name.len()].trim();
+            // Only a value type: a handle's `T()` would construct an object, and a
+            // template head has to keep its arguments to name a type at all.
+            if ty.is_empty() || is_object_handle_type(ty) || ty.contains("&") {
+                return None;
+            }
+            let ty = qualify_decl_type(ty, refs);
+            Some((reader, format!("{}return {ty}();", indent_of(&lines[reader]))))
+        })();
+        match folded {
+            Some((reader, line)) => {
+                lines[reader] = line;
+                lines.remove(at);
+            }
+            None => at += 1,
+        }
+    }
+    let mut text = lines.join("\n");
+    if body.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
 /// The declared type of `name` as this text spells it, from its declaration line.
 fn declared_type(lines: &[String], name: &str) -> Option<String> {
     lines.iter().find_map(|line| {
@@ -9250,42 +9294,57 @@ fn immediately_consumed_defs(f: &Func) -> HashSet<(i32, usize)> {
 /// after it. Same statement, different bytecode — and the witness for which one vanilla wrote is
 /// its own `STOREOBJ`, which stands where the value is pushed.
 fn fold_assignment_receivers(body: &str, consumed: &HashSet<(i32, usize)>) -> String {
-    let lines: Vec<&str> = body.lines().collect();
-    let mut out: Vec<String> = Vec::new();
+    let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
     let mut at = 0usize;
-    while at < lines.len() {
+    while at + 1 < lines.len() {
         let folded = (|| {
-            let (indent, name, init) = declaration_with_initializer(lines[at])?;
+            // The store may still carry its own declaration, or stand under a bare one hoisted to
+            // the top of the block — the receiver is the same either way.
+            let (indent, name, init) = declaration_with_initializer(&lines[at]).or_else(|| {
+                let (target, value) = slot_store(&lines[at])?;
+                is_decompiler_local(&target).then(|| (indent_of(&lines[at]), target, value))
+            })?;
             if !init.ends_with(')') || init.contains(" = ") {
                 return None;
             }
-            if !consumed.contains(&slot_and_life_any(&name)?) || count_ident(body, &name) != 2 {
+            if !consumed.contains(&slot_and_life_any(&name)?) {
                 return None;
             }
-            let next = lines.get(at + 1)?;
+            let declaration = lines
+                .iter()
+                .position(|line| bare_declaration(line).is_some_and(|(_, n)| n == name));
+            let mentions = 2 + usize::from(declaration.is_some());
+            if lines.iter().map(|line| count_ident(line, &name)).sum::<usize>() != mentions {
+                return None;
+            }
+            let next = &lines[at + 1];
             if indent_of(next) != indent {
                 return None;
             }
-            let rest = next.trim().strip_prefix(name.as_str())?;
-            let assigned = rest.strip_suffix(';')?;
+            let assigned = next.trim().strip_prefix(name.as_str())?.strip_suffix(';')?;
             let (target, _) = assigned.split_once(" = ")?;
             if !target.starts_with('.') || target.contains('(') {
                 return None;
             }
-            Some(format!("{indent}{init}{assigned};"))
+            Some((format!("{indent}{init}{assigned};"), declaration))
         })();
         match folded {
-            Some(line) => {
-                out.push(line);
-                at += 2;
-            }
-            None => {
-                out.push(lines[at].to_owned());
+            Some((line, declaration)) => {
+                lines[at] = line;
+                lines.remove(at + 1);
+                if let Some(declaration) = declaration {
+                    lines.remove(declaration);
+                    if declaration <= at {
+                        continue;
+                    }
+                }
                 at += 1;
             }
+            None => at += 1,
         }
     }
-    let mut text = out.join("\n");
+    let mut text = lines.join("
+");
     if body.ends_with('\n') {
         text.push('\n');
     }
