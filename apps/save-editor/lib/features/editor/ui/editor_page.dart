@@ -319,6 +319,7 @@ class _SaveSidebar extends StatelessWidget {
                               assignedProfile == null ||
                                   save.isMissing ||
                                   state.isLoading ||
+                                  state.deletedSaveRecovery != null ||
                                   state.hasUnsavedEdits
                               ? null
                               : () => _confirmDeleteSave(
@@ -1469,7 +1470,10 @@ class _HeaderCardState extends State<_HeaderCard> {
     final save = state.selectedSave;
     final currentProfile = _selectedSaveProfile(state);
     final actionsEnabled =
-        !state.isLoading && !state.hasUnsavedEdits && currentProfile != null;
+        !state.isLoading &&
+        !state.hasUnsavedEdits &&
+        state.deletedSaveRecovery == null &&
+        currentProfile != null;
     final screenshot = save?.screenshot ?? inspection.screenshot;
     final title =
         save?.displayName ??

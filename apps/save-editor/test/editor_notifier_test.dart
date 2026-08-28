@@ -5318,6 +5318,53 @@ void main() {
     );
   });
 
+  test('deleteSave preserves an existing one-click recovery', () async {
+    final core = _RecordingCoreService(
+      scanData: {
+        'saves': [
+          {
+            'path': r'C:\tmp\saves\G1R-006.sav',
+            'slot': 'G1R-006',
+            'format': 'GSAV',
+            'fileSize': 100,
+            'sha1': 'a',
+            'status': 'ok',
+            'persistentProfileId': 0,
+          },
+          {
+            'path': r'C:\tmp\saves\G1R-007.sav',
+            'slot': 'G1R-007',
+            'format': 'GSAV',
+            'fileSize': 100,
+            'sha1': 'b',
+            'status': 'ok',
+            'persistentProfileId': 0,
+          },
+        ],
+        'profiles': [
+          {
+            'profileId': 0,
+            'profileName': '0',
+            'savedSlots': ['G1R-006', 'G1R-007'],
+          },
+        ],
+        'activeProfileId': 0,
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await pumpEventQueue();
+
+    expect(await notifier.deleteSave(slot: 'G1R-006', profileId: 0), isTrue);
+    final recovery = notifier.state.deletedSaveRecovery;
+
+    expect(await notifier.deleteSave(slot: 'G1R-007', profileId: 0), isFalse);
+    expect(notifier.state.deletedSaveRecovery, same(recovery));
+    expect(
+      core.requests.where((request) => request.command == 'delete_save'),
+      hasLength(1),
+    );
+  });
+
   test(
     'selecting another save keeps deleted-save recovery reachable',
     () async {

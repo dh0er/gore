@@ -2684,6 +2684,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
     required int profileId,
   }) async {
     if (state.isLoading) return false;
+    // Keep the existing one-click recovery reachable. A second successful
+    // deletion would otherwise replace its sole recovery token and strand the
+    // first save's paired snapshots outside the UI.
+    if (state.deletedSaveRecovery != null) return false;
     if (state.hasUnsavedEdits) {
       state = state.copyWith(error: _l10n.editorUnsavedBeforeDeleteSave);
       return false;
