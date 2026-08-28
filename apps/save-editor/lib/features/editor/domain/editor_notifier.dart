@@ -209,6 +209,9 @@ class EditorState {
 
   bool get hasInvalidEdits => invalidEditKeys.isNotEmpty;
 
+  bool get pendingEditsChangePersistentDataList =>
+      pendingEdits.values.any((edit) => edit.syncPersistentDataList);
+
   /// Compatibility view for the NPC attribute editor. New surfaces should use
   /// [invalidEditKeys]/[hasInvalidEdits] instead.
   String? get invalidNpcEditKey {
@@ -595,6 +598,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       state = state.copyWith(error: _l10n.editorOperationInProgress);
       return Future.value(false);
     }
+    if (state.deletedSaveRecovery != null) return Future.value(false);
     // Refuse while slot edits are pending: this write runs _runWrite -> refresh,
     // and the same-save _inspect clears the pending registry — silently
     // discarding those drafts even though no write_save ran for them. Make the
@@ -1285,6 +1289,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (state.hasInvalidEdits) return false;
     if (state.pendingEdits.isEmpty) return true;
     if (state.isLoading) return false;
+    if (state.deletedSaveRecovery != null &&
+        state.pendingEditsChangePersistentDataList) {
+      return false;
+    }
     final savePath = state.selectedPath;
     if (savePath == null) return false;
 
@@ -2508,6 +2516,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// updates the save and PersistentDataList.sav as one operation.
   Future<bool> assignSelectedSaveToProfile(int profileId) async {
     if (state.isLoading) return false;
+    if (state.deletedSaveRecovery != null) return false;
     if (state.hasUnsavedEdits) {
       state = state.copyWith(error: _l10n.editorUnsavedBeforeChangeSaveProfile);
       return false;
@@ -2614,6 +2623,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     required int profileId,
   }) async {
     if (state.isLoading) return false;
+    if (state.deletedSaveRecovery != null) return false;
     if (state.hasUnsavedEdits) {
       state = state.copyWith(error: _l10n.editorUnsavedBeforeRemoveProfile);
       return false;
@@ -2880,6 +2890,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// companion `PersistentDataList.sav` backups); it defaults to the selected
   /// slot.
   Future<bool> restoreBackup(String backupPath, {String? targetPath}) async {
+    if (state.deletedSaveRecovery != null) return false;
     return _restoreBackup('restore_backup', backupPath, targetPath: targetPath);
   }
 
@@ -2979,6 +2990,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// accepts a file its own backup listing produced, so this can never remove
   /// the live save or another slot's snapshot.
   Future<void> deleteBackup(String backupPath, {String? targetPath}) async {
+    if (state.deletedSaveRecovery != null) return;
     final path = targetPath ?? state.selectedPath;
     if (path == null) return;
     await _withLoading(() async {

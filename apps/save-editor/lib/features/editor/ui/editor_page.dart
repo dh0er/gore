@@ -256,6 +256,7 @@ class _SaveSidebar extends StatelessWidget {
             otherSavesSelected: state.otherSavesSelected,
             notifier: notifier,
             isLoading: state.isLoading,
+            profileWritesBlocked: state.deletedSaveRecovery != null,
           ),
           if (state.otherSavesSelected)
             Padding(
@@ -307,6 +308,7 @@ class _SaveSidebar extends StatelessWidget {
                           onRemoveFromProfile:
                               assignedProfile == null ||
                                   state.isLoading ||
+                                  state.deletedSaveRecovery != null ||
                                   state.hasUnsavedEdits
                               ? null
                               : () => _confirmRemoveSaveFromProfile(
@@ -353,6 +355,7 @@ class _ProfileHeader extends StatelessWidget {
     required this.otherSavesSelected,
     required this.notifier,
     required this.isLoading,
+    required this.profileWritesBlocked,
   });
 
   final ProfileSummary? profile;
@@ -360,6 +363,7 @@ class _ProfileHeader extends StatelessWidget {
   final bool otherSavesSelected;
   final EditorNotifier notifier;
   final bool isLoading;
+  final bool profileWritesBlocked;
 
   @override
   Widget build(BuildContext context) {
@@ -406,7 +410,7 @@ class _ProfileHeader extends StatelessWidget {
                   child: ProfileDifficultyChip(
                     profile: profile,
                     notifier: notifier,
-                    isLoading: isLoading,
+                    isLoading: isLoading || profileWritesBlocked,
                   ),
                 ),
               ],
@@ -1087,6 +1091,8 @@ class _EditorWorkspace extends StatelessWidget {
                       onPressed:
                           pendingCount > 0 &&
                               !state.isLoading &&
+                              (!state.pendingEditsChangePersistentDataList ||
+                                  state.deletedSaveRecovery == null) &&
                               !state.hasInvalidEdits
                           ? notifier.saveAllPending
                           : null,
@@ -1935,7 +1941,10 @@ class _SaveProfileCard extends StatelessWidget {
     final currentProfile = _selectedSaveProfile(state);
     final currentId = currentProfile?.profileId;
     final enabled =
-        state.profiles.isNotEmpty && !state.isLoading && !state.hasUnsavedEdits;
+        state.profiles.isNotEmpty &&
+        !state.isLoading &&
+        !state.hasUnsavedEdits &&
+        state.deletedSaveRecovery == null;
     final explanation = external
         ? l10n.saveProfileExternalHint
         : state.profiles.isEmpty
@@ -3499,7 +3508,7 @@ class _BackupsPanel extends StatelessWidget {
           ...backups.map(
             (backup) => _BackupCard(
               backup: backup,
-              isLoading: state.isLoading,
+              isLoading: state.isLoading || state.deletedSaveRecovery != null,
               showRestoreAction: true,
               onRestore: () => notifier.restoreBackup(backup.path),
               onRename: (name) => notifier.renameBackup(backup.path, name),
@@ -3517,7 +3526,7 @@ class _BackupsPanel extends StatelessWidget {
           ...companionBackups.map(
             (backup) => _BackupCard(
               backup: backup,
-              isLoading: state.isLoading,
+              isLoading: state.isLoading || state.deletedSaveRecovery != null,
               showRestoreAction: true,
               onRestore: () => notifier.restoreCompanionBackup(backup.path),
               onRename: (name) => notifier.renameBackup(backup.path, name),

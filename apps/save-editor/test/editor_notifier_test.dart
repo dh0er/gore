@@ -5347,6 +5347,7 @@ void main() {
             'profileName': '0',
             'savedSlots': ['G1R-006', 'G1R-007'],
           },
+          {'profileId': 1, 'profileName': '1', 'savedSlots': <String>[]},
         ],
         'activeProfileId': 0,
       },
@@ -5363,6 +5364,48 @@ void main() {
       core.requests.where((request) => request.command == 'delete_save'),
       hasLength(1),
     );
+
+    expect(await notifier.assignSelectedSaveToProfile(1), isFalse);
+    expect(
+      await notifier.removeSaveFromProfile(slot: 'G1R-007', profileId: 0),
+      isFalse,
+    );
+    expect(
+      await notifier.writeProfileDifficulty(
+        profileId: 0,
+        difficulty: const {'preset': 'Gothic'},
+      ),
+      isFalse,
+    );
+    expect(
+      await notifier.restoreBackup(r'C:\tmp\saves\G1R-007.sav.bak.1'),
+      isFalse,
+    );
+    await notifier.deleteBackup(r'C:\tmp\saves\G1R-007.sav.bak.1');
+    notifier.setPendingEdit(
+      'publicName',
+      const PendingSaveEdit(
+        edits: [
+          {'op': 'public.setName', 'value': 'Keep recovery valid'},
+        ],
+        syncPersistentDataList: true,
+      ),
+    );
+    expect(await notifier.saveAllPending(), isFalse);
+    for (final command in [
+      'assign_save_profile',
+      'remove_save_from_profile',
+      'write_difficulty',
+      'restore_backup',
+      'delete_backup',
+      'write_save',
+    ]) {
+      expect(
+        core.requests.where((request) => request.command == command),
+        isEmpty,
+        reason: '$command must not invalidate the pending recovery',
+      );
+    }
   });
 
   test(
