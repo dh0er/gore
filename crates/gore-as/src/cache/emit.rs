@@ -2040,7 +2040,7 @@ fn emit_function_ctor(
         let rendered =
             merge_copy_constructed_declarations(&rendered, &copy_constructed_slots(f, refs));
         let rendered = drop_default_arguments(&rendered, refs);
-        let rendered = fold_returned_empty_values(&rendered, refs);
+        let rendered = fold_returned_empty_values(&rendered, f, refs);
         let rendered = drop_unused_declarations(&rendered);
         let rendered = fold_member_read_temporaries(
             &rendered,
@@ -3847,12 +3847,23 @@ fn statement_producer_slots(f: &Func) -> HashSet<i32> {
         if slot <= 0 {
             continue;
         }
-        // Walk forward to this slot's own push, counting what went on the stack before it.
+        // Walk forward to this slot's own push, counting what went on the stack before it. The
+        // walk has to stop where the STATEMENT does, or it counts a later statement's pushes as
+        // evidence about this one: a branch ends it, and so does any instruction that READS the
+        // slot without pushing it — a `CmpPtrNull v2` right behind the store is the null test of
+        // the very expression the value belongs to, and walking past it into the taken arm
+        // counted the cast lowering's own `PSF` as "another operand went on the stack first".
         let mut others = 0usize;
         for next in &instrs[at + 1..] {
+            if next.op.name.starts_with('J') || next.op.name == "RET" {
+                break;
+            }
             if !pushes(next.op.name) {
                 if matches!(next.op.name, "CALL" | "CALLSYS" | "CALLINTF" | "CALLBND") {
                     break; // the call went out without pushing this slot
+                }
+                if super::bytediff::addressed_slots(next).contains(&slot) {
+                    break; // a read that is not a push: this statement is over
                 }
                 continue;
             }
@@ -9197,7 +9208,35 @@ fn slot_and_life_any(name: &str) -> Option<(i32, usize)> {
 /// returned. The difference is not the name but the ORDER: a declaration constructs at its own
 /// line, before the return slot; an anonymous value is constructed after it, which is what vanilla
 /// does — the return slot's `$beh0` comes first, then the temporary's.
-fn fold_returned_empty_values(body: &str, refs: &RefResolver) -> String {
+/// Whether vanilla built the RETURNED value's own slot before the return object.
+///
+/// `T x; return x;` and `return T();` run the same two constructors in the opposite order: for a
+/// declaration the local is constructed first (`PSF vN; <ctor>`) and the return object after it
+/// (`PshVPtr vM; <the same ctor>`); for an anonymous value the return object comes first. So the
+/// pair, adjacent and with the same callee, is vanilla saying the source declared the local — and
+/// this fold must leave it alone. Adjacency and the same callee both carry the proof.
+fn declared_before_the_return_object(f: &Func) -> bool {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return false;
+    };
+    let target = |ins: &super::disasm::Instr| match ins.op.name {
+        "CALL" | "CALLINTF" | "CALLBND" => Some(ins.dwords.first().copied().unwrap_or(0) as i64),
+        "CALLSYS" => Some(ins.qwords.first().copied().unwrap_or(0) as i64),
+        _ => None,
+    };
+    instrs.windows(4).any(|w| {
+        w[0].op.name == "PSF"
+            && w[0].words.first().map(|s| *s as i16 as i32).unwrap_or(0) > 0
+            && w[2].op.name == "PshVPtr"
+            && target(&w[1]).is_some()
+            && target(&w[1]) == target(&w[3])
+    })
+}
+
+fn fold_returned_empty_values(body: &str, f: &Func, refs: &RefResolver) -> String {
+    if declared_before_the_return_object(f) {
+        return body.to_owned();
+    }
     let mut lines: Vec<String> = body.lines().map(str::to_owned).collect();
     let mut at = 0usize;
     while at < lines.len() {

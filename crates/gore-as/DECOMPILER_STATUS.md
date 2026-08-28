@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 99.05% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 99.06% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.05%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.06%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,573 functions (0.95%) recompile to bytecode that differs semantically.** A semantic
+**1,549 functions (0.94%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -612,6 +612,23 @@ build turned into compile errors, and both were gaps this file can now name:
   the structurer's view and the declarations — now carry the same rule, which is the whole lever:
   narrowing only the view took the receiver wrap away while the declaration stayed at the base,
   and `AActor local_2 = Cast<AGothicCharacter>(…)` could no longer answer `GetCharacterState()`.
+
+**`T x; return x;` and `return T();` differ only in which constructor runs first.** For a
+declaration the local is built first (`PSF vN; <ctor>`) and the return object after it
+(`PshVPtr vM; <the same ctor>`); for an anonymous value the return object comes first. The pair,
+adjacent and with the same callee, is vanilla saying the source declared the local — so the fold
+that writes `return T();` must leave it alone. The prediction was a closed list of four functions
+before the run and all four came back byte-identical, which is the strongest evidence this file
+carries that a witness read off vanilla's own stream says what the source wrote.
+
+**A producer's evidence ends where its STATEMENT ends.** The walk that decides "another operand
+went on the stack before this slot's own push" ran past branches and past instructions that READ
+the slot without pushing it — so a `CmpPtrNull v2` behind the store, which is the null test of the
+very expression the value belongs to, was walked through into the taken arm, where the cast
+lowering's own `PSF` counted as somebody else's operand. It now stops at the first jump and at the
+first non-push read.
+
+1,573 to 1,549, three of them traded for the first cast-diamond shapes the tighter walk now folds.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
