@@ -470,6 +470,8 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
     final l10n = AppLocalizations.of(context);
     final authoritative = widget.inspection.privateTypedVerified;
     final inventory = widget.inspection.privateInventory;
+    final inventoryComplete =
+        authoritative && inventory.itemStackCount == inventory.items.length;
     final totalItems = inventory.items.fold<int>(
       0,
       (sum, item) => sum + (item.count ?? 1),
@@ -496,11 +498,11 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
         ),
         _Metric(
           label: l10n.statisticsMetric('inventoryItems', 'Items'),
-          value: authoritative ? '$totalItems' : l10n.statisticsUnknown,
+          value: inventoryComplete ? '$totalItems' : l10n.statisticsUnknown,
         ),
         _Metric(
           label: l10n.statisticsMetric('ore', 'Ore'),
-          value: authoritative ? '$ore' : l10n.statisticsUnknown,
+          value: inventoryComplete ? '$ore' : l10n.statisticsUnknown,
         ),
       ],
     );

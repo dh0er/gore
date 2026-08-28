@@ -968,7 +968,7 @@ class _EditorWorkspace extends StatelessWidget {
                   ? null
                   : () => notifier.restoreDeletedSave(),
               icon: const Icon(Icons.undo),
-              label: Text(l10n.windowRestoreTooltip),
+              label: Text(l10n.restoreBackupTooltip(recovery.fileName)),
             ),
           TextButton(
             onPressed: state.isLoading ? null : notifier.dismissWriteMessage,

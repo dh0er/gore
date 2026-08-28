@@ -103,7 +103,9 @@ ThemeData _buildTheme(
     scaffoldBackgroundColor: scheme.surface,
     fontFamily: uiFontFamilyName(uiFontFamily, locale),
     fontFamilyFallback: uiFontFamily == UiFontFamily.system
-        ? const ['Microsoft YaHei UI', 'Yu Gothic UI']
+        ? locale.languageCode == 'ja'
+              ? const ['Yu Gothic UI', 'Microsoft YaHei UI']
+              : const ['Microsoft YaHei UI', 'Yu Gothic UI']
         : null,
     appBarTheme: AppBarTheme(
       backgroundColor: scheme.surfaceContainerLowest,

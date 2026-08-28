@@ -4220,6 +4220,11 @@ class DeletedSaveRecovery {
 
   final String targetPath;
   final String backupPath;
+
+  String get fileName {
+    final normalized = targetPath.replaceAll('\\', '/');
+    return normalized.split('/').last;
+  }
 }
 
 /// A single flattened pending edit paired with the snapshot key it came from, so

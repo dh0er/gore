@@ -17,6 +17,21 @@ import 'support/ui_settings_test_store.dart';
 import 'support/detail_tabs.dart';
 
 void main() {
+  test('system font fallbacks prefer the locale-specific CJK face', () {
+    expect(
+      buildGoresaveTheme(
+        locale: const Locale('ja'),
+      ).textTheme.bodyMedium?.fontFamilyFallback,
+      ['Yu Gothic UI', 'Microsoft YaHei UI'],
+    );
+    expect(
+      buildGoresaveTheme(
+        locale: const Locale('zh'),
+      ).textTheme.bodyMedium?.fontFamilyFallback,
+      ['Microsoft YaHei UI', 'Yu Gothic UI'],
+    );
+  });
+
   testWidgets('title progress is centered in the available title-bar space', (
     tester,
   ) async {
@@ -1393,6 +1408,36 @@ void main() {
     );
   });
 
+  testWidgets('truncated inventory statistics remain unavailable', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1500, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(
+            _TruncatedStatisticsCoreService(),
+          ),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('statistics-section-inventory')),
+        matching: find.text('Not available'),
+      ),
+      findsNWidgets(2),
+    );
+  });
+
   testWidgets(
     'save list shows file name and both delete actions require confirmation',
     (tester) async {
@@ -1544,8 +1589,11 @@ void main() {
       expect(request.payload['profileId'], 0);
       expect(request.payload['backup'], isTrue);
 
-      expect(find.widgetWithText(TextButton, 'Restore'), findsOneWidget);
-      await tester.tap(find.widgetWithText(TextButton, 'Restore'));
+      expect(
+        find.widgetWithText(TextButton, 'Restore G1R-001.sav'),
+        findsOneWidget,
+      );
+      await tester.tap(find.widgetWithText(TextButton, 'Restore G1R-001.sav'));
       await tester.pumpAndSettle();
 
       final restore = core.requests.lastWhere(
@@ -1853,7 +1901,7 @@ class _FakeCoreService implements GoresaveCoreService {
               'inventory': {
                 'candidateCount': 2,
                 'candidates': ['ITMI_GOLD', 'BP_Item_Ore'],
-                'itemStackCount': 1,
+                'itemStackCount': 2,
                 'itemScope': 'player_inventory_region',
                 'items': [
                   {
@@ -2442,6 +2490,23 @@ class _UnavailableStatisticsCoreService extends _FakeCoreService {
       'progression': {'status': 'failed'},
       'inventory': <String, Object?>{},
     };
+    return response;
+  }
+}
+
+class _TruncatedStatisticsCoreService extends _StatisticsCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    final response = await super.execute(command, payload: payload);
+    if (command != 'inspect_save') return response;
+
+    final data = (response['data'] as Map).cast<String, Object?>();
+    final private = (data['private'] as Map).cast<String, Object?>();
+    final inventory = (private['inventory'] as Map).cast<String, Object?>();
+    inventory['itemStackCount'] = 4097;
     return response;
   }
 }
