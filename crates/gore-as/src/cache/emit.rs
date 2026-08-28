@@ -900,6 +900,7 @@ fn emit_function_ctor(
     let touched_after_branch = slots_touched_only_after_a_branch(f);
     // Handles vanilla ALIASED into a slot of their own: that alias is a name the source wrote.
     let aliased = handle_alias_slots(f);
+    let copied_on = copied_on_slots(f);
     // How often each slot is default-constructed: more than once and the source spelled the
     // temporary out at every use.
     let constructions = default_construction_counts(f, refs);
@@ -1063,10 +1064,32 @@ fn emit_function_ctor(
     // handle type it was allocated with (`UObject`), and the structurer then has to write a
     // SECOND `Cast<T>` at every method call on it just to make the call legal — a cast vanilla
     // never had. Where the recorded type is a base the cast is narrower than, take the cast's.
+    //
+    // A slot the vanilla bytecode's own `TYPEID` proves a cast wrote is typed by that cast, and
+    // nothing weaker may retype it afterwards. A member's DECLARING class is weaker: the derived
+    // type has the member too, and `is_subclass` cannot say so across a native chain — which is
+    // how `APawn local_8 = Cast<AGothicCharacter>(…)` survived and then could not answer
+    // `IsEnemyTowards(AGothicCharacter, AGothicCharacter)` on the 2026-08-28 game build.
+    // Only a cast to a SCRIPT class protects the slot: a cast to an engine base is exactly the
+    // coarse type a member's declaring class is entitled to refine, and shielding those left
+    // `AActor local_2 = Cast<AGothicCharacter>(…)` unable to answer `GetCharacterState()`.
+    let cast_typed: HashSet<i32> = cast_result_slots(f, refs)
+        .into_iter()
+        .filter(|(_, ty)| !is_engine_base(ty))
+        .map(|(slot, _)| slot)
+        .collect();
     for (slot, ty) in cast_result_slots(f, refs) {
-        let narrows = local_types
-            .get(&slot)
-            .is_some_and(|wide| wide != &ty && (wide == "UObject" || refs.is_subclass(&ty, wide)));
+        // The recorded base may be any engine class, not just the universal root: the native
+        // chain `ACharacter -> APawn -> AActor -> UObject` is absent from the known hierarchy, so
+        // `is_subclass` cannot see through it. The direction still has to be proved, and a script
+        // class is the proof — replacing one engine base by ANOTHER is not a narrowing, and doing
+        // it typed a receiver `UAbilitySystemComponent` that had to answer `GetAvatar()`.
+        let narrows = local_types.get(&slot).is_some_and(|wide| {
+            wide != &ty
+                && ((is_engine_base(wide) && !is_engine_base(&ty))
+                    || wide == "?"
+                    || refs.is_subclass(&ty, wide))
+        });
         if narrows {
             local_types.insert(slot, ty);
         }
@@ -1089,7 +1112,7 @@ fn emit_function_ctor(
             .is_some_and(|ct| vanilla_obj_types.get(slot) == Some(ct) && ct != ty)
     };
     for (slot, ty) in &member_overrides {
-        if member_widen_blocked(slot, ty) {
+        if member_widen_blocked(slot, ty) || cast_typed.contains(slot) {
             continue;
         }
         // batch-33a: 31d most-derived merge, mirrored onto the MEMBER pass — a field's
@@ -1202,6 +1225,9 @@ fn emit_function_ctor(
     // uses are const-safe: vanilla used the same value through a const local, and Class A
     // restored the faithful const method qualifiers + const param renders.
     let mut const_slots = const_slots;
+    // A const handle that arrives from a call, not from a marked store: the hoisted declaration
+    // is typed from the slot table and would otherwise drop the qualifier.
+    const_slots.extend(const_call_result_slots(f, refs));
     // batch-30a (C6a, specs/batch29-errortail.md §6a): propagate const FORWARD through
     // same-type handle copies BEFORE the shrink loop. `local_M = local_N;` with N
     // const-marked previously DROPPED N (copy into a non-const local), keeping the
@@ -1384,6 +1410,7 @@ fn emit_function_ctor(
         &loop_elements,
         &widened,
         &aliased,
+        &copied_on,
     );
     // Runs after the producers have moved into their readers: only then is the value arm of a
     // short circuit the single assignment it was in source.
@@ -1412,6 +1439,7 @@ fn emit_function_ctor(
         &loop_elements,
         &widened,
         &aliased,
+        &copied_on,
     );
     let body = rewrite_operator_calls(&body);
     let body = fold_cast_diamonds(&body);
@@ -1433,6 +1461,7 @@ fn emit_function_ctor(
         &loop_elements,
         &widened,
         &aliased,
+        &copied_on,
     );
     let body = drop_unreachable_statements(&body);
     // All three run before the declarations are hoisted, so a temporary they empty out never
@@ -1556,7 +1585,7 @@ fn emit_function_ctor(
     for (slot, ty) in &member_overrides {
         // batch-30a (C6c): same gate as the body map — a sole-call-written slot whose call
         // return type matches the vanilla obj_locals entry keeps the exact vanilla type.
-        if used.contains(slot) && !member_widen_blocked(slot, ty) {
+        if used.contains(slot) && !member_widen_blocked(slot, ty) && !cast_typed.contains(slot) {
             // batch-33a: declaration-side mirror of the most-derived member merge above —
             // the vanilla obj_locals type wins over a field-declaring-class ANCESTOR.
             if let Some(vanilla) = vanilla_obj_types.get(slot) {
@@ -1727,7 +1756,10 @@ fn emit_function_ctor(
         // cache records for a cast out-slot.
         for (slot, ty) in cast_result_slots(f, refs) {
             let narrows = locals.get(&slot).is_some_and(|wide| {
-                wide != &ty && (wide == "UObject" || wide == "?" || refs.is_subclass(&ty, wide))
+                wide != &ty
+                    && ((is_engine_base(wide) && !is_engine_base(&ty))
+                        || wide == "?"
+                        || refs.is_subclass(&ty, wide))
             });
             if narrows {
                 locals.insert(slot, ty);
@@ -3688,6 +3720,43 @@ fn bool_slot_profile_is_safe(instrs: &[super::disasm::Instr], slot: i32) -> bool
 /// The type each slot's captured call result has: `CpyRtoV*`/`STOREOBJ` right after a call copies
 /// that call's return value into the slot, and the cache records what the callee returns. A slot
 /// that captures two DIFFERENT types is the compiler reusing it, and carries no witness at all.
+/// Slots an object-returning call fills with a CONST handle.
+///
+/// The declaration has to say `const` too, or the store is refused outright ("Can't implicitly
+/// convert from 'const T' to 'T'"). A declaration WITH an initializer already renders the return
+/// type in full; a hoisted bare declaration is typed from the slot table, which carries only the
+/// base name — which is how a game build that made one getter `const` broke the tree.
+fn const_call_result_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    let mut out = HashSet::new();
+    let mut returned: Option<&super::types::DataType> = None;
+    for ins in &instrs {
+        match ins.op.name {
+            "CALL" | "CALLINTF" | "CALLBND" => {
+                returned = refs.func_ret_by_id(ins.dwords.first().copied().unwrap_or(0) as i32);
+            }
+            "CALLSYS" => {
+                returned = refs.func_ret_by_ptr(ins.qwords.first().copied().unwrap_or(0) as i64);
+            }
+            "STOREOBJ" => {
+                if let (Some(ret), Some(slot)) = (
+                    returned.take(),
+                    ins.words.first().map(|word| *word as i16 as i32),
+                ) {
+                    if slot > 0 && ret.is_object_handle && (ret.is_read_only || ret.is_object_const)
+                    {
+                        out.insert(slot);
+                    }
+                }
+            }
+            _ => returned = None,
+        }
+    }
+    out
+}
+
 fn call_result_types(f: &Func, refs: &RefResolver) -> HashMap<i32, String> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return HashMap::new();
@@ -3846,6 +3915,19 @@ fn temporary_receiver_slots(f: &Func, refs: &RefResolver) -> HashSet<i32> {
 /// Slots a `Cast<T>` fills, with the T it fills them with: the cast writes its own out-slot and
 /// the source's slot takes it through `PshVPtr <out>; RefCpyV <slot>`, with the diamond's join
 /// jump and null arm in between.
+/// The engine base classes the cache hands out for temporaries and generic getters.
+///
+/// `is_subclass` walks script supers and stops at the first native one, so the native chain
+/// `ACharacter -> APawn -> AActor -> UObject` is invisible to it and a narrowing across that chain
+/// cannot be proved that way. Naming the bases is the proof that is available: a cast to a SCRIPT
+/// class is narrower than any of them.
+fn is_engine_base(t: &str) -> bool {
+    matches!(
+        t,
+        "UObject" | "AActor" | "APawn" | "ACharacter" | "UActorComponent" | "UAbilitySystemComponent"
+    )
+}
+
 fn cast_result_slots(f: &Func, refs: &RefResolver) -> Vec<(i32, String)> {
     let Ok(instrs) = disassemble(&f.bytecode) else {
         return Vec::new();
@@ -5901,6 +5983,24 @@ fn sole_use_is_a_conversion(line: &str, ident: &str, refs: &RefResolver) -> bool
 /// is a whole argument of a later call in the same block; the parameter at that position accepts
 /// a temporary (from the cache's own parameter table); and every statement in between is itself
 /// a temporary the SAME call consumes, so nothing else changes its order.
+/// Slots this function COPIES ON into another slot.
+///
+/// This compiler cannot put an expression's result into a declared variable without a copy, so
+/// the copy IS the name: `fTOd t, x; CpyVtoV8 n, t` is a declaration, while `fTOd t, x; MULd t,
+/// t, y` is an expression temporary consumed where it lands. A slot that is never a copy's SOURCE
+/// was never given a name to be copied into.
+fn copied_on_slots(f: &Func) -> HashSet<i32> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return HashSet::new();
+    };
+    instrs
+        .iter()
+        .filter(|ins| ins.op.name.starts_with("CpyVtoV"))
+        .filter_map(|ins| ins.words.get(1).map(|word| *word as i16 as i32))
+        .filter(|slot| *slot > 0)
+        .collect()
+}
+
 fn inline_call_argument_temporaries(
     body: &str,
     refs: &RefResolver,
@@ -5913,6 +6013,7 @@ fn inline_call_argument_temporaries(
     loop_elements: &HashSet<i32>,
     widened: &HashSet<i32>,
     aliased: &HashSet<i32>,
+    copied_on: &HashSet<i32>,
 ) -> String {
     const MAX_ARGUMENT_INLINE_PASSES: usize = 8;
     let trailing_newline = body.ends_with('\n');
@@ -5971,6 +6072,7 @@ fn inline_call_argument_temporaries(
                 if inline_temporary_into(
                     &mut lines, index, &temp, &callee, position, locals, refs, fields, call_types,
                     statement_producers, temporary_receivers, loop_elements, widened, aliased,
+                    copied_on,
                 ) {
                     changed = true;
                     moved = true;
@@ -6012,6 +6114,7 @@ fn inline_temporary_into(
     loop_elements: &HashSet<i32>,
     widened: &HashSet<i32>,
     aliased: &HashSet<i32>,
+    copied_on: &HashSet<i32>,
 ) -> bool {
     let receiver = position == Position::Receiver;
     // A loop header is evaluated once per ITERATION, and this producer stands before the loop.
@@ -6133,7 +6236,12 @@ fn inline_temporary_into(
                     && renders_a_bool(&value, locals, refs, fields)))
                 && (same_typed_own_field(&value, temp, locals, fields)
                     || is_call_result(&value)
-                    || names_a_static_class(&value, temp, locals))
+                    || names_a_static_class(&value, temp, locals)
+                    // Or vanilla itself says the slot was never a name: this compiler cannot put
+                    // a result into a declared variable without copying it on, so a slot that is
+                    // no copy's source held an expression temporary whatever its value looks
+                    // like.
+                    || slot_and_life(temp).is_some_and(|(slot, _)| !copied_on.contains(&slot)))
         }
         // An argument or a receiver takes the value as it is, so a member read may travel there
         // too — reading a member has no side effect of its own, and the field map proves the

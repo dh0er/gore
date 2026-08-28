@@ -2059,7 +2059,18 @@ fn downcast(
             }
         }
         (Some(s), Some(d)) if src_const && is_obj(&s) && s == *d => format!("{CONSTSTORE}{rhs}"),
-        _ => rhs,
+        // The destination's type is not always recorded here — the cache's `obj_locals` can be
+        // silent about a slot the emitter types later from this very call. A const handle stored
+        // into an unknown destination is still a const handle, and the declaration has to say so
+        // or the store is refused ("Can't implicitly convert from 'const T' to 'T'"). There is
+        // nothing to cast to, so the marker is the only thing this arm can contribute.
+        (Some(s), None) if src_const && is_obj(&s) => format!("{CONSTSTORE}{rhs}"),
+        other => {
+            if std::env::var_os("GORE_AS_CONST_DIAG").is_some() {
+                eprintln!("[const-store] src={:?} const={src_const} dst={:?} rhs={rhs}", other.0, other.1);
+            }
+            rhs
+        }
     }
 }
 
