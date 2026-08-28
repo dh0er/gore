@@ -1321,10 +1321,10 @@ void main() {
         .toList();
     expect(
       statisticsTexts,
-      contains('Old Camp\nGuard'),
+      contains('New Camp\nMercenary'),
       reason: statisticsTexts.join(' | '),
     );
-    final guildValue = tester.widget<Text>(find.text('Old Camp\nGuard'));
+    final guildValue = tester.widget<Text>(find.text('New Camp\nMercenary'));
     expect(guildValue.maxLines, 2);
     expect(guildValue.overflow, isNull);
     final worldTimeValue = tester.widget<Text>(find.text('Day 16, 08:37:13'));
@@ -1603,6 +1603,7 @@ void main() {
         'path': r'C:\tmp\saves\G1R-001.sav',
         'backupPath': r'C:\tmp\saves\goresave_backups\G1R-001.sav.bak.301',
         'expectedPersistentSha1': 'post-delete-profile-sha',
+        'expectedSaveSha1': 'deleted-save-sha',
       });
     },
   );
@@ -2023,6 +2024,7 @@ class _FakeCoreService implements GoresaveCoreService {
             'persistentBackupPath':
                 r'C:\tmp\saves\goresave_backups\PersistentDataList.sav.bak.301',
             'persistentPostDeleteSha1': 'post-delete-profile-sha',
+            'deletedSaveSha1': 'deleted-save-sha',
           },
         };
       case 'search_typed_properties':
@@ -2431,10 +2433,10 @@ class _StatisticsCoreService extends _FakeCoreService {
         'data': {
           'section': 'events',
           'character': 'Hero_Global',
-          'total': 4,
+          'total': 5,
           'offset': 0,
           'limit': payload['limit'] ?? 500,
-          'count': 3,
+          'count': 5,
           'events': [
             {
               'index': 0,
@@ -2462,6 +2464,11 @@ class _StatisticsCoreService extends _FakeCoreService {
               'tags': ['Memory.Character.Defeated'],
               'timeSeconds': 400.0,
               'affected': 'OC_STT_Diego',
+            },
+            {
+              'index': 4,
+              'tags': ['Memory.Guild.Joined', 'Guild.Human.NewCamp.Mercenary'],
+              'affected': 'Hero',
             },
           ],
           'arrayPath': [

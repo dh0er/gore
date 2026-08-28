@@ -611,10 +611,17 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                         "missing payload.expectedPersistentSha1".to_string(),
                     )
                 })?;
+            let expected_save_sha1 = payload
+                .get("expectedSaveSha1")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest("missing payload.expectedSaveSha1".to_string())
+                })?;
             Ok(restore_deleted_save(
                 &path,
                 &backup_path,
                 expected_persistent_sha1,
+                expected_save_sha1,
             )?)
         }
         "delete_backup" => {
@@ -2288,6 +2295,7 @@ fn restore_deleted_save(
     path: &Path,
     backup_path: &Path,
     expected_persistent_sha1: &str,
+    expected_save_sha1: &str,
 ) -> Result<Value, CoreError> {
     let file_name = path
         .file_name()
@@ -2306,6 +2314,7 @@ fn restore_deleted_save(
         backup_path,
         true,
         Some(expected_persistent_sha1),
+        Some(expected_save_sha1),
         |_| Ok(()),
     )
 }
@@ -2318,7 +2327,7 @@ fn restore_backup_with_before_replace<F>(
 where
     F: FnOnce(&Path) -> Result<(), CoreError>,
 {
-    restore_backup_with_mode(path, backup_path, false, None, before_replace)
+    restore_backup_with_mode(path, backup_path, false, None, None, before_replace)
 }
 
 fn restore_backup_with_mode<F>(
@@ -2326,6 +2335,7 @@ fn restore_backup_with_mode<F>(
     backup_path: &Path,
     require_missing_target: bool,
     expected_persistent_sha1: Option<&str>,
+    expected_backup_sha1: Option<&str>,
     before_replace: F,
 ) -> Result<Value, CoreError>
 where
@@ -2334,6 +2344,13 @@ where
     ensure_backup_belongs_to_save(path, backup_path)?;
     let backup_data = fs::read(backup_path)?;
     inspect_bytes(&backup_data, Some(backup_path), false)?;
+    if let Some(expected_sha1) = expected_backup_sha1 {
+        if sha1_hex(&backup_data) != expected_sha1 {
+            return Err(CoreError::Validation(
+                "the deleted save backup no longer matches the original snapshot".to_string(),
+            ));
+        }
+    }
 
     // inspect_bytes' GVAS branch only checks the magic and scans strings. Before
     // overwriting the live PersistentDataList.sav with a profile backup, require
@@ -5210,6 +5227,7 @@ where
         "backupPath": backup_path,
         "persistentBackupPath": persistent_backup_path,
         "persistentPostDeleteSha1": sha1_hex(&persistent_edited),
+        "deletedSaveSha1": sha1_hex(&save_original),
         "placementNoteWarning": placement_note_warning,
     }))
 }
@@ -16789,6 +16807,7 @@ mod tests {
                     "path": save_path,
                     "backupPath": backup_path,
                     "expectedPersistentSha1": response["persistentPostDeleteSha1"],
+                    "expectedSaveSha1": response["deletedSaveSha1"],
                 }
             })
             .to_string(),
@@ -16828,11 +16847,17 @@ mod tests {
             &minimal_stream(),
             &[0, 0, 0, 0],
         );
+        let deleted_sha1 = sha1_hex(&deleted);
         fs::write(&backup_path, deleted).unwrap();
         fs::write(&save_path, &recreated).unwrap();
 
-        let error =
-            restore_deleted_save(&save_path, &backup_path, "unused-profile-sha").unwrap_err();
+        let error = restore_deleted_save(
+            &save_path,
+            &backup_path,
+            "unused-profile-sha",
+            &deleted_sha1,
+        )
+        .unwrap_err();
 
         assert!(matches!(error, CoreError::Update(_)));
         assert_eq!(fs::read(&save_path).unwrap(), recreated);
@@ -16855,15 +16880,56 @@ mod tests {
         let deleted = delete_save(&save_path, &persistent_path, slot, 0, true).unwrap();
         let backup_path = PathBuf::from(deleted["backupPath"].as_str().unwrap());
         let expected_sha1 = deleted["persistentPostDeleteSha1"].as_str().unwrap();
+        let expected_save_sha1 = deleted["deletedSaveSha1"].as_str().unwrap();
         let newer_profile = assignment_persistent_data_list("G1R-007", 0);
         fs::write(&persistent_path, &newer_profile).unwrap();
 
-        let error =
-            restore_deleted_save(&save_path, &backup_path, expected_sha1).unwrap_err();
+        let error = restore_deleted_save(
+            &save_path,
+            &backup_path,
+            expected_sha1,
+            expected_save_sha1,
+        )
+        .unwrap_err();
 
         assert!(matches!(error, CoreError::Update(_)));
         assert!(!save_path.exists());
         assert_eq!(fs::read(&persistent_path).unwrap(), newer_profile);
+    }
+
+    #[test]
+    fn restore_deleted_save_rejects_a_changed_backup() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-006";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let save_original = build_gsav(
+            2,
+            &public_payload_with_profile("Deleted", 0),
+            &minimal_stream(),
+            &[0, 0, 0, 0],
+        );
+        fs::write(&save_path, &save_original).unwrap();
+        fs::write(&persistent_path, assignment_persistent_data_list(slot, 0)).unwrap();
+        let deleted = delete_save(&save_path, &persistent_path, slot, 0, true).unwrap();
+        let backup_path = PathBuf::from(deleted["backupPath"].as_str().unwrap());
+        let expected_persistent_sha1 =
+            deleted["persistentPostDeleteSha1"].as_str().unwrap();
+        let expected_save_sha1 = deleted["deletedSaveSha1"].as_str().unwrap();
+        let post_delete_profile = fs::read(&persistent_path).unwrap();
+        fs::write(&backup_path, assignment_persistent_data_list(slot, 0)).unwrap();
+
+        let error = restore_deleted_save(
+            &save_path,
+            &backup_path,
+            expected_persistent_sha1,
+            expected_save_sha1,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, CoreError::Validation(_)));
+        assert!(!save_path.exists());
+        assert_eq!(fs::read(&persistent_path).unwrap(), post_delete_profile);
     }
 
     #[test]

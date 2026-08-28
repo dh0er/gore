@@ -177,12 +177,13 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
           defeatedNpcs++;
         }
         if (tags.contains('memory.guild.joined')) {
-          final currentTime = event.timeSeconds ?? event.index.toDouble();
-          final previousTime =
-              latestGuildEvent?.timeSeconds ??
-              latestGuildEvent?.index.toDouble() ??
-              double.negativeInfinity;
-          if (currentTime >= previousTime) latestGuildEvent = event;
+          // The timestamp is optional, so comparing it with an array index
+          // mixes unrelated units. The event index is present for every row
+          // and preserves one consistent ordering across mixed records.
+          if (latestGuildEvent == null ||
+              event.index >= latestGuildEvent.index) {
+            latestGuildEvent = event;
+          }
         }
       }
       offset += page.events.length;

@@ -5238,6 +5238,10 @@ void main() {
         notifier.state.deletedSaveRecovery?.persistentPostDeleteSha1,
         'post-delete-profile-sha',
       );
+      expect(
+        notifier.state.deletedSaveRecovery?.deletedSaveSha1,
+        'deleted-save-sha',
+      );
 
       await notifier.restoreDeletedSave();
 
@@ -5253,6 +5257,7 @@ void main() {
         restore.payload['expectedPersistentSha1'],
         'post-delete-profile-sha',
       );
+      expect(restore.payload['expectedSaveSha1'], 'deleted-save-sha');
       expect(notifier.state.deletedSaveRecovery, isNull);
     },
   );
@@ -6262,6 +6267,7 @@ class _RecordingCoreService implements GoresaveCoreService {
             'persistentBackupPath':
                 r'C:\tmp\saves\goresave_backups\PersistentDataList.sav.bak.2',
             'persistentPostDeleteSha1': 'post-delete-profile-sha',
+            'deletedSaveSha1': 'deleted-save-sha',
           },
         };
       case 'search_typed_properties':
