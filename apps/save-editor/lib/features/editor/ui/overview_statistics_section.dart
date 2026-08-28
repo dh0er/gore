@@ -592,7 +592,6 @@ const _statisticsCardSpacing = 14.0;
 const _statisticsCardMinWidth = 300.0;
 const _statisticsCardMaxColumns = 3;
 const _statisticsHeaderHeight = 40.0;
-const _statisticsMetricHeight = 80.0;
 const _statisticsMetricSpacing = 8.0;
 const _statisticsMetricMinWidth = 130.0;
 
@@ -618,24 +617,22 @@ class _StatisticsGrid extends StatelessWidget {
                   _statisticsCardSpacing * (rowColumnCount - 1)) /
               rowColumnCount;
           final metricColumns = _metricColumnCount(cardWidth - 28);
-          final rowHeight = rowSections
-              .map((section) => section.heightFor(metricColumns))
-              .reduce(
-                (height, candidate) => height > candidate ? height : candidate,
-              );
           if (rows.isNotEmpty) {
             rows.add(const SizedBox(height: _statisticsCardSpacing));
           }
           rows.add(
-            SizedBox(
-              height: rowHeight,
+            IntrinsicHeight(
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   for (var index = 0; index < rowSections.length; index++) ...[
                     if (index > 0)
                       const SizedBox(width: _statisticsCardSpacing),
-                    Expanded(child: rowSections[index]),
+                    Expanded(
+                      child: rowSections[index].withMetricColumns(
+                        metricColumns,
+                      ),
+                    ),
                   ],
                 ],
               ),
@@ -678,21 +675,23 @@ class _StatisticsSection extends StatelessWidget {
     required this.title,
     required this.metrics,
     this.footer,
+    this.metricColumns = 1,
   });
 
   final IconData icon;
   final String title;
   final List<_Metric> metrics;
   final Widget? footer;
+  final int metricColumns;
 
-  double heightFor(int metricColumns) {
-    final metricRows = (metrics.length / metricColumns).ceil();
-    final metricsHeight =
-        metricRows * _statisticsMetricHeight +
-        (metricRows - 1) * _statisticsMetricSpacing;
-    final footerHeight = footer == null ? 0 : 17;
-    return 28 + _statisticsHeaderHeight + 11 + metricsHeight + footerHeight;
-  }
+  _StatisticsSection withMetricColumns(int columns) => _StatisticsSection(
+    key: key,
+    icon: icon,
+    title: title,
+    metrics: metrics,
+    footer: footer,
+    metricColumns: columns,
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -741,31 +740,47 @@ class _StatisticsSection extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 11),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final columnCount = _metricColumnCount(constraints.maxWidth);
-                final width =
-                    (constraints.maxWidth -
-                        _statisticsMetricSpacing * (columnCount - 1)) /
-                    columnCount;
-                return Wrap(
-                  spacing: _statisticsMetricSpacing,
-                  runSpacing: _statisticsMetricSpacing,
-                  children: [
-                    for (final metric in metrics)
-                      SizedBox(
-                        width: width,
-                        height: _statisticsMetricHeight,
-                        child: _DetailMetric(metric: metric),
-                      ),
-                  ],
-                );
-              },
-            ),
+            _MetricTable(metrics: metrics, columnCount: metricColumns),
             if (footer != null) ...[const SizedBox(height: 10), footer!],
           ],
         ),
       ),
+    );
+  }
+}
+
+class _MetricTable extends StatelessWidget {
+  const _MetricTable({required this.metrics, required this.columnCount});
+
+  final List<_Metric> metrics;
+  final int columnCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final rowCount = (metrics.length / columnCount).ceil();
+    return Table(
+      children: [
+        for (var row = 0; row < rowCount; row++)
+          TableRow(
+            children: [
+              for (var column = 0; column < columnCount; column++)
+                Padding(
+                  padding: EdgeInsets.only(
+                    right: column + 1 < columnCount
+                        ? _statisticsMetricSpacing
+                        : 0,
+                    bottom: row + 1 < rowCount ? _statisticsMetricSpacing : 0,
+                  ),
+                  child: switch (row * columnCount + column) {
+                    final index when index < metrics.length => _DetailMetric(
+                      metric: metrics[index],
+                    ),
+                    _ => const SizedBox.shrink(),
+                  },
+                ),
+            ],
+          ),
+      ],
     );
   }
 }
@@ -781,6 +796,7 @@ class _DetailMetric extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(metric.label, maxLines: 2, style: theme.textTheme.bodySmall),

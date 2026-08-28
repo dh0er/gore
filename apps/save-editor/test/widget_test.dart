@@ -1149,7 +1149,7 @@ void main() {
     );
     expect(tester.getTopLeft(timeCard).dy, tester.getTopLeft(characterCard).dy);
     expect(tester.getTopLeft(timeCard).dy, tester.getTopLeft(questCard).dy);
-    expect(tester.getSize(timeCard).height, lessThan(360));
+    expect(tester.getSize(timeCard).height, lessThan(270));
     for (final card in [characterCard, questCard]) {
       expect(tester.getSize(card).height, tester.getSize(timeCard).height);
       expect(tester.getSize(card).width, lessThan(450));
@@ -1158,6 +1158,7 @@ void main() {
       tester.getSize(inventoryCard).height,
       tester.getSize(encountersCard).height,
     );
+    expect(tester.getSize(encountersCard).height, lessThan(270));
     expect(
       tester.getSize(inventoryCard).width,
       tester.getSize(encountersCard).width,
