@@ -205,6 +205,8 @@ fn run() -> Result<()> {
         closing_audit,
         target,
     );
+    let prior_artifact_failure_disposition =
+        prior_artifact_failure_disposition(standalone_report.recovery_required());
     let verified = match standalone_report.finish_while_target_pinned(|report| {
         finish_verification(
             report,
@@ -218,6 +220,11 @@ fn run() -> Result<()> {
         )
     }) {
         Ok(verified) => verified,
+        Err(error)
+            if prior_artifact_failure_disposition == PriorArtifactFailureDisposition::Preserve =>
+        {
+            return Err(error)
+        }
         Err(error) => {
             return Err(neutralize_after_error(
                 error,
@@ -565,6 +572,20 @@ fn neutralize_after_error<const N: usize>(
             "OUTPUT_RECOVERY_REQUIRED: {error:#}; exact-handle neutralization failed for {}",
             cleanup_failures.join("; ")
         )
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PriorArtifactFailureDisposition {
+    Preserve,
+    Neutralize,
+}
+
+fn prior_artifact_failure_disposition(recovery_required: bool) -> PriorArtifactFailureDisposition {
+    if recovery_required {
+        PriorArtifactFailureDisposition::Preserve
+    } else {
+        PriorArtifactFailureDisposition::Neutralize
     }
 }
 
@@ -1516,5 +1537,17 @@ mod tests {
         .to_string();
         assert!(error.contains(DIAGNOSTICS_HOOK_ENV), "{error}");
         assert!(error.contains("SHA-256-verified"), "{error}");
+    }
+
+    #[test]
+    fn standalone_recovery_preserves_the_prior_embedded_reference() {
+        assert_eq!(
+            prior_artifact_failure_disposition(true),
+            PriorArtifactFailureDisposition::Preserve
+        );
+        assert_eq!(
+            prior_artifact_failure_disposition(false),
+            PriorArtifactFailureDisposition::Neutralize
+        );
     }
 }
