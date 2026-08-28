@@ -1136,6 +1136,53 @@ void main() {
       find.byKey(const ValueKey('statistics-section-inventory')),
       findsOneWidget,
     );
+    final timeCard = find.byKey(const ValueKey('statistics-card-time'));
+    final characterCard = find.byKey(
+      const ValueKey('statistics-card-character'),
+    );
+    final questCard = find.byKey(const ValueKey('statistics-card-quests'));
+    final encountersCard = find.byKey(
+      const ValueKey('statistics-card-progress'),
+    );
+    final inventoryCard = find.byKey(
+      const ValueKey('statistics-section-inventory'),
+    );
+    expect(tester.getTopLeft(timeCard).dy, tester.getTopLeft(characterCard).dy);
+    expect(tester.getTopLeft(timeCard).dy, tester.getTopLeft(questCard).dy);
+    expect(tester.getSize(timeCard).height, lessThan(300));
+    for (final card in [
+      characterCard,
+      questCard,
+      encountersCard,
+      inventoryCard,
+    ]) {
+      expect(tester.getSize(card).height, tester.getSize(timeCard).height);
+      expect(tester.getSize(card).width, lessThan(450));
+    }
+    expect(
+      tester.getTopLeft(encountersCard).dy - tester.getBottomLeft(timeCard).dy,
+      closeTo(14, 0.1),
+    );
+    expect(
+      tester.getTopLeft(inventoryCard).dy,
+      tester.getTopLeft(encountersCard).dy,
+    );
+    final chapterLabel = find.descendant(
+      of: timeCard,
+      matching: find.text('Chapter'),
+    );
+    final chapterValue = find.descendant(
+      of: timeCard,
+      matching: find.text('1'),
+    );
+    expect(
+      tester.getTopLeft(chapterValue).dy,
+      greaterThan(tester.getTopLeft(chapterLabel).dy),
+    );
+    expect(
+      tester.getTopLeft(chapterValue).dx,
+      closeTo(tester.getTopLeft(chapterLabel).dx, 0.1),
+    );
     expect(
       find.text(
         'A compact summary of character, quest, world, and save progress.',

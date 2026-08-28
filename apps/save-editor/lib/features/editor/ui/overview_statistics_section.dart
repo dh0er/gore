@@ -254,15 +254,15 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
                   ],
                 ),
                 const SizedBox(height: 18),
-                _progressSection(context),
-                const SizedBox(height: 18),
-                _characterSection(context),
-                const SizedBox(height: 18),
-                _questSection(context),
-                const SizedBox(height: 18),
-                _encountersSection(context),
-                const SizedBox(height: 18),
-                _inventorySection(context),
+                _StatisticsGrid(
+                  sections: [
+                    _progressSection(context),
+                    _characterSection(context),
+                    _questSection(context),
+                    _encountersSection(context),
+                    _inventorySection(context),
+                  ],
+                ),
               ],
             ),
           ),
@@ -271,7 +271,7 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
     );
   }
 
-  Widget _progressSection(BuildContext context) {
+  _StatisticsSection _progressSection(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final parts = _gameTime == null
         ? null
@@ -302,7 +302,7 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
     );
   }
 
-  Widget _characterSection(BuildContext context) {
+  _StatisticsSection _characterSection(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final attributes = _attributeValues();
     final attributesLoaded = _heroAttributes != null;
@@ -354,7 +354,7 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
     );
   }
 
-  Widget _questSection(BuildContext context) {
+  _StatisticsSection _questSection(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final counts = widget.inspection.privateProgression.questStates;
     final succeeded = _questCount(counts, 'Succeeded');
@@ -380,7 +380,7 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
     );
   }
 
-  Widget _encountersSection(BuildContext context) {
+  _StatisticsSection _encountersSection(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final catalog = _characterCatalog;
     final humanNpcs = catalog == null || _characters == null
@@ -448,7 +448,7 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
     );
   }
 
-  Widget _inventorySection(BuildContext context) {
+  _StatisticsSection _inventorySection(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final inventory = widget.inspection.privateInventory;
     final totalItems = inventory.items.fold<int>(
@@ -589,6 +589,72 @@ class _Metric {
   final String value;
 }
 
+const _statisticsCardSpacing = 14.0;
+const _statisticsCardMinWidth = 300.0;
+const _statisticsCardMaxColumns = 3;
+const _statisticsHeaderHeight = 40.0;
+const _statisticsMetricHeight = 56.0;
+const _statisticsMetricSpacing = 8.0;
+const _statisticsMetricMinWidth = 96.0;
+
+class _StatisticsGrid extends StatelessWidget {
+  const _StatisticsGrid({required this.sections});
+
+  final List<_StatisticsSection> sections;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columnCount = _cardColumnCount(constraints.maxWidth);
+        final cardWidth =
+            (constraints.maxWidth -
+                _statisticsCardSpacing * (columnCount - 1)) /
+            columnCount;
+        final metricColumns = _metricColumnCount(cardWidth - 28);
+        final cardHeight = sections
+            .map((section) => section.heightFor(metricColumns))
+            .reduce(
+              (height, candidate) => height > candidate ? height : candidate,
+            );
+
+        return GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: columnCount,
+            crossAxisSpacing: _statisticsCardSpacing,
+            mainAxisSpacing: _statisticsCardSpacing,
+            mainAxisExtent: cardHeight,
+          ),
+          itemCount: sections.length,
+          itemBuilder: (context, index) => sections[index],
+        );
+      },
+    );
+  }
+
+  static int _cardColumnCount(double width) {
+    for (var count = _statisticsCardMaxColumns; count > 1; count--) {
+      final requiredWidth =
+          _statisticsCardMinWidth * count +
+          _statisticsCardSpacing * (count - 1);
+      if (width >= requiredWidth) return count;
+    }
+    return 1;
+  }
+}
+
+int _metricColumnCount(double width) {
+  for (var count = 3; count > 1; count--) {
+    final requiredWidth =
+        _statisticsMetricMinWidth * count +
+        _statisticsMetricSpacing * (count - 1);
+    if (width >= requiredWidth) return count;
+  }
+  return 1;
+}
+
 class _StatisticsSection extends StatelessWidget {
   const _StatisticsSection({
     super.key,
@@ -602,6 +668,15 @@ class _StatisticsSection extends StatelessWidget {
   final String title;
   final List<_Metric> metrics;
   final Widget? footer;
+
+  double heightFor(int metricColumns) {
+    final metricRows = (metrics.length / metricColumns).ceil();
+    final metricsHeight =
+        metricRows * _statisticsMetricHeight +
+        (metricRows - 1) * _statisticsMetricSpacing;
+    final footerHeight = footer == null ? 0 : 17;
+    return 28 + _statisticsHeaderHeight + 11 + metricsHeight + footerHeight;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -617,46 +692,54 @@ class _StatisticsSection extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.primaryContainer,
-                    borderRadius: BorderRadius.circular(7),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(7),
-                    child: Icon(
-                      icon,
-                      size: 18,
-                      color: theme.colorScheme.onPrimaryContainer,
+            SizedBox(
+              height: _statisticsHeaderHeight,
+              child: Row(
+                children: [
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(7),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(7),
+                      child: Icon(
+                        icon,
+                        size: 18,
+                        color: theme.colorScheme.onPrimaryContainer,
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 10),
-                Text(
-                  title,
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
             const SizedBox(height: 11),
             LayoutBuilder(
               builder: (context, constraints) {
-                final width = constraints.maxWidth >= 900
-                    ? (constraints.maxWidth - 24) / 3
-                    : constraints.maxWidth >= 520
-                    ? (constraints.maxWidth - 12) / 2
-                    : constraints.maxWidth;
+                final columnCount = _metricColumnCount(constraints.maxWidth);
+                final width =
+                    (constraints.maxWidth -
+                        _statisticsMetricSpacing * (columnCount - 1)) /
+                    columnCount;
                 return Wrap(
-                  spacing: 12,
-                  runSpacing: 8,
+                  spacing: _statisticsMetricSpacing,
+                  runSpacing: _statisticsMetricSpacing,
                   children: [
                     for (final metric in metrics)
                       SizedBox(
                         width: width,
+                        height: _statisticsMetricHeight,
                         child: _DetailMetric(metric: metric),
                       ),
                   ],
@@ -680,19 +763,22 @@ class _DetailMetric extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 7),
-      child: Row(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(child: Text(metric.label, style: theme.textTheme.bodySmall)),
-          const SizedBox(width: 10),
-          Flexible(
-            child: Text(
-              metric.value,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.end,
-              style: theme.textTheme.labelLarge,
-            ),
+          Text(
+            metric.label,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodySmall,
+          ),
+          const SizedBox(height: 2),
+          Text(
+            metric.value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.labelLarge,
           ),
         ],
       ),
