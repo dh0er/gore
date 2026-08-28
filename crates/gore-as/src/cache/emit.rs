@@ -1117,6 +1117,15 @@ fn emit_function_ctor(
             local_types.insert(slot, ty);
         }
     }
+    // The same narrowing, proved by the alias's own producer rather than by a cast.
+    for (slot, ty) in refcpy_source_types(f, refs) {
+        let narrows = local_types
+            .get(&slot)
+            .is_some_and(|wide| wide != &ty && (is_engine_base(wide) || wide == "?"));
+        if narrows {
+            local_types.insert(slot, ty);
+        }
+    }
     // member-access-derived types (`member_overrides`, computed above as the type lower-bound):
     // the field's declaring class is the strongest signal for a slot used as a member-access
     // base; apply AFTER (overriding) the call-arg guess.
@@ -1790,6 +1799,18 @@ fn emit_function_ctor(
                         || wide == "?"
                         || refs.is_subclass(&ty, wide))
             });
+            if narrows {
+                locals.insert(slot, ty);
+            }
+        }
+        // The alias narrowing has to reach the DECLARATION as well. Narrowing only the
+        // structurer's view takes the receiver wrap away while the declaration stays at the base,
+        // and the call then has nothing to resolve against — measured as a tree-wide
+        // `No matching signatures to 'UObject::GetRelationship()'`.
+        for (slot, ty) in refcpy_source_types(f, refs) {
+            let narrows = locals
+                .get(&slot)
+                .is_some_and(|wide| wide != &ty && (is_engine_base(wide) || wide == "?"));
             if narrows {
                 locals.insert(slot, ty);
             }
@@ -4096,6 +4117,102 @@ fn is_engine_base(t: &str) -> bool {
         t,
         "UObject" | "AActor" | "APawn" | "ACharacter" | "UActorComponent" | "UAbilitySystemComponent"
     )
+}
+
+/// Slots an alias names, with the type their PRODUCER declares.
+///
+/// `RefCpyV` is the instruction that says the source gave a handle a name — and it carries no
+/// type. The named slot therefore keeps whatever coarse type `obj_locals` recorded (`UObject`,
+/// `AActor`), and the structurer then has to write a `Cast<Owner>(recv)` at every call on it just
+/// to keep the call legal: a cast vanilla never had, and eight extra opcodes. For a `RefCpyV` the
+/// producer is one hop away and its DECLARED type is in reach — the field's own type or the
+/// callee's return, never a declaring class, which is the weaker signal that once typed
+/// `APawn local_8 = Cast<AGothicCharacter>(…)`.
+///
+/// Three clauses, all of them load-bearing. The recorded type must be an engine base (checked at
+/// the call site); the alias must be the slot's ONLY object write, so nothing else can have been
+/// upcast into it; and the slot must be a RECEIVER — a `PshVPtr` immediately before a call, since
+/// this compiler pushes arguments first and the receiver last. Without the last clause an
+/// `AActor local_6 = this.TargetEnemy;` that is only ever passed to `Add()` gets retyped, and
+/// vanilla's source really did widen that one.
+fn refcpy_source_types(f: &Func, refs: &RefResolver) -> Vec<(i32, String)> {
+    let Ok(instrs) = disassemble(&f.bytecode) else {
+        return Vec::new();
+    };
+    let w0 = |ins: &super::disasm::Instr| ins.words.first().map(|w| *w as i16 as i32).unwrap_or(0);
+    let is_call = |name: &str| matches!(name, "CALL" | "CALLSYS" | "CALLINTF" | "CALLBND");
+    let mut object_writes: HashMap<i32, usize> = HashMap::new();
+    for ins in &instrs {
+        if matches!(
+            ins.op.name,
+            "STOREOBJ" | "RefCpyV" | "REFCPY" | "ClrVPtr" | "CpyVtoV8"
+        ) {
+            *object_writes.entry(w0(ins)).or_default() += 1;
+        }
+    }
+    let receiver: HashSet<i32> = instrs
+        .windows(2)
+        .filter(|pair| pair[0].op.name == "PshVPtr" && is_call(pair[1].op.name))
+        .map(|pair| w0(&pair[0]))
+        .collect();
+    let mut out = Vec::new();
+    for (at, ins) in instrs.iter().enumerate() {
+        let slot = w0(ins);
+        if ins.op.name != "RefCpyV"
+            || slot <= 0
+            || object_writes.get(&slot).copied() != Some(1)
+            || !receiver.contains(&slot)
+        {
+            continue;
+        }
+        // Walk back to the producer, reading past the cleanup pairs a consumed temporary drags.
+        let mut back = at;
+        while back > 0 && instrs[back - 1].op.name == "RDSPtr" {
+            back -= 1;
+        }
+        let declared = if back > 0 && instrs[back - 1].op.name == "ADDSi" {
+            let field = &instrs[back - 1];
+            let off = field.words.first().copied().unwrap_or(0) as i32;
+            let tid = field.dwords.first().copied().unwrap_or(0) as i32;
+            refs.member(tid, off).and_then(|member| {
+                let class = refs.type_by_id(tid)?;
+                refs.field_type_by_class(class, member).map(str::to_owned)
+            })
+        } else if back > 0 && instrs[back - 1].op.name == "PshVPtr" {
+            let source = w0(&instrs[back - 1]);
+            let mut producer = back - 1;
+            while producer >= 2
+                && instrs[producer - 1].op.name == "CALLSYS"
+                && instrs[producer - 2].op.name == "PSF"
+                && refs.func_by_ptr(instrs[producer - 1].qwords.first().copied().unwrap_or(0) as i64)
+                    == Some("$beh2")
+            {
+                producer -= 2;
+            }
+            (producer >= 2
+                && instrs[producer - 1].op.name == "STOREOBJ"
+                && w0(&instrs[producer - 1]) == source)
+                .then(|| {
+                    let call = &instrs[producer - 2];
+                    match call.op.name {
+                        "CALLSYS" => refs
+                            .func_ret_by_ptr(call.qwords.first().copied().unwrap_or(0) as i64)
+                            .map(|ty| ty.base_name(refs)),
+                        "CALL" | "CALLINTF" | "CALLBND" => refs
+                            .func_ret_by_id(call.dwords.first().copied().unwrap_or(0) as i32)
+                            .map(|ty| ty.base_name(refs)),
+                        _ => None,
+                    }
+                })
+                .flatten()
+        } else {
+            None
+        };
+        if let Some(ty) = declared.filter(|ty| !is_engine_base(ty) && !ty.is_empty()) {
+            out.push((slot, ty));
+        }
+    }
+    out
 }
 
 fn cast_result_slots(f: &Func, refs: &RefResolver) -> Vec<(i32, String)> {

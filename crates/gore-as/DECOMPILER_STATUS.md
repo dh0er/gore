@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 99.13% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 99.14% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.13%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.14%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,431 functions (0.87%) recompile to bytecode that differs semantically.** A semantic
+**1,419 functions (0.86%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -737,6 +737,25 @@ slot the typed-locals map says nothing about, on the reasoning that such a slot 
 costs an `sbTOi` on the way in and an `iTOb` on the way out, and the enum cast the wrap sits
 inside is what vanilla wrote instead. The enum test is what bounds it — the same syntax with an
 ordinary callee is a real argument conversion. 1,437 to 1,431, six fixed and none broken.
+
+**An alias carries no type, so the name it gives inherits the engine base.** `RefCpyV` is the
+instruction that says the source named a handle — and it propagates nothing about what that handle
+is. The slot therefore keeps whatever coarse type the cache recorded (`UObject`, `AActor`), and
+the structurer then has to write a `Cast<Owner>(recv)` at every call on it to keep the call legal:
+a cast vanilla never had, and eight extra opcodes. For an alias the producer is one hop away and
+its DECLARED type is in reach — the field's own type or the callee's return, never a declaring
+class, which is the weaker signal that once typed `APawn local_8 = Cast<AGothicCharacter>(…)`.
+
+Three clauses, all load-bearing. The recorded type must be an engine base; the alias must be the
+slot's ONLY object write, so nothing else can have been upcast into it; and the slot must be a
+RECEIVER — a `PshVPtr` immediately before a call, since this compiler pushes arguments first and
+the receiver last. Drop the last one and an `AActor local_6 = this.TargetEnemy;` that is only ever
+passed to `Add()` gets retyped, which vanilla's source really did widen.
+
+And the narrowing has to reach BOTH type maps. Landing it only in the structurer's view took the
+receiver wrap away while the declaration stayed at the base, and the whole tree stopped compiling
+with `No matching signatures to 'UObject::GetRelationship()'` — the same two-map mistake the cast
+narrowing made before it. 1,431 to 1,419, twelve fixed and none broken.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
