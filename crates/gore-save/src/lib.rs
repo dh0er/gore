@@ -617,11 +617,20 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 .ok_or_else(|| {
                     CoreError::InvalidRequest("missing payload.expectedSaveSha1".to_string())
                 })?;
+            let expected_persistent_backup_sha1 = payload
+                .get("expectedPersistentBackupSha1")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest(
+                        "missing payload.expectedPersistentBackupSha1".to_string(),
+                    )
+                })?;
             Ok(restore_deleted_save(
                 &path,
                 &backup_path,
                 expected_persistent_sha1,
                 expected_save_sha1,
+                expected_persistent_backup_sha1,
             )?)
         }
         "delete_backup" => {
@@ -2296,6 +2305,7 @@ fn restore_deleted_save(
     backup_path: &Path,
     expected_persistent_sha1: &str,
     expected_save_sha1: &str,
+    expected_persistent_backup_sha1: &str,
 ) -> Result<Value, CoreError> {
     let file_name = path
         .file_name()
@@ -2315,6 +2325,7 @@ fn restore_deleted_save(
         true,
         Some(expected_persistent_sha1),
         Some(expected_save_sha1),
+        Some(expected_persistent_backup_sha1),
         |_| Ok(()),
     )
 }
@@ -2327,7 +2338,7 @@ fn restore_backup_with_before_replace<F>(
 where
     F: FnOnce(&Path) -> Result<(), CoreError>,
 {
-    restore_backup_with_mode(path, backup_path, false, None, None, before_replace)
+    restore_backup_with_mode(path, backup_path, false, None, None, None, before_replace)
 }
 
 fn restore_backup_with_mode<F>(
@@ -2336,6 +2347,7 @@ fn restore_backup_with_mode<F>(
     require_missing_target: bool,
     expected_persistent_sha1: Option<&str>,
     expected_backup_sha1: Option<&str>,
+    expected_companion_backup_sha1: Option<&str>,
     before_replace: F,
 ) -> Result<Value, CoreError>
 where
@@ -2421,6 +2433,17 @@ where
                 "{} changed after the save was deleted; the newer profile was preserved",
                 plan.persistent_path.display()
             )));
+        }
+        let expected_companion_sha1 = expected_companion_backup_sha1.ok_or_else(|| {
+            CoreError::InvalidRequest(
+                "deleted-save recovery requires the original profile snapshot hash".to_string(),
+            )
+        })?;
+        if sha1_hex(&plan.companion_data) != expected_companion_sha1 {
+            return Err(CoreError::Validation(
+                "the deleted save's profile backup no longer matches the original snapshot"
+                    .to_string(),
+            ));
         }
     }
 
@@ -5228,6 +5251,7 @@ where
         "persistentBackupPath": persistent_backup_path,
         "persistentPostDeleteSha1": sha1_hex(&persistent_edited),
         "deletedSaveSha1": sha1_hex(&save_original),
+        "deletedPersistentSha1": sha1_hex(&persistent_original),
         "placementNoteWarning": placement_note_warning,
     }))
 }
@@ -16808,6 +16832,7 @@ mod tests {
                     "backupPath": backup_path,
                     "expectedPersistentSha1": response["persistentPostDeleteSha1"],
                     "expectedSaveSha1": response["deletedSaveSha1"],
+                    "expectedPersistentBackupSha1": response["deletedPersistentSha1"],
                 }
             })
             .to_string(),
@@ -16856,6 +16881,7 @@ mod tests {
             &backup_path,
             "unused-profile-sha",
             &deleted_sha1,
+            "unused-persistent-backup-sha",
         )
         .unwrap_err();
 
@@ -16881,6 +16907,8 @@ mod tests {
         let backup_path = PathBuf::from(deleted["backupPath"].as_str().unwrap());
         let expected_sha1 = deleted["persistentPostDeleteSha1"].as_str().unwrap();
         let expected_save_sha1 = deleted["deletedSaveSha1"].as_str().unwrap();
+        let expected_persistent_backup_sha1 =
+            deleted["deletedPersistentSha1"].as_str().unwrap();
         let newer_profile = assignment_persistent_data_list("G1R-007", 0);
         fs::write(&persistent_path, &newer_profile).unwrap();
 
@@ -16889,6 +16917,7 @@ mod tests {
             &backup_path,
             expected_sha1,
             expected_save_sha1,
+            expected_persistent_backup_sha1,
         )
         .unwrap_err();
 
@@ -16916,6 +16945,8 @@ mod tests {
         let expected_persistent_sha1 =
             deleted["persistentPostDeleteSha1"].as_str().unwrap();
         let expected_save_sha1 = deleted["deletedSaveSha1"].as_str().unwrap();
+        let expected_persistent_backup_sha1 =
+            deleted["deletedPersistentSha1"].as_str().unwrap();
         let post_delete_profile = fs::read(&persistent_path).unwrap();
         fs::write(&backup_path, assignment_persistent_data_list(slot, 0)).unwrap();
 
@@ -16924,6 +16955,51 @@ mod tests {
             &backup_path,
             expected_persistent_sha1,
             expected_save_sha1,
+            expected_persistent_backup_sha1,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, CoreError::Validation(_)));
+        assert!(!save_path.exists());
+        assert_eq!(fs::read(&persistent_path).unwrap(), post_delete_profile);
+    }
+
+    #[test]
+    fn restore_deleted_save_rejects_a_changed_profile_backup() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-006";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let save_original = build_gsav(
+            2,
+            &public_payload_with_profile("Deleted", 0),
+            &minimal_stream(),
+            &[0, 0, 0, 0],
+        );
+        fs::write(&save_path, &save_original).unwrap();
+        fs::write(&persistent_path, assignment_persistent_data_list(slot, 0)).unwrap();
+        let deleted = delete_save(&save_path, &persistent_path, slot, 0, true).unwrap();
+        let backup_path = PathBuf::from(deleted["backupPath"].as_str().unwrap());
+        let persistent_backup_path =
+            PathBuf::from(deleted["persistentBackupPath"].as_str().unwrap());
+        let expected_persistent_sha1 =
+            deleted["persistentPostDeleteSha1"].as_str().unwrap();
+        let expected_save_sha1 = deleted["deletedSaveSha1"].as_str().unwrap();
+        let expected_persistent_backup_sha1 =
+            deleted["deletedPersistentSha1"].as_str().unwrap();
+        let post_delete_profile = fs::read(&persistent_path).unwrap();
+        fs::write(
+            &persistent_backup_path,
+            assignment_persistent_data_list("G1R-007", 0),
+        )
+        .unwrap();
+
+        let error = restore_deleted_save(
+            &save_path,
+            &backup_path,
+            expected_persistent_sha1,
+            expected_save_sha1,
+            expected_persistent_backup_sha1,
         )
         .unwrap_err();
 

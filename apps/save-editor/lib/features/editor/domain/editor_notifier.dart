@@ -2746,12 +2746,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
         final persistentPostDeleteSha1 =
             data['persistentPostDeleteSha1'] as String?;
         final deletedSaveSha1 = data['deletedSaveSha1'] as String?;
+        final deletedPersistentSha1 = data['deletedPersistentSha1'] as String?;
         if (backupPath == null ||
             backupPath.isEmpty ||
             persistentPostDeleteSha1 == null ||
             persistentPostDeleteSha1.isEmpty ||
             deletedSaveSha1 == null ||
-            deletedSaveSha1.isEmpty) {
+            deletedSaveSha1.isEmpty ||
+            deletedPersistentSha1 == null ||
+            deletedPersistentSha1.isEmpty) {
           return;
         }
         state = state.copyWith(
@@ -2761,6 +2764,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
             backupPath: backupPath,
             persistentPostDeleteSha1: persistentPostDeleteSha1,
             deletedSaveSha1: deletedSaveSha1,
+            deletedPersistentSha1: deletedPersistentSha1,
             message: state.lastWriteMessage!,
           ),
         );
@@ -2881,6 +2885,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     String? targetPath,
     String? expectedPersistentSha1,
     String? expectedSaveSha1,
+    String? expectedPersistentBackupSha1,
   }) async {
     final path = targetPath ?? state.selectedPath;
     if (path == null) return false;
@@ -2893,6 +2898,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
           'backupPath': backupPath,
           'expectedPersistentSha1': ?expectedPersistentSha1,
           'expectedSaveSha1': ?expectedSaveSha1,
+          'expectedPersistentBackupSha1': ?expectedPersistentBackupSha1,
         },
       );
       if (response['ok'] != true) {
@@ -2958,6 +2964,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       targetPath: recovery.targetPath,
       expectedPersistentSha1: recovery.persistentPostDeleteSha1,
       expectedSaveSha1: recovery.deletedSaveSha1,
+      expectedPersistentBackupSha1: recovery.deletedPersistentSha1,
     );
     if (restored) {
       state = state.copyWith(clearDeletedSaveRecovery: true);
@@ -4255,6 +4262,7 @@ class DeletedSaveRecovery {
     required this.backupPath,
     required this.persistentPostDeleteSha1,
     required this.deletedSaveSha1,
+    required this.deletedPersistentSha1,
     required this.message,
   });
 
@@ -4262,6 +4270,7 @@ class DeletedSaveRecovery {
   final String backupPath;
   final String persistentPostDeleteSha1;
   final String deletedSaveSha1;
+  final String deletedPersistentSha1;
   final String message;
 
   String get fileName {

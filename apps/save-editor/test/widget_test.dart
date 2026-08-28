@@ -1604,6 +1604,7 @@ void main() {
         'backupPath': r'C:\tmp\saves\goresave_backups\G1R-001.sav.bak.301',
         'expectedPersistentSha1': 'post-delete-profile-sha',
         'expectedSaveSha1': 'deleted-save-sha',
+        'expectedPersistentBackupSha1': 'deleted-persistent-sha',
       });
     },
   );
@@ -2025,6 +2026,7 @@ class _FakeCoreService implements GoresaveCoreService {
                 r'C:\tmp\saves\goresave_backups\PersistentDataList.sav.bak.301',
             'persistentPostDeleteSha1': 'post-delete-profile-sha',
             'deletedSaveSha1': 'deleted-save-sha',
+            'deletedPersistentSha1': 'deleted-persistent-sha',
           },
         };
       case 'search_typed_properties':
