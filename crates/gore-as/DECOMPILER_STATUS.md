@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,437 functions (0.87%) recompile to bytecode that differs semantically.** A semantic
+**1,431 functions (0.87%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -730,6 +730,13 @@ Measured: **0 fixed, 0 broken**. The declarations are now vanilla's, but every o
 functions carries a second defect — mostly a loop rotation — so none of them flips on this alone.
 It is kept because it removes one defect from 45 records and cannot cost anything, not because it
 moved the number.
+
+**`EEnum(int(x))` is `EEnum(x)`.** The inner conversion is emitted wherever a value lands in a
+slot the typed-locals map says nothing about, on the reasoning that such a slot renders as an
+`int` local and the conversion is then neutral. It is neutral at four bytes; a one-byte enum read
+costs an `sbTOi` on the way in and an `iTOb` on the way out, and the enum cast the wrap sits
+inside is what vanilla wrote instead. The enum test is what bounds it — the same syntax with an
+ordinary callee is a real argument conversion. 1,437 to 1,431, six fixed and none broken.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
