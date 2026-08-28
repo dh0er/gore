@@ -68,7 +68,7 @@ MAX_PROFILE_BLOB_BYTES = 512 * 1024 * 1024
 MAX_PROFILE_AGGREGATE_BYTES = 1024 * 1024 * 1024
 MAX_FULL_TREE_RECEIPT_BYTES = 4 * 1024 * 1024
 FULL_TREE_RECEIPT_SCHEMA = "gore.as.internal-full-tree-verification"
-FULL_TREE_RECEIPT_VERSION = 1
+FULL_TREE_RECEIPT_VERSION = 2
 FULL_TREE_VERIFICATION_DIRECTORY = "verification/full-tree"
 # Python's classic-ZIP writer switches to ZIP64 above this boundary. The
 # internal package deliberately forbids ZIP64, so the bound is explicit here.
@@ -1897,6 +1897,72 @@ def _full_tree_receipt_relative(catalog_entry: dict[str, object]) -> str:
     return _safe_relative(relative, "full-tree verification receipt path")
 
 
+def _parse_full_tree_execution_run(
+    value: object,
+    *,
+    label: str,
+    backend: str,
+    standalone_attempted: bool,
+    game_attempted: bool,
+    install_restore: str,
+    require_captured_diagnostics: bool,
+) -> None:
+    if not isinstance(value, dict):
+        raise BundleError(f"{label} must be an object")
+    fields = (
+        "backend",
+        "runner_invocations",
+        "standalone_attempted",
+        "game_attempted",
+        "install_restore",
+        "closing_audit",
+        "publication",
+        "recovery_required",
+        "fallback_present",
+        "backend_diagnostic_count",
+        *(
+            ("diagnostics_disposition", "diagnostic_count")
+            if require_captured_diagnostics
+            else ()
+        ),
+    )
+    _require_exact_fields(value, fields, label)
+    if (
+        value["backend"] != backend
+        or _require_uint(
+            value["runner_invocations"],
+            f"{label} runner invocations",
+            maximum=(1 << 32) - 1,
+        )
+        != 1
+        or value["install_restore"] != install_restore
+        or value["closing_audit"] != "passed"
+        or value["publication"] != "published"
+    ):
+        raise BundleError(f"{label} does not satisfy its exact publication contract")
+    _require_bool(
+        value["standalone_attempted"],
+        standalone_attempted,
+        f"{label} standalone_attempted",
+    )
+    _require_bool(value["game_attempted"], game_attempted, f"{label} game_attempted")
+    _require_bool(value["recovery_required"], False, f"{label} recovery_required")
+    _require_bool(value["fallback_present"], False, f"{label} fallback_present")
+    _require_nonnegative_uint(
+        value["backend_diagnostic_count"],
+        f"{label} backend diagnostic count",
+        maximum=(1 << 32) - 1,
+    )
+    if require_captured_diagnostics:
+        if value["diagnostics_disposition"] != "captured":
+            raise BundleError(f"{label} did not capture native compiler diagnostics")
+        _require_nonnegative_uint(
+            value["diagnostic_count"],
+            f"{label} diagnostic count",
+            maximum=(1 << 32) - 1,
+        )
+
+
 def _parse_full_tree_receipt(
     bytes_: bytes,
     catalog_entry: dict[str, object],
@@ -1941,57 +2007,26 @@ def _parse_full_tree_receipt(
         raise BundleError("full-tree verification execution must be an object")
     _require_exact_fields(
         execution,
-        (
-            "backend",
-            "runner_invocations",
-            "standalone_attempted",
-            "game_attempted",
-            "install_restore",
-            "closing_audit",
-            "publication",
-            "recovery_required",
-            "fallback_present",
-            "backend_diagnostic_count",
-        ),
+        ("embedded_game", "standalone"),
         "full-tree verification execution",
     )
-    if (
-        execution["backend"] != "standalone"
-        or _require_uint(
-            execution["runner_invocations"],
-            "full-tree verification runner invocations",
-            maximum=(1 << 32) - 1,
-        )
-        != 1
-        or execution["install_restore"] != "not_started"
-        or execution["closing_audit"] != "passed"
-        or execution["publication"] != "published"
-    ):
-        raise BundleError(
-            "full-tree verification did not use exactly one strict standalone publication"
-        )
-    _require_bool(
-        execution["standalone_attempted"],
-        True,
-        "full-tree verification standalone_attempted",
+    _parse_full_tree_execution_run(
+        execution["embedded_game"],
+        label="full-tree embedded-game execution",
+        backend="game",
+        standalone_attempted=False,
+        game_attempted=True,
+        install_restore="restored_exact",
+        require_captured_diagnostics=True,
     )
-    _require_bool(
-        execution["game_attempted"], False, "full-tree verification game_attempted"
-    )
-    _require_bool(
-        execution["recovery_required"],
-        False,
-        "full-tree verification recovery_required",
-    )
-    _require_bool(
-        execution["fallback_present"],
-        False,
-        "full-tree verification fallback_present",
-    )
-    _require_nonnegative_uint(
-        execution["backend_diagnostic_count"],
-        "full-tree verification backend diagnostic count",
-        maximum=(1 << 32) - 1,
+    _parse_full_tree_execution_run(
+        execution["standalone"],
+        label="full-tree standalone execution",
+        backend="standalone",
+        standalone_attempted=True,
+        game_attempted=False,
+        install_restore="not_started",
+        require_captured_diagnostics=False,
     )
 
     authority = receipt["authority"]
@@ -2122,11 +2157,37 @@ def _parse_full_tree_receipt(
             "full-tree verification frozen source must be the exact edit-only base module universe"
         )
 
-    embedded_reference = _seal(
-        receipt["embedded_reference"],
+    embedded_value = receipt["embedded_reference"]
+    if not isinstance(embedded_value, dict):
+        raise BundleError("full-tree verification embedded reference must be an object")
+    _require_exact_fields(
+        embedded_value,
+        ("byte_len", "sha256", "module_count"),
         "full-tree verification embedded reference",
-        MAX_PROFILE_BLOB_BYTES,
     )
+    embedded_reference = Seal(
+        _require_uint(
+            embedded_value["byte_len"],
+            "full-tree verification embedded reference byte length",
+            maximum=MAX_PROFILE_BLOB_BYTES,
+        ),
+        _require_hex(
+            embedded_value["sha256"],
+            64,
+            "full-tree verification embedded reference SHA-256",
+        ),
+    )
+    if (
+        _require_uint(
+            embedded_value["module_count"],
+            "full-tree verification embedded reference module count",
+            maximum=(1 << 32) - 1,
+        )
+        != module_count
+    ):
+        raise BundleError(
+            "full-tree verification embedded module count differs from frozen source"
+        )
     candidate_value = receipt["standalone_candidate"]
     if not isinstance(candidate_value, dict):
         raise BundleError("full-tree verification standalone candidate must be an object")

@@ -594,16 +594,32 @@ class SyntheticInternalInput:
                 "version": bundle.FULL_TREE_RECEIPT_VERSION,
                 "passed": True,
                 "execution": {
-                    "backend": "standalone",
-                    "runner_invocations": 1,
-                    "standalone_attempted": True,
-                    "game_attempted": False,
-                    "install_restore": "not_started",
-                    "closing_audit": "passed",
-                    "publication": "published",
-                    "recovery_required": False,
-                    "fallback_present": False,
-                    "backend_diagnostic_count": 0,
+                    "embedded_game": {
+                        "backend": "game",
+                        "runner_invocations": 1,
+                        "standalone_attempted": False,
+                        "game_attempted": True,
+                        "install_restore": "restored_exact",
+                        "closing_audit": "passed",
+                        "publication": "published",
+                        "recovery_required": False,
+                        "fallback_present": False,
+                        "backend_diagnostic_count": 0,
+                        "diagnostics_disposition": "captured",
+                        "diagnostic_count": 0,
+                    },
+                    "standalone": {
+                        "backend": "standalone",
+                        "runner_invocations": 1,
+                        "standalone_attempted": True,
+                        "game_attempted": False,
+                        "install_restore": "not_started",
+                        "closing_audit": "passed",
+                        "publication": "published",
+                        "recovery_required": False,
+                        "fallback_present": False,
+                        "backend_diagnostic_count": 0,
+                    },
                 },
                 "authority": {
                     "qualified_profile_sha256": profile["profile_sha256"],
@@ -626,6 +642,7 @@ class SyntheticInternalInput:
                 "embedded_reference": {
                     "byte_len": 40,
                     "sha256": "32" * 32,
+                    "module_count": module_count,
                 },
                 "standalone_candidate": {
                     "byte_len": 40,
@@ -1020,6 +1037,44 @@ class StandaloneCompilerBundleTests(unittest.TestCase):
 
         manipulations = (
             (
+                "legacy-unbound-version",
+                lambda value: value.__setitem__("version", 1),
+                "schema/version is unsupported",
+            ),
+            (
+                "missing-embedded-run",
+                lambda value: value["execution"].pop("embedded_game"),
+                "execution fields differ",
+            ),
+            (
+                "embedded-backend",
+                lambda value: value["execution"]["embedded_game"].__setitem__(
+                    "backend", "standalone"
+                ),
+                "embedded-game execution does not satisfy",
+            ),
+            (
+                "embedded-restore",
+                lambda value: value["execution"]["embedded_game"].__setitem__(
+                    "install_restore", "not_started"
+                ),
+                "embedded-game execution does not satisfy",
+            ),
+            (
+                "embedded-diagnostics",
+                lambda value: value["execution"]["embedded_game"].__setitem__(
+                    "diagnostics_disposition", "unavailable_fallback"
+                ),
+                "did not capture native compiler diagnostics",
+            ),
+            (
+                "standalone-game-attempt",
+                lambda value: value["execution"]["standalone"].__setitem__(
+                    "game_attempted", True
+                ),
+                "standalone execution game_attempted",
+            ),
+            (
                 "profile",
                 lambda value: value["authority"].__setitem__(
                     "qualified_profile_sha256", "ef" * 32
@@ -1062,6 +1117,13 @@ class StandaloneCompilerBundleTests(unittest.TestCase):
                 "must not be the zero digest",
             ),
             (
+                "embedded-module-count",
+                lambda value: value["embedded_reference"].__setitem__(
+                    "module_count", 4
+                ),
+                "embedded module count differs",
+            ),
+            (
                 "candidate-module-count",
                 lambda value: value["standalone_candidate"].__setitem__(
                     "module_count", 4
@@ -1101,6 +1163,33 @@ class StandaloneCompilerBundleTests(unittest.TestCase):
                         qualified_profile_verifier=_accept_synthetic_profile,
                         promotion_attestation_verifier=_accept_synthetic_attestation,
                     )
+
+        case = self.base / "full-tree-byte-identical-backends"
+        case.mkdir()
+        fixture = SyntheticInternalInput(case)
+        descriptor_path = fixture.root / bundle.INTERNAL_INPUT_DESCRIPTOR_FILE
+        descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+        for entry in descriptor["full_tree_verifications"]:
+            receipt_path = fixture.root.joinpath(
+                *bundle.PurePosixPath(entry["relative_path"]).parts
+            )
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            receipt["standalone_candidate"]["byte_len"] = receipt[
+                "embedded_reference"
+            ]["byte_len"]
+            receipt["standalone_candidate"]["sha256"] = receipt[
+                "embedded_reference"
+            ]["sha256"]
+            receipt_bytes = bundle._canonical_pretty(receipt)
+            receipt_path.write_bytes(receipt_bytes)
+            entry.update(_seal(receipt_bytes))
+        descriptor_path.write_bytes(bundle._canonical_pretty(descriptor))
+        bundle.verify_internal_input(
+            fixture.root,
+            sidecar_verifier=_accept_synthetic_sidecar,
+            qualified_profile_verifier=_accept_synthetic_profile,
+            promotion_attestation_verifier=_accept_synthetic_attestation,
+        )
 
         for mutation in ("missing", "extra", "swapped"):
             with self.subTest(receipt_set=mutation):

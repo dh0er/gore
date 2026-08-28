@@ -57,9 +57,12 @@ EXE remains usable when its Shipping format and complete Binds API match.
 
 The internal release package has a stricter completeness rule than this runtime
 selection: it must carry both product profiles (`24539464` and `24878692`), one
-common final sidecar, and one sealed full-tree differential receipt per profile.
-That rule prevents an incomplete CLI/Studio release; it does not turn those two
-Steam tuples or their whole executable hashes into runtime gates.
+common final sidecar, and one sealed full-tree differential receipt v2 per
+profile. Each receipt comes from one helper-controlled embedded-game run and
+one strict standalone run over the same frozen graph; callers cannot substitute
+their own reference cache. That rule prevents an incomplete CLI/Studio release;
+it does not turn those two Steam tuples or their whole executable hashes into
+runtime gates.
 
 The default policy is `standalone-then-game`: GORE tries the qualified
 standalone compiler first. If the package is absent, the selected game's cache
@@ -165,7 +168,9 @@ gore as diagnostics-check --exe "D:\Custom\G1R\Binaries\Win64\G1R-Win64-Shipping
 The check reports the executable's SHA-256, both raw match counts and RVA sets,
 and both structure-verification results. An explicitly trusted helper
 override is available through `--diagnostics-hook DLL` or `GORE_AS_DIAGNOSTICS_HOOK`;
-the embedded and sibling release helpers are SHA-256 verified.
+the embedded and sibling release helpers are SHA-256 verified. Internal
+full-tree release qualification rejects that development override and requires
+one of the verified release helpers.
 
 Archived 1.0.0–1.0.5 executables pass the same offline two-boundary signature
 and structure audit. Runtime results for each explicitly supported standalone-compiler

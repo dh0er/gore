@@ -19,11 +19,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   source-only full graphs. Full-tree comparisons for both supported profiles
   now have exact structural equality with zero semantic or alignment
   differences; the parser and bytecode generator remain unchanged.
-- Require both supported compiler profiles and a strict full-tree differential
-  receipt per profile in internal-input V2 publication packages. The pinned
-  signed V1 package remains usable for local builds only and is rejected by
-  distribution, installer, tag, and push paths until an explicitly authorized
-  final promotion replaces it.
+- Require both supported compiler profiles and a self-contained full-tree
+  differential receipt per profile in internal-input V2 publication packages.
+  Receipt v2 records one guarded, exactly restored embedded-game run and one
+  strict standalone run over the same frozen graph; an operator-supplied cache
+  can no longer impersonate the reference compiler, and an ambient diagnostics
+  hook development override cannot impersonate the verified release hook. The pinned signed V1
+  package remains usable for local builds only and is rejected by distribution,
+  installer, tag, and push paths until an explicitly authorized final promotion
+  replaces it.
 
 ## [0.2.0] - 2026-08-27
 

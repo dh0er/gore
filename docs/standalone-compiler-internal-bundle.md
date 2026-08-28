@@ -103,8 +103,9 @@ identities, any parity difference, and any typed profile reload failure.
 
 The 27-case corpus is necessary but not the release-scale gate. For each
 profile, copy the complete source tree to a stable location outside the game
-installation, produce one embedded reference cache from those exact bytes, and
-run the internal full-tree verifier with the same frozen source:
+installation and run the internal full-tree verifier. The verifier itself
+produces the embedded-game reference and the standalone candidate from one
+in-memory snapshot; it never accepts a caller-supplied reference cache:
 
 ```powershell
 cargo build -p gore-as --release --bin gore-as-full-tree-verifier
@@ -117,21 +118,35 @@ target\release\gore-as-full-tree-verifier.exe `
   C:\absolute\game-root\G1R\Script\PrecompiledScript_Shipping.Cache `
   C:\absolute\game-root\G1R\Script\Binds.Cache `
   C:\absolute\frozen-full-source `
-  C:\absolute\copied-embedded-reference.Cache `
+  C:\absolute\embedded-game-work `
   C:\absolute\standalone-work `
+  C:\absolute\new-embedded-output.Cache `
   C:\absolute\new-standalone-output.Cache `
   C:\absolute\full-tree-build-<BuildID>.json
 ```
 
-The helper can invoke only the strict standalone backend. Its canonical receipt
-binds the qualified profile SHA-256, the final sidecar length/SHA-256 and
-protocol, Shipping and Binds seals, the frozen source aggregate, the copied
-embedded reference and standalone candidate, and the complete WholeCache
-semantic digest/counts. Publication requires exact WholeCache structural
-equality, `semantic = 0`, and `alignment_loss = 0`. `benign` may be nonzero: it
-remains visible and is accepted only through the pinned default normalizers.
-Both output paths are create-new; the receipt is canonical UTF-8 JSON written
-directly by the helper, not shell-redirection output.
+The helper first acquires the normal cross-tool install guard and invokes
+exactly the game backend. It requires captured native diagnostics, exact
+installation restoration, a passing closing audit, no fallback, and one
+published retained reference. Without releasing the restored target authority,
+it then invokes exactly one strict standalone compile over the same source,
+Shipping and Binds bytes; that second run cannot start the game or mutate the
+installation. Receipt version 2 records both execution contracts separately.
+The release verifier refuses an ambient `GORE_AS_DIAGNOSTICS_HOOK` development
+override, so the game run can use only a SHA-256-verified sibling or embedded
+diagnostics helper.
+
+The canonical receipt also binds the qualified profile SHA-256, final sidecar
+length/SHA-256 and protocol, Shipping and Binds seals, frozen source aggregate,
+both retained output seals/module counts, and the complete WholeCache semantic
+digest/counts. Publication requires exact WholeCache structural equality,
+`semantic = 0`, and `alignment_loss = 0`. `benign` may be nonzero: it remains
+visible and is accepted only through the pinned default normalizers. Both work
+roots must be existing and disjoint. Both cache outputs and the receipt are
+create-new; the receipt is canonical UTF-8 JSON written directly by the helper,
+not shell-redirection output. A failed later gate neutralizes already published
+outputs through their retained handles unless the compiler reports a recovery
+state, in which case the normal recovery artifacts remain authoritative.
 
 ## Record and compress the internal package
 

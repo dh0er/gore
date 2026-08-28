@@ -33,6 +33,9 @@ network access or GitHub release. Package creation is a separate one-time operat
 Authenticode, typed profile data, and GitHub/Sigstore provenance before publication into this
 directory. Internal-input V2 additionally requires exactly the `24539464` and `24878692` product
 profiles, both bound to the same final sidecar, with exactly one strict full-tree receipt each.
+Each receipt is version 2 and separately proves the helper-controlled, exactly restored
+embedded-game run and the strict standalone run over one frozen graph; no external cache is
+accepted as the reference authority.
 Distribution packaging, installers, tags, and pushes reject the legacy V1 bridge; only a later,
 explicitly authorized one-time signing/promotion may replace it with that V2 publishing set. This
 publishing policy is intentionally separate from runtime admission. Runtime selection is

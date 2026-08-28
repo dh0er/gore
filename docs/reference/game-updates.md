@@ -199,10 +199,16 @@ each profile independently. A Binds/API-only update normally requires new
 profile data, not a speculative compiler-core change.
 
 **9. Run and seal one full-tree differential per compiler profile.** Freeze the
-complete source tree before either comparison. Each receipt must bind its
-profile SHA-256, the common final sidecar and protocol, that profile's Shipping
-and Binds seals, the source aggregate, copied embedded reference and standalone
-candidate. Accept only exact WholeCache structural equality, zero semantic
+complete source tree before the comparison. The verifier must produce both
+outputs itself from one in-memory snapshot: exactly one guarded game-only run
+with captured native diagnostics and exact restoration, followed by exactly one
+strict standalone run with no installation mutation or fallback. Receipt v2
+binds both execution records, its profile SHA-256, the common final sidecar and
+protocol, that profile's Shipping and Binds seals, the source aggregate, and
+both retained candidates. A copied or caller-selected reference cache is not
+authority. The release verifier also refuses `GORE_AS_DIAGNOSTICS_HOOK`, so an
+ambient development helper cannot stand in for the SHA-256-verified diagnostics
+hook. Accept only exact WholeCache structural equality, zero semantic
 diffs, and zero alignment loss; benign normalized byte differences stay
 visible. The internal package recorder then requires exactly both product
 targets and exactly one receipt per profile. Missing and additional targets or
