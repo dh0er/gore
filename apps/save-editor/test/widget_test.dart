@@ -77,10 +77,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('GORE Save Editor'), findsOneWidget);
-    final windowTitle = tester.widget<Text>(find.text('GORE Save Editor'));
-    expect(windowTitle.style?.fontFamily, podkovaFontFamily);
-    expect(windowTitle.style?.fontSize, isNull);
-    expect(windowTitle.style?.height, isNull);
+    expect(
+      _effectiveTextStyle(tester, find.text('GORE Save Editor')).fontFamily,
+      'Segoe UI',
+    );
     expect(find.text('Die Welt der Verurteilten'), findsAtLeastNWidgets(1));
     expect(find.text('Overview'), findsOneWidget);
     expect(find.byKey(const ValueKey('edit-save-name')), findsOneWidget);
@@ -618,6 +618,17 @@ void main() {
       tester.widget<DropdownButton<UiFontFamily>>(fontDropdown).value,
       UiFontFamily.system,
     );
+    final fontItems = tester
+        .widget<DropdownButton<UiFontFamily>>(fontDropdown)
+        .items!;
+    Text fontItem(UiFontFamily font) =>
+        fontItems.singleWhere((item) => item.value == font).child as Text;
+    expect(fontItem(UiFontFamily.system).style?.fontFamily, 'Segoe UI');
+    expect(fontItem(UiFontFamily.podkova).style?.fontFamily, podkovaFontFamily);
+    expect(
+      fontItem(UiFontFamily.notoSerif).style?.fontFamily,
+      notoSerifFontFamily,
+    );
     final settingsContext = tester.element(find.text('Appearance'));
     expect(
       Theme.of(settingsContext).textTheme.bodyMedium?.fontFamily,
@@ -628,8 +639,8 @@ void main() {
       'Segoe UI',
     );
     expect(
-      tester.widget<Text>(find.text('GORE Save Editor')).style?.fontFamily,
-      podkovaFontFamily,
+      _effectiveTextStyle(tester, find.text('GORE Save Editor')).fontFamily,
+      'Segoe UI',
     );
 
     tester.widget<DropdownButton<UiFontFamily>>(fontDropdown).onChanged!(
@@ -647,6 +658,10 @@ void main() {
       ).textTheme.bodyMedium?.fontFamily,
       podkovaFontFamily,
     );
+    expect(
+      _effectiveTextStyle(tester, find.text('GORE Save Editor')).fontFamily,
+      podkovaFontFamily,
+    );
 
     tester.widget<DropdownButton<UiFontFamily>>(fontDropdown).onChanged!(
       UiFontFamily.notoSerif,
@@ -658,10 +673,9 @@ void main() {
       ).textTheme.bodyMedium?.fontFamily,
       notoSerifFontFamily,
     );
-    // The language-independent product title intentionally stays Podkova.
     expect(
-      tester.widget<Text>(find.text('GORE Save Editor')).style?.fontFamily,
-      podkovaFontFamily,
+      _effectiveTextStyle(tester, find.text('GORE Save Editor')).fontFamily,
+      notoSerifFontFamily,
     );
 
     await tester.tap(find.text('Inspection JSON'));
@@ -1471,6 +1485,12 @@ void main() {
       expect(find.text('Lost save'), findsNothing);
     },
   );
+}
+
+TextStyle _effectiveTextStyle(WidgetTester tester, Finder finder) {
+  final text = tester.widget<Text>(finder);
+  final inheritedStyle = DefaultTextStyle.of(tester.element(finder)).style;
+  return text.style == null ? inheritedStyle : inheritedStyle.merge(text.style);
 }
 
 class _RecordedRequest {

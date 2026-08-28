@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
+import 'package:goresave/ui/design/app_theme.dart';
 
 /// Appearance settings (theme mode, UI scale, language) shown in the Settings
 /// tab.
@@ -119,11 +120,19 @@ class AppearanceSettingsCard extends ConsumerWidget {
                           if (uiFontFamilySupportedFor(font, lang))
                             DropdownMenuItem(
                               value: font,
-                              child: Text(switch (font) {
-                                UiFontFamily.system => 'Segoe UI',
-                                UiFontFamily.podkova => 'Podkova',
-                                UiFontFamily.notoSerif => 'Noto Serif',
-                              }),
+                              child: Text(
+                                switch (font) {
+                                  UiFontFamily.system => 'Segoe UI',
+                                  UiFontFamily.podkova => 'Podkova',
+                                  UiFontFamily.notoSerif => 'Noto Serif',
+                                },
+                                style: TextStyle(
+                                  fontFamily: uiFontFamilyName(
+                                    font,
+                                    lang.locale,
+                                  ),
+                                ),
+                              ),
                             ),
                       ],
                     ),

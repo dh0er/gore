@@ -22,7 +22,7 @@ String uiAwareMonospaceFontFamily(
   };
 }
 
-String _fontFamilyFor(UiFontFamily font, Locale locale) => switch (font) {
+String uiFontFamilyName(UiFontFamily font, Locale locale) => switch (font) {
   UiFontFamily.system => 'Segoe UI',
   UiFontFamily.podkova => podkovaFontFamily,
   UiFontFamily.notoSerif when locale.languageCode == 'ja' =>
@@ -101,7 +101,7 @@ ThemeData _buildTheme(
     useMaterial3: true,
     colorScheme: scheme,
     scaffoldBackgroundColor: scheme.surface,
-    fontFamily: _fontFamilyFor(uiFontFamily, locale),
+    fontFamily: uiFontFamilyName(uiFontFamily, locale),
     fontFamilyFallback: uiFontFamily == UiFontFamily.system
         ? const ['Microsoft YaHei UI', 'Yu Gothic UI']
         : null,

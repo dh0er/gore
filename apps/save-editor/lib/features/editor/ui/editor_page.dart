@@ -142,7 +142,6 @@ class _EditorPageState extends ConsumerState<EditorPage>
                   l10n.appTitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontFamily: podkovaFontFamily),
                 ),
               ),
               const SizedBox(width: 16),
