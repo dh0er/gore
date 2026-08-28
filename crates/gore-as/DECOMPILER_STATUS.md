@@ -1,6 +1,6 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: every module decompiles, the whole tree recompiles, and 99.08% of it is byte-faithful.**
+**Status: every module decompiles, the whole tree recompiles, and 99.09% of it is byte-faithful.**
 The emitter reconstructs every function body it writes from the shipped cache; when it cannot
 prove a body is correct it keeps the declaration and emits a clearly marked, signature-preserving
 stub instead of inventing logic. The current corpus needs no such stub. What is NOT proven is that
@@ -23,7 +23,7 @@ functions the vanilla and regenerated caches align:
 | Whole-tree recompile warnings | full corpus | **0** (the compiler treats them as errors) |
 | Class defaults authored | full corpus | **0 modules suppressed** (all 30,005 `__InitDefaults`) |
 | Whole-tree recompile (`as compile`) | full corpus | **0 errors** |
-| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.08%** (`IDENTICAL`+`BENIGN`) |
+| Byte-faithfulness (`bytediff --norm-slots`) | full corpus, 164,607 functions | **99.09%** (`IDENTICAL`+`BENIGN`) |
 | Alignment loss | full corpus | **none** — every function the cache has is regenerated |
 | Splice back (`extract-remap`) | 305-module sample | 302 (**99.02%**) |
 
@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,508 functions (0.92%) recompile to bytecode that differs semantically.** A semantic
+**1,495 functions (0.91%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -675,6 +675,13 @@ a constructor's parameter-free member store into a declaration initializer did n
 field lives. The declaration loop writes the class's OWN fields and nothing else, so a store lifted
 onto an INHERITED field had nowhere to land and vanished with the store — ten constructors lost a
 `SetV1; LoadThisR; WRTV1` that way. 1,518 to 1,508.
+
+**A struct's members are initialised in two passes, and the order says which.** Pass 1 takes the
+members with NO initializer: for a primitive or an enum it pushes the DESTINATION first
+(`LoadThisR wOFF; SetVn vT, <zero>; WRTVn vT`, or `PshVPtr v0; ADDSi wOFF; PopRPtr; …` where the
+constructor takes parameters). Pass 2 takes the members that HAVE one and lowers it as an ordinary
+assignment, so the VALUE is compiled first. Address-first therefore says the source wrote that
+member bare — asked per FIELD, because one struct carries both kinds side by side. 1,508 to 1,495.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern

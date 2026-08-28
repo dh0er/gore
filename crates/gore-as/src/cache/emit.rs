@@ -657,6 +657,7 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver, defaults: Option<&[
     let own_fields: HashSet<&str> = c.fields.iter().map(|f| f.name.as_str()).collect();
     let member_initializers = extract_member_initializers(&mut constructors, &own_fields);
     let handle_nulls_are_the_compiler_s = null_stores_are_compiler_generated(&c.ctors);
+    let written_bare = fields_initialised_bare(&c.ctors, refs);
     for f in &c.fields {
         // Drop a leading `const`: UE-AS UPROPERTY members aren't const-assignable, yet the
         // generated constructor assigns them — keeping `const` causes "Cannot assign" errors.
@@ -672,6 +673,11 @@ fn emit_class(s: &mut String, c: &Class, refs: &RefResolver, defaults: Option<&[
             // every implicitly-defaulted one. Only the constructors' own bytecode says which it
             // was — dropping every `= nullptr` without asking fixed 11 struct constructors and
             // broke 11 class ones (measured).
+            // Address-first says the source wrote this member bare, whatever value the
+            // constructor stores into it.
+            Some(_) if written_bare.contains(&f.name) => {
+                let _ = writeln!(s, "    {ty} {};", f.name);
+            }
             Some(value) if value != "nullptr" || !handle_nulls_are_the_compiler_s => {
                 let _ = writeln!(s, "    {ty} {} = {value};", f.name);
             }
@@ -6805,6 +6811,53 @@ fn call_of_expression(expression: &str) -> Option<(String, Vec<String>)> {
 ///
 /// Anything else in the body — a call, a branch, a local — means the constructor really is a
 /// constructor, and it keeps every statement.
+/// The class's own fields whose constructors initialise them ADDRESS-FIRST.
+///
+/// A struct's members are initialised in two passes over the declarations. Pass 1 takes the
+/// members with NO initializer and, for a primitive or an enum, pushes the DESTINATION first —
+/// `LoadThisR wOFF; SetVn vT, <zero>; WRTVn vT` in a parameterless constructor, or
+/// `PshVPtr v0; ADDSi wOFF; PopRPtr; SetVn vT, <zero>; WRTVn vT` where the constructor takes
+/// parameters. Pass 2 takes the members that HAVE an initializer and lowers it as an ordinary
+/// assignment, so the VALUE is compiled first: `SetVn vT, K; LoadThisR wOFF; WRTVn vT`.
+///
+/// Address-first therefore says the source wrote that member BARE. It has to be asked per FIELD
+/// and not per class — one struct carries both kinds side by side — which is the same mistake the
+/// handle-null rule below makes for the same reason.
+fn fields_initialised_bare(ctors: &[Func], refs: &RefResolver) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let field_of = |ins: &super::disasm::Instr| {
+        let off = ins.words.first().copied().unwrap_or(0) as i32;
+        let tid = ins.dwords.first().copied().unwrap_or(0) as i32;
+        refs.member(tid, off).map(|name| name.to_string())
+    };
+    for ctor in ctors {
+        let Ok(instrs) = disassemble(&ctor.bytecode) else {
+            continue;
+        };
+        for (at, ins) in instrs.iter().enumerate() {
+            if !ins.op.name.starts_with("WRTV") || at < 2 {
+                continue;
+            }
+            if !instrs[at - 1].op.name.starts_with("SetV") {
+                continue; // value-first, or not a constant store at all
+            }
+            let address = if instrs[at - 2].op.name == "LoadThisR" {
+                field_of(&instrs[at - 2])
+            } else if at >= 4
+                && instrs[at - 2].op.name == "PopRPtr"
+                && instrs[at - 3].op.name == "ADDSi"
+                && instrs[at - 4].op.name == "PshVPtr"
+            {
+                field_of(&instrs[at - 3])
+            } else {
+                None
+            };
+            out.extend(address);
+        }
+    }
+    out
+}
+
 /// Whether EVERY null a class's constructors store into a member is the compiler's own zeroing.
 ///
 /// The compiler writes `PshNull; PshVPtr w0; ADDSi wOFF,TID; REFCPY` and leaves nothing on the
