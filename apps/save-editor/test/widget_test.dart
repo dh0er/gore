@@ -1549,7 +1549,7 @@ void main() {
       await tester.pumpAndSettle();
 
       final restore = core.requests.lastWhere(
-        (request) => request.command == 'restore_backup',
+        (request) => request.command == 'restore_deleted_save',
       );
       expect(restore.payload, {
         'path': r'C:\tmp\saves\G1R-001.sav',
@@ -1954,6 +1954,7 @@ class _FakeCoreService implements GoresaveCoreService {
           },
         };
       case 'restore_backup':
+      case 'restore_deleted_save':
         return {
           'ok': true,
           'data': {
@@ -2481,7 +2482,7 @@ class _DeletingSaveCoreService extends _FakeCoreService {
 
     final response = await super.execute(command, payload: payload);
     if (command == 'delete_save') _deleted = true;
-    if (command == 'restore_backup') _deleted = false;
+    if (command == 'restore_deleted_save') _deleted = false;
     return response;
   }
 }

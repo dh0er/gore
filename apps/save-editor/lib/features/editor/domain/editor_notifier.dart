@@ -436,7 +436,7 @@ class EditorState {
       lastWriteMessage: clearWriteMessage
           ? null
           : lastWriteMessage ?? this.lastWriteMessage,
-      deletedSaveRecovery: clearDeletedSaveRecovery
+      deletedSaveRecovery: clearDeletedSaveRecovery || clearWriteMessage
           ? null
           : identical(deletedSaveRecovery, _unchanged)
           ? this.deletedSaveRecovery
@@ -563,7 +563,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
         return;
       }
       final data = (response['data'] as Map).cast<String, Object?>();
-      state = state.copyWith(lastWriteMessage: message(data));
+      state = state.copyWith(
+        lastWriteMessage: message(data),
+        clearDeletedSaveRecovery: true,
+      );
       onSuccess?.call(data);
       beforeRefresh?.call();
       await refresh();
@@ -2845,12 +2848,20 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// companion `PersistentDataList.sav` backups); it defaults to the selected
   /// slot.
   Future<bool> restoreBackup(String backupPath, {String? targetPath}) async {
+    return _restoreBackup('restore_backup', backupPath, targetPath: targetPath);
+  }
+
+  Future<bool> _restoreBackup(
+    String command,
+    String backupPath, {
+    String? targetPath,
+  }) async {
     final path = targetPath ?? state.selectedPath;
     if (path == null) return false;
     var restored = false;
     await _withLoading(() async {
       final response = await _execute(
-        'restore_backup',
+        command,
         payload: {'path': path, 'backupPath': backupPath},
       );
       if (response['ok'] != true) {
@@ -2906,7 +2917,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<void> restoreDeletedSave() async {
     final recovery = state.deletedSaveRecovery;
     if (recovery == null) return;
-    final restored = await restoreBackup(
+    final restored = await _restoreBackup(
+      'restore_deleted_save',
       recovery.backupPath,
       targetPath: recovery.targetPath,
     );

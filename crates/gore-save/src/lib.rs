@@ -594,6 +594,17 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 })?;
             Ok(restore_backup(&path, &backup_path)?)
         }
+        "restore_deleted_save" => {
+            let path = required_path(&payload)?;
+            let backup_path = payload
+                .get("backupPath")
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest("missing payload.backupPath".to_string())
+                })?;
+            Ok(restore_deleted_save(&path, &backup_path)?)
+        }
         "delete_backup" => {
             let path = required_path(&payload)?;
             let backup_path = required_backup_path(&payload)?;
@@ -2258,9 +2269,40 @@ fn restore_backup(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
     restore_backup_with_before_replace(path, backup_path, |_| Ok(()))
 }
 
+/// Recreate a slot removed by [`delete_save`] from its exact paired backup.
+/// The target must still be absent; a game/cloud process that recreated it wins
+/// and is never overwritten.
+fn restore_deleted_save(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| CoreError::InvalidRequest("payload.path has no file name".to_string()))?;
+    let slot = file_name.strip_suffix(".sav").ok_or_else(|| {
+        CoreError::InvalidRequest("payload.path must name a save-slot .sav file".to_string())
+    })?;
+    if !looks_slot_name(slot) {
+        return Err(CoreError::InvalidRequest(format!(
+            "payload.path does not name a valid save slot: {file_name}"
+        )));
+    }
+    restore_backup_with_mode(path, backup_path, true, |_| Ok(()))
+}
+
 fn restore_backup_with_before_replace<F>(
     path: &Path,
     backup_path: &Path,
+    before_replace: F,
+) -> Result<Value, CoreError>
+where
+    F: FnOnce(&Path) -> Result<(), CoreError>,
+{
+    restore_backup_with_mode(path, backup_path, false, before_replace)
+}
+
+fn restore_backup_with_mode<F>(
+    path: &Path,
+    backup_path: &Path,
+    require_missing_target: bool,
     before_replace: F,
 ) -> Result<Value, CoreError>
 where
@@ -2286,17 +2328,37 @@ where
         })?;
     }
 
-    let original = fs::read(path)?;
-    inspect_bytes(&original, Some(path), false)?;
+    let original_snapshot = snapshot_file(path)?;
+    let original = match &original_snapshot {
+        FileSnapshot::Present(_) if require_missing_target => {
+            return Err(CoreError::Update(format!(
+                "{} already exists; the recreated save was preserved",
+                path.display()
+            )));
+        }
+        FileSnapshot::Present(bytes) => {
+            inspect_bytes(bytes, Some(path), false)?;
+            Some(bytes.clone())
+        }
+        FileSnapshot::Missing if require_missing_target => None,
+        FileSnapshot::Missing => {
+            return Err(CoreError::Validation(format!(
+                "{} no longer exists; use deleted-save recovery instead",
+                path.display()
+            )));
+        }
+    };
 
     // inspect_bytes accepts both GSAV and GVAS containers, so require the backup
     // to share the slot's container format. Otherwise a misnamed GVAS sidecar
     // backup could pass validation and replace the GSAV slot with an unusable
     // file.
-    if save_container_magic(&backup_data) != save_container_magic(&original) {
-        return Err(CoreError::Validation(
-            "backup container format does not match the selected save".to_string(),
-        ));
+    if let Some(original) = &original {
+        if save_container_magic(&backup_data) != save_container_magic(original) {
+            return Err(CoreError::Validation(
+                "backup container format does not match the selected save".to_string(),
+            ));
+        }
     }
 
     // Discover and validate the paired companion rollback *before* mutating the
@@ -2308,28 +2370,46 @@ where
     // the safety backup must avoid existing slot-backup suffixes too — otherwise
     // it could land on a slot's suffix and be wrongly paired as that slot's
     // companion on a later slot restore (same hazard as the write path).
-    let (current_backup_path, companion_safety_backup) = match &companion_plan {
-        Some(plan) => {
-            let (slot_backup, companion_backup) = create_paired_backup_bytes(
-                path,
-                &original,
-                &plan.persistent_path,
-                &plan.original_data,
-            )?;
-            (slot_backup, Some(companion_backup))
-        }
-        None if target_is_profile => (
-            create_backup_bytes_avoiding(path, &original, &existing_foreign_backup_suffixes(path))?,
-            None,
-        ),
-        None => (create_backup_bytes_avoiding(path, &original, &[])?, None),
-    };
+    let (current_backup_path, companion_safety_backup) =
+        match (original.as_deref(), &companion_plan) {
+            (Some(original), Some(plan)) => {
+                let (slot_backup, companion_backup) = create_paired_backup_bytes(
+                    path,
+                    original,
+                    &plan.persistent_path,
+                    &plan.original_data,
+                )?;
+                (Some(slot_backup), Some(companion_backup))
+            }
+            (Some(original), None) if target_is_profile => (
+                Some(create_backup_bytes_avoiding(
+                    path,
+                    original,
+                    &existing_foreign_backup_suffixes(path),
+                )?),
+                None,
+            ),
+            (Some(original), None) => (
+                Some(create_backup_bytes_avoiding(path, original, &[])?),
+                None,
+            ),
+            (None, Some(plan)) => (
+                None,
+                Some(create_backup_bytes_avoiding(
+                    &plan.persistent_path,
+                    &plan.original_data,
+                    &existing_foreign_backup_suffixes(&plan.persistent_path),
+                )?),
+            ),
+            (None, None) => (None, None),
+        };
     // Before the staging and the two guarded replaces below, any of which can
     // still abort: an aborted restore would otherwise leave this safety backup
     // listed with a pinned save in it and no record of the routine those pins
     // replaced.
-    let backup_note_warning = placement::snapshot_backup(path, &current_backup_path)
-        .err()
+    let backup_note_warning = current_backup_path
+        .as_deref()
+        .and_then(|backup| placement::snapshot_backup(path, backup).err())
         .map(|err| err.to_string());
 
     // Stage both writes in unique same-directory files and validate before
@@ -2355,11 +2435,8 @@ where
     // the companion; if the companion replace fails, roll the slot back so they
     // never end up restored to different edits.
     before_replace(path)?;
-    let slot_pending = begin_replace_if_unchanged(
-        path,
-        slot_tmp.path(),
-        &FileSnapshot::Present(original.clone()),
-    )?;
+    let slot_pending =
+        begin_replace_if_unchanged(path, slot_tmp.path(), &original_snapshot)?;
     if let (Some(plan), Some(tmp)) = (&companion_plan, &companion_tmp) {
         match begin_replace_if_unchanged(
             &plan.persistent_path,
@@ -2400,9 +2477,9 @@ where
         "restoredFrom": backup_path,
         "backupPath": current_backup_path,
         "placementNoteWarning": placement_note_warning,
-        "previousSha1": sha1_hex(&original),
+        "previousSha1": original.as_ref().map(|bytes| sha1_hex(bytes)),
         "restoredSha1": sha1_hex(&backup_data),
-        "bytesChanged": original != backup_data,
+        "bytesChanged": original.as_ref().map_or(true, |bytes| bytes != &backup_data),
         "persistentPath": companion_plan.as_ref().map(|p| p.persistent_path.display().to_string()),
         "persistentRestoredFrom": companion_plan
             .as_ref()
@@ -16529,15 +16606,12 @@ mod tests {
         assert_eq!(response["slot"], slot);
         assert_eq!(response["profileId"], 0);
         assert!(!save_path.exists());
+        let backup_path = PathBuf::from(response["backupPath"].as_str().unwrap());
+        let persistent_backup_path =
+            PathBuf::from(response["persistentBackupPath"].as_str().unwrap());
+        assert_eq!(fs::read(&backup_path).unwrap(), save_original);
         assert_eq!(
-            fs::read(Path::new(response["backupPath"].as_str().unwrap())).unwrap(),
-            save_original
-        );
-        assert_eq!(
-            fs::read(Path::new(
-                response["persistentBackupPath"].as_str().unwrap()
-            ))
-            .unwrap(),
+            fs::read(&persistent_backup_path).unwrap(),
             persistent_original
         );
 
@@ -16551,6 +16625,56 @@ mod tests {
         }
         let rescanned = scan_save_dir_summary_with_codec_backend(dir.path(), None).unwrap();
         assert!(rescanned.saves.iter().all(|save| save.slot != slot));
+
+        let restore = execute_json_inner(
+            &json!({
+                "command": "restore_deleted_save",
+                "payload": {"path": save_path, "backupPath": backup_path}
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(restore["bytesChanged"], true);
+        assert!(restore["backupPath"].is_null());
+        assert_eq!(fs::read(&save_path).unwrap(), save_original);
+        assert_eq!(fs::read(&persistent_path).unwrap(), persistent_original);
+        assert!(
+            Path::new(restore["persistentBackupPath"].as_str().unwrap()).exists()
+        );
+        let restored_root = parse_profile_file(&fs::read(&persistent_path).unwrap()).unwrap();
+        assert!(persistent_slot_is_registered(&restored_root, slot).unwrap());
+        let rescanned = scan_save_dir_summary_with_codec_backend(dir.path(), None).unwrap();
+        assert!(rescanned.saves.iter().any(|save| save.slot == slot));
+    }
+
+    #[test]
+    fn restore_deleted_save_preserves_a_concurrently_recreated_slot() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-006";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let backup_dir = dir.path().join("goresave_backups");
+        fs::create_dir_all(&backup_dir).unwrap();
+        let backup_path = backup_dir.join(format!("{slot}.sav.bak.1"));
+        let deleted = build_gsav(
+            2,
+            &public_payload_with_profile("Deleted", 0),
+            &minimal_stream(),
+            &[0, 0, 0, 0],
+        );
+        let recreated = build_gsav(
+            2,
+            &public_payload_with_profile("Recreated", 0),
+            &minimal_stream(),
+            &[0, 0, 0, 0],
+        );
+        fs::write(&backup_path, deleted).unwrap();
+        fs::write(&save_path, &recreated).unwrap();
+
+        let error = restore_deleted_save(&save_path, &backup_path).unwrap_err();
+
+        assert!(matches!(error, CoreError::Update(_)));
+        assert_eq!(fs::read(&save_path).unwrap(), recreated);
     }
 
     #[test]

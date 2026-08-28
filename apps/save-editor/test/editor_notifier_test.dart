@@ -5160,7 +5160,7 @@ void main() {
       await notifier.restoreDeletedSave();
 
       final restore = core.requests.lastWhere(
-        (request) => request.command == 'restore_backup',
+        (request) => request.command == 'restore_deleted_save',
       );
       expect(restore.payload['path'], r'C:\tmp\saves\G1R-006.sav');
       expect(
@@ -5170,6 +5170,53 @@ void main() {
       expect(notifier.state.deletedSaveRecovery, isNull);
     },
   );
+
+  test('selecting another save disarms deleted-save recovery', () async {
+    final core = _RecordingCoreService(
+      scanData: {
+        'saves': [
+          {
+            'path': r'C:\tmp\saves\G1R-006.sav',
+            'slot': 'G1R-006',
+            'format': 'GSAV',
+            'fileSize': 100,
+            'sha1': 'a',
+            'status': 'ok',
+            'playerSaveName': 'Delete me',
+            'persistentProfileId': 0,
+          },
+          {
+            'path': r'C:\tmp\saves\G1R-007.sav',
+            'slot': 'G1R-007',
+            'format': 'GSAV',
+            'fileSize': 100,
+            'sha1': 'b',
+            'status': 'ok',
+            'playerSaveName': 'Keep me',
+            'persistentProfileId': 0,
+          },
+        ],
+        'profiles': [
+          {
+            'profileId': 0,
+            'profileName': '0',
+            'savedSlots': ['G1R-006', 'G1R-007'],
+          },
+        ],
+        'activeProfileId': 0,
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await pumpEventQueue();
+
+    expect(await notifier.deleteSave(slot: 'G1R-006', profileId: 0), isTrue);
+    expect(notifier.state.deletedSaveRecovery, isNotNull);
+
+    await notifier.inspect(r'C:\tmp\saves\G1R-007.sav');
+
+    expect(notifier.state.lastWriteMessage, isNull);
+    expect(notifier.state.deletedSaveRecovery, isNull);
+  });
 
   test(
     'all unassigned saves stay out of profiles and collect in Other saves',
@@ -5950,6 +5997,7 @@ class _RecordingCoreService implements GoresaveCoreService {
           },
         };
       case 'restore_backup':
+      case 'restore_deleted_save':
         return {
           'ok': true,
           'data': {
