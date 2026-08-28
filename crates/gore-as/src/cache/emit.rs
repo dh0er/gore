@@ -4009,12 +4009,21 @@ fn handle_alias_slots(f: &Func) -> HashSet<i32> {
         .filter(|(at, ins)| {
             ins.op.name == "RefCpyV"
                 && !(instrs.get(at + 1).is_some_and(|next| {
-                    matches!(next.op.name, "CmpPtrNull" | "CmpPtr") && slot(next) == slot(ins)
+                    // EITHER operand: `CmpPtr v2, v4` compares the alias on the right, and
+                    // reading only the first operand missed every `<expr> != this` vanilla wrote
+                    // with the entity spelled out.
+                    matches!(next.op.name, "CmpPtrNull" | "CmpPtr")
+                        && slot(ins).is_some_and(|s| {
+                            super::bytediff::addressed_slots(next).contains(&s)
+                        })
                 }) && at
                     .checked_sub(1)
                     .and_then(|prev| instrs.get(prev))
                     .is_some_and(|prev| {
-                        prev.op.name == "PshVPtr" && slot(prev).is_some_and(|src| src < 0)
+                        // `this` is slot 0 and a parameter is negative; both are entities the
+                        // source names outright, so an alias of one built for a comparison is
+                        // the comparison's own temporary and not a declaration.
+                        prev.op.name == "PshVPtr" && slot(prev).is_some_and(|src| src <= 0)
                     }))
         })
         .filter_map(|(_, ins)| slot(ins))
@@ -4053,7 +4062,11 @@ fn wholly_consumed_object_slots(f: &Func) -> HashSet<i32> {
                     loose.insert(dst);
                 }
             }
-            "ClrVPtr" | "RefCpyV" | "REFCPY" | "CpyVtoV4" | "CpyVtoV8" | "CpyGtoV4" | "SetV8" => {
+            // A release is the cost of a handle DECLARED inside a block, so a slot that carries
+            // one was named by the source — the object-mirror of the scope-exit destructor that
+            // already makes a value-type slot loose.
+            "ClrVPtr" | "RefCpyV" | "REFCPY" | "CpyVtoV4" | "CpyVtoV8" | "CpyGtoV4" | "SetV8"
+            | "FreeNullV8" | "FreeNullV4" | "FREE" => {
                 loose.insert(dst);
             }
             _ => {}

@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,549 functions (0.94%) recompile to bytecode that differs semantically.** A semantic
+**1,546 functions (0.94%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -629,6 +629,18 @@ lowering's own `PSF` counted as somebody else's operand. It now stops at the fir
 first non-push read.
 
 1,573 to 1,549, three of them traded for the first cast-diamond shapes the tighter walk now folds.
+
+**An alias built for a comparison is the comparison's own temporary — on either side of it.**
+The rule was already there for a parameter aliased into a null test; it read only the
+comparison's FIRST operand, so every `<expr> != this` vanilla wrote with the entity spelled out
+stayed a named local on our side. `this` is slot 0, a parameter is negative, and both are entities
+the source names outright. Three functions, no regressions.
+
+A release is also a name: `FreeNullV8` is what a handle DECLARED inside a block costs, so a slot
+carrying one can no longer be called wholly consumed — the object mirror of the scope-exit
+destructor that already makes a value-type slot loose.
+
+1,549 to 1,546.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
