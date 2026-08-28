@@ -11,6 +11,12 @@ import 'package:path/path.dart' as p;
 
 const _maximumItemCount = 4096;
 const _maximumManifestBytes = 8 * 1024 * 1024;
+const _preparationRetryDelays = [
+  Duration(minutes: 1),
+  Duration(minutes: 5),
+  Duration(minutes: 15),
+  Duration(minutes: 30),
+];
 
 /// Verified, generation-bound item images extracted from the user's own game.
 class ItemIconCatalog {
@@ -123,6 +129,11 @@ final itemIconCoreServiceProvider = Provider<GoresaveCoreService>((ref) {
 /// verification intentionally proves every PNG and is therefore not cheap.
 final itemIconCatalogReloadProvider = StateProvider<int>((ref) => 0);
 
+@visibleForTesting
+final itemIconCatalogNowProvider = Provider<DateTime Function()>(
+  (ref) => DateTime.now,
+);
+
 final _itemIconCatalogRetentionProvider = Provider(
   (ref) => _ItemIconCatalogRetention(),
 );
@@ -137,6 +148,8 @@ class _ItemIconCatalogRetention {
   String? pendingRequestedGamePath;
   String? attemptedSourceIdentity;
   String? attemptedRequestedGamePath;
+  int attemptedFailures = 0;
+  DateTime? attemptedRetryAfter;
   Future<String?>? sourceIdentityRead;
   String? sourceIdentityReadGamePath;
 }
@@ -147,6 +160,7 @@ final itemIconCatalogRefreshProvider = Provider<ItemIconCatalogRefresh>((ref) {
     () => ref.read(itemIconCoreServiceProvider),
     () => ref.read(sharedConfigProvider).gamePath(),
     () => ref.read(itemIconCatalogProvider).isLoading,
+    () => ref.read(itemIconCatalogNowProvider)(),
     retention,
     () => ref.read(itemIconCatalogReloadProvider.notifier).state++,
   );
@@ -157,6 +171,7 @@ class ItemIconCatalogRefresh {
     this._core,
     this._gamePath,
     this._catalogIsLoading,
+    this._now,
     this._retention,
     this._reload,
   );
@@ -164,6 +179,7 @@ class ItemIconCatalogRefresh {
   final GoresaveCoreService Function() _core;
   final String? Function() _gamePath;
   final bool Function() _catalogIsLoading;
+  final DateTime Function() _now;
   final _ItemIconCatalogRetention _retention;
   final void Function() _reload;
 
@@ -191,9 +207,13 @@ class ItemIconCatalogRefresh {
     final attemptedMatches =
         identity == _retention.attemptedSourceIdentity &&
         configuredGamePath == _retention.attemptedRequestedGamePath;
+    final attemptedStillCoolingDown =
+        attemptedMatches &&
+        (_retention.attemptedRetryAfter == null ||
+            _now().isBefore(_retention.attemptedRetryAfter!));
     if ((!selectionChanged && identity == _retention.sourceIdentity) ||
         pendingMatches ||
-        attemptedMatches) {
+        attemptedStillCoolingDown) {
       return;
     }
     _retention.pendingSourceIdentity = identity;
@@ -207,10 +227,18 @@ class ItemIconCatalogRefresh {
 final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
   ref.watch(itemIconCatalogReloadProvider);
   final retention = ref.read(_itemIconCatalogRetentionProvider);
+  final now = ref.read(itemIconCatalogNowProvider);
   final requestSequence = ++retention.requestSequence;
   final requestedSourceIdentity = retention.pendingSourceIdentity;
   final requestedGamePath = retention.pendingRequestedGamePath;
   if (requestedSourceIdentity != null) {
+    final sameAttempt =
+        requestedSourceIdentity == retention.attemptedSourceIdentity &&
+        requestedGamePath == retention.attemptedRequestedGamePath;
+    if (!sameAttempt) {
+      retention.attemptedFailures = 0;
+      retention.attemptedRetryAfter = null;
+    }
     retention.attemptedSourceIdentity = requestedSourceIdentity;
     retention.attemptedRequestedGamePath = requestedGamePath;
   }
@@ -222,6 +250,7 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
   if (!core.isAvailable) return retainedOrEmpty();
 
   String? preparedManifestPath;
+  var requestSucceeded = false;
   try {
     final gamePath = ref.watch(sharedConfigProvider).gamePath();
     final response = await core.execute(
@@ -262,11 +291,14 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
           ? sourceGamePath
           : null;
       retention.requestedGamePath = gamePath;
-      retention.attemptedSourceIdentity = null;
-      retention.attemptedRequestedGamePath = null;
     }
+    retention.attemptedSourceIdentity = null;
+    retention.attemptedRequestedGamePath = null;
+    retention.attemptedFailures = 0;
+    retention.attemptedRetryAfter = null;
     final previousManifestPath = retention.value?.manifestPath;
     retention.value = catalog;
+    requestSucceeded = true;
     if (previousManifestPath != null && previousManifestPath.isNotEmpty) {
       // Publish the new catalog first. Widgets can still paint the retained
       // AsyncData for the rest of this event turn, so release its native lease
@@ -292,6 +324,21 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
     // so a missing game, corrupt cache, or transient extraction error must not
     // make the save editor unusable or erase a previously loaded generation.
     return retainedOrEmpty();
+  } finally {
+    if (!requestSucceeded &&
+        requestSequence == retention.requestSequence &&
+        requestedSourceIdentity != null &&
+        requestedSourceIdentity == retention.attemptedSourceIdentity &&
+        requestedGamePath == retention.attemptedRequestedGamePath) {
+      final failures = retention.attemptedFailures + 1;
+      retention.attemptedFailures = failures;
+      final delayIndex = failures <= _preparationRetryDelays.length
+          ? failures - 1
+          : _preparationRetryDelays.length - 1;
+      retention.attemptedRetryAfter = now().add(
+        _preparationRetryDelays[delayIndex],
+      );
+    }
   }
 });
 

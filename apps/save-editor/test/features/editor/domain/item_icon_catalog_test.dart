@@ -324,7 +324,7 @@ void main() {
   });
 
   test(
-    'failed preparation is not retried for every unchanged resume',
+    'failed preparation backs off before retrying unchanged source',
     () async {
       final root = Directory.systemTemp.createTempSync(
         'gore_item_icons_failed',
@@ -339,14 +339,18 @@ void main() {
             'items': {'ItFo_Apple': 'ItFo_Apple.png'},
           }),
         );
+      var now = DateTime.utc(2026, 1, 1);
       final core = _SourceChangeItemIconCore(
         manifest.path,
-        ['source-a', 'source-b'],
-        ['source-b', 'source-b'],
+        ['source-a', 'source-b', 'source-b'],
+        ['source-b', 'source-b', 'source-b'],
         {1},
       );
       final container = ProviderContainer(
-        overrides: [itemIconCoreServiceProvider.overrideWithValue(core)],
+        overrides: [
+          itemIconCoreServiceProvider.overrideWithValue(core),
+          itemIconCatalogNowProvider.overrideWithValue(() => now),
+        ],
       );
       addTearDown(container.dispose);
       final sub = container.listen(itemIconCatalogProvider, (_, _) {});
@@ -360,6 +364,12 @@ void main() {
 
       expect(container.read(itemIconCatalogReloadProvider), 1);
       expect(core.prepares, 2);
+
+      now = now.add(const Duration(minutes: 1, seconds: 1));
+      await refresh.refreshIfSourceChanged();
+      await container.read(itemIconCatalogProvider.future);
+      expect(container.read(itemIconCatalogReloadProvider), 2);
+      expect(core.prepares, 3);
     },
   );
 
