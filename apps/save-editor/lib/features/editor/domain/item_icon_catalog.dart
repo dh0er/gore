@@ -191,9 +191,11 @@ class ItemIconCatalogRefresh {
     if (!core.isAvailable) return;
     final configuredGamePath = _gamePath();
     final selectionChanged = configuredGamePath != _retention.requestedGamePath;
+    final retainedSourceDiffersFromRequest =
+        _retention.sourceGamePath != _retention.requestedGamePath;
     final identity = await _readItemIconSourceIdentity(
       core,
-      selectionChanged
+      selectionChanged || retainedSourceDiffersFromRequest
           ? configuredGamePath
           : _retention.sourceGamePath ?? configuredGamePath,
       _retention,

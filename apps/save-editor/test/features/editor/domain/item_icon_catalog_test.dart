@@ -318,8 +318,8 @@ void main() {
     await container.read(itemIconCatalogProvider.future);
     expect(core.prepares, 2);
     expect(core.identityPayloads, [
-      {'gamePath': 'D:/Steam/Gothic 1 Remake'},
-      {'gamePath': 'D:/Steam/Gothic 1 Remake'},
+      {'gamePath': 'C:/stale-configured-game'},
+      {'gamePath': 'C:/stale-configured-game'},
     ]);
   });
 
