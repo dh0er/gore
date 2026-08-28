@@ -2355,13 +2355,19 @@ where
 {
     ensure_backup_belongs_to_save(path, backup_path)?;
     let backup_data = fs::read(backup_path)?;
-    inspect_bytes(&backup_data, Some(backup_path), false)?;
     if let Some(expected_sha1) = expected_backup_sha1 {
         if sha1_hex(&backup_data) != expected_sha1 {
             return Err(CoreError::Validation(
                 "the deleted save backup no longer matches the original snapshot".to_string(),
             ));
         }
+    }
+    // Normal restores accept only structurally inspectable saves. Deleted-save
+    // recovery is different: deletion may intentionally remove a malformed
+    // registered slot, and its undo promise is to reinstall the exact original
+    // bytes. The hash captured by that delete transaction is the authority.
+    if !require_missing_target {
+        inspect_bytes(&backup_data, Some(backup_path), false)?;
     }
 
     // inspect_bytes' GVAS branch only checks the magic and scans strings. Before
@@ -2497,7 +2503,16 @@ where
     // committing either. Fixed temp names let concurrent restores overwrite
     // each other's already-validated bytes.
     let slot_tmp = ScratchFile::create(path, "tmp-restore", &backup_data)?;
-    inspect_save(slot_tmp.path(), false)?;
+    if require_missing_target {
+        let staged_data = fs::read(slot_tmp.path())?;
+        if staged_data != backup_data {
+            return Err(CoreError::Validation(
+                "staged deleted-save recovery no longer matches its backup".to_string(),
+            ));
+        }
+    } else {
+        inspect_save(slot_tmp.path(), false)?;
+    }
     let companion_tmp = match &companion_plan {
         Some(plan) => {
             let tmp =
@@ -17006,6 +17021,30 @@ mod tests {
         assert!(matches!(error, CoreError::Validation(_)));
         assert!(!save_path.exists());
         assert_eq!(fs::read(&persistent_path).unwrap(), post_delete_profile);
+    }
+
+    #[test]
+    fn restore_deleted_save_reinstalls_hash_verified_malformed_bytes() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-006";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let malformed_original = b"not a parseable save container";
+        fs::write(&save_path, malformed_original).unwrap();
+        fs::write(&persistent_path, assignment_persistent_data_list(slot, 0)).unwrap();
+
+        let deleted = delete_save(&save_path, &persistent_path, slot, 0, true).unwrap();
+        let backup_path = PathBuf::from(deleted["backupPath"].as_str().unwrap());
+        restore_deleted_save(
+            &save_path,
+            &backup_path,
+            deleted["persistentPostDeleteSha1"].as_str().unwrap(),
+            deleted["deletedSaveSha1"].as_str().unwrap(),
+            deleted["deletedPersistentSha1"].as_str().unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(fs::read(&save_path).unwrap(), malformed_original);
     }
 
     #[test]

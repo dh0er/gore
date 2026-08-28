@@ -1404,7 +1404,7 @@ void main() {
         of: find.byKey(const ValueKey('statistics-section-inventory')),
         matching: find.text('Not available'),
       ),
-      findsAtLeastNWidgets(2),
+      findsNWidgets(3),
     );
   });
 
@@ -2491,6 +2491,30 @@ class _UnavailableStatisticsCoreService extends _FakeCoreService {
     String command, {
     Map<String, Object?> payload = const {},
   }) async {
+    if (command == 'private.skills.list') {
+      return {
+        'ok': true,
+        'data': {
+          'actor': 'Hero',
+          'found': false,
+          'skills': [
+            {
+              'base': 'Sneaking',
+              'label': 'Sneaking',
+              'category': 'Thief',
+              'kind': 'binary',
+              'learned': false,
+              'current': 'Untrained',
+              'hasUntrained': true,
+              'options': [
+                {'value': 'Untrained'},
+                {'value': 'Learned'},
+              ],
+            },
+          ],
+        },
+      };
+    }
     final response = await super.execute(command, payload: payload);
     if (command != 'inspect_save') return response;
 

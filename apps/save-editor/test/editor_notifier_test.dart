@@ -5319,6 +5319,7 @@ void main() {
   });
 
   test('deleteSave preserves an existing one-click recovery', () async {
+    final store = _MemoryEditorSettingsStore();
     final core = _RecordingCoreService(
       scanData: {
         'saves': [
@@ -5352,11 +5353,16 @@ void main() {
         'activeProfileId': 0,
       },
     );
-    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      settingsStore: store,
+    );
     await pumpEventQueue();
 
     expect(await notifier.deleteSave(slot: 'G1R-006', profileId: 0), isTrue);
     final recovery = notifier.state.deletedSaveRecovery;
+    expect(store.settings.deletedSaveRecovery, same(recovery));
 
     expect(await notifier.deleteSave(slot: 'G1R-007', profileId: 0), isFalse);
     expect(notifier.state.deletedSaveRecovery, same(recovery));
@@ -5406,6 +5412,22 @@ void main() {
         reason: '$command must not invalidate the pending recovery',
       );
     }
+
+    final restarted = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      settingsStore: store,
+    );
+    expect(
+      restarted.state.deletedSaveRecovery?.targetPath,
+      recovery?.targetPath,
+    );
+    expect(
+      restarted.state.deletedSaveRecovery?.backupPath,
+      recovery?.backupPath,
+    );
+    restarted.dismissDeletedSaveRecovery();
+    expect(store.settings.deletedSaveRecovery, isNull);
   });
 
   test(

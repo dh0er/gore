@@ -493,7 +493,7 @@ class _OverviewStatisticsSectionState extends State<OverviewStatisticsSection> {
           label: l10n.statisticsMetric('learnedSkills', 'Learned skills'),
           value: !_skillsLoaded
               ? _loadingValue
-              : _skills == null
+              : _skills == null || !_skills!.found
               ? l10n.statisticsUnknown
               : '${_skills!.skills.where((skill) => skill.learned).length}',
         ),

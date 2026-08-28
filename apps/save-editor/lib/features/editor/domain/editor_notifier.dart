@@ -979,6 +979,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   void dismissDeletedSaveRecovery() {
     if (state.deletedSaveRecovery != null) {
       state = state.copyWith(clearDeletedSaveRecovery: true);
+      _persistSettings();
     }
   }
 
@@ -2983,6 +2984,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     );
     if (restored) {
       state = state.copyWith(clearDeletedSaveRecovery: true);
+      _persistSettings();
     }
   }
 
@@ -4245,6 +4247,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
         saveDir: state.saveDir,
         externalSavePaths: state.externalSavePaths,
         hiddenOtherSavePaths: state.hiddenOtherSavePaths,
+        deletedSaveRecovery: state.deletedSaveRecovery,
       ),
     );
   }
@@ -4258,6 +4261,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       saveDir: saveDir ?? stored.saveDir ?? defaultSaveRoot(),
       externalSavePaths: stored.externalSavePaths,
       hiddenOtherSavePaths: stored.hiddenOtherSavePaths,
+      deletedSaveRecovery: stored.deletedSaveRecovery,
     );
   }
 }
@@ -4270,29 +4274,6 @@ class _BackupSnapshot {
 
   final List<BackupEntry> backups;
   final List<BackupEntry> companionBackups;
-}
-
-class DeletedSaveRecovery {
-  const DeletedSaveRecovery({
-    required this.targetPath,
-    required this.backupPath,
-    required this.persistentPostDeleteSha1,
-    required this.deletedSaveSha1,
-    required this.deletedPersistentSha1,
-    required this.message,
-  });
-
-  final String targetPath;
-  final String backupPath;
-  final String persistentPostDeleteSha1;
-  final String deletedSaveSha1;
-  final String deletedPersistentSha1;
-  final String message;
-
-  String get fileName {
-    final normalized = targetPath.replaceAll('\\', '/');
-    return normalized.split('/').last;
-  }
 }
 
 /// A single flattened pending edit paired with the snapshot key it came from, so
