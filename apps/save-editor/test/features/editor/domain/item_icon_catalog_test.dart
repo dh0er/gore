@@ -363,6 +363,53 @@ void main() {
     },
   );
 
+  test('configured game path changes trigger one bounded reload', () async {
+    final root = Directory.systemTemp.createTempSync(
+      'gore_item_icons_config_change',
+    );
+    addTearDown(() => root.deleteSync(recursive: true));
+    final manifest = File(p.join(root.path, 'manifest.json'))
+      ..writeAsStringSync(
+        jsonEncode({
+          'schema': 1,
+          'buildId': 'generation-a',
+          'itemCount': 1,
+          'items': {'ItFo_Apple': 'ItFo_Apple.png'},
+        }),
+      );
+    final config = SharedConfig(File(p.join(root.path, 'config.json')))
+      ..setGamePath('C:/configured-a');
+    final core = _SourceChangeItemIconCore(
+      manifest.path,
+      ['source-a', 'source-b'],
+      ['source-a', 'source-a'],
+      {1},
+    );
+    final container = ProviderContainer(
+      overrides: [
+        itemIconCoreServiceProvider.overrideWithValue(core),
+        sharedConfigProvider.overrideWithValue(config),
+      ],
+    );
+    addTearDown(container.dispose);
+    final sub = container.listen(itemIconCatalogProvider, (_, _) {});
+    addTearDown(sub.close);
+
+    await container.read(itemIconCatalogProvider.future);
+    config.setGamePath('E:/configured-b');
+    final refresh = container.read(itemIconCatalogRefreshProvider);
+    await refresh.refreshIfSourceChanged();
+    await container.read(itemIconCatalogProvider.future);
+    await refresh.refreshIfSourceChanged();
+
+    expect(container.read(itemIconCatalogReloadProvider), 1);
+    expect(core.prepares, 2);
+    expect(core.identityPayloads, [
+      {'gamePath': 'E:/configured-b'},
+      {'gamePath': 'E:/configured-b'},
+    ]);
+  });
+
   test('overlapping source checks coalesce one cache reload', () async {
     final root = Directory.systemTemp.createTempSync(
       'gore_item_icons_coalesce',

@@ -53,6 +53,16 @@ struct SourceBindingIdentity {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct SourceIdentity(Vec<SourceBindingIdentity>);
 
+#[derive(Debug, Eq, PartialEq, Serialize)]
+struct QuickSourceBindingIdentity {
+    role: String,
+    file: FileIdentity,
+    unreliable_content_blake3: Option<String>,
+}
+
+#[derive(Debug, Eq, PartialEq, Serialize)]
+struct QuickSourceIdentity(Vec<QuickSourceBindingIdentity>);
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PersistedSourceFileDigest {
@@ -187,9 +197,9 @@ pub fn build_id_for(utoc: &Path, usmap: &Path) -> Result<String> {
     build_id_for_in_cache_dir(utoc, usmap, &gore_loc::paths::shared_data_dir())
 }
 
-/// Cheap change token for the installed IoStore source set. Unlike the build
-/// fingerprint this reads no container payload bytes: it only binds the direct
-/// UTOC/UCAS directory entries to strong platform file identities.
+/// Cheap change token for the installed IoStore source set. On filesystems with
+/// strong change tokens this binds only direct UTOC/UCAS metadata. A source
+/// lacking such a token is hashed so restored timestamps cannot hide updates.
 pub(crate) fn quick_composite_source_identity(main_utoc: &Path) -> Result<String> {
     let paks = main_utoc
         .parent()
@@ -231,7 +241,7 @@ pub(crate) fn quick_composite_source_identity(main_utoc: &Path) -> Result<String
         if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
             return Err(invalid_data("texture source is not a plain regular file"));
         }
-        let file = open_regular_no_follow(&path)?;
+        let mut file = open_regular_no_follow(&path)?;
         let metadata = file.metadata()?;
         let identity = file_identity(&file, &metadata)?;
         found_main |= path == canonical_main;
@@ -240,10 +250,7 @@ pub(crate) fn quick_composite_source_identity(main_utoc: &Path) -> Result<String
             .and_then(|name| name.to_str())
             .ok_or_else(|| invalid_data("installed texture source name is not Unicode"))?
             .to_string();
-        bindings.push(SourceBindingIdentity {
-            role,
-            file: identity,
-        });
+        bindings.push(quick_source_binding_identity(role, &mut file, identity)?);
     }
     if !found_main {
         return Err(invalid_data(
@@ -251,7 +258,7 @@ pub(crate) fn quick_composite_source_identity(main_utoc: &Path) -> Result<String
         ));
     }
     bindings.sort_by(|left, right| left.role.cmp(&right.role));
-    let encoded = serde_json::to_vec(&SourceIdentity(bindings)).map_err(|error| {
+    let encoded = serde_json::to_vec(&QuickSourceIdentity(bindings)).map_err(|error| {
         crate::error::TexError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             error.to_string(),
@@ -261,6 +268,31 @@ pub(crate) fn quick_composite_source_identity(main_utoc: &Path) -> Result<String
     hasher.update(b"gore-tex.quick-composite-source-identity.v1\0");
     hasher.update(&encoded);
     Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn quick_source_binding_identity(
+    role: String,
+    file: &mut File,
+    identity: FileIdentity,
+) -> Result<QuickSourceBindingIdentity> {
+    let unreliable_content_blake3 = if identity.reliable_change_token {
+        None
+    } else {
+        file.seek(SeekFrom::Start(0))?;
+        let mut content = blake3::Hasher::new();
+        let copied = std::io::copy(file, &mut content)?;
+        if copied != identity.byte_len {
+            return Err(invalid_data(
+                "texture source length changed while checking its identity",
+            ));
+        }
+        Some(content.finalize().to_hex().to_string())
+    };
+    Ok(QuickSourceBindingIdentity {
+        role,
+        file: identity,
+        unreliable_content_blake3,
+    })
 }
 
 fn build_id_for_in_cache_dir(utoc: &Path, usmap: &Path, cache_directory: &Path) -> Result<String> {
@@ -1432,6 +1464,39 @@ mod tests {
 
         std::fs::write(&main_data, b"longer-data-a").unwrap();
         assert_ne!(quick_composite_source_identity(&main).unwrap(), with_hotfix,);
+    }
+
+    #[test]
+    fn quick_identity_hashes_sources_without_reliable_change_tokens() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("source.ucas");
+        let identity = FileIdentity {
+            byte_len: 6,
+            modified_stamp: "unchanged".to_string(),
+            change_stamp: "0".to_string(),
+            reliable_change_token: false,
+            platform_identity: "same-file".to_string(),
+        };
+
+        std::fs::write(&path, b"data-a").unwrap();
+        let first = quick_source_binding_identity(
+            "source.ucas".to_string(),
+            &mut File::open(&path).unwrap(),
+            identity.clone(),
+        )
+        .unwrap();
+        std::fs::write(&path, b"data-b").unwrap();
+        let second = quick_source_binding_identity(
+            "source.ucas".to_string(),
+            &mut File::open(&path).unwrap(),
+            identity,
+        )
+        .unwrap();
+
+        assert_ne!(
+            first.unreliable_content_blake3,
+            second.unreliable_content_blake3
+        );
     }
 
     #[test]

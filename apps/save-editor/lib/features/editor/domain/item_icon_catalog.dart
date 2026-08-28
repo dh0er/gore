@@ -132,8 +132,11 @@ class _ItemIconCatalogRetention {
   int requestSequence = 0;
   String? sourceIdentity;
   String? sourceGamePath;
+  String? requestedGamePath;
   String? pendingSourceIdentity;
+  String? pendingRequestedGamePath;
   String? attemptedSourceIdentity;
+  String? attemptedRequestedGamePath;
   Future<String?>? sourceIdentityRead;
   String? sourceIdentityReadGamePath;
 }
@@ -170,19 +173,31 @@ class ItemIconCatalogRefresh {
     if (_catalogIsLoading()) return;
     final core = _core();
     if (!core.isAvailable) return;
+    final configuredGamePath = _gamePath();
+    final selectionChanged = configuredGamePath != _retention.requestedGamePath;
     final identity = await _readItemIconSourceIdentity(
       core,
-      _retention.sourceGamePath ?? _gamePath(),
+      selectionChanged
+          ? configuredGamePath
+          : _retention.sourceGamePath ?? configuredGamePath,
       _retention,
     );
-    if (identity == null ||
-        identity == _retention.sourceIdentity ||
-        identity == _retention.pendingSourceIdentity ||
-        identity == _retention.attemptedSourceIdentity ||
-        _catalogIsLoading()) {
+    if (identity == null || _catalogIsLoading()) {
+      return;
+    }
+    final pendingMatches =
+        identity == _retention.pendingSourceIdentity &&
+        configuredGamePath == _retention.pendingRequestedGamePath;
+    final attemptedMatches =
+        identity == _retention.attemptedSourceIdentity &&
+        configuredGamePath == _retention.attemptedRequestedGamePath;
+    if ((!selectionChanged && identity == _retention.sourceIdentity) ||
+        pendingMatches ||
+        attemptedMatches) {
       return;
     }
     _retention.pendingSourceIdentity = identity;
+    _retention.pendingRequestedGamePath = configuredGamePath;
     _reload();
   }
 }
@@ -194,10 +209,13 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
   final retention = ref.read(_itemIconCatalogRetentionProvider);
   final requestSequence = ++retention.requestSequence;
   final requestedSourceIdentity = retention.pendingSourceIdentity;
+  final requestedGamePath = retention.pendingRequestedGamePath;
   if (requestedSourceIdentity != null) {
     retention.attemptedSourceIdentity = requestedSourceIdentity;
+    retention.attemptedRequestedGamePath = requestedGamePath;
   }
   retention.pendingSourceIdentity = null;
+  retention.pendingRequestedGamePath = null;
   ItemIconCatalog retainedOrEmpty() =>
       retention.value ?? const ItemIconCatalog.empty();
   final core = ref.watch(itemIconCoreServiceProvider);
@@ -243,7 +261,9 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
           sourceGamePath != null && sourceGamePath.isNotEmpty
           ? sourceGamePath
           : null;
+      retention.requestedGamePath = gamePath;
       retention.attemptedSourceIdentity = null;
+      retention.attemptedRequestedGamePath = null;
     }
     final previousManifestPath = retention.value?.manifestPath;
     retention.value = catalog;
@@ -264,6 +284,7 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
     return catalog;
   } catch (_) {
     retention.pendingSourceIdentity = null;
+    retention.pendingRequestedGamePath = null;
     if (preparedManifestPath != null) {
       await _releaseItemIconCatalog(core, preparedManifestPath);
     }
