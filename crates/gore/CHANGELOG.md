@@ -8,26 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Add the 2026-08-27/28 game generation (Steam BuildID 24878692) to the
-  structural cache/API compatibility registry. Compatible repacks remain
-  qualified by format and ordered Binds API rather than a whole-EXE hash.
-- Update the native compiler diagnostics hook and capture contracts for the
-  new Shipping layout while retaining structured source, line, column,
-  severity, and native compiler messages.
-- Recreate cached string literals through the registered string factory and
-  project the Shipping StaticJIT FINAL/candidate boundary structurally for
-  source-only full graphs. Full-tree comparisons for both supported profiles
-  now have exact structural equality with zero semantic or alignment
-  differences; the parser and bytecode generator remain unchanged.
-- Require both supported compiler profiles and a self-contained full-tree
-  differential receipt per profile in internal-input V2 publication packages.
-  Receipt v2 records one guarded, exactly restored embedded-game run and one
-  strict standalone run over the same frozen graph; an operator-supplied cache
-  can no longer impersonate the reference compiler, and an ambient diagnostics
-  hook development override cannot impersonate the verified release hook. The pinned signed V1
-  package remains usable for local builds only and is rejected by distribution,
-  installer, tag, and push paths until an explicitly authorized final promotion
-  replaces it.
+## [0.2.1] - 2026-08-28
+
+- Add support for Gothic 1 Remake patch 1.0.5.
 
 ## [0.2.0] - 2026-08-27
 
