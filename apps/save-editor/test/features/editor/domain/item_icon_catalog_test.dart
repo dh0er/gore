@@ -108,12 +108,8 @@ void main() {
 
     final catalog = await container.read(itemIconCatalogProvider.future);
 
-    expect(core.commands, [
-      'item_icons_prepare',
-      'item_icons_source_identity',
-    ]);
+    expect(core.commands, ['item_icons_prepare']);
     expect(core.payloads, [
-      {'gamePath': 'D:/Games/Gothic Remake'},
       {'gamePath': 'D:/Games/Gothic Remake'},
     ]);
     expect(catalog.pathFor(itemId: 'ItFo_Apple'), isNotNull);
@@ -193,9 +189,7 @@ void main() {
     expect(second.buildId, 'generation-b');
     expect(core.commands, [
       'item_icons_prepare',
-      'item_icons_source_identity',
       'item_icons_prepare',
-      'item_icons_source_identity',
       'item_icons_release',
     ]);
     expect(core.payloads.last, {'manifestPath': firstManifest.path});
@@ -299,7 +293,8 @@ void main() {
       );
     final core = _SourceChangeItemIconCore(
       manifest.path,
-      ['source-a', 'source-a', 'source-b', 'source-b'],
+      ['source-a', 'source-b'],
+      ['source-a', 'source-b'],
     );
     final container = ProviderContainer(
       overrides: [itemIconCoreServiceProvider.overrideWithValue(core)],
@@ -317,6 +312,85 @@ void main() {
     expect(container.read(itemIconCatalogReloadProvider), 1);
     await container.read(itemIconCatalogProvider.future);
     expect(core.prepares, 2);
+  });
+
+  test(
+    'failed preparation is not retried for every unchanged resume',
+    () async {
+      final root = Directory.systemTemp.createTempSync(
+        'gore_item_icons_failed',
+      );
+      addTearDown(() => root.deleteSync(recursive: true));
+      final manifest = File(p.join(root.path, 'manifest.json'))
+        ..writeAsStringSync(
+          jsonEncode({
+            'schema': 1,
+            'buildId': 'generation-a',
+            'itemCount': 1,
+            'items': {'ItFo_Apple': 'ItFo_Apple.png'},
+          }),
+        );
+      final core = _SourceChangeItemIconCore(
+        manifest.path,
+        ['source-a', 'source-b'],
+        ['source-b', 'source-b'],
+        {1},
+      );
+      final container = ProviderContainer(
+        overrides: [itemIconCoreServiceProvider.overrideWithValue(core)],
+      );
+      addTearDown(container.dispose);
+      final sub = container.listen(itemIconCatalogProvider, (_, _) {});
+      addTearDown(sub.close);
+
+      await container.read(itemIconCatalogProvider.future);
+      final refresh = container.read(itemIconCatalogRefreshProvider);
+      await refresh.refreshIfSourceChanged();
+      await container.read(itemIconCatalogProvider.future);
+      await refresh.refreshIfSourceChanged();
+
+      expect(container.read(itemIconCatalogReloadProvider), 1);
+      expect(core.prepares, 2);
+    },
+  );
+
+  test('overlapping source checks coalesce one cache reload', () async {
+    final root = Directory.systemTemp.createTempSync(
+      'gore_item_icons_coalesce',
+    );
+    addTearDown(() => root.deleteSync(recursive: true));
+    final manifest = File(p.join(root.path, 'manifest.json'))
+      ..writeAsStringSync(
+        jsonEncode({
+          'schema': 1,
+          'buildId': 'generation-a',
+          'itemCount': 1,
+          'items': {'ItFo_Apple': 'ItFo_Apple.png'},
+        }),
+      );
+    final core = _SourceChangeItemIconCore(
+      manifest.path,
+      ['source-a', 'source-b'],
+      ['source-b'],
+    );
+    final container = ProviderContainer(
+      overrides: [itemIconCoreServiceProvider.overrideWithValue(core)],
+    );
+    addTearDown(container.dispose);
+    final sub = container.listen(itemIconCatalogProvider, (_, _) {});
+    addTearDown(sub.close);
+
+    await container.read(itemIconCatalogProvider.future);
+    final refresh = container.read(itemIconCatalogRefreshProvider);
+    await Future.wait([
+      refresh.refreshIfSourceChanged(),
+      refresh.refreshIfSourceChanged(),
+    ]);
+    await container.read(itemIconCatalogProvider.future);
+
+    expect(container.read(itemIconCatalogReloadProvider), 1);
+    expect(core.prepares, 2);
+    expect(core.identityReads, 1);
   });
 }
 
@@ -348,7 +422,7 @@ class _ItemIconCore implements GoresaveCoreService {
     }
     return {
       'ok': true,
-      'data': {'manifestPath': manifestPath},
+      'data': {'manifestPath': manifestPath, 'sourceIdentity': 'source-a'},
     };
   }
 }
@@ -381,7 +455,7 @@ class _ReloadItemIconCore implements GoresaveCoreService {
     if (calls == 1) {
       return Future.value({
         'ok': true,
-        'data': {'manifestPath': manifestPath},
+        'data': {'manifestPath': manifestPath, 'sourceIdentity': 'source-a'},
       });
     }
     return secondResponse.future;
@@ -412,13 +486,16 @@ class _ReplacingItemIconCore implements GoresaveCoreService {
     if (command == 'item_icons_prepare') {
       return {
         'ok': true,
-        'data': {'manifestPath': manifestPaths[prepares++]},
+        'data': {
+          'manifestPath': manifestPaths[prepares++],
+          'sourceIdentity': 'source-a',
+        },
       };
     }
     if (command == 'item_icons_source_identity') {
       return {
         'ok': true,
-        'data': {'sourceIdentity': 'source-$prepares'},
+        'data': {'sourceIdentity': 'source-a'},
       };
     }
     return {
@@ -461,10 +538,17 @@ class _OverlappingItemIconCore implements GoresaveCoreService {
 }
 
 class _SourceChangeItemIconCore implements GoresaveCoreService {
-  _SourceChangeItemIconCore(this.manifestPath, this.identities);
+  _SourceChangeItemIconCore(
+    this.manifestPath,
+    this.prepareIdentities,
+    this.identities, [
+    this.failPrepareIndices = const {},
+  ]);
 
   final String manifestPath;
+  final List<String> prepareIdentities;
   final List<String> identities;
+  final Set<int> failPrepareIndices;
   int prepares = 0;
   int identityReads = 0;
 
@@ -480,10 +564,20 @@ class _SourceChangeItemIconCore implements GoresaveCoreService {
     Map<String, Object?> payload = const {},
   }) async {
     if (command == 'item_icons_prepare') {
-      prepares++;
+      final prepareIndex = prepares++;
+      if (failPrepareIndices.contains(prepareIndex)) {
+        return {
+          'ok': false,
+          'error': {'message': 'transient native failure'},
+        };
+      }
+      final sourceIdentity = prepareIdentities[prepareIndex];
       return {
         'ok': true,
-        'data': {'manifestPath': manifestPath},
+        'data': {
+          'manifestPath': manifestPath,
+          'sourceIdentity': sourceIdentity,
+        },
       };
     }
     if (command == 'item_icons_source_identity') {

@@ -92,6 +92,52 @@ pub fn prepare_item_icon_cache(game_root: &Path, items: &[ItemIconSpec]) -> Resu
     prepare_item_icon_cache_with_source_and_lease(&cache_root, items, &mut source, true)
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedItemIconCache {
+    pub manifest_path: PathBuf,
+    pub source_identity: String,
+}
+
+/// Prepare a catalog and bind it to one stable metadata generation. The full
+/// preparation already verifies source bytes before publication; matching
+/// strong file identities on both sides closes the gap to later resume checks.
+pub fn prepare_item_icon_cache_with_identity(
+    game_root: &Path,
+    items: &[ItemIconSpec],
+) -> Result<PreparedItemIconCache> {
+    prepare_item_icon_cache_with_identity_using(
+        || item_icon_source_identity(game_root),
+        || prepare_item_icon_cache(game_root, items),
+    )
+}
+
+fn prepare_item_icon_cache_with_identity_using<Identity, Prepare>(
+    mut identity: Identity,
+    prepare: Prepare,
+) -> Result<PreparedItemIconCache>
+where
+    Identity: FnMut() -> Result<String>,
+    Prepare: FnOnce() -> Result<PathBuf>,
+{
+    let source_identity_before = identity()?;
+    let manifest_path = prepare()?;
+    let source_identity_after = match identity() {
+        Ok(identity) => identity,
+        Err(error) => {
+            let _ = release_item_icon_cache(&manifest_path);
+            return Err(error);
+        }
+    };
+    if source_identity_before != source_identity_after {
+        let _ = release_item_icon_cache(&manifest_path);
+        return Err(TexError::GenerationChanged);
+    }
+    Ok(PreparedItemIconCache {
+        manifest_path,
+        source_identity: source_identity_before,
+    })
+}
+
 /// Metadata-only identity used by Save Editor to decide whether a later resume
 /// needs the expensive, byte-verifying cache preparation again.
 pub fn item_icon_source_identity(game_root: &Path) -> Result<String> {
@@ -1971,6 +2017,27 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         assert!(release_item_icon_cache(&temp.path().join("image.png")).is_err());
         assert!(!release_item_icon_cache(&temp.path().join(MANIFEST_FILE_NAME)).unwrap());
+    }
+
+    #[test]
+    fn prepared_catalog_identity_must_stay_stable_across_preparation() {
+        let temp = tempfile::tempdir().unwrap();
+        let manifest = temp.path().join(MANIFEST_FILE_NAME);
+        let mut identities = ["source-a", "source-b"].into_iter();
+        let error = prepare_item_icon_cache_with_identity_using(
+            || Ok(identities.next().unwrap().to_string()),
+            || Ok(manifest.clone()),
+        )
+        .unwrap_err();
+        assert!(matches!(error, TexError::GenerationChanged));
+
+        let prepared = prepare_item_icon_cache_with_identity_using(
+            || Ok("source-b".to_string()),
+            || Ok(manifest.clone()),
+        )
+        .unwrap();
+        assert_eq!(prepared.manifest_path, manifest);
+        assert_eq!(prepared.source_identity, "source-b");
     }
 
     #[test]

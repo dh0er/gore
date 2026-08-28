@@ -132,6 +132,7 @@ class _ItemIconCatalogRetention {
   int requestSequence = 0;
   String? sourceIdentity;
   String? pendingSourceIdentity;
+  String? attemptedSourceIdentity;
   Future<String?>? sourceIdentityRead;
   String? sourceIdentityReadGamePath;
 }
@@ -175,7 +176,9 @@ class ItemIconCatalogRefresh {
     );
     if (identity == null ||
         identity == _retention.sourceIdentity ||
-        identity == _retention.pendingSourceIdentity) {
+        identity == _retention.pendingSourceIdentity ||
+        identity == _retention.attemptedSourceIdentity ||
+        _catalogIsLoading()) {
       return;
     }
     _retention.pendingSourceIdentity = identity;
@@ -189,6 +192,10 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
   ref.watch(itemIconCatalogReloadProvider);
   final retention = ref.read(_itemIconCatalogRetentionProvider);
   final requestSequence = ++retention.requestSequence;
+  final requestedSourceIdentity = retention.pendingSourceIdentity;
+  if (requestedSourceIdentity != null) {
+    retention.attemptedSourceIdentity = requestedSourceIdentity;
+  }
   retention.pendingSourceIdentity = null;
   ItemIconCatalog retainedOrEmpty() =>
       retention.value ?? const ItemIconCatalog.empty();
@@ -205,6 +212,7 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
     if (response['ok'] != true) return retainedOrEmpty();
     final data = (response['data'] as Map?)?.cast<String, Object?>();
     final manifestPath = data?['manifestPath'] as String?;
+    final sourceIdentity = data?['sourceIdentity'] as String?;
     if (manifestPath == null || manifestPath.isEmpty) {
       return retainedOrEmpty();
     }
@@ -223,20 +231,17 @@ final itemIconCatalogProvider = FutureProvider<ItemIconCatalog>((ref) async {
       manifestPath: manifestPath,
       json: await file.readAsString(),
     );
-    final sourceIdentity = await _readItemIconSourceIdentity(
-      core,
-      gamePath,
-      retention,
-    );
     if (requestSequence != retention.requestSequence) {
       await _releaseItemIconCatalog(core, catalog.manifestPath);
       return retainedOrEmpty();
     }
-    if (sourceIdentity != null) retention.sourceIdentity = sourceIdentity;
+    if (sourceIdentity != null && sourceIdentity.isNotEmpty) {
+      retention.sourceIdentity = sourceIdentity;
+      retention.attemptedSourceIdentity = null;
+    }
     final previousManifestPath = retention.value?.manifestPath;
     retention.value = catalog;
-    if (previousManifestPath != null &&
-        previousManifestPath.isNotEmpty) {
+    if (previousManifestPath != null && previousManifestPath.isNotEmpty) {
       // Publish the new catalog first. Widgets can still paint the retained
       // AsyncData for the rest of this event turn, so release its native lease
       // on the next turn rather than opening a deletion race with that paint.

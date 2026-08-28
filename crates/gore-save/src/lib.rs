@@ -8757,14 +8757,20 @@ struct ItemIconCatalogEntry {
 }
 
 fn item_icons_prepare(payload: &Value) -> Result<Value, CoreError> {
-    item_icons_prepare_with(
+    let mut source_identity = None;
+    let mut response = item_icons_prepare_with(
         payload,
         ITEM_CATALOG_JSON,
         |explicit| {
             gore_loc::config::game_root(explicit)
                 .map_err(|error| CoreError::InvalidRequest(error.to_string()))
         },
-        |game_root, items| gore_tex::item_icons::prepare_item_icon_cache(game_root, items),
+        |game_root, items| {
+            let prepared =
+                gore_tex::item_icons::prepare_item_icon_cache_with_identity(game_root, items)?;
+            source_identity = Some(prepared.source_identity);
+            Ok(prepared.manifest_path)
+        },
         || {
             if gore_loc::config::autodetect_disabled() {
                 None
@@ -8772,7 +8778,15 @@ fn item_icons_prepare(payload: &Value) -> Result<Value, CoreError> {
                 gore_loc::discover::find_game_root()
             }
         },
-    )
+    )?;
+    let source_identity = source_identity.ok_or_else(|| {
+        CoreError::Io("item icon preparation returned no source identity".to_string())
+    })?;
+    response
+        .as_object_mut()
+        .expect("item icon prepare helper returns an object")
+        .insert("sourceIdentity".to_string(), json!(source_identity));
+    Ok(response)
 }
 
 fn item_icons_source_identity(payload: &Value) -> Result<Value, CoreError> {
