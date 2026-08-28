@@ -1507,7 +1507,7 @@ fn emit_function_ctor(
     // A function that returns by REFERENCE keeps its named local: the name is what makes the
     // returned thing outlive the expression (same condition as `ref_ret` below).
     let returns_by_reference = f.ret.is_reference && f.ret.token == 5 && !f.ret.is_object_handle;
-    let body = fold_condition_temporaries(&body, &declared_locals, refs, fields, &spilled_boolean_names(f, refs));
+    let body = fold_condition_temporaries(&body, &declared_locals, refs, fields, &spilled_boolean_names(f, refs), false);
     let body = fold_alias_copies(&body, &declared_locals);
     let body = fold_copy_out_temporaries(&body, &declared_locals, &const_result_slots, fields);
     let body = fold_cast_operands(&body, &declared_locals, &call_result_types);
@@ -2037,7 +2037,7 @@ fn emit_function_ctor(
         // The rest of the fold chain, for the same reason as the passes above it: each of these
         // asks about a declaration, and until the hoist has been joined back on there is nothing
         // for them to ask about.
-        let rendered = fold_condition_temporaries(&rendered, &declared_locals, refs, fields, &spilled_boolean_names(f, refs));
+        let rendered = fold_condition_temporaries(&rendered, &declared_locals, refs, fields, &spilled_boolean_names(f, refs), false);
         let rendered = fold_alias_copies(&rendered, &declared_locals);
         let rendered = fold_assignment_receivers(&rendered, &immediately_consumed_defs(f));
         let rendered =
@@ -2105,6 +2105,13 @@ fn emit_function_ctor(
         // folds above can delete the statement that stood between the two.
         let rendered = drop_int_inside_enum_cast(&rendered);
         let rendered = drop_block_end_handle_releases(&rendered);
+        let rendered = rejoin_logical_carriers(
+            &rendered,
+            &declared_locals,
+            refs,
+            fields,
+            &spilled_boolean_names(f, refs),
+        );
         s.truncate(declarations_at);
         s.push_str(&rendered);
     } else {
@@ -7254,6 +7261,7 @@ fn fold_condition_temporaries(
     refs: &RefResolver,
     fields: Option<&HashMap<String, String>>,
     spilled: &HashSet<i32>,
+    logical_only: bool,
 ) -> String {
     // A field of the class carries its type in the class's own map, which `renders_a_bool` does
     // not read.
@@ -7270,6 +7278,9 @@ fn fold_condition_temporaries(
     while at < lines.len() {
         let folded = (|| {
             let (name, value) = slot_store(lines[at])?;
+            if logical_only && top_level_logical_operator(&value).is_none() {
+                return None;
+            }
             // A call result the source spent a `bool` on keeps its name: folding it into the
             // condition takes away the store and the reload, which is what said the name was
             // there.
@@ -9835,6 +9846,108 @@ fn rejoin_short_circuit_chains(body: &str) -> String {
 
 /// True when the expression's outermost brackets enclose ALL of it — `(a || b)` yes, `(a) || (b)`
 /// no. A fold that drops an expression into a larger one has to know the difference.
+/// The operator of an expression's OWN outermost run — the one a splice would land beside.
+/// Bracketed and quoted content belongs to another node and is skipped.
+fn top_level_logical_operator(value: &str) -> Option<&'static str> {
+    let bytes = value.as_bytes();
+    let (mut depth, mut at, mut in_string) = (0i32, 0usize, false);
+    let mut found = None;
+    while at < bytes.len() {
+        if in_string {
+            match bytes[at] {
+                b'\\' => at += 1,
+                b'"' => in_string = false,
+                _ => {}
+            }
+            at += 1;
+            continue;
+        }
+        match bytes[at] {
+            b'"' => in_string = true,
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth -= 1,
+            _ if depth == 0 && bytes[at..].starts_with(b" && ") => {
+                found = Some("&&");
+                at += 3;
+            }
+            _ if depth == 0 && bytes[at..].starts_with(b" || ") => {
+                found = Some("||");
+                at += 3;
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    found
+}
+
+/// One more pass of the two folds that put a `&&`/`||` chain back into its reader.
+///
+/// Both already match on the finished text of bodies they never get to see: when they run, the
+/// OUTER chain is still an if/else over a slot, `fold_short_circuits` only turns it into a store
+/// further down, and the pass that collapses `X = c; return X;` runs after that. The fold chain is
+/// a fixed sequence, not a fixpoint, so neither pass is ever asked again.
+///
+/// The condition fold is restricted here to a value carrying a TOP-LEVEL `&&`/`||`. That shape
+/// occurs in none of the 54,366 byte-faithful bodies and in 109 slots of the divergent ones.
+/// Without the restriction the late pass also takes `bool X; X = <call>; if (X)`, which vanilla
+/// wrote WITH the name — four byte-faithful bodies say so. `rejoin` needs no such guard: its own
+/// gate already requires the consumer to continue the chain.
+fn rejoin_logical_carriers(
+    body: &str,
+    locals: &BTreeMap<i32, String>,
+    refs: &RefResolver,
+    fields: Option<&HashMap<String, String>>,
+    spilled: &HashSet<i32>,
+) -> String {
+    let carriers: HashSet<String> = body
+        .lines()
+        .filter_map(|line| slot_store(line))
+        .filter(|(_, value)| top_level_logical_operator(value).is_some())
+        .map(|(name, _)| name)
+        .collect();
+    if carriers.is_empty() {
+        return body.to_owned();
+    }
+    let mut text = body.to_owned();
+    for _ in 0..4 {
+        let folded = fold_condition_temporaries(
+            &rejoin_short_circuit_chains(&text),
+            locals,
+            refs,
+            fields,
+            spilled,
+            true,
+        );
+        if folded == text {
+            break;
+        }
+        text = folded;
+    }
+    // Only a declaration this block itself emptied: a declaration with no reader still reserves
+    // its slot, and vanilla has some that were already dead.
+    let lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let kept: Vec<&String> = lines
+        .iter()
+        .filter(|line| {
+            let Some((_, name)) = bare_declaration(line) else {
+                return true;
+            };
+            !(carriers.contains(&name)
+                && lines.iter().map(|l| count_ident(l, &name)).sum::<usize>() == 1)
+        })
+        .collect();
+    let mut out = kept
+        .into_iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 fn wraps_whole_expression(expr: &str) -> bool {
     if !expr.starts_with('(') || !expr.ends_with(')') {
         return false;

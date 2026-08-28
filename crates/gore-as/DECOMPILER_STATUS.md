@@ -37,7 +37,7 @@ tree stops compiling (1,474 `bool` to `E*&` errors) — a property of the run, n
 
 ## What is left
 
-**1,419 functions (0.86%) recompile to bytecode that differs semantically.** A semantic
+**1,412 functions (0.86%) recompile to bytecode that differs semantically.** A semantic
 difference means *not proven identical*, not *proven wrong*: the whole-tree compile proves the
 source type-checks, and `bytediff` normalizes away reference keys, jump absolutes, constant
 encodings and (opt-in) slot allocation before judging the rest.
@@ -756,6 +756,22 @@ And the narrowing has to reach BOTH type maps. Landing it only in the structurer
 receiver wrap away while the declaration stayed at the base, and the whole tree stopped compiling
 with `No matching signatures to 'UObject::GetRelationship()'` — the same two-map mistake the cast
 narrowing made before it. 1,431 to 1,419, twelve fixed and none broken.
+
+**A chain the emitter computed into a carrier of its own belongs in its reader — and the two
+passes that put it there were never asked twice.** The fold chain is a fixed sequence, not a
+fixpoint, and for a whole class of bodies the shape those passes match on does not exist yet when
+they run: the outer chain is still an if/else over a slot, the store appears further down, and the
+pass that collapses `X = c; return X;` runs after that. One more pass over the finished text is
+the whole repair.
+
+The condition fold is restricted there to a value carrying a TOP-LEVEL `&&`/`||`. That shape
+occurs in none of the 54,366 byte-faithful bodies and in 109 slots of the divergent ones; without
+the restriction the late pass also takes `bool X; X = <call>; if (X)`, which vanilla wrote WITH
+the name — four byte-faithful bodies say so, and read-count does not separate them. The bracketing
+needed no change: both passes already wrap unless ONE pair spans the whole value, and the carrier
+is always the leftmost operand of the run that reads it, so the wrap costs no bytes.
+
+1,419 to 1,412, seven fixed and none broken.
 
 Cutting across them, 6 are `__InitDefaults` — down from 37, because the language CAN spell
 infinity after all: an overflowing decimal literal (`1e39f`) parses and rounds to the bit pattern
