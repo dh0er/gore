@@ -2059,6 +2059,11 @@ class _FakeCoreService implements GoresaveCoreService {
             'deletedPersistentSha1': 'deleted-persistent-sha',
           },
         };
+      case 'dismiss_deleted_save_recovery':
+        return {
+          'ok': true,
+          'data': {'dismissed': true},
+        };
       case 'search_typed_properties':
         if (payload['query'] == 'GameTime' && gameTimeTotalSeconds != null) {
           return {

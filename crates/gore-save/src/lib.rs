@@ -460,6 +460,7 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 "saves": summary.saves,
                 "profiles": summary.profiles,
                 "activeProfileId": summary.active_profile_id,
+                "deletedSaveRecovery": discover_deleted_save_recovery(&path)?,
             }))
         }
         // Make this save the one the decoded-payload and parsed-root caches
@@ -632,6 +633,11 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 expected_save_sha1,
                 expected_persistent_backup_sha1,
             )?)
+        }
+        "dismiss_deleted_save_recovery" => {
+            let path = required_path(&payload)?;
+            let backup_path = required_backup_path(&payload)?;
+            Ok(dismiss_deleted_save_recovery(&path, &backup_path)?)
         }
         "delete_backup" => {
             let path = required_path(&payload)?;
@@ -2319,7 +2325,7 @@ fn restore_deleted_save(
             "payload.path does not name a valid save slot: {file_name}"
         )));
     }
-    restore_backup_with_mode(
+    let mut restored = restore_backup_with_mode(
         path,
         backup_path,
         true,
@@ -2327,7 +2333,23 @@ fn restore_deleted_save(
         Some(expected_save_sha1),
         Some(expected_persistent_backup_sha1),
         |_| Ok(()),
-    )
+    )?;
+    let manifest_path = deleted_save_recovery_manifest_path(backup_path)?;
+    let manifest_warning = match fs::remove_file(&manifest_path) {
+        Ok(()) => None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => Some(format!(
+            "restored the save, but could not clear recovery manifest {}: {error}",
+            manifest_path.display()
+        )),
+    };
+    if let Some(object) = restored.as_object_mut() {
+        object.insert(
+            "recoveryManifestWarning".to_string(),
+            manifest_warning.map_or(Value::Null, Value::String),
+        );
+    }
+    Ok(restored)
 }
 
 fn restore_backup_with_before_replace<F>(
@@ -3282,6 +3304,246 @@ fn reserve_backup_file(path: &Path, suffix: &str) -> std::io::Result<(PathBuf, F
 fn write_reserved_backup(mut file: File, bytes: &[u8]) -> std::io::Result<()> {
     file.write_all(bytes)?;
     file.sync_all()
+}
+
+const DELETED_SAVE_RECOVERY_MANIFEST_VERSION: u32 = 1;
+const DELETED_SAVE_RECOVERY_MANIFEST_PREFIX: &str = ".delete-recovery.";
+const DELETED_SAVE_RECOVERY_MANIFEST_SUFFIX: &str = ".json";
+const MAX_DELETED_SAVE_RECOVERY_MANIFEST_BYTES: u64 = 64 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeletedSaveRecoveryManifest {
+    version: u32,
+    created_epoch: u64,
+    target_path: PathBuf,
+    backup_path: PathBuf,
+    persistent_path: PathBuf,
+    persistent_backup_path: PathBuf,
+    persistent_post_delete_sha1: String,
+    deleted_save_sha1: String,
+    deleted_persistent_sha1: String,
+}
+
+fn deleted_save_recovery_manifest_path(backup_path: &Path) -> Result<PathBuf, CoreError> {
+    let file_name = backup_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| CoreError::InvalidRequest("backup path has no file name".to_string()))?;
+    let parent = backup_path
+        .parent()
+        .ok_or_else(|| CoreError::InvalidRequest("backup path has no parent".to_string()))?;
+    Ok(parent.join(format!(
+        "{DELETED_SAVE_RECOVERY_MANIFEST_PREFIX}{file_name}{DELETED_SAVE_RECOVERY_MANIFEST_SUFFIX}"
+    )))
+}
+
+struct DeleteRecoveryManifestGuard {
+    path: PathBuf,
+    keep: bool,
+}
+
+impl DeleteRecoveryManifestGuard {
+    fn publish(manifest: &DeletedSaveRecoveryManifest) -> Result<Self, CoreError> {
+        let path = deleted_save_recovery_manifest_path(&manifest.backup_path)?;
+        let bytes = serde_json::to_vec_pretty(manifest).map_err(|error| {
+            CoreError::Parse(format!("cannot encode deleted-save recovery: {error}"))
+        })?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        Ok(Self { path, keep: false })
+    }
+
+    fn keep(&mut self) {
+        self.keep = true;
+    }
+}
+
+impl Drop for DeleteRecoveryManifestGuard {
+    fn drop(&mut self) {
+        if !self.keep {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn read_deleted_save_recovery_manifest(
+    path: &Path,
+) -> Result<DeletedSaveRecoveryManifest, CoreError> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(CoreError::Validation(format!(
+            "{} is not a regular recovery manifest",
+            path.display()
+        )));
+    }
+    if metadata.len() > MAX_DELETED_SAVE_RECOVERY_MANIFEST_BYTES {
+        return Err(CoreError::Validation(format!(
+            "{} exceeds the recovery manifest size limit",
+            path.display()
+        )));
+    }
+    let manifest: DeletedSaveRecoveryManifest =
+        serde_json::from_slice(&fs::read(path)?).map_err(|error| {
+            CoreError::Parse(format!(
+                "{} is not readable deleted-save recovery JSON: {error}",
+                path.display()
+            ))
+        })?;
+    if manifest.version != DELETED_SAVE_RECOVERY_MANIFEST_VERSION {
+        return Err(CoreError::Validation(format!(
+            "{} uses unsupported recovery manifest version {}",
+            path.display(),
+            manifest.version
+        )));
+    }
+    Ok(manifest)
+}
+
+fn validate_discovered_deleted_save_recovery(
+    save_root: &Path,
+    manifest_path: &Path,
+    manifest: &DeletedSaveRecoveryManifest,
+) -> Result<(), CoreError> {
+    if deleted_save_recovery_manifest_path(&manifest.backup_path)? != manifest_path {
+        return Err(CoreError::Validation(
+            "recovery manifest name does not match its slot backup".to_string(),
+        ));
+    }
+    ensure_backup_belongs_to_save(&manifest.target_path, &manifest.backup_path)?;
+    if manifest.target_path.exists() {
+        return Err(CoreError::Validation(
+            "recovery target already exists".to_string(),
+        ));
+    }
+    let canonical_root = fs::canonicalize(save_root)?;
+    let target_parent = manifest
+        .target_path
+        .parent()
+        .ok_or_else(|| CoreError::Validation("recovery target has no parent".to_string()))?;
+    if fs::canonicalize(target_parent)? != canonical_root {
+        return Err(CoreError::Validation(
+            "recovery target is outside the scanned save folder".to_string(),
+        ));
+    }
+    let expected_persistent = canonical_root.join("PersistentDataList.sav");
+    if fs::canonicalize(&manifest.persistent_path)? != fs::canonicalize(&expected_persistent)? {
+        return Err(CoreError::Validation(
+            "recovery profile is outside the scanned save folder".to_string(),
+        ));
+    }
+    let slot_prefix = backup_file_prefix(&manifest.target_path)?;
+    let slot_backup_name = manifest
+        .backup_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| CoreError::Validation("recovery slot backup has no name".to_string()))?;
+    let suffix = slot_backup_name.strip_prefix(&slot_prefix).ok_or_else(|| {
+        CoreError::Validation("recovery slot backup has the wrong prefix".to_string())
+    })?;
+    let expected_persistent_backup = manifest
+        .backup_path
+        .parent()
+        .ok_or_else(|| CoreError::Validation("recovery slot backup has no parent".to_string()))?
+        .join(format!(
+            "{}{suffix}",
+            backup_file_prefix(&expected_persistent)?
+        ));
+    if manifest.persistent_backup_path != expected_persistent_backup {
+        return Err(CoreError::Validation(
+            "recovery profile backup is not paired with its slot backup".to_string(),
+        ));
+    }
+    let canonical_backup_dir = fs::canonicalize(canonical_root.join("goresave_backups"))?;
+    for backup in [&manifest.backup_path, &manifest.persistent_backup_path] {
+        let metadata = fs::symlink_metadata(backup)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(CoreError::Validation(
+                "recovery backup is not a regular file".to_string(),
+            ));
+        }
+        let parent = backup
+            .parent()
+            .ok_or_else(|| CoreError::Validation("recovery backup has no parent".to_string()))?;
+        if fs::canonicalize(parent)? != canonical_backup_dir {
+            return Err(CoreError::Validation(
+                "recovery backup is outside goresave_backups".to_string(),
+            ));
+        }
+    }
+    if sha1_hex(&fs::read(&manifest.persistent_path)?) != manifest.persistent_post_delete_sha1 {
+        return Err(CoreError::Validation(
+            "the live profile changed after deletion".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn discover_deleted_save_recovery(save_root: &Path) -> Result<Option<Value>, CoreError> {
+    let backup_dir = save_root.join("goresave_backups");
+    let entries = match fs::read_dir(&backup_dir) {
+        Ok(entries) => entries,
+        // Recovery is optional scan enrichment. An inaccessible backup folder
+        // must not hide otherwise readable saves or profiles.
+        Err(_) => return Ok(None),
+    };
+    let mut newest: Option<(u64, String, DeletedSaveRecoveryManifest)> = None;
+    for entry in entries.flatten() {
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if !file_name.starts_with(DELETED_SAVE_RECOVERY_MANIFEST_PREFIX)
+            || !file_name.ends_with(DELETED_SAVE_RECOVERY_MANIFEST_SUFFIX)
+        {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(manifest) = read_deleted_save_recovery_manifest(&path) else {
+            continue;
+        };
+        if validate_discovered_deleted_save_recovery(save_root, &path, &manifest).is_err() {
+            continue;
+        }
+        let candidate = (manifest.created_epoch, file_name, manifest);
+        if newest
+            .as_ref()
+            .is_none_or(|current| (candidate.0, &candidate.1) > (current.0, &current.1))
+        {
+            newest = Some(candidate);
+        }
+    }
+    newest
+        .map(|(_, _, manifest)| {
+            serde_json::to_value(manifest).map_err(|error| {
+                CoreError::Parse(format!("cannot encode deleted-save recovery: {error}"))
+            })
+        })
+        .transpose()
+}
+
+fn dismiss_deleted_save_recovery(
+    target_path: &Path,
+    backup_path: &Path,
+) -> Result<Value, CoreError> {
+    ensure_backup_belongs_to_save(target_path, backup_path)?;
+    let manifest_path = deleted_save_recovery_manifest_path(backup_path)?;
+    match fs::symlink_metadata(&manifest_path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(json!({ "dismissed": false }));
+        }
+        Err(error) => return Err(error.into()),
+    }
+    let manifest = read_deleted_save_recovery_manifest(&manifest_path)?;
+    if manifest.target_path != target_path || manifest.backup_path != backup_path {
+        return Err(CoreError::InvalidRequest(
+            "recovery manifest does not belong to this deleted save".to_string(),
+        ));
+    }
+    fs::remove_file(&manifest_path)?;
+    Ok(json!({ "dismissed": true }))
 }
 
 fn backup_suffix(timestamp: u64, attempt: u32) -> String {
@@ -5109,6 +5371,31 @@ where
         ))
     })?;
 
+    // Publish the recovery authority before the first live-path mutation. The
+    // guard removes it on every ordinary error return; a process or machine
+    // exit skips Drop and leaves the fully synced manifest discoverable on the
+    // next scan. Backups already exist and are synced at this point.
+    let mut recovery_manifest = match (&backup_path, &persistent_backup_path) {
+        (Some(backup_path), Some(persistent_backup_path)) => {
+            let manifest = DeletedSaveRecoveryManifest {
+                version: DELETED_SAVE_RECOVERY_MANIFEST_VERSION,
+                created_epoch: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                target_path: save_path.to_path_buf(),
+                backup_path: backup_path.clone(),
+                persistent_path: persistent_path.to_path_buf(),
+                persistent_backup_path: persistent_backup_path.clone(),
+                persistent_post_delete_sha1: sha1_hex(&persistent_edited),
+                deleted_save_sha1: sha1_hex(&save_original),
+                deleted_persistent_sha1: sha1_hex(&persistent_original),
+            };
+            Some(DeleteRecoveryManifestGuard::publish(&manifest)?)
+        }
+        _ => None,
+    };
+
     let save_claim = claim_existing_target(save_path, "delete").map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             CoreError::Update(format!(
@@ -5252,6 +5539,9 @@ where
     }
     persistent_pending.commit();
     invalidate_decoded_payload_cache(save_path);
+    if let Some(manifest) = &mut recovery_manifest {
+        manifest.keep();
+    }
 
     let placement_note_warning = placement::forget_live(save_path)
         .err()
@@ -17035,6 +17325,11 @@ mod tests {
 
         let deleted = delete_save(&save_path, &persistent_path, slot, 0, true).unwrap();
         let backup_path = PathBuf::from(deleted["backupPath"].as_str().unwrap());
+        let discovered = discover_deleted_save_recovery(dir.path())
+            .unwrap()
+            .expect("delete must publish a discoverable recovery manifest");
+        assert_eq!(discovered["targetPath"], save_path.display().to_string());
+        assert_eq!(discovered["backupPath"], backup_path.display().to_string());
         restore_deleted_save(
             &save_path,
             &backup_path,
@@ -17045,6 +17340,48 @@ mod tests {
         .unwrap();
 
         assert_eq!(fs::read(&save_path).unwrap(), malformed_original);
+        assert!(
+            discover_deleted_save_recovery(dir.path())
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn dismissed_deleted_save_recovery_keeps_its_backups() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-006";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        fs::write(
+            &save_path,
+            build_gsav(
+                2,
+                &public_payload_with_profile("Dismiss", 0),
+                &minimal_stream(),
+                &[0, 0, 0, 0],
+            ),
+        )
+        .unwrap();
+        fs::write(&persistent_path, assignment_persistent_data_list(slot, 0)).unwrap();
+
+        let deleted = delete_save(&save_path, &persistent_path, slot, 0, true).unwrap();
+        let backup_path = PathBuf::from(deleted["backupPath"].as_str().unwrap());
+        let persistent_backup_path =
+            PathBuf::from(deleted["persistentBackupPath"].as_str().unwrap());
+        assert_eq!(
+            dismiss_deleted_save_recovery(&save_path, &backup_path).unwrap()["dismissed"],
+            true
+        );
+
+        assert!(
+            discover_deleted_save_recovery(dir.path())
+                .unwrap()
+                .is_none()
+        );
+        assert!(backup_path.exists());
+        assert!(persistent_backup_path.exists());
+        assert!(!save_path.exists());
     }
 
     #[test]
@@ -17093,6 +17430,11 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(backup_bytes.contains(&save_original));
         assert!(backup_bytes.contains(&persistent_original));
+        assert!(
+            discover_deleted_save_recovery(dir.path())
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -17134,6 +17476,11 @@ mod tests {
         assert!(matches!(error, CoreError::Update(_)));
         assert_eq!(fs::read(&save_path).unwrap(), save_newer);
         assert_eq!(fs::read(&persistent_path).unwrap(), persistent_original);
+        assert!(
+            discover_deleted_save_recovery(dir.path())
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

@@ -121,6 +121,16 @@ bool _sameSavePathList(List<String> a, List<String> b) {
   return true;
 }
 
+bool _sameDeletedSaveRecovery(DeletedSaveRecovery? a, DeletedSaveRecovery? b) {
+  if (identical(a, b)) return true;
+  if (a == null || b == null) return false;
+  return _sameSavePath(a.targetPath, b.targetPath) &&
+      _sameSavePath(a.backupPath, b.backupPath) &&
+      a.persistentPostDeleteSha1 == b.persistentPostDeleteSha1 &&
+      a.deletedSaveSha1 == b.deletedSaveSha1 &&
+      a.deletedPersistentSha1 == b.deletedPersistentSha1;
+}
+
 class EditorState {
   EditorState({
     required this.saveDir,
@@ -976,11 +986,26 @@ class EditorNotifier extends StateNotifier<EditorState> {
   }
 
   /// Dismiss the one-click recovery for the most recently deleted save.
-  void dismissDeletedSaveRecovery() {
-    if (state.deletedSaveRecovery != null) {
+  Future<void> dismissDeletedSaveRecovery() async {
+    final recovery = state.deletedSaveRecovery;
+    if (recovery == null) return;
+    await _withLoading(() async {
+      final response = await _execute(
+        'dismiss_deleted_save_recovery',
+        payload: {
+          'path': recovery.targetPath,
+          'backupPath': recovery.backupPath,
+        },
+      );
+      if (response['ok'] != true) {
+        state = state.copyWith(
+          error: _l10n.editorUnexpectedError(_errorDetails(response)),
+        );
+        return;
+      }
       state = state.copyWith(clearDeletedSaveRecovery: true);
       _persistSettings();
-    }
+    }, failureMessage: _l10n.editorUnexpectedError);
   }
 
   /// Switch the active profile filter. Pass null to clear the explicit
@@ -2184,10 +2209,19 @@ class EditorNotifier extends StateNotifier<EditorState> {
       if (seq != _loadSeq) return;
       String? scanError;
       Map<String, Object?>? data;
+      DeletedSaveRecovery? discoveredDeletedSaveRecovery;
       late final List<ProfileSummary> profiles;
       late final List<SaveSlot> saves;
       if (response['ok'] == true) {
         data = (response['data'] as Map?)?.cast<String, Object?>();
+        final rawRecovery = data?['deletedSaveRecovery'];
+        if (rawRecovery is Map) {
+          final recoveryData = rawRecovery.cast<String, Object?>();
+          discoveredDeletedSaveRecovery = DeletedSaveRecovery.tryFromJson({
+            ...recoveryData,
+            'message': _backupMessage(_l10n.editorSaveDeleted, recoveryData),
+          });
+        }
         final rawProfiles = (data?['profiles'] as List?) ?? const [];
         profiles = rawProfiles
             .whereType<Map>()
@@ -2308,6 +2342,25 @@ class EditorNotifier extends StateNotifier<EditorState> {
           ? state.selectedProfileId
           : null;
 
+      // A native manifest is the crash-safe authority. Drop a settings-only
+      // token once a successful scan sees its target recreated; keeping it
+      // would expose an undo action that can no longer restore safely.
+      final retainedDeletedSaveRecovery =
+          scanError == null &&
+              state.deletedSaveRecovery != null &&
+              saves.any(
+                (save) =>
+                    !save.isMissing &&
+                    _sameSavePath(
+                      save.path,
+                      state.deletedSaveRecovery!.targetPath,
+                    ),
+              )
+          ? null
+          : state.deletedSaveRecovery;
+      final deletedSaveRecovery =
+          discoveredDeletedSaveRecovery ?? retainedDeletedSaveRecovery;
+
       // When the explicit selection was reset, fall back to any visible save;
       // otherwise restrict to the still-valid profile's visible saves.
       final newState = state.copyWith(
@@ -2317,13 +2370,21 @@ class EditorNotifier extends StateNotifier<EditorState> {
         selectedProfileId: keptSelectedProfileId,
         externalSavePaths: externalSavePaths,
         hiddenOtherSavePaths: hiddenOtherSavePaths,
+        deletedSaveRecovery: deletedSaveRecovery,
         // With no profiles, Other saves is the switcher's only destination and
         // therefore the natural initial view (including its Open file button).
         otherSavesSelected: profiles.isEmpty ? true : state.otherSavesSelected,
       );
       final settingsChanged =
           !_sameSavePathList(state.externalSavePaths, externalSavePaths) ||
-          !_sameSavePathList(state.hiddenOtherSavePaths, hiddenOtherSavePaths);
+          !_sameSavePathList(
+            state.hiddenOtherSavePaths,
+            hiddenOtherSavePaths,
+          ) ||
+          !_sameDeletedSaveRecovery(
+            state.deletedSaveRecovery,
+            deletedSaveRecovery,
+          );
       // Compute visible saves with the updated state fields to find a
       // sensible first selection path when the folder or profile changed.
       final visibleAfterRefresh = newState.visibleSaves;

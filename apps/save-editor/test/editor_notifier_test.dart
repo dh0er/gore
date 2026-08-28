@@ -5426,7 +5426,92 @@ void main() {
       restarted.state.deletedSaveRecovery?.backupPath,
       recovery?.backupPath,
     );
-    restarted.dismissDeletedSaveRecovery();
+    await restarted.dismissDeletedSaveRecovery();
+    expect(store.settings.deletedSaveRecovery, isNull);
+  });
+
+  test('refresh discovers a native deleted-save recovery manifest', () async {
+    final store = _MemoryEditorSettingsStore();
+    final core = _RecordingCoreService(
+      scanData: {
+        'saves': <Object?>[],
+        'profiles': <Object?>[],
+        'deletedSaveRecovery': {
+          'version': 1,
+          'createdEpoch': 1,
+          'targetPath': r'C:\tmp\saves\G1R-006.sav',
+          'backupPath': r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.1',
+          'persistentPath': r'C:\tmp\saves\PersistentDataList.sav',
+          'persistentBackupPath':
+              r'C:\tmp\saves\goresave_backups\PersistentDataList.sav.bak.1',
+          'persistentPostDeleteSha1': 'post-delete-profile-sha',
+          'deletedSaveSha1': 'deleted-save-sha',
+          'deletedPersistentSha1': 'deleted-persistent-sha',
+        },
+      },
+    );
+
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      settingsStore: store,
+    );
+    await pumpEventQueue();
+
+    expect(
+      notifier.state.deletedSaveRecovery?.targetPath,
+      r'C:\tmp\saves\G1R-006.sav',
+    );
+    expect(store.settings.deletedSaveRecovery, isNotNull);
+    await notifier.dismissDeletedSaveRecovery();
+    expect(store.settings.deletedSaveRecovery, isNull);
+    expect(
+      core.requests
+          .lastWhere(
+            (request) => request.command == 'dismiss_deleted_save_recovery',
+          )
+          .payload['backupPath'],
+      r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.1',
+    );
+  });
+
+  test('refresh clears stale recovery after target is recreated', () async {
+    final recovery = DeletedSaveRecovery(
+      targetPath: r'C:\tmp\saves\G1R-006.sav',
+      backupPath: r'C:\tmp\saves\goresave_backups\G1R-006.sav.bak.1',
+      persistentPostDeleteSha1: 'post-delete-profile-sha',
+      deletedSaveSha1: 'deleted-save-sha',
+      deletedPersistentSha1: 'deleted-persistent-sha',
+      message: 'Deleted',
+    );
+    final store = _MemoryEditorSettingsStore(
+      EditorSettings(deletedSaveRecovery: recovery),
+    );
+    final core = _RecordingCoreService(
+      scanData: {
+        'saves': <Object?>[
+          {
+            'path': r'C:\tmp\saves\G1R-006.sav',
+            'slot': 'G1R-006',
+            'format': 'GSAV',
+            'fileSize': 1,
+            'sha1': 'recreated-save-sha',
+            'status': 'ok',
+          },
+        ],
+        'profiles': <Object?>[],
+        'deletedSaveRecovery': null,
+      },
+    );
+
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      settingsStore: store,
+    );
+    await pumpEventQueue();
+
+    expect(notifier.state.deletedSaveRecovery, isNull);
     expect(store.settings.deletedSaveRecovery, isNull);
   });
 
@@ -5477,7 +5562,7 @@ void main() {
 
       expect(notifier.state.lastWriteMessage, isNull);
       expect(notifier.state.deletedSaveRecovery, isNotNull);
-      notifier.dismissDeletedSaveRecovery();
+      await notifier.dismissDeletedSaveRecovery();
       expect(notifier.state.deletedSaveRecovery, isNull);
     },
   );
@@ -6390,6 +6475,11 @@ class _RecordingCoreService implements GoresaveCoreService {
             'deletedSaveSha1': 'deleted-save-sha',
             'deletedPersistentSha1': 'deleted-persistent-sha',
           },
+        };
+      case 'dismiss_deleted_save_recovery':
+        return {
+          'ok': true,
+          'data': {'dismissed': true},
         };
       case 'search_typed_properties':
         final pages = typedSearchPages;
